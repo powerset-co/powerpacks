@@ -1098,5 +1098,65 @@ class TestTwoPhaseJudging(unittest.TestCase):
         self.assertTrue(parser_defaults.triage)
 
 
+class TestNoCliBulkFilter(unittest.TestCase):
+    """CLI agent engines are phase-2 judges only: --no-triage over a large frontier must refuse codex."""
+
+    def _staged_run(self, d, n_candidates):
+        run_dir = d / "run"
+        e0 = run_dir / "epoch0"
+        e0.mkdir(parents=True)
+        (e0 / "plan.json").write_text(json.dumps({"traits": {"must_have": []}, "created_at": "t"}))
+        rows = [{"person_id": f"p{i}", "candidate_id": f"p{i}"} for i in range(n_candidates)]
+        (e0 / "union.jsonl").write_text("".join(json.dumps({"person_id": r["person_id"], "found_by": ["q0"]}) + "\n" for r in rows))
+        (e0 / "candidate_frontier.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (e0 / "candidate_frontier.json").write_text(json.dumps({"candidates": rows}))
+        (e0 / "probe_summaries.json").write_text("[]")
+        jd = d / "jd.txt"
+        jd.write_text("Build systems")
+        return run_dir, jd
+
+    def test_no_triage_large_frontier_codex_refused(self):
+        dsl = _load("deep_search_loop")
+        d = Path(tempfile.mkdtemp())
+        run_dir, jd = self._staged_run(d, dsl.MAX_CLI_JUDGE_FRONTIER + 1)
+        argv = sys.argv
+        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
+                    "--max-epochs", "1", "--plan-approved", "--no-triage", "--judge", "codex"]
+        try:
+            with unittest.mock.patch.object(dsl, "run"), unittest.mock.patch.object(dsl, "judge"):
+                with self.assertRaises(SystemExit) as ctx:
+                    dsl.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_no_triage_small_frontier_codex_allowed(self):
+        dsl = _load("deep_search_loop")
+        d = Path(tempfile.mkdtemp())
+        run_dir, jd = self._staged_run(d, 3)
+
+        def fake_run(cmd, *, expected_paths=None, description=None):
+            if description and "consensus" in description:
+                out = run_dir / "shortlist"
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "consensus.json").write_text("[]")
+                (out / "ground_truth_ranked.json").write_text("[]")
+
+        def fake_judge(edir, candidates, judge_kind, effort, concurrency):
+            (edir / "candidate_evaluations.raw.jsonl").write_text(
+                "".join(json.dumps({"candidate_id": c["candidate_id"], "jd_score": 0.1}) + "\n" for c in candidates))
+
+        argv = sys.argv
+        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
+                    "--max-epochs", "1", "--plan-approved", "--no-triage", "--judge", "codex"]
+        try:
+            with unittest.mock.patch.object(dsl, "run", side_effect=fake_run), \
+                 unittest.mock.patch.object(dsl, "judge", side_effect=fake_judge):
+                dsl.main()
+        finally:
+            sys.argv = argv
+        self.assertTrue((run_dir / "loop.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

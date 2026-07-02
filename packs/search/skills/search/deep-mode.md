@@ -165,7 +165,10 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    (measured on an earlier pass: 2 reachable GT dropped) — pass `--no-triage` for a
    maximum-fidelity run where wall-clock/cost don't matter. Pick the phase-2 engine with
    `--judge codex|gpt` (or the `POWERPACKS_DEEP_JUDGE` env preference): codex = free/slower,
-   gpt = paid `gpt-5.4` on the flex tier, fast.
+   gpt = paid `gpt-5.4` on the flex tier, fast. **CLI agent engines (codex/claude) are phase-2
+   judges only — they never do the thousands→hundreds bulk cut, and there is no fallback that
+   hands them one:** triage failure fails the run loud, and `--no-triage` over a frontier with
+   more than ~300 unjudged candidates requires `--judge gpt`.
 
 3. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
    rubric with the IC seniority hard-gates (default `gpt-5.4`). **Default to a CROSS-VENDOR panel:**

@@ -46,6 +46,10 @@ GPT_JUDGE = ROOT / "packs/search/primitives/evaluate_profile_candidates/evaluate
 TRIAGE = P / "triage_candidates.py"
 CONSENSUS = P / "judge_consensus.py"
 
+# CLI agent judges (codex/claude) are phase-2 only: they never bulk-filter. With --no-triage,
+# a frontier with more unjudged candidates than this requires the API judge (--judge gpt).
+MAX_CLI_JUDGE_FRONTIER = 300
+
 # A fetched JD below this many chars is almost certainly a JS-rendered page that yielded no real
 # text; decomposing it produces a garbage plan. Mirrors fetch_jd._THIN_CHARS (fetch_jd flags "thin"
 # but exits 0, so the loop guards it explicitly before spending on sourcing).
@@ -257,11 +261,14 @@ def main() -> None:
             # the expensive per-candidate judge sees a much smaller frontier. Resume-safe twice
             # over: it only runs when the frontier still has unjudged candidates, and
             # candidate_frontier.full.jsonl is the pre-triage backup/marker so a rerun never
-            # re-filters survivors.
+            # re-filters survivors. Bulk filtering is ALWAYS the batched API filter — a CLI
+            # agent engine (codex/claude) is a phase-2 judge only, never the thousands->hundreds
+            # cut, and there is no fallback that hands it one: triage failure fails the run loud,
+            # and --no-triage over a large frontier requires the API judge.
             triage_pool = None
             frontier = _jsonl(edir / "candidate_frontier.jsonl")
+            pending = [c for c in frontier if (c.get("person_id") or c.get("candidate_id")) not in judged_pids]
             if args.triage:
-                pending = [c for c in frontier if (c.get("person_id") or c.get("candidate_id")) not in judged_pids]
                 if pending and not (edir / "candidate_frontier.full.jsonl").exists():
                     run([sys.executable, TRIAGE, "--run-dir", edir, "--concurrency", max(args.concurrency, 8)],
                         expected_paths=[edir / "candidate_frontier.jsonl", edir / "candidate_frontier.full.jsonl"],
@@ -269,6 +276,12 @@ def main() -> None:
                     frontier = _jsonl(edir / "candidate_frontier.jsonl")
                 if (edir / "candidate_frontier.full.jsonl").exists():
                     triage_pool = len(_jsonl(edir / "candidate_frontier.full.jsonl"))
+            elif args.judge != "gpt" and len(pending) > MAX_CLI_JUDGE_FRONTIER:
+                print(json.dumps({"primitive": "deep_search_loop", "status": "failed",
+                                  "error": f"--no-triage with {len(pending)} unjudged candidates and --judge {args.judge}: "
+                                           f"CLI agent engines never do bulk filtering (max {MAX_CLI_JUDGE_FRONTIER} untriaged). "
+                                           "Re-enable triage (the default) or use --judge gpt."}, indent=2))
+                raise SystemExit(1)
             new = [c for c in frontier if (c.get("person_id") or c.get("candidate_id")) not in judged_pids]
             (edir / "candidate_frontier.to_judge.jsonl").write_text("".join(json.dumps(c, sort_keys=True) + "\n" for c in new))
             new_judged = 0
