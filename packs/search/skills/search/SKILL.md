@@ -1,12 +1,17 @@
 ---
 name: search
-description: "The single people-search door for Powerpacks. Run a people search from a natural-language query and route automatically: simple people searches go to fast local DuckDB / TurboPuffer retrieval; deep JD / job-posting-URL / role-brief / shortlist requests go to the deep-search engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
+description: "The single people-search door for Powerpacks. You decide surface/backend/depth and record it (decision.json): explicit words pick the backend (powerset → TurboPuffer/Supabase, local → DuckDB); a JD or job-posting URL runs the deep multi-profile engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
 <!--
 Changelog:
+- 2026-07-01: Replaced the Step-0 classifier (route_query.py, deleted) with an agent-made decision
+  contract — you decide surface/backend/depth and record decision.json before anything runs. Added
+  the mandatory native-task checklist and the universal confirm-before-execute gate. Explicit
+  "powerset"/"local" words now bind the backend end-to-end. Decision quality is benchmarked by the
+  agent decision eval (packs/search/evals/run_decision_eval.py) instead of the offline classifier eval.
 - 2026-06-30: Renamed from `search-network` to `search` (search consolidation Stage 3). Added the
-  Step-0 router (route_query.py) that dispatches deep JD/URL/brief/shortlist to $search's deep mode and
+  Step-0 router that dispatches deep JD/URL/brief/shortlist to $search's deep mode and
   company/sql/contacts to their surfaces; ordinary people searches stay on the fast local/TurboPuffer
   path. $search-network is a deprecated alias. The retrieval primitive (search_network_pipeline.py)
   and search-network-jd-* schemas/tasks keep their names.
@@ -29,66 +34,111 @@ Use this for any people search request:
 > `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
 > primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
 
-## Step 0 — Route the query (run this first)
+## How to run this skill
 
-Classify the query deterministically, then dispatch. Do not hand-guess the route:
+**FIRST, before running anything: create a literal, visible checklist with the five steps
+below and step through it, marking each item complete as you go.** This is mandatory. Use
+your harness's plan/todo/task tool:
 
-```bash
-uv run --project . python packs/search/primitives/route_query/route_query.py --query "<the user's query>"
+- **Claude Code:** `TaskCreate` one task per step (1–5), then `TaskUpdate` each to
+  `in_progress` then `completed` as you go.
+- **Codex:** `update_plan` with the five steps, updating status as you go.
+- **Any other harness:** its equivalent todo/plan mechanism.
+
+Seed the checklist with these exact item titles:
+
+    1. Decide + record the search decision (decision.json)
+    2. Prepare the search (payload preview or deep plan)
+    3. GATE — confirm requirements with the user
+    4. Execute the search
+    5. Present results
+
+Work the checklist in order 1 → 5. Exactly one item `in_progress` at a time; mark it
+`completed` before starting the next. No batching, no reordering, no skipping, no invented
+extra steps. If Step 1 decides surface `company`/`sql`/`contacts`, mark items 2–5 as handed
+off and load that surface's SKILL — it owns its own flow. If Step 1 decides depth `deep`,
+items 2–4 are owned by deep mode's own checklist (`deep-mode.md`) — load it right after
+recording the decision.
+
+## Step 1 — Decide the route (you are the router)
+
+You make this decision — there is no classifier to run. A one-liner, a pasted JD, and a
+job-posting URL all come through this same step and the same rules. Decide three things,
+record them, and only then act.
+
+<!-- decision-rules:start -->
+Decide `surface`, `backend`, and `depth` for the query:
+
+1. **surface** — where the query belongs:
+   - `people` — any search for people. The default when unsure.
+   - `company` — the subject is companies (lookup / IDs / investors / funding / sector) and
+     no people are asked for. "Engineers at companies backed by Sequoia" is `people`.
+   - `sql` — the predicate needs cross-row or cross-person logic: per-person aggregates
+     ("2+ startup stints"), role ordering ("engineers who became PMs"), or a join against
+     another person ("overlapped with Jane at Stripe"). A person's name alone is NOT sql:
+     "look up Jane Doe" and "who is Jane Doe" are `people` lookups. Common words like
+     "career" or "worked with <a technology>" do not make a query sql.
+   - `contacts` — "my contacts" / "set contacts" plus contact-field filtering.
+2. **backend** — which index runs the search. The user's explicit words always win:
+   - `powerset` — the user says "powerset", names a set, or says "team/shared network"
+     (even if they also say "my network": "search my Powerset network" is `powerset`).
+   - `local` — the user says "local", "offline", or "my imported network/contacts",
+     even if remote credentials exist.
+   - Unstated → environment default: if `POWERPACKS_LOCAL_SEARCH_DB` is set, or
+     `.powerpacks/search-index/local-search.duckdb` exists with no TurboPuffer credentials
+     configured, pick `local`; otherwise `powerset`. Both configured → `powerset`, and say
+     which you picked in one line so the user can flip it.
+   - Forced values: `sql` is always `local`; `company` and `contacts` are always `powerset`.
+3. **depth** — how hard to search (people surface only):
+   - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
+     deep/thorough/judged run or names the deliverable ("recruit ...", "build a shortlist",
+     "source candidates", "more people like <linkedin url>").
+   - `fast` — everything else: one expansion → retrieval → rerank pass.
+   - Deep is the multi-profile engine: decompose the role into diverse candidate archetypes,
+     run each as a probe through the same retrieval pipeline, union, judge, converge.
+4. Uncertain on any axis → `people` / the environment default / `fast`, and state the
+   uncertainty in `reason`. Never block on routing.
+<!-- decision-rules:end -->
+
+Record the decision before anything runs (checklist item 1). Create the run dir with a short
+stable slug from the query (e.g. `swe-sf-stanford`) and write `decision.json`:
+
+```json
+{"surface": "people", "backend": "powerset", "depth": "fast",
+ "reason": "<one sentence on why>"}
 ```
 
-It prints `{route, rule, subroute}`. Dispatch on `route`:
+- fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
+  to `prepare` so the decision, payload, and outputs live together.
+- deep → `.powerpacks/deep-search/<jd-slug>/decision.json` (the engine's existing run dir).
 
-| route | action |
-|-------|--------|
-| `deep`     | deep JD / job-posting URL / role brief / "build a shortlist" / "more people like <url>" → load `packs/search/skills/search/deep-mode.md` and run the deep-search engine (a job URL goes straight in via `deep_search_loop.py --jd-url`). |
-| `company`  | company lookup / ids / investors / funding / sector → load `packs/search/skills/search-company/SKILL.md`. |
-| `sql`      | relational / aggregate / career-shape predicate → load `packs/search/skills/search-sql/SKILL.md`. |
-| `contacts` | my/set contacts + contact-field filtering → load `packs/contacts/skills/search-contacts/SKILL.md`. |
-| `network`  | ordinary people search → stay here; use the `subroute` (`local` \| `turbopuffer`) and the Mode Detection + Happy Paths below. |
+Then dispatch — this table is the whole routing contract:
 
-The classifier encodes this skill-routing heuristic and is regression-tested against a labeled
-query set (`packs/search/evals/routing/cases.json`, baseline strict 0.9375). When `route` is
-`network`, continue with Mode Detection to pick local vs TurboPuffer. If the router is unavailable,
-fall back to reading the intent yourself using the same rules.
+| decision | action |
+|---|---|
+| surface `company` | load `packs/search/skills/search-company/SKILL.md` (decision.json still written first) |
+| surface `sql` | load `packs/search/skills/search-sql/SKILL.md` (decision.json still written first) |
+| surface `contacts` | load `packs/contacts/skills/search-contacts/SKILL.md` (decision.json still written first) |
+| `people` + `fast` + `local` | **Local Happy Path** below |
+| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below |
+| `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; deep runs on powerset only today — for an explicit deep+local ask, say so and offer fast local now or deep on powerset) |
 
-## Mode Detection
+The deep engine owns its own orchestration and delegates capped per-profile searches back to
+this skill's TurboPuffer path with a per-search `limit` and `--filter-only` — do not run
+`search_network_pipeline.py` directly for a deep input yourself.
 
-For `network` queries, apply these rules in order:
+Input shapes normalize before `prepare`, never before the decision:
 
-1. **Deep JD / role-brief guard** — if the input is a URL pointing to a job posting, a
-   pasted multi-paragraph job description, a broad multi-trait role brief
-   that needs multiple distinct candidate profiles, **or a similar-person
-   request** ("find me more people like <linkedin url>", "people similar to
-   X" with a LinkedIn profile URL), the router already sent it to `deep` —
-   load `packs/search/skills/search/deep-mode.md` and run the deep-search engine.
-   Do not run `search_network_pipeline.py` directly for these inputs; the
-   deep-search engine owns the orchestration and delegates individual profile
-   searches back here (TurboPuffer mode) with a per-search `limit` and
-   filter-only flag.
+- **job-posting URL** — deep mode fetches it itself (`--jd-url`). Only when the user
+  explicitly forces `fast` on a URL, fetch first with
+  `uv run --project . python packs/search/primitives/deep_search/fetch_jd.py --url <url> --out <run>/jd.txt`
+  (a thin fetch under ~400 chars → ask for a paste) and use the fetched text as the query.
+- **pasted JD forced to `fast`** — use the JD text directly as `--query`; expansion condenses it.
+- **one-liner** — the query as-is.
 
-2. **Local mode** — if any of these are true:
-   - The user says "local", "local search", "offline", or "my imported
-     network" / "my network" **without** mentioning Powerset, a set name, or
-     the team network
-   - `POWERPACKS_LOCAL_SEARCH_DB` is set in the environment or `.env`
-   - `.powerpacks/search-index/local-search.duckdb` exists and no TurboPuffer
-     credentials are configured
-   Then use the **Local Happy Path** below.
-
-3. **TurboPuffer mode** — everything else. This is the default for queries
-   against a Powerset set, team network, or any remote-backed search.
-   Use the **TurboPuffer Happy Path** below.
-
-Disambiguation:
-
-- Any mention of "Powerset", a set name/ID, or the team/shared network always
-  means **TurboPuffer**, even if the user also says "my network" (e.g.
-  "search my Powerset network" is TurboPuffer, not local).
-- "Local", "offline", or "my imported contacts" always means **Local**, even
-  if remote credentials exist.
-- When both local DB and TurboPuffer creds exist and the user didn't specify
-  either way, prefer TurboPuffer.
+**The gate (checklist item 3):** every search stops exactly once for user confirmation before
+executing — fast mode at the prepare preview (`Execute this search or modify it?`), deep mode
+at GATE 1 (plan approval). Never run an `execute_command` without that answer; never ask twice.
 
 ---
 
@@ -179,8 +229,11 @@ the agentic SQL fan-out gate.
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/local_search_pipeline/local_search_pipeline.py prepare \
      --query "<user query>" \
-     --db "<db-path>"
+     --db "<db-path>" \
+     --output-dir ".powerpacks/search/<slug>"
    ```
+
+   Use the same `<slug>` run dir where `decision.json` was recorded.
 
 4. Show the preview compactly (it will include `scope: local_duckdb` and a
    `pool_estimate` with `matched_people` / `total_people`). Include one line
@@ -301,8 +354,12 @@ files on the happy path. Start a fresh run for every search request.
 
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
-     --query "<user query>"
+     --query "<user query>" \
+     --output-dir ".powerpacks/search/<slug>"
    ```
+
+   Use the same `<slug>` run dir where `decision.json` was recorded. (Deep-engine delegated
+   profile searches pass their own output dir; follow the engine's instructions there.)
 
 3. If `prepare` returns `status: company_directory_fast_path`, follow the
    returned tool request and skip semantic retrieval.
@@ -342,6 +399,8 @@ files on the happy path. Start a fresh run for every search request.
 
 ## Execution Rules
 
+- Never run an `execute_command` without the gate confirmation (checklist item 3).
+  One gate per search — no auto-execution, and no second approval after it.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
 - Do not use sub-agents for ordinary single-query searches. (Exception: the

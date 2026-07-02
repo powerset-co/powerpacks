@@ -67,8 +67,10 @@ here."* This is a capability unique to the local Powerpacks context.
    existing `local_search_backend` (DuckDB) instead of `search_network_pipeline
    run`, emitting the **same `ledger.json` + union shape** so `build_union` and
    everything downstream are untouched. This is an adapter, not a rewrite —
-   mirror `$search`'s local subroute (`route_query.py` already classifies
-   `network → local`).
+   read the backend from the run's `decision.json` (`backend: local`), the
+   agent-made Step-1 decision that replaced the deleted `route_query.py`
+   classifier. (An explicit deep+local ask currently gets the remote-only
+   message from `$search` until this ships.)
 2. **Sandboxed relational lane (optional, higher value).** Let the loop run
    ad-hoc read-only SQL over the local DuckDB (the `$search-sql` capability)
    as an in-loop sourcing probe — e.g. "2+ startup stints AND worked at a

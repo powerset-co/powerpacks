@@ -1,0 +1,48 @@
+{
+  "cases": 68,
+  "errors": 0,
+  "strict_accuracy": 0.9853,
+  "lenient_accuracy": 1.0,
+  "field_accuracy": {
+    "surface": 1.0,
+    "backend": 1.0,
+    "depth": 0.9762
+  },
+  "confusion": {
+    "surface": {
+      "people": {
+        "people": 42
+      },
+      "company": {
+        "company": 9
+      },
+      "sql": {
+        "sql": 9
+      },
+      "contacts": {
+        "contacts": 8
+      }
+    },
+    "backend": {
+      "powerset": {
+        "powerset": 52
+      },
+      "local": {
+        "local": 16
+      }
+    },
+    "depth": {
+      "fast": {
+        "fast": 28,
+        "deep": 1
+      },
+      "deep": {
+        "deep": 13
+      }
+    }
+  },
+  "misses": [],
+  "harness": "codex",
+  "reasoning_effort": "low",
+  "generated_at": "2026-07-02T03:01:27+00:00"
+}

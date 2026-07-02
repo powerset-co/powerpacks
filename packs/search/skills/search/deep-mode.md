@@ -1,7 +1,10 @@
 # `$search` deep mode — the deep-search engine
 
-`$search`'s deep mode for a JD. The `$search` router loads this file when a query is a job-posting
-URL, a pasted JD, a complex role brief, a "build a shortlist" request, or "more people like <url>".
+`$search`'s deep mode for a JD. You load this file when the Step-1 decision you recorded is
+`depth: deep` — automatic for a job-posting URL or pasted JD, or on an explicit ask ("deep",
+"thorough", "build a shortlist", "recruit ...", "more people like <url>"). The decision is
+already recorded in the run dir's `decision.json` (`.powerpacks/deep-search/<jd-slug>/`);
+GATE 1 below is the run's one confirm-before-execute gate.
 
 <!--
 Created: 2026-06-26
@@ -20,11 +23,14 @@ Changelog:
 - 2026-07-01: Fold into $search as its deep mode. Removed the separate $recruit / $search-profile
   skills; renamed the engine package recruit/ -> deep_search/ (recruit_loop -> deep_search_loop,
   run_shotgun -> run_wide_search) and the route recruit -> deep.
+- 2026-07-01: Entry is now the agent-made Step-1 decision (`depth: deep` in decision.json), not
+  the deleted route_query classifier. GATE 1 doubles as $search's universal pre-execute gate.
 -->
 
 > **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, "build a
-> shortlist", and "more people like <url>" all route here — JD→judged-shortlist with a core-tagged
-> plan, mixture-of-judges, core-gate, and IC-track-aware seniority.
+> shortlist", and "more people like <url>" all land here via the recorded Step-1 decision —
+> JD→judged-shortlist with a core-tagged plan, mixture-of-judges, core-gate, and IC-track-aware
+> seniority.
 
 ## The engine
 
