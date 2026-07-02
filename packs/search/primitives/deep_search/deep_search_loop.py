@@ -171,6 +171,8 @@ def main() -> None:
     # rejudge them blindly on process restart. First gate resume has no such files, so this is a no-op.
     master_union = {r["person_id"]: r for r in _jsonl(master_union_path) if r.get("person_id")}
     for v in _jsonl(master_judge):
+        if v.get("error"):
+            continue  # a transient judge failure is not a verdict; leave the pid re-judgeable
         pid = v.get("person_id") or v.get("candidate_id")
         if pid:
             judged_pids.add(pid)
@@ -250,14 +252,28 @@ def main() -> None:
             new = [c for c in frontier if (c.get("person_id") or c.get("candidate_id")) not in judged_pids]
             (edir / "candidate_frontier.to_judge.jsonl").write_text("".join(json.dumps(c, sort_keys=True) + "\n" for c in new))
             new_judged = 0
+            judge_errors_dropped = 0
             if new:
                 judge(edir, new, args.judge, args.reasoning_effort, args.concurrency)
                 verds = _jsonl(edir / "candidate_evaluations.raw.jsonl")
+                # A transient judge failure (timeout/429/unparsable) writes a synthetic 0.0 "out"
+                # verdict with an `error` marker. That must not become a cached rejection: retry
+                # the errored candidates once in-epoch, then drop any that still errored — they
+                # are never appended to the master judge file and stay re-judgeable.
+                errored = {v.get("person_id") or v.get("candidate_id") for v in verds if v.get("error")}
+                if errored:
+                    retry = [c for c in new if (c.get("person_id") or c.get("candidate_id")) in errored]
+                    judge(edir, retry, args.judge, args.reasoning_effort, args.concurrency)
+                    retried = _jsonl(edir / "candidate_evaluations.raw.jsonl")
+                    verds = [v for v in verds if (v.get("person_id") or v.get("candidate_id")) not in errored] + retried
+                    (edir / "candidate_evaluations.raw.jsonl").write_text("".join(json.dumps(v) + "\n" for v in verds))
+                ok_verds = [v for v in verds if not v.get("error")]
+                judge_errors_dropped = len(verds) - len(ok_verds)
                 with master_judge.open("a") as fh:
-                    for v in verds:
+                    for v in ok_verds:
                         fh.write(json.dumps(v) + "\n")
-                judged_pids |= {c.get("person_id") or c.get("candidate_id") for c in new}
-                new_judged = len(verds)
+                judged_pids |= {v.get("person_id") or v.get("candidate_id") for v in ok_verds}
+                new_judged = len(ok_verds)
             master_union_path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in master_union.values()))
 
             # consensus over everything judged so far
@@ -271,6 +287,7 @@ def main() -> None:
             new_strong = now_pids - strong_pids
             history.append({"epoch": epoch, "phase": "jd" if epoch == 0 else "anchor",
                             "new_judged": new_judged, "judged_total": len(judged_pids),
+                            "judge_errors_dropped": judge_errors_dropped,
                             "strong_total": len(now_pids), "new_strong": len(new_strong)})
             print(json.dumps(history[-1]))
             strong_pids = now_pids

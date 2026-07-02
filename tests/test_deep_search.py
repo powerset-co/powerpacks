@@ -1044,5 +1044,21 @@ class TestFetchJDAshby(unittest.TestCase):
         self.assertIsNone(fj.fetch_ashby("https://jobs.ashbyhq.com/supabase"))
 
 
+class TestJudgeErrorHandling(unittest.TestCase):
+    """Transient judge failures must not become cached rejections (PR #153 review finding 1)."""
+
+    def test_consensus_read_jsonl_skips_error_rows(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "loop.jsonl"
+            path.write_text(
+                json.dumps({"candidate_id": "p1", "jd_score": 0.8, "verdict": "top_tier", "seniority_fit": "ideal"}) + "\n"
+                + json.dumps({"candidate_id": "p2", "jd_score": 0.0, "verdict": "out", "seniority_fit": "unknown", "error": "timeout"}) + "\n",
+                encoding="utf-8",
+            )
+            rows = jc.read_jsonl(path)
+        self.assertEqual([r["person_id"] for r in rows], ["p1"])
+
+
 if __name__ == "__main__":
     unittest.main()
