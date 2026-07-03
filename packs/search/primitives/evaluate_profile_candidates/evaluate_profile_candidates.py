@@ -123,11 +123,13 @@ IF THE TARGET IS AN IC ROLE (senior IC, staff IC, lead-IC, "Member of Technical 
 - "ideal" / "acceptable" (IN-BAND): any hands-on individual contributor on the same technical track AT OR ABOVE the target IC level — senior, staff, principal, distinguished, fellow, or "MTS / research scientist at a top lab" — PLUS one level below it (a strong mid-level IC ready to step up). A MORE-senior IC is NOT "stepping down": strong senior ICs are exactly who these roles want, and at startups they routinely take IC / founding-engineer seats. NEVER mark a senior / staff / principal IC "too_senior" merely for being a high IC level.
 - "too_senior": the candidate's CURRENT primary identity is on the MANAGEMENT / EXEC track or running a company — engineering/eng manager with no current hands-on work, director, VP, Head-of, C-suite (CEO/CTO/CxO), president, current founder/co-founder, managing director, general partner, board member, or full-time investor/advisor. They will not return to an IC seat. (A PAST founder/manager is fine if the CURRENT role is a hands-on IC.)
 - "too_junior": two or more levels below the target IC level (interns, new grads, early-career with no real depth).
+- Lead-title discipline: "Tech Lead", "Team Lead", "TL/TLM", "lead maintainer", or "founding engineer" with current hands-on work is a LEAD-IC and IN-BAND for an IC target. Never mark too_senior from a "Lead" title alone — gate only on clear management-track evidence (direct reports, org ownership, no hands-on work).
 
 IF THE TARGET IS A MANAGEMENT / EXEC ROLE (manager, director, VP, Head-of, exec): judge by career LEVEL directly. IN-BAND = the target level and exactly one level below (step up) — e.g. for a VP target a VP/Director is in-band. "too_senior" = one level above the target or higher (for a VP target, only CEO/founder/president/C-suite is too_senior). A senior IC two+ rungs below the management target is "too_junior".
 
-- "wrong_track": a genuinely different career lane (e.g. data scientist without pipeline ownership for a data-engineering role, a pure people-manager with no hands-on evidence for an IC role, consultant/agency when the role is in-house).
+- "wrong_track": a genuinely different career lane (e.g. data scientist without pipeline ownership for a data-engineering role, a pure people-manager with no hands-on evidence for an IC role, consultant/agency when the role is in-house). Enforce this even when skills match deeply: a candidate whose CURRENT primary work is independent consulting, an agency, or a fractional/contract practice is wrong_track for an in-house role — do not rescue them on skill history.
 - "unknown": genuinely cannot tell.
+- Ambiguous titles: if the current title is ambiguous between IC and management (e.g. "Principal Engineer / Director", "Head of X, Engineering"), decide seniority_fit from the profile's hands-on evidence and ALWAYS record a caveat "seniority ambiguous — verify IC vs management in screen" (material only if other signals point to management).
 
 A candidate with deep matching skills but TRULY out-of-band seniority is OUT — do not rescue a current VP/exec/founder for an IC role on skills alone (they will not step down). But for an IC target, do NOT gate a senior / staff / principal IC: a more-senior IC stepping into a focused IC or founding-engineer role is the BEST hire, not a down-level. Past founder/exec roles are fine if the CURRENT role is in-band.
 
@@ -144,7 +146,8 @@ For every provided trait, assign exactly one evidence level with a short cite fr
 
 Discipline:
 - Only profile evidence counts. Do not invent facts. No evidence is "missing" or "unknown", not "foundational".
-- Recency: weight current and recent (last ~5 years) roles most heavily. A trait evidenced only by roles older than ~8 years caps at "capable".
+- Research counts: PhD/postdoc research, publications, patents, and open-source ownership on the trait's EXACT domain are direct evidence — at least "experienced" (or "doing_now" when the current role continues that work), never capped at "foundational" for lacking a matching job title.
+- Recency: weight current and recent (last ~5 years) roles most heavily. A trait evidenced only by roles older than ~8 years caps at "capable". Apply this to WHEN the work (including research) happened, not to whether it carried a job title.
 - Cross-track: evidence from a different career lane than the trait implies caps at "capable", never "experienced"/"doing_now" (e.g. SRE/platform reliability work for a product-API-ownership trait).
 - Brand-name employers, total years of experience, and seniority of past titles are NOT trait evidence by themselves. Score the trait, not the resume.
 - Do not park everyone at "capable"/"foundational" to hedge. If they are clearly doing it now, say "doing_now"; if there is genuinely nothing, say "missing". Calibrate honestly — the buckets are the score.
@@ -166,6 +169,8 @@ The job context names a hire stage. Apply the matching bar:
 === CAVEATS ===
 
 Each caveat is {"text": "...", "material": true|false}. Mark material=true only when it would genuinely give the hiring manager pause for THIS role. Material caveats reduce the computed score; do not pad with trivia.
+
+Split focus: when the profile shows significant CURRENT attention on unrelated ventures (a side business, parallel non-technical ventures), judge the traits from the primary technical role only and record a material caveat for the split focus.
 
 === OUTPUT ===
 

@@ -25,6 +25,10 @@ Changelog:
   run_shotgun -> run_wide_search) and the route recruit -> deep.
 - 2026-07-01: Entry is now the agent-made Step-1 decision (`depth: deep` in decision.json), not
   the deleted route_query classifier. GATE 1 doubles as $search's universal pre-execute gate.
+- 2026-07-03: Present the shortlist with a ~0.55 SENDABLE CUT (measured on the AgentMail rerun:
+  the core-gated tail below ~0.55 was padding); keep the full score-only pool (consensus.json,
+  mean >=0.40 + in-band, no core-gate) as the bench to mine. Judge rubric gained research-evidence,
+  lead-IC, consultant-enforcement, split-focus, and ambiguous-title rules (evaluate_profile_candidates).
 -->
 
 > **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, "build a
@@ -202,6 +206,10 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    `table_stakes` traits only rank — so a strong-but-wrong-domain senior is excluded no matter how
    high their blended score (that is what collapses the give-up case). Without core tags it falls
    back to the score gate. Reads the per-trait statuses the judge already emits — rubric untouched.
+   **Present in two layers:** the core-gated entries with mean ≥ **~0.55** are the SENDABLE list
+   (measured on the AgentMail rerun: the 0.40–0.55 core-gated tail was padding — retail/comms SREs
+   a hiring manager would not move on); everything else in `consensus.json` (mean ≥0.40 + in-band,
+   no core-gate) is the BENCH — name it to the user as minable, don't mix it into the sendable list.
    Then ✅
    `export_candidate_shortlist` for the sendable CSV. **Measured (AgentMail JD):** single judge
    → recall 48% / p@25 0.36; 3-judge (2,2) → 52% / 0.44; a `(2,1)` gate (majority in-band +
