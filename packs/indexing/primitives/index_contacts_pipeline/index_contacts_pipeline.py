@@ -32,6 +32,15 @@ DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
 CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
+# The fan-in merge auto-ingests these decision/override files (default paths defined in
+# packs/ingestion/primitives/merge_network_sources/merge_network_sources.py). They must be
+# fingerprinted so an updated override invalidates the fan-in no-op cache, but they are
+# decisions, not people sources — never pass them as merge --input.
+FAN_IN_OVERRIDE_FILES = [
+    Path(".powerpacks/network-import/overrides/review.csv"),
+    Path(".powerpacks/network-import/overrides/retarget-people.csv"),
+    Path(".powerpacks/network-import/overrides/consolidate-people.csv"),
+]
 ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
 
 from packs.indexing.lib.openai_usage_tiers import openai_usage_tier_profile  # noqa: E402
@@ -389,7 +398,7 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
     started_at = started_at or now_iso()
     manifest_path = Path(args.manifest)
     inputs = fan_in_input_paths(args)
-    fingerprints = input_fingerprints(inputs)
+    fingerprints = input_fingerprints(inputs + FAN_IN_OVERRIDE_FILES)
     existing = status_payload(argparse.Namespace(manifest=str(manifest_path)))
     existing_fan_in = existing if existing.get("step") == "fan_in" else existing.get("fan_in") if isinstance(existing.get("fan_in"), dict) else {}
     existing_artifacts = existing_fan_in.get("artifacts") if isinstance(existing_fan_in.get("artifacts"), dict) else {}
