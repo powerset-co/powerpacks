@@ -17,7 +17,7 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             powerset_pack,
-            ["fix-powerpacks", "powerpacks-console", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
+            ["fix-powerpacks", "install-powerpacks", "powerpacks-console", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
         )
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
