@@ -10,7 +10,7 @@ MANAGED_SKILLS=(
   search search-network search-network-jd search-company search-sql search-contacts build-local-search-index
   # removed by the 2026-07 $search consolidation — cleaned up so stale installs don't linger
   search-profile search-highlight extract-search-query recruit
-  powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
+  powerset powerset-login powerset-set update-powerpacks fix-powerpacks install-powerpacks sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   import-email import-gmail enrich-email-markers discover-contacts import-twitter deep-context logbook
   import-messages import-imessage import-contacts-review
@@ -108,6 +108,7 @@ install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SK
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
+install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/messages/skills/import-messages/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
 install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
