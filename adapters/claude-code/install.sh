@@ -100,4 +100,5 @@ echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search build-outbound"
 echo "  setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context discover-contacts import-twitter"
 echo
-echo "restart Claude Code to pick up the skill list"
+echo "skills are usable NOW in the session that installed them (the agent reads the installed files directly);"
+echo "typed \$skill triggers and auto-routing for NEW skills need a fresh Claude Code conversation (skill list is per-session)"

@@ -47,4 +47,5 @@ else
 fi
 
 echo
-echo "Powerpacks Codex update complete. Restart Codex to reload installed skills."
+echo "Powerpacks Codex update complete. This session can use the refreshed skills immediately;"
+echo "other open Codex sessions see NEW skills only in their next conversation."
