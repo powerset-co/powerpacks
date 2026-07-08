@@ -32,4 +32,5 @@ else
 fi
 
 echo
-echo "Powerpacks Claude Code update complete. Restart Claude Code to reload installed skills."
+echo "Powerpacks Claude Code update complete. This session can use the refreshed skills immediately;"
+echo "other open Claude Code sessions see NEW skills only in their next conversation."
