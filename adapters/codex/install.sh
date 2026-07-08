@@ -134,5 +134,3 @@ else
 fi
 
 echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context logbook discover-contacts import-twitter"
-echo "skills are usable NOW in the session that installed them (the agent reads the installed files directly);"
-echo "typed \$skill triggers and auto-routing for NEW skills need a fresh Codex conversation (skill list is per-session)"
