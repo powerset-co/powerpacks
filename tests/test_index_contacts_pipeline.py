@@ -95,5 +95,47 @@ class IndexContactsPipelineTest(unittest.TestCase):
             self.assertTrue(any("build-local-duckdb-shim.py" in " ".join(cmd) for cmd in calls))
 
 
+class FanInOverrideFingerprintTest(unittest.TestCase):
+    def test_override_file_change_invalidates_fan_in_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            imports = tmp / ".powerpacks/network-import/import/linkedin"
+            imports.mkdir(parents=True)
+            (imports / "people.csv").write_text("id\np1\n", encoding="utf-8")
+
+            old_root = index_contacts_pipeline.ROOT
+            index_contacts_pipeline.ROOT = tmp
+            try:
+                args = argparse.Namespace(input=[], include_existing_artifacts=False)
+                inputs = index_contacts_pipeline.fan_in_input_paths(args)
+                fingerprint_paths = inputs + index_contacts_pipeline.FAN_IN_OVERRIDE_FILES
+                existing = index_contacts_pipeline.input_fingerprints(fingerprint_paths)
+
+                # unchanged inputs + absent overrides -> cache hit
+                self.assertTrue(index_contacts_pipeline.fan_in_fingerprints_match(
+                    existing, index_contacts_pipeline.input_fingerprints(fingerprint_paths)))
+
+                # a newly approved retarget override must invalidate the no-op cache
+                overrides = tmp / ".powerpacks/network-import/overrides"
+                overrides.mkdir(parents=True)
+                (overrides / "retarget-people.csv").write_text("id\np2\n", encoding="utf-8")
+                current = index_contacts_pipeline.input_fingerprints(
+                    index_contacts_pipeline.fan_in_input_paths(args) + index_contacts_pipeline.FAN_IN_OVERRIDE_FILES)
+                self.assertFalse(index_contacts_pipeline.fan_in_fingerprints_match(existing, current))
+
+                # ... and a content edit to an existing override must too
+                stale = current
+                (overrides / "retarget-people.csv").write_text("id\np2\np3\n", encoding="utf-8")
+                edited = index_contacts_pipeline.input_fingerprints(
+                    index_contacts_pipeline.fan_in_input_paths(args) + index_contacts_pipeline.FAN_IN_OVERRIDE_FILES)
+                self.assertFalse(index_contacts_pipeline.fan_in_fingerprints_match(stale, edited))
+
+                # override files are fingerprint inputs only — never merge --input sources
+                self.assertFalse(set(map(str, index_contacts_pipeline.fan_in_input_paths(args)))
+                                 & set(map(str, index_contacts_pipeline.FAN_IN_OVERRIDE_FILES)))
+            finally:
+                index_contacts_pipeline.ROOT = old_root
+
+
 if __name__ == "__main__":
     unittest.main()

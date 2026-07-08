@@ -22,7 +22,12 @@ rm -rf "$SKILLS_DIR/import-messages" \
   "$SKILLS_DIR/import-contacts" \
   "$SKILLS_DIR/import-email" \
   "$SKILLS_DIR/import-gmail" \
-  "$SKILLS_DIR/import-network"
+  "$SKILLS_DIR/import-network" \
+  "$SKILLS_DIR/search-network" \
+  "$SKILLS_DIR/search-profile" \
+  "$SKILLS_DIR/search-highlight" \
+  "$SKILLS_DIR/extract-search-query" \
+  "$SKILLS_DIR/recruit"
 "$REPO_ROOT/bin/setup-python"
 
 copy_powerpacks_bundle() {

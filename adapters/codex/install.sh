@@ -8,6 +8,8 @@ BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
   search search-network search-network-jd search-company search-sql search-contacts build-local-search-index
+  # removed by the 2026-07 $search consolidation — cleaned up so stale installs don't linger
+  search-profile search-highlight extract-search-query recruit
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   import-email import-gmail enrich-email-markers discover-contacts import-twitter deep-context logbook
