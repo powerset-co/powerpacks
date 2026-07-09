@@ -6,6 +6,13 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-07-09b: Synthetic review in the UI + research opt-in. reconcile-deep-research gained
+  --include-plausibly-absent (researches the judge's "plausibly has no LinkedIn" people — the
+  primary synthetic candidates; still excluded from retarget research by default). The review UI
+  now surfaces synthetic-people.csv rows: pending -> Needs review with a "🧬 synthetic — no
+  LinkedIn" badge (researched profile shown in place of a LinkedIn link), Keep -> approved=yes
+  (merges), Detach -> approved=no, ↺ -> pending. Decisions write only the synthetic CSV's
+  approved column.
 - 2026-07-09: Synthetic profiles (packs/ingestion/docs/synthetic-profiles-plan.md, built).
   `bin/deep-context assemble-synthetic` turns existing deep-research artifacts into
   people-schema rows for people with NO real LinkedIn (synth-… identifiers,

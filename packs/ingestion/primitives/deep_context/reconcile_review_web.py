@@ -26,6 +26,7 @@ by `apply-retargets` + `realize`. No spend, local only.
 from __future__ import annotations
 
 import argparse
+import csv
 import html
 import json
 import re
@@ -129,6 +130,102 @@ def _cached_profile_pic(pub: str) -> str:
     except (json.JSONDecodeError, OSError):
         return ""
     return str(np.get("profile_pic_url") or "")
+
+
+SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
+
+
+def _fmt_experiences(work_json: str) -> list[str]:
+    try:
+        positions = json.loads(work_json or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    out = []
+    for p in positions if isinstance(positions, list) else []:
+        title, company = (p.get("title") or "").strip(), (p.get("company_name") or "").strip()
+        if title or company:
+            span = " / ".join(v for v in ((p.get("start_date") or ""), (p.get("end_date") or ("present" if p.get("is_current") else ""))) if v)
+            out.append(f"{title or '?'} @ {company or '?'}" + (f" ({span})" if span else ""))
+    return out
+
+
+def load_synthetic_parents(path: Path) -> list[dict[str, Any]]:
+    """Deep-researched people with NO real LinkedIn (assemble_synthetic_profile output),
+    surfaced as review rows: pending -> Needs review, auto/yes -> verified, no -> rejected.
+    One candidate per person, flagged synthetic (there is no LinkedIn to link to)."""
+    parents: list[dict[str, Any]] = []
+    if not path.exists():
+        return parents
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            pub = (row.get("public_identifier") or "").strip().lower()
+            if not pub.startswith("synth-"):
+                continue
+            try:
+                meta = json.loads(row.get("synthetic_metadata") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            edu = []
+            try:
+                edu = [" — ".join(v for v in ((e.get("degree") or ""), (e.get("school_name") or "")) if v)
+                       for e in json.loads(row.get("education") or "[]") if isinstance(e, dict)]
+            except (json.JSONDecodeError, TypeError):
+                pass
+            name = row.get("full_name") or pub
+            gaps = ", ".join(meta.get("gaps") or [])
+            parents.append({
+                "slug": f"synthetic-{pub}", "name": name, "person_ids": [row.get("id") or pub],
+                "candidates": [{
+                    "pub": pub, "url": "", "full_name": name,
+                    "headline": row.get("headline") or "",
+                    "profile_pic_url": "",
+                    "experiences": _fmt_experiences(row.get("work_experiences") or ""),
+                    "education": [e for e in edu if e],
+                    "location": row.get("location_raw") or "",
+                    "has_profile": True,
+                    "verdict": "synthetic",
+                    "confidence": float(meta.get("completeness") or 0.0),
+                    "supporting": [], "contradicting": [],
+                    "reason": (row.get("summary") or row.get("headline") or "deep-researched profile")
+                              + (f" · research gaps: {gaps}" if gaps else ""),
+                    "plausibly_absent": False, "recommend_dr": False,
+                    "match_emails": [e for e in (row.get("primary_email") or "").split("|") if e],
+                    "match_phones": [p for p in (row.get("primary_phone") or "").split("|") if p],
+                    "conflict": False, "synthetic": True,
+                    "action": "verify",
+                    "approved": (row.get("approved") or "").strip().lower(),
+                    "new_url": "",
+                    "llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": "",
+                }],
+            })
+    return parents
+
+
+def apply_synthetic_decision(path: Path, pub: str, decision: str) -> dict[str, str]:
+    """The only mutation for synthetic rows: flip the approved gate in synthetic-people.csv.
+    keep -> yes (merges), detach/exclude -> no (never merges), reset -> pending."""
+    approved = {"keep": "yes", "detach": "no", "exclude": "no", "reset": ""}.get(decision)
+    if approved is None:
+        raise ValueError(f"decision '{decision}' not supported for synthetic rows")
+    pub = (pub or "").strip().lower()
+    rows: list[dict[str, str]] = []
+    fieldnames: list[str] = []
+    hit = False
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        fieldnames = list(reader.fieldnames or [])
+        for row in reader:
+            if (row.get("public_identifier") or "").strip().lower() == pub:
+                row["approved"] = approved
+                hit = True
+            rows.append(row)
+    if not hit:
+        raise ValueError(f"synthetic row not found: {pub}")
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+    return {"action": "verify", "approved": approved, "new_url": ""}
 
 
 def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
@@ -369,7 +466,11 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
     if using_parent:
         badge += ("<span class='usingparent' title=\"Detaching this LinkedIn does NOT lose the email/phone "
                   "— it stays on this person, under the parent LinkedIn above\">✓ email kept on this person</span>")
-    judgment = judgment_line(cand["verdict"], cand["confidence"])
+    if cand.get("synthetic"):
+        judgment = (f"<div class='judgment j-review'>🧬 Researched profile · "
+                    f"{cand['confidence'] * 100:.0f}% complete — keep to make them searchable</div>")
+    else:
+        judgment = judgment_line(cand["verdict"], cand["confidence"])
     profile = []
     if cand["headline"]:
         profile.append(f"<div class='hl'>{esc(cand['headline'])}</div>")
@@ -400,6 +501,10 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
         pct = f" {float(conf) * 100:.0f}%" if conf else ""
         flags.append(f"<span class='flag flag-spam' title='{esc(cand.get('llm_reject_reason') or '')}'>"
                      f"🚫 spam-flagged{pct} — won't be indexed unless you keep them</span>")
+    if cand.get("synthetic"):
+        flags.append("<span class='flag flag-synth' title='Deep-researched profile — this person has no "
+                     "real LinkedIn. Keep = merge into your searchable network; Detach = discard.'>"
+                     "🧬 synthetic — no LinkedIn</span>")
     fixed_note = f"<div class='fixednote'>✓ verified — corrected LinkedIn: <a href='{esc(cand['new_url'])}' target='_blank' rel='noreferrer'>{esc(cand['new_url'])}</a></div>" if st == "fixed" and cand["new_url"] else ""
     pic = cand.get("profile_pic_url") or ""
     avatar = (f"<img class='avatar' src='{esc(pic)}' alt='' loading='lazy' referrerpolicy='no-referrer' "
@@ -410,7 +515,7 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
         {avatar}
         <div class='cand-id'>
           {badge}{option}
-          <a href='{esc(cand['url'])}' target='_blank' rel='noreferrer'>{esc(cand['url'] or cand['pub'])}</a>
+          {f"<span class='nopick'>{esc(cand['pub'])} (researched — no LinkedIn)</span>" if cand.get("synthetic") else f"<a href='{esc(cand['url'])}' target='_blank' rel='noreferrer'>{esc(cand['url'] or cand['pub'])}</a>"}
           {''.join(flags)}
           {f"<div class='contacts'><strong>from your messages</strong> <b class='cval'>{esc(contacts)}</b></div>" if contacts else ""}
         </div>
@@ -762,6 +867,7 @@ summary::-webkit-details-marker{display:none}
 .btn.detach.suggested{background:var(--badbg);border-color:var(--bad);color:var(--bad);font-weight:700}
 .btn.suggested::after{content:" · suggested";font-size:10.5px;font-weight:600;opacity:.75}
 .flag-spam{background:var(--badbg);color:var(--bad);border:1px solid var(--bad)}
+.flag-synth{background:#f0ebfa;color:var(--fix);border:1px solid var(--fix)}
 .wrongones{margin-top:4px;border-top:1px dashed var(--line);padding-top:6px}
 .wrongones>summary{color:var(--bad);background:#fff;border:1px solid var(--line)}
 .wrongones>summary:hover{background:var(--soft)}
@@ -900,7 +1006,8 @@ document.querySelectorAll('details.dossier').forEach(d=>d.addEventListener('togg
 # --- server -----------------------------------------------------------------
 
 def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, dossier_dir: Path,
-                 confirm_threshold: float, detach_threshold: float):
+                 confirm_threshold: float, detach_threshold: float,
+                 synthetic_path: Path = SYNTHETIC_PEOPLE_CSV):
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, body: bytes, content_type: str = "text/html; charset=utf-8", status: int = 200) -> None:
             self.send_response(status)
@@ -924,6 +1031,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             parents, _ = build_parents(verdicts_path, review_path)
             auto_resolve_merged(parents, review_path, confirm_threshold)
+            parents.extend(load_synthetic_parents(synthetic_path))
             params = urllib.parse.parse_qs(parsed.query)
             self.send_bytes(page_html(parents, params, review_path))
 
@@ -941,8 +1049,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_bytes(b"bad request", "text/plain", status=400)
                 return
             try:
-                result = apply_decision(review_path, verdicts_path, pub, decision, new_url,
-                                        confirm_threshold, detach_threshold)
+                if pub.strip().lower().startswith("synth-"):
+                    # synthetic rows live in synthetic-people.csv, gated by `approved` only
+                    result = apply_synthetic_decision(synthetic_path, pub, decision)
+                else:
+                    result = apply_decision(review_path, verdicts_path, pub, decision, new_url,
+                                            confirm_threshold, detach_threshold)
             except ValueError as exc:
                 self.send_bytes(str(exc).encode(), "text/plain", status=400)
                 return
