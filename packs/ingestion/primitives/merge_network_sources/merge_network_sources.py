@@ -267,12 +267,41 @@ def load_overrides(path: Path | None) -> dict[str, dict[str, Any]]:
                 "phones": {_phone10(p) for p in (row.get("match_phones") or "").split("|") if _phone10(p)},
                 "confidence": row.get("confidence", ""),
                 "reason": row.get("reason", ""),
+                # machine-owned spam-screen columns (absent in older files -> blank)
+                "person_id": (row.get("person_id") or "").strip(),
+                "llm_reject": (row.get("llm_reject") or "").strip().lower(),
+                "llm_reject_confidence": row.get("llm_reject_confidence", ""),
             }
     return overrides
 
 
 # Decisions apply only when high-confidence (auto) or the user approved (yes).
 APPLIED_APPROVALS = {"auto", "yes"}
+
+# The LLM spam flag drops a person only at high confidence — and NEVER overrides a human:
+# any user-approved (yes) decision other than detach on that person keeps them indexed.
+SPAM_DROP_CONFIDENCE = 0.85
+
+
+def spam_dropped_person_ids(overrides: dict[str, dict[str, Any]]) -> set[str]:
+    """person_ids to drop entirely at merge: LLM-flagged spam at/above the confidence bar,
+    unless the user made any keep-ish decision (approved=yes with action != detach)."""
+    flagged: set[str] = set()
+    protected: set[str] = set()
+    for ov in overrides.values():
+        pid = ov.get("person_id") or ""
+        if not pid:
+            continue
+        if ov.get("llm_reject") == "spam":
+            try:
+                conf = float(ov.get("llm_reject_confidence") or 0)
+            except ValueError:
+                conf = 0.0
+            if conf >= SPAM_DROP_CONFIDENCE:
+                flagged.add(pid)
+        if ov.get("approved") == "yes" and ov.get("action") != "detach":
+            protected.add(pid)
+    return flagged - protected
 
 
 def _scope_matches(ov: dict[str, Any], row: dict[str, Any]) -> bool:
@@ -290,12 +319,20 @@ def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, A
     person indexed"); `detach`/`retarget` clear the wrong LinkedIn (so the LinkedIn-only
     people.csv drops that old row — for a retarget the correct enriched row arrives via
     retarget-people.csv); `verify` annotates the surviving row. Idempotent."""
-    detached = verified = retargeted = excluded = 0
+    detached = verified = retargeted = excluded = spam_dropped = 0
     if not overrides:
-        return {"detached": 0, "verified": 0, "retargeted": 0, "excluded": 0}
+        return {"detached": 0, "verified": 0, "retargeted": 0, "excluded": 0, "spam_dropped": 0}
+    spam_pids = spam_dropped_person_ids(overrides)
     for row in rows:
         ov = overrides.get(row_public_identifier(row))
-        if not ov or ov["approved"] not in APPLIED_APPROVALS or not _scope_matches(ov, row):
+        if not ov or not _scope_matches(ov, row):
+            continue
+        # LLM spam screen: person-level drop, independent of the per-row decision state.
+        if spam_pids and (ov.get("person_id") or "") in spam_pids:
+            row["__excluded__"] = True
+            spam_dropped += 1
+            continue
+        if ov["approved"] not in APPLIED_APPROVALS:
             continue
         if ov["action"] == "exclude":
             row["__excluded__"] = True
@@ -310,7 +347,8 @@ def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, A
             row["linkedin_verified_confidence"] = ov["confidence"]
             row["linkedin_verified_reason"] = ov["reason"]
             verified += 1
-    return {"detached": detached, "verified": verified, "retargeted": retargeted, "excluded": excluded}
+    return {"detached": detached, "verified": verified, "retargeted": retargeted, "excluded": excluded,
+            "spam_dropped": spam_dropped}
 
 
 def stable_source_key(row: dict[str, str]) -> str:
