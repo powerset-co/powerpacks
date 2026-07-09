@@ -1,5 +1,7 @@
 # Powerpacks
 
+<!-- Changelog: 2026-07-08 — install section leads with the one-sentence agent install (install-powerpacks skill). -->
+
 `powerpacks` is a portable bundle of skills + deterministic primitives +
 check-in data contracts that turn a coding-agent host (Codex, Claude Code,
 Pi, NanoClaw) into a recruiting-search and contact-import workstation backed by
@@ -9,6 +11,18 @@ The core package is host-agnostic. The same skills run unchanged across hosts;
 only the install adapter differs.
 
 ## Install
+
+Tell your agent (Codex, Claude Code, ...) one sentence:
+
+> Download and install the Powerpacks skill from
+> https://raw.githubusercontent.com/powerset-co/powerpacks/main/packs/powerset/skills/install-powerpacks/SKILL.md
+
+Then just say what you want — the skill clones this repo, installs everything
+for your harness, and keeps going in the same session:
+
+> Use powerpacks to set up my local network search.
+
+### Other install paths
 
 For Codex, let Codex fetch/update the repo and run the installer:
 
