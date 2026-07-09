@@ -3,6 +3,10 @@
 _Created 2026-06-24._
 
 ## Changelog
+- 2026-07-09: Picked back up. Confirmed: research runs on Parallel.ai (deep_research_contacts
+  ParallelClient) — no Perplexity/Sonar dependency is ported. Added integration note: the fan-in
+  no-op cache now fingerprints override files (PR #172), so `overrides/synthetic-people.csv` must
+  join FAN_IN_OVERRIDE_FILES in index_contacts_pipeline when the merge starts reading it.
 - 2026-06-24: Initial plan.
 - 2026-06-24: Locked decisions — (1) synthetic rows **gated behind the review `approved`
   column** (confident → `auto`, rest pending; nothing hits the index unapproved);
