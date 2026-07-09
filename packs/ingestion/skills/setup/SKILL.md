@@ -13,6 +13,10 @@ Changelog:
   Modal index). $setup now: update -> login -> keys -> import LinkedIn ->
   fan-in -> index -> validate. Uses the modern import -> fan-in -> index path so
   the $import-* skills can merge their sources on top of LinkedIn.
+- 2026-07-09: Step 0 runs the updater for the CURRENT harness (bin/update-codex
+  was hardcoded — a Claude Code run refreshed Codex's skills, never its own).
+  Step 6: note the status.json path's historical name (index-people reuses the
+  Gmail progress dir; the path is correct for LinkedIn runs).
 -->
 
 # setup
@@ -43,7 +47,7 @@ Mandatory. Use your harness's plan/todo/task tool:
 Seed the checklist with these exact item titles:
 
 ```
-0. Update Powerpacks (bin/update-codex)
+0. Update Powerpacks (this harness's updater)
 1. Check Powerset login + credentials
 2. Log in to Powerset (only if not logged in)
 3. Pull runtime keys (Modal + OpenAI)
@@ -104,8 +108,12 @@ cd "$REPO"
 
 ### Step 0 — Update Powerpacks
 
+Run the updater for the harness you are running in:
+
 ```bash
-cd "$REPO" && bin/update-codex
+cd "$REPO" && bin/update-codex          # Codex
+cd "$REPO" && bin/update-claude-code    # Claude Code
+cd "$REPO" && adapters/pi/install.sh    # Pi
 ```
 
 ### Step 1 — Check Powerset login + credentials
@@ -188,9 +196,11 @@ panic:
 - **The authoritative signal is the process itself**, not a status file: it stays
   running until done and prints a final `{"status": "completed", ...}` on
   success. `index-people` writes progress to
-  `.powerpacks/runs/setup-gmail-modal/status.json` (stages `enriching` →
-  `importing` → `indexing` → `completed`) — poll that, but if it lags the live
-  stdout, **trust the running process and its stdout.**
+  `.powerpacks/runs/setup-gmail-modal/status.json` (the path name is historical —
+  index-people reuses the Gmail progress dir for every vertical, including this
+  LinkedIn run; stages `enriching` → `importing` → `indexing` → `completed`) —
+  poll that, but if it lags the live stdout, **trust the running process and its
+  stdout.**
 - **Do not treat pre-existing files in `.powerpacks/search-index/` as this run's
   output.** They may be left over from a prior run. The index is done only when
   the command exits 0 and has freshly downloaded `local-search.duckdb` +
