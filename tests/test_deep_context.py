@@ -1243,6 +1243,60 @@ class TestSubsetReviewMerge(unittest.TestCase):
             self.assertTrue(by_key[("bob", "bob-1")]["verdict"]["spam_contact"])
 
 
+class TestAssembleSyntheticProfile(unittest.TestCase):
+    def _profile(self, completeness=0.7, linkedin=None, positions=True):
+        return {
+            "person": {"full_name": "Ross Nordeen", "first_name": "Ross", "last_name": "Nordeen", "confidence": 0.9},
+            "location": {"city": "San Francisco", "country": "United States", "raw": ""},
+            "headline": {"text": "builder"},
+            "summary": {"text": "career summary"},
+            "positions": ([{"title": "CTO", "company_name": "StealthCo", "is_current": True},
+                           {"title": "Eng", "company_name": "PriorCo", "is_current": False}] if positions else []),
+            "education": [{"school_name": "MTU", "degree": "BS"}],
+            "social": {"linkedin_url": linkedin, "twitter_handle": "rpoo"},
+            "metadata": {"estimated_completeness": completeness, "gaps": ["education dates"],
+                         "research_date": "2026-07-09", "research_method": "parallel-core2x",
+                         "source_channel": "twitter"},
+        }
+
+    def test_synth_identifier_prefers_email_then_phone_then_handle(self) -> None:
+        from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
+        a = asp.synth_public_identifier("A@B.com", "+14155551234", "rpoo")
+        b = asp.synth_public_identifier("a@b.com", "", "rpoo")
+        self.assertEqual(a, b)  # email normalized, wins over phone
+        self.assertTrue(asp.synth_public_identifier("", "+14155551234", "rpoo").startswith("synth-phone-"))
+        self.assertEqual(asp.synth_public_identifier("", "", "Rpoo"), "synth-x-rpoo")
+
+    def test_build_row_maps_research_to_people_schema(self) -> None:
+        from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
+        contact = {"handle": "rpoo", "primary_email": "ross@x.com", "source_channel": "twitter"}
+        original = {"id": "pid-7", "all_emails": "ross@x.com|r@y.com", "interaction_counts": "{'email': 12}"}
+        row = asp.build_synthetic_row(self._profile(), contact, original, "pid-7")
+        self.assertTrue(row["public_identifier"].startswith("synth-email-"))
+        self.assertEqual(row["enrichment_provider"], "synthetic")
+        self.assertEqual(row["entity_urn"], "synthetic:pid-7")
+        self.assertEqual(row["current_title"], "CTO")
+        self.assertEqual(row["current_company"], "StealthCo")
+        self.assertEqual(json.loads(row["work_experiences"])[1]["company_name"], "PriorCo")
+        self.assertEqual(row["all_emails"], "ross@x.com|r@y.com")  # carry columns
+        self.assertEqual(row["approved"], "auto")  # 0.7 >= 0.6
+        self.assertIn("education dates", row["synthetic_metadata"])
+        self.assertEqual(row["linkedin_url"], "")
+
+    def test_low_completeness_waits_for_review(self) -> None:
+        from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
+        row = asp.build_synthetic_row(self._profile(completeness=0.3), {"handle": "rpoo"}, None, "")
+        self.assertEqual(row["approved"], "")
+
+    def test_usability_floor(self) -> None:
+        from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
+        self.assertTrue(asp.profile_is_usable(self._profile()))
+        no_name = self._profile(); no_name["person"]["full_name"] = ""
+        self.assertFalse(asp.profile_is_usable(no_name))
+        bare = self._profile(positions=False); bare["location"] = {}
+        self.assertFalse(asp.profile_is_usable(bare))
+
+
 class TestSpamDropAtMerge(unittest.TestCase):
     def _overrides(self, approved: str, action: str, conf: str = "0.950") -> dict:
         return {"spam-guy": {"action": action, "approved": approved, "emails": set(), "phones": set(),
@@ -1276,6 +1330,23 @@ class TestSpamDropAtMerge(unittest.TestCase):
         counts = merge.apply_overrides(rows, ov)
         self.assertEqual(counts["spam_dropped"], 1)
         self.assertTrue(rows[0].get("__excluded__"))
+
+    def test_keep_filter_admits_only_approved_synthetic_rows(self) -> None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "merge_network_sources",
+            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py")
+        merge = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(merge)
+
+        synth = {"public_identifier": "synth-email-abc123", "enrichment_provider": "synthetic"}
+        self.assertTrue(merge.keep_people_csv_row({**synth, "approved": "auto"}))
+        self.assertTrue(merge.keep_people_csv_row({**synth, "approved": "yes"}))
+        self.assertFalse(merge.keep_people_csv_row({**synth, "approved": ""}))    # pending stays out
+        self.assertFalse(merge.keep_people_csv_row({**synth, "approved": "no"}))  # user-rejected stays out
+        # real rows still require LinkedIn + rapidapi — the relaxation is synthetic-only
+        self.assertFalse(merge.keep_people_csv_row({"public_identifier": "someone", "approved": "auto"}))
 
 
 if __name__ == "__main__":

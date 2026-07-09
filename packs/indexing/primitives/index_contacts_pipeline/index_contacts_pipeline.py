@@ -40,6 +40,7 @@ FAN_IN_OVERRIDE_FILES = [
     Path(".powerpacks/network-import/overrides/review.csv"),
     Path(".powerpacks/network-import/overrides/retarget-people.csv"),
     Path(".powerpacks/network-import/overrides/consolidate-people.csv"),
+    Path(".powerpacks/network-import/overrides/synthetic-people.csv"),
 ]
 ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
 

@@ -6,6 +6,15 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-07-09: Synthetic profiles (packs/ingestion/docs/synthetic-profiles-plan.md, built).
+  `bin/deep-context assemble-synthetic` turns existing deep-research artifacts into
+  people-schema rows for people with NO real LinkedIn (synth-… identifiers,
+  enrichment_provider=synthetic, research metadata attached). Gated behind `approved`:
+  completeness >= 0.6 auto-approves, the rest wait in overrides/synthetic-people.csv.
+  The fan-in merge auto-ingests approved rows (keep-filter admits synthetic rows only
+  with approved auto/yes; real rows still require LinkedIn + rapidapi). Research runs
+  on Parallel.ai via the existing reconcile-deep-research flow — one research pass per
+  person, branching retarget (LinkedIn found) vs synthetic (none found).
 - 2026-07-06: Spam screen + LLM re-review. reconcile now also judges whether a contact is
   spammy cold outreach the user never engaged with (spam_contact/spam_confidence/spam_reason in
   the verdict schema) and writes machine-owned llm_reject/llm_reject_confidence/llm_reject_reason

@@ -212,6 +212,13 @@ def has_rapidapi_profile(row: dict[str, Any]) -> bool:
 
 
 def keep_people_csv_row(row: dict[str, Any]) -> bool:
+    # Synthetic rows (deep-researched people with NO real LinkedIn) have neither a
+    # LinkedIn key nor a rapidapi payload by design — keep them iff they carry an
+    # approved gate (auto = high research completeness, yes = user approved). Real
+    # rows keep the strict LinkedIn+rapidapi requirement unchanged.
+    if (row.get("enrichment_provider") or "").strip().lower() == "synthetic":
+        return bool((row.get("public_identifier") or "").strip()) and \
+            (row.get("approved") or "").strip().lower() in APPLIED_APPROVALS
     return bool(stable_linkedin_key(row)) and has_rapidapi_profile(row)
 
 
@@ -659,10 +666,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         return Path(value) if value else None
 
     override_path = _resolve(args.overrides, "review.csv")
-    # Auto-ingest extra people rows produced by the self-heal: retarget re-attachments and
-    # consolidation rows (a parent's children's contacts folded onto its kept LinkedIn).
+    # Auto-ingest extra people rows produced by the self-heal: retarget re-attachments,
+    # consolidation rows (a parent's children's contacts folded onto its kept LinkedIn),
+    # and approved synthetic rows (deep-researched people with no real LinkedIn).
     for extra in (_resolve(args.retarget_people, "retarget-people.csv"),
-                  _resolve(args.consolidate_people, "consolidate-people.csv")):
+                  _resolve(args.consolidate_people, "consolidate-people.csv"),
+                  _resolve(getattr(args, "synthetic_people", None), "synthetic-people.csv")):
         if extra and extra.exists() and extra not in inputs:
             inputs.append(extra)
     all_rows: list[dict[str, str]] = []
@@ -767,6 +776,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Enriched re-attach rows from apply-retargets; defaults to the overrides/ sibling of --output-dir, '' to disable.")
     run.add_argument("--consolidate-people", default=None,
                      help="Contact-only rows folding parent children onto the kept LinkedIn; defaults to the overrides/ sibling of --output-dir, '' to disable.")
+    run.add_argument("--synthetic-people", default=None,
+                     help="Deep-researched synthetic rows (no real LinkedIn) from assemble_synthetic_profile; only approved (auto/yes) rows survive the keep-filter. Defaults to the overrides/ sibling of --output-dir, '' to disable.")
     run.set_defaults(func=cmd_run)
     return parser
 

@@ -42,6 +42,8 @@ usage: bin/deep-context <command> [args]
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
   review       open the self-heal review UI (local, free)
+  assemble-synthetic  build synthetic people-rows from deep-research output for
+               people with NO real LinkedIn (free, local; approved rows merge)
   re-review    LLM re-review: refresh all non-user decisions + spam screen (spends
                OpenAI; try `re-review --dry-run` first; user yes/no rows are sticky)
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
@@ -140,6 +142,13 @@ case "$cmd" in
     # Phase 3: verify each parent against its attached LinkedIn (self-heal).
     # Use `reconcile --dry-run` for a free cost estimate first.
     "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
+    ;;
+  assemble-synthetic)
+    # Free, local: build synthetic people-rows from EXISTING deep-research artifacts
+    # for people with no real LinkedIn (see packs/ingestion/docs/synthetic-profiles-plan.md).
+    # High-completeness rows are approved=auto and flow into the next fan-in merge;
+    # the rest wait pending in overrides/synthetic-people.csv.
+    "${PY[@]}" "$PKG.assemble_synthetic_profile" "$@"
     ;;
   re-review)
     # LLM re-review (spends OpenAI; try `re-review --dry-run` first for a free estimate):
