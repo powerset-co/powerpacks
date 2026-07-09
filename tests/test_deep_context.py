@@ -1182,5 +1182,101 @@ class TestWhatsAppUSJid(unittest.TestCase):
             self.assertEqual(by_text, {"mine": "from_me", "theirs": "from_them"})
 
 
+class TestSpamRejectColumns(unittest.TestCase):
+    """The machine-owned llm_reject* columns: always refreshed, never a decision."""
+
+    def _task(self, pub: str, spam: bool, conf: float = 0.9) -> dict:
+        return {"candidate_key": pub, "action": "confirm", "person_ids": [f"pid-{pub}"],
+                "linkedin": {"linkedin_url": f"https://linkedin.com/in/{pub}"},
+                "match_emails": [], "match_phones": [],
+                "verdict": {"verdict": "confirmed", "confidence": 0.9, "reason": "r",
+                            "spam_contact": spam, "spam_confidence": conf, "spam_reason": "cold outreach" if spam else ""}}
+
+    def test_sticky_user_row_gets_llm_columns_without_touching_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "review.csv"
+            # user already verified this pub (sticky)
+            reconcile._write_override_rows(path, {"spammy": {
+                **{k: "" for k in reconcile.OVERRIDE_COLUMNS},
+                "public_identifier": "spammy", "action": "verify", "approved": "yes"}})
+            reconcile.write_overrides(path, [self._task("spammy", spam=True)])
+            row = reconcile.load_override_rows(path)["spammy"]
+            self.assertEqual(row["action"], "verify")
+            self.assertEqual(row["approved"], "yes")  # decision untouched
+            self.assertEqual(row["llm_reject"], "spam")  # machine column refreshed
+            self.assertEqual(row["llm_reject_reason"], "cold outreach")
+            # a later re-review that clears the flag also propagates
+            reconcile.write_overrides(path, [self._task("spammy", spam=False)])
+            self.assertEqual(reconcile.load_override_rows(path)["spammy"]["llm_reject"], "")
+
+    def test_backwards_compatible_with_old_csv_without_llm_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "review.csv"
+            old_cols = reconcile.OVERRIDE_COLUMNS[:13]  # pre-spam schema
+            path.write_text(",".join(old_cols) + "\nold-pub,verify,yes,,,,,,0.9,r,pid-1,src,t\n", encoding="utf-8")
+            rows = reconcile.load_override_rows(path)
+            self.assertEqual((rows["old-pub"].get("llm_reject") or ""), "")
+            reconcile._write_override_rows(path, rows)  # round-trips onto the new schema
+            self.assertIn("llm_reject", path.read_text().splitlines()[0])
+
+
+class TestSubsetReviewMerge(unittest.TestCase):
+    def test_subset_run_overlays_instead_of_clobbering(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            verdicts = Path(tmpdir) / "verdicts.jsonl"
+            rows = [
+                {"parent_slug": "alice", "candidate_key": "alice-1", "no_link": False,
+                 "linkedin": {}, "verdict": {"verdict": "confirmed", "confidence": 0.9}, "error": ""},
+                {"parent_slug": "bob", "candidate_key": "bob-1", "no_link": False,
+                 "linkedin": {}, "verdict": {"verdict": "confirmed", "confidence": 0.8}, "error": ""},
+            ]
+            verdicts.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+            fresh = [{"parent_slug": "bob", "candidate_key": "bob-1", "no_link": False,
+                      "linkedin": {}, "verdict": {"verdict": "wrong_person", "confidence": 0.95,
+                                                  "spam_contact": True, "spam_confidence": 0.9,
+                                                  "spam_reason": "cold outreach"}, "error": ""}]
+            merged = reconcile.merge_subset_tasks(verdicts, fresh)
+            by_key = {(t["parent_slug"], t["candidate_key"]): t for t in merged}
+            self.assertEqual(len(merged), 2)  # alice preserved, bob overlaid
+            self.assertEqual(by_key[("alice", "alice-1")]["verdict"]["verdict"], "confirmed")
+            self.assertEqual(by_key[("bob", "bob-1")]["verdict"]["verdict"], "wrong_person")
+            self.assertTrue(by_key[("bob", "bob-1")]["verdict"]["spam_contact"])
+
+
+class TestSpamDropAtMerge(unittest.TestCase):
+    def _overrides(self, approved: str, action: str, conf: str = "0.950") -> dict:
+        return {"spam-guy": {"action": action, "approved": approved, "emails": set(), "phones": set(),
+                             "confidence": "0.9", "reason": "r", "person_id": "pid-1",
+                             "llm_reject": "spam", "llm_reject_confidence": conf}}
+
+    def test_only_reject_drops_person(self) -> None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "merge_network_sources",
+            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py")
+        merge = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(merge)
+
+        # only the LLM flag (no user decision) -> dropped
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("", "verify")), {"pid-1"})
+        # auto decisions do NOT protect (machine vs machine)
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("auto", "verify")), {"pid-1"})
+        # a user detach does NOT protect (wrong link + spam -> gone)
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("yes", "detach")), {"pid-1"})
+        # a user keep-ish decision (verify/retarget) protects the person
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("yes", "verify")), set())
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("yes", "retarget")), set())
+        # low confidence never drops
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("", "verify", conf="0.500")), set())
+
+        # end-to-end through apply_overrides: the person row is excluded
+        ov = self._overrides("", "verify")
+        rows = [{"public_identifier": "spam-guy", "linkedin_url": "https://linkedin.com/in/spam-guy"}]
+        counts = merge.apply_overrides(rows, ov)
+        self.assertEqual(counts["spam_dropped"], 1)
+        self.assertTrue(rows[0].get("__excluded__"))
+
+
 if __name__ == "__main__":
     unittest.main()

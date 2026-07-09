@@ -5,6 +5,8 @@ description: "The single people-search door for Powerpacks. You decide surface/b
 
 <!--
 Changelog:
+- 2026-07-08: Checklist step 3 is now "Review — confirm requirements with the user" (was "GATE —").
+  Plain "Review" instead of "GATE"/"GATE 1" in the printed tasks; the core-gate keeps its name.
 - 2026-07-01: Replaced the Step-0 classifier (route_query.py, deleted) with an agent-made decision
   contract — you decide surface/backend/depth and record decision.json before anything runs. Added
   the mandatory native-task checklist and the universal confirm-before-execute gate. Explicit
@@ -49,7 +51,7 @@ Seed the checklist with these exact item titles:
 
     1. Decide + record the search decision (decision.json)
     2. Prepare the search (payload preview or deep plan)
-    3. GATE — confirm requirements with the user
+    3. Review — confirm requirements with the user
     4. Execute the search
     5. Present results
 
@@ -143,7 +145,7 @@ Input shapes normalize before `prepare`, never before the decision:
 
 **The gate (checklist item 3):** every search stops exactly once for user confirmation before
 executing — fast mode at the prepare preview (`Execute this search or modify it?`, or the local
-path's `Execute this local search or modify it?`), deep mode at GATE 1 (plan approval). Never
+path's `Execute this local search or modify it?`), deep mode at Review (plan approval). Never
 run an `execute_command` without that answer; never ask twice.
 
 ---

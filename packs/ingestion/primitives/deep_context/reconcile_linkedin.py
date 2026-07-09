@@ -161,7 +161,14 @@ SYSTEM_PROMPT = (
     "would not have a (matching) profile, set linkedin_plausibly_absent=true rather than "
     "forcing a verdict. Set recommend_deep_research=true only when EXTERNAL research could "
     "realistically resolve the identity (i.e. not when they plausibly have no profile at all). "
-    "Cite concrete supporting and contradicting evidence."
+    "Cite concrete supporting and contradicting evidence.\n\n"
+    "SPAM / COLD-OUTREACH SCREEN (separate from identity): also assess whether this CONTACT "
+    "is a spammy relationship not worth indexing — unsolicited cold outreach ('hey, would you "
+    "be interested in X', sales/SEO/agency/recruiting pitches, automated sequences) where I "
+    "never engaged, replied 'not interested', or asked them to stop. Set spam_contact=true with "
+    "spam_confidence and a one-line spam_reason. A real relationship — a colleague, friend, "
+    "warm intro, anyone I initiated with or had a genuine back-and-forth with — is NEVER spam, "
+    "no matter how pitchy a single message reads. When in doubt, spam_contact=false."
 )
 
 RECONCILE_SCHEMA: dict[str, Any] = {
@@ -175,9 +182,13 @@ RECONCILE_SCHEMA: dict[str, Any] = {
         "linkedin_plausibly_absent": {"type": "boolean"},
         "recommend_deep_research": {"type": "boolean"},
         "reason": {"type": "string", "description": "One-line rationale."},
+        "spam_contact": {"type": "boolean", "description": "Unsolicited cold-outreach contact I never engaged with."},
+        "spam_confidence": {"type": "number"},
+        "spam_reason": {"type": "string", "description": "One line; empty when spam_contact=false."},
     },
     "required": ["verdict", "confidence", "supporting_evidence", "contradicting_evidence",
-                 "linkedin_plausibly_absent", "recommend_deep_research", "reason"],
+                 "linkedin_plausibly_absent", "recommend_deep_research", "reason",
+                 "spam_contact", "spam_confidence", "spam_reason"],
 }
 
 
@@ -403,6 +414,7 @@ def connection_verdict() -> dict[str, Any]:
                                 "Connections import) — you are connected, so it is the same person."],
         "contradicting_evidence": [], "linkedin_plausibly_absent": False, "recommend_deep_research": False,
         "reason": "Ground truth: you're connected to this person on LinkedIn (linkedin_csv import).",
+        "spam_contact": False, "spam_confidence": 0.0, "spam_reason": "",
     }
 
 
@@ -553,10 +565,12 @@ def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
     if not li or not li.get("has_profile"):
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": True,
-                "recommend_deep_research": False, "reason": "no usable LinkedIn profile"}
+                "recommend_deep_research": False, "reason": "no usable LinkedIn profile",
+                "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
     return {"verdict": "confirmed", "confidence": 0.9, "supporting_evidence": ["attached link (offline stub)"],
             "contradicting_evidence": [], "linkedin_plausibly_absent": False,
-            "recommend_deep_research": False, "reason": "offline stub: trusts attached link"}
+            "recommend_deep_research": False, "reason": "offline stub: trusts attached link",
+            "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
 
 
 # --- parent markdown injection ----------------------------------------------
@@ -641,7 +655,11 @@ def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
 
 OVERRIDE_COLUMNS = ["public_identifier", "action", "approved", "new_linkedin_url",
                     "new_public_identifier", "linkedin_url", "match_emails", "match_phones",
-                    "confidence", "reason", "person_id", "source", "updated_at"]
+                    "confidence", "reason", "person_id", "source", "updated_at",
+                    # Machine-owned spam screen (backwards compatible: older files simply lack
+                    # them). The LLM may ALWAYS refresh these three — and ONLY these three — on
+                    # any row, including user-decided ones; action/approved stay user-owned.
+                    "llm_reject", "llm_reject_confidence", "llm_reject_reason"]
 # A user-touched approval is sticky — re-runs never overwrite these rows.
 USER_APPROVED = {"yes", "no"}
 
@@ -671,6 +689,16 @@ def _write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
 _VERDICT_TO_ACTION = {"wrong_person": "detach", "confirmed": "verify", "needs_review": "verify"}
 
 
+def _llm_reject_fields(v: dict[str, Any]) -> dict[str, str]:
+    """The machine-owned spam columns. Always refreshable — including on user-decided rows —
+    because they never carry a decision, only the model's latest read of the relationship."""
+    if v.get("spam_contact"):
+        return {"llm_reject": "spam",
+                "llm_reject_confidence": f"{float(v.get('spam_confidence') or 0):.3f}",
+                "llm_reject_reason": v.get("spam_reason", "")}
+    return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": ""}
+
+
 def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Upsert EVERY judged row into the single durable, approval-aware decisions table — the
     one file the user edits and the fan-in merge re-applies.
@@ -691,8 +719,11 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
         if not pub:
             continue
         if (existing.get(pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
+            # sticky: never overwrite a user decision — but the machine-owned llm_* columns
+            # are always refreshed, so a re-review can flag spam without touching the decision.
+            existing[pub].update(_llm_reject_fields(t.get("verdict") or {}))
             preserved += 1
-            continue  # sticky: never overwrite a user decision
+            continue
         v = t.get("verdict") or {}
         action = t.get("action")
         if action == "confirm":
@@ -710,6 +741,7 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
             "confidence": f"{float(v.get('confidence') or 0):.3f}",
             "reason": v.get("reason", ""), "person_id": (t.get("person_ids") or [""])[0],
             "source": "deep-context-reconcile", "updated_at": now_iso(),
+            **_llm_reject_fields(v),
         }
         if approved == "auto":
             detach += ov_action == "detach"
@@ -991,6 +1023,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     people = load_people_rows(Path(args.people_csv))
     tasks = build_tasks(index, people, Path(args.facts_dir), Path(args.raw_dir), Path(args.profile_cache_dir))
+    # Subset targeting (--slug/--limit): cheap spot re-reviews (e.g. testing the spam screen)
+    # without re-judging everyone. Results MERGE into verdicts.jsonl (see _finalize).
+    if getattr(args, "slug", None):
+        wanted = {s.strip().lower() for s in args.slug}
+        tasks = [t for t in tasks if (t.get("parent_slug") or "").lower() in wanted]
+    if getattr(args, "limit", 0):
+        tasks = tasks[: args.limit]
     # Ground truth first: contacts who ARE your LinkedIn connections are confirmed without the LLM.
     connections = [t for t in tasks if t.get("from_connections") and not t.get("no_link")]
     for t in connections:
@@ -1054,8 +1093,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             task["verdict"] = deterministic_verdict(task)
             task["error"] = ""
 
+    # A subset run must not clobber the full verdicts file: overlay the fresh rows onto the
+    # existing verdicts so the review UI keeps seeing everyone.
+    if getattr(args, "slug", None) or getattr(args, "limit", 0):
+        tasks = merge_subset_tasks(Path(args.verdicts_jsonl), tasks)
+
     return _finalize(args, tasks, index, usage_total=usage_total, use_llm=use_llm,
                      judged=len(judgeable), started=started)
+
+
+def merge_subset_tasks(verdicts_path: Path, fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Overlay freshly judged tasks onto the existing verdicts file by (parent_slug,
+    candidate_key). Existing rows keep their old verdicts; downstream decide/override
+    passes are idempotent and sticky, so re-running them over the merged set is safe."""
+    existing = load_tasks_from_verdicts(verdicts_path)
+    merged: dict[tuple[str, str], dict[str, Any]] = {
+        ((t.get("parent_slug") or ""), (t.get("candidate_key") or "")): t for t in existing
+    }
+    for t in fresh:
+        merged[((t.get("parent_slug") or ""), (t.get("candidate_key") or ""))] = t
+    return list(merged.values())
 
 
 def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict[str, Any], *,
@@ -1145,6 +1202,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Durable override the fan-in merge re-applies (detach/verify per public_identifier)")
     p.add_argument("--consolidate-people-csv", default=str(CONSOLIDATE_PEOPLE_CSV),
                    help="Contact-only rows folding each parent's children onto its kept LinkedIn")
+    p.add_argument("--slug", action="append", default=None,
+                   help="Only re-judge these parent slugs (repeatable). Results merge into verdicts.jsonl.")
+    p.add_argument("--limit", type=int, default=0,
+                   help="Only re-judge the first N tasks (0 = all). Results merge into verdicts.jsonl.")
     p.add_argument("--dry-run", action="store_true", help="Estimate cost only; no spend, no writes")
     p.add_argument("--no-overrides", action="store_true", help="Write verdicts but do NOT update the override table")
     p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
