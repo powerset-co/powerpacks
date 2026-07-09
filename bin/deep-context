@@ -42,6 +42,8 @@ usage: bin/deep-context <command> [args]
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
   review       open the self-heal review UI (local, free)
+  re-review    LLM re-review: refresh all non-user decisions + spam screen (spends
+               OpenAI; try `re-review --dry-run` first; user yes/no rows are sticky)
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
   apply-retargets           enrich approved retargets -> retarget-people.csv
   realize      fan-in merge applying your decisions (free, local)
@@ -137,6 +139,13 @@ case "$cmd" in
   reconcile)
     # Phase 3: verify each parent against its attached LinkedIn (self-heal).
     # Use `reconcile --dry-run` for a free cost estimate first.
+    "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
+    ;;
+  re-review)
+    # LLM re-review (spends OpenAI; try `re-review --dry-run` first for a free estimate):
+    # fresh re-judge of everyone, refreshing every decision the user has NOT made themselves
+    # (pending + approved=auto rows) plus the spam screen. The machine-owned llm_reject*
+    # columns always update; user rows (approved yes/no) keep action/approved untouched.
     "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
     ;;
   review)

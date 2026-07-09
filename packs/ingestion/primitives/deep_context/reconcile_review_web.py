@@ -57,7 +57,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 APPLIED_APPROVED = {"auto", "yes"}
-VALID_TABS = {"all", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided"}
+VALID_TABS = {"all", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided", "rejected"}
 
 
 # --- model: join verdicts.jsonl (display) with review.csv (decisions) -------
@@ -171,8 +171,16 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
             "action": dec.get("action", ""),
             "approved": (dec.get("approved") or "").strip().lower(),
             "new_url": dec.get("new_linkedin_url", ""),
+            # machine-owned spam screen (review.csv llm_* columns)
+            "llm_reject": (dec.get("llm_reject") or "").strip().lower(),
+            "llm_reject_confidence": dec.get("llm_reject_confidence", ""),
+            "llm_reject_reason": dec.get("llm_reject_reason", ""),
         })
     return list(parents.values()), overrides
+
+
+def is_llm_rejected(parent: dict[str, Any]) -> bool:
+    return any(c.get("llm_reject") == "spam" for c in parent["candidates"])
 
 
 def parent_in_tab(parent: dict[str, Any], tab: str) -> bool:
@@ -182,6 +190,11 @@ def parent_in_tab(parent: dict[str, Any], tab: str) -> bool:
         return is_decided(parent)
     if tab == "conflict":
         return any(c.get("conflict") for c in parent["candidates"]) or len(parent["candidates"]) > 1
+    if tab == "rejected":
+        return is_llm_rejected(parent)
+    if tab == "review":
+        # spam-flagged people are handled on the Rejected tab, not the review pile
+        return parent_status(parent) == "review" and not is_llm_rejected(parent)
     return parent_status(parent) == tab
 
 
@@ -196,7 +209,7 @@ def parent_matches_query(parent: dict[str, Any], q: str) -> bool:
 
 
 def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
-    s = {k: 0 for k in ("total", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided")}
+    s = {k: 0 for k in ("total", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided", "rejected")}
     s["total"] = len(parents)
     for p in parents:
         s[parent_status(p)] += 1
@@ -204,6 +217,11 @@ def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
             s["conflict"] += 1
         if is_decided(p):
             s["decided"] += 1
+        if is_llm_rejected(p):
+            s["rejected"] += 1
+    # user-facing: a retarget ("fixed") reads as verified; spam-flagged leave the review pile
+    s["verified"] += s["fixed"]
+    s["review"] = sum(1 for p in parents if parent_in_tab(p, "review"))
     return s
 
 
@@ -296,7 +314,7 @@ def esc(value: Any) -> str:
 
 
 STATUS_LABEL = {"review": "needs review", "verified": "verified", "detached": "detached",
-                "fixed": "fixed", "excluded": "excluded"}
+                "fixed": "verified", "excluded": "excluded"}
 
 
 # Direction-aware judgment line: the confidence is confidence IN THE VERDICT, so a
@@ -343,10 +361,14 @@ def _is_collapsible_wrong(cand: dict[str, Any]) -> bool:
 
 
 def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
-                     show_exclude: bool = True, parent_label: bool = False) -> str:
+                     show_exclude: bool = True, parent_label: bool = False,
+                     using_parent: bool = False) -> str:
     st = candidate_state(cand)
     option = f"<span class='opt'>Option {idx + 1} of {total}</span>" if total > 1 else ""
     badge = "<span class='parentbadge' title='the LinkedIn we keep for this person'>parent</span>" if parent_label else ""
+    if using_parent:
+        badge += ("<span class='usingparent' title=\"Detaching this LinkedIn does NOT lose the email/phone "
+                  "— it stays on this person, under the parent LinkedIn above\">✓ email kept on this person</span>")
     judgment = judgment_line(cand["verdict"], cand["confidence"])
     profile = []
     if cand["headline"]:
@@ -373,7 +395,12 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
         flags.append("<span class='flag'>may have no LinkedIn</span>")
     if cand["recommend_dr"]:
         flags.append("<span class='flag'>deep-research suggested</span>")
-    fixed_note = f"<div class='fixednote'>→ re-targeted to <a href='{esc(cand['new_url'])}' target='_blank' rel='noreferrer'>{esc(cand['new_url'])}</a></div>" if st == "fixed" and cand["new_url"] else ""
+    if cand.get("llm_reject") == "spam":
+        conf = cand.get("llm_reject_confidence") or ""
+        pct = f" {float(conf) * 100:.0f}%" if conf else ""
+        flags.append(f"<span class='flag flag-spam' title='{esc(cand.get('llm_reject_reason') or '')}'>"
+                     f"🚫 spam-flagged{pct} — won't be indexed unless you keep them</span>")
+    fixed_note = f"<div class='fixednote'>✓ verified — corrected LinkedIn: <a href='{esc(cand['new_url'])}' target='_blank' rel='noreferrer'>{esc(cand['new_url'])}</a></div>" if st == "fixed" and cand["new_url"] else ""
     pic = cand.get("profile_pic_url") or ""
     avatar = (f"<img class='avatar' src='{esc(pic)}' alt='' loading='lazy' referrerpolicy='no-referrer' "
               f"onerror='this.style.display=&quot;none&quot;'>" if pic else "<span class='avatar avatar-empty'></span>")
@@ -399,14 +426,53 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
       </div>
       {fixed_note}
       <div class='actions'>
-        <button class='btn keep' data-act='keep'>Keep this LinkedIn</button>
-        <button class='btn detach' data-act='detach'>Detach (wrong person)</button>
+        <button class='btn keep{" suggested" if parent_label and st == "review" else ""}' data-act='keep'>Keep this LinkedIn</button>
+        <button class='btn detach{" suggested" if using_parent and st == "review" else ""}' data-act='detach'>Detach (wrong person)</button>
         <span class='fixwrap'><input class='fixurl' placeholder='paste correct LinkedIn URL'>
           <button class='btn fix' data-act='fix'>Fix</button></span>
         {"<button class='btn exclude' data-act='exclude-person' title=\"Don't index this person at all — drops them from people.csv (whole person, all LinkedIns)\">✕ Exclude person</button>" if show_exclude else ""}
         <button class='btn reset' data-act='reset' title='revert to the model decision'>↺</button>
       </div>
     </div>"""
+
+
+def auto_resolve_merged(parents: list[dict[str, Any]], review_path: Path,
+                        confirm_threshold: float) -> int:
+    """Minimize clicks on merged (multi-LinkedIn) people: machine-apply the obvious decisions
+    as approved='auto' so a human only overturns mistakes instead of confirming the obvious.
+    - Every non-parent LinkedIn still undecided -> detach (its email stays on the person).
+    - The ranked-first 'parent' -> verify, but ONLY when the judge is confident it's the same
+      person (verdict confirmed at/above the confirm bar). Unclear parents stay needs-review.
+    Never touches user decisions (approved yes/no). Idempotent: decided rows are skipped."""
+    changed = 0
+    rows = load_override_rows(review_path)
+    for parent in parents:
+        cands = parent["candidates"]
+        if len(cands) < 2:
+            continue
+        ordered = sorted(cands, key=_cand_rank)
+        for i, cand in enumerate(ordered):
+            if candidate_state(cand) != "review":
+                continue
+            pub = (cand.get("pub") or "").strip().lower()
+            if not pub:
+                continue
+            if i == 0:
+                if not (cand.get("verdict") == "confirmed" and cand.get("confidence", 0.0) >= confirm_threshold):
+                    continue
+                action = "verify"
+            else:
+                action = "detach"
+            row = rows.get(pub) or {k: "" for k in OVERRIDE_COLUMNS}
+            row["public_identifier"] = pub
+            row["action"], row["approved"] = action, "auto"
+            row["new_linkedin_url"], row["new_public_identifier"] = "", ""
+            rows[pub] = row
+            cand["action"], cand["approved"] = action, "auto"
+            changed += 1
+    if changed:
+        _write_override_rows(review_path, rows)
+    return changed
 
 
 def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
@@ -433,10 +499,12 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
         shown, collapsed = ordered, []
     if multi:
         cand_html = "".join(
-            render_candidate(i, n_cand, c, show_exclude=False, parent_label=(i == 0))
+            render_candidate(i, n_cand, c, show_exclude=False, parent_label=(i == 0),
+                             using_parent=(i != 0))
             for i, c in enumerate(shown))
         if collapsed:
-            wrong = "".join(render_candidate(0, 1, c, show_exclude=False) for c in collapsed)
+            wrong = "".join(render_candidate(0, 1, c, show_exclude=False, using_parent=True)
+                            for c in collapsed)
             n_wrong = len(collapsed)
             cand_html += (f"<details class='wrongones'><summary>show {n_wrong} likely-wrong "
                           f"match{'es' if n_wrong != 1 else ''}</summary>{wrong}</details>")
@@ -447,14 +515,17 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
         cand_html = "".join(render_candidate(i, n_cand, c) for i, c in enumerate(shown))
         exclude_top = ""
     cands = cand_html
-    banner = (f"<div class='conflictbanner'>⚠ Merged person — {n_cand} different LinkedIns ended up on "
-              f"this one person. Keep the right one and detach the rest.</div>" if multi else "")
+    banner = (f"<div class='conflictbanner'>⚠ Multiple emails — {n_cand} different LinkedIns matched "
+              f"this one person. We keep the parent and detach the rest automatically (every email "
+              f"stays on this person) — overturn below if we picked wrong.</div>" if multi else "")
     # Clarify which dossier this is: it's the whole person's combined message history, not
     # tied to any single LinkedIn candidate (that confusion is what the label fixes).
     doss_label = "show message dossier — all messages for this person"
     if n_people > 1:
         doss_label += f" ({n_people} clusters)"
     parent_cls = "parent multi" if multi else "parent"
+    if is_llm_rejected(parent):
+        parent_cls += " llmrejected"
     summary_pic = next((c.get("profile_pic_url") for c in cands_list if c.get("profile_pic_url")), "")
     summary_avatar = (f"<img class='avatar avatar-sm' src='{esc(summary_pic)}' alt='' loading='lazy' "
                       f"referrerpolicy='no-referrer' onerror='this.style.display=&quot;none&quot;'>"
@@ -465,7 +536,7 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
         <span class='chip chip-{status}'>{esc(STATUS_LABEL.get(status, status))}</span>
         {summary_avatar}
         <span class='pname'>{esc(parent['name'])}</span>
-        {"<span class='multibadge'>" + str(n_cand) + " LinkedIns</span>" if multi else f"<span class='picked'>{picked_html}</span>"}
+        {"<span class='multibadge'>" + str(n_cand) + " LinkedIns</span><span class='usingparent usingparent-sm' title='All this person&#39;s emails/phones stay together — one LinkedIn is kept, the rest get detached'>✓ " + str(n_cand) + " accounts linked, keeps 1</span>" if multi else f"<span class='picked'>{picked_html}</span>"}
         <span class='pmeta'>{n_people} message cluster{'s' if n_people != 1 else ''} · conf {conf}</span>
       </summary>
       <div class='pbody'>
@@ -524,8 +595,9 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         f"<div class='stat'><span>you decided</span><strong data-count='decided'>{summary['decided']}</strong></div>",
         "</div></header>",
         "<nav class='tabs'>",
-        tab_link("conflict", "Merged", "conflict"),
+        tab_link("conflict", "Multiple emails", "conflict"),
         tab_link("review", "Needs review", "review"),
+        tab_link("rejected", "Rejected", "rejected"),
         tab_link("excluded", "Excluded", "excluded"),
         tab_link("all", "All", "total"),
         "</nav>",
@@ -594,7 +666,7 @@ summary::-webkit-details-marker{display:none}
 .chip-review{color:var(--warn);border-color:#e7d3ad}
 .chip-verified{color:var(--ok);border-color:#a8d5cd}
 .chip-detached{color:var(--bad);border-color:#e6b8b0}
-.chip-fixed{color:var(--fix);border-color:#c9bce8}
+.chip-fixed{color:var(--ok);border-color:#a8d5cd}
 .pname{font-weight:700;font-size:15px;min-width:150px}
 .picked{font-size:12.5px;color:var(--muted);flex:1;overflow-wrap:anywhere}
 .picked a{color:var(--ok);text-decoration:none}.picked a:hover{text-decoration:underline}
@@ -630,7 +702,7 @@ summary::-webkit-details-marker{display:none}
 .flag{font-size:10.5px;border-radius:999px;padding:2px 6px;background:#eef1f5;color:#5b6876}
 .flag.conflict{background:#fff;border:1px solid var(--line);color:var(--warn)}
 .cand-state{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
-.state-verified{color:var(--ok)}.state-detached{color:var(--bad)}.state-fixed{color:var(--fix)}.state-review{color:var(--warn)}
+.state-verified{color:var(--ok)}.state-detached{color:var(--bad)}.state-fixed{color:var(--ok)}.state-review{color:var(--warn)}
 .profile .hl{font-size:13px;color:#334155;font-weight:600}
 .profile .loc{font-size:12px;color:var(--muted)}
 .exp{margin:5px 0;padding-left:18px;font-size:12.5px;color:#334155}
@@ -684,6 +756,12 @@ summary::-webkit-details-marker{display:none}
 .parent-actions{display:flex;justify-content:flex-end;margin-bottom:2px}
 .exclude-top{font-size:12px}
 .parentbadge{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#fff;background:var(--ok);border-radius:999px;padding:2px 9px}
+.usingparent{font-size:11px;font-weight:700;color:var(--ok);background:var(--okbg);border:1px solid var(--ok);border-radius:999px;padding:2px 9px;white-space:nowrap}
+.usingparent-sm{font-size:10.5px;padding:1px 8px;flex:0 0 auto}
+.btn.keep.suggested{background:var(--okbg);border-color:var(--ok);color:var(--ok);font-weight:700}
+.btn.detach.suggested{background:var(--badbg);border-color:var(--bad);color:var(--bad);font-weight:700}
+.btn.suggested::after{content:" · suggested";font-size:10.5px;font-weight:600;opacity:.75}
+.flag-spam{background:var(--badbg);color:var(--bad);border:1px solid var(--bad)}
 .wrongones{margin-top:4px;border-top:1px dashed var(--line);padding-top:6px}
 .wrongones>summary{color:var(--bad);background:#fff;border:1px solid var(--line)}
 .wrongones>summary:hover{background:var(--soft)}
@@ -695,7 +773,7 @@ summary::-webkit-details-marker{display:none}
 JS = r"""
 const toast=document.getElementById('toast');let tt=null;
 function showToast(t){toast.textContent=t;toast.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>toast.classList.remove('show'),1300)}
-const LBL={review:'needs review',verified:'verified',detached:'detached',fixed:'fixed',excluded:'excluded'};
+const LBL={review:'needs review',verified:'verified',detached:'detached',fixed:'verified',excluded:'excluded'};
 function candStateOf(c){return ([...c.classList].find(x=>x.startsWith('cand-')&&x!=='cand')||'cand-review').slice(5)}
 function setCandState(cand,action,approved,newUrl){
   cand.classList.remove('cand-verified','cand-detached','cand-fixed','cand-review','cand-excluded');
@@ -706,6 +784,8 @@ function setCandState(cand,action,approved,newUrl){
   cand.classList.add('cand-'+st);
   const se=cand.querySelector('.cand-state');se.className='cand-state state-'+st;se.textContent=LBL[st];
   cand.querySelectorAll('.btn').forEach(b=>b.classList.remove('on'));
+  // a real decision replaces the pre-highlighted suggestion
+  if(st!=='review')cand.querySelectorAll('.btn.suggested').forEach(b=>b.classList.remove('suggested'));
   if(st==='verified')cand.querySelector('.btn.keep').classList.add('on');
   if(st==='detached')cand.querySelector('.btn.detach').classList.add('on');
   if(st==='fixed')cand.querySelector('.btn.fix').classList.add('on');
@@ -723,6 +803,9 @@ function parentStatusFromCands(parent){
 function updateCounts(){
   const c={review:0,verified:0,detached:0,fixed:0,excluded:0,decided:0};
   document.querySelectorAll('.parent').forEach(p=>{c[parentStatusFromCands(p)]++;if(p.classList.contains('decided'))c.decided++;});
+  // mirror the server's user-facing folds: retargets read as verified; spam-flagged aren't "needs review"
+  c.verified+=c.fixed;
+  document.querySelectorAll('.parent.llmrejected').forEach(p=>{if(parentStatusFromCands(p)==='review')c.review--;});
   ['review','verified','detached','excluded','decided'].forEach(k=>{
     const el=document.querySelector('.stat strong[data-count="'+k+'"]');if(el)el.textContent=c[k];});
 }
@@ -769,8 +852,20 @@ async function decide(cand,act){
   let url='';
   if(act==='fix'){url=cand.querySelector('.fixurl').value.trim();if(!url){showToast('paste a LinkedIn URL first');return}}
   try{const j=await postDecide(cand,act,url);setCandState(cand,j.action,j.approved,j.new_url);
-    refreshParent(cand.closest('.parent'));
-    showToast({keep:'Kept',detach:'Detached',fix:'Re-targeted',reset:'Reset to model'}[act]||'Saved');
+    const parent=cand.closest('.parent');
+    // Keeping/fixing one LinkedIn on a merged person IS the decision for the whole person:
+    // auto-detach the other still-undecided LinkedIns (incl. ones tucked in the likely-wrong
+    // expander) so one click resolves the row. Explicit user decisions are never overridden.
+    let auto=0;
+    if((act==='keep'||act==='fix')&&parent.classList.contains('multi')){
+      for(const sib of parent.querySelectorAll('.cand')){
+        if(sib!==cand&&candStateOf(sib)==='review'){
+          const sj=await postDecide(sib,'detach','');setCandState(sib,sj.action,sj.approved,sj.new_url);auto++;}
+      }
+    }
+    refreshParent(parent);
+    const base={keep:'Kept',detach:'Detached',fix:'Re-targeted',reset:'Reset to model'}[act]||'Saved';
+    showToast(auto?base+' — detached the other '+auto+' LinkedIn'+(auto===1?'':'s')+' for you':base);
   }catch(e){showToast('Save failed: '+e.message)}
 }
 document.querySelectorAll('.cand .btn:not(.exclude)').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();decide(b.closest('.cand'),b.dataset.act)}));
@@ -828,6 +923,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             parents, _ = build_parents(verdicts_path, review_path)
+            auto_resolve_merged(parents, review_path, confirm_threshold)
             params = urllib.parse.parse_qs(parsed.query)
             self.send_bytes(page_html(parents, params, review_path))
 

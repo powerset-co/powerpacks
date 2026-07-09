@@ -6,6 +6,20 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-07-06: Spam screen + LLM re-review. reconcile now also judges whether a contact is
+  spammy cold outreach the user never engaged with (spam_contact/spam_confidence/spam_reason in
+  the verdict schema) and writes machine-owned llm_reject/llm_reject_confidence/llm_reject_reason
+  columns into overrides/review.csv (backwards compatible; ALWAYS refreshed, even on user-decided
+  rows — action/approved stay user-owned). The fan-in merge drops spam-flagged people (conf >=
+  0.85) UNLESS the user made a keep-ish decision (approved=yes, action != detach). The review UI
+  gained a "Rejected" tab showing flagged people (spam-flagged leave the Needs-review pile; a Keep
+  there protects them). `$deep-context re-review` / "re-review my contacts" / "refresh the LLM
+  decisions" runs `bin/deep-context re-review` — a fresh LLM re-judge refreshing all NON-user
+  decisions + the spam screen; user yes/no rows keep their action. SPEND-GATED like reconcile:
+  always run `re-review --dry-run` first and confirm the estimate with the user. Also: merged
+  (multi-LinkedIn) people now auto-resolve in the review UI (parent auto-verifies when the judge
+  is confident, the rest auto-detach as approved=auto — one overturn click instead of N confirms),
+  and a retarget ("fix") now reads as "verified" in the UI.
 - 2026-06-29: Added a review-only fast path. `$deep-context review` (or "open/show the review
   UI", "let me click through") now just runs `bin/deep-context review` — read-only over the
   existing reconcile artifacts, opens the browser, no checklist, no spend — instead of walking
