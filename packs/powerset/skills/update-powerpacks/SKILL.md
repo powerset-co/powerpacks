@@ -115,6 +115,8 @@ Tell the user:
 - which repo path was updated;
 - which installer ran;
 - the current git commit;
+- the install stamp the installer wrote (`<skills-dir>/.powerpacks-install.json`:
+  version + commit + installed_at) — this is how a stale install is detected;
 - whether local changes were stashed and popped (and the stash name if a pop
   conflict left the stash in place);
 - that they must restart/reload the agent to pick up changed skills.
