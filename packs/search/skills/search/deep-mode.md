@@ -25,6 +25,10 @@ Changelog:
   run_shotgun -> run_wide_search) and the route recruit -> deep.
 - 2026-07-01: Entry is now the agent-made Step-1 decision (`depth: deep` in decision.json), not
   the deleted route_query classifier. Review doubles as $search's universal pre-execute gate.
+- 2026-07-09: Geo-first sourcing. decompose_jd extracts the JD's metro and appends it to ~3/4 of
+  the probe seeds (every 4th stays global as the recall hedge); --location overrides, --location
+  global disables. Previously NO location was used at all (JD or company) — verified live: an SF
+  on-site JD produced 16/16 location-free probes.
 - 2026-07-03: Present the shortlist with a ~0.55 SENDABLE CUT (measured on the AgentMail rerun:
   the core-gated tail below ~0.55 was padding); keep the full score-only pool (consensus.json,
   mean >=0.40 + in-band, no core-gate) as the bench to mine. Judge rubric gained research-evidence,
@@ -67,6 +71,13 @@ The plan is the highest-leverage artifact — the core must-haves *are* the shor
 is where the human sharpens a niche role ("delivered large hardware" → "delivered large
 *fusion/plasma* hardware") or just confirms the domain for a common one. Let the user edit
 `plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the end.
+
+Also surface the **sourcing location** at this checkpoint: `decompose_jd` extracts the JD's stated
+metro (e.g. "San Francisco, CA · on-site" → "San Francisco Bay Area") and geo-constrains ~3 of 4
+probes to it — smaller first blast radius — while every 4th probe stays global as the recall hedge
+(relocators/remote-friendly hires are real: a measured SF-role GT included Seattle/NY/Bengaluru
+people). The decompose summary prints `location` + `geo_seeds`; if the metro is wrong or the user
+wants global sourcing, re-run `decompose_jd.py --location "<metro>"` (or `--location global`).
 
 **JD input.** Supply the role either way — job-posting URLs, pasted JDs, and complex role briefs
 all run here:

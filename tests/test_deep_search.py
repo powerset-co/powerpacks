@@ -175,6 +175,21 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("Build RAG systems", msgs[-1]["content"])
         self.assertIn("7", msgs[-1]["content"])
 
+    def test_location_mix_geo_first_with_global_hedge(self):
+        seeds = [{"key": f"q{i:02d}", "query": f"seed {i}."} for i in range(8)]
+        geo = dj.apply_location_mix(seeds, "San Francisco Bay Area")
+        self.assertEqual(geo, 6)  # every 4th seed stays global
+        self.assertIn("based in San Francisco Bay Area", seeds[0]["query"])
+        self.assertNotIn("based in", seeds[3]["query"])  # the hedge seeds
+        self.assertNotIn("based in", seeds[7]["query"])
+        self.assertNotIn("..", seeds[0]["query"])  # trailing period stripped before suffix
+
+    def test_location_mix_noop_when_empty(self):
+        seeds = [{"key": "q00", "query": "seed 0."}]
+        self.assertEqual(dj.apply_location_mix(seeds, ""), 0)
+        self.assertEqual(dj.apply_location_mix(seeds, "   "), 0)
+        self.assertEqual(seeds[0]["query"], "seed 0.")
+
 
 class TestExpandFromAnchor(unittest.TestCase):
     def test_anchor_to_seed_from_profile(self):
