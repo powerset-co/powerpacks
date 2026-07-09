@@ -125,6 +125,29 @@ install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/S
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
 
+# Install stamp: which Powerpacks these skills came from. Auto-generated (never
+# hand-bumped, so it can't drift): release version from the Release Please
+# manifest + the exact commit + when. Lets update-powerpacks/doctor detect stale
+# installs instead of discovering them by zombie skills.
+write_install_stamp() {
+  local harness="$1" dest="$2"
+  local version commit
+  version="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["."])' "$REPO_ROOT/.release-please-manifest.json" 2>/dev/null || echo unknown)"
+  commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  cat > "$dest" <<EOF
+{
+  "package": "powerpacks",
+  "version": "$version",
+  "commit": "$commit",
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "harness": "$harness",
+  "repo_root": "$REPO_ROOT"
+}
+EOF
+}
+write_install_stamp codex "$SKILLS_DIR/.powerpacks-install.json"
+write_install_stamp codex "$BUNDLE_DIR/.powerpacks-install.json"
+
 if [[ "${POWERPACKS_SKIP_AGENT_BOOTSTRAP:-}" == "1" ]]; then
   echo "skipped local Codex profile generation (POWERPACKS_SKIP_AGENT_BOOTSTRAP=1)"
 elif uv run --project "$REPO_ROOT" python "$REPO_ROOT/bin/agent-bootstrap"; then

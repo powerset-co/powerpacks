@@ -96,6 +96,21 @@ install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/S
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
 
+# Install stamp: which Powerpacks these skills came from (auto-generated, never
+# hand-bumped). Lets update-powerpacks/doctor detect stale installs.
+version="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["."])' "$REPO_ROOT/.release-please-manifest.json" 2>/dev/null || echo unknown)"
+commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+cat > "$SKILLS_DIR/.powerpacks-install.json" <<EOF
+{
+  "package": "powerpacks",
+  "version": "$version",
+  "commit": "$commit",
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "harness": "claude-code",
+  "repo_root": "$REPO_ROOT"
+}
+EOF
+
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search build-outbound"
 echo "  setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context discover-contacts import-twitter"
