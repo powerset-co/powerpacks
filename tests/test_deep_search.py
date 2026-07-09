@@ -39,6 +39,8 @@ cj_judge = _load("codex_judge")
 rs = _load("robust_source")
 rl = _load("deep_search_loop")
 fj = _load("fetch_jd")
+ms = _load("micro_sort_shortlist")
+pc = _load("plan_critic")
 
 
 class TestSubprocessUtils(unittest.TestCase):
@@ -189,6 +191,47 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertEqual(dj.apply_location_mix(seeds, ""), 0)
         self.assertEqual(dj.apply_location_mix(seeds, "   "), 0)
         self.assertEqual(seeds[0]["query"], "seed 0.")
+
+
+class TestMicroSortShortlist(unittest.TestCase):
+    def _rows(self, scores):
+        return [{"person_id": f"p{i:02d}", "name": f"P{i}", "mean_score": s} for i, s in enumerate(scores)]
+
+    def test_banding_packs_adjacent_and_passes_through_low_scores(self):
+        rows = self._rows([0.82, 0.81, 0.80, 0.74, 0.73, 0.71, 0.44, 0.41])
+        batches, passthrough = ms.build_batches(rows)
+        self.assertEqual(len(batches), 1)  # 0.8 + 0.7 bands pack under the cap
+        self.assertEqual(len(batches[0]), 6)
+        self.assertEqual([r["person_id"] for r in passthrough], ["p06", "p07"])  # <0.5 untouched
+
+    def test_oversized_band_splits_into_subbatches(self):
+        rows = self._rows([0.80 + i * 0.001 for i in range(45)])  # one 0.8 band of 45
+        batches, passthrough = ms.build_batches(rows)
+        self.assertEqual(passthrough, [])
+        self.assertEqual([len(b) for b in batches], [20, 20, 5])  # split at BATCH_CAP, merged in order
+
+    def test_tiny_band_keeps_original_order(self):
+        rows = self._rows([0.9, 0.9])  # below MIN_BAND_SIZE
+        batches, passthrough = ms.build_batches(rows)
+        self.assertEqual([len(b) for b in batches], [2])  # flushed as-is, never split
+
+    def test_validate_ordering_dedupes_and_restores_missing(self):
+        batch = self._rows([0.8, 0.8, 0.8])
+        out = ms.validate_ordering(["p02", "p02", "ghost", "p00"], batch, "person_id")
+        self.assertEqual([r["person_id"] for r in out], ["p02", "p00", "p01"])  # dupe+ghost dropped, missing appended
+
+
+class TestPlanCritic(unittest.TestCase):
+    def test_deterministic_checks_flag_off_enum_stage_and_missing_core(self):
+        issues = pc.deterministic_checks({"hire_stage": "growth", "traits": {"must_have": [{"trait": "x", "tier": "table_stakes"}]}})
+        self.assertEqual(len(issues), 2)
+        self.assertIn("off-enum", issues[0])
+        self.assertIn("core", issues[1])
+
+    def test_deterministic_checks_pass_valid_plan(self):
+        issues = pc.deterministic_checks({"hire_stage": "founding_early",
+                                          "traits": {"must_have": [{"trait": "x", "tier": "core"}]}})
+        self.assertEqual(issues, [])
 
 
 class TestExpandFromAnchor(unittest.TestCase):
@@ -889,8 +932,9 @@ class TestRecruitLoopAnchors(unittest.TestCase):
             (edir / "candidate_evaluations.raw.jsonl").write_text(json.dumps({"candidate_id": "p1", "jd_score": 0.1}) + "\n")
 
         argv = sys.argv
-        # --no-triage: this test pins plan preservation + build skip on resume, not phase-1 filtering
-        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1", "--plan-approved", "--no-triage"]
+        # --no-triage/--no-micro-sort: this test pins plan preservation + build skip on resume,
+        # not phase-1 filtering or the final ordering pass
+        sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1", "--plan-approved", "--no-triage", "--no-micro-sort"]
         try:
             with mock.patch.object(rl, "run", side_effect=fake_run), mock.patch.object(rl, "judge", side_effect=fake_judge):
                 rl.main()
