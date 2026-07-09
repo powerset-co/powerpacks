@@ -119,6 +119,16 @@ def build_batches(rows: list[dict[str, Any]], *, score_key: str = "mean_score") 
     return batches, passthrough
 
 
+def cap_batches(batches: list[list[dict[str, Any]]], max_batches: int) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
+    """Deterministic runtime bound: keep only the first (highest-scoring) max_batches
+    batches — effective sort region = max_batches * BATCH_CAP candidates (default 200).
+    Dropped batches keep their score order and are appended after the sorted region."""
+    if len(batches) <= max_batches:
+        return batches, []
+    dropped = [r for b in batches[max_batches:] for r in b]
+    return batches[:max_batches], dropped
+
+
 def validate_ordering(output_ids: list[str], batch: list[dict[str, Any]], id_key: str) -> list[dict[str, Any]]:
     """Dedupe, drop unknown ids, append any the model lost — never lose a candidate."""
     by_id = {str(r.get(id_key)): r for r in batch}
@@ -184,6 +194,10 @@ def main() -> None:
     ap.add_argument("--out", default=None, help="Output (default <run>/shortlist/ranked_final.json)")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--concurrency", type=int, default=4)
+    ap.add_argument("--max-batches", type=int, default=MAX_BATCHES,
+                    help=f"Deterministic runtime bound: sort at most N batches of {BATCH_CAP} "
+                         f"(default {MAX_BATCHES} -> top ~{MAX_BATCHES * BATCH_CAP}); 5 -> top ~100. "
+                         "Everything past the cap keeps its judge-score order.")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -207,12 +221,9 @@ def main() -> None:
             evidence[str(r.get("candidate_id") or r.get("person_id"))] = r
 
     batches, passthrough = build_batches(rows)
-    capped = 0
-    if len(batches) > MAX_BATCHES:
-        capped = len(batches) - MAX_BATCHES
-        # dropped batches keep their original order, appended after the sorted region
-        passthrough = [r for b in batches[MAX_BATCHES:] for r in b] + passthrough
-        batches = batches[:MAX_BATCHES]
+    batches, dropped = cap_batches(batches, max(1, args.max_batches))
+    capped = len(dropped)
+    passthrough = dropped + passthrough
 
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
@@ -230,8 +241,8 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(final, indent=1) + "\n", encoding="utf-8")
     print(json.dumps({"primitive": "micro_sort_shortlist", "status": "completed", "sorted": sum(len(b) for b in batches),
-                      "passthrough": len(passthrough), "batches": len(batches), "batches_dropped_to_cap": capped,
-                      "model": args.model, "out": str(out_path)}, indent=2))
+                      "passthrough": len(passthrough), "batches": len(batches), "candidates_dropped_to_cap": capped,
+                      "max_batches": args.max_batches, "model": args.model, "out": str(out_path)}, indent=2))
 
 
 if __name__ == "__main__":
