@@ -220,6 +220,15 @@ class TestMicroSortShortlist(unittest.TestCase):
         out = ms.validate_ordering(["p02", "p02", "ghost", "p00"], batch, "person_id")
         self.assertEqual([r["person_id"] for r in out], ["p02", "p00", "p01"])  # dupe+ghost dropped, missing appended
 
+    def test_cap_batches_bounds_runtime_deterministically(self):
+        batches = [[{"person_id": f"b{i}p{j}"} for j in range(20)] for i in range(15)]
+        kept, dropped = ms.cap_batches(batches, 10)
+        self.assertEqual(len(kept), 10)          # <=10 LLM calls, always
+        self.assertEqual(len(dropped), 100)      # 5 batches x 20 keep score order
+        self.assertEqual(dropped[0]["person_id"], "b10p0")  # order preserved
+        kept2, dropped2 = ms.cap_batches(batches[:3], 10)
+        self.assertEqual((len(kept2), dropped2), (3, []))  # under cap: untouched
+
 
 class TestPlanCritic(unittest.TestCase):
     def test_deterministic_checks_flag_off_enum_stage_and_missing_core(self):
