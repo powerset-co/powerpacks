@@ -45,6 +45,8 @@ CODEX_JUDGE = P / "codex_judge.py"
 GPT_JUDGE = ROOT / "packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py"
 TRIAGE = P / "triage_candidates.py"
 CONSENSUS = P / "judge_consensus.py"
+CRITIC = P / "plan_critic.py"
+MICROSORT = P / "micro_sort_shortlist.py"
 
 # CLI agent judges (codex/claude) are phase-2 only: they never bulk-filter. With --no-triage,
 # a frontier with more unjudged candidates than this requires the API judge (--judge gpt).
@@ -127,6 +129,11 @@ def main() -> None:
                     help="Phase-2 judge engine: codex = free (subscription, slower); gpt = paid gpt-5.4 on the flex tier (fast). Default from POWERPACKS_DEEP_JUDGE env, else codex.")
     ap.add_argument("--triage", action=argparse.BooleanOptionalAction, default=True,
                     help="Phase-1 cheap conservative filter (triage_candidates) over each epoch's frontier before the judge; --no-triage judges the full frontier")
+    ap.add_argument("--micro-sort", action=argparse.BooleanOptionalAction, default=False,
+                    help="OPT-IN final ordering pass: micro-sort the shortlist's saturated score bands "
+                         "(<=10 fast-model calls); judge scores untouched. Non-default per the "
+                         "anti-local-maxima rule: measured neutral on the audited 22-person benchmark; "
+                         "needs validation on a benchmark that can score top-band ordering")
     ap.add_argument("--reasoning-effort", default="low")
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--n", type=int, default=16, help="seeds per robust_source round (epoch 0)")
@@ -227,10 +234,22 @@ def main() -> None:
                     run(build_cmd, expected_paths=[edir / "plan.json", edir / "candidate_frontier.jsonl", edir / "candidate_frontier.json", edir / "probe_summaries.json"],
                         description="epoch0 build_eval_inputs")
                     if not args.approved_plan:
-                        history.append({"epoch": 0, "status": "awaiting_plan_approval", "plan": str(edir / "plan.json")})
+                        # Plan critic: advisory pre-Review check (missing core pillars, cutoff
+                        # contradictions — the top measured error source). Best-effort: a critic
+                        # failure never blocks the gate; the human at Review decides either way.
+                        critic: dict[str, Any] = {}
+                        try:
+                            run([sys.executable, CRITIC, "--plan", edir / "plan.json", "--jd-file", args.jd_file],
+                                description="plan critic")
+                            critic = json.loads((edir / "plan_critic.json").read_text(encoding="utf-8"))
+                        except Exception as exc:
+                            critic = {"verdict": "unavailable", "error": str(exc)[:200]}
+                        history.append({"epoch": 0, "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"),
+                                        "plan_critic": critic.get("verdict")})
                         (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
                         print(json.dumps({"primitive": "deep_search_loop", "status": "awaiting_plan_approval", "plan": str(edir / "plan.json"),
-                                          "next": "review/edit the plan, then rerun with --plan-approved"}, indent=2))
+                                          "plan_critic": critic,
+                                          "next": "review/edit the plan (see plan_critic findings), then rerun with --plan-approved"}, indent=2))
                         return
                     plan_path = Path(args.approved_plan)
             else:
@@ -334,9 +353,22 @@ def main() -> None:
         print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": str(exc), "details": exc.to_dict(), "history": history}, indent=2))
         raise SystemExit(1) from exc
 
+    # Final ordering pass: micro-sort (agentic merge sort, ported from network-search-api)
+    # reorders the saturated top bands using the judge's own evidence. Judge scores are
+    # untouched; a failure keeps the score ordering. Cheap: <=10 fast-model calls.
+    ranked_final = None
+    shortlist_path = run_dir / "shortlist" / "ground_truth_ranked.json"
+    if args.micro_sort and shortlist_path.exists():
+        try:
+            run([sys.executable, MICROSORT, "--run-dir", run_dir], description="micro-sort shortlist")
+            ranked_final = str(run_dir / "shortlist" / "ranked_final.json")
+        except Exception as exc:
+            history.append({"micro_sort": "failed", "error": str(exc)[:200]})
+
     (run_dir / "loop.json").write_text(json.dumps(history, indent=2))
     print(json.dumps({"primitive": "deep_search_loop", "status": "completed", "epochs": len(history),
-                      "strong_total": len(strong_pids), "shortlist": str(run_dir / "shortlist" / "ground_truth_ranked.json"),
+                      "strong_total": len(strong_pids), "shortlist": str(shortlist_path),
+                      "ranked_final": ranked_final,
                       "history": history}, indent=2))
 
 

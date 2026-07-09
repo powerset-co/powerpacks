@@ -25,6 +25,15 @@ Changelog:
   run_shotgun -> run_wide_search) and the route recruit -> deep.
 - 2026-07-01: Entry is now the agent-made Step-1 decision (`depth: deep` in decision.json), not
   the deleted route_query classifier. Review doubles as $search's universal pre-execute gate.
+- 2026-07-09: Plan critic + opt-in micro-sort. plan_critic runs automatically before the Review
+  checkpoint (one judge-grade LLM call + deterministic enum checks) and its findings ship in the
+  awaiting_plan_approval output — surface them to the user with the plan (validated: catches
+  off-enum hire_stage, self-contradictory cutoffs, dropped JD pillars; zero false flags on a good
+  plan). micro_sort_shortlist (agentic merge sort ported from network-search-api: 0.1 score bands,
+  pack/split/merge, judge evidence as ordering signal, scores never mutated) is available via
+  --micro-sort but NON-DEFAULT per the anti-local-maxima rule — measured neutral on the audited
+  22-person benchmark (mean audited-top10 rank 4.0 -> 4.7); needs a benchmark that can score
+  top-band ordering before defaulting on.
 - 2026-07-09: Geo-first sourcing. decompose_jd extracts the JD's metro and appends it to ~3/4 of
   the probe seeds (every 4th stays global as the recall hedge); --location overrides, --location
   global disables. Previously NO location was used at all (JD or company) — verified live: an SF
@@ -61,8 +70,10 @@ ranked shortlist with no further prompts (judge auto, no spend confirm; expand-f
 ☐ 3. Present the ranked shortlist
 ```
 
-**Review — the one checkpoint.** After `build_eval_inputs` writes `plan.json`, STOP and show the
-user, grouped for a 10-second read:
+**Review — the one checkpoint.** After `build_eval_inputs` writes `plan.json`, the loop also runs
+`plan_critic` (advisory, one LLM call) and includes its findings in the awaiting_plan_approval
+output — show them WITH the plan; they name missing core pillars and cutoff contradictions, the
+top measured error source. Then STOP and show the user, grouped for a 10-second read:
 - the **core** must-haves (the domain differentiators that GATE the shortlist) vs the
   **table_stakes** must-haves (generic seniority/leadership — these only RANK), and
 - the **target_level** + asymmetric seniority band.

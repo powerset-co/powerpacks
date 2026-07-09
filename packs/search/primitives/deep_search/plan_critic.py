@@ -1,0 +1,116 @@
+"""Plan critic: pre-Review sanity check on the generated deep-search plan.
+
+The plan is the highest-leverage artifact in deep mode (the core must-haves ARE the
+shortlist gate) and plan generation has a measured defect pattern: missing JD pillars
+in `core` (cost the two best candidates in the audited AgentMail run) and usable_cutoff
+prose that contradicts the judge rubric's IC-track rule (all three fresh plans on
+2026-07-04 had level-based or self-contradictory cutoffs, caught only by hand).
+
+Checks:
+- deterministic (code): hire_stage is a valid enum value.
+- LLM (one cheap call): every JD responsibility pillar is covered by a `core` trait;
+  the usable_cutoff doesn't gate hands-on IC levels (staff/principal/lead-IC) for an
+  IC-target role; internal contradictions.
+
+Writes <run>/plan_critic.json; deep mode surfaces it at the Review checkpoint. The
+critic ADVISES — the human at Review decides. Exit code stays 0 for advisory findings.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+from openai_client import make_openai_client  # noqa: E402
+
+# Judge-grade model: the critic runs ONCE per search, so quality > pennies here
+# (gpt-4.1 measurably missed a self-contradictory cutoff and over-flagged soft pillars).
+DEFAULT_MODEL = os.environ.get("POWERPACKS_PLAN_CRITIC_MODEL", "gpt-5.4")
+VALID_HIRE_STAGES = {"founding_early", "scaling_late"}
+
+SYSTEM = (
+    "You review a recruiting search plan against the job description it was generated from. "
+    "Report ONLY defects that would change WHO gets shortlisted; do not restyle the plan. "
+    "Precision over recall: a false flag wastes the reviewer's one checkpoint. When unsure, "
+    "do not flag.\n\n"
+    "Check, in order:\n"
+    "1. MISSING CORE PILLARS: a pillar is a distinct TECHNICAL capability area the role's day "
+    "job depends on (e.g. 'low-latency serving systems', 'consensus protocols', 'ETL/data-lake "
+    "architecture'). List any such pillar that no `core`-tier must-have covers. Do NOT flag "
+    "soft/process responsibilities (collaboration, communication, monitoring existing systems, "
+    "evaluating tools, customer advocacy) — those are table_stakes by definition and must never "
+    "be core.\n"
+    "2. CUTOFF CONTRADICTIONS — test by SIMULATION: take a hands-on senior IC, a staff IC, a "
+    "principal IC, and a tech-lead IC, and apply the usable_cutoff text literally to each. If it "
+    "marks ANY of them too_senior for an IC-target role, that is a defect — only the current "
+    "management/exec track may gate. Also flag direct self-contradictions, e.g. this REAL defect: "
+    "'Hire senior_ic and staff_ic; staff engineers or higher are too_senior' (hires staff while "
+    "gating staff).\n"
+    "3. ANYTHING ELSE that would misgate candidates (wrong target level for the JD, a core trait "
+    "that is generic table-stakes in disguise).\n\n"
+    'Return strict JSON: {"missing_core_pillars": ["<pillar> — <the JD text implying it>"], '
+    '"cutoff_issues": ["<issue>"], "other_issues": ["<issue>"], "verdict": "ok|needs_edits"}'
+)
+
+
+def deterministic_checks(plan: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    stage = (plan.get("hire_stage") or "").strip()
+    if stage and stage not in VALID_HIRE_STAGES:
+        issues.append(f"hire_stage '{stage}' is off-enum (must be one of {sorted(VALID_HIRE_STAGES)}); "
+                      "the judge's hire-stage bar will not match")
+    if not any(t.get("tier") == "core" for t in (plan.get("traits", {}) or {}).get("must_have", [])):
+        issues.append("no must_have trait is tagged core — the shortlist core-gate will fall back to score-only")
+    return issues
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Critique a generated deep-search plan against its JD (one cheap LLM call).")
+    ap.add_argument("--plan", required=True)
+    ap.add_argument("--jd-file", required=True)
+    ap.add_argument("--out", default=None, help="Default: plan_critic.json next to the plan")
+    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--no-llm", action="store_true", help="Deterministic checks only (offline/tests)")
+    args = ap.parse_args()
+
+    plan_path = Path(args.plan)
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    jd = Path(args.jd_file).read_text(encoding="utf-8")
+
+    result: dict[str, Any] = {"missing_core_pillars": [], "cutoff_issues": [], "other_issues": []}
+    result["deterministic_issues"] = deterministic_checks(plan)
+
+    if not args.no_llm:
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            print(json.dumps({"primitive": "plan_critic", "status": "failed", "error": "OPENAI_API_KEY not set"}))
+            raise SystemExit(1)
+        client = make_openai_client(key)
+        resp = client.chat.completions.create(
+            model=args.model, temperature=0.0,
+            messages=[{"role": "system", "content": SYSTEM},
+                      {"role": "user", "content": f"JOB DESCRIPTION:\n{jd.strip()}\n\nPLAN:\n{json.dumps(plan, indent=1)}"}],
+            response_format={"type": "json_object"},
+        )
+        obj = json.loads(resp.choices[0].message.content or "{}")
+        for k in ("missing_core_pillars", "cutoff_issues", "other_issues"):
+            v = obj.get(k)
+            if isinstance(v, list):
+                result[k] = [str(x) for x in v][:8]
+
+    n_issues = sum(len(result[k]) for k in ("missing_core_pillars", "cutoff_issues", "other_issues", "deterministic_issues"))
+    result["verdict"] = "needs_edits" if n_issues else "ok"
+    out_path = Path(args.out) if args.out else plan_path.parent / "plan_critic.json"
+    out_path.write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
+    print(json.dumps({"primitive": "plan_critic", "status": "completed", "verdict": result["verdict"],
+                      "issues": n_issues, "out": str(out_path)}, indent=2))
+
+
+if __name__ == "__main__":
+    main()
