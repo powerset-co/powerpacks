@@ -4,7 +4,7 @@
 `depth: deep` — automatic for a job-posting URL or pasted JD, or on an explicit ask ("deep",
 "thorough", "build a shortlist", "recruit ...", "more people like <url>"). The decision is
 already recorded in the run dir's `decision.json` (`.powerpacks/deep-search/<jd-slug>/`);
-GATE 1 below is the run's one confirm-before-execute gate.
+Review below is the run's one confirm-before-execute gate.
 
 <!--
 Created: 2026-06-26
@@ -14,9 +14,9 @@ Changelog:
   100% of ground truth at depth) but noisy single-query ranking — so the lever is WIDE SEARCH
   (many diverse probes) + a mixture-of-judges, not a new backend. See
   packs/search/docs/agentic-search.md and deep-search-ground-truth-status.md.
-- 2026-06-29: Add the CORE-GATE + GATE 1. build_eval_inputs tags must-haves core|table_stakes;
+- 2026-06-29: Add the CORE-GATE + Review. build_eval_inputs tags must-haves core|table_stakes;
   judge_consensus --plan gates the shortlist on genuinely doing >=1 core domain capability (not the
-  blended score, which can't separate "filled" from "give-up"). One human touchpoint (GATE 1, the
+  blended score, which can't separate "filled" from "give-up"). One human touchpoint (Review, the
   plan), then autonomous. Measured: AgentMail distsys -> 88 filled; Realta fusion VP -> 12->7->2.
 - 2026-06-30: Absorb the old $search-profile inputs. deep_search_loop accepts a job-posting URL via
   --jd-url (fetch_jd.py, stdlib/no spend) in addition to --jd-file.
@@ -24,11 +24,14 @@ Changelog:
   skills; renamed the engine package recruit/ -> deep_search/ (recruit_loop -> deep_search_loop,
   run_shotgun -> run_wide_search) and the route recruit -> deep.
 - 2026-07-01: Entry is now the agent-made Step-1 decision (`depth: deep` in decision.json), not
-  the deleted route_query classifier. GATE 1 doubles as $search's universal pre-execute gate.
+  the deleted route_query classifier. Review doubles as $search's universal pre-execute gate.
 - 2026-07-03: Present the shortlist with a ~0.55 SENDABLE CUT (measured on the AgentMail rerun:
   the core-gated tail below ~0.55 was padding); keep the full score-only pool (consensus.json,
   mean >=0.40 + in-band, no core-gate) as the bench to mine. Judge rubric gained research-evidence,
   lead-IC, consultant-enforcement, split-focus, and ambiguous-title rules (evaluate_profile_candidates).
+- 2026-07-08: Rename the human checkpoint "GATE 1" -> "Review" in the printed task checklist and
+  prose (the plan-approval step). The algorithmic core-gate (which candidates make the shortlist)
+  keeps its name. Engine flags are unchanged (--plan-approved / awaiting_plan_approval).
 -->
 
 > **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, "build a
@@ -44,17 +47,17 @@ is the productized version of the agentic-search method in `packs/search/docs/ag
 ## Run it: ONE human gate, then autonomous
 
 Track the run as **native harness tasks (checkboxes)** so progress is visible/resumable. There is
-exactly **one human touchpoint — GATE 1, the plan** — and everything after it runs to a finished,
+exactly **one human touchpoint — Review, the plan** — and everything after it runs to a finished,
 ranked shortlist with no further prompts (judge auto, no spend confirm; expand-from-anchor auto).
 
 ```
 ☐ 1. Source + extract plan      robust_source → build_eval_inputs   (free / 1 cheap call)
-      ──▶ GATE 1: show the plan, get approval/edits   ← the ONLY human touch
+      ──▶ Review: show the plan, get approval/edits   ← the ONLY human touch
 ☐ 2. Judge → core-gate → expand-from-anchor (high reasoning on finalists)   (auto)
 ☐ 3. Present the ranked shortlist
 ```
 
-**GATE 1 — the one checkpoint.** After `build_eval_inputs` writes `plan.json`, STOP and show the
+**Review — the one checkpoint.** After `build_eval_inputs` writes `plan.json`, STOP and show the
 user, grouped for a 10-second read:
 - the **core** must-haves (the domain differentiators that GATE the shortlist) vs the
   **table_stakes** must-haves (generic seniority/leadership — these only RANK), and
@@ -75,7 +78,7 @@ all run here:
   to every `deep_search_loop` invocation: sourcing probes run against the local DuckDB index
   instead of TurboPuffer/Postgres (no `--set-id`, no pinned seniority bands; judging is unchanged).
 
-The first `deep_search_loop` invocation sources and builds the plan, then stops at GATE 1 with
+The first `deep_search_loop` invocation sources and builds the plan, then stops at Review with
 `status: awaiting_plan_approval`:
 
 ```bash
@@ -98,16 +101,16 @@ uv run --env-file .env --project . python packs/search/primitives/deep_search/de
 ```
 
 Writes `<run>/shortlist/ground_truth_ranked.json` + `<run>/loop.json` (per-epoch convergence). To
-drive GATE 1 by hand, run stages 1–2 below up to `build_eval_inputs`, review the plan, then continue
+drive Review by hand, run stages 1–2 below up to `build_eval_inputs`, review the plan, then continue
 from the judge. Pass the approved `plan.json` to `judge_consensus --plan` so the **core-gate** fires.
 
 **Why a gate at all (and why the score alone can't replace it).** A blended `jd_score` cannot tell
 a role with real candidates from one with none: pedigree + generic leadership inflate wrong-domain
 seniors, so the top of a fusion-VP search scores as high as a real distributed-systems search
 (both peak ~0.72–0.77). The fix is the **core-gate**, not a score cutoff — and a clean core comes
-from GATE 1. Measured (real judged data): **AgentMail distsys MTS → 88 shortlisted (filled)**, gems
+from Review. Measured (real judged data): **AgentMail distsys MTS → 88 shortlisted (filled)**, gems
 on top (Modal/Anyscale/NVIDIA AI-infra); **Realta fusion VP → 12 → 7 (broad "hardware" core, crypto/
-HFT/consumer false-positives excluded) → 2 (GATE-1-sharpened fusion core)** — a clean, self-limiting
+HFT/consumer false-positives excluded) → 2 (Review-sharpened fusion core)** — a clean, self-limiting
 give-up driven entirely by core-trait sharpness.
 
 ## The core finding this skill is built on (read once)
@@ -154,7 +157,7 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    down*; too_junior = two+ below). Defaults to `senior_ic`. It also **tags each must-have
    `core` vs `table_stakes`** — `core` = the 1–3 domain differentiators that make THIS role hard
    (the shortlist GATE); `table_stakes` = generic seniority/leadership/stage (RANK only). This is the
-   plan the human approves at **GATE 1**. Rewrites the run into the contract — no recompute:
+   plan the human approves at **Review**. Rewrites the run into the contract — no recompute:
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/deep_search/build_eval_inputs.py \
      --run-dir <run> --jd-file <run>/jd.txt --set-name "<set>" --created-at <iso>
@@ -285,7 +288,7 @@ HARD before judging to control cost. *(Claude-Code-only sessions can swap the Op
 ## Default recipe (fully primitive-driven; robust ≥0.95 sourcing; $0-OpenAI option)
 
 `robust_source` (multi-round `decompose_jd`+`run_wide_search` union → non-flaky ≥0.95 recall) →
-`build_eval_inputs` (tags must-haves core/table_stakes) → **GATE 1 (human approves the plan)** →
+`build_eval_inputs` (tags must-haves core/table_stakes) → **Review (human approves the plan)** →
 `codex_judge` (FREE; or paid `evaluate_profile_candidates`, ×N for a cross-vendor panel) →
 `judge_consensus --plan <plan> --score-threshold ~0.40` (**core-gate**) → `export_candidate_shortlist`;
 `expand_from_anchor` each epoch (auto in `deep_search_loop`); `score_ground_truth_gaps` to track epochs.
