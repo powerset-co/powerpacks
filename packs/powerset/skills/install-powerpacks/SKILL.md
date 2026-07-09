@@ -7,7 +7,7 @@ metadata:
   display-name: Powerpacks Installer
   version: 1.0.0
   summary: One-sentence bootstrap for the full Powerpacks skill suite
-  download-url: https://raw.githubusercontent.com/powerset-co/powerpacks/main/packs/powerset/skills/install-powerpacks/SKILL.md
+  download-url: https://powerset.dev/powerpacks
   tags:
     - powerpacks
     - install
@@ -26,7 +26,7 @@ Changelog:
 One sentence installs everything:
 
 > Download and install the Powerpacks skill from
-> https://raw.githubusercontent.com/powerset-co/powerpacks/main/packs/powerset/skills/install-powerpacks/SKILL.md
+> https://powerset.dev/powerpacks
 
 Then the user just says what they want:
 

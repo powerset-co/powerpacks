@@ -15,7 +15,7 @@ only the install adapter differs.
 Tell your agent (Codex, Claude Code, ...) one sentence:
 
 > Download and install the Powerpacks skill from
-> https://raw.githubusercontent.com/powerset-co/powerpacks/main/packs/powerset/skills/install-powerpacks/SKILL.md
+> https://powerset.dev/powerpacks
 
 Then just say what you want — the skill clones this repo, installs everything
 for your harness, and keeps going in the same session:
