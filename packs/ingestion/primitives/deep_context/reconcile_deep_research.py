@@ -9,8 +9,9 @@ hands the still-unresolved subset to the existing Parallel.ai deep-research prim
 Cost-gated, NOT opt-in: estimate the Parallel.ai spend; if it is within the budget
 (default $25) it runs automatically; above the budget it stops and asks for approval
 (pass a higher --budget). People the judge flagged `linkedin_plausibly_absent` are
-EXCLUDED — some people legitimately have no LinkedIn and "no profile exists" is a valid
-final answer; we never force a match.
+EXCLUDED by default — some people legitimately have no LinkedIn and "no profile exists"
+is a valid final answer; we never force a match. Pass --include-plausibly-absent to
+research them anyway for SYNTHETIC profiles (assemble_synthetic_profile.py).
 
 Reuses `packs/messages/primitives/deep_research_contacts` (Parallel.ai core2x) — this
 step only builds the research queue, estimates cost, enforces the gate, and shells out.
@@ -84,7 +85,8 @@ def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
 
 
 def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
-                    overrides: dict[str, dict[str, str]] | None = None) -> list[dict[str, Any]]:
+                    overrides: dict[str, dict[str, str]] | None = None,
+                    include_plausibly_absent: bool = False) -> list[dict[str, Any]]:
     """Detaches that external research could resolve — from BOTH the model and the user.
 
     Two ways a link becomes eligible:
@@ -96,8 +98,9 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
         we try to find the right one.
 
     Skipped either way: a link the user `exclude`d (don't want this person at all — never
-    re-attach them), one that already has a `retarget` (we know the correct one), or one the
-    judge flagged `linkedin_plausibly_absent` (some people legitimately have no profile)."""
+    re-attach them), or one that already has a `retarget` (we know the correct one).
+    `linkedin_plausibly_absent` people are skipped by default (no profile exists is a valid
+    answer) and included only with include_plausibly_absent=True — the synthetic path."""
     overrides = overrides or {}
     has_retarget = {pub for pub, r in overrides.items()
                     if (r.get("action") or "").strip().lower() == "retarget"}
@@ -116,7 +119,16 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
     for r in verdicts:
         v = r.get("verdict") or {}
         pub = (r.get("candidate_key") or "").strip().lower()
-        if v.get("linkedin_plausibly_absent") or (pub and (pub in seen or pub in has_retarget or pub in excluded)):
+        if pub and (pub in seen or pub in has_retarget or pub in excluded):
+            continue
+        if v.get("linkedin_plausibly_absent"):
+            # Excluded from RETARGET research by design (some people legitimately have no
+            # profile) — but they are the primary SYNTHETIC-profile candidates: research
+            # them only when the caller opts in (synthetic-profiles-plan §5).
+            if include_plausibly_absent and r.get("parent_slug") not in parents_with_kept:
+                if pub:
+                    seen.add(pub)
+                out.append(r)
             continue
         model_ok = (v.get("verdict") == "wrong_person"
                     and float(v.get("confidence") or 0) >= threshold
@@ -228,7 +240,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     verdicts = _read_jsonl(Path(args.verdicts_jsonl))
     overrides = load_override_rows(Path(args.overrides_csv))
-    subset = eligible_subset(verdicts, args.confirm_threshold, overrides)
+    subset = eligible_subset(verdicts, args.confirm_threshold, overrides,
+                             include_plausibly_absent=getattr(args, "include_plausibly_absent", False))
     user_detached_eligible = sum(
         1 for r in subset
         if (overrides.get((r.get("candidate_key") or "").strip().lower(), {}).get("action") or "").lower() == "detach"
@@ -304,6 +317,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", type=float, default=DEFAULT_BUDGET, help="Auto-approve ceiling (USD)")
     p.add_argument("--approve", action="store_true", help="Approve spend above --budget")
     p.add_argument("--dry-run", action="store_true", help="Build the queue + estimate only; no Parallel.ai spend")
+    p.add_argument("--include-plausibly-absent", action="store_true",
+                   help="Also research people the judge flagged linkedin_plausibly_absent — the synthetic-profile candidates (synthetic-profiles-plan §5)")
     return p
 
 

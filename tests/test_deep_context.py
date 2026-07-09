@@ -1297,6 +1297,59 @@ class TestAssembleSyntheticProfile(unittest.TestCase):
         self.assertFalse(asp.profile_is_usable(bare))
 
 
+class TestSyntheticReviewUI(unittest.TestCase):
+    CSV_HEADER = ("id,public_identifier,full_name,headline,summary,location_raw,work_experiences,"
+                  "education,primary_email,primary_phone,enrichment_provider,approved,synthetic_metadata\n")
+
+    def _csv_row(self, approved: str) -> str:
+        work = json.dumps([{"title": "CTO", "company_name": "StealthCo", "is_current": True}]).replace('"', '""')
+        meta = json.dumps({"completeness": 0.75, "gaps": ["education dates"]}).replace('"', '""')
+        return (f'pid-9,synth-email-abc,Ross Nordeen,stealth founder,long summary,"San Francisco, US",'
+                f'"{work}","[]",ross@x.com,,synthetic,{approved},"{meta}"\n')
+
+    def test_load_synthetic_parents_states_and_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "synthetic-people.csv"
+            path.write_text(self.CSV_HEADER + self._csv_row(""), encoding="utf-8")
+            parents = web.load_synthetic_parents(path)
+            self.assertEqual(len(parents), 1)
+            cand = parents[0]["candidates"][0]
+            self.assertTrue(cand["synthetic"])
+            self.assertEqual(web.candidate_state(cand), "review")  # pending -> Needs review pile
+            self.assertEqual(cand["experiences"], ["CTO @ StealthCo (present)"])
+            self.assertIn("research gaps: education dates", cand["reason"])
+            # approved=auto surfaces as verified
+            path.write_text(self.CSV_HEADER + self._csv_row("auto"), encoding="utf-8")
+            cand = web.load_synthetic_parents(path)[0]["candidates"][0]
+            self.assertEqual(web.candidate_state(cand), "verified")
+
+    def test_apply_synthetic_decision_flips_the_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "synthetic-people.csv"
+            path.write_text(self.CSV_HEADER + self._csv_row(""), encoding="utf-8")
+            self.assertEqual(web.apply_synthetic_decision(path, "synth-email-abc", "keep")["approved"], "yes")
+            self.assertIn(",yes,", path.read_text())
+            self.assertEqual(web.apply_synthetic_decision(path, "synth-email-abc", "detach")["approved"], "no")
+            self.assertEqual(web.apply_synthetic_decision(path, "synth-email-abc", "reset")["approved"], "")
+            with self.assertRaises(ValueError):
+                web.apply_synthetic_decision(path, "synth-ghost", "keep")
+            with self.assertRaises(ValueError):
+                web.apply_synthetic_decision(path, "synth-email-abc", "fix")
+
+
+class TestEligibleSubsetPlausiblyAbsent(unittest.TestCase):
+    def _verdict(self, slug: str, absent: bool) -> dict:
+        return {"parent_slug": slug, "candidate_key": f"{slug}-key", "person_ids": [slug],
+                "verdict": {"verdict": "needs_review", "confidence": 0.5,
+                            "linkedin_plausibly_absent": absent, "recommend_deep_research": False}}
+
+    def test_absent_people_excluded_by_default_included_with_flag(self) -> None:
+        verdicts = [self._verdict("ghost", absent=True), self._verdict("normal", absent=False)]
+        self.assertEqual(dresearch.eligible_subset(verdicts, 0.85, {}), [])
+        included = dresearch.eligible_subset(verdicts, 0.85, {}, include_plausibly_absent=True)
+        self.assertEqual([r["parent_slug"] for r in included], ["ghost"])
+
+
 class TestSpamDropAtMerge(unittest.TestCase):
     def _overrides(self, approved: str, action: str, conf: str = "0.950") -> dict:
         return {"spam-guy": {"action": action, "approved": approved, "emails": set(), "phones": set(),
