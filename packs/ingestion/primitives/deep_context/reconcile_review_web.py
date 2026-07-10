@@ -467,7 +467,7 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
         badge += ("<span class='usingparent' title=\"Detaching this LinkedIn does NOT lose the email/phone "
                   "— it stays on this person, under the parent LinkedIn above\">✓ email kept on this person</span>")
     if cand.get("synthetic"):
-        judgment = (f"<div class='judgment j-review'>🧬 Researched profile · "
+        judgment = (f"<div class='judgment j-review'>Researched profile · "
                     f"{cand['confidence'] * 100:.0f}% complete — keep to make them searchable</div>")
     else:
         judgment = judgment_line(cand["verdict"], cand["confidence"])
@@ -504,7 +504,7 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
     if cand.get("synthetic"):
         flags.append("<span class='flag flag-synth' title='Deep-researched profile — this person has no "
                      "real LinkedIn. Keep = merge into your searchable network; Detach = discard.'>"
-                     "🧬 synthetic — no LinkedIn</span>")
+                     "synthetic — no LinkedIn</span>")
     fixed_note = f"<div class='fixednote'>✓ verified — corrected LinkedIn: <a href='{esc(cand['new_url'])}' target='_blank' rel='noreferrer'>{esc(cand['new_url'])}</a></div>" if st == "fixed" and cand["new_url"] else ""
     pic = cand.get("profile_pic_url") or ""
     avatar = (f"<img class='avatar' src='{esc(pic)}' alt='' loading='lazy' referrerpolicy='no-referrer' "
