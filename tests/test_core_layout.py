@@ -185,6 +185,24 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("gcloud auth login", text)
         self.assertNotIn("Secret Manager", text)
 
+    def test_install_skill_distinguishes_install_auth_and_provisioning_urls(self) -> None:
+        text = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
+        self.assertIn("using my Powerset account", text)
+        self.assertIn("Its Steps 1-3 authenticate the Powerset user", text)
+        self.assertIn("Do not run a\n     separate `$powerset setup`", text)
+        self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
+        self.assertIn("https://powerset.dev/powerpacks", text)
+        self.assertIn("https://search-api-7wk4uhe77q-uw.a.run.app", text)
+        self.assertIn("Auth0 audience identifier only: `https://api.powerset.dev`", text)
+
+        hosted_env = (ROOT / "packs/powerset/templates/env.powerset.example").read_text()
+        self.assertIn(
+            "POWERPACKS_SEARCH_API_URL=https://search-api-7wk4uhe77q-uw.a.run.app",
+            hosted_env,
+        )
+        self.assertNotIn("POWERPACKS_API_URL=https://api.powerset.dev", hosted_env)
+        self.assertNotIn("POWERSET_API_URL=https://api.powerset.dev", hosted_env)
+
     def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()
         self.assertIn("$powerset setup", text)
@@ -192,6 +210,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("packs/powerset/primitives/auth/auth.py login", text)
         self.assertIn("packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull", text)
         self.assertIn("packs/powerset/primitives/mcp_install/mcp_install.py install --host all", text)
+        self.assertIn("uv run --env-file .env --project . python", text)
         self.assertIn("Powerset setup complete. Please restart Codex", text)
         self.assertNotIn("provision_runtime_env", text)
         self.assertNotIn("operator_bootstrap", text)

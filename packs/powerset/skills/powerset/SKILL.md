@@ -1,6 +1,6 @@
 ---
 name: powerset
-description: Unified Powerset command surface. Use for `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset whoami`, `$powerset sets list`, `$powerset sets use <id|name>`, `$powerset mcp install`, `$powerset env pull`, `$powerset create oauth app`, and `$powerset help`.
+description: Unified Powerset command surface. Use for `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset whoami`, `$powerset sets list`, `$powerset sets use [id-or-name]`, `$powerset mcp install`, `$powerset env pull`, `$powerset create oauth app`, and `$powerset help`.
 ---
 
 # Powerset
@@ -88,7 +88,7 @@ For read-only commands (`$powerset status`, `$powerset whoami`, `$powerset sets
 list`), still prefer the canonical repo when available. If no canonical repo is
 available, stop instead of writing or syncing from `~/.codex/powerpacks`.
 
-Run primitives from the canonical repo with `uv run --project . python
+Run primitives from the canonical repo with `uv run --env-file .env --project . python
 packs/...`. Prefer `python3` only when invoking a local helper outside `uv`.
 
 ## `$powerset setup`
@@ -119,7 +119,7 @@ User-facing output must be terse:
 Run one internal setup check first:
 
 ```bash
-uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
+uv run --env-file .env --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env
 ```
@@ -131,7 +131,7 @@ doctor fix commands so browser/code prompts stay visible.
 If `auth0_login` is missing or expired, run the Auth0 login directly:
 
 ```bash
-uv run --project . python packs/powerset/primitives/auth/auth.py login
+uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
 After Auth0 login, always run the env pull so rotated or newly added keys land
@@ -139,7 +139,7 @@ in `.env`, even if the initial setup check was already healthy. This pulls your
 Modal token + OpenAI key from the Powerset API using your Auth0 bearer:
 
 ```bash
-uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
+uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
   --env-file .env
 ```
 
@@ -149,7 +149,7 @@ band; relay that one-line action and continue.
 Then install/refresh MCP:
 
 ```bash
-uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 Re-run the setup check at the end and use the success/blocker message above. If
@@ -175,7 +175,7 @@ User-facing output must be terse:
 Run one internal setup check:
 
 ```bash
-uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
+uv run --env-file .env --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env
 ```
@@ -192,9 +192,9 @@ Otherwise handle `fix_kind` values internally:
 Common direct fixes:
 
 ```bash
-uv run --project . python packs/powerset/primitives/auth/auth.py login
-uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull --env-file .env
-uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
+uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull --env-file .env
+uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 Do not run nested fix commands in the normal login flow; they can hide
@@ -211,7 +211,7 @@ OpenAI key for their Powerset user (the endpoints never mint).
 Run the setup check read-only with the requested or default profile:
 
 ```bash
-uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
+uv run --env-file .env --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env
 ```
@@ -223,7 +223,7 @@ debugging detail.
 ## `$powerset whoami`
 
 ```bash
-uv run --project . python packs/powerset/primitives/auth/auth.py whoami
+uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py whoami
 ```
 
 Report the email and authorization/role. Do not print raw tokens.
@@ -231,13 +231,13 @@ Report the email and authorization/role. Do not print raw tokens.
 ## `$powerset mcp install`
 
 ```bash
-uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 If the user asks only to inspect MCP state, run:
 
 ```bash
-uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host all
+uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host all
 ```
 
 ## `$powerset env pull`
@@ -250,7 +250,7 @@ token (to dispatch) and an OpenAI key (local search LLM steps). The explicit
 confirmation. Run:
 
 ```bash
-uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
+uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
   --env-file .env
 ```
 
@@ -264,13 +264,13 @@ action and continue. Requires a valid Auth0 login (`$powerset login`).
 This alias is for msgvault/Gmail OAuth setup. Prefer browser automation:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup
+uv run --env-file .env --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup
 ```
 
 If the user only wants instructions, run:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app
+uv run --env-file .env --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app
 ```
 
 If the user provided an email, add `--email <gmail>`. If they provided a Google

@@ -68,14 +68,14 @@ repo="$(resolve_powerpacks_root)" || {
 cd "$repo"
 ```
 
-Run primitives from the canonical repo with `uv run --project . python packs/...`.
+Run primitives from the canonical repo with `uv run --env-file .env --project . python packs/...`.
 
 ## Happy Path
 
 Run one internal read-only setup check:
 
 ```bash
-uv run --project . python packs/powerset/primitives/doctor/doctor.py run \
+uv run --env-file .env --project . python packs/powerset/primitives/doctor/doctor.py run \
   --profile search-core \
   --env-file .env
 ```
@@ -114,7 +114,7 @@ Pick the host the user is currently using. If both hosts need repair, run both.
 If `auth0_login` is missing or expired, run:
 
 ```bash
-uv run --project . python packs/powerset/primitives/auth/auth.py login
+uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
 ### Step 3 - Pull runtime keys and register MCP directly
@@ -122,7 +122,7 @@ uv run --project . python packs/powerset/primitives/auth/auth.py login
 If `runtime_keys` is missing, run:
 
 ```bash
-uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
+uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull \
   --env-file .env
 ```
 
@@ -134,7 +134,7 @@ only to the separate msgvault/Gmail OAuth app setup flow.
 If `mcp_powerset_search` is missing but a host CLI exists, run:
 
 ```bash
-uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
+uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 If `mcp_powerset_search` says no MCP host CLI is on PATH, that is an install
