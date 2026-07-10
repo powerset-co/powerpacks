@@ -65,8 +65,11 @@ PLAN_SYSTEM = (
     "- Each trait is a short evidence-checkable phrase, NOT a sentence and NOT a job title.\n"
     "- core_groups: encode the actual gate. Each group is an alternative viable archetype; ALL core "
     "traits named inside one group are required, while satisfying any one whole group is sufficient. "
-    "Most roles have one group containing all core traits. Use multiple groups only when the JD truly "
-    "admits alternative backgrounds. Reference core trait text exactly.\n"
+    "DEFAULT: one group PER core trait (any single core capability qualifies — measured against real "
+    "shortlists, requiring many core traits at once gates out nearly everyone: an all-of-3 group cut a "
+    "validated 22-person shortlist to 1). Combine 2-3 traits into one group ONLY when the JD truly "
+    "requires that exact conjunction; never put more than 3 traits in a group. Reference core trait "
+    "text exactly.\n"
     "- hire_stage: one of founding_early | scaling_late. Use founding_early for 0-to-1/ambiguous/early "
     "startup work and scaling_late for hardening, scale, mature systems, or later-stage organizations.\n"
     "- target_level: the role's career level — one of senior_ic | staff_ic | lead | manager | "
@@ -116,7 +119,7 @@ def _must_trait(t: Any) -> dict[str, str] | None:
 
 
 def _core_groups(obj: dict[str, Any], must: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """Normalize alternative all-of gates, falling back to one group containing every core trait."""
+    """Normalize alternative all-of gates, falling back to one group PER core trait (any-one)."""
     core_by_norm = {_norm(t["trait"]): t["trait"] for t in must if t["tier"] == "core"}
     groups: list[dict[str, Any]] = []
     for i, raw in enumerate(obj.get("core_groups") or []):
@@ -135,8 +138,11 @@ def _core_groups(obj: dict[str, Any], must: list[dict[str, str]]) -> list[dict[s
             })
     if groups:
         return groups
+    # Fallback = one group PER core trait (any-one semantics). This is the measured default:
+    # a single all-of group over every core trait gated a validated 22-person shortlist to 1.
     core = [t["trait"] for t in must if t["tier"] == "core"]
-    return [{"name": "default", "all_of": core, "source": "jd"}] if core else []
+    return [{"name": f"core_{i + 1}", "all_of": [trait], "source": "default"}
+            for i, trait in enumerate(core)]
 
 
 def _norm(value: str) -> str:

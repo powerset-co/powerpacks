@@ -57,7 +57,8 @@ SYSTEM = (
     "management/exec track may gate. Also flag direct self-contradictions, e.g. this REAL defect: "
     "'Hire senior_ic and staff_ic; staff engineers or higher are too_senior' (hires staff while "
     "gating staff).\n"
-    "3. ANYTHING ELSE that would misgate candidates (wrong target level for the JD, a core trait "
+    "3. GEO SCOPE: if the JD states an on-site/city/metro location but the plan's search_scope.location is empty or null, flag it — geo-first sourcing will be disabled for the WHOLE run unless the reviewer sets it (or deliberately approves global).\n"
+    "4. ANYTHING ELSE that would misgate candidates (wrong target level for the JD, a core trait "
     "that is generic table-stakes in disguise).\n\n"
     'Return strict JSON: {"missing_core_pillars": ["<pillar> — <the JD text implying it>"], '
     '"cutoff_issues": ["<issue>"], "other_issues": ["<issue>"], "verdict": "ok|needs_edits"}'
@@ -88,6 +89,20 @@ def deterministic_checks(plan: dict[str, Any]) -> list[str]:
             issues.append(f"core traits missing from core_groups: {missing}")
         if unknown:
             issues.append(f"core_groups reference non-core traits: {unknown}")
+    # Conjunctivity guard — measured on the audited benchmark: an all-of-3 group cut a
+    # validated 22-person shortlist to 1; bigger groups ship empty shortlists.
+    for group in plan.get("core_groups") or []:
+        n = len(group.get("all_of") or [])
+        if n > 3:
+            issues.append(
+                f"core group '{group.get('name')}' requires ALL {n} traits at experienced+ — "
+                "nearly nobody passes such a conjunction; split into alternative archetype "
+                "groups (default: one group per trait) or confirm deliberately at Review")
+    scope = plan.get("set_scope") or {}
+    route = (plan.get("route") or plan.get("search_scope", {}).get("backend") or "").strip().lower()
+    if route in ("", "powerset") and "set_scope" in plan and not (scope.get("set_id") or "").strip():
+        issues.append("set_scope.set_id is empty — approval will hard-fail after Review; set "
+                      "POWERPACKS_DEFAULT_SET_ID or pass --set-id before approving")
     return issues
 
 
@@ -114,7 +129,7 @@ def main() -> None:
             raise SystemExit(1)
         client = make_openai_client(key)
         resp = client.chat.completions.create(
-            model=args.model,
+            model=args.model, temperature=0.0,
             messages=[{"role": "system", "content": SYSTEM},
                       {"role": "user", "content": f"JOB DESCRIPTION:\n{jd.strip()}\n\nPLAN:\n{json.dumps(plan, indent=1)}"}],
             response_format={"type": "json_object"},

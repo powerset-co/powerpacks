@@ -109,10 +109,14 @@ def normalize_verdict(r: dict[str, Any]) -> dict[str, Any]:
         r = {**r, "person_id": r["candidate_id"]}
     if "score" not in r and r.get("jd_score") is not None:
         r = {**r, "score": r["jd_score"]}
-    if r.get("seniority_fit") in GATED_FITS or r.get("seniority_fit") == "unknown":
+    # unknown seniority stays IN-BAND (main semantics, audit-validated: thin profiles are
+    # legitimately kept; hard-gating unknown also breaks the founder-eligible override and
+    # starves anchor expansion). unknown_seniority_votes still surfaces it for review.
+    if r.get("seniority_fit") in GATED_FITS:
         r = {**r, "in_band": False}
     elif "in_band" not in r:
-        r = {**r, "in_band": r.get("seniority_fit") in CONFIRMED_IN_BAND_FITS}
+        # not gated = in-band (unknown included — main/audited semantics)
+        r = {**r, "in_band": r.get("seniority_fit") not in GATED_FITS}
     return r
 
 
@@ -229,7 +233,8 @@ def main() -> None:
     ap.add_argument("--union", help="candidates_union.jsonl for candidate metadata (optional)")
     ap.add_argument("--out-dir", required=True, help="Where to write consensus.json + ground_truth_ranked.json")
     ap.add_argument("--min-inband-votes", type=int, default=2)
-    ap.add_argument("--min-notout-votes", type=int, default=2)
+    ap.add_argument("--min-notout-votes", type=int, default=1,
+                    help="Judges that must not vote OUT (default 1 — single-judge runs; raise to 2 for panels)")
     ap.add_argument("--score-threshold", type=float, default=None,
                     help="If set, shortlist = majority-in-band AND mean_score >= threshold "
                         "(tunable recall/precision cutoff; ~0.40 recovered ~0.9 recall on AgentMail). "

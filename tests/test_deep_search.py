@@ -247,6 +247,26 @@ class TestMicroSortShortlist(unittest.TestCase):
 
 
 class TestPlanCritic(unittest.TestCase):
+    def test_conjunctive_core_group_is_flagged(self):
+        # Measured on the audited benchmark: an all-of-3 group cut a validated 22-person
+        # shortlist to 1. Groups over 3 traits must surface at Review.
+        plan = {"hire_stage": "founding_early",
+                "traits": {"must_have": [{"trait": c, "tier": "core"} for c in "abcd"]},
+                "core_groups": [{"name": "mega", "all_of": ["a", "b", "c", "d"]}]}
+        issues = pc.deterministic_checks(plan)
+        self.assertTrue(any("ALL 4 traits" in i for i in issues), issues)
+        # per-trait groups (the measured default) pass clean
+        plan["core_groups"] = [{"name": f"g{c}", "all_of": [c]} for c in "abcd"]
+        self.assertEqual([i for i in pc.deterministic_checks(plan) if "ALL" in i], [])
+
+    def test_empty_powerset_set_id_surfaces_at_review(self):
+        plan = {"hire_stage": "founding_early", "route": "powerset",
+                "set_scope": {"set_id": ""},
+                "traits": {"must_have": [{"trait": "x", "tier": "core"}]},
+                "core_groups": [{"name": "g", "all_of": ["x"]}]}
+        issues = pc.deterministic_checks(plan)
+        self.assertTrue(any("set_scope.set_id is empty" in i for i in issues), issues)
+
     def test_deterministic_checks_flag_off_enum_stage_and_missing_core(self):
         issues = pc.deterministic_checks({"hire_stage": "growth", "traits": {"must_have": [{"trait": "x", "tier": "table_stakes"}]}})
         self.assertEqual(len(issues), 2)
@@ -852,14 +872,17 @@ class TestNormalizeVerdict(unittest.TestCase):
         r = jc.normalize_verdict({"candidate_id": "p2", "jd_score": 0.2, "seniority_fit": "too_senior", "verdict": "out"})
         self.assertFalse(r["in_band"])
 
-    def test_unknown_seniority_is_not_confirmed_in_band(self):
+    def test_unknown_seniority_stays_in_band_but_is_surfaced(self):
+        # Audit-validated semantics: thin-but-real profiles (seniority unknown) stay in the
+        # pool — hard-gating unknown starved anchor expansion and broke the founder-eligible
+        # override. unknown is surfaced via unknown_seniority_votes for human review instead.
         r = jc.normalize_verdict({
             "candidate_id": "p2",
             "jd_score": 0.9,
             "seniority_fit": "unknown",
             "verdict": "top_tier",
         })
-        self.assertFalse(r["in_band"])
+        self.assertTrue(r["in_band"])
         r = jc.normalize_verdict({
             "person_id": "p3",
             "score": 0.9,
@@ -867,7 +890,7 @@ class TestNormalizeVerdict(unittest.TestCase):
             "verdict": "top_tier",
             "in_band": True,
         })
-        self.assertFalse(r["in_band"])
+        self.assertTrue(r["in_band"])  # explicit native in_band is honored
 
     def test_native_schema_passthrough(self):
         native = {"person_id": "p3", "score": 0.5, "in_band": True, "seniority_fit": "in_band", "verdict": "high_potential"}

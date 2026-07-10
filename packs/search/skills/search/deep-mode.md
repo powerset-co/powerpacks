@@ -197,6 +197,12 @@ critic, decomposition, probe preparation, and default triage still use configure
    callable on their own for a single quick pass.) **Recall is fixed HERE, in sourcing — not by
    loosening the judge.**
 
+   ⚠ **Manual sourcing and the plan binding do not mix.** `deep_search_loop --plan-approved`
+   refuses a run dir that has retrieval artifacts but no `plan_binding.json` ("start a new run") —
+   the binding is written only when the LOOP performs the sourcing. If you source manually with
+   `robust_source` as above, stay manual for the rest of the run (triage → judge → consensus as
+   below); to use the loop, let the loop do the sourcing after approval instead.
+
 3. **Bridge the union into the judge's contract** 🆕 (no plan LLM call on resume). The judge reads a
    profile-search run dir (`plan.json` + `candidate_frontier.json/jsonl` + `probe_summaries.json` →
    the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs --plan` reuses the approved plan and

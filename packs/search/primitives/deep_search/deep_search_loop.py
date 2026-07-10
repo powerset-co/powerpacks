@@ -337,7 +337,13 @@ def main() -> None:
     if args.jd_url:
         run_dir.mkdir(parents=True, exist_ok=True)
         jd_txt = run_dir / "jd.txt"
-        run([sys.executable, FETCH_JD, "--url", args.jd_url, "--out", jd_txt], expected_paths=[jd_txt], description="fetch_jd URL->JD")
+        if jd_txt.exists():
+            # The first fetch IS the contract: re-fetching would overwrite the JD the plan
+            # (and its hash binding) came from — rotating page tokens or a taken-down posting
+            # would silently corrupt or brick the run. Reuse the bound file.
+            print(json.dumps({"primitive": "deep_search_loop", "note": "using existing jd.txt (bound); not re-fetching --jd-url"}))
+        else:
+            run([sys.executable, FETCH_JD, "--url", args.jd_url, "--out", jd_txt], expected_paths=[jd_txt], description="fetch_jd URL->JD")
         jd_text = jd_txt.read_text(encoding="utf-8").strip()
         if len(jd_text) < _MIN_JD_CHARS:
             print(json.dumps({"primitive": "deep_search_loop", "status": "failed",
@@ -420,9 +426,12 @@ def main() -> None:
                     # The critic is advisory; schema validation above is the hard contract check.
                     pass
             critic_path = epoch0_dir / "plan_critic.json"
-            critic = json.loads(critic_path.read_text(encoding="utf-8")) if critic_path.exists() else {
-                "verdict": "unavailable"
-            }
+            try:
+                critic = json.loads(critic_path.read_text(encoding="utf-8")) if critic_path.exists() else {
+                    "verdict": "unavailable"
+                }
+            except (json.JSONDecodeError, OSError) as exc:
+                critic = {"verdict": "unavailable", "error": str(exc)[:200]}  # advisory: never block the gate
             history.append({
                 "epoch": 0,
                 "status": "awaiting_plan_approval",

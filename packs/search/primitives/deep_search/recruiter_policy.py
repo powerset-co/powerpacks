@@ -255,7 +255,7 @@ def validate_recruiter_preferences(
     out: dict[str, Any] = {}
     if "hire_stage" in preferences:
         stage = preferences["hire_stage"]
-        if not isinstance(stage, str) or stage not in HIRE_STAGE_ALIASES:
+        if not isinstance(stage, str) or _normalized_token(stage) not in HIRE_STAGE_ALIASES:
             raise RecruiterPolicyError(f"{source}.hire_stage must be a canonical stage or normalized alias")
         out["hire_stage"] = HIRE_STAGE_ALIASES[stage]
     if "excellence_weights" in preferences:
