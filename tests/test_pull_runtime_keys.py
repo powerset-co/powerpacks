@@ -1,4 +1,7 @@
 import argparse
+import contextlib
+import io
+import json
 import os
 import tempfile
 import unittest
@@ -34,7 +37,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}), \
+            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}, clear=True), \
                  mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
                 code = stage.cmd_pull(self._args(env))
@@ -47,12 +50,27 @@ class PullRuntimeKeysTests(unittest.TestCase):
     def test_pull_handles_not_provisioned(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}), \
+            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}, clear=True), \
                  mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", return_value=("not_provisioned", None)):
                 code = stage.cmd_pull(self._args(env))
             self.assertEqual(code, 2)              # nothing written -> non-zero
             self.assertFalse(env.exists())          # no .env created when nothing pulled
+
+    def test_pull_reports_endpoint_errors_as_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, {
+                "POWERPACKS_SEARCH_API_URL": "https://search-api.example.test",
+            }, clear=True), \
+                 mock.patch.object(stage, "bearer_token", return_value="tok"), \
+                 mock.patch.object(stage, "fetch_endpoint", return_value=("error", {"http_status": 502})), \
+                 contextlib.redirect_stdout(output):
+                code = stage.cmd_pull(self._args(env))
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(output.getvalue())["status"], "error")
+            self.assertFalse(env.exists())
 
     def test_pull_partial_when_only_one_endpoint(self):
         def fake_fetch(base, path, token, timeout=30):
@@ -62,7 +80,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}), \
+            with mock.patch.dict(os.environ, {"POWERPACKS_API_URL": "https://api.example.test"}, clear=True), \
                  mock.patch.object(stage, "bearer_token", return_value="tok"), \
                  mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
                 code = stage.cmd_pull(self._args(env))
@@ -77,6 +95,20 @@ class PullRuntimeKeysTests(unittest.TestCase):
                 stage.api_base()
         self.assertIn("POWERPACKS_API_URL", str(cm.exception))
         self.assertIn("env.powerset.example", str(cm.exception))
+
+    def test_api_base_prefers_search_api_over_auth_audience_alias(self):
+        with mock.patch.dict(os.environ, {
+            "POWERPACKS_API_URL": "https://api.powerset.dev",
+            "POWERPACKS_SEARCH_API_URL": "https://search-api.example.test",
+        }, clear=True):
+            self.assertEqual(stage.api_base(), "https://search-api.example.test")
+
+    def test_api_base_reads_the_pull_env_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text("POWERPACKS_SEARCH_API_URL=https://search-api.example.test/\n")
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(stage.api_base(env), "https://search-api.example.test")
 
     def test_cmd_pull_reports_missing_api_env(self):
         with tempfile.TemporaryDirectory() as tmp:

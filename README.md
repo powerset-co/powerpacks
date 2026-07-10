@@ -1,6 +1,6 @@
 # Powerpacks
 
-<!-- Changelog: 2026-07-08 — install section leads with the one-sentence agent install (install-powerpacks skill). -->
+<!-- Changelog: 2026-07-10 — distinguish the install URL from the Powerset provisioning API. -->
 
 `powerpacks` is a portable bundle of skills + deterministic primitives +
 check-in data contracts that turn a coding-agent host (Codex, Claude Code,
@@ -20,7 +20,12 @@ Tell your agent (Codex, Claude Code, ...) one sentence:
 Then just say what you want — the skill clones this repo, installs everything
 for your harness, and keeps going in the same session:
 
-> Use powerpacks to set up my local network search.
+> Use Powerpacks to set up my local network search using my Powerset account.
+
+That initializes the public hosted config, signs in to Powerset, pulls the
+provisioned Modal/OpenAI runtime keys for that user, and then builds the local
+LinkedIn network index. The shorter `Use Powerpacks to set up my local network
+search` prompt remains supported.
 
 ### Other install paths
 

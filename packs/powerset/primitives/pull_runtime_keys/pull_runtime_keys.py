@@ -27,7 +27,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[4]
 AUTH_SCRIPT = REPO / "packs/powerset/primitives/auth/auth.py"
 
-API_BASE_ENV_KEYS = ("POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL")
+API_BASE_ENV_KEYS = (
+    "POWERPACKS_SEARCH_API_URL",
+    "POWERPACKS_API_BASE_URL",
+    "POWERSET_API_BASE",
+    "POWERPACKS_API_URL",
+    "POWERSET_API_URL",
+)
 
 # env var -> (endpoint path, response field). The only keys the local machine
 # needs once processing runs on Modal. Extend this map to pull more.
@@ -51,9 +57,24 @@ def missing_api_base_message() -> str:
     )
 
 
-def api_base() -> str:
+def _read_env_file(path: Path | None) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if path is None or not path.exists():
+        return values
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip().removeprefix("export ").strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def api_base(env_file: Path | None = None) -> str:
+    values = _read_env_file(env_file)
+    values.update(os.environ)
     for key in API_BASE_ENV_KEYS:
-        value = (os.environ.get(key) or "").strip()
+        value = (values.get(key) or "").strip()
         if value:
             return value.rstrip("/")
     raise SystemExit(missing_api_base_message())
@@ -121,8 +142,9 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
 
 
 def cmd_pull(args: argparse.Namespace) -> int:
+    env_path = Path(args.env_file)
     try:
-        base = api_base()
+        base = api_base(env_path)
     except SystemExit as exc:
         emit({
             "primitive": "pull_runtime_keys",
@@ -148,10 +170,16 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 if payload.get(field):
                     values[key] = str(payload[field])
 
-    env_path = Path(args.env_file)
     written = write_env(env_path, values) if values else []
     missing = [k for k in KEY_SOURCES if k not in values]
-    status = "ok" if not missing else ("partial" if written else "not_provisioned")
+    if not missing:
+        status = "ok"
+    elif written:
+        status = "partial"
+    elif "error" in endpoints.values():
+        status = "error"
+    else:
+        status = "not_provisioned"
     emit({
         "primitive": "pull_runtime_keys",
         "command": "pull",

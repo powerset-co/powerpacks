@@ -120,7 +120,7 @@ cd "$REPO" && adapters/pi/install.sh    # Pi
 
 ```bash
 test -f "$HOME/.powerpacks/credentials.json" && echo "credentials.json: present" || echo "credentials.json: MISSING"
-cd "$REPO" && uv run --project . python packs/powerset/primitives/auth/auth.py whoami
+cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py whoami
 ```
 
 If missing or `whoami` fails → Step 2. Otherwise Step 2 is a no-op → Step 3.
@@ -128,7 +128,7 @@ If missing or `whoami` fails → Step 2. Otherwise Step 2 is a no-op → Step 3.
 ### Step 2 — Log in (only if Step 1 said not logged in)
 
 ```bash
-cd "$REPO" && uv run --project . python packs/powerset/primitives/auth/auth.py login
+cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
 ```
 
 Browser consent. If it can't open, print the URL for the user. Re-run `whoami`.
@@ -136,7 +136,7 @@ Browser consent. If it can't open, print the URL for the user. Re-run `whoami`.
 ### Step 3 — Pull provisioned runtime keys (Modal + OpenAI)
 
 ```bash
-cd "$REPO" && uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull --env-file .env
+cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull --env-file .env
 ```
 
 Verify: `… pull_runtime_keys.py check --env-file .env`.
@@ -152,7 +152,7 @@ cd "$REPO"
 DEST=".powerpacks/network-import/discover/linkedin/Connections.csv"
 mkdir -p "$(dirname "$DEST")"
 cp -f "<user-csv-path>" "$DEST"
-uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py import-linkedin --csv "$DEST"
+uv run --env-file .env --project . python packs/indexing/modal/linkedin_modal_pipeline.py import-linkedin --csv "$DEST"
 ```
 
 This runs only the Modal import/enrich stage (no local DuckDB) and writes the
@@ -167,7 +167,7 @@ Fan-in merges the per-source `import/<source>/people.csv` files into one network
 (LinkedIn here; also Gmail/Messages if you've run those skills):
 
 ```bash
-cd "$REPO" && uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
+cd "$REPO" && uv run --env-file .env --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
   --people-csv .powerpacks/network-import/merged/people.csv
 ```
 
@@ -180,7 +180,7 @@ Index the merged people.csv on Modal (generic indexer, no import stage) and
 download the duckdb:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
+cd "$REPO" && uv run --env-file .env --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
   --people-csv .powerpacks/network-import/merged/people.csv
 ```
 
@@ -213,7 +213,7 @@ exits 0.
 ### Step 7 — Validate the search index
 
 ```bash
-cd "$REPO" && uv run --project . python packs/indexing/primitives/validate_search_index/validate_search_index.py
+cd "$REPO" && uv run --env-file .env --project . python packs/indexing/primitives/validate_search_index/validate_search_index.py
 ```
 
 JSON with `status` (`ok`/`fail`/`missing`), per-table row counts,
