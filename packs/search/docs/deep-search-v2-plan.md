@@ -1,5 +1,10 @@
 # `$search` deep mode v2 — local-execution sandbox + technical-skills surfacing 🧭
 
+> **Historical design note, not the current product contract.** Some items below
+> have shipped and others remain proposals. See the canonical
+> [`$search` architecture](search-architecture.md) for current behavior, trust
+> boundaries, and the active roadmap.
+
 > **Created:** 2026-07-01
 > **Status:** proposed (design + punch-list for the follow-up to PR #153)
 >

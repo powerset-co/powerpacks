@@ -31,6 +31,11 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from openai_client import make_openai_client  # noqa: E402
 
+try:  # direct script execution
+    import recruiter_policy as recruiter_policy
+except ImportError:  # module execution
+    from . import recruiter_policy
+
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = os.environ.get("RECRUIT_TRIAGE_MODEL", "gpt-4.1-mini")
 KEEP = {"keep", "maybe"}
@@ -39,7 +44,9 @@ SYSTEM = (
     "You are a fast first-pass recruiting screener. You are NOT the final judge — be CONSERVATIVE: "
     "only 'drop' candidates who are CLEARLY irrelevant to the role (wrong field entirely, or "
     "obviously far too junior/senior with no relevant work). When unsure, 'maybe'. Reserve 'keep' "
-    "for clearly on-target profiles. Missing data is NOT grounds to drop.\n"
+    "for clearly on-target profiles. Missing data is NOT grounds to drop. Alternative core groups "
+    "are OR paths: satisfying one path is enough, and missing traits from other paths is never a "
+    "reason to drop.\n"
     'Return strict JSON: {"verdicts":[{"id":"<id>","v":"keep|maybe|drop"}, ...]} for EVERY id given.'
 )
 
@@ -65,12 +72,27 @@ def compact_card(pid: str, front: dict[str, Any], prof: dict[str, Any] | None) -
     }
 
 
-def build_batch_messages(traits: dict[str, Any], cards: list[dict[str, Any]]) -> list[dict[str, str]]:
-    must = [t.get("trait") for t in (traits.get("must_have") or []) if t.get("trait")]
+def build_batch_messages(
+    traits: dict[str, Any],
+    cards: list[dict[str, Any]],
+    recruiter_prompt: str = "",
+    core_groups: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    must_items = [t for t in (traits.get("must_have") or []) if t.get("trait")]
+    core = [t.get("trait") for t in must_items if t.get("tier") == "core"]
+    table_stakes = [t.get("trait") for t in must_items if t.get("tier") != "core"]
     nice = [t.get("trait") for t in (traits.get("nice_to_have") or []) if t.get("trait")]
+    group_lines = [
+        f"- {group.get('name') or 'path'}: " + " AND ".join(str(t) for t in group.get("all_of") or [])
+        for group in (core_groups or [])
+    ]
     head = (
-        "Role must-have traits:\n" + "\n".join(f"- {t}" for t in must) +
+        "Alternative core paths (OR across paths; AND within a path; one complete path is enough):\n" +
+        ("\n".join(group_lines) or "- none declared") +
+        "\nCore evidence traits to inspect:\n" + "\n".join(f"- {t}" for t in core) +
+        "\nShared table-stakes traits:\n" + "\n".join(f"- {t}" for t in table_stakes) +
         "\nNice-to-have:\n" + "\n".join(f"- {t}" for t in nice) +
+        ("\n\n" + recruiter_prompt if recruiter_prompt else "") +
         "\n\nClassify each candidate. Candidates (JSON):\n" + json.dumps(cards, ensure_ascii=False)
     )
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": head}]
@@ -126,9 +148,14 @@ def main() -> None:
     run_dir = Path(args.run_dir)
     if not run_dir.is_absolute():
         run_dir = ROOT / run_dir
-    frontier = [json.loads(l) for l in (run_dir / "candidate_frontier.jsonl").read_text().splitlines() if l.strip()]
+    frontier = [
+        json.loads(line)
+        for line in (run_dir / "candidate_frontier.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
     plan = json.loads((run_dir / "plan.json").read_text())
     traits = plan.get("traits", {}) or {}
+    recruiter_prompt = recruiter_policy.render_recruiter_prompt(plan.get("recruiter_policy"))
 
     wanted = {c["person_id"] for c in frontier}
     profiles = load_profiles(run_dir / "probe_summaries.json", wanted)
@@ -151,7 +178,13 @@ def main() -> None:
     def run_batch(batch: list[dict[str, Any]]) -> dict[str, str]:
         try:
             resp = client.chat.completions.create(
-                model=args.model, messages=build_batch_messages(traits, batch),
+                model=args.model,
+                messages=build_batch_messages(
+                    traits,
+                    batch,
+                    recruiter_prompt,
+                    plan.get("core_groups") or [],
+                ),
                 response_format={"type": "json_object"},
             )
             return parse_verdicts(resp.choices[0].message.content or "{}")

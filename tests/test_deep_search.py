@@ -119,6 +119,16 @@ class TestLocalBackendThreading(unittest.TestCase):
         self.assertEqual(rsg._backend_args("local", "x.duckdb"), ["--backend", "local", "--db", "x.duckdb"])
         self.assertEqual(rsg._backend_args("powerset", None), [])
 
+    def test_deep_loop_binds_backend_to_decision_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            run_dir = Path(d)
+            decision = run_dir / "decision.json"
+            decision.write_text(json.dumps({"surface": "people", "backend": "local", "depth": "deep"}))
+            backend, used = rl.resolve_backend(run_dir, None, None)
+            self.assertEqual((backend, used), ("local", decision))
+            with self.assertRaises(ValueError):
+                rl.resolve_backend(run_dir, "powerset", None)
+
     def _parse_with_real_parser(self, mod, argv: list[str]) -> argparse.Namespace:
         """Drive mod.main() only through its real argparse parse, then halt (no execution)."""
         captured: dict[str, argparse.Namespace] = {}
@@ -192,6 +202,12 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertEqual(dj.apply_location_mix(seeds, "   "), 0)
         self.assertEqual(seeds[0]["query"], "seed 0.")
 
+    def test_approved_null_location_beats_model_reextraction(self):
+        plan = {"search_scope": {"location": None}}
+        self.assertEqual(dj.resolve_location(None, plan, "San Francisco Bay Area"), "")
+        self.assertEqual(dj.resolve_location(None, None, "San Francisco Bay Area"), "San Francisco Bay Area")
+        self.assertEqual(dj.resolve_location("global", plan, "San Francisco Bay Area"), "")
+
 
 class TestMicroSortShortlist(unittest.TestCase):
     def _rows(self, scores):
@@ -239,7 +255,8 @@ class TestPlanCritic(unittest.TestCase):
 
     def test_deterministic_checks_pass_valid_plan(self):
         issues = pc.deterministic_checks({"hire_stage": "founding_early",
-                                          "traits": {"must_have": [{"trait": "x", "tier": "core"}]}})
+                                          "traits": {"must_have": [{"trait": "x", "tier": "core"}]},
+                                          "core_groups": [{"name": "default", "all_of": ["x"]}]})
         self.assertEqual(issues, [])
 
 
@@ -393,6 +410,28 @@ class TestCoreGate(unittest.TestCase):
                                        score_threshold=0.40, core_traits={"distributed systems", "gpu kernels"})
         self.assertEqual([r["person_id"] for r in strong], ["ONE"])
 
+    def test_explicit_core_group_requires_all_traits(self):
+        judges = {"j1": [
+            {"person_id": "PARTIAL", "in_band": True, "verdict": "high_potential",
+             "score": 0.8, "seniority_fit": "in_band", "must_have": [
+                 {"trait": "distributed systems", "status": "experienced"},
+                 {"trait": "control planes", "status": "capable"},
+                 {"trait": "inference serving", "status": "missing"},
+             ]},
+            {"person_id": "ALT", "in_band": True, "verdict": "high_potential",
+             "score": 0.7, "seniority_fit": "in_band", "must_have": [
+                 {"trait": "distributed systems", "status": "missing"},
+                 {"trait": "control planes", "status": "missing"},
+                 {"trait": "inference serving", "status": "doing_now"},
+             ]},
+        ]}
+        groups = [{"distributed systems", "control planes"}, {"inference serving"}]
+        _, strong = jc.build_consensus(
+            judges, {}, min_inband_votes=1, min_notout_votes=1,
+            score_threshold=0.40, core_groups=groups,
+        )
+        self.assertEqual([r["person_id"] for r in strong], ["ALT"])
+
     def test_no_core_traits_falls_back_to_score_gate(self):
         _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1,
                                        score_threshold=0.40, core_traits=set())
@@ -497,10 +536,54 @@ class TestBuildEvalInputs(unittest.TestCase):
              "must_have": ["schedulers", "control plane", ""], "nice_to_have": ["gpus"]},
             set_name="s", set_id="sid", source_url=None, created_at="2026-01-01T00:00:00Z")
         self.assertEqual([t["trait"] for t in plan["traits"]["must_have"]], ["schedulers", "control plane"])
-        self.assertEqual(plan["traits"]["nice_to_have"], [{"trait": "gpus"}])
+        self.assertEqual(plan["traits"]["nice_to_have"], [{"trait": "gpus", "source": "jd"}])
         self.assertEqual(plan["set_scope"], {"name": "s", "set_id": "sid"})
         self.assertEqual(plan["normalized_archetype"], "distsys engineer")
+        self.assertEqual(plan["hire_stage"], "scaling_late")
         self.assertFalse(plan["retrieval_ran"])
+
+    def test_plan_from_obj_user_preferences_override_jd_and_record_provenance(self):
+        plan = bei.plan_from_obj(
+            {
+                "hire_stage": "growth",
+                "must_have": [{"trait": "systems", "tier": "core"}],
+            },
+            set_name="s",
+            set_id="sid",
+            source_url=None,
+            created_at="t",
+            user_preferences={"hire_stage": "early", "pedigree_policy": "ignore"},
+        )
+        policy = plan["recruiter_policy"]
+        self.assertEqual(plan["hire_stage"], "founding_early")
+        self.assertEqual(policy["preferences"]["pedigree_policy"], "ignore")
+        self.assertEqual(policy["provenance"]["hire_stage"]["source"], "user")
+        self.assertEqual(policy["provenance"]["pedigree_policy"]["source"], "user")
+
+    def test_plan_from_obj_extracts_only_explicit_jd_preferences_below_user(self):
+        plan = bei.plan_from_obj(
+            {
+                "hire_stage": "growth",
+                "must_have": [{"trait": "systems", "tier": "core"}],
+                "recruiter_preferences": {
+                    "pedigree_policy": "ignore",
+                    "current_founder_c_suite_for_non_exec_ic": "review",
+                },
+            },
+            set_name="s",
+            set_id="sid",
+            source_url=None,
+            created_at="t",
+            user_preferences={"current_founder_c_suite_for_non_exec_ic": "eligible"},
+        )
+        policy = plan["recruiter_policy"]
+        self.assertEqual(policy["preferences"]["pedigree_policy"], "ignore")
+        self.assertEqual(policy["provenance"]["pedigree_policy"]["source"], "jd")
+        self.assertEqual(policy["preferences"]["current_founder_c_suite_for_non_exec_ic"], "eligible")
+        self.assertEqual(
+            policy["provenance"]["current_founder_c_suite_for_non_exec_ic"]["source"],
+            "user",
+        )
 
     def test_plan_from_obj_requires_must_have(self):
         with self.assertRaises(ValueError):
@@ -526,7 +609,7 @@ class TestBuildEvalInputs(unittest.TestCase):
 
     def test_must_trait_tagged_object_preserves_tier(self):
         self.assertEqual(bei._must_trait({"trait": "distributed systems", "tier": "core"}),
-                         {"trait": "distributed systems", "tier": "core"})
+                         {"trait": "distributed systems", "tier": "core", "source": "jd"})
 
     def test_must_trait_invalid_tier_defaults_table_stakes(self):
         # A mis-tagged/absent tier must NOT over-gate -> degrade to table_stakes (gate falls back).
@@ -534,7 +617,8 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(bei._must_trait({"trait": "x"})["tier"], "table_stakes")
 
     def test_must_trait_bare_string_is_table_stakes(self):
-        self.assertEqual(bei._must_trait("schedulers"), {"trait": "schedulers", "tier": "table_stakes"})
+        self.assertEqual(bei._must_trait("schedulers"),
+                         {"trait": "schedulers", "tier": "table_stakes", "source": "jd"})
         self.assertIsNone(bei._must_trait("   "))
 
     def test_plan_from_obj_carries_core_tier(self):
@@ -544,6 +628,38 @@ class TestBuildEvalInputs(unittest.TestCase):
             set_name="s", set_id="i", source_url=None, created_at="t")
         tiers = {t["trait"]: t["tier"] for t in plan["traits"]["must_have"]}
         self.assertEqual(tiers, {"fusion hardware": "core", "leadership": "table_stakes"})
+
+    def test_plan_core_groups_are_alternative_all_of_gates(self):
+        plan = bei.plan_from_obj(
+            {"must_have": [
+                {"trait": "distributed schedulers", "tier": "core"},
+                {"trait": "control planes", "tier": "core"},
+                {"trait": "inference serving", "tier": "core"},
+            ], "core_groups": [
+                {"name": "scheduler", "all_of": ["distributed schedulers", "control planes"]},
+                {"name": "inference", "all_of": ["inference serving"]},
+            ]},
+            set_name="s", set_id="i", source_url=None, created_at="t")
+        self.assertEqual(plan["core_groups"][0]["all_of"], ["distributed schedulers", "control planes"])
+        self.assertEqual(plan["core_groups"][1]["all_of"], ["inference serving"])
+
+    def test_generated_plan_conforms_to_published_schema(self):
+        plan = bei.plan_from_obj(
+            {"job_title": "Staff Engineer", "normalized_archetype": "systems engineer",
+             "hire_stage": "growth", "location": "San Francisco Bay Area",
+             "must_have": [{"trait": "distributed systems", "tier": "core"}],
+             "nice_to_have": ["GPU infrastructure"]},
+            set_name="team", set_id="set-1", source_url=None,
+            created_at="2026-07-10T00:00:00Z")
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "plan.json"
+            path.write_text(json.dumps(plan))
+            cp = subprocess.run([
+                sys.executable,
+                str(ROOT / "packs/search/primitives/validate_artifact/validate_artifact.py"),
+                "--schema", "search-network-jd-plan", "--file", str(path),
+            ], text=True, capture_output=True, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr + cp.stdout)
 
     def test_build_frontier_has_merge_compatible_fields(self):
         union_row = {
@@ -582,7 +698,7 @@ class TestBuildEvalInputs(unittest.TestCase):
         ])
         bei.write_frontier_artifacts(d, frontier)
         json_doc = json.loads((d / "candidate_frontier.json").read_text())
-        jsonl_rows = [json.loads(l) for l in (d / "candidate_frontier.jsonl").read_text().splitlines()]
+        jsonl_rows = [json.loads(line) for line in (d / "candidate_frontier.jsonl").read_text().splitlines()]
         self.assertEqual(json_doc["candidate_count"], 2)
         self.assertEqual({r["person_id"] for r in json_doc["candidates"]}, {"a", "b"})
         self.assertEqual({r["person_id"] for r in jsonl_rows}, {"a", "b"})
@@ -647,6 +763,21 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(rows[0]["Source"], "Jane Doe")
         self.assertEqual(rows[0]["Channel"], "gmail")
 
+    def test_export_keeps_empty_sendable_shortlist_empty(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "candidate_frontier.json").write_text(json.dumps({"candidates": [{
+            "candidate_id": "p1", "name": "Not a fit", "current_role": "Other",
+        }]}))
+        (d / "candidate_evaluations.json").write_text(json.dumps({"evaluations": [{
+            "candidate_id": "p1", "rank": 1, "verdict": "out", "rationale": "wrong domain",
+        }]}))
+        export = ROOT / "packs/search/primitives/export_candidate_shortlist/export_candidate_shortlist.py"
+        cp = subprocess.run([sys.executable, str(export), "--run-dir", str(d)],
+                            text=True, capture_output=True, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr + cp.stdout)
+        with (d / "shortlist.csv").open() as fh:
+            self.assertEqual(list(csv.DictReader(fh)), [])
+
 
 class TestTriageCandidates(unittest.TestCase):
     def test_compact_card_merges_front_and_profile(self):
@@ -689,6 +820,26 @@ class TestTriageCandidates(unittest.TestCase):
         self.assertIn("schedulers", msgs[-1]["content"])
         self.assertIn("gpus", msgs[-1]["content"])
 
+    def test_build_batch_messages_preserves_alternative_core_paths(self):
+        msgs = tc.build_batch_messages(
+            {
+                "must_have": [
+                    {"trait": "scheduler", "tier": "core"},
+                    {"trait": "inference", "tier": "core"},
+                ],
+                "nice_to_have": [],
+            },
+            [{"id": "a"}],
+            core_groups=[
+                {"name": "scheduler path", "all_of": ["scheduler"]},
+                {"name": "inference path", "all_of": ["inference"]},
+            ],
+        )
+        prompt = msgs[-1]["content"]
+        self.assertIn("OR across paths", prompt)
+        self.assertIn("scheduler path: scheduler", prompt)
+        self.assertIn("inference path: inference", prompt)
+
 
 class TestNormalizeVerdict(unittest.TestCase):
     def test_maps_eval_raw_to_consensus_schema(self):
@@ -699,6 +850,23 @@ class TestNormalizeVerdict(unittest.TestCase):
 
     def test_gated_fit_is_not_in_band(self):
         r = jc.normalize_verdict({"candidate_id": "p2", "jd_score": 0.2, "seniority_fit": "too_senior", "verdict": "out"})
+        self.assertFalse(r["in_band"])
+
+    def test_unknown_seniority_is_not_confirmed_in_band(self):
+        r = jc.normalize_verdict({
+            "candidate_id": "p2",
+            "jd_score": 0.9,
+            "seniority_fit": "unknown",
+            "verdict": "top_tier",
+        })
+        self.assertFalse(r["in_band"])
+        r = jc.normalize_verdict({
+            "person_id": "p3",
+            "score": 0.9,
+            "seniority_fit": "unknown",
+            "verdict": "top_tier",
+            "in_band": True,
+        })
         self.assertFalse(r["in_band"])
 
     def test_native_schema_passthrough(self):
@@ -776,9 +944,9 @@ class TestConsensusScoreThreshold(unittest.TestCase):
             {"person_id": "c", "seniority_fit": "too_senior", "verdict": "out", "score": 0.9, "in_band": False},
         ]}
 
-    def test_threshold_keeps_inband_above_cutoff(self):
+    def test_threshold_never_rescues_categorical_out(self):
         _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1, score_threshold=0.40)
-        self.assertEqual([r["person_id"] for r in strong], ["a"])  # a (0.45) in; b (0.30) below; c gated
+        self.assertEqual(strong, [])
 
     def test_threshold_gates_out_of_band_even_if_high_score(self):
         _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1, score_threshold=0.10)
@@ -838,6 +1006,21 @@ class TestRobustSourceMerge(unittest.TestCase):
 
 
 class TestRecruitLoopAnchors(unittest.TestCase):
+    def _approved_plan(self, directory: Path) -> Path:
+        path = directory / "plan.json"
+        path.write_text(json.dumps(bei.plan_from_obj(
+            {
+                "job_title": "Staff Engineer",
+                "hire_stage": "growth",
+                "must_have": [{"trait": "distributed systems", "tier": "core"}],
+            },
+            set_name="team",
+            set_id="set-1",
+            source_url=None,
+            created_at="t",
+        )))
+        return path
+
     def test_diverse_anchors_dedups_by_company_and_ranks_by_score(self):
         strong = [
             {"person_id": "a", "current_company": "SpaceX", "mean_score": 0.9},
@@ -871,16 +1054,101 @@ class TestRecruitLoopAnchors(unittest.TestCase):
 
         jdir = rl.stage_judge_input(d, [full[0]])
         self.assertEqual((d / "candidate_frontier.jsonl").read_text(), original)
-        staged = [json.loads(l) for l in (jdir / "candidate_frontier.jsonl").read_text().splitlines()]
+        staged = [json.loads(line) for line in (jdir / "candidate_frontier.jsonl").read_text().splitlines()]
         self.assertEqual([r["person_id"] for r in staged], ["a"])
         self.assertTrue((jdir / "plan.json").exists())
         self.assertTrue((jdir / "probe_summaries.json").exists())
 
-    def test_judge_consensus_help_says_at_least_one_core(self):
+    def test_judge_consensus_help_describes_alternative_core_groups(self):
         cp = subprocess.run([sys.executable, str(PRIM / "judge_consensus.py"), "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(cp.returncode, 0)
-        self.assertIn("at least one core", cp.stdout)
-        self.assertNotIn("every core must-have", cp.stdout)
+        self.assertIn("one complete alternative core group", cp.stdout)
+
+    def test_approved_plan_cross_field_validation_accepts_resolved_contract(self):
+        directory = Path(tempfile.mkdtemp())
+        plan_path = self._approved_plan(directory)
+
+        validated = rl.validate_approved_plan(plan_path)
+
+        self.assertEqual(validated["hire_stage"], "scaling_late")
+
+    def test_approved_plan_cross_field_validation_rejects_stage_and_core_drift(self):
+        directory = Path(tempfile.mkdtemp())
+        plan_path = self._approved_plan(directory)
+        plan = json.loads(plan_path.read_text())
+        plan["hire_stage"] = "founding_early"
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            rl.validate_approved_plan(plan_path)
+
+        plan["hire_stage"] = "scaling_late"
+        plan["core_groups"][0]["all_of"] = ["invented trait"]
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "core_groups reference non-core"):
+            rl.validate_approved_plan(plan_path)
+
+    def test_approved_plan_binding_rejects_contract_or_backend_drift(self):
+        directory = Path(tempfile.mkdtemp())
+        run_dir = directory / "run"
+        run_dir.mkdir()
+        plan_path = self._approved_plan(directory)
+        jd_path = directory / "jd.txt"
+        jd_path.write_text("original role")
+        retrieval = {"backend": "local", "db_path": "/tmp/a.duckdb", "db_size": 1, "db_mtime_ns": 2}
+        canonical, digest = rl.bind_approved_plan(run_dir, plan_path, retrieval, jd_path)
+        self.assertEqual(canonical, run_dir / "epoch0" / "plan.json")
+        self.assertEqual(json.loads((run_dir / "plan_binding.json").read_text())["plan_sha256"], digest)
+
+        plan = json.loads(plan_path.read_text())
+        plan["job_title"] = "Different role"
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "differs from the contract"):
+            rl.bind_approved_plan(run_dir, plan_path, retrieval, jd_path)
+        with self.assertRaisesRegex(ValueError, "retrieval corpus differs"):
+            rl.bind_approved_plan(
+                run_dir,
+                canonical,
+                {"backend": "local", "db_path": "/tmp/b.duckdb", "db_size": 1, "db_mtime_ns": 2},
+                jd_path,
+            )
+        jd_path.write_text("changed role")
+        with self.assertRaisesRegex(ValueError, "JD source differs"):
+            rl.bind_approved_plan(run_dir, canonical, retrieval, jd_path)
+
+    def test_retrieval_identity_enforces_reviewed_set_and_local_db(self):
+        directory = Path(tempfile.mkdtemp())
+        plan_path = self._approved_plan(directory)
+        plan = json.loads(plan_path.read_text())
+        plan["set_scope"]["set_id"] = "set-reviewed"
+
+        identity, set_id, db = rl.resolve_retrieval_identity(
+            "powerset", plan, None, "unused.duckdb"
+        )
+        self.assertEqual(identity, {"backend": "powerset", "set_id": "set-reviewed"})
+        self.assertEqual(set_id, "set-reviewed")
+        self.assertEqual(db, "unused.duckdb")
+        with self.assertRaisesRegex(ValueError, "conflicts with approved plan"):
+            rl.resolve_retrieval_identity("powerset", plan, "set-other", "unused.duckdb")
+
+        db_path = directory / "local.duckdb"
+        db_path.write_bytes(b"duckdb fixture")
+        identity, set_id, resolved_db = rl.resolve_retrieval_identity(
+            "local", plan, "ignored", str(db_path)
+        )
+        self.assertEqual(identity["backend"], "local")
+        self.assertEqual(identity["db_path"], str(db_path.resolve()))
+        self.assertEqual(identity["db_size"], len(b"duckdb fixture"))
+        self.assertIsNone(set_id)
+        self.assertEqual(resolved_db, str(db_path.resolve()))
+
+    def test_unbound_derived_artifacts_cannot_be_reused(self):
+        directory = Path(tempfile.mkdtemp())
+        run_dir = directory / "run"
+        (run_dir / "epoch0").mkdir(parents=True)
+        plan_path = self._approved_plan(directory)
+        (run_dir / "epoch0" / "union.jsonl").write_text("{}\n")
+        with self.assertRaisesRegex(ValueError, "without an approved-plan binding"):
+            rl.bind_approved_plan(run_dir, plan_path, {"backend": "powerset", "set_id": "set-1"})
 
     def test_main_stops_at_gate_without_approval_and_does_not_judge(self):
         d = Path(tempfile.mkdtemp())
@@ -889,15 +1157,13 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         run_dir = d / "run"
 
         def fake_run(cmd, *, expected_paths=None, description=None):
-            if description == "epoch0 robust_source":
-                (run_dir / "epoch0" / "union.jsonl").write_text(json.dumps({"person_id": "p1", "found_by": ["q0"]}) + "\n")
-            elif description == "epoch0 build_eval_inputs":
+            if description == "build recruiter plan":
                 e0 = run_dir / "epoch0"
-                (e0 / "plan.json").write_text(json.dumps({"traits": {"must_have": []}, "created_at": "t"}))
-                rows = [{"person_id": "p1", "candidate_id": "p1"}]
-                (e0 / "candidate_frontier.jsonl").write_text(json.dumps(rows[0]) + "\n")
-                (e0 / "candidate_frontier.json").write_text(json.dumps({"candidates": rows}))
-                (e0 / "probe_summaries.json").write_text("[]")
+                (e0 / "plan.json").write_text(json.dumps({"route": "deep", "traits": {"must_have": []}, "created_at": "t"}))
+            elif description == "plan critic":
+                (run_dir / "epoch0" / "plan_critic.json").write_text(json.dumps({"verdict": "ok"}))
+            elif description == "validate recruiter plan":
+                pass
             else:
                 self.fail(f"unexpected run before gate: {description}")
 
@@ -910,6 +1176,8 @@ class TestRecruitLoopAnchors(unittest.TestCase):
             sys.argv = argv
         hist = json.loads((run_dir / "loop.json").read_text())
         self.assertEqual(hist[0]["status"], "awaiting_plan_approval")
+        self.assertFalse(hist[0]["source_started"])
+        self.assertFalse((run_dir / "epoch0" / "union.jsonl").exists())
         self.assertTrue((run_dir / "epoch0" / "plan.json").exists())
 
     def test_plan_approved_resume_preserves_existing_plan_and_skips_build(self):
@@ -936,6 +1204,9 @@ class TestRecruitLoopAnchors(unittest.TestCase):
                 out.mkdir(parents=True, exist_ok=True)
                 (out / "consensus.json").write_text("[]")
                 (out / "ground_truth_ranked.json").write_text("[]")
+                (out / "shortlist_ranked.json").write_text("[]")
+                (out / "sendable_ranked.json").write_text("[]")
+                (out / "bench_ranked.json").write_text("[]")
 
         def fake_judge(edir, candidates, judge_kind, effort, concurrency):
             (edir / "candidate_evaluations.raw.jsonl").write_text(json.dumps({"candidate_id": "p1", "jd_score": 0.1}) + "\n")
@@ -945,12 +1216,20 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         # not phase-1 filtering or the final ordering pass
         sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t", "--max-epochs", "1", "--plan-approved", "--no-triage", "--no-micro-sort"]
         try:
-            with mock.patch.object(rl, "run", side_effect=fake_run), mock.patch.object(rl, "judge", side_effect=fake_judge):
+            with mock.patch.object(rl, "run", side_effect=fake_run), \
+                 mock.patch.object(rl, "validate_approved_plan"), \
+                 mock.patch.object(
+                     rl,
+                     "resolve_retrieval_identity",
+                     return_value=({"backend": "powerset", "set_id": "x"}, "x", "db"),
+                 ), \
+                 mock.patch.object(rl, "bind_approved_plan", return_value=(e0 / "plan.json", "digest")), \
+                 mock.patch.object(rl, "judge", side_effect=fake_judge):
                 rl.main()
         finally:
             sys.argv = argv
         self.assertEqual((e0 / "plan.json").read_bytes(), plan_bytes)
-        self.assertEqual(calls, ["epoch0 consensus"])
+        self.assertEqual(calls, ["validate approved recruiter plan", "epoch0 consensus"])
 
     def test_unapproved_rerun_with_existing_plan_does_not_clobber_or_build(self):
         d = Path(tempfile.mkdtemp())
@@ -1149,9 +1428,7 @@ class TestTwoPhaseJudging(unittest.TestCase):
 
     def test_triage_default_on(self):
         dsl = _load("deep_search_loop")
-        ns = argparse.Namespace()
         # parse defaults directly via a fresh parser run
-        import io, contextlib
         parser_defaults = None
         real_parse = argparse.ArgumentParser.parse_args
 
@@ -1191,7 +1468,19 @@ class TestNoCliBulkFilter(unittest.TestCase):
         sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
                     "--max-epochs", "1", "--plan-approved", "--no-triage", "--judge", "codex"]
         try:
-            with unittest.mock.patch.object(dsl, "run"), unittest.mock.patch.object(dsl, "judge"):
+            with unittest.mock.patch.object(dsl, "run"), \
+                 unittest.mock.patch.object(dsl, "validate_approved_plan"), \
+                 unittest.mock.patch.object(
+                     dsl,
+                     "resolve_retrieval_identity",
+                     return_value=({"backend": "powerset", "set_id": "x"}, "x", "db"),
+                 ), \
+                 unittest.mock.patch.object(
+                     dsl,
+                     "bind_approved_plan",
+                     return_value=(run_dir / "epoch0" / "plan.json", "digest"),
+                 ), \
+                 unittest.mock.patch.object(dsl, "judge"):
                 with self.assertRaises(SystemExit) as ctx:
                     dsl.main()
         finally:
@@ -1209,6 +1498,9 @@ class TestNoCliBulkFilter(unittest.TestCase):
                 out.mkdir(parents=True, exist_ok=True)
                 (out / "consensus.json").write_text("[]")
                 (out / "ground_truth_ranked.json").write_text("[]")
+                (out / "shortlist_ranked.json").write_text("[]")
+                (out / "sendable_ranked.json").write_text("[]")
+                (out / "bench_ranked.json").write_text("[]")
 
         def fake_judge(edir, candidates, judge_kind, effort, concurrency):
             (edir / "candidate_evaluations.raw.jsonl").write_text(
@@ -1219,6 +1511,17 @@ class TestNoCliBulkFilter(unittest.TestCase):
                     "--max-epochs", "1", "--plan-approved", "--no-triage", "--judge", "codex"]
         try:
             with unittest.mock.patch.object(dsl, "run", side_effect=fake_run), \
+                 unittest.mock.patch.object(dsl, "validate_approved_plan"), \
+                 unittest.mock.patch.object(
+                     dsl,
+                     "resolve_retrieval_identity",
+                     return_value=({"backend": "powerset", "set_id": "x"}, "x", "db"),
+                 ), \
+                 unittest.mock.patch.object(
+                     dsl,
+                     "bind_approved_plan",
+                     return_value=(run_dir / "epoch0" / "plan.json", "digest"),
+                 ), \
                  unittest.mock.patch.object(dsl, "judge", side_effect=fake_judge):
                 dsl.main()
         finally:

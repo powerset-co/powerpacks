@@ -67,10 +67,51 @@ def apply_location_mix(seeds: list[dict[str, str]], location: str) -> int:
     return geo
 
 
-def build_messages(jd: str, n: int) -> list[dict[str, str]]:
+def resolve_location(
+    cli_location: str | None,
+    plan: dict[str, Any] | None,
+    extracted_location: str | None,
+) -> str:
+    """Resolve geo precedence while preserving an approved explicit global/null scope."""
+    if cli_location is not None:
+        location = cli_location
+    elif plan is not None:
+        location = (plan.get("search_scope") or {}).get("location") or ""
+    else:
+        location = extracted_location or ""
+    return "" if str(location).strip().lower() == "global" else str(location)
+
+
+def plan_context(plan: dict[str, Any] | None) -> str:
+    if not plan:
+        return ""
+    traits = plan.get("traits") or {}
+    compact = {
+        "job_title": plan.get("job_title"),
+        "normalized_archetype": plan.get("normalized_archetype"),
+        "hire_stage": plan.get("hire_stage"),
+        "target_level": plan.get("target_level"),
+        "location": (plan.get("search_scope") or {}).get("location"),
+        "core_groups": plan.get("core_groups") or [],
+        "must_have": traits.get("must_have") or [],
+        "nice_to_have": traits.get("nice_to_have") or [],
+        "recruiter_policy": plan.get("recruiter_policy") or {},
+    }
+    return (
+        "\n\nAPPROVED RECRUITER PLAN (authoritative):\n"
+        f"{json.dumps(compact, indent=2)}\n"
+        "Every core group and must-have needs explicit probe coverage. Nice-to-haves and adjacent "
+        "backgrounds broaden recall, but must not replace the approved core coverage."
+    )
+
+
+def build_messages(jd: str, n: int, plan: dict[str, Any] | None = None) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": f"Produce exactly {n} diverse work-described seeds for this JD:\n\n{jd.strip()}"},
+        {"role": "user", "content": (
+            f"Produce exactly {n} diverse work-described seeds for this JD:\n\n{jd.strip()}"
+            f"{plan_context(plan)}"
+        )},
     ]
 
 
@@ -101,6 +142,7 @@ def main() -> None:
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--api-key", default=None)
     ap.add_argument("--out", required=True, help="Where to write seeds.json")
+    ap.add_argument("--plan", default=None, help="Approved plan.json; its core groups and traits must shape seed coverage")
     ap.add_argument("--location", default=None,
                     help="Override the JD-extracted metro for geo-first probes "
                          "('global' disables geo-constraining entirely)")
@@ -112,18 +154,17 @@ def main() -> None:
         print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": "OPENAI_API_KEY not set"}))
         raise SystemExit(1)
 
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8")) if args.plan else None
     client = make_openai_client(key)
     resp = client.chat.completions.create(
         model=args.model,
-        messages=build_messages(jd, args.n),
+        messages=build_messages(jd, args.n, plan),
         response_format={"type": "json_object"},
     )
     obj = json.loads(resp.choices[0].message.content or "{}")
     seeds = parse_seeds(obj, n=args.n)
     # Geo-first: JD-extracted metro unless overridden; --location global turns it off.
-    location = args.location if args.location is not None else str(obj.get("location") or "")
-    if location.strip().lower() == "global":
-        location = ""
+    location = resolve_location(args.location, plan, obj.get("location"))
     geo_seeds = apply_location_mix(seeds, location)
 
     out = Path(args.out)

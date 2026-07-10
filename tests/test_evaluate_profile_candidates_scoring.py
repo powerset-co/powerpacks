@@ -94,6 +94,91 @@ class TestComputeTraitScore(unittest.TestCase):
         self.assertAlmostEqual(score, 0.0)
 
 
+class TestComputeExcellence(unittest.TestCase):
+    def test_missing_pedigree_is_floor_neutral(self) -> None:
+        m = _load_module()
+        without = m.compute_excellence(_excellence(0.8, 0.0, 0.8))
+        with_pedigree = m.compute_excellence(_excellence(0.8, 1.0, 0.8))
+        self.assertAlmostEqual(without, 0.8)
+        self.assertAlmostEqual(with_pedigree, 1.0)
+
+    def test_plan_can_explicitly_ignore_pedigree(self) -> None:
+        m = _load_module()
+        score = m.compute_excellence(
+            _excellence(0.7, 1.0, 0.9),
+            {"trajectory": 0.4, "impact": 0.4, "pedigree": 0.2},
+            "ignore",
+        )
+        self.assertAlmostEqual(score, 0.8)
+
+
+class TestRecruiterPrompt(unittest.TestCase):
+    def test_management_titles_require_responsibility_evidence(self) -> None:
+        prompt = _load_module().SYSTEM_PROMPT
+
+        self.assertIn("A manager/director/VP/Head title alone is not enough", prompt)
+        self.assertIn("mark ambiguous cases `unknown` with a caveat", prompt)
+
+    def test_alternative_core_paths_are_or_not_one_flat_must_list(self) -> None:
+        m = _load_module()
+        plan = _plan(n_must=0, n_nice=0)
+        plan["traits"]["must_have"] = [
+            {"trait": "path a", "tier": "core"},
+            {"trait": "path b1", "tier": "core"},
+            {"trait": "path b2", "tier": "core"},
+            {"trait": "path b3", "tier": "core"},
+        ]
+        plan["core_groups"] = [
+            {"name": "a", "all_of": ["path a"]},
+            {"name": "b", "all_of": ["path b1", "path b2", "path b3"]},
+        ]
+        parsed = {
+            "seniority_fit": "ideal",
+            "must_have": [
+                {"trait": "path a", "status": "experienced", "evidence": "direct"},
+                {"trait": "path b1", "status": "missing", "evidence": ""},
+                {"trait": "path b2", "status": "missing", "evidence": ""},
+                {"trait": "path b3", "status": "missing", "evidence": ""},
+            ],
+            "nice_to_have": [],
+            "excellence": _excellence(0.8, 0.0, 0.8),
+            "rationale": "strong path a",
+            "caveats": [],
+        }
+
+        out = m.normalize_evaluation(parsed, plan)
+
+        self.assertEqual(out["verdict"], "top_tier")
+        self.assertEqual(out["score_breakdown"]["selected_core_group"], "a")
+        self.assertEqual(out["score_breakdown"]["scored_must_have"], ["path a"])
+        self.assertAlmostEqual(out["score_breakdown"]["trait_score"], 0.8)
+
+    def test_founder_policy_override_cannot_be_overruled_by_base_title_gate(self) -> None:
+        m = _load_module()
+        plan = _plan()
+        plan["target_level"] = "senior_ic"
+        plan["recruiter_policy"] = m.recruiter_policy.resolve_recruiter_preferences(
+            user_preferences={"current_founder_c_suite_for_non_exec_ic": "eligible"}
+        )
+        parsed = {
+            "seniority_fit": "too_senior",
+            "must_have": [{"trait": f"t{i}", "status": "experienced", "evidence": "e"} for i in range(3)],
+            "nice_to_have": [{"trait": f"t{i}", "status": "missing", "evidence": ""} for i in (3, 4)],
+            "excellence": _excellence(0.8, 0.0, 0.8),
+            "rationale": "current founder",
+            "caveats": [],
+        }
+
+        out = m.normalize_evaluation(parsed, plan, {"current_title": "Co-Founder and CTO"})
+
+        self.assertEqual(out["seniority_fit"], "unknown")
+        self.assertEqual(
+            out["seniority_policy_adjustment"],
+            "founder_c_suite_eligible_title_gate_removed",
+        )
+        self.assertNotEqual(out["verdict"], "out")
+
+
 class TestQuorumAggregate(unittest.TestCase):
     def test_anchors(self) -> None:
         m = _load_module()
@@ -191,8 +276,9 @@ class TestNormalizeEvaluation(unittest.TestCase):
         }
         out = m.normalize_evaluation(parsed, _plan())
         # quorum(foundational x3)=0.5; nice missing -> 0; trait=0.5;
-        # excellence=0.5; final = 0.55*0.5 + 0.45*0.5 = 0.5
-        self.assertAlmostEqual(out["jd_score"], 0.5, places=3)
+        # direct excellence=.5; pedigree contributes an upside-only .1 bonus;
+        # final = 0.55*.5 + 0.45*.6 = .545
+        self.assertAlmostEqual(out["jd_score"], 0.545, places=3)
         self.assertEqual(out["verdict"], "out")
         self.assertIn("score_breakdown", out)
         self.assertAlmostEqual(out["score_breakdown"]["trait_score"], 0.5, places=3)

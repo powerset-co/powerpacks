@@ -8,13 +8,13 @@ only — per-trait evidence statuses, excellence subscores (trajectory /
 pedigree / impact), seniority fit, and caveats. The final score and verdict
 are computed deterministically in code from those judgments:
 
-    trait_score    = (2*sum(must statuses) + sum(nice statuses)) / (2*n_must + n_nice)
-    excellence     = 0.4*trajectory + 0.3*impact + 0.3*pedigree
+    trait_score    = quorum(best alternative core path + table stakes) + nice bonus
+    excellence     = direct-evidence base (trajectory/impact) + capped pedigree bonus
     caveat_penalty = min(0.20, 0.05 * material_caveat_count)
     final_score    = 0.55*trait_score + 0.45*excellence - caveat_penalty
 
 Verdict ladder (bar-raiser model — default is out):
-    top_tier        in-band, no missing must-have, trait_score >= 0.85,
+    top_tier        in-band, no missing scored must-have, trait_score >= 0.80,
                     excellence >= 0.70
     high_potential  in-band, trait_score >= 0.60, trajectory >= 0.75
                     (confident diamond-in-the-rough)
@@ -33,6 +33,7 @@ import asyncio
 import gzip
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -46,6 +47,10 @@ SHARED_DIR = ROOT / "packs/search/primitives/shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from probe_artifacts import load_probe_summaries  # noqa: E402
+DEEP_SEARCH_DIR = ROOT / "packs/search/primitives/deep_search"
+if str(DEEP_SEARCH_DIR) not in sys.path:
+    sys.path.insert(0, str(DEEP_SEARCH_DIR))
+import recruiter_policy  # noqa: E402
 DEFAULT_MODEL = os.environ.get("PROFILE_EVAL_MODEL", os.environ.get("JD_EVAL_MODEL", "gpt-5.4"))
 DEFAULT_REASONING_EFFORT = os.environ.get("PROFILE_EVAL_REASONING_EFFORT", os.environ.get("JD_EVAL_REASONING_EFFORT", "medium"))
 DEFAULT_CONCURRENCY = 100
@@ -83,7 +88,7 @@ MUST_WEIGHT = 2.0
 NICE_WEIGHT = 1.0
 TRAIT_COMPONENT_WEIGHT = 0.55
 EXCELLENCE_COMPONENT_WEIGHT = 0.45
-EXCELLENCE_WEIGHTS = {"trajectory": 0.4, "impact": 0.3, "pedigree": 0.3}
+EXCELLENCE_WEIGHTS = {"trajectory": 0.4, "impact": 0.4, "pedigree": 0.2}
 CAVEAT_PENALTY_EACH = 0.05
 CAVEAT_PENALTY_CAP = 0.20
 # Quorum / consensus aggregation for must-haves. Real top candidates spike on
@@ -111,6 +116,8 @@ You only surface candidates the hiring team would be lucky to get — people who
 
 You will receive: the job context (including hire stage), the seniority band / usable cutoff policy, must-have traits, nice-to-have traits, and one candidate profile.
 
+When the plan defines ALTERNATIVE CORE GROUPS, they are OR paths: a candidate needs one complete group, not every group. Evaluate evidence for every trait, but never reject or downgrade a candidate merely for missing traits that belong only to other alternative groups. Table-stakes traits apply across every path. The deterministic scorer selects the strongest complete path.
+
 You do NOT produce a final score or verdict. You produce structured judgments — per-trait evidence statuses, excellence subscores, seniority fit, and caveats. The final score and verdict are computed deterministically from your judgments, so be precise and calibrated: every status and subscore directly moves the ranking.
 
 === SENIORITY IS A HARD GATE, SEPARATE FROM SKILLS ===
@@ -121,7 +128,8 @@ First decide seniority_fit. Seniority has TWO axes — career LEVEL and TRACK (i
 
 IF THE TARGET IS AN IC ROLE (senior IC, staff IC, lead-IC, "Member of Technical Staff", founding engineer, applied/research engineer):
 - "ideal" / "acceptable" (IN-BAND): any hands-on individual contributor on the same technical track AT OR ABOVE the target IC level — senior, staff, principal, distinguished, fellow, or "MTS / research scientist at a top lab" — PLUS one level below it (a strong mid-level IC ready to step up). A MORE-senior IC is NOT "stepping down": strong senior ICs are exactly who these roles want, and at startups they routinely take IC / founding-engineer seats. NEVER mark a senior / staff / principal IC "too_senior" merely for being a high IC level.
-- "too_senior": the candidate's CURRENT primary identity is on the MANAGEMENT / EXEC track or running a company — engineering/eng manager with no current hands-on work, director, VP, Head-of, C-suite (CEO/CTO/CxO), president, current founder/co-founder, managing director, general partner, board member, or full-time investor/advisor. They will not return to an IC seat. (A PAST founder/manager is fine if the CURRENT role is a hands-on IC.)
+- "too_senior": the candidate's CURRENT primary identity is clearly on the MANAGEMENT / EXEC track and the profile shows no current hands-on work — for example org/people ownership, managing director, general partner, board member, or full-time investor/advisor. A manager/director/VP/Head title alone is not enough: use current responsibilities and company-stage context. A PAST founder/manager is fine when the CURRENT role is hands-on.
+- Current founder/C-suite discipline: obey the supplied recruiter policy. `default_out` treats a current founder/C-suite identity as too_senior for a non-executive IC target. `eligible` means the title is not a gate; judge current hands-on work and track. `review` means return `unknown` with a material caveat rather than forcing OUT. This policy does not apply when the target itself is management/executive.
 - "too_junior": two or more levels below the target IC level (interns, new grads, early-career with no real depth).
 - Lead-title discipline: "Tech Lead", "Team Lead", "TL/TLM", "lead maintainer", or "founding engineer" with current hands-on work is a LEAD-IC and IN-BAND for an IC target. Never mark too_senior from a "Lead" title alone — gate only on clear management-track evidence (direct reports, org ownership, no hands-on work).
 
@@ -131,7 +139,7 @@ IF THE TARGET IS A MANAGEMENT / EXEC ROLE (manager, director, VP, Head-of, exec)
 - "unknown": genuinely cannot tell.
 - Ambiguous titles: if the current title is ambiguous between IC and management (e.g. "Principal Engineer / Director", "Head of X, Engineering"), decide seniority_fit from the profile's hands-on evidence and ALWAYS record a caveat "seniority ambiguous — verify IC vs management in screen" (material only if other signals point to management).
 
-A candidate with deep matching skills but TRULY out-of-band seniority is OUT — do not rescue a current VP/exec/founder for an IC role on skills alone (they will not step down). But for an IC target, do NOT gate a senior / staff / principal IC: a more-senior IC stepping into a focused IC or founding-engineer role is the BEST hire, not a down-level. Past founder/exec roles are fine if the CURRENT role is in-band.
+A candidate with deep matching skills but TRULY out-of-band seniority is OUT. Apply the explicit founder/C-suite recruiter policy before gating a current company runner. Do not infer that a manager/director/VP/Head is non-hands-on from title alone; use explicit current evidence and mark ambiguous cases `unknown` with a caveat. For an IC target, do NOT gate a senior / staff / principal IC: a more-senior IC stepping into a focused IC or founding-engineer role is the BEST hire, not a down-level. Past founder/exec roles are fine if the CURRENT role is in-band.
 
 === TRAIT EVIDENCE LADDER ===
 
@@ -260,18 +268,27 @@ def collect_profiles(candidates: list[dict[str, Any]], run_dir: Path) -> dict[st
 
 def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
     traits = plan.get("traits", {}) or {}
-    must = [t.get("trait") for t in traits.get("must_have", []) if t.get("trait")]
+    must = [t for t in traits.get("must_have", []) if t.get("trait")]
     nice = [t.get("trait") for t in traits.get("nice_to_have", []) if t.get("trait")]
+    core_groups = plan.get("core_groups") or []
     hire_stage = plan.get("hire_stage") or "founding_early"
     parts = [
         f"Job: {plan.get('job_title') or ''} ({plan.get('normalized_archetype') or ''})",
         f"Hire stage: {hire_stage}",
         f"Target level: {plan.get('target_level') or 'senior individual contributor (default)'}",
         f"Seniority / usable cutoff policy: {plan.get('usable_cutoff') or 'Senior in-band IC; executives, founders, and advisors are out.'}",
-        "Must-have traits:",
-        *[f"- {t}" for t in must],
+        "Must-have traits (with tier):",
+        *[f"- [{t.get('tier') or 'table_stakes'}] {t['trait']}" for t in must],
+        "Alternative core paths (OR across groups; AND within a group):",
+        *[
+            f"- {group.get('name') or 'path'}: " + " AND ".join(str(t) for t in group.get("all_of") or [])
+            for group in core_groups
+        ],
+        "Evaluate every trait, but missing traits from unselected alternative paths do not count against the candidate.",
         "Nice-to-have traits:",
         *[f"- {t}" for t in nice],
+        "",
+        recruiter_policy.render_recruiter_prompt(plan.get("recruiter_policy")),
         "",
         "Candidate profile (JSON):",
         json.dumps(profile, sort_keys=True),
@@ -308,6 +325,10 @@ def _status_values(traits: list[dict[str, Any]]) -> list[float]:
     return [STATUS_VALUE.get(t.get("status", "unknown"), 0.0) for t in traits]
 
 
+def _norm_trait(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
 def compute_trait_score(must: list[dict[str, Any]], nice: list[dict[str, Any]]) -> float:
     """Quorum over must-haves, plus nice-to-haves as a small additive bonus.
 
@@ -322,16 +343,89 @@ def compute_trait_score(must: list[dict[str, Any]], nice: list[dict[str, Any]]) 
     return min(1.0, must_q + NICE_BONUS_WEIGHT * nice_avg)
 
 
-def compute_excellence(excellence: dict[str, Any]) -> float:
-    total = 0.0
-    for key, weight in EXCELLENCE_WEIGHTS.items():
+def scoring_preferences(plan: dict[str, Any] | None) -> dict[str, Any]:
+    resolved = (plan or {}).get("recruiter_policy")
+    if not resolved:
+        resolved = recruiter_policy.resolve_recruiter_preferences()
+    preferences = resolved.get("preferences") if isinstance(resolved, dict) else None
+    if not isinstance(preferences, dict):
+        raise recruiter_policy.RecruiterPolicyError("plan recruiter_policy.preferences must be an object")
+    return preferences
+
+
+_FOUNDER_C_SUITE_TITLE = re.compile(
+    r"\b(?:co[ -]?founder|founder|ceo|cto|cfo|coo|cpo|cmo|cio|ciso|"
+    r"chief (?:executive|technology|financial|operating|product|marketing|information|security) officer)\b",
+    re.IGNORECASE,
+)
+
+
+def profile_is_current_founder_c_suite(profile: dict[str, Any] | None) -> bool:
+    """Best-effort structured check used only to enforce an explicit policy override."""
+    if not isinstance(profile, dict):
+        return False
+    titles = [profile.get("current_title"), profile.get("title")]
+    positions = profile.get("positions") or profile.get("work_experiences") or []
+    if isinstance(positions, list):
+        for index, position in enumerate(positions):
+            if not isinstance(position, dict):
+                continue
+            is_current = position.get("is_current") is True or not any(
+                position.get(key) for key in ("end_date", "end_year", "ended_at")
+            )
+            if index == 0 or is_current:
+                titles.append(position.get("title"))
+    return any(_FOUNDER_C_SUITE_TITLE.search(str(title or "")) for title in titles)
+
+
+def apply_founder_policy(
+    seniority_fit: str,
+    plan: dict[str, Any],
+    profile: dict[str, Any] | None,
+    preferences: dict[str, Any],
+) -> tuple[str, str | None]:
+    """Prevent the base seniority rubric from overriding an explicit founder preference."""
+    if plan.get("target_level") not in {"senior_ic", "staff_ic", "lead", None}:
+        return seniority_fit, None
+    if not profile_is_current_founder_c_suite(profile):
+        return seniority_fit, None
+    policy = preferences.get("current_founder_c_suite_for_non_exec_ic") or "default_out"
+    if policy == "review" and seniority_fit not in {"too_junior", "wrong_track"}:
+        return "unknown", "founder_c_suite_review"
+    if policy == "eligible" and seniority_fit == "too_senior":
+        return "unknown", "founder_c_suite_eligible_title_gate_removed"
+    return seniority_fit, None
+
+
+def compute_excellence(
+    excellence: dict[str, Any],
+    weights: dict[str, float] | None = None,
+    pedigree_policy: str = "positive_prior_not_gate",
+) -> float:
+    weights = weights or EXCELLENCE_WEIGHTS
+    scores: dict[str, float] = {}
+    for key in EXCELLENCE_WEIGHTS:
         block = excellence.get(key) or {}
         try:
             score = max(0.0, min(1.0, float(block.get("score", 0))))
         except (TypeError, ValueError):
             score = 0.0
-        total += weight * score
-    return total
+        scores[key] = score
+
+    # Pedigree is an upside-only prior. Normalize the direct evidence dimensions independently so
+    # absent/no-name pedigree cannot lower excellence or block top-tier by itself, then add the
+    # configured pedigree bonus. Explicit `ignore` removes that bonus entirely.
+    direct_weight = float(weights.get("trajectory", 0)) + float(weights.get("impact", 0))
+    direct = 0.0
+    if direct_weight > 0:
+        direct = (
+            float(weights.get("trajectory", 0)) * scores["trajectory"]
+            + float(weights.get("impact", 0)) * scores["impact"]
+        ) / direct_weight
+    pedigree_bonus = 0.0
+    if pedigree_policy != "ignore":
+        pedigree_bonus = float(weights.get("pedigree", 0)) * scores["pedigree"]
+    return min(1.0, direct + pedigree_bonus)
 
 
 def caveat_penalty(caveats: list[dict[str, Any]]) -> float:
@@ -342,6 +436,40 @@ def caveat_penalty(caveats: list[dict[str, Any]]) -> float:
 def must_coverage(must: list[dict[str, Any]]) -> float:
     """Must-have coverage as the quorum/consensus aggregate (0-1)."""
     return quorum_aggregate(_status_values(must))
+
+
+def effective_must_for_scoring(
+    plan: dict[str, Any],
+    must: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Select one alternative core path and combine it with shared table stakes."""
+    plan_must = (plan.get("traits") or {}).get("must_have") or []
+    by_trait = {_norm_trait(item.get("trait")): item for item in must if item.get("trait")}
+    table_stakes = [
+        by_trait[_norm_trait(item.get("trait"))]
+        for item in plan_must
+        if item.get("tier") != "core" and _norm_trait(item.get("trait")) in by_trait
+    ]
+
+    options: list[tuple[tuple[float, float, float], str, list[dict[str, Any]]]] = []
+    for index, group in enumerate(plan.get("core_groups") or []):
+        group_traits = [
+            by_trait[_norm_trait(trait)]
+            for trait in group.get("all_of") or []
+            if _norm_trait(trait) in by_trait
+        ]
+        if not group_traits:
+            continue
+        values = _status_values(group_traits)
+        # All-of groups are compared weakest-link first so one directly evidenced path beats a
+        # broader but merely adjacent path. Quorum and average break ties deterministically.
+        quality = (min(values), quorum_aggregate(values), sum(values) / len(values))
+        name = str(group.get("name") or f"archetype_{index + 1}")
+        options.append((quality, name, group_traits))
+    if not options:
+        return must, None
+    _, selected_name, selected_traits = max(options, key=lambda option: option[0])
+    return [*table_stakes, *selected_traits], selected_name
 
 
 def decide_verdict(
@@ -375,7 +503,11 @@ def decide_verdict(
     return "out"
 
 
-def normalize_evaluation(parsed: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+def normalize_evaluation(
+    parsed: dict[str, Any],
+    plan: dict[str, Any],
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     traits = plan.get("traits", {}) or {}
     must_expected = [t.get("trait") for t in traits.get("must_have", []) if t.get("trait")]
     nice_expected = [t.get("trait") for t in traits.get("nice_to_have", []) if t.get("trait")]
@@ -433,15 +565,25 @@ def normalize_evaluation(parsed: dict[str, Any], plan: dict[str, Any]) -> dict[s
     excellence_block = norm_excellence(parsed.get("excellence"))
     caveats = norm_caveats(parsed.get("caveats"))
 
-    trait_score = compute_trait_score(must, nice)
-    excellence_score = compute_excellence(excellence_block)
+    scored_must, selected_core_group = effective_must_for_scoring(plan, must)
+    trait_score = compute_trait_score(scored_must, nice)
+    preferences = scoring_preferences(plan)
+    seniority_fit, seniority_policy_adjustment = apply_founder_policy(
+        seniority_fit,
+        plan,
+        profile,
+        preferences,
+    )
+    excellence_weights = preferences.get("excellence_weights") or EXCELLENCE_WEIGHTS
+    pedigree_policy = str(preferences.get("pedigree_policy") or "positive_prior_not_gate")
+    excellence_score = compute_excellence(excellence_block, excellence_weights, pedigree_policy)
     trajectory = float(excellence_block.get("trajectory", {}).get("score", 0))
     penalty = caveat_penalty(caveats)
 
     final_score = TRAIT_COMPONENT_WEIGHT * trait_score + EXCELLENCE_COMPONENT_WEIGHT * excellence_score - penalty
     final_score = max(0.0, min(1.0, final_score))
 
-    verdict = decide_verdict(seniority_fit, trait_score, excellence_score, trajectory, must)
+    verdict = decide_verdict(seniority_fit, trait_score, excellence_score, trajectory, scored_must)
     # Hard gate enforced in code, not just the prompt.
     if seniority_fit in GATED_SENIORITY:
         verdict = "out"
@@ -453,12 +595,17 @@ def normalize_evaluation(parsed: dict[str, Any], plan: dict[str, Any]) -> dict[s
         "jd_score": round(final_score, 3),
         "verdict": verdict,
         "seniority_fit": seniority_fit,
+        "seniority_policy_adjustment": seniority_policy_adjustment,
         "must_have": must,
         "nice_to_have": nice,
         "excellence": excellence_block,
         "score_breakdown": {
             "trait_score": round(trait_score, 3),
             "excellence_score": round(excellence_score, 3),
+            "excellence_weights": excellence_weights,
+            "pedigree_policy": pedigree_policy,
+            "selected_core_group": selected_core_group,
+            "scored_must_have": [item["trait"] for item in scored_must],
             "caveat_penalty": round(penalty, 3),
             "formula": f"{TRAIT_COMPONENT_WEIGHT}*trait + {EXCELLENCE_COMPONENT_WEIGHT}*excellence - penalty",
         },
@@ -524,7 +671,7 @@ async def evaluate_one(
                 response = await client.chat.completions.create(**kwargs)
                 content = response.choices[0].message.content or "{}"
                 parsed = json.loads(content)
-                return {**base, **normalize_evaluation(parsed, plan)}
+                return {**base, **normalize_evaluation(parsed, plan, profile)}
             except Exception as exc:  # noqa: BLE001
                 last_error = str(exc)
                 if attempt < max_retries:

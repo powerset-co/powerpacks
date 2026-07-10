@@ -76,5 +76,8 @@
   { "id": "dep-fast-url-forced", "query": "quick fast search, don't do the deep loop: https://jobs.lever.co/acme/xyz", "surface": "people", "backend": "powerset", "depth": "fast", "note": "explicit fast override beats the URL auto-deep rule" },
 
   { "id": "cross-jd-local", "query": "search local for people matching this JD:\n\nSenior Platform Engineer\n\nResponsibilities\n- Build and run Kubernetes infrastructure\n\nQualifications\n- 5+ years of infrastructure engineering", "surface": "people", "backend": "local", "depth": "deep", "note": "pasted JD -> deep; explicit local binds the backend" },
-  { "id": "cross-url-powerset", "query": "in powerset: https://job-boards.greenhouse.io/anthropic/jobs/5239391008", "surface": "people", "backend": "powerset", "depth": "deep" }
+  { "id": "cross-url-powerset", "query": "in powerset: https://job-boards.greenhouse.io/anthropic/jobs/5239391008", "surface": "people", "backend": "powerset", "depth": "deep" },
+
+  { "id": "quality-cracked-distsys", "query": "find the most cracked distributed-systems engineers in my Powerset network", "surface": "people", "backend": "powerset", "depth": "deep", "note": "quality superlative + role context requires the judged recruiter loop" },
+  { "id": "quality-best-founding-local", "query": "find the best founding engineers in my local network", "surface": "people", "backend": "local", "depth": "deep", "note": "quality superlative + hiring archetype enters deep on the explicit local backend" }
 ]

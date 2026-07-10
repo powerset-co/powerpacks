@@ -1,5 +1,10 @@
 # `$search` deep mode — ground-truth run v1 status (AgentMail Distributed Systems)
 
+> **Historical benchmark status, not the current product contract.** Candidate
+> and metric claims below describe a dated benchmark run. See the canonical
+> [`$search` architecture](search-architecture.md) for current behavior and the
+> evaluation roadmap.
+
 _Created: 2026-06-26_
 
 _Changelog:_

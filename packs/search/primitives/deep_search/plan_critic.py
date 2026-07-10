@@ -29,10 +29,15 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from openai_client import make_openai_client  # noqa: E402
 
+try:  # direct script execution
+    import recruiter_policy as recruiter_policy
+except ImportError:  # module execution
+    from . import recruiter_policy
+
 # Judge-grade model: the critic runs ONCE per search, so quality > pennies here
 # (gpt-4.1 measurably missed a self-contradictory cutoff and over-flagged soft pillars).
 DEFAULT_MODEL = os.environ.get("POWERPACKS_PLAN_CRITIC_MODEL", "gpt-5.4")
-VALID_HIRE_STAGES = {"founding_early", "scaling_late"}
+VALID_HIRE_STAGES = set(recruiter_policy.CANONICAL_HIRE_STAGES)
 
 SYSTEM = (
     "You review a recruiting search plan against the job description it was generated from. "
@@ -65,8 +70,24 @@ def deterministic_checks(plan: dict[str, Any]) -> list[str]:
     if stage and stage not in VALID_HIRE_STAGES:
         issues.append(f"hire_stage '{stage}' is off-enum (must be one of {sorted(VALID_HIRE_STAGES)}); "
                       "the judge's hire-stage bar will not match")
-    if not any(t.get("tier") == "core" for t in (plan.get("traits", {}) or {}).get("must_have", [])):
+    policy_stage = (((plan.get("recruiter_policy") or {}).get("preferences") or {}).get("hire_stage"))
+    if policy_stage and stage != policy_stage:
+        issues.append(f"hire_stage '{stage}' disagrees with recruiter_policy hire_stage '{policy_stage}'")
+    core = {str(t.get("trait") or "").strip() for t in (plan.get("traits", {}) or {}).get("must_have", [])
+            if t.get("tier") == "core" and str(t.get("trait") or "").strip()}
+    if not core:
         issues.append("no must_have trait is tagged core — the shortlist core-gate will fall back to score-only")
+    else:
+        grouped = {str(t).strip() for group in plan.get("core_groups") or []
+                   for t in (group.get("all_of") or []) if str(t).strip()}
+        if not plan.get("core_groups"):
+            issues.append("core traits exist but core_groups is empty — the gate is ambiguous")
+        missing = sorted(core - grouped)
+        unknown = sorted(grouped - core)
+        if missing:
+            issues.append(f"core traits missing from core_groups: {missing}")
+        if unknown:
+            issues.append(f"core_groups reference non-core traits: {unknown}")
     return issues
 
 
@@ -93,7 +114,7 @@ def main() -> None:
             raise SystemExit(1)
         client = make_openai_client(key)
         resp = client.chat.completions.create(
-            model=args.model, temperature=0.0,
+            model=args.model,
             messages=[{"role": "system", "content": SYSTEM},
                       {"role": "user", "content": f"JOB DESCRIPTION:\n{jd.strip()}\n\nPLAN:\n{json.dumps(plan, indent=1)}"}],
             response_format={"type": "json_object"},
