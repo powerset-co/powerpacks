@@ -1,5 +1,10 @@
 # Agentic search → judged ground truth (foundational)
 
+> **Historical method and benchmark note, not the current product contract.**
+> Retained for the experiments that motivated wide probing and judged evaluation.
+> See the canonical [`$search` architecture](search-architecture.md) for the
+> shipped router, local/Powerset backends, review lifecycle, and artifacts.
+
 _Created: 2026-06-26_
 
 This is the foundational "agentic search" method behind `$search`'s deep mode. It builds a **trustworthy,

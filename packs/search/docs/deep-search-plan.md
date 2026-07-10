@@ -1,5 +1,10 @@
 # `$search` deep mode — emulate a recruiting team (source → judge → hill-climb)
 
+> **Historical design note, not the current product contract.** Retained to
+> preserve the original deep-search rationale and task history. See the canonical
+> [`$search` architecture](search-architecture.md) for current behavior, artifact
+> names, review points, and shipped-versus-planned status.
+
 _Created: 2026-06-26_
 
 _Changelog:_

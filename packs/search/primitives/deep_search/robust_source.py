@@ -46,7 +46,10 @@ EMPHASES = [
 def _load_union(path: Path) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
-    return {r["person_id"]: r for r in (json.loads(l) for l in path.read_text().splitlines() if l.strip())}
+    return {
+        row["person_id"]: row
+        for row in (json.loads(line) for line in path.read_text().splitlines() if line.strip())
+    }
 
 
 def _merge(into: dict[str, dict[str, Any]], rnd_union: Path, round_tag: str) -> int:
@@ -72,6 +75,7 @@ def _merge(into: dict[str, dict[str, Any]], rnd_union: Path, round_tag: str) -> 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Robust sourcing: union independent wide-search rounds until coverage saturates.")
     ap.add_argument("--jd-file", required=True)
+    ap.add_argument("--plan", default=None, help="Approved plan.json; passed to every decomposition round")
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--set-id", default=None)
     ap.add_argument("--backend", choices=("powerset", "local"), default="powerset", help="Threaded to run_wide_search; local = the local DuckDB index")
@@ -106,6 +110,8 @@ def main() -> None:
             round_jd.write_text(jd_text + (f"\n\nSOURCING EMPHASIS FOR THIS PASS: {emphasis}" if emphasis else ""), encoding="utf-8")
             seeds_path = rdir / "seeds.json"
             dcmd = [sys.executable, str(DECOMPOSE), "--jd-file", str(round_jd), "--n", str(args.n), "--out", str(seeds_path)]
+            if args.plan:
+                dcmd += ["--plan", args.plan]
             if args.decompose_model:
                 dcmd += ["--model", args.decompose_model]
             run_checked(dcmd, expected_paths=[seeds_path], description=f"decompose round {r}")

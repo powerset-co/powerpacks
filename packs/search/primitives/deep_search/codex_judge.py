@@ -125,7 +125,7 @@ def main() -> None:
                   "\n\nIMPORTANT: do NOT use tools or read files; reply with ONLY the JSON object "
                   "specified in the OUTPUT section.\n\n" + EV.build_user_prompt(plan, prof or {}))
         parsed, err = judge_one(prompt, args.model, args.reasoning_effort, args.timeout)
-        rec = EV.normalize_evaluation(parsed, plan) if parsed else {
+        rec = EV.normalize_evaluation(parsed, plan, prof) if parsed else {
             "jd_score": 0.0, "verdict": "out", "seniority_fit": "unknown", "rationale": ""}
         rec["candidate_id"] = pid
         rec["error"] = err

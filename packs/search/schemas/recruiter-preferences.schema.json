@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks.local/schemas/recruiter-preferences.schema.json",
+  "title": "Recruiter Preferences",
+  "description": "Optional user- or JD-derived overrides for the versioned recruiter defaults. Safety and job-evidence constraints are intentionally not overrideable.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "hire_stage": {
+      "description": "Canonical hire stage or a normalized legacy alias. Resolution stores the canonical value.",
+      "type": "string",
+      "enum": [
+        "founding_early",
+        "founding",
+        "founding_stage",
+        "pre_seed",
+        "seed",
+        "early",
+        "early_stage",
+        "scaling_late",
+        "growth",
+        "growth_stage",
+        "scale",
+        "scaling",
+        "late",
+        "late_stage",
+        "mature"
+      ]
+    },
+    "excellence_weights": {
+      "description": "Partial non-negative weights. Missing dimensions inherit from the lower-precedence source; the resolved weights are normalized to sum to 1.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "trajectory": {
+          "type": "number",
+          "minimum": 0
+        },
+        "impact": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pedigree": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "pedigree_policy": {
+      "description": "Pedigree may be ignored or used only as positive evidence; it is never a gate.",
+      "type": "string",
+      "enum": [
+        "positive_prior_not_gate",
+        "ignore"
+      ]
+    },
+    "current_founder_c_suite_for_non_exec_ic": {
+      "description": "Hireability treatment of a current founder or C-suite candidate for a non-executive IC target.",
+      "type": "string",
+      "enum": [
+        "default_out",
+        "eligible",
+        "review"
+      ]
+    }
+  }
+}

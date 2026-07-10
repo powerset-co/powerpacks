@@ -17,6 +17,9 @@ Changelog:
   company/sql/contacts to their surfaces; ordinary people searches stay on the fast local/TurboPuffer
   path. $search-network is a deprecated alias. The retrieval primitive (search_network_pipeline.py)
   and search-network-jd-* schemas/tasks keep their names.
+- 2026-07-10: Quality-superlative hiring asks ("best", "strongest", "cracked") enter deep mode.
+  Deep mode now builds and critiques its recruiter plan before sourcing, then uses the approved
+  core/nice criteria and explicit recruiter defaults to generate epoch-0 probes.
 -->
 
 # Search
@@ -94,7 +97,10 @@ Decide `surface`, `backend`, and `depth` for the query:
 3. **depth** — how hard to search (people surface only):
    - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
      deep/thorough/judged run or names the deliverable ("recruit ...", "build a shortlist",
-     "source candidates", "more people like <linkedin url>").
+     "source candidates", "more people like <linkedin url>"). Quality-superlative hiring intent
+     also means deep when the request supplies a role/domain to judge: "best", "strongest",
+     "most exceptional", "top-tier", or "cracked" candidates. A bare "find me candidates" with
+     no role context remains fast/clarify; do not fabricate a hiring profile.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
    - Deep is the multi-profile engine: decompose the role into diverse candidate archetypes,
      run each as a probe through the same retrieval pipeline, union, judge, converge.
@@ -148,6 +154,19 @@ executing — fast mode at the prepare preview (`Execute this search or modify i
 path's `Execute this local search or modify it?`), deep mode at Review (plan approval). Never
 run an `execute_command` without that answer; never ask twice.
 
+### Retrieval surface boundary
+
+`$search` people retrieval means the Powerpacks network surface: the `powerset` backend is
+set-scoped TurboPuffer/Postgres and the `local` backend is DuckDB. It is not Sales Navigator.
+
+- An explicit Powerset/network request stays on `$search` with `surface: people` and
+  `backend: powerset`, including retries, wider probes, adjacency, and sparse-result diagnosis.
+- Never treat Sales Nav or LinkedIn leads as an implicit fallback for a failed or weak `$search`
+  run. Ask before changing retrieval surfaces and keep artifacts/results separate unless the user
+  explicitly requests both.
+- If the user says only "extended search" and the conversation has not defined the surface, ask:
+  `Do you mean Sales Nav extended search, or regular Powerset network search?`
+
 ---
 
 ## Hiring seniority & hireability defaults
@@ -155,6 +174,12 @@ run an `execute_command` without that answer; never ask twice.
 These apply to every hiring-intent search (a JD, a role brief, "find
 candidates", "people like X for this role") in both local and TurboPuffer
 modes, and they bind any fallback behavior too:
+
+Deep mode resolves these through the versioned recruiter policy at
+`packs/search/policies/recruiter-defaults.json` and embeds the resolved values plus provenance in
+`epoch0/plan.json`. The order is **explicit user preferences > JD-supported inference > defaults**.
+Defaults rank; they do not silently become JD hard requirements. Review shows them once so the
+user can override them before sourcing.
 
 - **Derive the seniority target from level language, else from the title's
   conventional range.** Map stated levels ("senior", "staff+", "director and

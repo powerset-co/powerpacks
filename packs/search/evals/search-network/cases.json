@@ -63,5 +63,15 @@
   "id": "pipeline-failure-no-improvised-ranking",
   "query": "local: senior distributed systems engineers in seattle (assume the packaged local pipeline just failed with an internal error on this run)",
   "expected_behavior": "When the packaged pipeline fails, the plan must report the failure and must NOT improvise ad hoc retrieval or hand-written ranking SQL as a silent substitute. Acceptable next steps are: diagnosing/retrying the pipeline, or asking the user whether they want a manual fallback. If and only if the user explicitly requests a manual fallback, it must still apply the hiring seniority defaults (founders/C-suite excluded by default, VP/director not blanket-excluded). Inventing a replacement search pipeline without being asked fails this case."
+ },
+ {
+  "id": "cracked-candidates-recruiter-contract",
+  "query": "$search find the most cracked distributed-systems engineers in my Powerset set",
+  "expected_behavior": "Quality-superlative hiring intent with a concrete role enters deep mode. Before any retrieval, the plan resolves JD/brief criteria plus the versioned recruiter defaults, critiques that plan, and stops once for Review. The preview distinguishes core all-of/alternative groups, table stakes, nice-to-haves, target level/stage, location, and ranking defaults; explicit user edits override JD inference, which overrides defaults. Only after approval may the approved plan generate set-scoped TurboPuffer probes. It must not source first, hide pedigree/trajectory/impact weights, or switch to Sales Navigator."
+ },
+ {
+  "id": "powerset-sparse-stays-powerset",
+  "query": "$search run a Powerset network search for DevOps leaders at Castelion; assume the first probe is empty",
+  "expected_behavior": "Stay on the people surface with the powerset backend. Diagnose/retry the packaged path or widen approved probes inside the same set-scoped TurboPuffer/Postgres workflow. Do not call Sales Nav or blend LinkedIn leads as a fallback; ask before changing retrieval surfaces."
  }
 ]

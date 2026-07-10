@@ -45,11 +45,19 @@ Changelog:
 - 2026-07-08: Rename the human checkpoint "GATE 1" -> "Review" in the printed task checklist and
   prose (the plan-approval step). The algorithmic core-gate (which candidates make the shortlist)
   keeps its name. Engine flags are unchanged (--plan-approved / awaiting_plan_approval).
+- 2026-07-10: Move plan extraction + critic + Review before retrieval. The approved plan now drives
+  epoch-0 decomposition. Add versioned recruiter defaults, explicit alternative all-of core groups,
+  decision.json backend enforcement, and separate shortlist/sendable/bench outputs. Correct the
+  automated judge claim: the loop runs one selected judge; multi-vendor panels remain manual/planned.
+- 2026-07-10: Keep generated core groups singleton-by-default for eligibility while scoring all
+  must-haves. Only deliberate paths approved at Review change path scoring; every conjunction is a
+  Review decision and groups larger than three traits are rejected. Explicit unknown seniority may
+  stay in the qualified/anchor recall pool, but never becomes sendable.
 -->
 
 > **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, "build a
 > shortlist", and "more people like <url>" all land here via the recorded Step-1 decision —
-> JD→judged-shortlist with a core-tagged plan, mixture-of-judges, core-gate, and IC-track-aware
+> JD→judged-shortlist with a reviewed recruiter plan, selected bar-raiser judge, core-gate, and IC-track-aware
 > seniority.
 
 ## The engine
@@ -64,9 +72,9 @@ exactly **one human touchpoint — Review, the plan** — and everything after i
 ranked shortlist with no further prompts (judge auto, no spend confirm; expand-from-anchor auto).
 
 ```
-☐ 1. Source + extract plan      robust_source → build_eval_inputs   (free / 1 cheap call)
-      ──▶ Review: show the plan, get approval/edits   ← the ONLY human touch
-☐ 2. Judge → core-gate → expand-from-anchor (high reasoning on finalists)   (auto)
+☐ 1. Extract + critique plan    build_eval_inputs --plan-only → plan_critic
+      ──▶ Review: show the plan/defaults, get approval/edits   ← the ONLY human touch
+☐ 2. Source → triage → judge → core-gate → expand-from-anchor   (auto)
 ☐ 3. Present the ranked shortlist
 ```
 
@@ -74,21 +82,30 @@ ranked shortlist with no further prompts (judge auto, no spend confirm; expand-f
 `plan_critic` (advisory, one LLM call) and includes its findings in the awaiting_plan_approval
 output — show them WITH the plan; they name missing core pillars and cutoff contradictions, the
 top measured error source. Then STOP and show the user, grouped for a 10-second read:
-- the **core** must-haves (the domain differentiators that GATE the shortlist) vs the
-  **table_stakes** must-haves (generic seniority/leadership — these only RANK), and
-- the **target_level** + asymmetric seniority band.
+- the **core groups** vs **table_stakes** must-haves: generated defaults are one singleton
+  eligibility alternative per core trait, while a deliberate alternative path or multi-trait
+  conjunction changes path scoring and must be explicitly approved at Review; reject any group
+  larger than three traits, and
+- the **nice-to-haves**, **target_level**, hire stage, sourcing location, and resolved recruiter
+  defaults (including ranking weights and provenance).
 
-The plan is the highest-leverage artifact — the core must-haves *are* the shortlist gate — so this
-is where the human sharpens a niche role ("delivered large hardware" → "delivered large
-*fusion/plasma* hardware") or just confirms the domain for a common one. Let the user edit
-`plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the end.
+The plan is the highest-leverage artifact. Default singleton groups mean direct evidence for any
+one core capability can establish eligibility, but the default score still considers all
+must-haves. Satisfying one approved group prevents missing sibling alternatives from forcing
+`OUT`; singleton eligibility does not silently discard the other requirements from ranking.
+This is where the human sharpens a niche role ("delivered large hardware" → "delivered large
+*fusion/plasma* hardware") or deliberately defines an alternative/conjunctive path. When Review
+changes the default grouping into a scoring path, change that group's `source` from `default` to
+`user` (or `jd` when the JD explicitly defines the alternative). Let the user
+edit `plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the
+end.
 
-Also surface the **sourcing location** at this checkpoint: `decompose_jd` extracts the JD's stated
+Also surface the **sourcing location** at this checkpoint: the recruiter plan extracts the JD's stated
 metro (e.g. "San Francisco, CA · on-site" → "San Francisco Bay Area") and geo-constrains ~3 of 4
 probes to it — smaller first blast radius — while every 4th probe stays global as the recall hedge
 (relocators/remote-friendly hires are real: a measured SF-role GT included Seattle/NY/Bengaluru
-people). The decompose summary prints `location` + `geo_seeds`; if the metro is wrong or the user
-wants global sourcing, re-run `decompose_jd.py --location "<metro>"` (or `--location global`).
+people). Edit `plan.json.search_scope.location` to correct it or use `null` for global sourcing;
+the approved value is passed to decomposition.
 
 **JD input.** Supply the role either way — job-posting URLs, pasted JDs, and complex role briefs
 all run here:
@@ -96,35 +113,45 @@ all run here:
 - **job-posting URL** → pass `--jd-url <url>` instead; `deep_search_loop` fetches it to `<run>/jd.txt`
   via `fetch_jd.py` (stdlib, no spend) before sourcing. Provide exactly one of `--jd-file` /
   `--jd-url`. JS-rendered careers pages come back `thin` with a warning — paste the JD instead.
-- **backend** — when the recorded decision says `backend: local`, add `--backend local --db <db>`
-  to every `deep_search_loop` invocation: sourcing probes run against the local DuckDB index
-  instead of TurboPuffer/Postgres (no `--set-id`, no pinned seniority bands; judging is unchanged).
+- **backend** — `deep_search_loop` reads `<run>/decision.json` and enforces its backend. When local,
+  pass `--db <db>` if the default path is not correct; sourcing uses DuckDB instead of
+  TurboPuffer/Postgres (no `--set-id`, no pinned seniority bands; judging is unchanged). An explicit
+  `--backend` that conflicts with the recorded decision fails rather than silently changing corpus.
 
-The first `deep_search_loop` invocation sources and builds the plan, then stops at Review with
-`status: awaiting_plan_approval`:
+The first `deep_search_loop` invocation builds/validates/critiques the plan and stops at Review with
+`status: awaiting_plan_approval`. It does **not** start retrieval:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/deep_search/deep_search_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
-  --max-epochs 3 --score-threshold 0.40 --judge codex --reasoning-effort high
+  --max-epochs 3 --score-threshold 0.40 --sendable-threshold 0.55 \
+  --judge codex --reasoning-effort high
+# If the user supplied recruiter preferences, first write a JSON object matching
+# recruiter-preferences.schema.json and add: --preferences <run>/preferences.json
 # or, from a job-posting URL (no separate fetch step):
 #   ... deep_search_loop.py --jd-url "https://job-boards.greenhouse.io/acme/jobs/123" --run-dir <run> ...
 ```
 
-Review/edit `<run>/epoch0/plan.json`, then resume the autonomous engine. Resume does **not**
-rebuild or overwrite the approved plan; it judges free by default, **core-gates** the shortlist,
-and expands from your own judged-strong each epoch:
+Review/edit `<run>/epoch0/plan.json`, then resume the autonomous engine. Resume validates and
+content-hash binds that exact plan/JD plus Powerset set ID or local DuckDB identity before reusing
+any derived artifact. It uses the plan to generate epoch-0 probes, runs
+the selected judge, **core-gates** the shortlist, and expands from judged-strong candidates:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/deep_search/deep_search_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
-  --max-epochs 3 --score-threshold 0.40 --judge codex --reasoning-effort high \
+  --max-epochs 3 --score-threshold 0.40 --sendable-threshold 0.55 \
+  --judge codex --reasoning-effort high \
   --plan-approved
 ```
 
-Writes `<run>/shortlist/ground_truth_ranked.json` + `<run>/loop.json` (per-epoch convergence). To
-drive Review by hand, run stages 1–2 below up to `build_eval_inputs`, review the plan, then continue
-from the judge. Pass the approved `plan.json` to `judge_consensus --plan` so the **core-gate** fires.
+Writes `<run>/shortlist/{shortlist_ranked,sendable_ranked,bench_ranked}.json` plus `<run>/loop.json`.
+`ground_truth_ranked.json` remains a compatibility alias for `shortlist_ranked.json`; it is not an
+independently audited evaluation ground truth. Pass the approved `plan.json` to every manual
+`decompose_jd`/`robust_source` and `judge_consensus` call.
+
+Pre-policy deep plans cannot safely resume: they do not encode the current core-group and policy
+contract. Start a new run, repeat Review once, and do not carry old retrieval/judge artifacts into it.
 
 **Why a gate at all (and why the score alone can't replace it).** A blended `jd_score` cannot tell
 a role with real candidates from one with none: pedigree + generic leadership inflate wrong-domain
@@ -155,9 +182,24 @@ that's what drops good candidates. Keep recall high and let the judges gate.
 ## Flow (every step is a callable primitive — Codex / any harness runs it identically)
 
 Legend: 🆕 = new `deep_search/` primitive · ✅ = existing primitive. No step relies on a harness
-improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
+improvising. `codex_judge` avoids per-candidate OpenAI judge calls, but contract extraction,
+critic, decomposition, probe preparation, and default triage still use configured model APIs.
 
-1. **Robust source** 🆕 (read-only retrieval; only LLM cost is cheap `gpt-4o` decompose/expand).
+1. **Resolve + review the recruiter plan** (one plan call + one advisory critic call, no retrieval).
+   `build_eval_inputs --plan-only` extracts JD-supported core/table-stakes/nice criteria, singleton
+   core eligibility alternatives, level/stage/location, and the resolved versioned recruiter
+   defaults. Generated singleton groups preserve broad eligibility while default scoring still
+   considers every must-have. Deliberate alternative/conjunctive paths must be approved at Review,
+   every conjunction must be surfaced there, and no group may contain more than three traits. The
+   generated plan must validate before Review; explicit user edits outrank JD inference, which
+   outranks defaults.
+   ```bash
+   uv run --env-file .env --project . python packs/search/primitives/deep_search/build_eval_inputs.py \
+     --run-dir <run>/epoch0 --jd-file <run>/jd.txt --created-at <iso> --plan-only
+   ```
+
+2. **Robust source from the approved plan** 🆕 (read-only retrieval; sourcing adds `gpt-4o`
+   decomposition calls plus the normal probe-preparation model boundary).
    A single `decompose_jd → run_wide_search` round is **flaky** — the LLM seed set varies, so GT
    recall swings (measured 0.87–0.97 across trials). `robust_source` removes that variance by
    unioning several independent rounds (each a fresh decompose with a rotated emphasis) until
@@ -165,25 +207,26 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    min 0.968 / mean 0.978 (always ≥0.95); 3 independent runs union to 1.00.**
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/deep_search/robust_source.py \
-     --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --n 16 --keep 200 --max-rounds 3
+     --jd-file <run>/jd.txt --plan <run>/epoch0/plan.json \
+     --run-dir <run>/epoch0 --set-id <set> --n 16 --keep 200 --max-rounds 3
    ```
    Writes `<run>/union.jsonl`. (It chains `decompose_jd` + `run_wide_search` internally — those stay
    callable on their own for a single quick pass.) **Recall is fixed HERE, in sourcing — not by
    loosening the judge.**
 
-2. **Bridge the union into the judge's contract** 🆕 (1 cheap LLM call). The judge reads a
+   ⚠ **Manual sourcing and the plan binding do not mix.** `deep_search_loop --plan-approved`
+   refuses a run dir that has retrieval artifacts but no `plan_binding.json` ("start a new run") —
+   the binding is written only when the LOOP performs the sourcing. If you source manually with
+   `robust_source` as above, stay manual for the rest of the run (triage → judge → consensus as
+   below); to use the loop, let the loop do the sourcing after approval instead.
+
+3. **Bridge the union into the judge's contract** 🆕 (no plan LLM call on resume). The judge reads a
    profile-search run dir (`plan.json` + `candidate_frontier.json/jsonl` + `probe_summaries.json` →
-   the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs` extracts must/nice traits **and a
-   `target_level`** from the JD (so the judge's seniority gate is asymmetric around the role: in-band
-   = target and one level below = *step up*; too_senior = one level above or higher = *won't step
-   down*; too_junior = two+ below). Defaults to `senior_ic`. It also **tags each must-have
-   `core` vs `table_stakes`** — `core` = the 1–3 domain differentiators that make THIS role hard
-   (the shortlist GATE); `table_stakes` = generic seniority/leadership/stage (RANK only). This is the
-   plan the human approves at **Review**. Rewrites the run into the contract — no recompute:
+   the already-on-disk `profiles.jsonl.gz`). `build_eval_inputs --plan` reuses the approved plan and
+   only writes the candidate frontier/probe handoff — it does not reinterpret requirements:
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/deep_search/build_eval_inputs.py \
-     --run-dir <run> --jd-file <run>/jd.txt --set-name "<set>" --created-at <iso>
-     # loop epochs reuse the approved plan (no re-extract): --plan <run>/epoch0/plan.json
+     --run-dir <run>/epoch0 --plan <run>/epoch0/plan.json --created-at <iso>
    ```
 
    *Two-phase judging is the default.* The loop runs **phase 1: triage** (`triage_candidates`,
@@ -199,14 +242,11 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    hands them one:** triage failure fails the run loud, and `--no-triage` over a frontier with
    more than ~300 unjudged candidates requires `--judge gpt`.
 
-3. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
-   rubric with the IC seniority hard-gates (default `gpt-5.4`). **Default to a CROSS-VENDOR panel:**
-   one `gpt-5.4` judge at `--reasoning-effort low` (measured: ~as good as `high` here, far cheaper)
-   **+ one Claude judge on the same rubric.** Cross-vendor agreement is the real confidence signal —
-   when both vendors say strong, surface it; when they split, that's the human-review pile. Collect
-   each pass's verdicts into a `judges/` dir; `judge_consensus` ingests the
-   `evaluate_profile_candidates` raw format directly (maps `candidate_id`/`jd_score`, derives
-   `in_band` from `seniority_fit`) alongside native Claude-judge JSONL.
+4. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
+   rubric with IC seniority hard-gates. The automated loop runs **one selected judge**:
+   `--judge codex` (default/free/slower) or `--judge gpt` (paid/faster). An independently configured
+   panel can still be run manually by placing judge JSONL files in a directory and calling
+   `judge_consensus`; automated panel/dissent orchestration is planned, not shipped.
    - **FREE / portable judge:** `deep_search/codex_judge.py` spawns `codex exec` subprocesses, reusing
      the *exact* canonical rubric + deterministic scorer (so the bar is identical, the engine is $0
      via ChatGPT-subscription auth). This is the default cheap judge; the paid `gpt-5.4` API path is
@@ -217,31 +257,39 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
      verdict cutoff (~0.50). Lowering `judge_consensus --score-threshold` to ~**0.40** recovers
      **~0.9 recall while admitting only ~4–6 non-GT of 42** — the gap was calibration, not
      sourcing/vendor. A **cross-vendor union** (codex OR gpt keeps) lifts recall further (~0.96).
-     Validate the threshold on a 2nd JD before hardcoding a default.
+     The current **0.40 qualified floor**, **0.55 sendable cut**, and evaluator's **0.70 top-tier
+     excellence gate** are provisional AgentMail-calibrated defaults, not universal hiring truths.
+     Keep the rubric fixed while re-benchmarking all three across multiple JDs; both shortlist and
+     sendable cuts are configurable at execution time.
 
-4. **Consensus + rank** 🆕 (the **core-gate** lives here):
+5. **Consensus + rank** 🆕 (the **core-gate** lives here):
    ```bash
    uv run --project . python packs/search/primitives/deep_search/judge_consensus.py \
      --judges-dir <run>/judges --union <run>/union.jsonl --out-dir <run>/shortlist \
-     --plan <run>/plan.json --score-threshold 0.40 --min-inband-votes 2   # single judge: 1
+     --plan <run>/epoch0/plan.json --score-threshold 0.40 --sendable-threshold 0.55 \
+     --min-inband-votes 1 --min-notout-votes 1
    ```
-   → `shortlist/ground_truth_ranked.json` (stack-ranked). **With `--plan`, the shortlist is
-   CORE-GATED:** membership = majority in-band AND the candidate genuinely DOES ≥1 `core` domain
-   capability (`experienced`/`doing_now`; `capable` does NOT count) AND clears the score floor.
-   `table_stakes` traits only rank — so a strong-but-wrong-domain senior is excluded no matter how
-   high their blended score (that is what collapses the give-up case). Without core tags it falls
-   back to the score gate. Reads the per-trait statuses the judge already emits — rubric untouched.
-   **Present in two layers:** the core-gated entries with mean ≥ **~0.55** are the SENDABLE list
+   → `shortlist/shortlist_ranked.json` (stack-ranked). **With `--plan`, the shortlist is
+   CORE-GATED:** membership = in-band + non-OUT + every trait in at least one approved core group at
+   `experienced`/`doing_now` + the score floor (`capable` does not satisfy a core requirement).
+   Generated groups are singleton eligibility alternatives, while default scoring still considers
+   all must-haves. A deliberately reviewed alternative/conjunctive path may instead use path
+   scoring. `table_stakes` traits always rank — so a strong-but-wrong-domain senior is excluded no
+   matter how high their blended score. Without core tags it falls back to the score gate. Reads the
+   per-trait statuses the judge already emits — rubric untouched.
+   **Present in two layers:** the core-gated entries with mean ≥ **0.55** are written to
+   `sendable_ranked.json`; lower-confidence/in-dispute candidates stay in `bench_ranked.json`
    (measured on the AgentMail rerun: the 0.40–0.55 core-gated tail was padding — retail/comms SREs
-   a hiring manager would not move on); everything else in `consensus.json` (mean ≥0.40 + in-band,
-   no core-gate) is the BENCH — name it to the user as minable, don't mix it into the sendable list.
-   Then ✅
-   `export_candidate_shortlist` for the sendable CSV. **Measured (AgentMail JD):** single judge
+   a hiring manager would not move on). These thresholds remain provisional and can be overridden.
+   `consensus.json` contains every normalized judged row. A candidate explicitly judged
+   `seniority_fit: unknown` may remain qualified and seed anchor expansion for recall, but is never
+   sendable and remains visible on the bench. A missing or invalid seniority value is not in-band;
+   an `OUT` row never qualifies or seeds expansion. **Measured (AgentMail JD):** single judge
    → recall 48% / p@25 0.36; 3-judge (2,2) → 52% / 0.44; a `(2,1)` gate (majority in-band +
    ≥1 not-out) Pareto-beats it (64% / 0.48) by rescuing borderline candidates one strict judge
    cut — but per the anti-local-maxima rule it stays NON-default until validated on a 2nd JD.
 
-5. **Expand-from-anchor — the core Phase-2 loop (NOT optional)** 🆕. This is the hill-climb engine,
+6. **Expand-from-anchor — the core Phase-2 loop (NOT optional)** 🆕. This is the hill-climb engine,
    and `deep_search_loop --plan-approved` runs it automatically every epoch after the first judge: take your *own*
    judged-strong picks (a DIVERSE set — `deep_search_loop` dedups anchors by company so you don't
    echo-chamber one archetype), build "more like this" seeds from their profiles, re-source, and
@@ -252,12 +300,13 @@ improvising. With the free `codex_judge`, a whole run can be **$0 OpenAI**.
    anchors → loop ends (correct give-up). Manual form:
    ```bash
    uv run --project . python packs/search/primitives/deep_search/expand_from_anchor.py \
-     --anchors <run>/shortlist/ground_truth_ranked.json --top-k 6 --out <run>/anchor_seeds.json
+     --anchors <run>/shortlist/shortlist_ranked.json --top-k 6 --out <run>/anchor_seeds.json
    uv run --env-file .env --project . python packs/search/primitives/deep_search/run_wide_search.py \
      --seeds <run>/anchor_seeds.json --run-dir <run>/anchor --limit 200
    ```
 
-6. **Measure convergence (epochs)** 🆕. Score any run against a trusted ground-truth set:
+7. **Measure benchmark convergence (offline)** 🆕. Score any run against a separately audited
+   ground-truth set; this differs from operational convergence (an epoch adds no new shortlist rows):
    ```bash
    uv run --project . python packs/search/primitives/deep_search/score_ground_truth_gaps.py \
      --ground-truth <run>/ground_truth/ground_truth_ranked.json \
@@ -303,16 +352,16 @@ HARD before judging to control cost. *(Claude-Code-only sessions can swap the Op
 
 ## Artifacts (gitignored under `.powerpacks/deep-search/<jd-slug>/`)
 
-`BRIEF.md` · `probes/<family>/…` · `candidates_union.jsonl` · `judges/*.jsonl` ·
-`shortlist/{consensus.json,ground_truth_ranked.json}` · `epochs/<epoch>/{config,candidates,gaps}.json` ·
-`convergence.csv`. Candidate PII stays gitignored; surface the shortlist to the user.
+`decision.json` · `jd.txt` · `epoch0/{plan.json,plan_critic.json,union.jsonl,probes/…}` ·
+`judges/loop.jsonl` · `shortlist/{consensus,shortlist_ranked,sendable_ranked,bench_ranked}.json` ·
+`loop.json`. Candidate PII stays gitignored; surface the sendable list and summarize the bench.
 
-## Default recipe (fully primitive-driven; robust ≥0.95 sourcing; $0-OpenAI option)
+## Default recipe (fully primitive-driven; robust ≥0.95 measured sourcing)
 
-`robust_source` (multi-round `decompose_jd`+`run_wide_search` union → non-flaky ≥0.95 recall) →
-`build_eval_inputs` (tags must-haves core/table_stakes) → **Review (human approves the plan)** →
-`codex_judge` (FREE; or paid `evaluate_profile_candidates`, ×N for a cross-vendor panel) →
-`judge_consensus --plan <plan> --score-threshold ~0.40` (**core-gate**) → `export_candidate_shortlist`;
+`build_eval_inputs --plan-only` (JD criteria + recruiter defaults) → `plan_critic` → **Review** →
+`robust_source --plan` (multi-round approved-plan probes) → `build_eval_inputs --plan` → triage →
+one selected `codex_judge` or paid `evaluate_profile_candidates` →
+`judge_consensus --plan <plan> --score-threshold 0.40` (**non-OUT + core-gate**) → sendable/bench;
 `expand_from_anchor` each epoch (auto in `deep_search_loop`); `score_ground_truth_gaps` to track epochs.
 Every step is a CLI any harness can call — nothing depends on an agent improvising.
 
@@ -324,11 +373,13 @@ rounds), precision via the **judge** + **score-threshold** — not by loosening 
 ## Primitives
 
 New (`packs/search/primitives/deep_search/`):
-- `deep_search_loop.py` 🆕 — **the gate/resume orchestrator**: first run sources + builds the plan and
-  stops at `awaiting_plan_approval`; rerun with `--plan-approved` or `--approved-plan` to judge →
+- `deep_search_loop.py` 🆕 — **the gate/resume orchestrator**: first run builds/critiques the plan
+  without retrieval and stops at `awaiting_plan_approval`; rerun with `--plan-approved` or
+  `--approved-plan` to source from the approved plan → judge →
   expand-from-anchor → re-judge, converge-capped. Incremental judging is staged through a separate
   new-candidate frontier so canonical frontier artifacts stay intact. Self-limiting give-up when
-  there are no strong anchors. Child primitive failures and missing required artifacts fail loudly
+  there are no strong anchors. `plan_binding.json` prevents a changed contract/corpus from reusing
+  stale retrieval or verdicts. Child primitive failures and missing required artifacts fail loudly
   with structured JSON instead of reporting false convergence.
 - `robust_source.py` 🆕 — **non-flaky sourcing**: unions independent `decompose_jd`+`run_wide_search`
   rounds (rotated emphasis) until coverage saturates. Turns flaky 0.87–0.97 single-round recall
@@ -336,7 +387,8 @@ New (`packs/search/primitives/deep_search/`):
 - `decompose_jd.py` 🆕 — JD → N diverse work-described seeds (1 LLM call).
 - `run_wide_search.py` 🆕 — runs the seed set through prepare→diversify→run, emits the union.
 - `diversify_probe_bm25.py` 🆕 — drop shared/homogeneous BM25 lead terms across the probe set.
-- `build_eval_inputs.py` 🆕 — union → `plan.json` + canonical `candidate_frontier.json` +
+- `build_eval_inputs.py` 🆕 — `--plan-only` creates the pre-source contract; full mode maps union →
+  approved `plan.json` + canonical `candidate_frontier.json` +
   streaming `candidate_frontier.jsonl` + `probe_summaries.json` (bridges the wide search run into the
   canonical judge/export contract; 1 LLM call, or `--plan` reuse without a new `--created-at`).
 - `triage_candidates.py` 🆕 — cheap-model conservative tier-1 filter over the frontier.
@@ -345,10 +397,10 @@ New (`packs/search/primitives/deep_search/`):
   via ChatGPT-subscription auth). Prompt/profile content is passed via stdin rather than argv.
   Drop-in for the paid gpt-5.4 judge; same raw output shape.
 - `expand_from_anchor.py` 🆕 — judged-strong anchors → "more like this" seeds (no LLM).
-- `judge_consensus.py` 🆕 — combine judge passes (native, `evaluate_profile_candidates` raw, or
-  `codex_judge` raw) → consensus shortlist. **`--plan` core-gates** membership on the plan's `core`
-  domain must-haves (genuinely doing ≥1 at `experienced`+) so wrong-domain seniors are excluded
-  regardless of score; `--score-threshold` is the floor/recall dial on the canonical score.
+- `judge_consensus.py` 🆕 — combine judge passes → consensus/shortlist/sendable/bench.
+  **`--plan` core-gates** membership on one complete approved group and never lets a score threshold
+  override a judge `OUT`; generated singleton groups affect eligibility while default scoring keeps
+  all must-haves. `--score-threshold` and `--sendable-threshold` are provisional configurable cuts.
 - `score_ground_truth_gaps.py` 🆕 — epoch scoring + convergence vs a ground-truth set.
 
 Existing (reused):
@@ -357,4 +409,5 @@ Existing (reused):
   headcount). Without the flag, expansion rewrites the vector and ~halves recall.
 - `search_network_pipeline … run --search-only` — read-only hybrid (BM25+vector) scoped retrieval + Postgres hydrate.
 - `llm_filter_candidates` — cheap conservative triage. `evaluate_profile_candidates` — canonical
-  judge rubric + IC seniority gates. `export_candidate_shortlist` — sendable shortlist.
+  judge rubric + IC seniority gates. `export_candidate_shortlist` — legacy standalone CSV exporter;
+  it is not wired into the automatic deep loop.

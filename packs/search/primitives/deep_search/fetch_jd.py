@@ -8,7 +8,7 @@ No LLM, no spend. Stdlib only (urllib + html.parser) — matches the repo's exis
 idiom (e.g. enrich_people.py). Fetches the page, strips HTML to readable text, and writes:
 
   <out>              clean JD text (default: the job description we feed deep mode)
-  <source-json>      {source_url, source_title, fetched_at}   (the source.json shape)
+  <source-json>      {requested_url, source_url, source_title, fetched_at}
   <raw-html>         raw HTML (optional, --raw-html, for debug)
 
 Fetch failure (HTTP/network) is fail-loud (exit 1). A page that fetches but yields little text
@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -163,7 +162,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Fetch a job-posting URL -> clean JD text (URL->JD front-end for $search deep mode).")
     ap.add_argument("--url", required=True, help="Job-posting URL to fetch")
     ap.add_argument("--out", required=True, help="Where to write the clean JD text (feeds deep mode --jd-file)")
-    ap.add_argument("--source-json", default=None, help="Where to write {source_url, source_title, fetched_at} (default: <out dir>/source.json)")
+    ap.add_argument("--source-json", default=None, help="Where to write source URL metadata (default: <out dir>/source.json)")
     ap.add_argument("--raw-html", default=None, help="Optional: also write the raw HTML here (debug)")
     ap.add_argument("--timeout", type=int, default=30)
     args = ap.parse_args()
@@ -187,7 +186,13 @@ def main() -> None:
     fetched_at = datetime.now(timezone.utc).isoformat()
 
     out.write_text(text + "\n", encoding="utf-8")
-    source_json.write_text(json.dumps({"source_url": final_url, "source_title": title, "fetched_at": fetched_at, "via": via}, indent=2) + "\n", encoding="utf-8")
+    source_json.write_text(json.dumps({
+        "requested_url": args.url,
+        "source_url": final_url,
+        "source_title": title,
+        "fetched_at": fetched_at,
+        "via": via,
+    }, indent=2) + "\n", encoding="utf-8")
     if args.raw_html and raw_html:
         Path(args.raw_html).write_text(raw_html, encoding="utf-8")
 

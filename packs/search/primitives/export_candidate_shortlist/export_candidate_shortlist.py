@@ -27,10 +27,9 @@ from pathlib import Path
 from typing import Any
 
 
-# Exact sendable-shortlist contract (packs/search/tasks/search-network-jd.task.json
-# -> export_sendable_shortlist.csv_columns_exact). Do not add forbidden columns
-# (JD Score, Verdict, Caveats, Matched Probes, Person ID, ...); those live only
-# in the debug/reranked pools.
+# Legacy standalone sendable-shortlist shape. Do not add debug fields (JD Score,
+# Verdict, Caveats, Matched Probes, Person ID, ...); the automatic deep loop emits
+# JSON shortlist/bench artifacts and does not invoke this exporter.
 SHORTLIST_FIELDS = [
     "Rank",
     "Name",
@@ -109,8 +108,7 @@ def run(args: argparse.Namespace) -> None:
     filtered = [e for e in evaluations if e.get("verdict") in include_verdicts]
 
     if not filtered:
-        print("warn: no candidates match the verdict filter, including all", file=sys.stderr)
-        filtered = evaluations
+        print("warn: no candidates match the verdict filter; writing an empty shortlist", file=sys.stderr)
 
     # Sort by rank
     filtered.sort(key=lambda e: e.get("rank", 9999))

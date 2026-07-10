@@ -1,0 +1,59 @@
+{
+  "policy_id": "powerpacks.recruiter-defaults",
+  "version": "1.0.0",
+  "description": "Default recruiter judgment policy for deep people search when the user has not supplied preferences.",
+  "precedence": [
+    "user",
+    "jd",
+    "default"
+  ],
+  "canonical_hire_stages": [
+    "founding_early",
+    "scaling_late"
+  ],
+  "hire_stage_aliases": {
+    "founding_early": "founding_early",
+    "founding": "founding_early",
+    "founding_stage": "founding_early",
+    "pre_seed": "founding_early",
+    "seed": "founding_early",
+    "early": "founding_early",
+    "early_stage": "founding_early",
+    "scaling_late": "scaling_late",
+    "growth": "scaling_late",
+    "growth_stage": "scaling_late",
+    "scale": "scaling_late",
+    "scaling": "scaling_late",
+    "late": "scaling_late",
+    "late_stage": "scaling_late",
+    "mature": "scaling_late"
+  },
+  "defaults": {
+    "hire_stage": "founding_early",
+    "evidence_priority": [
+      "direct_recent_demonstrated_work",
+      "trajectory",
+      "impact",
+      "pedigree"
+    ],
+    "excellence_weights": {
+      "trajectory": 0.4,
+      "impact": 0.4,
+      "pedigree": 0.2
+    },
+    "pedigree_policy": "positive_prior_not_gate",
+    "current_founder_c_suite_for_non_exec_ic": "default_out",
+    "higher_hands_on_ic": "eligible",
+    "fairness": {
+      "job_related_evidence_only": true,
+      "exclude_protected_attributes": true,
+      "exclude_protected_attribute_proxies": true
+    }
+  },
+  "overridable": [
+    "hire_stage",
+    "excellence_weights",
+    "pedigree_policy",
+    "current_founder_c_suite_for_non_exec_ic"
+  ]
+}
