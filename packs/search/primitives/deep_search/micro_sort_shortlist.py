@@ -75,7 +75,7 @@ CRITICAL: You MUST return EXACTLY {candidate_count} ids. Every candidate id abov
 def _jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def build_batches(rows: list[dict[str, Any]], *, score_key: str = "mean_score") -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:

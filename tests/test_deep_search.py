@@ -157,6 +157,14 @@ class TestLocalBackendThreading(unittest.TestCase):
         self.assertEqual(args.backend, "local")
         self.assertEqual(args.db, "x.duckdb")
 
+    def test_deep_search_loop_parser_exposes_sendable_threshold(self):
+        args = self._parse_with_real_parser(
+            rl,
+            ["loop", "--jd-file", "jd.txt", "--run-dir", "run", "--created-at", "t",
+             "--sendable-threshold", "0.61"],
+        )
+        self.assertEqual(args.sendable_threshold, 0.61)
+
     def test_robust_source_parser_accepts_local_backend(self):
         args = self._parse_with_real_parser(
             rs,
@@ -249,23 +257,33 @@ class TestMicroSortShortlist(unittest.TestCase):
 class TestPlanCritic(unittest.TestCase):
     def test_conjunctive_core_group_is_flagged(self):
         # Measured on the audited benchmark: an all-of-3 group cut a validated 22-person
-        # shortlist to 1. Groups over 3 traits must surface at Review.
+        # shortlist to 1. Every conjunction must surface at Review.
         plan = {"hire_stage": "founding_early",
                 "traits": {"must_have": [{"trait": c, "tier": "core"} for c in "abcd"]},
                 "core_groups": [{"name": "mega", "all_of": ["a", "b", "c", "d"]}]}
-        issues = pc.deterministic_checks(plan)
-        self.assertTrue(any("ALL 4 traits" in i for i in issues), issues)
+        for traits in (["a", "b"], ["a", "b", "c"], ["a", "b", "c", "d"]):
+            with self.subTest(n=len(traits)):
+                plan["core_groups"] = [{"name": "mega", "all_of": traits}]
+                issues = pc.deterministic_checks(plan)
+                self.assertTrue(any(f"ALL {len(traits)} traits" in i for i in issues), issues)
         # per-trait groups (the measured default) pass clean
         plan["core_groups"] = [{"name": f"g{c}", "all_of": [c]} for c in "abcd"]
         self.assertEqual([i for i in pc.deterministic_checks(plan) if "ALL" in i], [])
 
     def test_empty_powerset_set_id_surfaces_at_review(self):
-        plan = {"hire_stage": "founding_early", "route": "powerset",
+        plan = {"hire_stage": "founding_early", "route": "deep",
                 "set_scope": {"set_id": ""},
                 "traits": {"must_have": [{"trait": "x", "tier": "core"}]},
                 "core_groups": [{"name": "g", "all_of": ["x"]}]}
-        issues = pc.deterministic_checks(plan)
+        issues = pc.deterministic_checks(plan, backend="powerset")
         self.assertTrue(any("set_scope.set_id is empty" in i for i in issues), issues)
+        self.assertFalse(any("set_scope.set_id is empty" in i
+                             for i in pc.deterministic_checks(plan, backend="local")))
+
+    def test_critic_omits_temperature_for_reasoning_model_families(self):
+        self.assertFalse(pc.supports_custom_temperature("gpt-5.4"))
+        self.assertFalse(pc.supports_custom_temperature("o4-mini"))
+        self.assertTrue(pc.supports_custom_temperature("gpt-4o"))
 
     def test_deterministic_checks_flag_off_enum_stage_and_missing_core(self):
         issues = pc.deterministic_checks({"hire_stage": "growth", "traits": {"must_have": [{"trait": "x", "tier": "table_stakes"}]}})
@@ -892,6 +910,42 @@ class TestNormalizeVerdict(unittest.TestCase):
         })
         self.assertTrue(r["in_band"])  # explicit native in_band is honored
 
+    def test_missing_or_invalid_seniority_is_not_in_band(self):
+        for fit in (None, "", "not_a_seniority_band", ["ideal"]):
+            with self.subTest(fit=fit):
+                verdict = {"person_id": "p", "score": 0.9, "verdict": "top_tier", "in_band": True}
+                if fit is not None:
+                    verdict["seniority_fit"] = fit
+                self.assertFalse(jc.normalize_verdict(verdict)["in_band"])
+
+    def test_evaluator_marker_distinguishes_missing_from_explicit_unknown(self):
+        missing = jc.normalize_verdict({
+            "person_id": "p1",
+            "score": 0.9,
+            "verdict": "top_tier",
+            "seniority_fit": "unknown",
+            "_seniority_assessment_valid": False,
+        })
+        explicit = jc.normalize_verdict({
+            "person_id": "p2",
+            "score": 0.9,
+            "verdict": "top_tier",
+            "seniority_fit": "unknown",
+            "_seniority_assessment_valid": True,
+        })
+        self.assertFalse(missing["in_band"])
+        self.assertTrue(explicit["in_band"])
+
+    def test_known_seniority_is_normalized_before_classification(self):
+        verdict = jc.normalize_verdict({
+            "person_id": "p",
+            "score": 0.9,
+            "verdict": "top_tier",
+            "seniority_fit": " IDEAL ",
+        })
+        self.assertEqual(verdict["seniority_fit"], "ideal")
+        self.assertTrue(verdict["in_band"])
+
     def test_native_schema_passthrough(self):
         native = {"person_id": "p3", "score": 0.5, "in_band": True, "seniority_fit": "in_band", "verdict": "high_potential"}
         self.assertEqual(jc.normalize_verdict(dict(native)), native)
@@ -979,6 +1033,44 @@ class TestConsensusScoreThreshold(unittest.TestCase):
         # without threshold, all verdicts are "out" -> nobody passes the not-out gate
         _, strong = jc.build_consensus(self._judges(), {}, min_inband_votes=1, min_notout_votes=1)
         self.assertEqual(strong, [])
+
+    def test_cli_defaults_support_one_judge_and_bench_unknown_seniority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            judges = root / "judges"
+            out = root / "out"
+            judges.mkdir()
+            rows = [
+                {"person_id": "known", "seniority_fit": "ideal", "verdict": "top_tier", "score": 0.9},
+                {"person_id": "unknown", "seniority_fit": "unknown", "verdict": "top_tier", "score": 0.9},
+                {"person_id": "missing", "verdict": "top_tier", "score": 0.9},
+            ]
+            (judges / "one.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(PRIM / "judge_consensus.py"),
+                    "--judges-dir",
+                    str(judges),
+                    "--out-dir",
+                    str(out),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(cp.returncode, 0, cp.stderr + cp.stdout)
+            shortlist = {row["person_id"] for row in json.loads((out / "shortlist_ranked.json").read_text())}
+            sendable = {row["person_id"] for row in json.loads((out / "sendable_ranked.json").read_text())}
+            bench = {row["person_id"] for row in json.loads((out / "bench_ranked.json").read_text())}
+            self.assertEqual(shortlist, {"known", "unknown"})
+            self.assertEqual(sendable, {"known"})
+            self.assertEqual(bench, {"unknown"})
 
 
 class TestRobustSourceMerge(unittest.TestCase):
@@ -1109,6 +1201,64 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         plan_path.write_text(json.dumps(plan))
         with self.assertRaisesRegex(ValueError, "core_groups reference non-core"):
             rl.validate_approved_plan(plan_path)
+
+    def test_approved_plan_rejects_oversized_conjunction_and_url_drift(self):
+        directory = Path(tempfile.mkdtemp())
+        plan_path = self._approved_plan(directory)
+        plan = json.loads(plan_path.read_text())
+        plan["traits"]["must_have"] = [
+            {"trait": trait, "tier": "core", "source": "jd"}
+            for trait in ("a", "b", "c", "d")
+        ]
+        plan["core_groups"] = [{"name": "mega", "all_of": ["a", "b", "c", "d"], "source": "jd"}]
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "at most 3"):
+            rl.validate_approved_plan(plan_path)
+
+        plan["core_groups"] = [{"name": "default conjunction", "all_of": ["a", "b"], "source": "default"},
+                               {"name": "c", "all_of": ["c"], "source": "default"},
+                               {"name": "d", "all_of": ["d"], "source": "default"}]
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "default core_groups must be singleton"):
+            rl.validate_approved_plan(plan_path)
+
+        plan["core_groups"] = [{"name": trait, "all_of": [trait], "source": "default"}
+                               for trait in ("a", "b", "c", "d")]
+        plan["source_url"] = "https://example.test/original"
+        plan_path.write_text(json.dumps(plan))
+        self.assertEqual(
+            rl.validate_approved_plan(
+                plan_path,
+                expected_source_url="https://EXAMPLE.test/original#apply",
+            )["source_url"],
+            "https://example.test/original",
+        )
+        with self.assertRaisesRegex(ValueError, "conflicts with requested URL"):
+            rl.validate_approved_plan(plan_path, expected_source_url="https://example.test/other")
+
+    def test_advisory_critic_non_object_is_unavailable(self):
+        directory = Path(tempfile.mkdtemp())
+        critic = directory / "plan_critic.json"
+        critic.write_text("[]")
+        loaded = rl.load_advisory_critic(critic)
+        self.assertEqual(loaded["verdict"], "unavailable")
+        self.assertIn("JSON object", loaded["error"])
+
+    def test_url_source_binding_rejects_missing_or_different_metadata(self):
+        directory = Path(tempfile.mkdtemp())
+        source = directory / "source.json"
+        with self.assertRaisesRegex(ValueError, "cannot verify"):
+            rl.validate_bound_jd_source(source, "https://example.test/job")
+        source.write_text(json.dumps({
+            "requested_url": "https://example.test/job",
+            "source_url": "https://redirect.test/final",
+        }))
+        self.assertEqual(
+            rl.validate_bound_jd_source(source, "https://EXAMPLE.test/job#apply")["source_url"],
+            "https://redirect.test/final",
+        )
+        with self.assertRaisesRegex(ValueError, "conflicts with the URL bound"):
+            rl.validate_bound_jd_source(source, "https://example.test/other")
 
     def test_approved_plan_binding_rejects_contract_or_backend_drift(self):
         directory = Path(tempfile.mkdtemp())
@@ -1335,6 +1485,7 @@ class TestFetchJd(unittest.TestCase):
             self.assertTrue(out.exists())
             self.assertIn("do the work", out.read_text())
             src = json.loads((Path(d) / "source.json").read_text())
+            self.assertEqual(src["requested_url"], "https://example.test/job")
             self.assertEqual(src["source_url"], "https://example.test/job")
             self.assertEqual(src["source_title"], "Role X")
             self.assertIn("fetched_at", src)
@@ -1371,20 +1522,33 @@ class TestFetchJd(unittest.TestCase):
     def test_deep_search_loop_jd_url_fetches_before_loop(self):
         with tempfile.TemporaryDirectory() as d:
             run_dir = Path(d) / "run"
-            (run_dir / "epoch0").mkdir(parents=True)
-            (run_dir / "epoch0" / "plan.json").write_text('{"traits":[]}')  # forces zero-spend awaiting_plan_approval
+            build_cmd = None
             argv = sys.argv
             sys.argv = ["loop", "--jd-url", "https://example.test/job", "--run-dir", str(run_dir), "--created-at", "t"]
             try:
-                # stub the fetch_jd subprocess: write a realistic (non-thin) jd.txt like the real primitive would
-                def fake_run(cmd, **kw):
-                    (run_dir / "jd.txt").write_text(
-                        "Senior Backend Engineer\n\n" + ("Build and operate high-throughput APIs. " * 20))
+                def fake_run(cmd, *, expected_paths=None, description=None):
+                    nonlocal build_cmd
+                    if description == "fetch_jd URL->JD":
+                        (run_dir / "jd.txt").write_text(
+                            "Senior Backend Engineer\n\n" + ("Build high-throughput APIs. " * 20))
+                        (run_dir / "source.json").write_text(json.dumps({
+                            "requested_url": "https://example.test/job",
+                            "source_url": "https://example.test/job",
+                        }))
+                    elif description == "build recruiter plan":
+                        build_cmd = [str(part) for part in cmd]
+                        epoch0 = run_dir / "epoch0"
+                        epoch0.mkdir(parents=True, exist_ok=True)
+                        (epoch0 / "plan.json").write_text(json.dumps({"route": "deep", "traits": []}))
+                    elif description == "plan critic":
+                        (run_dir / "epoch0" / "plan_critic.json").write_text(json.dumps({"verdict": "ok"}))
                 with mock.patch.object(rl, "run", side_effect=fake_run):
                     rl.main()  # returns at awaiting_plan_approval (no SystemExit)
             finally:
                 sys.argv = argv
             self.assertTrue((run_dir / "jd.txt").exists())  # URL was fetched to jd.txt before the loop
+            self.assertIn("--source-url", build_cmd)
+            self.assertEqual(build_cmd[build_cmd.index("--source-url") + 1], "https://example.test/job")
 
     def test_deep_search_loop_rejects_thin_fetched_jd(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1395,6 +1559,10 @@ class TestFetchJd(unittest.TestCase):
                 # a JS-rendered page fetches to near-empty text: the loop must stop, not build a garbage plan
                 def fake_run(cmd, **kw):
                     (run_dir / "jd.txt").write_text("Apply now\n")
+                    (run_dir / "source.json").write_text(json.dumps({
+                        "requested_url": "https://example.test/js-job",
+                        "source_url": "https://example.test/js-job",
+                    }))
                 with mock.patch.object(rl, "run", side_effect=fake_run):
                     with self.assertRaises(SystemExit) as ctx:
                         rl.main()

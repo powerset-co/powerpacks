@@ -13,6 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EVALUATE_PY = ROOT / "packs/search/primitives/evaluate_profile_candidates/evaluate_profile_candidates.py"
+BUILD_EVAL_PY = ROOT / "packs/search/primitives/deep_search/build_eval_inputs.py"
+CONSENSUS_PY = ROOT / "packs/search/primitives/deep_search/judge_consensus.py"
 
 
 def _load_module():
@@ -20,6 +22,28 @@ def _load_module():
     if name in sys.modules:
         return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, EVALUATE_PY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_build_eval_module():
+    name = "build_eval_inputs_scoring_test"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, BUILD_EVAL_PY)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_consensus_module():
+    name = "judge_consensus_scoring_test"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, CONSENSUS_PY)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
@@ -119,6 +143,56 @@ class TestRecruiterPrompt(unittest.TestCase):
         self.assertIn("A manager/director/VP/Head title alone is not enough", prompt)
         self.assertIn("mark ambiguous cases `unknown` with a caveat", prompt)
 
+    def test_default_singletons_keep_all_must_haves_in_scoring(self) -> None:
+        m = _load_module()
+        plan = _plan(n_must=0, n_nice=0)
+        plan["traits"]["must_have"] = [
+            {"trait": trait, "tier": "core"} for trait in ("path a", "path b", "path c")
+        ]
+        plan["core_groups"] = [
+            {"name": trait, "all_of": [trait], "source": "default"}
+            for trait in ("path a", "path b", "path c")
+        ]
+        parsed = {
+            "seniority_fit": "ideal",
+            "must_have": [
+                {"trait": "path a", "status": "experienced", "evidence": "direct"},
+                {"trait": "path b", "status": "missing", "evidence": ""},
+                {"trait": "path c", "status": "missing", "evidence": ""},
+            ],
+            "nice_to_have": [],
+            "excellence": _excellence(0.8, 0.0, 0.8),
+            "caveats": [],
+        }
+
+        out = m.normalize_evaluation(parsed, plan)
+
+        self.assertEqual(out["verdict"], "high_potential")
+        self.assertIsNone(out["score_breakdown"]["selected_core_group"])
+        self.assertEqual(
+            out["score_breakdown"]["scored_must_have"],
+            ["path a", "path b", "path c"],
+        )
+        self.assertAlmostEqual(out["score_breakdown"]["trait_score"], 0.348, places=3)
+        self.assertEqual(out["score_breakdown"]["qualifying_core_group"], "path a")
+        self.assertEqual(out["score_breakdown"]["qualification_must_have"], ["path a"])
+        self.assertAlmostEqual(out["score_breakdown"]["qualification_trait_score"], 0.8)
+        self.assertFalse(
+            m.uses_default_singleton_core_groups(plan["core_groups"][:-1], ["path a", "path b", "path c"])
+        )
+
+        consensus = _load_consensus_module()
+        row = consensus.normalize_verdict({"candidate_id": "p1", **out})
+        _, strong = consensus.build_consensus(
+            {"judge": [row]},
+            {},
+            min_inband_votes=1,
+            min_notout_votes=1,
+            score_threshold=0.40,
+            core_groups=[{"path a"}, {"path b"}, {"path c"}],
+        )
+        self.assertEqual([item["person_id"] for item in strong], ["p1"])
+
     def test_alternative_core_paths_are_or_not_one_flat_must_list(self) -> None:
         m = _load_module()
         plan = _plan(n_must=0, n_nice=0)
@@ -129,8 +203,8 @@ class TestRecruiterPrompt(unittest.TestCase):
             {"trait": "path b3", "tier": "core"},
         ]
         plan["core_groups"] = [
-            {"name": "a", "all_of": ["path a"]},
-            {"name": "b", "all_of": ["path b1", "path b2", "path b3"]},
+            {"name": "a", "all_of": ["path a"], "source": "jd"},
+            {"name": "b", "all_of": ["path b1", "path b2", "path b3"], "source": "jd"},
         ]
         parsed = {
             "seniority_fit": "ideal",
@@ -152,6 +226,44 @@ class TestRecruiterPrompt(unittest.TestCase):
         self.assertEqual(out["score_breakdown"]["selected_core_group"], "a")
         self.assertEqual(out["score_breakdown"]["scored_must_have"], ["path a"])
         self.assertAlmostEqual(out["score_breakdown"]["trait_score"], 0.8)
+
+    def test_user_groups_use_best_path_scoring(self) -> None:
+        m = _load_module()
+        plan = _plan(n_must=0, n_nice=0)
+        plan["traits"]["must_have"] = [
+            {"trait": "hardware", "tier": "core"},
+            {"trait": "software", "tier": "core"},
+        ]
+        plan["core_groups"] = [
+            {"name": "hardware path", "all_of": ["hardware"], "source": "user"},
+            {"name": "software path", "all_of": ["software"], "source": "user"},
+        ]
+        must = [
+            {"trait": "hardware", "status": "missing", "evidence": ""},
+            {"trait": "software", "status": "experienced", "evidence": "direct"},
+        ]
+
+        scored, selected = m.effective_must_for_scoring(plan, must)
+
+        self.assertEqual(selected, "software path")
+        self.assertEqual([item["trait"] for item in scored], ["software"])
+
+    def test_missing_seniority_is_marked_non_qualifying_upstream(self) -> None:
+        m = _load_module()
+        plan = _plan(n_must=1, n_nice=0)
+        parsed = {
+            "must_have": [{"trait": "t0", "status": "experienced", "evidence": "direct"}],
+            "nice_to_have": [],
+            "excellence": _excellence(0.9, 0.0, 0.9),
+            "caveats": [],
+        }
+
+        missing = m.normalize_evaluation(parsed, plan)
+        explicit = m.normalize_evaluation({**parsed, "seniority_fit": "unknown"}, plan)
+
+        self.assertEqual(missing["seniority_fit"], "unknown")
+        self.assertFalse(missing["_seniority_assessment_valid"])
+        self.assertTrue(explicit["_seniority_assessment_valid"])
 
     def test_founder_policy_override_cannot_be_overruled_by_base_title_gate(self) -> None:
         m = _load_module()
@@ -177,6 +289,158 @@ class TestRecruiterPrompt(unittest.TestCase):
             "founder_c_suite_eligible_title_gate_removed",
         )
         self.assertNotEqual(out["verdict"], "out")
+
+    def test_founder_default_out_is_enforced_in_code(self) -> None:
+        m = _load_module()
+        plan = _plan()
+        plan["target_level"] = "senior_ic"
+        plan["recruiter_policy"] = m.recruiter_policy.resolve_recruiter_preferences()
+        parsed = {
+            "seniority_fit": "ideal",
+            "must_have": [
+                {"trait": f"t{i}", "status": "experienced", "evidence": "e"}
+                for i in range(3)
+            ],
+            "nice_to_have": [],
+            "excellence": _excellence(0.9, 0.9, 0.9),
+            "caveats": [],
+        }
+
+        out = m.normalize_evaluation(parsed, plan, {"current_title": "Founder and CEO"})
+
+        self.assertEqual(out["seniority_fit"], "too_senior")
+        self.assertEqual(out["seniority_policy_adjustment"], "founder_c_suite_default_out")
+        self.assertEqual(out["verdict"], "out")
+        self.assertLessEqual(out["jd_score"], 0.3)
+
+    def test_founder_review_policy_stays_unknown(self) -> None:
+        m = _load_module()
+        plan = _plan()
+        plan["target_level"] = "senior_ic"
+        preferences = m.recruiter_policy.resolve_recruiter_preferences(
+            user_preferences={"current_founder_c_suite_for_non_exec_ic": "review"}
+        )["preferences"]
+
+        fit, adjustment = m.apply_founder_policy(
+            "ideal", plan, {"current_title": "CTO"}, preferences
+        )
+
+        self.assertEqual((fit, adjustment), ("unknown", "founder_c_suite_review"))
+
+    def test_founder_default_does_not_gate_management_target(self) -> None:
+        m = _load_module()
+        plan = _plan()
+        plan["target_level"] = "vp"
+        preferences = m.recruiter_policy.resolve_recruiter_preferences()["preferences"]
+
+        fit, adjustment = m.apply_founder_policy(
+            "ideal", plan, {"current_title": "Founder and CEO"}, preferences
+        )
+
+        self.assertEqual((fit, adjustment), ("ideal", None))
+
+    def test_founder_policy_ignores_sparse_undated_history(self) -> None:
+        m = _load_module()
+
+        self.assertFalse(
+            m.profile_is_current_founder_c_suite(
+                {"positions": [{"title": "Founder and CEO", "company_name": "OldCo"}]}
+            )
+        )
+        self.assertFalse(
+            m.profile_is_current_founder_c_suite(
+                {
+                    "positions": [
+                        {"title": "Founder", "start_year": 2018, "end_year": 2020},
+                        {"title": "Staff Engineer", "is_current": True},
+                    ]
+                }
+            )
+        )
+
+    def test_founder_policy_accepts_defensible_current_position_evidence(self) -> None:
+        m = _load_module()
+
+        self.assertTrue(
+            m.profile_is_current_founder_c_suite(
+                {"positions": [{"position_title": "Co-Founder", "is_current": True}]}
+            )
+        )
+        self.assertTrue(
+            m.profile_is_current_founder_c_suite(
+                {"work_experiences": [{"title": "CTO", "start_year": 2024}]}
+            )
+        )
+
+
+class TestPlanCoreGroupProvenance(unittest.TestCase):
+    def _must(self) -> list[dict]:
+        return [
+            {"trait": trait, "tier": "core", "source": "jd"}
+            for trait in ("schedulers", "control planes", "inference")
+        ]
+
+    def test_generated_singletons_are_default_provenance(self) -> None:
+        m = _load_build_eval_module()
+        groups = m._core_groups(
+            {
+                "core_groups": [
+                    {"name": trait, "all_of": [trait]}
+                    for trait in ("schedulers", "control planes", "inference")
+                ]
+            },
+            self._must(),
+        )
+
+        self.assertEqual({group["source"] for group in groups}, {"default"})
+
+    def test_missing_groups_fall_back_to_default_singletons(self) -> None:
+        m = _load_build_eval_module()
+
+        groups = m._core_groups({}, self._must())
+
+        self.assertEqual(
+            [(group["all_of"], group["source"]) for group in groups],
+            [
+                (["schedulers"], "default"),
+                (["control planes"], "default"),
+                (["inference"], "default"),
+            ],
+        )
+
+    def test_deliberate_alternative_paths_are_jd_provenance(self) -> None:
+        m = _load_build_eval_module()
+        groups = m._core_groups(
+            {
+                "core_groups": [
+                    {"name": "scheduler path", "all_of": ["schedulers", "control planes"]},
+                    {"name": "inference path", "all_of": ["inference"]},
+                ]
+            },
+            self._must(),
+        )
+
+        self.assertEqual({group["source"] for group in groups}, {"jd"})
+
+    def test_explicit_jd_singleton_alternatives_keep_jd_provenance(self) -> None:
+        m = _load_build_eval_module()
+        groups = m._core_groups(
+            {
+                "core_groups": [
+                    {"name": trait, "all_of": [trait], "source": "jd"}
+                    for trait in ("schedulers", "control planes", "inference")
+                ]
+            },
+            self._must(),
+        )
+
+        self.assertEqual({group["source"] for group in groups}, {"jd"})
+
+    def test_extractor_prompt_describes_complete_paths_not_each_trait_as_a_gate(self) -> None:
+        prompt = _load_build_eval_module().PLAN_SYSTEM
+
+        self.assertIn("lacks evidence for EVERY complete core path", prompt)
+        self.assertNotIn("someone who lacks a core trait", prompt)
 
 
 class TestQuorumAggregate(unittest.TestCase):

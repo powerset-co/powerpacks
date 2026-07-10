@@ -49,6 +49,10 @@ Changelog:
   epoch-0 decomposition. Add versioned recruiter defaults, explicit alternative all-of core groups,
   decision.json backend enforcement, and separate shortlist/sendable/bench outputs. Correct the
   automated judge claim: the loop runs one selected judge; multi-vendor panels remain manual/planned.
+- 2026-07-10: Keep generated core groups singleton-by-default for eligibility while scoring all
+  must-haves. Only deliberate paths approved at Review change path scoring; every conjunction is a
+  Review decision and groups larger than three traits are rejected. Explicit unknown seniority may
+  stay in the qualified/anchor recall pool, but never becomes sendable.
 -->
 
 > **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, "build a
@@ -78,15 +82,23 @@ ranked shortlist with no further prompts (judge auto, no spend confirm; expand-f
 `plan_critic` (advisory, one LLM call) and includes its findings in the awaiting_plan_approval
 output — show them WITH the plan; they name missing core pillars and cutoff contradictions, the
 top measured error source. Then STOP and show the user, grouped for a 10-second read:
-- the alternative **core groups** (every trait in one group must be directly evidenced) vs the
-  **table_stakes** must-haves (generic seniority/leadership — these only RANK), and
+- the **core groups** vs **table_stakes** must-haves: generated defaults are one singleton
+  eligibility alternative per core trait, while a deliberate alternative path or multi-trait
+  conjunction changes path scoring and must be explicitly approved at Review; reject any group
+  larger than three traits, and
 - the **nice-to-haves**, **target_level**, hire stage, sourcing location, and resolved recruiter
   defaults (including ranking weights and provenance).
 
-The plan is the highest-leverage artifact — the core must-haves *are* the shortlist gate — so this
-is where the human sharpens a niche role ("delivered large hardware" → "delivered large
-*fusion/plasma* hardware") or just confirms the domain for a common one. Let the user edit
-`plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the end.
+The plan is the highest-leverage artifact. Default singleton groups mean direct evidence for any
+one core capability can establish eligibility, but the default score still considers all
+must-haves. Satisfying one approved group prevents missing sibling alternatives from forcing
+`OUT`; singleton eligibility does not silently discard the other requirements from ranking.
+This is where the human sharpens a niche role ("delivered large hardware" → "delivered large
+*fusion/plasma* hardware") or deliberately defines an alternative/conjunctive path. When Review
+changes the default grouping into a scoring path, change that group's `source` from `default` to
+`user` (or `jd` when the JD explicitly defines the alternative). Let the user
+edit `plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the
+end.
 
 Also surface the **sourcing location** at this checkpoint: the recruiter plan extracts the JD's stated
 metro (e.g. "San Francisco, CA · on-site" → "San Francisco Bay Area") and geo-constrains ~3 of 4
@@ -112,7 +124,8 @@ The first `deep_search_loop` invocation builds/validates/critiques the plan and 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/deep_search/deep_search_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
-  --max-epochs 3 --score-threshold 0.40 --judge codex --reasoning-effort high
+  --max-epochs 3 --score-threshold 0.40 --sendable-threshold 0.55 \
+  --judge codex --reasoning-effort high
 # If the user supplied recruiter preferences, first write a JSON object matching
 # recruiter-preferences.schema.json and add: --preferences <run>/preferences.json
 # or, from a job-posting URL (no separate fetch step):
@@ -127,7 +140,8 @@ the selected judge, **core-gates** the shortlist, and expands from judged-strong
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/deep_search/deep_search_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
-  --max-epochs 3 --score-threshold 0.40 --judge codex --reasoning-effort high \
+  --max-epochs 3 --score-threshold 0.40 --sendable-threshold 0.55 \
+  --judge codex --reasoning-effort high \
   --plan-approved
 ```
 
@@ -172,9 +186,12 @@ improvising. `codex_judge` avoids per-candidate OpenAI judge calls, but contract
 critic, decomposition, probe preparation, and default triage still use configured model APIs.
 
 1. **Resolve + review the recruiter plan** (one plan call + one advisory critic call, no retrieval).
-   `build_eval_inputs --plan-only` extracts JD-supported core/table-stakes/nice criteria, alternative
-   all-of core groups, level/stage/location, and embeds the resolved versioned recruiter defaults.
-   The generated plan must validate before Review; explicit user edits outrank JD inference, which
+   `build_eval_inputs --plan-only` extracts JD-supported core/table-stakes/nice criteria, singleton
+   core eligibility alternatives, level/stage/location, and the resolved versioned recruiter
+   defaults. Generated singleton groups preserve broad eligibility while default scoring still
+   considers every must-have. Deliberate alternative/conjunctive paths must be approved at Review,
+   every conjunction must be surfaced there, and no group may contain more than three traits. The
+   generated plan must validate before Review; explicit user edits outrank JD inference, which
    outranks defaults.
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/deep_search/build_eval_inputs.py \
@@ -240,26 +257,34 @@ critic, decomposition, probe preparation, and default triage still use configure
      verdict cutoff (~0.50). Lowering `judge_consensus --score-threshold` to ~**0.40** recovers
      **~0.9 recall while admitting only ~4–6 non-GT of 42** — the gap was calibration, not
      sourcing/vendor. A **cross-vendor union** (codex OR gpt keeps) lifts recall further (~0.96).
-     Validate the threshold on a 2nd JD before hardcoding a default.
+     The current **0.40 qualified floor**, **0.55 sendable cut**, and evaluator's **0.70 top-tier
+     excellence gate** are provisional AgentMail-calibrated defaults, not universal hiring truths.
+     Keep the rubric fixed while re-benchmarking all three across multiple JDs; both shortlist and
+     sendable cuts are configurable at execution time.
 
 5. **Consensus + rank** 🆕 (the **core-gate** lives here):
    ```bash
    uv run --project . python packs/search/primitives/deep_search/judge_consensus.py \
      --judges-dir <run>/judges --union <run>/union.jsonl --out-dir <run>/shortlist \
-     --plan <run>/epoch0/plan.json --score-threshold 0.40 \
+     --plan <run>/epoch0/plan.json --score-threshold 0.40 --sendable-threshold 0.55 \
      --min-inband-votes 1 --min-notout-votes 1
    ```
    → `shortlist/shortlist_ranked.json` (stack-ranked). **With `--plan`, the shortlist is
-   CORE-GATED:** membership = in-band + non-OUT + every trait in at least one alternative core group
-   at `experienced`/`doing_now` + the score floor (`capable` does not satisfy a core requirement).
-   `table_stakes` traits only rank — so a strong-but-wrong-domain senior is excluded no matter how
-   high their blended score (that is what collapses the give-up case). Without core tags it falls
-   back to the score gate. Reads the per-trait statuses the judge already emits — rubric untouched.
+   CORE-GATED:** membership = in-band + non-OUT + every trait in at least one approved core group at
+   `experienced`/`doing_now` + the score floor (`capable` does not satisfy a core requirement).
+   Generated groups are singleton eligibility alternatives, while default scoring still considers
+   all must-haves. A deliberately reviewed alternative/conjunctive path may instead use path
+   scoring. `table_stakes` traits always rank — so a strong-but-wrong-domain senior is excluded no
+   matter how high their blended score. Without core tags it falls back to the score gate. Reads the
+   per-trait statuses the judge already emits — rubric untouched.
    **Present in two layers:** the core-gated entries with mean ≥ **0.55** are written to
    `sendable_ranked.json`; lower-confidence/in-dispute candidates stay in `bench_ranked.json`
    (measured on the AgentMail rerun: the 0.40–0.55 core-gated tail was padding — retail/comms SREs
-   a hiring manager would not move on). `consensus.json` contains every normalized judged row;
-   OUT or unknown-seniority rows never seed expansion. **Measured (AgentMail JD):** single judge
+   a hiring manager would not move on). These thresholds remain provisional and can be overridden.
+   `consensus.json` contains every normalized judged row. A candidate explicitly judged
+   `seniority_fit: unknown` may remain qualified and seed anchor expansion for recall, but is never
+   sendable and remains visible on the bench. A missing or invalid seniority value is not in-band;
+   an `OUT` row never qualifies or seeds expansion. **Measured (AgentMail JD):** single judge
    → recall 48% / p@25 0.36; 3-judge (2,2) → 52% / 0.44; a `(2,1)` gate (majority in-band +
    ≥1 not-out) Pareto-beats it (64% / 0.48) by rescuing borderline candidates one strict judge
    cut — but per the anti-local-maxima rule it stays NON-default until validated on a 2nd JD.
@@ -373,8 +398,9 @@ New (`packs/search/primitives/deep_search/`):
   Drop-in for the paid gpt-5.4 judge; same raw output shape.
 - `expand_from_anchor.py` 🆕 — judged-strong anchors → "more like this" seeds (no LLM).
 - `judge_consensus.py` 🆕 — combine judge passes → consensus/shortlist/sendable/bench.
-  **`--plan` core-gates** membership on one complete alternative all-of core group and never lets a
-  score threshold override a judge `OUT`; `--score-threshold` is only a floor on qualified rows.
+  **`--plan` core-gates** membership on one complete approved group and never lets a score threshold
+  override a judge `OUT`; generated singleton groups affect eligibility while default scoring keeps
+  all must-haves. `--score-threshold` and `--sendable-threshold` are provisional configurable cuts.
 - `score_ground_truth_gaps.py` 🆕 — epoch scoring + convergence vs a ground-truth set.
 
 Existing (reused):

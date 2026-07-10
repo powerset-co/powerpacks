@@ -69,7 +69,7 @@ def _load(path: Path) -> list[dict[str, Any]]:
     text = path.read_text(encoding="utf-8").strip()
     if not text:
         return []
-    return json.loads(text) if text[0] == "[" else [json.loads(l) for l in text.splitlines() if l.strip()]
+    return json.loads(text) if text[0] == "[" else [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 def main() -> None:

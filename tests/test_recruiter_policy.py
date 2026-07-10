@@ -130,6 +130,12 @@ class TestRecruiterPolicy(unittest.TestCase):
         self.assertEqual(validated["hire_stage"], "scaling_late")
         self.assertEqual(validated["excellence_weights"], {"impact": 2.0})
 
+    def test_validation_uses_normalized_hire_stage_alias_for_lookup(self):
+        for alias in ("Early", "Founding Early", "founding-early"):
+            with self.subTest(alias=alias):
+                validated = rp.validate_recruiter_preferences({"hire_stage": alias}, source="user")
+                self.assertEqual(validated["hire_stage"], "founding_early")
+
     def test_prompt_states_recruiter_defaults_and_non_discrimination(self):
         prompt = rp.render_recruiter_prompt(rp.resolve_recruiter_preferences())
 

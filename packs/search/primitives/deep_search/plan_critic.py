@@ -58,14 +58,24 @@ SYSTEM = (
     "'Hire senior_ic and staff_ic; staff engineers or higher are too_senior' (hires staff while "
     "gating staff).\n"
     "3. GEO SCOPE: if the JD states an on-site/city/metro location but the plan's search_scope.location is empty or null, flag it — geo-first sourcing will be disabled for the WHOLE run unless the reviewer sets it (or deliberately approves global).\n"
-    "4. ANYTHING ELSE that would misgate candidates (wrong target level for the JD, a core trait "
+    "4. CORE PATH PROVENANCE: if the JD explicitly offers independently viable alternatives but "
+    "the corresponding singleton groups have source='default', flag that they need source='jd' so "
+    "unselected paths do not lower ranking. Do not infer alternatives merely because the plan uses "
+    "default singleton membership groups.\n"
+    "5. ANYTHING ELSE that would misgate candidates (wrong target level for the JD, a core trait "
     "that is generic table-stakes in disguise).\n\n"
     'Return strict JSON: {"missing_core_pillars": ["<pillar> — <the JD text implying it>"], '
     '"cutoff_issues": ["<issue>"], "other_issues": ["<issue>"], "verdict": "ok|needs_edits"}'
 )
 
 
-def deterministic_checks(plan: dict[str, Any]) -> list[str]:
+def supports_custom_temperature(model: str) -> bool:
+    """Match the repo's model-family contract for Chat Completions options."""
+    normalized = model.strip().lower()
+    return not (normalized.startswith("gpt-5") or normalized.startswith("o"))
+
+
+def deterministic_checks(plan: dict[str, Any], *, backend: str | None = None) -> list[str]:
     issues: list[str] = []
     stage = (plan.get("hire_stage") or "").strip()
     if stage and stage not in VALID_HIRE_STAGES:
@@ -89,18 +99,22 @@ def deterministic_checks(plan: dict[str, Any]) -> list[str]:
             issues.append(f"core traits missing from core_groups: {missing}")
         if unknown:
             issues.append(f"core_groups reference non-core traits: {unknown}")
-    # Conjunctivity guard — measured on the audited benchmark: an all-of-3 group cut a
+    # Conjunctivity guard: measured on the audited benchmark, an all-of-3 group cut a
     # validated 22-person shortlist to 1; bigger groups ship empty shortlists.
     for group in plan.get("core_groups") or []:
         n = len(group.get("all_of") or [])
-        if n > 3:
+        if n > 1:
+            suffix = (
+                "; approval rejects groups larger than 3"
+                if n > 3
+                else "; confirm this conjunction deliberately at Review"
+            )
             issues.append(
                 f"core group '{group.get('name')}' requires ALL {n} traits at experienced+ — "
-                "nearly nobody passes such a conjunction; split into alternative archetype "
-                "groups (default: one group per trait) or confirm deliberately at Review")
+                "conjunctions sharply reduce recall; prefer alternative singleton archetypes"
+                f"{suffix}")
     scope = plan.get("set_scope") or {}
-    route = (plan.get("route") or plan.get("search_scope", {}).get("backend") or "").strip().lower()
-    if route in ("", "powerset") and "set_scope" in plan and not (scope.get("set_id") or "").strip():
+    if backend == "powerset" and "set_scope" in plan and not (scope.get("set_id") or "").strip():
         issues.append("set_scope.set_id is empty — approval will hard-fail after Review; set "
                       "POWERPACKS_DEFAULT_SET_ID or pass --set-id before approving")
     return issues
@@ -112,6 +126,8 @@ def main() -> None:
     ap.add_argument("--jd-file", required=True)
     ap.add_argument("--out", default=None, help="Default: plan_critic.json next to the plan")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--backend", choices=("powerset", "local"), default=None,
+                    help="Execution backend; enables backend-specific deterministic checks")
     ap.add_argument("--no-llm", action="store_true", help="Deterministic checks only (offline/tests)")
     args = ap.parse_args()
 
@@ -120,7 +136,7 @@ def main() -> None:
     jd = Path(args.jd_file).read_text(encoding="utf-8")
 
     result: dict[str, Any] = {"missing_core_pillars": [], "cutoff_issues": [], "other_issues": []}
-    result["deterministic_issues"] = deterministic_checks(plan)
+    result["deterministic_issues"] = deterministic_checks(plan, backend=args.backend)
 
     if not args.no_llm:
         key = os.environ.get("OPENAI_API_KEY")
@@ -128,13 +144,18 @@ def main() -> None:
             print(json.dumps({"primitive": "plan_critic", "status": "failed", "error": "OPENAI_API_KEY not set"}))
             raise SystemExit(1)
         client = make_openai_client(key)
-        resp = client.chat.completions.create(
-            model=args.model, temperature=0.0,
+        request: dict[str, Any] = dict(
+            model=args.model,
             messages=[{"role": "system", "content": SYSTEM},
                       {"role": "user", "content": f"JOB DESCRIPTION:\n{jd.strip()}\n\nPLAN:\n{json.dumps(plan, indent=1)}"}],
             response_format={"type": "json_object"},
         )
+        if supports_custom_temperature(args.model):
+            request["temperature"] = 0.0
+        resp = client.chat.completions.create(**request)
         obj = json.loads(resp.choices[0].message.content or "{}")
+        if not isinstance(obj, dict):
+            obj = {}
         for k in ("missing_core_pillars", "cutoff_issues", "other_issues"):
             v = obj.get(k)
             if isinstance(v, list):

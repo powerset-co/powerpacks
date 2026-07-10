@@ -70,6 +70,17 @@ role, level and track, location, hire stage, usable cutoff, core and table-stake
 must-haves, nice-to-haves, core groups, and the recruiter policy used to rank
 otherwise eligible candidates.
 
+Generated core groups default to one singleton eligibility alternative per core
+trait. That broad eligibility rule does not remove the other must-haves from
+default scoring: satisfying one approved group prevents sibling alternatives
+from forcing `OUT`, while all must-haves still contribute to the ranking score
+and score cutoffs. Only a deliberate alternative
+or conjunctive path approved at Review changes path scoring. Every conjunction
+must be surfaced at Review, and a group with more than three traits is rejected
+rather than allowed to collapse the pool silently. A reviewed scoring path is
+marked `source: user`, or `source: jd` when it directly reflects an explicit JD
+alternative; the canonical singleton eligibility set remains `source: default`.
+
 Plans from the pre-policy schema are not auto-migrated because they do not say
 which must-haves are shared table stakes versus alternative core paths. Start a
 new run and perform the one Review again; do not reuse retrieval or verdicts
@@ -112,6 +123,19 @@ ranking prior, not an implicit brand-name prompt:
 These weights rank candidates only after the role's core fit and seniority/track
 rules are applied. User-specified preferences can replace them. Protected or
 demographic attributes and non-job-related proxies are never ranking inputs.
+
+### Provisional calibration thresholds
+
+The current `0.40` qualified-shortlist floor, `0.55` sendable cut, and `0.70`
+top-tier excellence gate are provisional defaults calibrated on the AgentMail
+benchmark. They are not universal hiring bars. The shortlist and sendable cuts
+are configurable per execution; all three need cross-JD re-benchmarking before
+being treated as stable policy.
+
+An explicit `seniority_fit: unknown` preserves recall: it may remain in the
+qualified pool and seed anchor expansion, but it is never sendable and remains
+visible on the bench. Missing or invalid seniority is not equivalent to an
+explicit unknown judgment and is not in-band.
 
 Other recruiter defaults remain visible in the plan and editable at Review:
 
@@ -165,15 +189,15 @@ reviews are automated quality controls and do not pause execution.
 | Stage | Reviewer | What it checks | Artifact or enforcement |
 | --- | --- | --- | --- |
 | Route | Agent rules; offline decision eval | Correct surface, backend, and depth. | `decision.json`; `packs/search/evals/run_decision_eval.py`. |
-| Contract normalization | Schema-shaped extraction plus hard schema and cross-field validation | Required role fields, valid enums, alternative all-of core groups, core versus table-stakes traits, provenance, normalized weights, recruiter-policy snapshot. | `epoch0/plan.json`; malformed generated or user-edited plans fail before sourcing. |
-| Plan critic | Automated advisory critic plus deterministic enum checks | Missing core pillars and contradictions between target level, cutoff, track, and JD. | `epoch0/plan_critic.json`. A critic failure is surfaced but does not replace Review. |
+| Contract normalization | Schema-shaped extraction plus hard schema and cross-field validation | Required role fields, valid enums, singleton default eligibility groups, core versus table-stakes traits, provenance, normalized weights, recruiter-policy snapshot; groups larger than three are rejected. | `epoch0/plan.json`; malformed generated or user-edited plans fail before sourcing. |
+| Plan critic | Automated advisory critic plus deterministic enum checks | Missing core pillars, every proposed conjunction, and contradictions between target level, cutoff, track, and JD. | `epoch0/plan_critic.json`. A critic failure is surfaced but does not replace Review. |
 | **Review** | **Human, once** | Whether the resolved role and default/user preferences describe the intended hire. | Edit or approve `epoch0/plan.json`; resume with `--plan-approved`; `plan_binding.json` prevents stale artifact reuse. |
 | Probe construction | Automated diversity and bounded-round checks | Diverse archetypes and token leads rather than many near-duplicate queries; another independent round when the union is still growing. | `round*/seeds.json`, probe payloads, `rounds.json`. |
 | Retrieval | Primitive validation | Every probe uses the selected backend, has bounded limits, and contributes to a deduplicated union; isolated probe failures do not corrupt successful lanes. | Probe artifacts and `epoch*/union.jsonl`. |
 | Triage | Conservative cheap model | Drops only clear misses; missing data and uncertainty survive to the canonical judge. | `candidate_frontier.full.jsonl`, filtered `candidate_frontier.jsonl`, `triage.json`. |
 | Candidate judge | One selected judge in the automatic loop | Per-trait evidence, level/track fit, rationale, and canonical score. | `candidate_evaluations.raw.jsonl`, accumulated in `judges/loop.jsonl`. |
-| Consensus and core gate | Deterministic code | Non-OUT and in-band votes, score floor, and demonstrated evidence for every trait in at least one approved alternative core group. | `shortlist/consensus.json`, `shortlist/shortlist_ranked.json`, `shortlist/sendable_ranked.json`, `shortlist/bench_ranked.json`. |
-| Expansion | Deterministic anchor selection plus retrieval | Uses only judged-strong candidates, diversifies anchors by company, judges only new people, and stops on no anchors or no new strong candidates. | `epochN/anchors.json`, `anchor_seeds.json`, `loop.json`. |
+| Consensus and core gate | Deterministic code | Non-OUT and in-band votes, configurable score floor, and demonstrated evidence for every trait in at least one approved core group. Default singleton groups govern eligibility while all must-haves score; reviewed paths may use path scoring. Explicit unknown seniority may qualify but cannot be sendable. | `shortlist/consensus.json`, `shortlist/shortlist_ranked.json`, `shortlist/sendable_ranked.json`, `shortlist/bench_ranked.json`. |
+| Expansion | Deterministic anchor selection plus retrieval | Uses judged-strong candidates, including explicit unknown-seniority rows retained for recall; diversifies anchors by company, judges only new people, and stops on no anchors or no new strong candidates. | `epochN/anchors.json`, `anchor_seeds.json`, `loop.json`. |
 | Final ordering | Score order; optional automated micro-sort | Preserves judge scores and optionally reorders saturated score bands using existing evidence. | Optional `shortlist/ranked_final.json`. A production finalizer is planned. |
 
 ### Judge count, precisely
@@ -255,9 +279,9 @@ The current names below are the contract; older docs that mention `BRIEF.md`,
 | `master_union.jsonl` | Deduplicated union accumulated across all epochs. |
 | `judges/loop.jsonl` | Successful selected-judge verdicts accumulated across epochs. |
 | `shortlist/consensus.json` | All normalized judged rows, evidence, and vote/score metadata. |
-| `shortlist/shortlist_ranked.json` | Non-OUT, in-band, score-qualified candidates that satisfy one complete approved core group. |
-| `shortlist/sendable_ranked.json` | High-confidence subset of the core-gated shortlist at the sendable threshold. |
-| `shortlist/bench_ranked.json` | Lower-confidence or unknown-seniority candidates worth retaining or reviewing but not in the sendable subset. |
+| `shortlist/shortlist_ranked.json` | Non-OUT, in-band, score-qualified candidates that satisfy one complete approved core group; explicit unknown seniority may remain here for recall and anchors. |
+| `shortlist/sendable_ranked.json` | High-confidence subset of the core-gated shortlist at the configurable sendable threshold; explicit unknown seniority is excluded. |
+| `shortlist/bench_ranked.json` | Lower-confidence candidates plus explicit unknown-seniority rows retained for review, including unknowns that also remain in the qualified anchor pool. |
 | `shortlist/ground_truth_ranked.json` | Compatibility alias for `shortlist_ranked.json`. The filename is legacy; a normal run does not make its own output ground truth. |
 | `shortlist/ranked_final.json` | Optional micro-sorted order, present only with `--micro-sort`. |
 | `loop.json` | Epoch history, convergence, counts, and terminal status. |
@@ -322,5 +346,7 @@ The current names below are the contract; older docs that mention `BRIEF.md`,
 - Measure recall by stage, precision at shortlist cutoffs, core and seniority
   violations, unique contribution by lane, judge dissent, ordering quality,
   latency, and cost.
+- Recalibrate the provisional `0.40` qualified, `0.55` sendable, and `0.70`
+  top-tier bars across multiple job families and levels.
 - Compare Powerset and local backends on equivalent corpora where possible, and
   add a dedicated benchmark for the planned SQL lane and finalizer.

@@ -103,20 +103,26 @@ def normalize_verdict(r: dict[str, Any]) -> dict[str, Any]:
     The canonical judge emits {candidate_id, jd_score, seniority_fit, verdict, rationale} with no
     explicit `in_band`; the native (Claude sub-agent) judges emit {person_id, score, in_band, ...}.
     Normalize to {person_id, score, in_band, verdict, seniority_fit, name, rationale} so a directory
-    can mix either format. `in_band` is derived from seniority_fit when absent (not gated = in-band).
+    can mix either format. Explicit `unknown` remains shortlist/anchor eligible, but a missing or
+    unsupported seniority value fails closed rather than becoming implicitly in-band.
     """
     if "person_id" not in r and r.get("candidate_id"):
         r = {**r, "person_id": r["candidate_id"]}
     if "score" not in r and r.get("jd_score") is not None:
         r = {**r, "score": r["jd_score"]}
-    # unknown seniority stays IN-BAND (main semantics, audit-validated: thin profiles are
-    # legitimately kept; hard-gating unknown also breaks the founder-eligible override and
-    # starves anchor expansion). unknown_seniority_votes still surfaces it for review.
-    if r.get("seniority_fit") in GATED_FITS:
+    raw_fit = r.get("seniority_fit")
+    fit = raw_fit.strip().lower() if isinstance(raw_fit, str) else None
+    if isinstance(raw_fit, str) and fit != raw_fit:
+        r = {**r, "seniority_fit": fit}
+
+    # Explicit unknown stays shortlist/anchor eligible so thin-but-real profiles and explicit
+    # founder-eligible overrides can expand the search. Missing or unsupported values are not the
+    # same contract and fail closed. The sendable split below keeps every unknown row on the bench.
+    assessment_valid = r.get("_seniority_assessment_valid", True) is not False
+    if not assessment_valid or fit in GATED_FITS or fit not in CONFIRMED_IN_BAND_FITS | {"unknown"}:
         r = {**r, "in_band": False}
     elif "in_band" not in r:
-        # not gated = in-band (unknown included — main/audited semantics)
-        r = {**r, "in_band": r.get("seniority_fit") not in GATED_FITS}
+        r = {**r, "in_band": True}
     return r
 
 
@@ -232,7 +238,8 @@ def main() -> None:
     ap.add_argument("--judges-dir", required=True, help="Directory of <judge>.jsonl verdict files")
     ap.add_argument("--union", help="candidates_union.jsonl for candidate metadata (optional)")
     ap.add_argument("--out-dir", required=True, help="Where to write consensus.json + ground_truth_ranked.json")
-    ap.add_argument("--min-inband-votes", type=int, default=2)
+    ap.add_argument("--min-inband-votes", type=int, default=1,
+                    help="Judges that must mark the candidate in-band (default 1 — single-judge runs; raise to 2 for panels)")
     ap.add_argument("--min-notout-votes", type=int, default=1,
                     help="Judges that must not vote OUT (default 1 — single-judge runs; raise to 2 for panels)")
     ap.add_argument("--score-threshold", type=float, default=None,
@@ -240,7 +247,7 @@ def main() -> None:
                         "(tunable recall/precision cutoff; ~0.40 recovered ~0.9 recall on AgentMail). "
                          "Never overrides the non-OUT vote gate; lower-confidence rows stay on the bench.")
     ap.add_argument("--sendable-threshold", type=float, default=0.55,
-                    help="Minimum mean score for sendable_ranked.json (default 0.55)")
+                    help="Minimum mean score for known-seniority rows in sendable_ranked.json (default 0.55)")
     ap.add_argument("--plan", default=None,
                     help="plan.json. If its must_haves carry tier=='core', the shortlist is CORE-GATED: "
                          "membership = majority-in-band/non-OUT AND one complete alternative core group met. "
@@ -270,7 +277,10 @@ def main() -> None:
     (out / "consensus.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
     (out / "shortlist_ranked.json").write_text(json.dumps(strong, indent=2) + "\n", encoding="utf-8")
     (out / "ground_truth_ranked.json").write_text(json.dumps(strong, indent=2) + "\n", encoding="utf-8")
-    sendable = [r for r in strong if r["mean_score"] >= args.sendable_threshold]
+    sendable = [
+        r for r in strong
+        if r["mean_score"] >= args.sendable_threshold and r["unknown_seniority_votes"] == 0
+    ]
     sendable_ids = {r["person_id"] for r in sendable}
     floor = args.score_threshold if args.score_threshold is not None else 0.40
     bench = [r for r in rows if r["person_id"] not in sendable_ids

@@ -8,16 +8,16 @@ only — per-trait evidence statuses, excellence subscores (trajectory /
 pedigree / impact), seniority fit, and caveats. The final score and verdict
 are computed deterministically in code from those judgments:
 
-    trait_score    = quorum(best alternative core path + table stakes) + nice bonus
+    trait_score    = quorum(all must-haves by default, or an explicit reviewed path) + nice bonus
     excellence     = direct-evidence base (trajectory/impact) + capped pedigree bonus
     caveat_penalty = min(0.20, 0.05 * material_caveat_count)
     final_score    = 0.55*trait_score + 0.45*excellence - caveat_penalty
 
 Verdict ladder (bar-raiser model — default is out):
-    top_tier        in-band, no missing scored must-have, trait_score >= 0.80,
+    top_tier        in-band, complete qualifying path, ranking trait_score >= 0.80,
                     excellence >= 0.70
-    high_potential  in-band, trait_score >= 0.60, trajectory >= 0.75
-                    (confident diamond-in-the-rough)
+    high_potential  in-band, qualifying path coverage >= 0.60, or >= 0.45 with
+                    trajectory >= 0.75 (confident diamond-in-the-rough)
     out             everyone else, including seniority-gated candidates
 
 Seniority is a hard gate enforced in code: too_senior / too_junior /
@@ -116,7 +116,7 @@ You only surface candidates the hiring team would be lucky to get — people who
 
 You will receive: the job context (including hire stage), the seniority band / usable cutoff policy, must-have traits, nice-to-have traits, and one candidate profile.
 
-When the plan defines ALTERNATIVE CORE GROUPS, they are OR paths: a candidate needs one complete group, not every group. Evaluate evidence for every trait, but never reject or downgrade a candidate merely for missing traits that belong only to other alternative groups. Table-stakes traits apply across every path. The deterministic scorer selects the strongest complete path.
+Core groups control membership. Default singleton groups mean direct evidence for any one core trait can pass the core gate, but every must-have still informs ranking. Explicit JD/user alternative groups are OR paths: a candidate needs one complete group, not every group, and the deterministic scorer selects the strongest path plus shared table stakes. Evaluate evidence for every trait; only for explicit alternative paths should missing traits from unselected paths not count against the candidate.
 
 You do NOT produce a final score or verdict. You produce structured judgments — per-trait evidence statuses, excellence subscores, seniority fit, and caveats. The final score and verdict are computed deterministically from your judgments, so be precise and calibrated: every status and subscore directly moves the ranking.
 
@@ -279,12 +279,20 @@ def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
         f"Seniority / usable cutoff policy: {plan.get('usable_cutoff') or 'Senior in-band IC; executives, founders, and advisors are out.'}",
         "Must-have traits (with tier):",
         *[f"- [{t.get('tier') or 'table_stakes'}] {t['trait']}" for t in must],
-        "Alternative core paths (OR across groups; AND within a group):",
+        "Core membership groups (OR across groups; AND within a group):",
         *[
-            f"- {group.get('name') or 'path'}: " + " AND ".join(str(t) for t in group.get("all_of") or [])
+            f"- [{group.get('source') or 'jd'}] {group.get('name') or 'path'}: "
+            + " AND ".join(str(t) for t in group.get("all_of") or [])
             for group in core_groups
         ],
-        "Evaluate every trait, but missing traits from unselected alternative paths do not count against the candidate.",
+        (
+            "These are default singleton membership gates; score every must-have."
+            if uses_default_singleton_core_groups(
+                core_groups,
+                [item.get("trait") for item in must if item.get("tier") == "core"],
+            )
+            else "These are explicit alternative paths; missing traits from unselected paths do not count."
+        ),
         "Nice-to-have traits:",
         *[f"- {t}" for t in nice],
         "",
@@ -361,20 +369,41 @@ _FOUNDER_C_SUITE_TITLE = re.compile(
 
 
 def profile_is_current_founder_c_suite(profile: dict[str, Any] | None) -> bool:
-    """Best-effort structured check used only to enforce an explicit policy override."""
+    """Use explicit current-role evidence; sparse undated history is not current by default."""
     if not isinstance(profile, dict):
         return False
     titles = [profile.get("current_title"), profile.get("title")]
+
+    current_positions = profile.get("current_positions") or []
+    if isinstance(current_positions, list):
+        titles.extend(
+            position.get("title") or position.get("position_title")
+            for position in current_positions
+            if isinstance(position, dict)
+        )
+
     positions = profile.get("positions") or profile.get("work_experiences") or []
     if isinstance(positions, list):
-        for index, position in enumerate(positions):
+        for position in positions:
             if not isinstance(position, dict):
                 continue
-            is_current = position.get("is_current") is True or not any(
-                position.get(key) for key in ("end_date", "end_year", "ended_at")
-            )
-            if index == 0 or is_current:
-                titles.append(position.get("title"))
+            flags = [position.get(key) for key in ("is_current", "is_current_position", "is_current_role")]
+            if any(flag is True for flag in flags):
+                is_current = True
+            elif any(flag is False for flag in flags):
+                is_current = False
+            else:
+                has_start = any(
+                    position.get(key) not in (None, "", 0)
+                    for key in ("start_date", "start_year", "started_at", "start_date_epoch")
+                )
+                has_end = any(
+                    position.get(key) not in (None, "", 0)
+                    for key in ("end_date", "end_year", "ended_at", "end_date_epoch")
+                )
+                is_current = has_start and not has_end
+            if is_current:
+                titles.append(position.get("title") or position.get("position_title"))
     return any(_FOUNDER_C_SUITE_TITLE.search(str(title or "")) for title in titles)
 
 
@@ -390,6 +419,8 @@ def apply_founder_policy(
     if not profile_is_current_founder_c_suite(profile):
         return seniority_fit, None
     policy = preferences.get("current_founder_c_suite_for_non_exec_ic") or "default_out"
+    if policy == "default_out":
+        return "too_senior", "founder_c_suite_default_out"
     if policy == "review" and seniority_fit not in {"too_junior", "wrong_track"}:
         return "unknown", "founder_c_suite_review"
     if policy == "eligible" and seniority_fit == "too_senior":
@@ -442,8 +473,13 @@ def effective_must_for_scoring(
     plan: dict[str, Any],
     must: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Select one alternative core path and combine it with shared table stakes."""
+    """Preserve default all-must scoring or select one explicit alternative core path."""
+    core_groups = plan.get("core_groups") or []
     plan_must = (plan.get("traits") or {}).get("must_have") or []
+    core_traits = [item.get("trait") for item in plan_must if item.get("tier") == "core"]
+    if uses_default_singleton_core_groups(core_groups, core_traits):
+        return must, None
+
     by_trait = {_norm_trait(item.get("trait")): item for item in must if item.get("trait")}
     table_stakes = [
         by_trait[_norm_trait(item.get("trait"))]
@@ -451,8 +487,21 @@ def effective_must_for_scoring(
         if item.get("tier") != "core" and _norm_trait(item.get("trait")) in by_trait
     ]
 
+    selected_traits, selected_name = best_core_group_for_candidate(plan, must)
+    if not selected_traits:
+        return must, None
+    return [*table_stakes, *selected_traits], selected_name
+
+
+def best_core_group_for_candidate(
+    plan: dict[str, Any],
+    must: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Choose the strongest approved core path without changing its all-of semantics."""
+    by_trait = {_norm_trait(item.get("trait")): item for item in must if item.get("trait")}
     options: list[tuple[tuple[float, float, float], str, list[dict[str, Any]]]] = []
-    for index, group in enumerate(plan.get("core_groups") or []):
+    core_groups = plan.get("core_groups") or []
+    for index, group in enumerate(core_groups):
         group_traits = [
             by_trait[_norm_trait(trait)]
             for trait in group.get("all_of") or []
@@ -467,9 +516,28 @@ def effective_must_for_scoring(
         name = str(group.get("name") or f"archetype_{index + 1}")
         options.append((quality, name, group_traits))
     if not options:
-        return must, None
+        return [], None
     _, selected_name, selected_traits = max(options, key=lambda option: option[0])
-    return [*table_stakes, *selected_traits], selected_name
+    return selected_traits, selected_name
+
+
+def uses_default_singleton_core_groups(
+    groups: list[dict[str, Any]],
+    core_traits: list[Any] | None = None,
+) -> bool:
+    """Default singleton groups gate membership only; they are not alternative scoring paths."""
+    if not groups or not all(
+        isinstance(group, dict)
+        and group.get("source") == "default"
+        and len(group.get("all_of") or []) == 1
+        for group in groups
+    ):
+        return False
+    if core_traits is None:
+        return True
+    expected = {_norm_trait(trait) for trait in core_traits if _norm_trait(trait)}
+    actual = [_norm_trait(group["all_of"][0]) for group in groups]
+    return len(actual) == len(expected) and set(actual) == expected
 
 
 def decide_verdict(
@@ -477,21 +545,20 @@ def decide_verdict(
     trait_score: float,
     excellence: float,
     trajectory: float,
-    must: list[dict[str, Any]],
+    qualification_must: list[dict[str, Any]],
 ) -> str:
     """Deterministic verdict ladder. Default is out.
 
-    top_tier gates on combined trait coverage (must + nice) plus excellence.
-    high_potential gates on must-have coverage only — nice-to-haves are
-    differentiators and must not sink a steep-trajectory candidate — plus a
-    high trajectory subscore (the explicit diamond-in-the-rough bet).
+    Top-tier uses the all-requirements ranking score plus excellence. High-potential uses only the
+    strongest approved core path, so missing sibling alternatives can lower rank without turning a
+    core-qualified candidate into OUT.
     """
     if seniority_fit in GATED_SENIORITY:
         return "out"
-    must_missing = any(t.get("status") in ("missing",) for t in must)
+    must_missing = any(t.get("status") in ("missing",) for t in qualification_must)
     if not must_missing and trait_score >= TOP_TIER_MIN_TRAIT and excellence >= TOP_TIER_MIN_EXCELLENCE:
         return "top_tier"
-    cov = must_coverage(must)
+    cov = must_coverage(qualification_must)
     # high_potential = solid must-have coverage (can do the work / pick it up
     # quickly), OR the diamond-in-the-rough escape: lighter coverage rescued
     # by a steep trajectory. Trajectory is an OR escape hatch, never a second
@@ -556,8 +623,10 @@ def normalize_evaluation(
                 out.append({"text": c[:200], "material": False})
         return out[:8]
 
-    seniority_fit = str(parsed.get("seniority_fit", "")).lower()
-    if seniority_fit not in VALID_SENIORITY:
+    raw_seniority_fit = parsed.get("seniority_fit")
+    seniority_fit = raw_seniority_fit.strip().lower() if isinstance(raw_seniority_fit, str) else ""
+    seniority_assessment_valid = seniority_fit in VALID_SENIORITY
+    if not seniority_assessment_valid:
         seniority_fit = "unknown"
 
     must = norm_traits(parsed.get("must_have"), must_expected)
@@ -566,7 +635,11 @@ def normalize_evaluation(
     caveats = norm_caveats(parsed.get("caveats"))
 
     scored_must, selected_core_group = effective_must_for_scoring(plan, must)
+    qualification_must, qualifying_core_group = best_core_group_for_candidate(plan, must)
+    if not qualification_must:
+        qualification_must = scored_must
     trait_score = compute_trait_score(scored_must, nice)
+    qualification_trait_score = compute_trait_score(qualification_must, [])
     preferences = scoring_preferences(plan)
     seniority_fit, seniority_policy_adjustment = apply_founder_policy(
         seniority_fit,
@@ -583,7 +656,13 @@ def normalize_evaluation(
     final_score = TRAIT_COMPONENT_WEIGHT * trait_score + EXCELLENCE_COMPONENT_WEIGHT * excellence_score - penalty
     final_score = max(0.0, min(1.0, final_score))
 
-    verdict = decide_verdict(seniority_fit, trait_score, excellence_score, trajectory, scored_must)
+    verdict = decide_verdict(
+        seniority_fit,
+        trait_score,
+        excellence_score,
+        trajectory,
+        qualification_must,
+    )
     # Hard gate enforced in code, not just the prompt.
     if seniority_fit in GATED_SENIORITY:
         verdict = "out"
@@ -595,6 +674,7 @@ def normalize_evaluation(
         "jd_score": round(final_score, 3),
         "verdict": verdict,
         "seniority_fit": seniority_fit,
+        "_seniority_assessment_valid": seniority_assessment_valid,
         "seniority_policy_adjustment": seniority_policy_adjustment,
         "must_have": must,
         "nice_to_have": nice,
@@ -606,6 +686,9 @@ def normalize_evaluation(
             "pedigree_policy": pedigree_policy,
             "selected_core_group": selected_core_group,
             "scored_must_have": [item["trait"] for item in scored_must],
+            "qualifying_core_group": qualifying_core_group,
+            "qualification_trait_score": round(qualification_trait_score, 3),
+            "qualification_must_have": [item["trait"] for item in qualification_must],
             "caveat_penalty": round(penalty, 3),
             "formula": f"{TRAIT_COMPONENT_WEIGHT}*trait + {EXCELLENCE_COMPONENT_WEIGHT}*excellence - penalty",
         },

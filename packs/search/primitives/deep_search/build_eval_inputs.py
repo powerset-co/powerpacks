@@ -46,13 +46,14 @@ DEFAULT_MODEL = os.environ.get("RECRUIT_PLAN_MODEL", "gpt-4o")
 PLAN_SYSTEM = (
     "You are a technical recruiter turning a job description into a structured evaluation plan "
     "for an automated candidate judge. Extract ONLY what the JD supports. Hard rules:\n"
-    "- must_have traits: the non-negotiable capabilities the JD demands. Tag EACH must_have with a "
+    "- must_have traits: the evidence-checkable capabilities the JD demands. Tag EACH must_have with a "
     "`tier`:\n"
     "    * 'core' = a domain-defining differentiator that makes THIS role hard — the specific "
     "capability or domain a generically strong, senior person would NOT automatically have (e.g. "
     "'delivered large fusion/plasma hardware programs', 'built distributed schedulers at scale', "
-    "'shipped LLM inference systems in production'). These are the GATES: someone who lacks a core "
-    "trait is not a real fit no matter how senior or impressive. Make core traits as SHARP and "
+    "'shipped LLM inference systems in production'). These define the membership gate: someone who "
+    "lacks evidence for EVERY complete core path is not a real fit no matter how senior or impressive. "
+    "Make core traits as SHARP and "
     "domain-specific as the JD allows — prefer the narrowest true requirement over a broad one.\n"
     "    * 'table_stakes' = generic competence most qualified seniors in this band already have "
     "(leadership, communication, strategic thinking, people/eng management, relocation/logistics). "
@@ -63,12 +64,15 @@ PLAN_SYSTEM = (
     "NEVER mark generic leadership/communication/management/relocation/stage as core. "
     "nice_to_have: real pluses the JD mentions.\n"
     "- Each trait is a short evidence-checkable phrase, NOT a sentence and NOT a job title.\n"
-    "- core_groups: encode the actual gate. Each group is an alternative viable archetype; ALL core "
-    "traits named inside one group are required, while satisfying any one whole group is sufficient. "
-    "DEFAULT: one group PER core trait (any single core capability qualifies — measured against real "
+    "- core_groups: encode the membership gate. Groups are OR alternatives and traits within an "
+    "explicit group are AND requirements. Set source='default' for the automatic one-per-core "
+    "membership shape; set source='jd' ONLY when the JD explicitly defines the alternative or "
+    "conjunctive path. DEFAULT: emit one group PER core trait (any single core "
+    "capability qualifies for membership, while all must_have traits still inform ranking — measured against real "
     "shortlists, requiring many core traits at once gates out nearly everyone: an all-of-3 group cut a "
-    "validated 22-person shortlist to 1). Combine 2-3 traits into one group ONLY when the JD truly "
-    "requires that exact conjunction; never put more than 3 traits in a group. Reference core trait "
+    "validated 22-person shortlist to 1). Define alternative/conjunctive paths ONLY when the JD truly "
+    "says each path is independently viable; those explicit paths are scored separately and the best "
+    "complete path wins. Never put more than 3 traits in a group. Reference core trait "
     "text exactly.\n"
     "- hire_stage: one of founding_early | scaling_late. Use founding_early for 0-to-1/ambiguous/early "
     "startup work and scaling_late for hardening, scale, mature systems, or later-stage organizations.\n"
@@ -89,7 +93,7 @@ PLAN_SYSTEM = (
     "company identity; omit the object when the JD is silent.\n"
     'Return strict JSON: {"job_title","normalized_archetype","hire_stage","target_level","usable_cutoff",'
     '"location":"","must_have":[{"trait":"...","tier":"core|table_stakes"}],'
-    '"core_groups":[{"name":"<archetype>","all_of":["<exact core trait>"]}],'
+    '"core_groups":[{"name":"<archetype>","all_of":["<exact core trait>"],"source":"default|jd"}],'
     '"nice_to_have":["..."],"recruiter_preferences":{...}}.'
 )
 
@@ -134,9 +138,28 @@ def _core_groups(obj: dict[str, Any], must: list[dict[str, str]]) -> list[dict[s
             groups.append({
                 "name": str(raw.get("name") or f"archetype_{i + 1}").strip(),
                 "all_of": traits,
-                "source": "jd",
+                "declared_source": (
+                    str(raw.get("source") or "").strip().lower()
+                    if str(raw.get("source") or "").strip().lower() in {"default", "jd"}
+                    else None
+                ),
             })
     if groups:
+        # The extractor emits singleton groups as the measured default. Preserve that provenance so
+        # the scorer can distinguish a permissive membership gate from JD-declared alternative paths.
+        singleton_traits = [group["all_of"][0] for group in groups if len(group["all_of"]) == 1]
+        is_default_shape = (
+            len(singleton_traits) == len(groups) == len(core_by_norm)
+            and {_norm(trait) for trait in singleton_traits} == set(core_by_norm)
+        )
+        for group in groups:
+            declared_source = group.pop("declared_source")
+            if len(group["all_of"]) > 1:
+                group["source"] = "jd"
+            elif declared_source:
+                group["source"] = declared_source
+            else:
+                group["source"] = "default" if is_default_shape else "jd"
         return groups
     # Fallback = one group PER core trait (any-one semantics). This is the measured default:
     # a single all-of group over every core trait gated a validated 22-person shortlist to 1.

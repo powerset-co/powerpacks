@@ -29,6 +29,7 @@ import json
 import os
 import shutil
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -124,7 +125,47 @@ def resolve_backend(run_dir: Path, requested: str | None, decision_arg: str | No
     return recorded, decision_path
 
 
-def validate_approved_plan(plan_path: Path) -> dict[str, Any]:
+def normalize_source_url(value: str) -> str:
+    """Normalize only transport-irrelevant URL details for resume binding."""
+    parsed = urllib.parse.urlsplit(value.strip())
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"invalid JD source URL: {value!r}")
+    path = parsed.path or "/"
+    return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, parsed.query, ""))
+
+
+def validate_bound_jd_source(source_path: Path, requested_url: str) -> dict[str, Any]:
+    """Fail closed when a resumed URL run does not match its original fetch metadata."""
+    try:
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot verify existing jd.txt source from {source_path}: {exc}") from exc
+    if not isinstance(source, dict):
+        raise ValueError(f"cannot verify existing jd.txt source: {source_path} is not a JSON object")
+    bound_url = source.get("requested_url") or source.get("source_url")
+    if not isinstance(bound_url, str) or not bound_url.strip():
+        raise ValueError(f"cannot verify existing jd.txt source: {source_path} has no bound URL")
+    if normalize_source_url(bound_url) != normalize_source_url(requested_url):
+        raise ValueError(
+            f"--jd-url {requested_url!r} conflicts with the URL bound in {source_path}: {bound_url!r}"
+        )
+    return source
+
+
+def load_advisory_critic(path: Path) -> dict[str, Any]:
+    """A missing or corrupt advisory critic must never block the Review checkpoint."""
+    if not path.exists():
+        return {"verdict": "unavailable"}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return {"verdict": "unavailable", "error": str(exc)[:200]}
+    if not isinstance(value, dict):
+        return {"verdict": "unavailable", "error": "plan critic output must be a JSON object"}
+    return value
+
+
+def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None = None) -> dict[str, Any]:
     """Enforce cross-field recruiter invariants that JSON Schema cannot express."""
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     resolved = recruiter_policy.validate_resolved_recruiter_preferences(plan.get("recruiter_policy"))
@@ -134,6 +175,14 @@ def validate_approved_plan(plan_path: Path) -> dict[str, Any]:
         raise ValueError(
             f"plan hire_stage {stage!r} conflicts with recruiter policy hire_stage {policy_stage!r}"
         )
+    if expected_source_url:
+        source_url = plan.get("source_url")
+        if not isinstance(source_url, str) or not source_url.strip():
+            raise ValueError("approved URL-sourced plan must contain source_url")
+        if normalize_source_url(source_url) != normalize_source_url(expected_source_url):
+            raise ValueError(
+                f"approved plan source_url {source_url!r} conflicts with requested URL {expected_source_url!r}"
+            )
 
     must = (plan.get("traits") or {}).get("must_have") or []
     core_traits = {
@@ -146,6 +195,10 @@ def validate_approved_plan(plan_path: Path) -> dict[str, Any]:
         raise ValueError("approved plan must contain at least one core must-have trait")
     if not groups:
         raise ValueError("approved plan must contain at least one alternative all-of core group")
+    oversized = [str(group.get("name") or "unnamed") for group in groups
+                 if len(group.get("all_of") or []) > 3]
+    if oversized:
+        raise ValueError(f"approved core_groups may contain at most 3 traits: {oversized}")
     grouped_traits = {
         str(trait).strip()
         for group in groups
@@ -161,6 +214,16 @@ def validate_approved_plan(plan_path: Path) -> dict[str, Any]:
         if unknown:
             details.append(f"core_groups reference non-core traits: {unknown}")
         raise ValueError("; ".join(details))
+    default_groups = [group for group in groups if group.get("source") == "default"]
+    if any(len(group.get("all_of") or []) != 1 for group in default_groups):
+        raise ValueError("default core_groups must be singleton eligibility groups; mark reviewed paths as user or jd")
+    if len(default_groups) == len(groups):
+        default_traits = [str(group["all_of"][0]).strip() for group in default_groups]
+        if len(default_traits) != len(core_traits) or set(default_traits) != core_traits:
+            raise ValueError(
+                "default core_groups must contain exactly one singleton for every core trait; "
+                "mark deliberate reviewed paths as user or jd"
+            )
     return plan
 
 
@@ -297,6 +360,8 @@ def main() -> None:
     ap.add_argument("--created-at", required=True, help="ISO timestamp for the plan")
     ap.add_argument("--max-epochs", type=int, default=3, help="Total epochs incl. epoch 0 (converge-capped)")
     ap.add_argument("--score-threshold", type=float, default=0.40, help="Shortlist cutoff on the canonical score")
+    ap.add_argument("--sendable-threshold", type=float, default=0.55,
+                    help="Sendable shortlist cutoff on the canonical score (provisional default: 0.55)")
     ap.add_argument("--judge", choices=["codex", "gpt"], default=os.environ.get("POWERPACKS_DEEP_JUDGE", "codex"),
                     help="Phase-2 judge engine: codex = free (subscription, slower); gpt = paid gpt-5.4 on the flex tier (fast). Default from POWERPACKS_DEEP_JUDGE env, else codex.")
     ap.add_argument("--triage", action=argparse.BooleanOptionalAction, default=True,
@@ -337,13 +402,22 @@ def main() -> None:
     if args.jd_url:
         run_dir.mkdir(parents=True, exist_ok=True)
         jd_txt = run_dir / "jd.txt"
+        source_json = run_dir / "source.json"
         if jd_txt.exists():
             # The first fetch IS the contract: re-fetching would overwrite the JD the plan
             # (and its hash binding) came from — rotating page tokens or a taken-down posting
             # would silently corrupt or brick the run. Reuse the bound file.
-            print(json.dumps({"primitive": "deep_search_loop", "note": "using existing jd.txt (bound); not re-fetching --jd-url"}))
+            note = "using existing jd.txt (URL binding verified); not re-fetching --jd-url"
         else:
-            run([sys.executable, FETCH_JD, "--url", args.jd_url, "--out", jd_txt], expected_paths=[jd_txt], description="fetch_jd URL->JD")
+            run([sys.executable, FETCH_JD, "--url", args.jd_url, "--out", jd_txt],
+                expected_paths=[jd_txt, source_json], description="fetch_jd URL->JD")
+            note = "fetched jd.txt and bound its source URL"
+        try:
+            validate_bound_jd_source(source_json, args.jd_url)
+        except ValueError as exc:
+            print(json.dumps({"primitive": "deep_search_loop", "status": "failed", "error": str(exc)}, indent=2))
+            raise SystemExit(2) from exc
+        print(json.dumps({"primitive": "deep_search_loop", "note": note}))
         jd_text = jd_txt.read_text(encoding="utf-8").strip()
         if len(jd_text) < _MIN_JD_CHARS:
             print(json.dumps({"primitive": "deep_search_loop", "status": "failed",
@@ -407,6 +481,8 @@ def main() -> None:
                     sys.executable, BUILD, "--run-dir", epoch0_dir, "--jd-file", args.jd_file,
                     "--created-at", args.created_at, "--plan-only",
                 ]
+                if args.jd_url:
+                    build_cmd += ["--source-url", args.jd_url]
                 if args.set_id:
                     build_cmd += ["--set-id", args.set_id]
                 if args.preferences:
@@ -420,18 +496,14 @@ def main() -> None:
                                        stderr=exc.stderr_tail, missing=exc.missing,
                                        description="generated recruiter plan failed schema validation") from exc
                 try:
-                    run([sys.executable, CRITIC, "--plan", plan_path, "--jd-file", args.jd_file],
+                    run([sys.executable, CRITIC, "--plan", plan_path, "--jd-file", args.jd_file,
+                         "--backend", args.backend],
                         description="plan critic")
                 except CommandError:
                     # The critic is advisory; schema validation above is the hard contract check.
                     pass
             critic_path = epoch0_dir / "plan_critic.json"
-            try:
-                critic = json.loads(critic_path.read_text(encoding="utf-8")) if critic_path.exists() else {
-                    "verdict": "unavailable"
-                }
-            except (json.JSONDecodeError, OSError) as exc:
-                critic = {"verdict": "unavailable", "error": str(exc)[:200]}  # advisory: never block the gate
+            critic = load_advisory_critic(critic_path)
             history.append({
                 "epoch": 0,
                 "status": "awaiting_plan_approval",
@@ -458,7 +530,7 @@ def main() -> None:
         run([sys.executable, VALIDATE, "--schema", "search-network-jd-plan", "--file", plan_path],
             description="validate approved recruiter plan")
         try:
-            approved_plan = validate_approved_plan(plan_path)
+            approved_plan = validate_approved_plan(plan_path, expected_source_url=args.jd_url)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             raise CommandError(
                 ["validate-approved-plan", str(plan_path)],
@@ -590,6 +662,7 @@ def main() -> None:
             run([sys.executable, CONSENSUS, "--judges-dir", judges_dir, "--union", master_union_path,
                  "--out-dir", run_dir / "shortlist", "--min-inband-votes", 1, "--min-notout-votes", 1,
                  "--score-threshold", args.score_threshold,
+                 "--sendable-threshold", args.sendable_threshold,
                  "--plan", plan_path],
                 expected_paths=[run_dir / "shortlist" / "consensus.json",
                                 run_dir / "shortlist" / "shortlist_ranked.json",
@@ -604,6 +677,8 @@ def main() -> None:
                             "triage_pool": triage_pool, "frontier": len(frontier),
                             "new_judged": new_judged, "judged_total": len(judged_pids),
                             "judge_errors_dropped": judge_errors_dropped,
+                            "score_threshold": args.score_threshold,
+                            "sendable_threshold": args.sendable_threshold,
                             "strong_total": len(now_pids), "new_strong": len(new_strong)})
             print(json.dumps(history[-1]))
             strong_pids = now_pids
