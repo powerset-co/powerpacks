@@ -203,6 +203,20 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("POWERPACKS_API_URL=https://api.powerset.dev", hosted_env)
         self.assertNotIn("POWERSET_API_URL=https://api.powerset.dev", hosted_env)
 
+    def test_setup_skill_asks_about_powerset_account(self) -> None:
+        text = (ROOT / "packs/ingestion/skills/setup/SKILL.md").read_text()
+        # Step 1 is an explicit choice, not a silent Powerset default.
+        self.assertIn("Do you have a Powerset account you'd like to log in with?", text)
+        self.assertIn("own-keys route", text)
+        self.assertIn("1. Choose credentials (Powerset account or your own keys)", text)
+        # Powerset route initializes .env from the hosted template.
+        self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
+        # Own-keys route verifies instead of provisioning.
+        self.assertIn("pull_runtime_keys.py check --env-file .env", text)
+
+        installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
+        self.assertIn("only when the user chose Powerset", installer)
+
     def test_powerset_setup_skill_combines_login_env_and_mcp(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset/SKILL.md").read_text()
         self.assertIn("$powerset setup", text)

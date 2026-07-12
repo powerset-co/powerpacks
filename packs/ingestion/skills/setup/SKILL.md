@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Deterministic LinkedIn-only Powerpacks setup. Use for $setup. Steps through update, Powerset login, runtime-key pull, LinkedIn Connections.csv import (on Modal), source merge, Modal index, and search-index validation. Always reruns the full checklist; overwrites in place. For Gmail use $import-gmail; for iMessage/WhatsApp use $import-messages.
+description: Deterministic LinkedIn-only Powerpacks setup. Use for $setup. Steps through update, an explicit Powerset-account choice (login + runtime-key pull, or the user's own Modal/OpenAI keys), LinkedIn Connections.csv import (on Modal), source merge, Modal index, and search-index validation. Always reruns the full checklist; overwrites in place. For Gmail use $import-gmail; for iMessage/WhatsApp use $import-messages.
 ---
 
 <!--
@@ -17,6 +17,10 @@ Changelog:
   was hardcoded — a Claude Code run refreshed Codex's skills, never its own).
   Step 6: note the status.json path's historical name (index-people reuses the
   Gmail progress dir; the path is correct for LinkedIn runs).
+- 2026-07-12: Step 1 is now an explicit choice — ask whether the user has a
+  Powerset account to log in with (initializing .env from the hosted template
+  on yes) instead of silently defaulting into Powerset login. New own-keys
+  route: skip login/pull and verify the user's own Modal/OpenAI keys instead.
 -->
 
 # setup
@@ -48,17 +52,18 @@ Seed the checklist with these exact item titles:
 
 ```
 0. Update Powerpacks (this harness's updater)
-1. Check Powerset login + credentials
-2. Log in to Powerset (only if not logged in)
-3. Pull runtime keys (Modal + OpenAI)
+1. Choose credentials (Powerset account or your own keys)
+2. Log in to Powerset (Powerset route, only if not logged in)
+3. Pull or verify runtime keys (Modal + OpenAI)
 4. Import LinkedIn Connections.csv
 5. Merge all sources
 6. Index the merged network
 7. Validate the search index
 ```
 
-Step 2 is conditional (skip as a no-op if Step 1 says already logged in) — keep
-it in the checklist and mark it complete.
+Steps 2 and 3 depend on the Step 1 choice (Step 2 is a no-op on the own-keys
+route or when already logged in) — keep them in the checklist and mark them
+complete.
 
 Then:
 
@@ -81,9 +86,10 @@ Then:
   Otherwise only invoke the primitives below.
 - **Do not write scripts to do the work.** Reuse the exact primitive commands.
   Plain shell for `cp`/`test`/`wc`/`cat` is fine.
-- **Consent gate (pause for the user):** Powerset browser login (Step 2). The
-  LinkedIn import runs enrichment on Modal (no local key, no extra spend prompt).
-  Everything else runs without asking.
+- **Consent gates (pause for the user):** the Step 1 Powerset-account question
+  (when the request didn't already answer it) and the Powerset browser login
+  (Step 2). The LinkedIn import runs enrichment on Modal (no local key, no
+  extra spend prompt). Everything else runs without asking.
 
 ### Repo root
 
@@ -116,16 +122,47 @@ cd "$REPO" && bin/update-claude-code    # Claude Code
 cd "$REPO" && adapters/pi/install.sh    # Pi
 ```
 
-### Step 1 — Check Powerset login + credentials
+### Step 1 — Choose credentials (Powerset account or your own keys)
+
+The import + index steps need Modal and OpenAI runtime keys. A Powerset account
+provisions them for the user; without one the user supplies their own. Decide
+the route, in this order:
+
+1. **The request already answered it.** "… using my Powerset account" (or any
+   explicit ask to use Powerset) → **Powerset route**, no question. An explicit
+   "without Powerset" / "my own keys" → **own-keys route**, no question.
+2. **Already logged in.** If `.env` exists, check:
+
+   ```bash
+   test -f "$HOME/.powerpacks/credentials.json" && echo "credentials.json: present" || echo "credentials.json: MISSING"
+   cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py whoami
+   ```
+
+   If `whoami` succeeds, say "already logged in to Powerset as <email> — using
+   that account" and take the **Powerset route**.
+3. **Otherwise ask the user and wait** (consent gate):
+
+   > Do you have a Powerset account you'd like to log in with? It provisions
+   > the Modal + OpenAI runtime keys this setup needs. If not, you'll need
+   > your own `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, and `OPENAI_API_KEY`
+   > in `.env`.
+
+   Yes → **Powerset route**. No → **own-keys route**.
+
+**Powerset route only** — make sure `.env` carries the hosted Powerset config:
 
 ```bash
-test -f "$HOME/.powerpacks/credentials.json" && echo "credentials.json: present" || echo "credentials.json: MISSING"
-cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py whoami
+cd "$REPO"
+[ -f .env ] || { cp packs/powerset/templates/env.powerset.example .env; chmod 600 .env; }
 ```
 
-If missing or `whoami` fails → Step 2. Otherwise Step 2 is a no-op → Step 3.
+If `.env` already exists, preserve its secrets and other settings; only align
+the public Powerset URL/Auth0 values with
+`packs/powerset/templates/env.powerset.example` if they drifted.
 
-### Step 2 — Log in (only if Step 1 said not logged in)
+### Step 2 — Log in (Powerset route, only if Step 1 said not logged in)
+
+Own-keys route, or already logged in: mark complete as a no-op. Otherwise:
 
 ```bash
 cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
@@ -133,13 +170,24 @@ cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitive
 
 Browser consent. If it can't open, print the URL for the user. Re-run `whoami`.
 
-### Step 3 — Pull provisioned runtime keys (Modal + OpenAI)
+### Step 3 — Pull or verify runtime keys (Modal + OpenAI)
+
+**Powerset route** — pull the user's provisioned keys:
 
 ```bash
 cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull --env-file .env
 ```
 
 Verify: `… pull_runtime_keys.py check --env-file .env`.
+
+**Own-keys route** — no provisioning call; verify the user's keys are present:
+
+```bash
+cd "$REPO" && uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py check --env-file .env
+```
+
+On `status: missing`, ask the user to add the missing keys to `.env`, then
+re-run the check. Do not proceed to Step 4 until it reports `ok`.
 
 ### Step 4 — Import LinkedIn Connections.csv
 
@@ -224,8 +272,9 @@ JSON with `status` (`ok`/`fail`/`missing`), per-table row counts,
 
 ## Done
 
-Report a terse summary: logged in as <email>, keys pulled, LinkedIn imported,
-merged network of M people, index validated. Remind the user that rerunning
+Report a terse summary: credential route (logged in as <email> + keys pulled,
+or own Modal/OpenAI keys verified), LinkedIn imported, merged network of M
+people, index validated. Remind the user that rerunning
 `$setup` reruns the whole checklist, and that **Gmail** (`$import-gmail`) and
 **iMessage/WhatsApp** (`$import-messages`) are separate skills that add their
 source on top and re-merge + re-index.
