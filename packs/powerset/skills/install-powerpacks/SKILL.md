@@ -5,7 +5,7 @@ license: MIT
 metadata:
   slug: install-powerpacks
   display-name: Powerpacks Installer
-  version: 1.0.1
+  version: 1.0.2
   summary: One-sentence bootstrap for the full Powerpacks skill suite
   download-url: https://powerset.dev/powerpacks
   tags:
@@ -22,6 +22,8 @@ Created: 2026-07-08
 Changelog:
 - 2026-07-08: Initial ShareOne-style one-URL bootstrap skill.
 - 2026-07-10: Define the Powerset-environment route and provisioning API URL.
+- 2026-07-12: Hosted-config init is conditional on the user choosing Powerset;
+  otherwise $setup Step 1 asks explicitly (own keys are the alternative).
 -->
 
 One sentence installs everything:
@@ -33,8 +35,9 @@ Then a Powerset user says:
 
 > Use Powerpacks to set up my local network search using my Powerset account.
 
-This wording is explicit but not required. The shorter existing prompt still
-runs the same Powerset-backed setup.
+This wording is explicit but not required. With the shorter prompt (no
+Powerset mentioned), `$setup` asks whether to log in with a Powerset account
+before anything runs; answering yes gives the same Powerset-backed setup.
 
 ## Step 0 — install this file (the "download and install" sentence)
 
@@ -79,9 +82,10 @@ Do the following, in order:
    Local-only: git + uv/Python setup, no paid APIs, no uploads. Downstream skills
    gate their own spend and logins.
 
-3. **Initialize the hosted config for Powerset-backed setup.** For either local
-   network search prompt above, work in the canonical repo. If `.env` does not
-   exist, copy the public hosted config and restrict its permissions:
+3. **Initialize the hosted config only when the user chose Powerset.** If the
+   ask said "using my Powerset account" (or otherwise named Powerset), work in
+   the canonical repo. If `.env` does not exist, copy the public hosted config
+   and restrict its permissions:
 
    ```bash
    cp packs/powerset/templates/env.powerset.example .env
@@ -91,6 +95,11 @@ Do the following, in order:
    If `.env` already exists, preserve its secrets and other settings. Ensure its
    public Powerset URL/Auth0 keys match
    `packs/powerset/templates/env.powerset.example`; do not replace the whole file.
+
+   If the ask did NOT mention Powerset (plain "set up my local network
+   search"), skip this step — `$setup` Step 1 asks the user whether they have
+   a Powerset account to log in with and initializes `.env` on a yes (own
+   Modal/OpenAI keys are the alternative).
 
 4. **Continue in THIS session — no restart.** The harness's skill registry is
    snapshotted at session start, but you do not need it: the skills are now plain
@@ -102,7 +111,9 @@ Do the following, in order:
    - "set up my local network search" with or without "using my Powerset
      account" -> follow `$setup` (LinkedIn export -> merge -> search index).
      Its Steps 1-3 authenticate the Powerset user and pull that user's
-     provisioned Modal/OpenAI keys before the LinkedIn import. Do not run a
+     provisioned Modal/OpenAI keys before the LinkedIn import; when the prompt
+     didn't name Powerset, its Step 1 first asks whether to log in with a
+     Powerset account (the user's own keys are the alternative). Do not run a
      separate `$powerset setup`; that would duplicate the same login/key pull.
    - broader source linking/onboarding -> `onboard`; Gmail -> `import-gmail`;
      iMessage/WhatsApp -> `import-messages`; then searches -> `search`.
