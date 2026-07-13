@@ -1,5 +1,9 @@
 # Slice Planning
 
+> **Legacy V1 design reference.** See the canonical
+> [`$search` architecture](search-architecture.md) and executable
+> [`$search` skill](../skills/search/SKILL.md) before applying these heuristics.
+
 The V1 Powerpacks search loop should not jump from one natural-language request
 to one giant retrieval pass.
 

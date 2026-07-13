@@ -1,8 +1,12 @@
 # `$search` deep mode — the deep-search engine
 
+> Product overview and diagrams:
+> [`packs/search/docs/search-architecture.md`](../../docs/search-architecture.md).
+> This file is the executable runbook.
+
 `$search`'s deep mode for a JD. You load this file when the Step-1 decision you recorded is
 `depth: deep` — automatic for a job-posting URL or pasted JD, or on an explicit ask ("deep",
-"thorough", "build a shortlist", "recruit ...", "more people like <url>"). The decision is
+"thorough", "build a shortlist", "recruit ..."). The decision is
 already recorded in the run dir's `decision.json` (`.powerpacks/deep-search/<jd-slug>/`);
 Review below is the run's one confirm-before-execute gate.
 
@@ -12,7 +16,7 @@ Changelog:
 - 2026-06-26: Initial engine. Replaces search-highlight. Built on the empirical finding that
   the existing search_network_pipeline has excellent recall (a single loose probe contains
   100% of ground truth at depth) but noisy single-query ranking — so the lever is WIDE SEARCH
-  (many diverse probes) + a mixture-of-judges, not a new backend. See
+  (many diverse probes) + evidence judging, not a new backend. See
   packs/search/docs/agentic-search.md and deep-search-ground-truth-status.md.
 - 2026-06-29: Add the CORE-GATE + Review. build_eval_inputs tags must-haves core|table_stakes;
   judge_consensus --plan gates the shortlist on genuinely doing >=1 core domain capability (not the
@@ -61,15 +65,20 @@ Changelog:
   completed ledgers cannot cross an approved-plan boundary.
 -->
 
-> **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, "build a
-> shortlist", and "more people like <url>" all land here via the recorded Step-1 decision —
+> **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, and "build a
+> shortlist" all land here via the recorded Step-1 decision —
 > JD→judged-shortlist with a reviewed recruiter plan, selected bar-raiser judge, core-gate, and IC-track-aware
 > seniority.
 
+A raw profile URL is not a supported intake yet. The shipped "more like this"
+primitive expands from candidates already judged against this run's approved
+role contract; it does not infer a new role contract from an arbitrary profile.
+
 ## The engine
 
-Source, judge, and rank candidates for a JD from a Powerset set, the way a sourcing team would. This
-is the productized version of the agentic-search method in `packs/search/docs/agentic-search.md`.
+Source, judge, and rank candidates for a JD from either a Powerset set or the
+local DuckDB index, the way a sourcing team would. This is the productized
+version of the agentic-search method in `packs/search/docs/agentic-search.md`.
 
 ## Run it: ONE human gate, then autonomous
 
@@ -226,7 +235,7 @@ critic, decomposition, probe preparation, and default triage still use configure
      --jd-file <run>/jd.txt --plan <run>/epoch0/plan.json \
      --run-dir <run>/epoch0 --set-id <set> --n 16 --keep 200 --max-rounds 3
    ```
-   Writes `<run>/union.jsonl`. (It chains `decompose_jd` + `run_wide_search` internally — those stay
+   Writes `<run>/epoch0/union.jsonl`. (It chains `decompose_jd` + `run_wide_search` internally — those stay
    callable on their own for a single quick pass.) **Recall is fixed HERE, in sourcing — not by
    loosening the judge.**
 
@@ -238,8 +247,9 @@ critic, decomposition, probe preparation, and default triage still use configure
    ⚠ **Manual sourcing and the plan binding do not mix.** `deep_search_loop --plan-approved`
    refuses a run dir that has retrieval artifacts but no `plan_binding.json` ("start a new run") —
    the binding is written only when the LOOP performs the sourcing. If you source manually with
-   `robust_source` as above, stay manual for the rest of the run (triage → judge → consensus as
-   below); to use the loop, let the loop do the sourcing after approval instead.
+   `robust_source` as above, do not resume that directory through the loop. The manual snippets in
+   this section are developer-level primitive examples, not a second end-to-end recipe; the
+   canonical executable workflow is the two `deep_search_loop` commands above.
 
 3. **Bridge the union into the judge's contract** 🆕 (no plan LLM call on resume). The judge reads a
    profile-search run dir (`plan.json` + `candidate_frontier.json/jsonl` + `probe_summaries.json` →
@@ -286,7 +296,7 @@ critic, decomposition, probe preparation, and default triage still use configure
 5. **Consensus + rank** 🆕 (the **core-gate** lives here):
    ```bash
    uv run --project . python packs/search/primitives/deep_search/judge_consensus.py \
-     --judges-dir <run>/judges --union <run>/union.jsonl --out-dir <run>/shortlist \
+     --judges-dir <run>/judges --union <run>/epoch0/union.jsonl --out-dir <run>/shortlist \
      --plan <run>/epoch0/plan.json --score-threshold 0.40 --sendable-threshold 0.55 \
      --min-inband-votes 1 --min-notout-votes 1
    ```
@@ -324,13 +334,23 @@ critic, decomposition, probe preparation, and default triage still use configure
    `--max-epochs`. The JD is a lossy proxy — a proven-strong profile is the highest-signal query
    for the adjacent people the JD wording never names. NEVER seed from the eval ground truth (that's
    looking up the answers; only matters for the recall *metric*). Self-limiting: ~0 strong → no
-   anchors → loop ends (correct give-up). Manual form:
+   anchors → loop ends (correct give-up). The loop is the supported path. For developer inspection,
+   a manual expansion must repeat the exact approved backend identity rather than relying on the
+   `run_wide_search` default:
    ```bash
    uv run --project . python packs/search/primitives/deep_search/expand_from_anchor.py \
      --anchors <run>/shortlist/shortlist_ranked.json --plan <run>/epoch0/plan.json \
      --top-k 6 --out <run>/anchor_seeds.json
+
+   # Powerset corpus:
    uv run --env-file .env --project . python packs/search/primitives/deep_search/run_wide_search.py \
-     --seeds <run>/anchor_seeds.json --run-dir <run>/anchor --limit 200
+     --seeds <run>/anchor_seeds.json --run-dir <run>/anchor \
+     --backend powerset --set-id <approved-set-id> --limit 200
+
+   # Or local corpus (never run both for one approved search):
+   uv run --env-file .env --project . python packs/search/primitives/deep_search/run_wide_search.py \
+     --seeds <run>/anchor_seeds.json --run-dir <run>/anchor \
+     --backend local --db <approved-duckdb-path> --limit 200
    ```
 
 7. **Measure benchmark convergence (offline)** 🆕. Score any run against a separately audited
@@ -338,7 +358,7 @@ critic, decomposition, probe preparation, and default triage still use configure
    ```bash
    uv run --project . python packs/search/primitives/deep_search/score_ground_truth_gaps.py \
      --ground-truth <run>/ground_truth/ground_truth_ranked.json \
-     --epoch-candidates <epoch>/candidates.json \
+     --epoch-candidates <run>/shortlist/shortlist_ranked.json \
      --epoch-dir <epoch> --epoch-label epoch-NN --convergence-csv <run>/convergence.csv
    ```
    `gaps.json` = recall@k / precision@k / missed-GT; `convergence.csv` = one row per epoch.
@@ -369,14 +389,19 @@ Hill-climbing the harness is easy to overfit to one JD. Hard rules:
 
 ## Cost
 
-Sourcing is ~free: retrieval (TurboPuffer) is read-only, hydration is Postgres-only; the only
-OpenAI spend there is `decompose_jd` (1 call) + the per-seed `prepare` expansions (cheap `gpt-4o`).
-`build_eval_inputs` is 1 cheap call; `triage_candidates` is cheap `gpt-4.1-mini` batches
-(~$0.20 over ~1k candidates). **The real spend is the judge:** `evaluate_profile_candidates`
-(`gpt-5.4`) ≈ a few cents/candidate → ~$15–25 per pass over a ~600 triaged pool; a 3-judge
-mixture is ~3×. Measured AgentMail full-chain run (1034→606→3-judge panel) ≈ **~$47**. Triage
-HARD before judging to control cost. *(Claude-Code-only sessions can swap the OpenAI judge for
-2–3 Claude sub-agents on the same rubric — Claude-priced, ~zero OpenAI, but not portable.)*
+Retrieval itself is read-only, but deep sourcing is not model-free. A default
+run includes plan extraction, one judge-grade plan critic, two independent
+robust-source rounds, a fresh decomposition for each round, and one query
+preparation expansion per probe. The union then goes through cheap-model
+triage and one selected judge. Optional micro-sort adds more model calls.
+
+The paid judge is normally the largest variable cost because it evaluates
+candidate evidence one profile at a time. The default `codex` judge uses the
+configured Codex subscription instead; choosing `--judge gpt` uses the paid
+`gpt-5.4` evaluator. Costs therefore depend on probe count, frontier size,
+cache coverage, selected judge, and optional stages. Treat the dated AgentMail
+figures in `deep-search-ground-truth-status.md` as benchmark evidence, not a
+quote for a new run.
 
 ## Artifacts (gitignored under `.powerpacks/deep-search/<jd-slug>/`)
 

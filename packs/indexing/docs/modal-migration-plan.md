@@ -1,4 +1,10 @@
-# 🚀 Modal migration plan: indexing/processing pipeline
+# Modal migration plan: indexing/processing pipeline (historical)
+
+> **Historical migration and benchmark record, not the current operator
+> guide.** See the canonical
+> [LinkedIn and Modal indexing pipeline](linkedin-modal-pipeline.md) for shipped
+> behavior and current architecture. The measurements below are preserved as
+> dated engineering evidence.
 
 **Created:** 2026-06-11
 

@@ -1,6 +1,6 @@
 ---
 name: search
-description: "The single people-search door for Powerpacks. You decide surface/backend/depth and record it (decision.json): explicit words pick the backend (powerset → TurboPuffer/Supabase, local → DuckDB); a JD or job-posting URL runs the deep multi-profile engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
+description: "The single people-search door for Powerpacks. You decide surface/backend/depth and record it (decision.json): explicit words pick the backend (powerset uses TurboPuffer/Postgres; local uses DuckDB); a JD or job-posting URL runs the deep multi-profile engine; company / relational-SQL / my-contacts requests go to their surfaces. Formerly $search-network."
 ---
 
 <!--
@@ -26,6 +26,10 @@ Changelog:
 
 The single entry point for people search. `$search` routes every query to the right surface, then
 runs fast local/TurboPuffer retrieval itself for ordinary people searches.
+
+For the product and system walkthrough, read
+[`packs/search/docs/search-architecture.md`](../../docs/search-architecture.md).
+This file remains the executable agent contract.
 
 Use this for any people search request:
 
@@ -97,10 +101,12 @@ Decide `surface`, `backend`, and `depth` for the query:
 3. **depth** — how hard to search (people surface only):
    - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
      deep/thorough/judged run or names the deliverable ("recruit ...", "build a shortlist",
-     "source candidates", "more people like <linkedin url>"). Quality-superlative hiring intent
-     also means deep when the request supplies a role/domain to judge: "best", "strongest",
+     "source candidates"). Quality-superlative hiring intent also means deep when the request
+     supplies a role/domain to judge: "best", "strongest",
      "most exceptional", "top-tier", or "cracked" candidates. A bare "find me candidates" with
      no role context remains fast/clarify; do not fabricate a hiring profile.
+     A raw profile URL is not yet a supported deep-search intake: ask for the role/domain rather
+     than claiming the internal shortlist-anchor expansion can start from that URL.
    - `fast` — everything else: one expansion → retrieval → rerank pass.
    - Deep is the multi-profile engine: decompose the role into diverse candidate archetypes,
      run each as a probe through the same retrieval pipeline, union, judge, converge.
@@ -132,7 +138,7 @@ Then dispatch — this table is the whole routing contract:
 | `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
 
 The deep engine owns its own orchestration and delegates capped per-profile searches back to
-this skill's TurboPuffer path with a per-search `limit` and `--filter-only` — do not run
+this skill's selected backend path with a per-search `limit` and `--search-only` - do not run
 `search_network_pipeline.py` directly for a deep input yourself.
 
 Input shapes normalize before `prepare`, never before the decision:
@@ -221,10 +227,10 @@ user can override them before sourcing.
 
 ## Local Happy Path
 
-Uses the local DuckDB search index — no TurboPuffer, Postgres, or set
-resolution. LLM filtering/reranking runs by default after local retrieval
-(OpenAI only; the data path stays fully local). Use `--search-only` to skip
-LLM stages entirely.
+Uses the local DuckDB search index - no TurboPuffer, Postgres, or set
+resolution. Retrieval stays local, but LLM filtering/reranking runs by default
+and sends the required candidate evidence to the configured OpenAI boundary.
+Use `--search-only` to skip those model stages entirely.
 
 ### Local person lookup fast path
 

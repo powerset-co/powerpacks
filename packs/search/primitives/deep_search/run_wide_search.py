@@ -9,8 +9,10 @@ identically (no inline scripting, no shared-ledger footgun):
   -> union.jsonl (person_id + fields + found_by + attached profile)
 
 Input seeds.json = [{"key","query", ...}] from decompose_jd.py or expand_from_anchor.py.
-Retrieval is read-only (TurboPuffer) + Postgres hydrate -> no OpenAI here (the LLM cost was the
-one prepare() expansion call per seed). See packs/search/skills/search/SKILL.md.
+Retrieval is read-only on the selected backend: TurboPuffer plus Postgres
+hydration for Powerset, or DuckDB for local. There is no OpenAI call during the
+`run --search-only` step; each probe's earlier `prepare` expansion uses the
+configured model boundary. See packs/search/skills/search/SKILL.md.
 """
 from __future__ import annotations
 

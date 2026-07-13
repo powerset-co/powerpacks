@@ -1,5 +1,9 @@
 # Search Surface
 
+> **Legacy V1 design reference.** Routing and lifecycle details may be stale.
+> See the canonical [`$search` architecture](search-architecture.md) and the
+> executable [`$search` skill](../skills/search/SKILL.md) for current behavior.
+
 `powerpacks` V1 exposes a narrow search surface designed to succeed on simple
 requests without leaking private internal systems.
 

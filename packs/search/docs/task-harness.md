@@ -1,5 +1,9 @@
 # Task Harness
 
+> **Legacy V1 design reference.** This is not the current `$search` harness
+> contract. See the canonical [`$search` architecture](search-architecture.md)
+> and executable [`$search` skill](../skills/search/SKILL.md).
+
 Powerpacks uses tasks as the plan/execute ledger for `/search-network`.
 
 ## Contract

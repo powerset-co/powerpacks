@@ -188,12 +188,12 @@ $search-company crypto trading infra companies that raised series B
 Resolves to canonical TurboPuffer company IDs you can hand to
 `search` as `company_filter`.
 
-### Messages pack — `$import-contacts`
+### Messages pack — `$import-messages`
 
 Use the one-command guided harness for the normal path:
 
 ```text
-$import-contacts              # iMessage + WhatsApp → merge → match → review
+$import-messages              # iMessage + WhatsApp → merge → match → review
 ```
 
 Use the underlying primitives directly for advanced/debug subflows.

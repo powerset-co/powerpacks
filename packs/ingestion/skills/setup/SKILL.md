@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Deterministic LinkedIn-only Powerpacks setup. Use for $setup. Steps through update, an explicit Powerset-account choice (login + runtime-key pull, or the user's own Modal/OpenAI keys), LinkedIn Connections.csv import (on Modal), source merge, Modal index, and search-index validation. Always reruns the full checklist; overwrites in place. For Gmail use $import-gmail; for iMessage/WhatsApp use $import-messages.
+description: Deterministic LinkedIn-only Powerpacks setup. Use for $setup. Steps through update, a supported Powerset workspace or an already-prepared custom Modal workspace, LinkedIn Connections.csv import on Modal, source merge, Modal indexing, and local search-index validation. Always reruns the full checklist; overwrites in place. For Gmail use $import-gmail; for iMessage/WhatsApp use $import-messages.
 ---
 
 <!--
@@ -19,8 +19,12 @@ Changelog:
   Gmail progress dir; the path is correct for LinkedIn runs).
 - 2026-07-12: Step 1 is now an explicit choice — ask whether the user has a
   Powerset account to log in with (initializing .env from the hosted template
-  on yes) instead of silently defaulting into Powerset login. New own-keys
-  route: skip login/pull and verify the user's own Modal/OpenAI keys instead.
+  on yes) instead of silently defaulting into Powerset login. The original
+  custom-workspace route skipped login and checked local keys.
+- 2026-07-13: Corrected the custom-workspace contract: local keys alone do not
+  mount provider secrets into a sandbox. A custom Modal workspace must already
+  contain the named OpenAI and RapidAPI secrets. Documented the current need
+  for a unique `POWERPACKS_OPERATOR_ID` in shared workspaces.
 - 2026-07-13: Step 6 now sets a count-based runtime expectation from the
   LinkedIn import summary and distinguishes warm-cache runs from cache-cold
   first runs so agents do not mistake a long, quiet Modal build for a hang.
@@ -55,18 +59,18 @@ Seed the checklist with these exact item titles:
 
 ```
 0. Update Powerpacks (this harness's updater)
-1. Choose credentials (Powerset account or your own keys)
+1. Choose credentials (Powerset or prepared Modal workspace)
 2. Log in to Powerset (Powerset route, only if not logged in)
-3. Pull or verify runtime keys (Modal + OpenAI)
+3. Pull or verify Modal access and provider secrets
 4. Import LinkedIn Connections.csv
 5. Merge all sources
 6. Index the merged network
 7. Validate the search index
 ```
 
-Steps 2 and 3 depend on the Step 1 choice (Step 2 is a no-op on the own-keys
-route or when already logged in) — keep them in the checklist and mark them
-complete.
+Steps 2 and 3 depend on the Step 1 choice (Step 2 is a no-op on the
+custom-workspace route or when already logged in) — keep them in the checklist
+and mark them complete.
 
 Then:
 
@@ -125,15 +129,18 @@ cd "$REPO" && bin/update-claude-code    # Claude Code
 cd "$REPO" && adapters/pi/install.sh    # Pi
 ```
 
-### Step 1 — Choose credentials (Powerset account or your own keys)
+### Step 1 — Choose credentials (Powerset or prepared Modal workspace)
 
-The import + index steps need Modal and OpenAI runtime keys. A Powerset account
-provisions them for the user; without one the user supplies their own. Decide
-the route, in this order:
+The import + index steps need access to a Modal workspace whose sandboxes can
+mount the provider secrets used by the driver. A provisioned Powerset account
+is the supported path. An advanced custom workspace works only when it already
+contains Modal secrets named `powerset-openai` and `powerset-rapidapi` (or the
+RapidAPI backup override is configured). A local `OPENAI_API_KEY` alone is not
+forwarded into the sandbox. Decide the route in this order:
 
 1. **The request already answered it.** "… using my Powerset account" (or any
    explicit ask to use Powerset) → **Powerset route**, no question. An explicit
-   "without Powerset" / "my own keys" → **own-keys route**, no question.
+   "without Powerset" / "my own workspace" → **custom-workspace route**, no question.
 2. **Already logged in.** If `.env` exists, check:
 
    ```bash
@@ -146,11 +153,11 @@ the route, in this order:
 3. **Otherwise ask the user and wait** (consent gate):
 
    > Do you have a Powerset account you'd like to log in with? It provisions
-   > the Modal + OpenAI runtime keys this setup needs. If not, you'll need
-   > your own `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, and `OPENAI_API_KEY`
-   > in `.env`.
+   > the supported Modal workspace this setup needs. If not, you need your own
+   > Modal workspace with `powerset-openai` and `powerset-rapidapi` secrets
+   > already configured, plus a working token or Modal profile.
 
-   Yes → **Powerset route**. No → **own-keys route**.
+   Yes → **Powerset route**. No → **custom-workspace route**.
 
 **Powerset route only** — make sure `.env` carries the hosted Powerset config:
 
@@ -165,7 +172,7 @@ the public Powerset URL/Auth0 values with
 
 ### Step 2 — Log in (Powerset route, only if Step 1 said not logged in)
 
-Own-keys route, or already logged in: mark complete as a no-op. Otherwise:
+Custom-workspace route, or already logged in: mark complete as a no-op. Otherwise:
 
 ```bash
 cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
@@ -173,7 +180,7 @@ cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitive
 
 Browser consent. If it can't open, print the URL for the user. Re-run `whoami`.
 
-### Step 3 — Pull or verify runtime keys (Modal + OpenAI)
+### Step 3 — Pull or verify Modal access and provider secrets
 
 **Powerset route** — pull the user's provisioned keys:
 
@@ -183,14 +190,31 @@ cd "$REPO" && uv run --env-file .env --project . python packs/powerset/primitive
 
 Verify: `… pull_runtime_keys.py check --env-file .env`.
 
-**Own-keys route** — no provisioning call; verify the user's keys are present:
+**Custom-workspace route** — no provisioning call. The driver accepts Modal
+credentials from `.env` or an existing `~/.modal.toml` profile. Verify that the
+selected workspace is reachable and already contains the named
+`powerset-openai` secret. It also needs either a `powerset-rapidapi` secret or a
+non-empty local `RAPIDAPI_LINKEDIN_KEY_BACKUP` override. Create the local env
+file if the Modal profile is the only credential source, because the remaining
+setup commands consistently load it. `secret list --json` returns names and
+metadata, not secret values:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py check --env-file .env
+cd "$REPO"
+[ -f .env ] || { touch .env; chmod 600 .env; }
+uv run --env-file .env --project . modal secret list --json
 ```
 
-On `status: missing`, ask the user to add the missing keys to `.env`, then
-re-run the check. Do not proceed to Step 4 until it reports `ok`.
+Do not proceed until `powerset-openai` is present and either
+`powerset-rapidapi` is present or `RAPIDAPI_LINKEDIN_KEY_BACKUP` is configured.
+Check only whether the override is non-empty; never print its value. A local
+`OPENAI_API_KEY` does not create or replace the workspace OpenAI secret.
+
+**Current namespace limitation for either route:** `$setup` does not provision
+a user-specific `POWERPACKS_OPERATOR_ID`. If a workspace administrator supplied
+one, put it in `.env` before upload. Otherwise the driver uses an all-zero
+namespace. Surface that as single-operator/development behavior and do not
+claim multi-user input/run isolation.
 
 ### Step 4 — Import LinkedIn Connections.csv
 
@@ -298,7 +322,7 @@ JSON with `status` (`ok`/`fail`/`missing`), per-table row counts,
 ## Done
 
 Report a terse summary: credential route (logged in as <email> + keys pulled,
-or own Modal/OpenAI keys verified), LinkedIn imported, merged network of M
+or prepared custom Modal workspace verified), LinkedIn imported, merged network of M
 people, index validated. Remind the user that rerunning
 `$setup` reruns the whole checklist, and that **Gmail** (`$import-gmail`) and
 **iMessage/WhatsApp** (`$import-messages`) are separate skills that add their

@@ -264,18 +264,20 @@ Routes:
   The single people-search door: the agent makes the **Step-1 decision**
   (surface `people|company|sql|contacts`, backend `powerset|local`, depth
   `fast|deep`) per the SKILL's decision-rules block, records it to the run
-  dir's `decision.json`, then dispatches — JD/URL/deep asks → **`$search` deep
-  mode**, company → `$search-company`, relational/aggregate → `$search-sql`,
+  dir's `decision.json`, then dispatches — JD/job-posting URL/deep asks →
+  **`$search` deep mode**, company → `$search-company`, relational/aggregate → `$search-sql`,
   my/set contacts → `$search-contacts`, and ordinary people searches stay here
   on the fast local DuckDB / TurboPuffer path. Explicit words bind the backend:
   "powerset"/set/team network → TurboPuffer+Postgres, "local"/"offline"/
   "my imported network" → local DuckDB. The retrieval primitive is still
   `search_network_pipeline.py` (only the skill/route was renamed).
   **Deep mode** (job-posting URLs via `deep_search_loop.py --jd-url`, pasted JDs,
-  complex role briefs, "build a shortlist", "more people like <url>") loads
-  `packs/search/skills/search/deep-mode.md` and runs the deep-search engine — a
-  wide search of many small archetype probes + mixture-of-judges shortlist +
-  core-gate + expand-from-anchor + epoch convergence vs a judged ground-truth set.
+  complex role briefs, and "build a shortlist") loads
+  `packs/search/skills/search/deep-mode.md` and runs the deep-search engine: a
+  wide search of many small archetype probes, conservative triage, one selected
+  evidence judge, a deterministic core gate, and capped expand-from-anchor
+  epochs. A bare LinkedIn profile URL is a lookup, not a shipped profile-to-role
+  deep-search intake; ask for the role/domain if similarity search was intended.
 - `$search-company`, company lookup, company IDs, investor/funding/sector or
   company-set resolution → `packs/search/skills/search-company/SKILL.md`
 - `$search-sql`, relational/aggregate local people queries ("who overlapped
@@ -289,12 +291,13 @@ Routes:
 > people-search door: the agent-made Step-1 decision (recorded to `decision.json`; rules live in
 > the SKILL's decision-rules block and are benchmarked by the agent decision eval,
 > `packs/search/evals/run_decision_eval.py` on `packs/search/evals/decision/cases.json`) dispatches
-> to its own **deep mode** (JD / job-posting URL / role brief / shortlist / "more people like
-> <url>" → `packs/search/skills/search/deep-mode.md`, the deep-search engine), plus `$search-company`,
+> to its own **deep mode** (JD / job-posting URL / role brief / shortlist →
+> `packs/search/skills/search/deep-mode.md`, the deep-search engine), plus `$search-company`,
 > `$search-sql`, and `$search-contacts`, and keeps ordinary people searches on the fast local
 > DuckDB / TurboPuffer path. `$search-company` / `$search-sql` / `$search-contacts` remain
 > **distinct surfaces (kept, not folded)** — reached through `$search`'s router or directly.
-> **`$recruit` and `$search-profile` were removed** (folded into `$search` deep mode); the engine
+> **`$recruit` and `$search-profile` were removed**; recruiter/JD intake moved into `$search` deep
+> mode, while raw profile-to-role intake is not currently shipped. The engine
 > package is `packs/search/primitives/deep_search/`. `$search-network` stays a recognized deprecated
 > alias of `$search`. The retrieval primitive is still `search_network_pipeline.py` and the
 > `search-network-jd-*` schemas/tasks keep their names — only the skill routes were renamed.

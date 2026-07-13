@@ -11,7 +11,7 @@ materialization, and local search indexing are owned by
 | `$import-email` | `packs/ingestion/skills/import-email/SKILL.md` | `packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run --gmail-account-email ...` | Local msgvault Gmail/email metadata discovery | Gmail source folder |
 | `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py run ...` | Source discovery across LinkedIn CSV, msgvault email, and optionally existing message/Twitter artifacts | Fixed source folders |
 | `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run ...` | Twitter/X crawl, MOE, and LinkedIn validation smoke/import | Twitter source `people.csv` |
-| `$import-contacts` | `packs/messages/skills/import-contacts/SKILL.md` | messages pack primitives | iMessage/WhatsApp contact metadata import/review | Message contacts artifacts |
+| `$import-messages` | `packs/messages/skills/import-messages/SKILL.md` | messages pack primitives | iMessage/WhatsApp contact metadata import/review | Message contacts artifacts |
 | LinkedIn CSV inside `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py` called by orchestrator | LinkedIn `Connections.csv`, enrichment cache/API approval | LinkedIn source `people.csv` |
 
 ## Why skills are not the runtime handler

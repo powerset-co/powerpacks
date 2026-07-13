@@ -88,6 +88,9 @@ npm run dev:share
 User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 `SKILL.md` with the full workflow.
 
+Product and architecture walkthroughs live in the
+[`docs` hub](docs/README.md). GitHub renders the Mermaid diagrams directly.
+
 ### Search
 
 | Skill | Trigger | What it does |
@@ -95,14 +98,14 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 | [`search`](packs/search/skills/search/SKILL.md) | `$search <query-or-jd>` | The single people-search door. The agent records a Step-1 decision (`decision.json`: surface / backend / depth) and dispatches. Ordinary queries: one expansion → hybrid retrieval (TurboPuffer+Postgres or local DuckDB) → LLM filter/rerank, behind one confirm gate. A JD / job-posting URL / role brief runs **deep mode**: resolve the recruiter contract → automated critic → one human Review → wide source → conservative triage → one selected judge → core-gated shortlist → expand-from-anchor until converged. Deep sourcing supports both Powerset and local DuckDB; the in-loop SQL lane and automated judge panel are planned. See the [search architecture](packs/search/docs/search-architecture.md). |
 | [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
 | [`search-sql`](packs/search/skills/search-sql/SKILL.md) | `$search-sql <question>` | Agentic read-only SQL over the local search DuckDB, for relational/aggregate people queries the filter DSL can't express (overlap joins, per-person aggregates, career-shape predicates). |
-| [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds deterministic local indexing artifacts from `.powerpacks/network-import/merged/people.csv` under `.powerpacks/search-index/<run-id>/` with no remote calls. |
+| [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds the fixed local search index at `.powerpacks/search-index/local-search.duckdb` from the canonical merged people CSV without Modal, Postgres, or TurboPuffer. Planning is local-only; full builds may use configured providers for cache misses. |
 
 ### Setup
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
 | [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: one-command setup (Auth0 login + Powerset API runtime-key pull + MCP), credential refresh, setup status, Auth0 identity, MCP install, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
-| [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | App-first ingestion/product setup: launches the local onboarding UI for source linking, import, enrichment, and local search-index/DuckDB readiness. `$setup cli` keeps the deterministic primitive runner available. Keeps `$powerset` focused on login/env/MCP. |
+| [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | Deterministic LinkedIn-only setup: credentials, Modal profile enrichment, local source merge, Modal indexing, DuckDB download, and read-only validation. Gmail and messages remain separate import skills. |
 | [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$local-msg-vault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 
 ### Sales Nav
@@ -116,7 +119,7 @@ User-facing skill entrypoints, grouped by purpose. Each skill ships its own
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`import-contacts`](packs/messages/skills/import-contacts/SKILL.md) | `$import-contacts` | One-command guided harness for iMessage + WhatsApp import, merge, Powerset candidate sync, local matching, browser review, and queue prep. No bodies. |
+| [`import-messages`](packs/messages/skills/import-messages/SKILL.md) | `$import-messages` | Adds iMessage and WhatsApp contact metadata to the local index, matches/reviews identities, merges sources, and rebuilds the Modal-backed local index. No message bodies. |
 | [`import-whatsapp`](packs/messages/skills/import-whatsapp/SKILL.md) | `$import-whatsapp` | Isolated WhatsApp metadata import flow using `wacli` instead of WAHA. |
 
 ## Goal
@@ -171,7 +174,7 @@ powerpacks/
 │   │   │                   harnesses/, workflows/
 │   │   └── evals/          recall, company-search, founder parity
 │   └── messages/           iMessage + WhatsApp + Powerset enrichment
-│       ├── skills/         import-contacts
+│       ├── skills/         import-messages, import-whatsapp
 │       ├── primitives/     iMessage / WAHA / matching / LLM-review /
 │       │                   deep-research primitives
 │       ├── schemas/        message-contact, messages-run-manifest
@@ -223,7 +226,7 @@ codex mcp get powerset-search
 $search senior infra eng at fintech
 $search-company stripe-like fintech infra companies
 $powerset setup                   # login + .env pull + powerset-search MCP
-$import-contacts                  # guided iMessage + WhatsApp import harness
+$import-messages                  # guided iMessage + WhatsApp import harness
 $import-whatsapp                  # isolated WhatsApp sync test via wacli
 ```
 
@@ -234,7 +237,7 @@ $import-whatsapp                  # isolated WhatsApp sync test via wacli
 | Any skill | `uv`, git. Powerpacks uses uv-managed Python 3.12 from `.python-version`. |
 | `search` / `search-company` | `.env` populated with Powerpacks runtime secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `powerset setup` | Powerset/Auth0 account. Runtime keys are pulled from the Powerset API when provisioned. |
-| `import-contacts` | macOS Full Disk Access for iMessage, Docker for WhatsApp, WhatsApp phone QR scan, plus optional review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
+| `import-messages` | macOS Full Disk Access for iMessage, WhatsApp setup, plus optional review/research secrets; see [Secrets / env vars](#secrets--env-vars). |
 | `sales-nav-search` | `$powerset setup` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
 | `build-outbound` | `APOLLO_API_KEY` in `.env` or shell, connected Apollo email account/schedule, and a Sales Nav run or manifest. Node/npx is only needed for MCP setup/status. |
 
@@ -394,7 +397,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 | `powerset setup` | Type `$powerset setup` — the agent should run the doctor, handle missing login, pull runtime keys, and finish with `mcp_install`. |
 | `search` | `$search senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
-| `import-contacts` | `$import-contacts` — should show a task checklist, ask once for local metadata import consent, then run until permissions/QR/cost approval are needed. |
+| `import-messages` | `$import-messages` — should show a task checklist, ask once for local metadata import consent, then run until permissions/QR/cost approval are needed. |
 | `import-whatsapp` | `$import-whatsapp` — should install/find wacli, show QR if needed, sync once, and export WhatsApp metadata. |
 
 If the agent host doesn't see a skill at all: re-run `./install.sh <host>`
@@ -432,11 +435,15 @@ secrets for provisioned Powerset users. The Google Cloud CLI is still used by
 the separate msgvault/Gmail OAuth app setup flow, not by Powerset runtime-key
 pull.
 
-## Task Flow
+## Architecture
 
-See `packs/search/docs/task-flow.md` for the current search task lifecycle,
-the parallel `expand_search_request` boundary, and the difference between
-primitive parity and pipeline eval harnesses.
+Start at [`docs/README.md`](docs/README.md). The canonical product guides are:
+
+- [`$search` architecture](packs/search/docs/search-architecture.md)
+- [LinkedIn and Modal indexing pipeline](packs/indexing/docs/linkedin-modal-pipeline.md)
+
+Historical task-flow and design-plan documents remain in their pack directories
+for implementation context, but they are not current product contracts.
 
 ## Development
 

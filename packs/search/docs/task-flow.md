@@ -1,5 +1,9 @@
 # Powerpacks Task Flow
 
+> **Legacy V1 design reference.** This is not the current task lifecycle. See
+> the canonical [`$search` architecture](search-architecture.md) and executable
+> [`$search` skill](../skills/search/SKILL.md).
+
 Powerpacks separates agent reasoning from deterministic execution.
 
 ## Current Flow
