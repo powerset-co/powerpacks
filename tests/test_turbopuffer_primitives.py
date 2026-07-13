@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import jsonschema
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIMITIVES = ROOT / "packs/search/primitives"
@@ -64,6 +66,23 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("role_track", "In", ["engineering"]), filters[1])
         self.assertIn(("is_current", "Eq", True), filters[1])
         self.assertIn(("total_years_experience", "Gte", 3), filters[1])
+
+    def test_required_location_families_can_be_conjunctive(self) -> None:
+        filters = turbopuffer_client.filters_from_role_payload({
+            "cities": ["London"],
+            "countries": ["United Kingdom"],
+            "location_filter_mode": "all",
+        })
+        self.assertEqual(filters[0], "And")
+        self.assertIn(("city", "In", ["London"]), filters[1])
+        self.assertIn(("country", "In", ["United Kingdom"]), filters[1])
+
+        schema = json.loads((ROOT / "packs/search/schemas/role-search-filters.schema.json").read_text())
+        jsonschema.validate({
+            "cities": ["London"],
+            "countries": ["United Kingdom"],
+            "location_filter_mode": "all",
+        }, schema)
 
     def test_position_window_converts_to_overlap_filters(self) -> None:
         filters = turbopuffer_client.filters_from_role_payload(

@@ -41,6 +41,7 @@ rl = _load("deep_search_loop")
 fj = _load("fetch_jd")
 ms = _load("micro_sort_shortlist")
 pc = _load("plan_critic")
+ls = _load("location_scope")
 
 
 class TestSubprocessUtils(unittest.TestCase):
@@ -71,7 +72,10 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
             # rsg.CommandError (not su.CommandError): run_wide_search's except binds its own import.
             boom = rsg.CommandError(["prepare"], returncode=1, description="prepare probe q00")
             with mock.patch.object(rsg, "run_checked", side_effect=boom):
-                result = rsg._prepare({"key": "q00", "query": "flaky"}, probe_dir, ".env", True, "powerset", None)
+                result = rsg._prepare(
+                    {"key": "q00", "query": "flaky", "required_location": "", "location_filters": {}},
+                    probe_dir, ".env", True, "powerset", None,
+                )
         self.assertIsNone(result)  # tolerated (dropped by ok_seeds), not propagated
 
     def test_prepare_returns_payload_path_on_success(self):
@@ -82,9 +86,100 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
             prep.mkdir(parents=True)
             (prep / "expand_search_request.json").write_text("{}")
             with mock.patch.object(rsg, "run_checked", return_value=None):
-                dest = rsg._prepare({"key": "q00", "query": "ok"}, probe_dir, ".env", True, "powerset", None)
+                dest = rsg._prepare(
+                    {"key": "q00", "query": "ok", "required_location": "", "location_filters": {}},
+                    probe_dir, ".env", True, "powerset", None,
+                )
             self.assertEqual(dest, probe_dir / "payload.json")
             self.assertTrue((probe_dir / "payload.json").exists())
+
+    def test_prepare_rejects_seed_without_reviewed_location_metadata(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            with mock.patch.object(rsg, "run_checked") as run_checked:
+                result = rsg._prepare(
+                    {"key": "q00", "query": "unbound"},
+                    probe_dir, ".env", True, "powerset", None,
+                )
+        self.assertIsNone(result)
+        run_checked.assert_not_called()
+
+    def test_prepare_rejects_required_location_with_empty_filters_before_spend(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            with mock.patch.object(rsg, "run_checked") as run_checked:
+                result = rsg._prepare(
+                    {
+                        "key": "q00", "query": "unbound",
+                        "required_location": "San Francisco", "location_filters": {},
+                    },
+                    probe_dir, ".env", True, "powerset", None,
+                )
+        self.assertIsNone(result)
+        run_checked.assert_not_called()
+
+    def test_prepare_overwrites_model_geo_with_required_location(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            prep = probe_dir / "prep" / "sub"
+            prep.mkdir(parents=True)
+            (prep / "expand_search_request.json").write_text(json.dumps({
+                "role_search_filters": {
+                    "cities": ["New York"],
+                    "countries": ["United States"],
+                    "company_cities": ["Boston"],
+                    "company_metro_areas": ["New York Metropolitan Area"],
+                }
+            }))
+            seed = {
+                "key": "q00", "query": "finance builder", "required_location": "San Francisco Bay Area",
+                "location_filters": {"metro_areas": ["San Francisco Bay Area"]},
+            }
+            with mock.patch.object(rsg, "run_checked", return_value=None):
+                dest = rsg._prepare(seed, probe_dir, ".env", True, "powerset", None)
+
+            filters = json.loads(dest.read_text())["role_search_filters"]
+            self.assertEqual(filters["metro_areas"], ["San Francisco Bay Area"])
+            self.assertNotIn("cities", filters)
+            self.assertNotIn("countries", filters)
+            self.assertNotIn("company_cities", filters)
+            self.assertNotIn("company_metro_areas", filters)
+
+    def test_prepare_approved_global_clears_model_geo(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            prep = probe_dir / "prep" / "sub"
+            prep.mkdir(parents=True)
+            (prep / "expand_search_request.json").write_text(json.dumps({
+                "role_search_filters": {"cities": ["New York"]}
+            }))
+            seed = {"key": "q00", "query": "finance builder", "required_location": "", "location_filters": {}}
+            with mock.patch.object(rsg, "run_checked", return_value=None):
+                dest = rsg._prepare(seed, probe_dir, ".env", True, "powerset", None)
+
+            filters = json.loads(dest.read_text())["role_search_filters"]
+            self.assertNotIn("cities", filters)
+
+    def test_prepare_rejects_hard_filters_that_bypass_required_geo(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            prep = probe_dir / "prep" / "sub"
+            prep.mkdir(parents=True)
+            (prep / "expand_search_request.json").write_text(json.dumps({
+                "role_search_filters": {"hard_filters": {"field": "role_track", "op": "Eq", "value": "Finance"}}
+            }))
+            seed = {
+                "key": "q00", "query": "finance", "required_location": "San Francisco Bay Area",
+                "location_filters": {"metro_areas": ["San Francisco Bay Area"]},
+            }
+            with mock.patch.object(rsg, "run_checked", return_value=None):
+                dest = rsg._prepare(seed, probe_dir, ".env", True, "powerset", None)
+        self.assertIsNone(dest)
 
     def test_run_returns_false_on_probe_failure_instead_of_raising(self):
         rsg = _load("run_wide_search")
@@ -94,7 +189,10 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
             (probe_dir / "payload.json").write_text(json.dumps({"role_search_filters": {}}))
             boom = rsg.CommandError(["run"], returncode=1, description="run probe q00")
             with mock.patch.object(rsg, "run_checked", side_effect=boom):
-                ok = rsg._run({"key": "q00", "query": "flaky"}, probe_dir, "set-123", ".env", 200, 6000, "powerset", None)
+                ok = rsg._run(
+                    {"key": "q00", "query": "flaky", "required_location": "", "location_filters": {}},
+                    probe_dir, "set-123", ".env", 200, 6000, "powerset", None,
+                )
         self.assertFalse(ok)  # tolerated (build_union skips the missing ledger), not propagated
 
     def test_run_returns_true_on_success(self):
@@ -104,8 +202,165 @@ class TestRunWideSearchPartialFailure(unittest.TestCase):
             probe_dir.mkdir(parents=True)
             (probe_dir / "payload.json").write_text(json.dumps({"role_search_filters": {}}))
             with mock.patch.object(rsg, "run_checked", return_value=None):
-                ok = rsg._run({"key": "q00", "query": "ok"}, probe_dir, None, ".env", 200, 6000, "powerset", None)
+                ok = rsg._run(
+                    {"key": "q00", "query": "ok", "required_location": "", "location_filters": {}},
+                    probe_dir, None, ".env", 200, 6000, "powerset", None,
+                )
         self.assertTrue(ok)
+
+    def test_run_discards_completed_ledger_before_fresh_payload(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            probe_dir.mkdir(parents=True)
+            (probe_dir / "payload.json").write_text(json.dumps({"role_search_filters": {}}))
+            ledger = probe_dir / "ledger.json"
+            ledger.write_text(json.dumps({"steps": [{"id": "execute_role_search", "status": "completed"}]}))
+
+            def fake_run(*args, **kwargs):
+                self.assertFalse(ledger.exists())
+                ledger.write_text(json.dumps({"artifacts": {}}))
+
+            with mock.patch.object(rsg, "run_checked", side_effect=fake_run):
+                ok = rsg._run(
+                    {"key": "q00", "query": "fresh", "required_location": "", "location_filters": {}},
+                    probe_dir, None, ".env", 200, 6000, "powerset", None,
+                )
+        self.assertTrue(ok)
+
+    def test_run_reasserts_required_location_after_diversification(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            probe_dir = Path(td) / "probes" / "q00"
+            probe_dir.mkdir(parents=True)
+            payload = probe_dir / "payload.json"
+            payload.write_text(json.dumps({"role_search_filters": {"cities": ["New York"]}}))
+            seed = {
+                "key": "q00", "query": "finance", "required_location": "San Francisco Bay Area",
+                "location_filters": {"metro_areas": ["San Francisco Bay Area"]},
+            }
+            with mock.patch.object(rsg, "run_checked", return_value=None):
+                ok = rsg._run(seed, probe_dir, None, ".env", 200, 6000, "local", "x.duckdb")
+
+            filters = json.loads(payload.read_text())["role_search_filters"]
+        self.assertTrue(ok)
+        self.assertEqual(filters["metro_areas"], ["San Francisco Bay Area"])
+        self.assertNotIn("cities", filters)
+
+    def test_union_preserves_canonical_headline_and_position_title_for_anchors(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            probe_dir = run_dir / "probes" / "q00"
+            probe_dir.mkdir(parents=True)
+            profiles = run_dir / "llm_profiles.jsonl"
+            profiles.write_text(json.dumps({
+                "person_id": "p1",
+                "headline": "Strategic finance builder",
+                "positions": [{
+                    "position_title": "Director of FP&A",
+                    "company_name": "CloudCo",
+                    "company_description": "GPU cloud platform",
+                }],
+            }) + "\n")
+            results = run_dir / "results.csv"
+            with results.open("w", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=[
+                    "rank", "person_id", "name", "linkedin_url", "current_titles",
+                    "current_companies", "location",
+                ])
+                writer.writeheader()
+                writer.writerow({
+                    "rank": 1, "person_id": "p1", "name": "Fran",
+                    "current_titles": "Director of FP&A", "current_companies": "CloudCo",
+                    "location": "San Rafael, California, United States",
+                })
+            retrieval = run_dir / "retrieval.json"
+            retrieval.write_text(json.dumps({
+                "namespace": "aleph_people_v1",
+                "candidates": [{
+                    "person_id": "p1", "city": "San Rafael", "state": "California",
+                    "country": "United States", "macro_region": "Americas",
+                    "metro_areas": ["San Francisco Bay Area"],
+                }],
+            }))
+            (probe_dir / "ledger.json").write_text(json.dumps({
+                "artifacts": {
+                    "llm_profiles_path": str(profiles), "csv": str(results),
+                    "retrieval_artifact": str(retrieval),
+                }
+            }))
+
+            union = rsg.build_union(run_dir, [{"key": "q00", "query": "finance"}], keep=10)
+
+        self.assertEqual(union[0]["headline"], "Strategic finance builder")
+        self.assertEqual(union[0]["positions"][0]["position_title"], "Director of FP&A")
+        self.assertEqual(union[0]["location_fields"]["city"], "San Rafael")
+        self.assertEqual(union[0]["location_fields"]["metro_areas"], ["San Francisco Bay Area"])
+
+    def test_union_rejects_missing_or_corrupt_structured_retrieval_provenance(self):
+        rsg = _load("run_wide_search")
+        for kind in ("missing", "corrupt"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as td:
+                run_dir = Path(td)
+                probe_dir = run_dir / "probes" / "q00"
+                probe_dir.mkdir(parents=True)
+                results = run_dir / "results.csv"
+                with results.open("w", newline="") as fh:
+                    writer = csv.DictWriter(fh, fieldnames=[
+                        "rank", "person_id", "name", "linkedin_url", "current_titles",
+                        "current_companies", "location",
+                    ])
+                    writer.writeheader()
+                    writer.writerow({
+                        "rank": 1, "person_id": "p1", "name": "Fran",
+                        "location": "San Francisco, California, United States",
+                    })
+                retrieval = run_dir / "retrieval.json"
+                if kind == "corrupt":
+                    retrieval.write_text("{")
+                (probe_dir / "ledger.json").write_text(json.dumps({
+                    "artifacts": {
+                        "csv": str(results),
+                        "retrieval_artifact": str(retrieval),
+                    },
+                }))
+
+                union = rsg.build_union(
+                    run_dir, [{"key": "q00", "query": "finance"}], keep=10,
+                )
+
+                self.assertEqual(union, [])
+
+    def test_union_marks_missing_candidate_geo_as_authoritative_unknown(self):
+        rsg = _load("run_wide_search")
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            probe_dir = run_dir / "probes" / "q00"
+            probe_dir.mkdir(parents=True)
+            results = run_dir / "results.csv"
+            with results.open("w", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=["rank", "person_id", "location"])
+                writer.writeheader()
+                writer.writerow({
+                    "rank": 1, "person_id": "p1",
+                    "location": "San Francisco, California, United States",
+                })
+            retrieval = run_dir / "retrieval.json"
+            retrieval.write_text(json.dumps({"candidates": [{"person_id": "p1"}]}))
+            (probe_dir / "ledger.json").write_text(json.dumps({
+                "artifacts": {"csv": str(results), "retrieval_artifact": str(retrieval)},
+            }))
+
+            union = rsg.build_union(
+                run_dir, [{"key": "q00", "query": "finance"}], keep=10,
+            )
+
+        self.assertEqual(union[0]["location_fields"], {})
+        self.assertEqual(
+            ls.location_fit({"metro_areas": ["San Francisco Bay Area"]}, union[0]),
+            "unknown",
+        )
 
 
 class TestLocalBackendThreading(unittest.TestCase):
@@ -168,7 +423,7 @@ class TestLocalBackendThreading(unittest.TestCase):
     def test_robust_source_parser_accepts_local_backend(self):
         args = self._parse_with_real_parser(
             rs,
-            ["robust", "--jd-file", "jd.txt", "--run-dir", "run",
+            ["robust", "--jd-file", "jd.txt", "--plan", "plan.json", "--run-dir", "run",
              "--backend", "local", "--db", "x.duckdb"],
         )
         self.assertEqual(args.backend, "local")
@@ -195,26 +450,270 @@ class TestDecomposeJd(unittest.TestCase):
         self.assertIn("Build RAG systems", msgs[-1]["content"])
         self.assertIn("7", msgs[-1]["content"])
 
-    def test_location_mix_geo_first_with_global_hedge(self):
+    def test_non_null_location_applies_to_every_seed(self):
         seeds = [{"key": f"q{i:02d}", "query": f"seed {i}."} for i in range(8)]
-        geo = dj.apply_location_mix(seeds, "San Francisco Bay Area")
-        self.assertEqual(geo, 6)  # every 4th seed stays global
-        self.assertIn("based in San Francisco Bay Area", seeds[0]["query"])
-        self.assertNotIn("based in", seeds[3]["query"])  # the hedge seeds
-        self.assertNotIn("based in", seeds[7]["query"])
-        self.assertNotIn("..", seeds[0]["query"])  # trailing period stripped before suffix
+        geo = dj.apply_location_scope(
+            seeds, "San Francisco Bay Area", {"metro_areas": ["San Francisco Bay Area"]},
+        )
+        self.assertEqual(geo, 8)
+        self.assertTrue(all(seed["required_location"] == "San Francisco Bay Area" for seed in seeds))
+        self.assertTrue(all("based in" not in seed["query"] for seed in seeds))
 
     def test_location_mix_noop_when_empty(self):
         seeds = [{"key": "q00", "query": "seed 0."}]
-        self.assertEqual(dj.apply_location_mix(seeds, ""), 0)
-        self.assertEqual(dj.apply_location_mix(seeds, "   "), 0)
+        self.assertEqual(dj.apply_location_scope(seeds, "", {}), 0)
+        self.assertEqual(dj.apply_location_scope(seeds, "   ", {}), 0)
         self.assertEqual(seeds[0]["query"], "seed 0.")
+        self.assertEqual(seeds[0]["required_location"], "")
+        self.assertEqual(seeds[0]["location_filters"], {})
 
-    def test_approved_null_location_beats_model_reextraction(self):
-        plan = {"search_scope": {"location": None}}
-        self.assertEqual(dj.resolve_location(None, plan, "San Francisco Bay Area"), "")
-        self.assertEqual(dj.resolve_location(None, None, "San Francisco Bay Area"), "San Francisco Bay Area")
-        self.assertEqual(dj.resolve_location("global", plan, "San Francisco Bay Area"), "")
+    def test_invalid_approved_plan_fails_before_model_client(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = Path(td) / "plan.json"
+            plan.write_text(json.dumps({
+                "search_scope": {"location": "San Francisco", "filters": {}},
+            }))
+            argv = sys.argv
+            sys.argv = [
+                "decompose", "--jd", "Build finance systems", "--plan", str(plan),
+                "--api-key", "test", "--out", str(Path(td) / "seeds.json"),
+            ]
+            try:
+                with mock.patch.object(dj, "make_openai_client") as client:
+                    with self.assertRaises(SystemExit) as ctx:
+                        dj.main()
+                self.assertEqual(ctx.exception.code, 1)
+                client.assert_not_called()
+            finally:
+                sys.argv = argv
+
+    def test_malformed_plan_shapes_fail_cleanly_before_model_client(self):
+        for document in ([1], {"search_scope": True}):
+            with self.subTest(document=document), tempfile.TemporaryDirectory() as td:
+                plan = Path(td) / "plan.json"
+                plan.write_text(json.dumps(document))
+                argv = sys.argv
+                sys.argv = [
+                    "decompose", "--jd", "Build finance systems", "--plan", str(plan),
+                    "--api-key", "test", "--out", str(Path(td) / "seeds.json"),
+                ]
+                try:
+                    with mock.patch.object(dj, "make_openai_client") as client:
+                        with self.assertRaises(SystemExit) as ctx:
+                            dj.main()
+                    self.assertEqual(ctx.exception.code, 1)
+                    client.assert_not_called()
+                finally:
+                    sys.argv = argv
+
+class TestRequiredLocationScope(unittest.TestCase):
+    def test_metro_match_is_strict_and_missing_fails_closed(self):
+        required = {"metro_areas": ["San Francisco Bay Area"]}
+        self.assertEqual(ls.location_fit(required, "San Francisco, California, United States"), "match")
+        self.assertEqual(ls.location_fit(required, "Palo Alto, California, United States"), "match")
+        self.assertEqual(ls.location_fit(required, "San Mateo, California, United States"), "match")
+        self.assertEqual(ls.location_fit(required, "Santa Monica, California, United States"), "mismatch")
+        self.assertEqual(ls.location_fit(required, None), "unknown")
+
+    def test_null_scope_does_not_gate(self):
+        self.assertEqual(ls.location_fit({}, None), "not_required")
+
+    def test_approved_global_aliases_must_be_literal_null(self):
+        self.assertIsNone(ls.required_location_from_plan({"search_scope": {"location": None, "filters": {}}}))
+        for alias in ("", "global", "remote", "worldwide", "anywhere"):
+            with self.subTest(alias=alias):
+                with self.assertRaises(ValueError):
+                    ls.required_location_from_plan({"search_scope": {"location": alias, "filters": {}}})
+
+    def test_approved_scope_requires_filter_contract_even_when_global(self):
+        with self.assertRaisesRegex(ValueError, "filters is required"):
+            ls.location_scope_from_plan({"search_scope": {"location": None}})
+        with self.assertRaisesRegex(ValueError, "must be an object"):
+            ls.location_scope_from_plan({"search_scope": {"location": None, "filters": []}})
+
+    def test_reviewed_structured_scopes_cover_regions_states_and_cities(self):
+        europe = {"macro_regions": ["Western Europe", "Eurasia"]}
+        self.assertEqual(ls.location_fit(europe, "Berlin, Germany"), "match")
+        self.assertEqual(ls.location_fit(europe, "San Francisco, California, United States"), "mismatch")
+        self.assertEqual(
+            ls.location_fit({"states": ["Ontario"], "countries": ["Canada"]}, "Toronto, Ontario, Canada"),
+            "match",
+        )
+        london = {"cities": ["London"], "countries": ["United Kingdom"]}
+        self.assertEqual(ls.location_fit(london, "London, England, United Kingdom"), "match")
+        self.assertEqual(ls.location_fit(london, "London, Ontario, Canada"), "mismatch")
+        africa = ls.canonicalize_generated_location_filters("Africa", {"macro_regions": ["Africa"]})
+        oceania = ls.canonicalize_generated_location_filters("Oceania", {"macro_regions": ["Oceania"]})
+        self.assertEqual(ls.location_fit(africa, "Accra, Ghana"), "match")
+        self.assertEqual(ls.location_fit(oceania, "Sydney, New South Wales, Australia"), "match")
+
+    def test_reviewed_city_scope_requires_country_qualifier(self):
+        with self.assertRaisesRegex(ValueError, "country qualifier"):
+            ls.location_scope_from_plan({
+                "search_scope": {
+                    "location": "London, UK",
+                    "filters": {"cities": ["London"]},
+                }
+            })
+
+    def test_generated_scope_canonicalizes_aliases_before_review(self):
+        self.assertEqual(
+            ls.canonicalize_generated_location_filters(
+                "London, UK", {"cities": ["London"], "countries": ["UK"]},
+            ),
+            {"cities": ["London"], "countries": ["United Kingdom"]},
+        )
+        self.assertEqual(
+            ls.canonicalize_location_filters({"states": ["CA"], "countries": ["US"]}),
+            {"states": ["California"], "countries": ["United States"]},
+        )
+        self.assertEqual(
+            ls.canonicalize_location_filters({"metro_areas": ["New York City metropolitan area"]}),
+            {"metro_areas": ["New York Metropolitan Area"]},
+        )
+        self.assertEqual(
+            ls.canonicalize_location_filters({"metro_areas": ["London Metropolitan Area"]}),
+            {"metro_areas": ["London Metropolitan Area"]},
+        )
+        self.assertEqual(
+            ls.canonicalize_generated_location_filters(
+                "New York City", {"cities": ["New York City"], "countries": ["US"]},
+            ),
+            {"cities": ["New York"], "countries": ["United States"]},
+        )
+        self.assertEqual(
+            ls.canonicalize_generated_location_filters("Europe", {"macro_regions": ["Europe"]}),
+            {"macro_regions": ["Western Europe", "Eurasia"]},
+        )
+
+    def test_every_local_canonical_metro_is_idempotent(self):
+        mapping = json.loads(ls.LOCATION_MAPPING_FILE.read_text(encoding="utf-8"))
+        metros = {
+            value
+            for values in mapping["city_to_metro"].values()
+            for value in (values if isinstance(values, list) else [values])
+        }
+        for metro in sorted(metros):
+            with self.subTest(metro=metro):
+                self.assertEqual(
+                    ls.canonicalize_location_filters({"metro_areas": [metro]}),
+                    {"metro_areas": [metro]},
+                )
+
+    def test_city_canonicalization_is_field_aware_and_review_idempotent(self):
+        filters = ls.canonicalize_generated_location_filters(
+            "New York City", {"cities": ["New York City"], "countries": ["US"]},
+        )
+        self.assertEqual(filters, {"cities": ["New York"], "countries": ["United States"]})
+        self.assertEqual(
+            ls.location_scope_from_plan({
+                "search_scope": {"location": "New York City", "filters": filters},
+            }),
+            ("New York City", filters),
+        )
+        for city, country in (("Washington", "United States"), ("Victoria", "Canada")):
+            with self.subTest(city=city):
+                expected = {"cities": [city], "countries": [country]}
+                self.assertEqual(
+                    ls.location_scope_from_plan({
+                        "search_scope": {
+                            "location": ls.canonical_location_label(expected), "filters": expected,
+                        },
+                    })[1],
+                    expected,
+                )
+
+    def test_approved_scope_rejects_noncanonical_or_conflicting_filters(self):
+        with self.assertRaisesRegex(ValueError, "canonical values"):
+            ls.location_scope_from_plan({
+                "search_scope": {"location": "California", "filters": {"states": ["CA"], "countries": ["US"]}}
+            })
+        with self.assertRaisesRegex(ValueError, "conflict"):
+            ls.location_scope_from_plan({
+                "search_scope": {"location": "San Francisco Bay Area", "filters": {"countries": ["Germany"]}}
+            })
+        for location, filters in (
+            ("Americas", {"macro_regions": ["APAC"]}),
+            ("Middle East", {"macro_regions": ["Western Europe"]}),
+            ("United States", {"countries": ["United States", "Germany"]}),
+            ("London, UK", {"cities": ["London"], "countries": ["United Kingdom", "Canada"]}),
+        ):
+            with self.subTest(location=location):
+                with self.assertRaises(ValueError):
+                    ls.location_scope_from_plan({
+                        "search_scope": {"location": location, "filters": filters}
+                    })
+
+    def test_cross_country_multi_office_scope_must_use_metros(self):
+        with self.assertRaisesRegex(ValueError, "exactly one country"):
+            ls.location_scope_from_plan({
+                "search_scope": {
+                    "location": "Vancouver or Portland",
+                    "filters": {
+                        "cities": ["Vancouver", "Portland"],
+                        "countries": ["Canada", "United States"],
+                    },
+                }
+            })
+        metros = {"metro_areas": ["Vancouver Metropolitan Area", "Portland Metropolitan Area"]}
+        label = ls.canonical_location_label(metros)
+        self.assertEqual(
+            ls.location_scope_from_plan({"search_scope": {"location": label, "filters": metros}}),
+            (label, metros),
+        )
+        with self.assertRaisesRegex(ValueError, "conflict|broaden"):
+            ls.location_scope_from_plan({
+                "search_scope": {"location": "Vancouver or Portland", "filters": metros},
+            })
+
+    def test_reviewed_label_cannot_be_silently_broadened_or_contradicted(self):
+        cases = (
+            ("San Francisco Bay Area", {"countries": ["United States"]}),
+            ("London, UK", {"countries": ["United Kingdom"]}),
+            ("California", {"countries": ["United States"]}),
+            ("San Francisco, CA", {"states": ["California"], "countries": ["United States"]}),
+            ("San Francisco", {"countries": ["Germany"]}),
+            ("San Francisco", {"metro_areas": ["San Francisco Bay Area"]}),
+            ("Remote US", {"countries": ["Germany"]}),
+        )
+        for location, filters in cases:
+            with self.subTest(location=location):
+                with self.assertRaisesRegex(ValueError, "conflict|broaden"):
+                    ls.location_scope_from_plan({
+                        "search_scope": {"location": location, "filters": filters},
+                    })
+
+    def test_ambiguous_state_abbreviations_need_country_context(self):
+        with self.assertRaisesRegex(ValueError, "country"):
+            ls.canonicalize_generated_location_filters("Perth, WA", {"cities": ["Perth"]})
+        self.assertEqual(
+            ls.canonicalize_generated_location_filters(
+                "Perth, WA", {"cities": ["Perth"], "countries": ["Australia"]},
+            ),
+            {"cities": ["Perth"], "countries": ["Australia"]},
+        )
+        self.assertEqual(
+            ls.location_fit(
+                {"cities": ["Perth"], "countries": ["Australia"]}, "Perth, WA",
+            ),
+            "unknown",
+        )
+
+    def test_broad_continent_scopes_are_country_unions_for_both_backends(self):
+        africa = ls.canonicalize_generated_location_filters("Africa", {"macro_regions": ["Africa"]})
+        oceania = ls.canonicalize_generated_location_filters("Oceania", {"macro_regions": ["Oceania"]})
+        latin_america = ls.canonicalize_generated_location_filters(
+            "Latin America", {"macro_regions": ["Latin America"]},
+        )
+        self.assertIn("Ghana", africa["countries"])
+        self.assertIn("Australia", oceania["countries"])
+        self.assertIn("Brazil", latin_america["countries"])
+        self.assertNotIn("United States", latin_america["countries"])
+        mixed = ls.canonicalize_generated_location_filters(
+            "Africa or Middle East", {"macro_regions": ["Africa", "Middle East"]},
+        )
+        self.assertIn("Ghana", mixed["countries"])
+        self.assertIn("Israel", mixed["countries"])
 
 
 class TestMicroSortShortlist(unittest.TestCase):
@@ -286,13 +785,18 @@ class TestPlanCritic(unittest.TestCase):
         self.assertTrue(pc.supports_custom_temperature("gpt-4o"))
 
     def test_deterministic_checks_flag_off_enum_stage_and_missing_core(self):
-        issues = pc.deterministic_checks({"hire_stage": "growth", "traits": {"must_have": [{"trait": "x", "tier": "table_stakes"}]}})
+        issues = pc.deterministic_checks({
+            "hire_stage": "growth",
+            "search_scope": {"location": None, "filters": {}},
+            "traits": {"must_have": [{"trait": "x", "tier": "table_stakes"}]},
+        })
         self.assertEqual(len(issues), 2)
         self.assertIn("off-enum", issues[0])
         self.assertIn("core", issues[1])
 
     def test_deterministic_checks_pass_valid_plan(self):
         issues = pc.deterministic_checks({"hire_stage": "founding_early",
+                                          "search_scope": {"location": None, "filters": {}},
                                           "traits": {"must_have": [{"trait": "x", "tier": "core"}]},
                                           "core_groups": [{"name": "default", "all_of": ["x"]}]})
         self.assertEqual(issues, [])
@@ -301,16 +805,95 @@ class TestPlanCritic(unittest.TestCase):
 class TestExpandFromAnchor(unittest.TestCase):
     def test_anchor_to_seed_from_profile(self):
         prof = {"name": "Ada", "headline": "AI Engineer at Notion",
-                "positions": [{"title": "AI Engineer", "company_name": "Notion", "company_description": "productivity"}],
-                "tech_skills": ["RAG", "LLM"]}
-        seed = ea.anchor_to_seed(prof)
+                "positions": [{"position_title": "AI Engineer", "company_name": "Notion",
+                               "company_description": "productivity software"}]}
+        plan = {"normalized_archetype": "AI infrastructure engineer",
+                "search_scope": {
+                    "location": "San Francisco Bay Area",
+                    "filters": {"metro_areas": ["San Francisco Bay Area"]},
+                },
+                "traits": {"must_have": []}}
+        seed = ea.anchor_to_seed(prof, plan)
         self.assertEqual(seed["anchor"], "Ada")
-        self.assertIn("Notion", seed["query"])
-        self.assertIn("proven-strong profile", seed["query"])
+        self.assertIn("AI infrastructure engineer", seed["query"])
+        self.assertIn("AI Engineer", seed["query"])
+        self.assertIn("proven-strong match", seed["query"])
+        self.assertEqual(seed["required_location"], "San Francisco Bay Area")
+        self.assertNotIn("based in", seed["query"])
+        self.assertNotIn("productivity software", seed["query"])
 
     def test_anchor_to_seed_fallback_and_none(self):
-        self.assertIn("Acme", ea.anchor_to_seed({"current_title": "Eng", "current_company": "Acme"})["query"])
+        self.assertIn("Eng", ea.anchor_to_seed({"current_title": "Eng", "current_company": "Acme"})["query"])
         self.assertIsNone(ea.anchor_to_seed({"name": "x"}))  # no usable text
+
+    def test_reviewed_global_anchor_carries_explicit_empty_scope(self):
+        seed = ea.anchor_to_seed(
+            {"name": "Fran", "current_title": "Finance Lead"},
+            {"job_title": "Finance Lead", "search_scope": {"location": None, "filters": {}}, "traits": {}},
+        )
+        self.assertIn("required_location", seed)
+        self.assertEqual(seed["required_location"], "")
+
+    def test_cli_requires_approved_plan(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            anchors = root / "anchors.json"
+            anchors.write_text("[]")
+            argv = sys.argv
+            sys.argv = ["expand", "--anchors", str(anchors), "--out", str(root / "seeds.json")]
+            try:
+                with self.assertRaises(SystemExit) as ctx:
+                    ea.main()
+                self.assertEqual(ctx.exception.code, 2)
+            finally:
+                sys.argv = argv
+
+    def test_finance_anchor_uses_plan_and_judged_core_evidence(self):
+        plan = {
+            "job_title": "Strategic Finance Lead",
+            "normalized_archetype": "strategic finance leader",
+            "search_scope": {
+                "location": "San Francisco Bay Area",
+                "filters": {"metro_areas": ["San Francisco Bay Area"]},
+            },
+            "traits": {"must_have": [
+                {"trait": "build operating P&L models", "tier": "core"},
+                {"trait": "translate infrastructure costs into pricing", "tier": "core"},
+                {"trait": "prepare board materials", "tier": "table_stakes"},
+            ]},
+        }
+        anchor = {
+            "name": "Fran",
+            "current_title": "Head of Strategic Finance",
+            "positions": [{
+                "position_title": "Director of FP&A",
+                "company_name": "CloudCo",
+                "company_description": "GPU cloud engineers building distributed systems",
+            }],
+            "per_judge": {"loop": {"must_have": [
+                {"trait": "build operating P&L models", "status": "doing_now",
+                 "evidence": "Built the first operating model and unit economics from scratch."},
+                {"trait": "translate infrastructure costs into pricing", "status": "capable",
+                 "evidence": "Adjacent exposure only."},
+                {"trait": "prepare board materials", "status": "experienced",
+                 "evidence": "Prepared board decks."},
+            ]}},
+        }
+
+        seed = ea.anchor_to_seed(anchor, plan)
+
+        self.assertIn("strategic finance leader", seed["query"])
+        self.assertIn("Head of Strategic Finance", seed["query"])
+        self.assertIn("Director of FP&A", seed["query"])
+        self.assertIn("build operating P&L models", seed["query"])
+        self.assertIn("Built the first operating model", seed["query"])
+        self.assertEqual(seed["required_location"], "San Francisco Bay Area")
+        self.assertEqual(seed["location_filters"], {"metro_areas": ["San Francisco Bay Area"]})
+        self.assertNotIn("based in", seed["query"])
+        self.assertNotIn("Engineer whose", seed["query"])
+        self.assertNotIn("GPU cloud engineers", seed["query"])
+        self.assertNotIn("Adjacent exposure only", seed["query"])
+        self.assertNotIn("Prepared board decks", seed["query"])
 
     def test_build_seeds_takes_top_k_by_score_and_keys(self):
         recs = [{"name": "lo", "headline": "h1", "mean_score": 0.3},
@@ -395,6 +978,39 @@ class TestJudgeConsensus(unittest.TestCase):
         a = next(r for r in rows if r["person_id"] == "A")
         self.assertEqual(a["current_company"], "Acme")
         self.assertEqual(a["found_by"], ["routing", "scheduler"])
+
+    def test_required_location_excludes_mismatch_and_unknown_from_shortlist(self):
+        meta = {
+            "A": {
+                "person_id": "A", "location": "San Rafael, California, United States",
+                "location_fields": {
+                    "city": "San Rafael", "state": "California", "country": "United States",
+                    "macro_region": "Americas", "metro_areas": ["San Francisco Bay Area"],
+                },
+            },
+            "B": {"person_id": "B", "location": "New York, New York, United States"},
+            "C": {"person_id": "C", "location": None},
+        }
+        rows, strong = jc.build_consensus(
+            self._judges(),
+            meta,
+            min_inband_votes=1,
+            min_notout_votes=1,
+            required_location="San Francisco, CA",
+            required_location_filters={"metro_areas": ["San Francisco Bay Area"]},
+        )
+
+        self.assertEqual([row["person_id"] for row in strong], ["A"])
+        fits = {row["person_id"]: row["location_fit"] for row in rows}
+        self.assertEqual(fits, {"A": "match", "B": "mismatch", "C": "unknown"})
+        self.assertEqual(
+            ls.location_fit(
+                {"metro_areas": ["San Francisco Bay Area"]},
+                "San Rafael, California, United States",
+            ),
+            "unknown",
+        )
+        self.assertEqual(next(row for row in rows if row["person_id"] == "A")["location_fields"]["city"], "San Rafael")
 
 
 class TestCoreGate(unittest.TestCase):
@@ -578,7 +1194,198 @@ class TestBuildEvalInputs(unittest.TestCase):
         self.assertEqual(plan["set_scope"], {"name": "s", "set_id": "sid"})
         self.assertEqual(plan["normalized_archetype"], "distsys engineer")
         self.assertEqual(plan["hire_stage"], "scaling_late")
+        self.assertEqual(plan["search_scope"], {"location": None, "filters": {}, "source": "jd"})
         self.assertFalse(plan["retrieval_ran"])
+
+    def test_plan_from_obj_requires_reviewable_structured_location(self):
+        base = {"must_have": [{"trait": "finance", "tier": "core"}]}
+        inferred_europe = bei.plan_from_obj(
+            {**base, "location": "Europe"},
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(
+            inferred_europe["search_scope"]["filters"],
+            {"macro_regions": ["Western Europe", "Eurasia"]},
+        )
+        plan = bei.plan_from_obj(
+            {
+                **base,
+                "location": "Europe",
+                "location_filters": {"macro_regions": ["Western Europe", "Eurasia"]},
+            },
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(
+            plan["search_scope"],
+            {
+                "location": "Europe",
+                "filters": {"macro_regions": ["Western Europe", "Eurasia"]},
+                "source": "jd",
+            },
+        )
+        remote = bei.plan_from_obj(
+            {**base, "location": "remote", "location_filters": {}},
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(remote["search_scope"], {"location": None, "filters": {}, "source": "jd"})
+
+        remote_us = bei.plan_from_obj(
+            {**base, "location": "remote", "location_filters": {"countries": ["US"]}},
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(
+            remote_us["search_scope"],
+            {"location": "United States", "filters": {"countries": ["United States"]}, "source": "jd"},
+        )
+
+        remote_multi = bei.plan_from_obj(
+            {
+                **base, "location": "remote",
+                "location_filters": {"countries": ["US", "Canada"]},
+            },
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(
+            remote_multi["search_scope"],
+            {
+                "location": "United States or Canada",
+                "filters": {"countries": ["United States", "Canada"]},
+                "source": "jd",
+            },
+        )
+
+        africa = bei.plan_from_obj(
+            {**base, "location": "Africa", "location_filters": {"countries": ["Ghana"]}},
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(africa["search_scope"]["location"], "Africa")
+        self.assertEqual(
+            set(africa["search_scope"]["filters"]["countries"]),
+            set(ls.CONTINENT_COUNTRIES["Africa"]),
+        )
+        remote_africa = bei.plan_from_obj(
+            {**base, "location": "Remote Africa", "location_filters": {"macro_regions": ["Africa"]}},
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(remote_africa["search_scope"]["location"], "Africa")
+
+        latin_america = bei.plan_from_obj(
+            {
+                **base, "location": "LATAM",
+                "location_filters": {"macro_regions": ["Americas"]},
+            },
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(latin_america["search_scope"]["location"], "Latin America")
+        self.assertEqual(
+            set(latin_america["search_scope"]["filters"]["countries"]),
+            ls.LATIN_AMERICA_COUNTRIES,
+        )
+
+        nyc = bei.plan_from_obj(
+            {
+                **base, "location": "New York City",
+                "location_filters": {"cities": ["New York City"], "countries": ["US"]},
+            },
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(
+            nyc["search_scope"],
+            {
+                "location": "New York, United States",
+                "filters": {"cities": ["New York"], "countries": ["United States"]},
+                "source": "jd",
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "conflict|broaden"):
+            bei.plan_from_obj(
+                {
+                    **base, "location": "San Francisco",
+                    "location_filters": {"countries": ["Germany"]},
+                },
+                set_name="s", set_id="sid", source_url=None, created_at="t",
+            )
+
+    def test_generated_location_accepts_natural_exact_or_labels_and_metro_aliases(self):
+        base = {"must_have": [{"trait": "finance", "tier": "core"}]}
+        cases = (
+            (
+                "Vancouver or Portland",
+                {"metro_areas": ["Vancouver Metropolitan Area", "Portland Metropolitan Area"]},
+            ),
+            (
+                "New York and Boston",
+                {"metro_areas": ["New York Metropolitan Area", "Boston Metropolitan Area"]},
+            ),
+            (
+                "New York, Boston, or Chicago",
+                {"metro_areas": [
+                    "New York Metropolitan Area", "Boston Metropolitan Area",
+                    "Chicago Metropolitan Area",
+                ]},
+            ),
+            (
+                "Bay Area, New York, or Boston",
+                {"metro_areas": [
+                    "San Francisco Bay Area", "New York Metropolitan Area",
+                    "Boston Metropolitan Area",
+                ]},
+            ),
+            (
+                "San Francisco, CA or New York, NY",
+                {"metro_areas": ["San Francisco Bay Area", "New York Metropolitan Area"]},
+            ),
+            (
+                "New York, Boston, or Chicago",
+                {
+                    "cities": ["New York", "Boston", "Chicago"],
+                    "countries": ["United States"],
+                },
+            ),
+            ("US and Canada", {"countries": ["United States", "Canada"]}),
+            (
+                "California, Texas, or New York",
+                {
+                    "states": ["California", "Texas", "New York"],
+                    "countries": ["United States"],
+                },
+            ),
+            ("Silicon Valley", {"metro_areas": ["San Francisco Bay Area"]}),
+            ("NYC metro", {"metro_areas": ["New York Metropolitan Area"]}),
+            ("Tri-state area", {"metro_areas": ["New York Metropolitan Area"]}),
+        )
+        for location, filters in cases:
+            with self.subTest(location=location):
+                plan = bei.plan_from_obj(
+                    {**base, "location": location, "location_filters": filters},
+                    set_name="s", set_id="sid", source_url=None, created_at="t",
+                )
+                self.assertEqual(plan["search_scope"]["filters"], filters)
+                self.assertEqual(
+                    plan["search_scope"]["location"],
+                    ls.canonical_location_label(filters),
+                )
+
+    def test_generated_location_rejects_broader_or_wrong_alternatives(self):
+        base = {"must_have": [{"trait": "finance", "tier": "core"}]}
+        with self.assertRaisesRegex(ValueError, "conflict|broaden"):
+            bei.plan_from_obj(
+                {
+                    **base, "location": "San Francisco or New York",
+                    "location_filters": {"metro_areas": [
+                        "San Francisco Bay Area", "New York Metropolitan Area",
+                        "Boston Metropolitan Area",
+                    ]},
+                },
+                set_name="s", set_id="sid", source_url=None, created_at="t",
+            )
+
+    def test_missing_archetype_falls_back_to_role_not_engineer(self):
+        plan = bei.plan_from_obj(
+            {"job_title": "Strategic Finance Lead", "must_have": [{"trait": "operating P&L", "tier": "core"}]},
+            set_name="s", set_id="sid", source_url=None, created_at="t",
+        )
+        self.assertEqual(plan["normalized_archetype"], "Strategic Finance Lead")
 
     def test_plan_from_obj_user_preferences_override_jd_and_record_provenance(self):
         plan = bei.plan_from_obj(
@@ -685,6 +1492,7 @@ class TestBuildEvalInputs(unittest.TestCase):
         plan = bei.plan_from_obj(
             {"job_title": "Staff Engineer", "normalized_archetype": "systems engineer",
              "hire_stage": "growth", "location": "San Francisco Bay Area",
+             "location_filters": {"metro_areas": ["San Francisco Bay Area"]},
              "must_have": [{"trait": "distributed systems", "tier": "core"}],
              "nice_to_have": ["GPU infrastructure"]},
             set_name="team", set_id="set-1", source_url=None,
@@ -1072,6 +1880,88 @@ class TestConsensusScoreThreshold(unittest.TestCase):
             self.assertEqual(sendable, {"known"})
             self.assertEqual(bench, {"unknown"})
 
+    def test_cli_plan_location_gates_every_shortlist_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            judges = root / "judges"
+            out = root / "out"
+            judges.mkdir()
+            rows = [
+                {"person_id": "local", "seniority_fit": "ideal", "verdict": "top_tier", "score": 0.9},
+                {"person_id": "remote", "seniority_fit": "ideal", "verdict": "top_tier", "score": 0.9},
+                {"person_id": "missing", "seniority_fit": "ideal", "verdict": "top_tier", "score": 0.9},
+            ]
+            (judges / "one.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            union = root / "union.jsonl"
+            union.write_text("".join(json.dumps(row) + "\n" for row in [
+                {"person_id": "local", "location": "Palo Alto, California, United States"},
+                {"person_id": "remote", "location": "New York, New York, United States"},
+                {"person_id": "missing", "location": None},
+            ]))
+            plan = root / "plan.json"
+            plan.write_text(json.dumps({
+                "search_scope": {
+                    "location": "San Francisco Bay Area",
+                    "filters": {"metro_areas": ["San Francisco Bay Area"]},
+                    "source": "jd",
+                },
+                "traits": {"must_have": [], "nice_to_have": []},
+            }))
+
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(PRIM / "judge_consensus.py"),
+                    "--judges-dir", str(judges),
+                    "--union", str(union),
+                    "--out-dir", str(out),
+                    "--plan", str(plan),
+                    "--score-threshold", "0.40",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(cp.returncode, 0, cp.stderr + cp.stdout)
+            for name in ("shortlist_ranked.json", "sendable_ranked.json"):
+                self.assertEqual(
+                    {row["person_id"] for row in json.loads((out / name).read_text())},
+                    {"local"},
+                )
+            self.assertEqual(json.loads((out / "bench_ranked.json").read_text()), [])
+            consensus = {row["person_id"]: row for row in json.loads((out / "consensus.json").read_text())}
+            self.assertEqual(consensus["remote"]["location_fit"], "mismatch")
+            self.assertEqual(consensus["missing"]["location_fit"], "unknown")
+
+            plan.write_text(json.dumps({
+                "search_scope": {"location": None, "filters": {}, "source": "jd"},
+                "traits": {"must_have": [], "nice_to_have": []},
+            }))
+            global_out = root / "global-out"
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    str(PRIM / "judge_consensus.py"),
+                    "--judges-dir", str(judges),
+                    "--union", str(union),
+                    "--out-dir", str(global_out),
+                    "--plan", str(plan),
+                    "--score-threshold", "0.40",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(cp.returncode, 0, cp.stderr + cp.stdout)
+            self.assertEqual(
+                {row["person_id"] for row in json.loads((global_out / "sendable_ranked.json").read_text())},
+                {"local", "remote", "missing"},
+            )
+
 
 class TestRobustSourceMerge(unittest.TestCase):
     def _write(self, rows):
@@ -1108,9 +1998,20 @@ class TestRobustSourceMerge(unittest.TestCase):
         d = Path(tempfile.mkdtemp())
         jd = d / "jd.txt"
         jd.write_text("Build distributed systems")
+        plan_path = d / "plan.json"
+        plan_path.write_text(json.dumps(bei.plan_from_obj(
+            {
+                "job_title": "Staff Engineer", "hire_stage": "growth",
+                "must_have": [{"trait": "distributed systems", "tier": "core"}],
+            },
+            set_name="team", set_id="set-1", source_url=None, created_at="t",
+        )))
         err = rs.CommandError(["fake"], returncode=9, stderr="boom", description="decompose round 0")
         argv = sys.argv
-        sys.argv = ["robust", "--jd-file", str(jd), "--run-dir", str(d / "run"), "--max-rounds", "1"]
+        sys.argv = [
+            "robust", "--jd-file", str(jd), "--plan", str(plan_path),
+            "--run-dir", str(d / "run"), "--max-rounds", "1",
+        ]
         try:
             with mock.patch.object(rs, "run_checked", side_effect=err):
                 with self.assertRaises(SystemExit) as ctx:
@@ -1118,6 +2019,49 @@ class TestRobustSourceMerge(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 1)
         finally:
             sys.argv = argv
+
+    def test_invalid_plan_fails_before_any_sourcing_subprocess(self):
+        d = Path(tempfile.mkdtemp())
+        jd = d / "jd.txt"
+        jd.write_text("Build distributed systems")
+        plan = d / "plan.json"
+        plan.write_text(json.dumps({
+            "search_scope": {"location": "San Francisco", "filters": {}},
+        }))
+        argv = sys.argv
+        sys.argv = [
+            "robust", "--jd-file", str(jd), "--plan", str(plan),
+            "--run-dir", str(d / "run"), "--max-rounds", "1",
+        ]
+        try:
+            with mock.patch.object(rs, "run_checked") as run_checked:
+                with self.assertRaises(SystemExit):
+                    rs.main()
+            run_checked.assert_not_called()
+        finally:
+            sys.argv = argv
+
+    def test_malformed_plan_shapes_fail_before_any_sourcing_subprocess(self):
+        for document in ([1], {"search_scope": True}):
+            with self.subTest(document=document):
+                d = Path(tempfile.mkdtemp())
+                jd = d / "jd.txt"
+                jd.write_text("Build distributed systems")
+                plan = d / "plan.json"
+                plan.write_text(json.dumps(document))
+                argv = sys.argv
+                sys.argv = [
+                    "robust", "--jd-file", str(jd), "--plan", str(plan),
+                    "--run-dir", str(d / "run"), "--max-rounds", "1",
+                ]
+                try:
+                    with mock.patch.object(rs, "run_checked") as run_checked:
+                        with self.assertRaises(SystemExit) as ctx:
+                            rs.main()
+                    self.assertEqual(ctx.exception.code, 1)
+                    run_checked.assert_not_called()
+                finally:
+                    sys.argv = argv
 
 
 class TestRecruitLoopAnchors(unittest.TestCase):
@@ -1155,6 +2099,13 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         strong = [{"person_id": str(i), "current_company": f"co{i}", "mean_score": 1.0 - i / 10} for i in range(10)]
         self.assertEqual(len(rl.diverse_anchors(strong, {}, k=4)), 4)
 
+    def test_anchor_expansion_command_always_passes_approved_plan(self):
+        command = [str(part) for part in rl.anchor_expansion_command(
+            Path("anchors.json"), Path("plan.json"), Path("seeds.json"), 6,
+        )]
+        self.assertEqual(command[command.index("--plan") + 1], "plan.json")
+        self.assertEqual(command[command.index("--anchors") + 1], "anchors.json")
+
     def test_stage_judge_input_does_not_mutate_canonical_frontier(self):
         d = Path(tempfile.mkdtemp())
         (d / "plan.json").write_text(json.dumps({"traits": {"must_have": []}}))
@@ -1187,6 +2138,15 @@ class TestRecruitLoopAnchors(unittest.TestCase):
 
         self.assertEqual(validated["hire_stage"], "scaling_late")
 
+    def test_approved_plan_schema_rejects_non_object_shapes_before_cross_field_checks(self):
+        directory = Path(tempfile.mkdtemp())
+        plan_path = directory / "plan.json"
+        for document in ([1], {"search_scope": True}):
+            with self.subTest(document=document):
+                plan_path.write_text(json.dumps(document))
+                with self.assertRaises(ValueError):
+                    rl.validate_approved_plan(plan_path)
+
     def test_approved_plan_cross_field_validation_rejects_stage_and_core_drift(self):
         directory = Path(tempfile.mkdtemp())
         plan_path = self._approved_plan(directory)
@@ -1200,6 +2160,12 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         plan["core_groups"][0]["all_of"] = ["invented trait"]
         plan_path.write_text(json.dumps(plan))
         with self.assertRaisesRegex(ValueError, "core_groups reference non-core"):
+            rl.validate_approved_plan(plan_path)
+
+        plan = json.loads(self._approved_plan(directory).read_text())
+        plan["search_scope"]["location"] = "remote"
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "search_scope"):
             rl.validate_approved_plan(plan_path)
 
     def test_approved_plan_rejects_oversized_conjunction_and_url_drift(self):
@@ -1314,14 +2280,44 @@ class TestRecruitLoopAnchors(unittest.TestCase):
         self.assertIsNone(set_id)
         self.assertEqual(resolved_db, str(db_path.resolve()))
 
-    def test_unbound_derived_artifacts_cannot_be_reused(self):
+    def test_unbound_execution_artifacts_cannot_be_reused(self):
+        artifacts = (
+            "epoch0/union.jsonl",
+            "epoch0/round0/union.jsonl",
+            "epoch0/round0/probes/q00/ledger.json",
+            "epoch1/probes/anchor00/ledger.json",
+            "epoch0/candidate_frontier.full.jsonl",
+            "epoch0/probe_summaries.json",
+            "epoch0/triage.json",
+            "epoch0/candidate_evaluations.raw.jsonl",
+            "epoch1/anchors.json",
+        )
+        for relative in artifacts:
+            with self.subTest(relative=relative):
+                directory = Path(tempfile.mkdtemp())
+                run_dir = directory / "run"
+                path = run_dir / relative
+                path.parent.mkdir(parents=True)
+                path.write_text("{}\n")
+                plan_path = self._approved_plan(directory)
+                with self.assertRaisesRegex(ValueError, "without an approved-plan binding"):
+                    rl.bind_approved_plan(
+                        run_dir, plan_path, {"backend": "powerset", "set_id": "set-1"},
+                    )
+                self.assertFalse((run_dir / "plan_binding.json").exists())
+
+    def test_pre_review_artifacts_remain_bindable(self):
         directory = Path(tempfile.mkdtemp())
         run_dir = directory / "run"
         (run_dir / "epoch0").mkdir(parents=True)
         plan_path = self._approved_plan(directory)
-        (run_dir / "epoch0" / "union.jsonl").write_text("{}\n")
-        with self.assertRaisesRegex(ValueError, "without an approved-plan binding"):
-            rl.bind_approved_plan(run_dir, plan_path, {"backend": "powerset", "set_id": "set-1"})
+        (run_dir / "epoch0" / "plan_critic.json").write_text(json.dumps({"verdict": "ok"}))
+        (run_dir / "decision.json").write_text(json.dumps({"surface": "people"}))
+        (run_dir / "loop.json").write_text(json.dumps([{"status": "awaiting_plan_approval"}]))
+        canonical, _ = rl.bind_approved_plan(
+            run_dir, plan_path, {"backend": "powerset", "set_id": "set-1"},
+        )
+        self.assertEqual(canonical, run_dir / "epoch0" / "plan.json")
 
     def test_main_stops_at_gate_without_approval_and_does_not_judge(self):
         d = Path(tempfile.mkdtemp())
