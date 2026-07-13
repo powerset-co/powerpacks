@@ -36,8 +36,20 @@ if str(SHARED_DIR) not in sys.path:
 from openai_client import make_openai_client  # noqa: E402
 
 try:  # direct script execution
+    from location_scope import (
+        LOCATION_FILTER_FIELDS,
+        UNSCOPED_LOCATIONS,
+        canonicalize_generated_location_filters,
+        location_scope_from_plan,
+    )
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
+    from .location_scope import (
+        LOCATION_FILTER_FIELDS,
+        UNSCOPED_LOCATIONS,
+        canonicalize_generated_location_filters,
+        location_scope_from_plan,
+    )
     from . import recruiter_policy
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -84,21 +96,67 @@ PLAN_SYSTEM = (
     "management/exec/company-running identities are too_senior unless the role asks for that track. "
     "For management/exec roles, in-band is the target and one level below; one+ above is too_senior, "
     "two+ below is too_junior. Name concrete in-band and gated titles for THIS role.\n"
-    "- location: the JD's candidate-sourcing metro, normalized for search; empty for remote/flexible/"
-    "unstated. Location scopes probes but is not a candidate-quality trait.\n"
+    "- location: the JD's required geographic recruiting scope; empty ONLY for genuinely worldwide "
+    "remote/flexible/unstated roles. A country/region-restricted remote role is still geographically "
+    "scoped (e.g. remote US -> location='United States'). location_filters: the exact backend scope, "
+    "with one or more non-empty families among cities, states, countries, metro_areas, macro_regions. "
+    "Values within a family are OR alternatives; families are AND requirements. Use metro_areas for "
+    "a commuting market, city + country for an exact city, state + country for a state/province, "
+    "countries for broad requirements, and macro_regions for explicit regions such as Europe/APAC. "
+    "Europe maps to ['Western Europe','Eurasia']. For multi-office scopes in different countries, "
+    "use ORed canonical metro_areas rather than parallel city/country lists. Exact macro values are "
+    "Americas, Western Europe, Eurasia, APAC, Middle East, South Asia, and Sub-Saharan Africa. "
+    "Broad Africa/Oceania scopes use ORed canonical countries, not macro_regions.\n"
     "- normalized_archetype: a 2-4 word canonical role archetype (e.g. 'distributed systems engineer').\n"
     "- recruiter_preferences: OPTIONAL and only for recruiter-ranking preferences the JD states "
     "explicitly. Allowed fields are excellence_weights, pedigree_policy, and "
     "current_founder_c_suite_for_non_exec_ic. Never infer brand/pedigree preference or weights from "
     "company identity; omit the object when the JD is silent.\n"
     'Return strict JSON: {"job_title","normalized_archetype","hire_stage","target_level","usable_cutoff",'
-    '"location":"","must_have":[{"trait":"...","tier":"core|table_stakes"}],'
+    '"location":"","location_filters":{"cities":[],"states":[],"countries":[],'
+    '"metro_areas":[],"macro_regions":[]},'
+    '"must_have":[{"trait":"...","tier":"core|table_stakes"}],'
     '"core_groups":[{"name":"<archetype>","all_of":["<exact core trait>"],"source":"default|jd"}],'
     '"nice_to_have":["..."],"recruiter_preferences":{...}}.'
 )
 
 VALID_TARGET_LEVELS = {"senior_ic", "staff_ic", "lead", "manager", "director", "vp", "exec"}
 VALID_TIERS = {"core", "table_stakes"}
+
+
+def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
+    raw_location = str(obj.get("location") or "").strip()
+    raw_filters = obj.get("location_filters", {})
+    if not isinstance(raw_filters, dict):
+        raise ValueError("plan extraction produced invalid location_filters")
+    unknown = sorted(set(raw_filters) - set(LOCATION_FILTER_FIELDS))
+    if unknown:
+        raise ValueError(f"plan extraction produced unsupported location filters: {unknown}")
+    filters: dict[str, list[str]] = {}
+    for field in LOCATION_FILTER_FIELDS:
+        values = raw_filters.get(field, [])
+        if not isinstance(values, list):
+            raise ValueError(f"plan extraction produced invalid location_filters.{field}")
+        cleaned = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+        if cleaned:
+            filters[field] = cleaned
+    if raw_location.lower() in UNSCOPED_LOCATIONS:
+        filters = canonicalize_generated_location_filters(raw_location, filters)
+        if filters:
+            if ("cities" in filters or "states" in filters) and "countries" not in filters:
+                raise ValueError("country/region-restricted remote location needs a country qualifier")
+            label_field = next(field for field in LOCATION_FILTER_FIELDS if filters.get(field))
+            location = ", ".join(filters[label_field])
+            if label_field in {"cities", "states"}:
+                location += ", " + ", ".join(filters["countries"])
+        else:
+            location = None
+    else:
+        location = raw_location
+        filters = canonicalize_generated_location_filters(location, filters)
+    scope = {"location": location, "filters": filters, "source": "jd"}
+    location_scope_from_plan({"search_scope": scope})
+    return scope
 
 
 def build_plan_messages(jd: str) -> list[dict[str, str]]:
@@ -205,20 +263,19 @@ def plan_from_obj(
         user_preferences=user_preferences,
         jd_preferences=jd_preferences,
     )
+    job_title = str(obj.get("job_title") or "role").strip()
+    normalized_archetype = str(obj.get("normalized_archetype") or job_title).strip()
     return {
         "route": "deep",
         "parse_only": False,
         "retrieval_ran": False,
         "job_id": "deep",
-        "job_title": str(obj.get("job_title") or "role").strip(),
-        "normalized_archetype": str(obj.get("normalized_archetype") or "engineer").strip(),
+        "job_title": job_title,
+        "normalized_archetype": normalized_archetype,
         "source_url": source_url,
         "source_title": None,
         "set_scope": {"name": set_name, "set_id": set_id},
-        "search_scope": {
-            "location": str(obj.get("location") or "").strip() or None,
-            "source": "jd",
-        },
+        "search_scope": _search_scope(obj),
         "hire_stage": resolved_policy["preferences"]["hire_stage"],
         "target_level": target_level,
         "usable_cutoff": str(obj.get("usable_cutoff") or "Senior in-band IC; executives, founders, and advisors are out.").strip(),

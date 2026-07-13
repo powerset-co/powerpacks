@@ -30,8 +30,10 @@ if str(SHARED_DIR) not in sys.path:
 from openai_client import make_openai_client  # noqa: E402
 
 try:  # direct script execution
+    from location_scope import location_scope_from_plan
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
+    from .location_scope import location_scope_from_plan
     from . import recruiter_policy
 
 # Judge-grade model: the critic runs ONCE per search, so quality > pennies here
@@ -57,7 +59,9 @@ SYSTEM = (
     "management/exec track may gate. Also flag direct self-contradictions, e.g. this REAL defect: "
     "'Hire senior_ic and staff_ic; staff engineers or higher are too_senior' (hires staff while "
     "gating staff).\n"
-    "3. GEO SCOPE: if the JD states an on-site/city/metro location but the plan's search_scope.location is empty or null, flag it — geo-first sourcing will be disabled for the WHOLE run unless the reviewer sets it (or deliberately approves global).\n"
+    "3. GEO SCOPE: if the JD states any geographic hiring restriction (including country/region-"
+    "restricted remote work) but the plan's search_scope.location is null, flag it — required-location "
+    "sourcing will be disabled for the WHOLE run unless the reviewer sets it.\n"
     "4. CORE PATH PROVENANCE: if the JD explicitly offers independently viable alternatives but "
     "the corresponding singleton groups have source='default', flag that they need source='jd' so "
     "unselected paths do not lower ranking. Do not infer alternatives merely because the plan uses "
@@ -77,6 +81,10 @@ def supports_custom_temperature(model: str) -> bool:
 
 def deterministic_checks(plan: dict[str, Any], *, backend: str | None = None) -> list[str]:
     issues: list[str] = []
+    try:
+        location_scope_from_plan(plan)
+    except ValueError as exc:
+        issues.append(str(exc))
     stage = (plan.get("hire_stage") or "").strip()
     if stage and stage not in VALID_HIRE_STAGES:
         issues.append(f"hire_stage '{stage}' is off-enum (must be one of {sorted(VALID_HIRE_STAGES)}); "

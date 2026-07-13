@@ -1,6 +1,6 @@
 {
   "task": "search_network_jd",
-  "version": 2,
+  "version": 3,
   "description": "Run the plan-first deep recruiter search: resolve and review the hiring contract before retrieval, source broadly, judge conservatively, and expand from proven anchors until convergence.",
   "default_constraints": {
     "surface": "people",
@@ -15,6 +15,7 @@
       "default"
     ],
     "automatic_judges": 1,
+    "approved_location_is_required": true,
     "retrieval_surface_fallback": false
   },
   "requirement_policy": {
@@ -22,6 +23,7 @@
     "table_stakes": "Required evidence that affects fit and score but is not part of the alternative core-group gate.",
     "nice_to_have": "Ranking upside only; it never compensates for a missing core group.",
     "seniority": "Judge level and track separately. Higher hands-on ICs remain eligible. Current founders/C-suite default out only for ordinary non-executive IC roles unless the user or JD overrides the policy. Manager/director/VP/Head titles require evidence of current responsibilities rather than title-only exclusion.",
+    "location": "A non-null reviewed search_scope.location is mandatory across every retrieval epoch and shortlist membership output. search_scope.filters contains one or more canonical specificity families: values within a family are OR alternatives and families are AND requirements. City/state scopes require a country qualifier. Null plus empty filters is reserved for genuinely worldwide roles; global/remote string aliases are invalid in an approved plan.",
     "evidence": "Prefer direct, recent demonstrated work, then trajectory and impact. Pedigree is a capped positive prior, never a gate, and missing pedigree is floor-neutral.",
     "fairness": "Use job-related evidence only; protected attributes and proxies for protected attributes are forbidden ranking inputs."
   },
@@ -59,7 +61,7 @@
       "id": "source_epoch_zero",
       "kind": "orchestrator",
       "primitive": "robust_source",
-      "description": "After approval, run diverse independent probe rounds shaped by the approved plan and union the selected backend's results.",
+      "description": "After approval, run diverse independent probe rounds shaped by the approved plan. Every probe receives the approved structured location scope, translated only when needed to the selected backend's equivalent canonical fields, before results are unioned.",
       "outputs": [
         "epoch0/rounds.json",
         "epoch0/union.jsonl"
@@ -80,7 +82,7 @@
       "id": "judge_and_gate",
       "kind": "pipeline",
       "primitive": "codex_judge|evaluate_profile_candidates + judge_consensus",
-      "description": "Run one selected automatic judge, retain per-trait evidence and caveats, then apply deterministic non-OUT, in-band, score-floor, and alternative core-group gates.",
+      "description": "Run one selected automatic judge, retain per-trait evidence and caveats, then apply deterministic approved-location, non-OUT, in-band, score-floor, and alternative core-group gates.",
       "outputs": [
         "judges/loop.jsonl",
         "shortlist/consensus.json",
@@ -93,7 +95,7 @@
       "id": "expand_and_converge",
       "kind": "loop",
       "primitive": "expand_from_anchor + run_wide_search",
-      "description": "Select diverse judged-strong anchors, source adjacent candidates on the same backend, judge only new people, and stop when no new strong candidates appear or the epoch cap is reached.",
+      "description": "Select diverse judged-strong anchors, construct role-aware seeds from titles and judged core evidence, preserve the approved location and backend, judge only new people, and stop when no new strong candidates appear or the epoch cap is reached.",
       "outputs": [
         "epochN/anchors.json",
         "epochN/anchor_seeds.json",
@@ -116,11 +118,12 @@
     "The generated and approved plan conform to search-network-jd-plan.schema.json; cross-field policy, stage, provenance, normalized-weight, and core-group invariants fail closed before sourcing.",
     "Explicit user preferences override JD-supported inference, which overrides versioned recruiter defaults.",
     "The approved plan shapes epoch-zero probes and every later triage and judge prompt.",
+    "A non-null approved location is injected as a structured filter into every epoch-zero and anchor probe; null is the only global-search contract.",
     "Every reusable retrieval and judge artifact is bound to the exact approved-plan hash, JD-source hash, and Powerset set ID or local DuckDB identity; contract or corpus drift fails closed.",
-    "Every shortlisted candidate is non-OUT, in band, above the score floor, and demonstrates every trait in at least one alternative all-of core group.",
+    "Every shortlisted candidate matches the approved current-location scope, is non-OUT, in band, above the score floor, and demonstrates every trait in at least one alternative all-of core group.",
     "A numeric score never rescues an OUT verdict or a failed seniority/core gate.",
-    "Anchor expansion uses only judged-strong candidates and never changes retrieval surfaces.",
-    "sendable_ranked.json contains only qualified sendable candidates; disputed or lower-confidence rows remain in bench_ranked.json.",
+    "Anchor expansion uses only judged-strong candidates, the approved role archetype and direct core evidence; it never changes location or retrieval surfaces.",
+    "sendable_ranked.json contains only qualified sendable candidates; location-matching disputed or lower-confidence rows remain in bench_ranked.json, while off-location rows remain audit-visible only in consensus.json.",
     "The automatic loop is described as one selected judge, not an automatic cross-vendor panel.",
     "Powerset deep search uses TurboPuffer/Postgres; local deep search uses DuckDB hybrid retrieval. Agentic SQL inside the deep loop remains planned, not shipped."
   ]

@@ -26,8 +26,10 @@ from pathlib import Path
 from typing import Any
 
 try:  # direct script execution
+    from location_scope import enforce_payload_location, location_scope_from_plan
     from subprocess_utils import CommandError, require_paths, run_checked
 except ImportError:  # module execution: python -m packs.search.primitives.deep_search.run_wide_search
+    from .location_scope import enforce_payload_location, location_scope_from_plan
     from .subprocess_utils import CommandError, require_paths, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -35,7 +37,7 @@ SNP = ROOT / "packs/search/primitives/search_network_pipeline/search_network_pip
 DIVERSIFY = ROOT / "packs/search/primitives/deep_search/diversify_probe_bm25.py"
 
 
-def _load_seeds(path: Path) -> list[dict[str, str]]:
+def _load_seeds(path: Path) -> list[dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return data if isinstance(data, list) else data.get("seeds", [])
 
@@ -44,10 +46,31 @@ def _backend_args(backend: str, db: str | None) -> list[str]:
     return ["--backend", "local", "--db", str(db)] if backend == "local" else []
 
 
-def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: bool, backend: str, db: str | None) -> Path | None:
+def _seed_location_filters(seed: dict[str, Any]) -> dict[str, list[str]]:
+    if "required_location" not in seed or "location_filters" not in seed:
+        raise ValueError("seed is missing reviewed location metadata")
+    display = seed["required_location"]
+    if not isinstance(display, str):
+        raise ValueError("seed required_location must be a string")
+    _, filters = location_scope_from_plan({
+        "search_scope": {
+            "location": display.strip() or None,
+            "filters": seed["location_filters"],
+        }
+    })
+    return filters
+
+
+def _prepare(seed: dict[str, Any], probe_dir: Path, env_file: str, preserve: bool, backend: str, db: str | None) -> Path | None:
     """Prepare one probe payload. Returns None (never raises) when this single probe fails so one
     flaky expansion call cannot abort the whole wide search: main drops None via ok_seeds and only fails
     if NO probe survives. Each prepare makes an LLM expansion call, so transient 429/500 is expected."""
+    try:
+        location_filters = _seed_location_filters(seed)
+    except ValueError as exc:
+        print(json.dumps({"primitive": "run_wide_search", "probe": seed.get("key"), "stage": "prepare",
+                          "status": "skipped", "error": str(exc)}), file=sys.stderr)
+        return None
     probe_dir.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(SNP), "prepare", "--query", seed["query"],
            "--env-file", env_file, "--output-dir", str(probe_dir / "prep"), *_backend_args(backend, db)]
@@ -61,38 +84,43 @@ def _prepare(seed: dict[str, str], probe_dir: Path, env_file: str, preserve: boo
         dest = probe_dir / "payload.json"
         shutil.copy(found[0], dest)
         require_paths([dest], cmd=cmd, description=f"prepare probe {seed.get('key')}")
+        payload = json.loads(dest.read_text(encoding="utf-8"))
+        enforce_payload_location(payload, location_filters)
+        dest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return dest
-    except CommandError as exc:
+    except (CommandError, OSError, json.JSONDecodeError, ValueError) as exc:
         print(json.dumps({"primitive": "run_wide_search", "probe": seed.get("key"), "stage": "prepare",
                           "status": "skipped", "error": str(exc)}), file=sys.stderr)
         return None
 
 
-def _run(seed: dict[str, str], probe_dir: Path, set_id: str | None, env_file: str, limit: int, top_k: int, backend: str, db: str | None) -> bool:
+def _run(seed: dict[str, Any], probe_dir: Path, set_id: str | None, env_file: str, limit: int, top_k: int, backend: str, db: str | None) -> bool:
     """Run one probe. Returns False (never raises) when this single probe fails so one flaky
     retrieval cannot abort the wide search: build_union skips probes without a ledger and main fails
     only if the union ends up empty."""
     payload = probe_dir / "payload.json"
     ledger = probe_dir / "ledger.json"
     try:
-        if set_id and backend != "local":  # ensure scoping even if the payload lacks it; local scope is the DB file
-            p = json.loads(payload.read_text())
-            f = p.get("role_search_filters") if isinstance(p.get("role_search_filters"), dict) else p
+        location_filters = _seed_location_filters(seed)
+        p = json.loads(payload.read_text(encoding="utf-8"))
+        enforce_payload_location(p, location_filters)
+        f = p.get("role_search_filters") if isinstance(p.get("role_search_filters"), dict) else p
+        if set_id and backend != "local":  # local scope is the reviewed DuckDB file
             f["set_id"] = set_id
-            payload.write_text(json.dumps(p, indent=2))
+        payload.write_text(json.dumps(p, indent=2) + "\n", encoding="utf-8")
         run_checked([sys.executable, str(SNP), "run", "--query", seed["key"],
                      "--payload-json", str(payload), "--ledger", str(ledger),
                      "--env-file", env_file, "--search-only", "--limit", str(limit), "--top-k", str(top_k),
                      *_backend_args(backend, db)],
                     expected_paths=[ledger], description=f"run probe {seed.get('key')}")
         return True
-    except (CommandError, OSError, json.JSONDecodeError) as exc:
+    except (CommandError, OSError, json.JSONDecodeError, ValueError) as exc:
         print(json.dumps({"primitive": "run_wide_search", "probe": seed.get("key"), "stage": "run",
                           "status": "skipped", "error": str(exc)}), file=sys.stderr)
         return False
 
 
-def build_union(run_dir: Path, seeds: list[dict[str, str]], keep: int) -> list[dict[str, Any]]:
+def build_union(run_dir: Path, seeds: list[dict[str, Any]], keep: int) -> list[dict[str, Any]]:
     prof: dict[str, dict[str, Any]] = {}
     union: dict[str, dict[str, Any]] = {}
     for seed in seeds:
@@ -103,16 +131,18 @@ def build_union(run_dir: Path, seeds: list[dict[str, str]], keep: int) -> list[d
         arts = led.get("artifacts") or {}
         lp = arts.get("llm_profiles_path")
         if lp and os.path.exists(lp):
-            for line in open(lp):
-                try:
-                    r = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                prof.setdefault(r["person_id"], r)
+            with open(lp, encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        r = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    prof.setdefault(r["person_id"], r)
         csvp = arts.get("csv")
         if not csvp or not os.path.exists(csvp):
             continue
-        rows = sorted(csv.DictReader(open(csvp)), key=lambda r: int(r["rank"]))[:keep]
+        with open(csvp, newline="", encoding="utf-8") as handle:
+            rows = sorted(csv.DictReader(handle), key=lambda r: int(r["rank"]))[:keep]
         for r in rows:
             pid = r["person_id"]
             u = union.setdefault(pid, {"person_id": pid, "name": r.get("name"), "linkedin_url": r.get("linkedin_url"),
@@ -122,7 +152,16 @@ def build_union(run_dir: Path, seeds: list[dict[str, str]], keep: int) -> list[d
     for pid, u in union.items():
         r = prof.get(pid, {})
         u["found_by"] = sorted(set(u["found_by"]))
-        u["positions"] = [{k: x.get(k) for k in ("title", "company_name", "company_description", "start_date", "end_date") if x.get(k)} for x in (r.get("positions") or [])[:5]]
+        u["headline"] = r.get("headline")
+        u["positions"] = [
+            {
+                **({"position_title": x.get("position_title") or x.get("title")}
+                   if x.get("position_title") or x.get("title") else {}),
+                **{k: x.get(k) for k in ("company_name", "company_description", "start_date", "end_date")
+                   if x.get(k)},
+            }
+            for x in (r.get("positions") or [])[:5]
+        ]
         u["education"] = [{k: e.get(k) for k in ("school_name", "degree", "field_of_study") if e.get(k)} for e in (r.get("education") or [])[:2]]
         u["tech_skills"] = [s for s in (r.get("tech_skills") or []) if isinstance(s, str)][:12]
     return sorted(union.values(), key=lambda r: (-len(r["found_by"]), r.get("name") or ""))

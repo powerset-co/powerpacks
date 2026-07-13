@@ -276,6 +276,7 @@ def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
         f"Job: {plan.get('job_title') or ''} ({plan.get('normalized_archetype') or ''})",
         f"Hire stage: {hire_stage}",
         f"Target level: {plan.get('target_level') or 'senior individual contributor (default)'}",
+        f"Required current location: {(plan.get('search_scope') or {}).get('location') or 'global / not constrained'}",
         f"Seniority / usable cutoff policy: {plan.get('usable_cutoff') or 'Senior in-band IC; executives, founders, and advisors are out.'}",
         "Must-have traits (with tier):",
         *[f"- [{t.get('tier') or 'table_stakes'}] {t['trait']}" for t in must],

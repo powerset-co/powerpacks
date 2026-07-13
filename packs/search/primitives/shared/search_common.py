@@ -529,7 +529,10 @@ def location_filter_from_payload(payload: dict[str, Any], mapping: list[tuple[st
             clauses.append(comparison(field, op, values))
     if not clauses:
         return None
-    return clauses[0] if len(clauses) == 1 else ("Or", clauses)
+    if len(clauses) == 1:
+        return clauses[0]
+    mode = "And" if payload.get("location_filter_mode") == "all" else "Or"
+    return (mode, clauses)
 
 
 def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:

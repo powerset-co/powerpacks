@@ -155,6 +155,11 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "location_filter_mode": {
+      "type": "string",
+      "enum": ["all"],
+      "description": "Internal execution marker: require every populated person-location family. Omit for the default cross-family OR behavior."
+    },
     "seniority_bands": {
       "type": "array",
       "items": {

@@ -7,7 +7,8 @@ seeds is the whole point, because the downstream `--preserve-query-semantic` pat
 verbatim as the retrieval vector, and overlapping/title-y seeds collapse recall (see
 packs/search/docs/deep-search-ground-truth-status.md).
 
-Output: seeds.json = [{"key": "q00", "query": "..."}, ...] — consumed by deep_search/run_wide_search.py.
+Output: seeds.json = [{"key": "q00", "query": "...", "required_location": "...",
+"location_filters": {...}}, ...] — consumed by deep_search/run_wide_search.py.
 One OpenAI call (json_object), mirroring expand_search_request's client pattern.
 """
 from __future__ import annotations
@@ -24,6 +25,11 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from openai_client import make_openai_client  # noqa: E402
 
+try:
+    from location_scope import location_scope_from_plan
+except ImportError:  # pragma: no cover - package execution
+    from .location_scope import location_scope_from_plan
+
 DEFAULT_MODEL = os.environ.get("RECRUIT_DECOMPOSE_MODEL", "gpt-4o")
 
 SYSTEM = (
@@ -36,50 +42,23 @@ SYSTEM = (
     "candidate space. Avoid every seed starting with the same words.\n"
     "- Cover the must-haves AND the bonus/adjacent angles of the role.\n"
     "- Do NOT add seniority or company hard filters to the seed sentences — those are handled "
-    "separately. Do not put a location in the seed sentences either.\n"
-    "- ALSO extract the job's LOCATION from the JD, normalized to the metro area a candidate search "
-    'would use (e.g. "San Francisco, CA" / "SF" / "on-site in SF" -> "San Francisco Bay Area"; '
-    '"NYC" -> "New York City metropolitan area"). Use the empty string when the role is remote, '
-    "location-flexible, or the JD does not state one.\n"
-    'Return strict JSON: {"seeds": ["sentence 1", ...], "location": "<metro or empty>"} with exactly '
-    "the requested seed count."
+    "separately. Do not put a location in the seed sentences either; the approved recruiter plan "
+    "supplies the authoritative structured location filter.\n"
+    'Return strict JSON: {"seeds": ["sentence 1", ...]} with exactly the requested seed count.'
 )
 
-# Geo-first sourcing: most probes carry the JD's metro so the initial blast radius is small,
-# but every GLOBAL_SEED_EVERY-th seed stays location-free — measured GT for an SF role included
-# strong candidates in Seattle/NY/Bengaluru, so geo-only sourcing loses real people (relocators,
-# remote-friendly hires). The expand-from-anchor epochs then widen from whoever survives judging.
-GLOBAL_SEED_EVERY = 4
 
-
-def apply_location_mix(seeds: list[dict[str, str]], location: str) -> int:
-    """Append the JD metro to all but every GLOBAL_SEED_EVERY-th seed (in place).
-    Returns how many seeds were geo-constrained."""
+def apply_location_scope(
+    seeds: list[dict[str, Any]],
+    location: str,
+    location_filters: dict[str, list[str]],
+) -> int:
+    """Bind the approved JD location to every seed. Returns the constrained count."""
     location = (location or "").strip()
-    if not location:
-        return 0
-    geo = 0
-    for i, seed in enumerate(seeds):
-        if (i + 1) % GLOBAL_SEED_EVERY == 0:
-            continue  # recall hedge: keep this one global
-        seed["query"] = f"{seed['query'].rstrip('.')} — based in {location}"
-        geo += 1
-    return geo
-
-
-def resolve_location(
-    cli_location: str | None,
-    plan: dict[str, Any] | None,
-    extracted_location: str | None,
-) -> str:
-    """Resolve geo precedence while preserving an approved explicit global/null scope."""
-    if cli_location is not None:
-        location = cli_location
-    elif plan is not None:
-        location = (plan.get("search_scope") or {}).get("location") or ""
-    else:
-        location = extracted_location or ""
-    return "" if str(location).strip().lower() == "global" else str(location)
+    for seed in seeds:
+        seed["required_location"] = location
+        seed["location_filters"] = location_filters
+    return len(seeds) if location else 0
 
 
 def plan_context(plan: dict[str, Any] | None) -> str:
@@ -142,10 +121,8 @@ def main() -> None:
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--api-key", default=None)
     ap.add_argument("--out", required=True, help="Where to write seeds.json")
-    ap.add_argument("--plan", default=None, help="Approved plan.json; its core groups and traits must shape seed coverage")
-    ap.add_argument("--location", default=None,
-                    help="Override the JD-extracted metro for geo-first probes "
-                         "('global' disables geo-constraining entirely)")
+    ap.add_argument("--plan", required=True,
+                    help="Approved plan.json; supplies authoritative traits and structured location scope")
     args = ap.parse_args()
 
     jd = Path(args.jd_file).read_text(encoding="utf-8") if args.jd_file else args.jd
@@ -154,7 +131,7 @@ def main() -> None:
         print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": "OPENAI_API_KEY not set"}))
         raise SystemExit(1)
 
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8")) if args.plan else None
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
     client = make_openai_client(key)
     resp = client.chat.completions.create(
         model=args.model,
@@ -163,9 +140,9 @@ def main() -> None:
     )
     obj = json.loads(resp.choices[0].message.content or "{}")
     seeds = parse_seeds(obj, n=args.n)
-    # Geo-first: JD-extracted metro unless overridden; --location global turns it off.
-    location = resolve_location(args.location, plan, obj.get("location"))
-    geo_seeds = apply_location_mix(seeds, location)
+    approved_location, location_filters = location_scope_from_plan(plan)
+    location = approved_location or ""
+    geo_seeds = apply_location_scope(seeds, location, location_filters)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

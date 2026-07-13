@@ -45,9 +45,34 @@
     "search_scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["location", "source"],
+      "required": ["location", "filters", "source"],
+      "oneOf": [
+        {
+          "properties": {
+            "location": {"type": "null"},
+            "filters": {"maxProperties": 0}
+          }
+        },
+        {
+          "properties": {
+            "location": {"type": "string", "minLength": 1},
+            "filters": {"minProperties": 1}
+          }
+        }
+      ],
       "properties": {
         "location": {"type": ["string", "null"]},
+        "filters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cities": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "states": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "countries": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "metro_areas": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "macro_regions": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+          }
+        },
         "source": {"enum": ["jd", "user", "default"]}
       }
     },

@@ -24,6 +24,11 @@ import statistics
 from pathlib import Path
 from typing import Any
 
+try:
+    from location_scope import location_fit, location_scope_from_plan
+except ImportError:  # pragma: no cover - package execution
+    from .location_scope import location_fit, location_scope_from_plan
+
 TIER = {"top_tier": 2, "high_potential": 1, "out": 0}
 GATED_FITS = {"too_senior", "too_junior", "wrong_track"}
 CONFIRMED_IN_BAND_FITS = {"ideal", "acceptable", "in_band"}
@@ -65,6 +70,12 @@ def core_groups_from_plan(plan_path: Path | None) -> list[set[str]]:
         if group:
             groups.append(group)
     return groups or [{trait} for trait in sorted(core)]
+
+
+def location_from_plan(plan_path: Path | None) -> tuple[str | None, dict[str, list[str]]]:
+    if not plan_path or not plan_path.exists():
+        return None, {}
+    return location_scope_from_plan(json.loads(plan_path.read_text(encoding="utf-8")))
 
 
 def candidate_meets_core(verds: dict[str, dict[str, Any]], present: list[str], core: set[str]) -> bool:
@@ -153,6 +164,8 @@ def build_consensus(
     score_threshold: float | None = None,
     core_traits: set[str] | None = None,
     core_groups: list[set[str]] | None = None,
+    required_location: str | None = None,
+    required_location_filters: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     judge_names = sorted(judges)
     by_pid: dict[str, dict[str, dict[str, Any]]] = {}
@@ -174,6 +187,7 @@ def build_consensus(
         resolved_groups = core_groups or ([{trait} for trait in sorted(core_traits)] if core_traits else [])
         core_met = candidate_meets_core_groups(verds, present, resolved_groups) if resolved_groups else None
         m = meta.get(pid, {})
+        candidate_location = m.get("location")
         rows.append({
             "person_id": pid,
             "core_met": core_met,
@@ -181,7 +195,10 @@ def build_consensus(
             "current_title": m.get("current_title"),
             "current_company": m.get("current_company"),
             "linkedin_url": m.get("linkedin_url"),
-            "location": m.get("location"),
+            "location": candidate_location,
+            "required_location": required_location,
+            "required_location_filters": required_location_filters or {},
+            "location_fit": location_fit(required_location_filters, candidate_location),
             "found_by": m.get("found_by", []),
             "n_judges": len(present),
             "mean_score": round(statistics.mean(scores), 4) if scores else 0.0,
@@ -206,6 +223,9 @@ def build_consensus(
         })
 
     resolved_groups = core_groups or ([{trait} for trait in sorted(core_traits)] if core_traits else [])
+    def location_qualified(row: dict[str, Any]) -> bool:
+        return row["location_fit"] in {"match", "not_required"}
+
     if resolved_groups:
         # CORE-GATE: membership = majority-in-band AND non-OUT AND the candidate satisfies every
         # experienced+ requirement in at least one approved alternative core group.
@@ -228,6 +248,7 @@ def build_consensus(
                   and r["mean_score"] >= score_threshold]
     else:
         strong = [r for r in rows if r["inband_votes"] >= min_inband_votes and r["notout_votes"] >= min_notout_votes]
+    strong = [r for r in strong if location_qualified(r)]
     strong.sort(key=lambda r: (-r["mean_score"], -r["notout_votes"], -r["inband_votes"], -len(r["found_by"])))
     rows.sort(key=lambda r: -r["mean_score"])
     return rows, strong
@@ -262,6 +283,7 @@ def main() -> None:
     plan_path = Path(args.plan) if args.plan else None
     core_traits = core_traits_from_plan(plan_path)
     core_groups = core_groups_from_plan(plan_path)
+    required_location, required_location_filters = location_from_plan(plan_path)
 
     rows, strong = build_consensus(
         judges, meta,
@@ -270,6 +292,8 @@ def main() -> None:
         score_threshold=args.score_threshold,
         core_traits=core_traits,
         core_groups=core_groups,
+        required_location=required_location,
+        required_location_filters=required_location_filters,
     )
 
     out = Path(args.out_dir)
@@ -286,6 +310,7 @@ def main() -> None:
     bench = [r for r in rows if r["person_id"] not in sendable_ids
              and (r["inband_votes"] >= args.min_inband_votes or r["unknown_seniority_votes"] > 0)
              and r["mean_score"] >= floor
+             and r["location_fit"] in {"match", "not_required"}
              and (not core_groups or r["core_met"])]
     (out / "sendable_ranked.json").write_text(json.dumps(sendable, indent=2) + "\n", encoding="utf-8")
     (out / "bench_ranked.json").write_text(json.dumps(bench, indent=2) + "\n", encoding="utf-8")
@@ -297,6 +322,8 @@ def main() -> None:
         "candidates": len(rows),
         "core_gate": sorted(core_traits) if core_traits else None,
         "core_groups": [sorted(group) for group in core_groups] if core_groups else None,
+        "required_location": required_location,
+        "required_location_filters": required_location_filters,
         "consensus_strong": len(strong),
         "sendable": len(sendable),
         "bench": len(bench),

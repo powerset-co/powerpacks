@@ -35,8 +35,10 @@ from typing import Any
 
 try:  # direct script execution
     import recruiter_policy
+    from location_scope import required_location_from_plan
     from subprocess_utils import CommandError, run_checked
 except ImportError:  # module execution: python -m packs.search.primitives.deep_search.deep_search_loop
+    from .location_scope import required_location_from_plan
     from .subprocess_utils import CommandError, run_checked
     from . import recruiter_policy
 
@@ -105,6 +107,17 @@ def stage_judge_input(edir: Path, candidates: list[dict[str, Any]]) -> Path:
     return jdir
 
 
+def anchor_expansion_command(anchors: Path, plan: Path, out: Path, top_k: int) -> list[object]:
+    """Build the bound Phase-2 command so role and location context cannot be omitted."""
+    return [
+        sys.executable, EXPAND,
+        "--anchors", anchors,
+        "--plan", plan,
+        "--top-k", top_k,
+        "--out", out,
+    ]
+
+
 def resolve_backend(run_dir: Path, requested: str | None, decision_arg: str | None) -> tuple[str, Path | None]:
     """Bind execution to decision.json when present; explicit CLI and recorded decisions may not drift."""
     decision_path = Path(decision_arg) if decision_arg else run_dir / "decision.json"
@@ -168,6 +181,7 @@ def load_advisory_critic(path: Path) -> dict[str, Any]:
 def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None = None) -> dict[str, Any]:
     """Enforce cross-field recruiter invariants that JSON Schema cannot express."""
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    required_location_from_plan(plan)
     resolved = recruiter_policy.validate_resolved_recruiter_preferences(plan.get("recruiter_policy"))
     stage = plan.get("hire_stage")
     policy_stage = resolved["preferences"]["hire_stage"]
@@ -590,7 +604,8 @@ def main() -> None:
                     history.append({"epoch": epoch, "stopped": "no_anchors_giveup"})
                     break
                 (edir / "anchors.json").write_text(json.dumps(anchors, indent=2))
-                run([sys.executable, EXPAND, "--anchors", edir / "anchors.json", "--top-k", len(anchors), "--out", edir / "anchor_seeds.json"],
+                run(anchor_expansion_command(
+                    edir / "anchors.json", plan_path, edir / "anchor_seeds.json", len(anchors)),
                     expected_paths=[edir / "anchor_seeds.json"], description=f"epoch{epoch} expand_from_anchor")
                 run([sys.executable, WIDE_SEARCH, "--seeds", edir / "anchor_seeds.json", "--run-dir", edir, "--env-file", args.env_file,
                      "--limit", args.keep]

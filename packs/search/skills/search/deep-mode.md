@@ -34,10 +34,8 @@ Changelog:
   --micro-sort but NON-DEFAULT per the anti-local-maxima rule — measured neutral on the audited
   22-person benchmark (mean audited-top10 rank 4.0 -> 4.7); needs a benchmark that can score
   top-band ordering before defaulting on.
-- 2026-07-09: Geo-first sourcing. decompose_jd extracts the JD's metro and appends it to ~3/4 of
-  the probe seeds (every 4th stays global as the recall hedge); --location overrides, --location
-  global disables. Previously NO location was used at all (JD or company) — verified live: an SF
-  on-site JD produced 16/16 location-free probes.
+- 2026-07-09: Introduced JD-derived geo-first sourcing. The original partial-probe hedge was
+  superseded by the mandatory reviewed-location contract on 2026-07-12.
 - 2026-07-03: Present the shortlist with a ~0.55 SENDABLE CUT (measured on the AgentMail rerun:
   the core-gated tail below ~0.55 was padding); keep the full score-only pool (consensus.json,
   mean >=0.40 + in-band, no core-gate) as the bench to mine. Judge rubric gained research-evidence,
@@ -53,6 +51,10 @@ Changelog:
   must-haves. Only deliberate paths approved at Review change path scoring; every conjunction is a
   Review decision and groups larger than three traits are rejected. Explicit unknown seniority may
   stay in the qualified/anchor recall pool, but never becomes sendable.
+- 2026-07-12: Make a reviewed non-null location mandatory across every sourcing and anchor probe
+  and the final shortlist. Structured location filters now replace model-inferred geo; `null`
+  remains the only global-search contract. Make anchor expansion role-aware and evidence-driven
+  instead of hardcoding an engineering template and serializing company descriptions.
 -->
 
 > **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, "build a
@@ -86,7 +88,8 @@ top measured error source. Then STOP and show the user, grouped for a 10-second 
   eligibility alternative per core trait, while a deliberate alternative path or multi-trait
   conjunction changes path scoring and must be explicitly approved at Review; reject any group
   larger than three traits, and
-- the **nice-to-haves**, **target_level**, hire stage, sourcing location, and resolved recruiter
+- the **nice-to-haves**, **target_level**, hire stage, required location plus its exact structured
+  filter families, and resolved recruiter
   defaults (including ranking weights and provenance).
 
 The plan is the highest-leverage artifact. Default singleton groups mean direct evidence for any
@@ -100,12 +103,16 @@ changes the default grouping into a scoring path, change that group's `source` f
 edit `plan.json`, then proceed. **Do NOT ask again** — judging + expansion run autonomously to the
 end.
 
-Also surface the **sourcing location** at this checkpoint: the recruiter plan extracts the JD's stated
-metro (e.g. "San Francisco, CA · on-site" → "San Francisco Bay Area") and geo-constrains ~3 of 4
-probes to it — smaller first blast radius — while every 4th probe stays global as the recall hedge
-(relocators/remote-friendly hires are real: a measured SF-role GT included Seattle/NY/Bengaluru
-people). Edit `plan.json.search_scope.location` to correct it or use `null` for global sourcing;
-the approved value is passed to decomposition.
+Also surface the **required location** at this checkpoint. The recruiter plan extracts the JD's
+stated recruiting metro (for example, "San Francisco, CA · on-site" becomes the San Francisco
+Bay Area search scope). A non-null approved location is a hard constraint: every epoch-zero and
+anchor payload receives the same structured geo filter, and only matching current locations can
+enter the shortlist. `search_scope.filters` contains one or more reviewed specificity families
+(`cities`, `states`, `countries`, `metro_areas`, or `macro_regions`); values within a family are OR
+alternatives and multiple families are AND requirements. Exact city/state scopes include a country
+qualifier to prevent names such as London from matching the wrong country. Use `null` plus empty
+filters only when the JD is genuinely worldwide; country/region-limited remote roles remain scoped.
+Review may correct or clear the scope, but child commands cannot widen it.
 
 **JD input.** Supply the role either way — job-posting URLs, pasted JDs, and complex role briefs
 all run here:
@@ -150,8 +157,9 @@ Writes `<run>/shortlist/{shortlist_ranked,sendable_ranked,bench_ranked}.json` pl
 independently audited evaluation ground truth. Pass the approved `plan.json` to every manual
 `decompose_jd`/`robust_source` and `judge_consensus` call.
 
-Pre-policy deep plans cannot safely resume: they do not encode the current core-group and policy
-contract. Start a new run, repeat Review once, and do not carry old retrieval/judge artifacts into it.
+Pre-policy or pre-required-location deep plans cannot safely resume: they do not encode the current
+core-group, policy, and structured geo contract. Start a new run, repeat Review once, and do not
+carry old retrieval/judge artifacts into it.
 
 **Why a gate at all (and why the score alone can't replace it).** A blended `jd_score` cannot tell
 a role with real candidates from one with none: pedigree + generic leadership inflate wrong-domain
@@ -270,8 +278,9 @@ critic, decomposition, probe preparation, and default triage still use configure
      --min-inband-votes 1 --min-notout-votes 1
    ```
    → `shortlist/shortlist_ranked.json` (stack-ranked). **With `--plan`, the shortlist is
-   CORE-GATED:** membership = in-band + non-OUT + every trait in at least one approved core group at
-   `experienced`/`doing_now` + the score floor (`capable` does not satisfy a core requirement).
+   CORE- AND LOCATION-GATED:** membership = approved-location match + in-band + non-OUT + every
+   trait in at least one approved core group at `experienced`/`doing_now` + the score floor
+   (`capable` does not satisfy a core requirement).
    Generated groups are singleton eligibility alternatives, while default scoring still considers
    all must-haves. A deliberately reviewed alternative/conjunctive path may instead use path
    scoring. `table_stakes` traits always rank — so a strong-but-wrong-domain senior is excluded no
@@ -281,7 +290,11 @@ critic, decomposition, probe preparation, and default triage still use configure
    `sendable_ranked.json`; lower-confidence/in-dispute candidates stay in `bench_ranked.json`
    (measured on the AgentMail rerun: the 0.40–0.55 core-gated tail was padding — retail/comms SREs
    a hiring manager would not move on). These thresholds remain provisional and can be overridden.
-   `consensus.json` contains every normalized judged row. A candidate explicitly judged
+   `consensus.json` contains every normalized judged row, including `required_location`,
+   `required_location_filters`, and `location_fit` (`match`, `mismatch`, `unknown`, or
+   `not_required`). Off-location and
+   unknown-location candidates remain auditable there but cannot enter shortlist/sendable/bench
+   when the approved plan has a location. A candidate explicitly judged
    `seniority_fit: unknown` may remain qualified and seed anchor expansion for recall, but is never
    sendable and remains visible on the bench. A missing or invalid seniority value is not in-band;
    an `OUT` row never qualifies or seeds expansion. **Measured (AgentMail JD):** single judge
@@ -292,7 +305,8 @@ critic, decomposition, probe preparation, and default triage still use configure
 6. **Expand-from-anchor — the core Phase-2 loop (NOT optional)** 🆕. This is the hill-climb engine,
    and `deep_search_loop --plan-approved` runs it automatically every epoch after the first judge: take your *own*
    judged-strong picks (a DIVERSE set — `deep_search_loop` dedups anchors by company so you don't
-   echo-chamber one archetype), build "more like this" seeds from their profiles, re-source, and
+   echo-chamber one archetype), build role-aware "more like this" seeds from their current/recent
+   titles and directly evidenced core work, re-source under the same required location, and
    judge **only the new** candidates; loop until an epoch adds no new strong (converged) or
    `--max-epochs`. The JD is a lossy proxy — a proven-strong profile is the highest-signal query
    for the adjacent people the JD wording never names. NEVER seed from the eval ground truth (that's
@@ -300,7 +314,8 @@ critic, decomposition, probe preparation, and default triage still use configure
    anchors → loop ends (correct give-up). Manual form:
    ```bash
    uv run --project . python packs/search/primitives/deep_search/expand_from_anchor.py \
-     --anchors <run>/shortlist/shortlist_ranked.json --top-k 6 --out <run>/anchor_seeds.json
+     --anchors <run>/shortlist/shortlist_ranked.json --plan <run>/epoch0/plan.json \
+     --top-k 6 --out <run>/anchor_seeds.json
    uv run --env-file .env --project . python packs/search/primitives/deep_search/run_wide_search.py \
      --seeds <run>/anchor_seeds.json --run-dir <run>/anchor --limit 200
    ```
