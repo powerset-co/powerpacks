@@ -35,6 +35,27 @@ def resolve_schema_path(name_or_path: str) -> Path:
     raise SystemExit(f"error: schema not found: {name_or_path} (looked in {SCHEMAS_DIR})")
 
 
+def validate_file(name_or_path: str, artifact_path: Path):
+    """Validate one JSON file and return its document; raise ValueError on invalid input."""
+    schema_path = resolve_schema_path(name_or_path)
+    if not artifact_path.exists():
+        raise ValueError(f"file not found: {artifact_path}")
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    try:
+        document = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{artifact_path} is not valid JSON: {exc}") from exc
+    validator = Draft202012Validator(schema)
+    errors = sorted(validator.iter_errors(document), key=lambda error: list(error.absolute_path))
+    if errors:
+        details = []
+        for error in errors:
+            pointer = "/" + "/".join(str(part) for part in error.absolute_path)
+            details.append(f"{pointer or '/'}: {error.message}")
+        raise ValueError("; ".join(details))
+    return document
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--schema", help="schema name (e.g. search-network-jd-plan) or path")
@@ -49,24 +70,13 @@ def main() -> None:
     if not args.schema or not args.file:
         parser.error("--schema and --file are required (or use --list-schemas)")
 
-    schema_path = resolve_schema_path(args.schema)
     artifact_path = Path(args.file)
-    if not artifact_path.exists():
-        raise SystemExit(f"error: file not found: {artifact_path}")
-
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     try:
-        document = json.loads(artifact_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"invalid: {artifact_path} is not valid JSON: {exc}")
-
-    validator = Draft202012Validator(schema)
-    errors = sorted(validator.iter_errors(document), key=lambda e: list(e.absolute_path))
-    if errors:
-        for error in errors:
-            pointer = "/" + "/".join(str(part) for part in error.absolute_path)
-            print(f"invalid: {pointer or '/'}: {error.message}", file=sys.stderr)
+        validate_file(args.schema, artifact_path)
+    except ValueError as exc:
+        print(f"invalid: {exc}", file=sys.stderr)
         raise SystemExit(1)
+    schema_path = resolve_schema_path(args.schema)
     print(f"ok: {artifact_path} conforms to {schema_path.name}")
 
 

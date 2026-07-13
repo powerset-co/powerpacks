@@ -39,16 +39,20 @@ try:  # direct script execution
     from location_scope import (
         LOCATION_FILTER_FIELDS,
         UNSCOPED_LOCATIONS,
+        canonical_location_label,
         canonicalize_generated_location_filters,
         location_scope_from_plan,
+        validate_generated_location_display,
     )
     import recruiter_policy as recruiter_policy
 except ImportError:  # module execution
     from .location_scope import (
         LOCATION_FILTER_FIELDS,
         UNSCOPED_LOCATIONS,
+        canonical_location_label,
         canonicalize_generated_location_filters,
         location_scope_from_plan,
+        validate_generated_location_display,
     )
     from . import recruiter_policy
 
@@ -99,14 +103,17 @@ PLAN_SYSTEM = (
     "- location: the JD's required geographic recruiting scope; empty ONLY for genuinely worldwide "
     "remote/flexible/unstated roles. A country/region-restricted remote role is still geographically "
     "scoped (e.g. remote US -> location='United States'). location_filters: the exact backend scope, "
-    "with one or more non-empty families among cities, states, countries, metro_areas, macro_regions. "
-    "Values within a family are OR alternatives; families are AND requirements. Use metro_areas for "
-    "a commuting market, city + country for an exact city, state + country for a state/province, "
-    "countries for broad requirements, and macro_regions for explicit regions such as Europe/APAC. "
+    "using exactly one supported shape: cities+one country, states+one country, metro_areas only, "
+    "countries only, or macro_regions only. Values within a family are OR alternatives. Use "
+    "metro_areas for a commuting market, city + country for an exact city, state + country for a "
+    "state/province, countries for broad requirements, and macro_regions for explicit regions such "
+    "as Europe/APAC. "
     "Europe maps to ['Western Europe','Eurasia']. For multi-office scopes in different countries, "
-    "use ORed canonical metro_areas rather than parallel city/country lists. Exact macro values are "
-    "Americas, Western Europe, Eurasia, APAC, Middle East, South Asia, and Sub-Saharan Africa. "
-    "Broad Africa/Oceania scopes use ORed canonical countries, not macro_regions.\n"
+    "use ORed canonical metro_areas rather than parallel city/country lists. Exact backend macro "
+    "values are Americas, Western Europe, Eurasia, APAC, Middle East, South Asia, and Sub-Saharan "
+    "Africa. For an explicit broad Africa, Oceania, or Latin America requirement, emit the temporary "
+    "macro_regions alias 'Africa', 'Oceania', or 'Latin America'; deterministic normalization expands "
+    "it to the complete canonical country OR-list before Review.\n"
     "- normalized_archetype: a 2-4 word canonical role archetype (e.g. 'distributed systems engineer').\n"
     "- recruiter_preferences: OPTIONAL and only for recruiter-ranking preferences the JD states "
     "explicitly. Allowed fields are excellence_weights, pedigree_policy, and "
@@ -140,20 +147,15 @@ def _search_scope(obj: dict[str, Any]) -> dict[str, Any]:
         cleaned = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
         if cleaned:
             filters[field] = cleaned
-    if raw_location.lower() in UNSCOPED_LOCATIONS:
-        filters = canonicalize_generated_location_filters(raw_location, filters)
-        if filters:
-            if ("cities" in filters or "states" in filters) and "countries" not in filters:
-                raise ValueError("country/region-restricted remote location needs a country qualifier")
-            label_field = next(field for field in LOCATION_FILTER_FIELDS if filters.get(field))
-            location = ", ".join(filters[label_field])
-            if label_field in {"cities", "states"}:
-                location += ", " + ", ".join(filters["countries"])
-        else:
-            location = None
+    filters = canonicalize_generated_location_filters(raw_location, filters)
+    if not filters:
+        if raw_location.lower() not in UNSCOPED_LOCATIONS:
+            raise ValueError("a required location must have at least one structured filter")
+        location = None
     else:
-        location = raw_location
-        filters = canonicalize_generated_location_filters(location, filters)
+        if raw_location.lower() not in UNSCOPED_LOCATIONS:
+            validate_generated_location_display(raw_location, filters)
+        location = canonical_location_label(filters)
     scope = {"location": location, "filters": filters, "source": "jd"}
     location_scope_from_plan({"search_scope": scope})
     return scope

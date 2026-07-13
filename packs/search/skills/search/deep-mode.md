@@ -55,6 +55,10 @@ Changelog:
   and the final shortlist. Structured location filters now replace model-inferred geo; `null`
   remains the only global-search contract. Make anchor expansion role-aware and evidence-driven
   instead of hardcoding an engineering template and serializing company descriptions.
+- 2026-07-13: Make generated location labels canonical before Review, restrict approved filters to
+  unambiguous execution shapes, and preserve backend-structured candidate geo through consensus.
+  Fresh probes with missing/corrupt retrieval provenance fail closed; stale nested artifacts and
+  completed ledgers cannot cross an approved-plan boundary.
 -->
 
 > **This is `$search`'s deep mode.** Job-posting URLs, pasted JDs, complex role briefs, "build a
@@ -109,10 +113,13 @@ Bay Area search scope). A non-null approved location is a hard constraint: every
 anchor payload receives the same structured geo filter, and only matching current locations can
 enter the shortlist. `search_scope.filters` contains one or more reviewed specificity families
 (`cities`, `states`, `countries`, `metro_areas`, or `macro_regions`); values within a family are OR
-alternatives and multiple families are AND requirements. Exact city/state scopes include a country
-qualifier to prevent names such as London from matching the wrong country. Use `null` plus empty
-filters only when the JD is genuinely worldwide; country/region-limited remote roles remain scoped.
-Review may correct or clear the scope, but child commands cannot widen it.
+alternatives. The only accepted shapes are city+country, state+country, metro-only, country-only,
+or macro-region-only. Exact city/state scopes include exactly one country qualifier to prevent names
+such as London from matching the wrong country; cross-country multi-office scopes use canonical metro
+OR alternatives. Draft JD text such as `San Francisco, CA` may normalize to a commuting-market label,
+but the canonical label shown at Review must exactly describe the execution filters and cannot be
+broader. Use `null` plus empty filters only when the JD is genuinely worldwide; country/region-limited
+remote roles remain scoped. Review may correct or clear the scope, but child commands cannot widen it.
 
 **JD input.** Supply the role either way — job-posting URLs, pasted JDs, and complex role briefs
 all run here:
@@ -141,7 +148,8 @@ uv run --env-file .env --project . python packs/search/primitives/deep_search/de
 
 Review/edit `<run>/epoch0/plan.json`, then resume the autonomous engine. Resume validates and
 content-hash binds that exact plan/JD plus Powerset set ID or local DuckDB identity before reusing
-any derived artifact. It uses the plan to generate epoch-0 probes, runs
+any derived artifact. Unbound nested round/probe/frontier/judge artifacts are rejected, and each fresh
+probe payload starts without an inherited completed-step ledger. It uses the plan to generate epoch-0 probes, runs
 the selected judge, **core-gates** the shortlist, and expands from judged-strong candidates:
 
 ```bash
@@ -221,6 +229,11 @@ critic, decomposition, probe preparation, and default triage still use configure
    Writes `<run>/union.jsonl`. (It chains `decompose_jd` + `run_wide_search` internally — those stay
    callable on their own for a single quick pass.) **Recall is fixed HERE, in sourcing — not by
    loosening the judge.**
+
+   Every contributing fresh probe must have readable structured retrieval provenance. The union
+   preserves backend-authoritative city/state/country/metro/macro fields; a corrupt or missing
+   retrieval artifact drops that probe, and an explicit empty candidate geo object remains
+   `unknown` at the final location gate. Display-string parsing exists only for legacy unions.
 
    ⚠ **Manual sourcing and the plan binding do not mix.** `deep_search_loop --plan-approved`
    refuses a run dir that has retrieval artifacts but no `plan_binding.json` ("start a new run") —

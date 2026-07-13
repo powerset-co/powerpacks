@@ -188,6 +188,7 @@ def build_consensus(
         core_met = candidate_meets_core_groups(verds, present, resolved_groups) if resolved_groups else None
         m = meta.get(pid, {})
         candidate_location = m.get("location")
+        candidate_location_fields = m.get("location_fields")
         rows.append({
             "person_id": pid,
             "core_met": core_met,
@@ -196,9 +197,13 @@ def build_consensus(
             "current_company": m.get("current_company"),
             "linkedin_url": m.get("linkedin_url"),
             "location": candidate_location,
+            "location_fields": candidate_location_fields,
             "required_location": required_location,
             "required_location_filters": required_location_filters or {},
-            "location_fit": location_fit(required_location_filters, candidate_location),
+            "location_fit": location_fit(
+                required_location_filters,
+                candidate_location_fields if isinstance(candidate_location_fields, dict) else candidate_location,
+            ),
             "found_by": m.get("found_by", []),
             "n_judges": len(present),
             "mean_score": round(statistics.mean(scores), 4) if scores else 0.0,

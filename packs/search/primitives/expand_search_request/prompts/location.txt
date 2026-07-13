@@ -89,9 +89,8 @@ DO NOT automatically expand locations to broader categories - only use what is e
 **AVAILABLE LOCATIONS IN OUR DATABASE:**
 
 **Valid Macro Regions (MUST BE EXACT):**
-Americas, Western Europe, Eurasia, APAC, Middle East, South Asia, Sub-Saharan Africa
+Americas, Western Europe, Eurasia, APAC, Middle East, South Asia, Africa, Oceania
 IMPORTANT: Only use these exact macro region values. Do NOT invent or approximate macro regions.
-For broad Africa or Oceania requirements, use an OR list of exact countries instead of macro_regions.
 
 **Valid Countries (sample):**
 United States, United Kingdom, Germany, France, Canada, Australia, India, Brazil, Japan, China, Singapore, Israel, Netherlands, Sweden, Switzerland, Ireland, South Korea, Mexico, Argentina, Colombia
@@ -144,3 +143,4 @@ Return JSON with these fields:
 - Only populate company location when query explicitly mentions company location
 - Handle city-states correctly (country only, not city)
 - Return empty arrays for fields that don't apply
+

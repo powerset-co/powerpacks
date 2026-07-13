@@ -75,14 +75,21 @@ location is mandatory, while `null` means global. There is no hidden
 required/preferred mode. `search_scope.filters` is the execution contract and
 contains one or more non-empty specificity families (`cities`, `states`,
 `countries`, `metro_areas`, or `macro_regions`); multiple values within a
-family are OR alternatives and multiple families are AND requirements. City
-and state filters require a country qualifier. Every epoch-zero and anchor seed carries both the
+family are OR alternatives. The accepted shapes are city+country, state+country,
+metro-only, country-only, or macro-region-only; the two-family shapes are AND
+requirements. This avoids ambiguous cross-products, and the reviewed label may
+not be broader or conflict with its execution filters. Every epoch-zero and anchor seed carries both the
 display label and filters; `run_wide_search` rejects bypassing `hard_filters`,
 clears model-inferred person/company geo, and writes the reviewed filters into
-each payload. Consensus independently verifies current location and fails closed
-on a mismatch or missing location. The plan uses the shared backend macro
-vocabulary; broad Africa/Oceania scopes normalize to explicit country OR filters
-because neither corpus has a lossless macro value for those continents.
+each payload. It also carries the backend's structured candidate city/state/country/
+metro/macro fields from `retrieval.json` into the union. Consensus independently
+checks those authoritative fields, falling back to display-string parsing only
+for legacy unions, and fails closed on a mismatch or missing location. A fresh
+probe with missing or corrupt retrieval provenance contributes nothing; a fresh
+candidate with explicit empty structured geo remains `unknown` instead of opting
+into legacy parsing. The plan uses the shared backend macro vocabulary; broad
+Africa/Oceania/Latin America scopes normalize to deterministic country OR filters
+because neither corpus has a lossless macro value for those regions.
 
 Generated core groups default to one singleton eligibility alternative per core
 trait. That broad eligibility rule does not remove the other must-haves from
@@ -205,9 +212,9 @@ reviews are automated quality controls and do not pause execution.
 | Route | Agent rules; offline decision eval | Correct surface, backend, and depth. | `decision.json`; `packs/search/evals/run_decision_eval.py`. |
 | Contract normalization | Schema-shaped extraction plus hard schema and cross-field validation | Required role fields, valid enums, singleton default eligibility groups, core versus table-stakes traits, provenance, normalized weights, recruiter-policy snapshot, and canonical structured location filters for any non-null location; groups larger than three are rejected. | `epoch0/plan.json`; malformed generated or user-edited plans fail before sourcing. |
 | Plan critic | Automated advisory critic plus deterministic enum checks | Missing core pillars, every proposed conjunction, and contradictions between target level, cutoff, track, and JD. | `epoch0/plan_critic.json`. A critic failure is surfaced but does not replace Review. |
-| **Review** | **Human, once** | Whether the resolved role and default/user preferences describe the intended hire. | Edit or approve `epoch0/plan.json`; resume with `--plan-approved`; `plan_binding.json` prevents stale artifact reuse. |
+| **Review** | **Human, once** | Whether the resolved role and default/user preferences describe the intended hire. | Edit or approve `epoch0/plan.json`; resume with `--plan-approved`; `plan_binding.json` rejects unbound nested round/probe/frontier artifacts, and fresh probe payloads cannot reuse old completed ledgers. |
 | Probe construction | Automated diversity and bounded-round checks | Diverse archetypes and token leads rather than many near-duplicate queries; another independent round when the union is still growing. Every seed carries the approved required location, or an explicit empty scope for a reviewed global search. | `round*/seeds.json`, probe payloads, `rounds.json`. |
-| Retrieval | Primitive validation | Every probe uses the selected backend, bounded limits, and the exact approved structured location filter; model-inferred geo is overwritten. Successful lanes contribute to a deduplicated union without corruption from isolated probe failures. | Probe artifacts and `epoch*/union.jsonl`. |
+| Retrieval | Primitive validation | Every probe uses the selected backend, bounded limits, and the exact approved structured location filter; model-inferred geo is overwritten. Successful lanes contribute to a deduplicated union and preserve backend-authoritative candidate geo without corruption from isolated probe failures. | Probe artifacts and `epoch*/union.jsonl`. |
 | Triage | Conservative cheap model | Drops only clear misses; missing data and uncertainty survive to the canonical judge. | `candidate_frontier.full.jsonl`, filtered `candidate_frontier.jsonl`, `triage.json`. |
 | Candidate judge | One selected judge in the automatic loop | Per-trait evidence, level/track fit, rationale, and canonical score. | `candidate_evaluations.raw.jsonl`, accumulated in `judges/loop.jsonl`. |
 | Consensus and core gate | Deterministic code | Required current-location match, non-OUT and in-band votes, configurable score floor, and demonstrated evidence for every trait in at least one approved core group. Default singleton groups govern eligibility while all must-haves score; reviewed paths may use path scoring. Explicit unknown seniority may qualify but cannot be sendable. | `shortlist/consensus.json`, `shortlist/shortlist_ranked.json`, `shortlist/sendable_ranked.json`, `shortlist/bench_ranked.json`. |
@@ -292,7 +299,7 @@ The current names below are the contract; older docs that mention `BRIEF.md`,
 | `epochN/anchors.json`, `anchor_seeds.json` | Diverse strong anchors and their follow-up probes for epochs after zero. |
 | `master_union.jsonl` | Deduplicated union accumulated across all epochs. |
 | `judges/loop.jsonl` | Successful selected-judge verdicts accumulated across epochs. |
-| `shortlist/consensus.json` | All normalized judged rows, evidence, vote/score metadata, and deterministic `required_location`/`required_location_filters`/`location_fit` fields. |
+| `shortlist/consensus.json` | All normalized judged rows, evidence, vote/score metadata, preserved `location_fields`, and deterministic `required_location`/`required_location_filters`/`location_fit` fields. |
 | `shortlist/shortlist_ranked.json` | Approved-location, non-OUT, in-band, score-qualified candidates that satisfy one complete approved core group; explicit unknown seniority may remain here for recall and anchors. |
 | `shortlist/sendable_ranked.json` | High-confidence approved-location subset of the core-gated shortlist at the configurable sendable threshold; explicit unknown seniority is excluded. |
 | `shortlist/bench_ranked.json` | Lower-confidence approved-location candidates plus explicit unknown-seniority rows retained for review. Off-location and missing-location rows remain only in `consensus.json`. |

@@ -23,7 +23,7 @@
     "table_stakes": "Required evidence that affects fit and score but is not part of the alternative core-group gate.",
     "nice_to_have": "Ranking upside only; it never compensates for a missing core group.",
     "seniority": "Judge level and track separately. Higher hands-on ICs remain eligible. Current founders/C-suite default out only for ordinary non-executive IC roles unless the user or JD overrides the policy. Manager/director/VP/Head titles require evidence of current responsibilities rather than title-only exclusion.",
-    "location": "A non-null reviewed search_scope.location is mandatory across every retrieval epoch and shortlist membership output. search_scope.filters contains one or more canonical specificity families: values within a family are OR alternatives and families are AND requirements. City/state scopes require a country qualifier. Null plus empty filters is reserved for genuinely worldwide roles; global/remote string aliases are invalid in an approved plan.",
+    "location": "A non-null reviewed search_scope.location is mandatory across every retrieval epoch and shortlist membership output. Allowed search_scope.filters shapes are city+country, state+country, metro-only, country-only, or macro-region-only; values within a family are OR alternatives. City/state scopes require exactly one country qualifier. The reviewed label must describe the exact canonical filter scope and cannot broaden it. Null plus empty filters is reserved for genuinely worldwide roles; global/remote string aliases are invalid in an approved plan.",
     "evidence": "Prefer direct, recent demonstrated work, then trajectory and impact. Pedigree is a capped positive prior, never a gate, and missing pedigree is floor-neutral.",
     "fairness": "Use job-related evidence only; protected attributes and proxies for protected attributes are forbidden ranking inputs."
   },
@@ -61,7 +61,7 @@
       "id": "source_epoch_zero",
       "kind": "orchestrator",
       "primitive": "robust_source",
-      "description": "After approval, run diverse independent probe rounds shaped by the approved plan. Every probe receives the approved structured location scope, translated only when needed to the selected backend's equivalent canonical fields, before results are unioned.",
+      "description": "After approval, run diverse independent probe rounds shaped by the approved plan. Every probe receives the approved structured location scope, translated only when needed to the selected backend's equivalent canonical fields. Only successful probes with readable structured retrieval provenance enter the union.",
       "outputs": [
         "epoch0/rounds.json",
         "epoch0/union.jsonl"
@@ -119,6 +119,7 @@
     "Explicit user preferences override JD-supported inference, which overrides versioned recruiter defaults.",
     "The approved plan shapes epoch-zero probes and every later triage and judge prompt.",
     "A non-null approved location is injected as a structured filter into every epoch-zero and anchor probe; null is the only global-search contract.",
+    "Fresh unions preserve backend-authoritative candidate geo; missing or corrupt retrieval provenance fails closed and never opts into display-string location matching.",
     "Every reusable retrieval and judge artifact is bound to the exact approved-plan hash, JD-source hash, and Powerset set ID or local DuckDB identity; contract or corpus drift fails closed.",
     "Every shortlisted candidate matches the approved current-location scope, is non-OUT, in band, above the score floor, and demonstrates every trait in at least one alternative all-of core group.",
     "A numeric score never rescues an OUT verdict or a failed seniority/core gate.",

@@ -126,12 +126,26 @@ def main() -> None:
     args = ap.parse_args()
 
     jd = Path(args.jd_file).read_text(encoding="utf-8") if args.jd_file else args.jd
+    try:
+        from deep_search_loop import validate_approved_plan
+    except ImportError:  # pragma: no cover - package execution
+        from .deep_search_loop import validate_approved_plan
+
+    try:
+        plan = validate_approved_plan(Path(args.plan))
+        approved_location, location_filters = location_scope_from_plan(plan)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(json.dumps({
+            "primitive": "decompose_jd",
+            "status": "failed",
+            "error": f"approved recruiter plan failed validation: {exc}",
+        }, indent=2))
+        raise SystemExit(1) from exc
     key = args.api_key or os.environ.get("OPENAI_API_KEY")
     if not key:
         print(json.dumps({"primitive": "decompose_jd", "status": "failed", "error": "OPENAI_API_KEY not set"}))
         raise SystemExit(1)
 
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
     client = make_openai_client(key)
     resp = client.chat.completions.create(
         model=args.model,
@@ -140,7 +154,6 @@ def main() -> None:
     )
     obj = json.loads(resp.choices[0].message.content or "{}")
     seeds = parse_seeds(obj, n=args.n)
-    approved_location, location_filters = location_scope_from_plan(plan)
     location = approved_location or ""
     geo_seeds = apply_location_scope(seeds, location, location_filters)
 

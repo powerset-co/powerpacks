@@ -94,6 +94,23 @@ def main() -> None:
     ap.add_argument("--decompose-model", default=None)
     args = ap.parse_args()
 
+    try:
+        try:
+            from deep_search_loop import resolve_retrieval_identity, validate_approved_plan
+        except ImportError:  # pragma: no cover - package execution
+            from .deep_search_loop import resolve_retrieval_identity, validate_approved_plan
+        plan = validate_approved_plan(Path(args.plan))
+        _, args.set_id, args.db = resolve_retrieval_identity(
+            args.backend, plan, args.set_id, args.db,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(json.dumps({
+            "primitive": "robust_source",
+            "status": "failed",
+            "error": f"approved recruiter plan failed validation: {exc}",
+        }, indent=2))
+        raise SystemExit(1) from exc
+
     run_dir = Path(args.run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     union: dict[str, dict[str, Any]] = {}

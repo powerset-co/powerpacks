@@ -179,8 +179,13 @@ def load_advisory_critic(path: Path) -> dict[str, Any]:
 
 
 def validate_approved_plan(plan_path: Path, *, expected_source_url: str | None = None) -> dict[str, Any]:
-    """Enforce cross-field recruiter invariants that JSON Schema cannot express."""
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    """Enforce the published schema plus cross-field recruiter invariants."""
+    validator_dir = ROOT / "packs/search/primitives/validate_artifact"
+    if str(validator_dir) not in sys.path:
+        sys.path.insert(0, str(validator_dir))
+    from validate_artifact import validate_file  # type: ignore
+
+    plan = validate_file("search-network-jd-plan", plan_path)
     required_location_from_plan(plan)
     resolved = recruiter_policy.validate_resolved_recruiter_preferences(plan.get("recruiter_policy"))
     stage = plan.get("hire_stage")
@@ -284,13 +289,25 @@ def resolve_retrieval_identity(
 
 
 def _derived_execution_artifacts(run_dir: Path) -> list[Path]:
-    candidates = [
+    candidates: list[Path] = [
         run_dir / "master_union.jsonl",
         *sorted(run_dir.glob("epoch*/union.jsonl")),
+        *sorted(run_dir.glob("epoch*/round*/union.jsonl")),
+        *sorted(run_dir.glob("epoch*/round*/seeds.json")),
+        *sorted(run_dir.glob("epoch*/rounds.json")),
+        *sorted(run_dir.glob("epoch*/round*/probes")),
+        *sorted(run_dir.glob("epoch*/probes")),
+        *sorted(run_dir.glob("epoch*/candidate_frontier*.json*")),
+        *sorted(run_dir.glob("epoch*/probe_summaries.json")),
+        *sorted(run_dir.glob("epoch*/triage.json")),
+        *sorted(run_dir.glob("epoch*/candidate_evaluations.raw.jsonl")),
+        *sorted(run_dir.glob("epoch*/judge_input")),
+        *sorted(run_dir.glob("epoch*/anchors.json")),
+        *sorted(run_dir.glob("epoch*/anchor_seeds.json")),
         *sorted((run_dir / "judges").glob("*.jsonl")),
         *sorted((run_dir / "shortlist").glob("*.json")),
     ]
-    return [path for path in candidates if path.exists()]
+    return list(dict.fromkeys(path for path in candidates if path.exists()))
 
 
 def bind_approved_plan(

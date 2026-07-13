@@ -101,6 +101,9 @@ def _run(seed: dict[str, Any], probe_dir: Path, set_id: str | None, env_file: st
     payload = probe_dir / "payload.json"
     ledger = probe_dir / "ledger.json"
     try:
+        # A fresh prepared payload must never inherit completed-step flags or artifact pointers
+        # from an older probe that happened to use the same stable seed key.
+        ledger.unlink(missing_ok=True)
         location_filters = _seed_location_filters(seed)
         p = json.loads(payload.read_text(encoding="utf-8"))
         enforce_payload_location(p, location_filters)
@@ -122,6 +125,7 @@ def _run(seed: dict[str, Any], probe_dir: Path, set_id: str | None, env_file: st
 
 def build_union(run_dir: Path, seeds: list[dict[str, Any]], keep: int) -> list[dict[str, Any]]:
     prof: dict[str, dict[str, Any]] = {}
+    location_fields: dict[str, dict[str, Any]] = {}
     union: dict[str, dict[str, Any]] = {}
     for seed in seeds:
         led_path = run_dir / "probes" / seed["key"] / "ledger.json"
@@ -129,6 +133,25 @@ def build_union(run_dir: Path, seeds: list[dict[str, Any]], keep: int) -> list[d
             continue
         led = json.loads(led_path.read_text())
         arts = led.get("artifacts") or {}
+        retrieval_path = arts.get("retrieval_artifact")
+        if not retrieval_path or not os.path.exists(retrieval_path):
+            continue
+        try:
+            retrieval = json.loads(Path(retrieval_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        candidates = retrieval.get("candidates") if isinstance(retrieval, dict) else None
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict) or not candidate.get("person_id"):
+                continue
+            pid = str(candidate["person_id"])
+            target = location_fields.setdefault(pid, {})
+            for field in ("city", "state", "country", "macro_region", "metro_areas"):
+                value = candidate.get(field)
+                if value not in (None, "", [], {}) and target.get(field) in (None, "", [], {}):
+                    target[field] = value
         lp = arts.get("llm_profiles_path")
         if lp and os.path.exists(lp):
             with open(lp, encoding="utf-8") as handle:
@@ -152,6 +175,9 @@ def build_union(run_dir: Path, seeds: list[dict[str, Any]], keep: int) -> list[d
     for pid, u in union.items():
         r = prof.get(pid, {})
         u["found_by"] = sorted(set(u["found_by"]))
+        # Fresh unions never opt into the legacy display-string parser. An explicit empty
+        # object is authoritative and makes the final location gate return unknown.
+        u["location_fields"] = location_fields.get(pid, {})
         u["headline"] = r.get("headline")
         u["positions"] = [
             {
@@ -202,6 +228,7 @@ def main() -> None:
 
         with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
             ran = list(ex.map(lambda s: _run(s, run_dir / "probes" / s["key"], args.set_id, args.env_file, args.limit, args.top_k, args.backend, args.db), ok_seeds))
+        ran_seeds = [seed for seed, ok in zip(ok_seeds, ran) if ok]
         run_ok = sum(1 for r in ran if r)
         if not run_ok:  # every surviving probe's retrieval failed
             raise CommandError(["run_wide_search"], description="run probes (all probes failed)", missing=[run_dir / "probes"])
@@ -209,7 +236,7 @@ def main() -> None:
         print(json.dumps({"primitive": "run_wide_search", "status": "failed", "error": str(exc), "details": exc.to_dict()}, indent=2))
         raise SystemExit(1) from exc
 
-    union = build_union(run_dir, ok_seeds, keep)
+    union = build_union(run_dir, ran_seeds, keep)
     if not union:
         print(json.dumps({"primitive": "run_wide_search", "status": "failed", "error": "empty union after successful probe runs"}, indent=2))
         raise SystemExit(1)
