@@ -2,8 +2,8 @@
 
 Write reusable search-result artifacts from a completed task run.
 
-Use this after `merge_candidate_frontier` or `hydrate_people` so the user can
-build on a search later.
+The standard pipeline calls this after hydration and its configured filter and
+rerank stages. Direct use is for diagnostics or compatible task states.
 
 Artifacts:
 
@@ -15,12 +15,14 @@ Artifacts:
 Commands:
 
 ```bash
-python powerpacks/primitives/persist_search_results/results_io.py export \
+uv run --project . python \
+  packs/search/primitives/persist_search_results/results_io.py export \
   --state .powerpacks/runs/search-network-<uuid>.json
 ```
 
 ```bash
-python powerpacks/primitives/persist_search_results/results_io.py view \
+uv run --project . python \
+  packs/search/primitives/persist_search_results/results_io.py view \
   --state .powerpacks/runs/search-network-<uuid>.json \
   --limit 25
 ```

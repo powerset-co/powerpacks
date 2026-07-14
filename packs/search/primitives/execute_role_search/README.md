@@ -1,63 +1,39 @@
 # execute_role_search
 
-Execute a role search using the role vertical contract.
+Execute one validated role-search payload against the selected search backend.
 
-This is the underlying retrieval primitive. In the slice-planning flow, it
-should usually be called through `execute_search_slice`.
+The standard `$search` path calls this primitive directly from
+`search_network_pipeline.py` after set/company/education resolution and
+prefiltering. Deep search sends each approved candidate-archetype probe through
+that same pipeline. It does not normally route through `execute_search_slice`;
+that primitive remains only for legacy task-state compatibility.
 
-Expected inputs:
+Inputs come from `role_search_filters` in task state or `--payload-json`. The
+supported fields are defined by
+[`role-search-filters.schema.json`](../../schemas/role-search-filters.schema.json)
+and the [TurboPuffer query contract](../../docs/turbopuffer-contract.md). Do not
+invent attributes or operators from the physical index schema.
 
-- `semantic_query`
-- optional `bm25_queries`
-- optional location filters
-- optional `company_ids`
-- optional `company_semantic_queries`
-- optional `education_ids`
-- optional `degree_levels`
-- optional `tech_skills`
-- optional `hard_filters`
-- optional `prefilters`
-- optional `adjacency_mode`
-- optional `company_adjacency_queries`
-- optional `adjacent_role_ids`
-- optional `adjacent_departments`
-- optional `adjacent_seniority`
-- optional `seniority_bands`
-- optional `role_tracks`
-- optional `years_experience_min`
-- optional `years_experience_max`
-- optional `age_min`
-- optional `age_max`
-- optional `position_after_date`
-- optional `position_before_date`
+Execution behavior:
 
-Execution notes:
+- resolve names to canonical IDs before retrieval when a field requires it;
+- apply education and technical-skill base-person prefilters before role search;
+- interpret position date bounds as overlapping employment windows;
+- keep strict role intent separate from explicitly requested adjacency; and
+- deduplicate position-level hits to base people before writing the retrieval
+  artifact and `candidate_ids`.
 
-- Education and tech skills are prefilters: resolve them to base candidate IDs
-  before role retrieval, then search roles inside that narrowed set.
-- Position dates are overlap windows. For example, Box between 2019 and 2022
-  means roles whose start/end dates overlapped that period.
-- Company-domain adjacency should be a separate planned mode, not silently mixed
-  into strict role search.
-
-Command:
+Direct diagnostic use:
 
 ```bash
-python powerpacks/primitives/execute_role_search/execute_role_search.py \
+uv run --env-file .env --project . python \
+  packs/search/primitives/execute_role_search/execute_role_search.py \
   --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
   --limit 0 \
   --top-k 10000 \
   --write-state
 ```
 
-The primitive reads `expand_search_request.output.role_search_filters`, validates
-field/operator usage against the checked-in TurboPuffer contract, embeds the
-dense `semantic_query` for hybrid searches, runs BM25 + vector retrieval or
-filter-only retrieval, dedupes to base person IDs, writes a retrieval artifact,
-and records `candidate_ids` in task state.
-
-`--top-k` controls TurboPuffer retrieval depth per channel/batch. `--limit`
-controls the number of unique people kept after retrieval; `--limit 0` means no
-post-retrieval cap, which is the local Powerpacks default so the full frontier is
-available in artifacts for paging/inspection.
+`--top-k` controls backend retrieval depth per channel or batch. `--limit`
+controls unique people retained after retrieval; `--limit 0` keeps the full
+retrieved frontier.

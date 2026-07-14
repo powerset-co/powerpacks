@@ -9,8 +9,8 @@
 > the CLIs under [`packs/search/primitives/`](../primitives/). If prose and a CLI
 > disagree, the CLI is current behavior and this page should be corrected.
 >
-> See the [search documentation index](README.md) for current technical
-> references and clearly separated historical design and benchmark notes.
+> See the [search documentation index](README.md) for maintained technical
+> references, method notes, and dated benchmark evidence.
 
 ## Product contract
 
@@ -24,12 +24,14 @@ Before execution, the agent records three choices in `decision.json`:
 
 1. **Surface:** what kind of answer is needed.
 2. **Backend:** which candidate corpus is authoritative.
-3. **Depth:** whether this is a fast lookup or a recruiter-style search.
+3. **Depth:** whether this is standard one-pass search or recruiter-style deep
+   search.
 
-Fast mode interprets one query, previews it, retrieves candidates, and ranks
-them. Deep mode first writes down what the intended hire means, lets a human
-edit or approve that contract once, then sources, judges, and expands until it
-finds no new qualified people or reaches its configured epoch safety limit.
+Standard search (`depth: fast`) interprets one query, previews it, retrieves
+candidates, and ranks them. Deep mode first writes down what the intended hire
+means, lets a human edit or approve that contract once, then sources, judges,
+and expands until it finds no new qualified people or reaches its configured
+epoch safety limit.
 
 ```mermaid
 flowchart TD
@@ -41,7 +43,7 @@ flowchart TD
     SURFACE -->|Known contacts| CONTACTS[$search-contacts]
     SURFACE -->|People| DEPTH{4. How much search?}
 
-    DEPTH -->|Fast| INTERPRET[5A. Interpret one query]
+    DEPTH -->|Standard| INTERPRET[5A. Interpret one query<br/>depth: fast]
     INTERPRET --> PREVIEW[6A. Show the exact search preview]
     PREVIEW --> FASTREVIEW{7A. Human confirms once}
     FASTREVIEW -->|Modify| INTERPRET
@@ -76,9 +78,9 @@ not depend on the diagram alone.
 | Backend | Which candidate collection should be searched? | A Powerset set, or a local DuckDB index. |
 | Depth | Is one retrieval pass enough, or does the request need recruiter judgment and iterative sourcing? | Fast or deep. |
 
-### Fast versus deep
+### Standard versus deep
 
-| | Fast search | Deep search |
+| | Standard search (`depth: fast`) | Deep search |
 | --- | --- | --- |
 | Best for | Ordinary lookups and bounded people queries. | JDs, role briefs, shortlists, and requests for the strongest candidates for a stated role or domain. |
 | Human checkpoint | Confirm the prepared query once. | Review the recruiter contract once. |
@@ -89,6 +91,12 @@ not depend on the diagram alone.
 Deep mode is not a separate database or one giant prompt. It is local
 orchestration over small, auditable primitives. The same reviewed contract and
 candidate rubric apply to both backends.
+
+`fast` is the persisted routing value for the original one-pass
+`$search-network` pipeline. It means standard search, not a different provider,
+a rushed implementation, or a lower-quality corpus. Both depths use the same
+selected Powerset or local backend; deep mode adds recruiter planning,
+diversified probes, evidence judgment, and expansion.
 
 ### Routing rules
 
@@ -194,10 +202,11 @@ demographic attributes and non-job-related proxies are never ranking inputs.
 ### Provisional calibration thresholds
 
 The current `0.40` qualified-shortlist floor, `0.55` sendable cut, and `0.70`
-top-tier excellence gate are provisional defaults calibrated on the AgentMail
-benchmark. They are not universal hiring bars. The shortlist and sendable cuts
-are configurable per execution; all three need cross-JD re-benchmarking before
-being treated as stable policy.
+top-tier excellence gate are provisional defaults informed by the dated
+[AgentMail benchmark](deep-search-ground-truth-status.md). They are not
+universal hiring bars. The shortlist and sendable cuts are configurable per
+execution; all three need cross-JD re-benchmarking before being treated as
+stable policy.
 
 An explicit `seniority_fit: unknown` preserves recall: it may remain in the
 qualified pool and seed anchor expansion, but it is never sendable and remains

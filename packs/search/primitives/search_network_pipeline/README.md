@@ -1,12 +1,13 @@
 # search_network_pipeline
 
-Resumable orchestrator for the mechanical part of `search-network`.
+Standard `$search` orchestrator and the retrieval substrate used by deep probes.
 
-This starts **after query extraction**. Provide either an existing task `--state`
-or `--query` plus `--payload-json` containing the `expand_search_request` output.
-Natural-language decomposition remains a skill/LLM step.
+`prepare` owns natural-language expansion for standard search. `run` accepts the
+prepared payload or an existing task state and executes the fixed mechanical
+pipeline. Deep mode supplies already reviewed, bounded probe intent through the
+same runner rather than creating a second retrieval backend.
 
-For the normal `search-network` happy path, call `prepare` first instead of
+For the normal standard-search happy path, call `prepare` first instead of
 asking the harness to inspect docs or build its own extraction flow:
 
 ```bash
@@ -25,7 +26,7 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
   --payload-json .powerpacks/search/payload.json
 ```
 
-The normal user-facing flow has one approval gate before this runner: show the
+The standard user-facing flow has one approval gate before this runner: show the
 extracted search preview and ask whether to modify or execute it. Once the user
 chooses execute, call the runner with `--execute-approved`:
 
@@ -50,7 +51,8 @@ The runner then executes without another gate:
 9. `persist_search_results`
 
 Use `--search-only` only when the user explicitly wants retrieval/hydration
-without LLM filtering/reranking. If `--execute-approved` is omitted and
+without LLM filtering/reranking, or when the deep loop owns downstream triage
+and judging. If `--execute-approved` is omitted and
 `--search-only` is not set, the runner preserves the older explicit
 `blocked_approval` gate for compatibility/tests.
 

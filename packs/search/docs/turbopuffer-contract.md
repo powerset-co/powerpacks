@@ -1,7 +1,8 @@
 # TurboPuffer Contract
 
-For the fixed namespace and attribute schema, also see
-`powerpacks/docs/turbopuffer-schema.md`.
+For the fixed namespace and attribute inventory, see the
+[TurboPuffer schema index](turbopuffer-schema.md) and checked-in
+[`contracts/turbopuffer/`](../contracts/turbopuffer/) JSON.
 
 This document exists to stop agents from guessing field names and types.
 
@@ -27,7 +28,7 @@ Use these person-level fields and operators only:
 | `role_track` | string | `In` | enum-backed |
 | `role_ids` | string[] | `ContainsAny` | array-backed role IDs |
 | `base_id` | string | `In` | person IDs used for hydration/prefilter |
-| `allowed_operator_ids` | string[] | `ContainsAny` | keep private; not part of public V1 |
+| `allowed_operator_ids` | string[] | `ContainsAny` | private set-scope filter; not a user-authored constraint |
 
 ## Company Constraint Contract
 
@@ -67,7 +68,7 @@ Use these company-level concepts only as constraints inside role search:
 - `ContainsAny` is for array-backed fields
 - `Eq` is for booleans
 - `Gte` and `Lte` are for numeric bounds
-- do not invent company filter families that are not in the public V1 schema
+- do not invent company filter families that are not in the current role-search schema
 
 ## Public Enum Hints
 

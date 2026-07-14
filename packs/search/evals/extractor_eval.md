@@ -1,5 +1,9 @@
 # Extractor Eval
 
+> **Dated evaluation snapshot.** These results describe the recorded extractor
+> dataset run, not current production accuracy. Rerun the eval before using the
+> numbers for calibration decisions.
+
 Dataset: `/path/to/network-search-api/tests/evals/query_expansion/datasets`
 
 | Extractor | Cases | Accuracy | Key Fields | Time |

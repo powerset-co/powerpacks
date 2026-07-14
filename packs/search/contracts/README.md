@@ -20,8 +20,9 @@ as artifacts unless a human decides to update these checked-in contracts.
 ## Diagnostics
 
 ```bash
-python powerpacks/primitives/contracts/contracts.py list
-python powerpacks/primitives/contracts/contracts.py show postgres/persons.table.json
-python powerpacks/primitives/contracts/contracts.py check-postgres --env-file .env
-python powerpacks/primitives/contracts/contracts.py dump-postgres --env-file .env --out .powerpacks/schema-dumps/postgres-live.json
+uv run --project . python packs/search/primitives/contracts/contracts.py list
+uv run --project . python packs/search/primitives/contracts/contracts.py show postgres/persons.table.json
+uv run --env-file .env --project . python packs/search/primitives/contracts/contracts.py check-postgres
+uv run --env-file .env --project . python packs/search/primitives/contracts/contracts.py dump-postgres \
+  --out .powerpacks/schema-dumps/postgres-live.json
 ```

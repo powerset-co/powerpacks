@@ -1,5 +1,9 @@
 # Pipeline Eval Results
 
+> **Dated evaluation snapshot.** These May 2026 results predate the current
+> standard/deep `$search` architecture. They are historical evidence, not a
+> current quality claim or execution contract.
+
 Run date: 2026-05-11
 Set: **Powerset** (`2663f70d`, 5 members, 39K people)
 Mode: `--search-only` (no LLM filter/rerank)

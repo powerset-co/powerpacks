@@ -79,19 +79,19 @@ Bad:
 ## Commands
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
+uv run --project . python packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
   --payload-json '<json>' \
   --env-file .env
 ```
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/search/primitives/resolve_investors/resolve_investors.py \
+uv run --project . python packs/search/primitives/resolve_investors/resolve_investors.py \
   --payload-json '<json>' \
   --env-file .env
 ```
 
 ```bash
-uv run --project powerpacks python powerpacks/packs/search/primitives/turbopuffer/turbopuffer_resolve_companies.py \
+uv run --project . python packs/search/primitives/turbopuffer/turbopuffer_resolve_companies.py \
   --payload-json '<json>' \
   --env-file .env
 ```

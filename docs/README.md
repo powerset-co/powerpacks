@@ -8,7 +8,7 @@ only when you need that level of detail.
 
 | Topic | Document | Use it for |
 | --- | --- | --- |
-| People search | [`$search` architecture](../packs/search/docs/search-architecture.md) | Product walkthrough of routing, fast search, deep recruiter search, review points, data boundaries, outputs, and roadmap. |
+| People search | [`$search` architecture](../packs/search/docs/search-architecture.md) | Product walkthrough of routing, standard (`depth: fast`) search, deep recruiter search, review points, data boundaries, outputs, and roadmap. |
 | LinkedIn setup and indexing | [LinkedIn and Modal indexing pipeline](../packs/indexing/docs/linkedin-modal-pipeline.md) | How a LinkedIn `Connections.csv` becomes the local DuckDB queried by `$search local`. |
 | Gmail import | [Gmail import pipeline](../packs/ingestion/docs/gmail-import-pipeline.md) | How bounded msgvault sync, metadata extraction, directory reuse, LinkedIn lookup, hydration, fan-in, and indexing work. |
 | iMessage and WhatsApp import | [Message import pipeline](../packs/messages/docs/message-import-pipeline.md) | Source extraction, matching, provider payloads, human review, and the Modal boundary. |
@@ -49,9 +49,9 @@ flowchart TD
 
 The product guides explain what the system does and why. `SKILL.md` files are
 the executable agent instructions. Schemas, contracts, and CLI behavior are
-the final authority when implementation details matter. The search and
-indexing plan files listed as historical by their pack documentation indexes
-are design history, not current contracts.
+the final authority when implementation details matter. Retired implementation
+plans remain available in Git history instead of appearing beside maintained
+product documentation.
 
 ## GitHub, Wiki, and Pages
 

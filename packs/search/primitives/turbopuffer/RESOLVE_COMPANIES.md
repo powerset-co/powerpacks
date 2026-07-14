@@ -1,7 +1,7 @@
 # resolve_companies
 
 Resolve raw company names or company descriptions into canonical company IDs and
-company filter objects before per-slice person search.
+company filter objects before person retrieval.
 
 Use before `apply_prefilters` and role search when a query contains company
 names, funding/headcount constraints, sectors, investors, or company geography.
