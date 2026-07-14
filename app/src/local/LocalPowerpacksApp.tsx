@@ -9,7 +9,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { fetchLocalProfile, fetchRunResults, fetchRuns, fetchSystemUpdateStatus } from "./powerpacksApi";
 import { LocalContactsPage } from "./LocalContactsPage";
 import { LocalQueryExpansionPanel } from "./LocalQueryExpansionPanel";
-import { LocalMessagesReviewPage } from "./LocalMessagesReviewPage";
 import { LocalOnboardingPage } from "./LocalOnboardingPage";
 import { LocalOnboardingV2Page } from "./LocalOnboardingV2Page";
 import { GmailSourcePage, LinkedInSourcePage, MessagesSourcePage } from "./LocalSourcePage";
@@ -40,7 +39,6 @@ type LocalView =
   | "gmailSource"
   | "linkedinSource"
   | "messagesSource"
-  | "messagesReview"
   | "settings"
   | "runs";
 
@@ -73,7 +71,7 @@ function viewFromPath(): LocalView {
   if (window.location.pathname === "/companies") return "companies";
   if (window.location.pathname === "/env" || window.location.pathname === "/system") return "settings";
   if (window.location.pathname.startsWith("/settings")) return "settings";
-  if (window.location.pathname === "/setup/imessage/review") return "messagesReview";
+  if (window.location.pathname === "/setup/imessage/review") return "messagesSource";
   return "runs";
 }
 
@@ -324,8 +322,6 @@ export function LocalPowerpacksApp() {
               <LocalCompaniesPage />
             ) : activeView === "companyDetails" ? (
               <LocalCompanyDetailsPage companyId={companyIdFromPath() || ""} />
-            ) : activeView === "messagesReview" ? (
-              <LocalMessagesReviewPage onBackToSetup={() => navigate("/")} />
             ) : !selectedRun ? (
               <div className="flex min-h-[calc(100dvh-7rem)] items-center justify-center">
                 <div className="w-full max-w-2xl">

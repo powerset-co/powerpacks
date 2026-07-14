@@ -213,16 +213,15 @@ only; keep that scoped to the msgvault primitives.
 
 ## Pack-specific readiness
 
-- **Messages pack** (iMessage / WhatsApp imports, contact review):
+- **Ingestion message workflows** (iMessage / WhatsApp imports, contact review):
   - `chat.db` access: requires Full Disk Access on macOS. Check it with the
     iMessage primitive's scoped `check` command when doing iMessage work; if
     access is not granted, *stop* and ask the user to enable it in System
     Settings before retrying.
-  - WAHA container: only needs to be up if the user is doing WhatsApp work.
-    Run `uv run --project . python packs/messages/primitives/waha_runtime/waha_runtime.py status`
-    on demand, not on every bootup.
-  - Powerset login: required for `sync_powerset_candidates`, `upload`. Check
-    via `uv run --project . python packs/powerset/primitives/auth/auth.py whoami`.
+  - WhatsApp uses `openclaw/wacli`. Run
+    `uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py status`
+    on demand. Installing `wacli`, QR login, and history sync require explicit
+    user consent. WAHA/Docker and Powerset upload are not part of this flow.
 - **Indexing pack** (build-local-search-index): local files only. It consumes
   `.powerpacks/network-import/merged/people.csv` and writes
   `.powerpacks/search-index/`; do not run LLM, network, Supabase,
@@ -322,7 +321,10 @@ Routes:
 - `$import-messages`, iMessage/WhatsApp, message-contact local import (discover →
   match vs LinkedIn/Gmail → deep-research → mandatory review → import) + fan-in
   merge + Modal index; local only, never uploads to Powerset →
-  `packs/messages/skills/import-messages/SKILL.md`
+  `packs/ingestion/skills/import-messages/SKILL.md`
+- `$import-whatsapp`, isolated WhatsApp metadata sync/export through wacli; no
+  identity resolution, fan-in, or indexing →
+  `packs/ingestion/skills/import-whatsapp/SKILL.md`
 - `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
   `packs/ingestion/skills/msgvault/SKILL.md`
 - `$onboard`, `$ingestion-onboarding`, local ingestion onboarding, link/export
@@ -345,7 +347,8 @@ Routes:
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
 - `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
-  msgvault/messages/Twitter source preparation →
+  msgvault/Twitter source preparation; iMessage/WhatsApp always route to
+  `$import-messages` →
   `packs/ingestion/skills/discover-contacts/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
@@ -397,12 +400,11 @@ the primitive blocks/fails or the user asks for implementation details.
 ```
 powerpacks/
 ├── packs/
-│   ├── messages/               # iMessage + WhatsApp + Powerset enrichment
-│   │   ├── primitives/         # one subdir per primitive
-│   │   ├── skills/             # user-facing skills (import-messages, import-whatsapp)
-│   │   ├── tasks/              # task JSON specs
-│   │   ├── docs/
-│   │   └── README.md
+│   ├── ingestion/              # LinkedIn/Gmail/Twitter/message source workflows
+│   │   ├── primitives/         # source discovery, import, and message leaf primitives
+│   │   ├── skills/             # setup, import-gmail/messages/whatsapp, deep-context
+│   │   ├── schemas/            # people and message-contact contracts
+│   │   └── docs/               # maintained ingestion product guides
 │   ├── indexing/               # build-local-search-index local artifacts
 │   ├── search/                 # search (router + deep mode), search-company, search-sql
 │   └── powerset/               # cross-pack tooling (doctor, auth, ...)

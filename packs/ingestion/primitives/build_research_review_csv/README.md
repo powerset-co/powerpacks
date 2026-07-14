@@ -1,0 +1,70 @@
+# build_research_review_csv
+
+Flatten the per-handle deep-research artifacts produced by
+`deep_research_contacts` into the fixed local research-review CSV consumed by
+the Powerpacks browser reviewer and Messages materializer. Stdlib-only.
+
+CSV columns:
+
+```
+bucket, handle, full_name, phone_e164, area_code, total_messages,
+imessage_message_count, whatsapp_message_count, message_source,
+last_message, imessage_last_message, whatsapp_last_message,
+group_names, location_city, location_country,
+top_titles, top_companies, top_title_company_pairs, schools,
+short_reason, identity_risk, signals, retarget_hint, exclude,
+enrich_decision
+```
+
+Buckets are `yes | maybe | no`. Legacy cached buckets are still accepted and
+normalized as `confident -> yes`, `medium|review -> maybe`.
+
+## Usage
+
+```bash
+# 1. LLM network-review bucketing.
+python packs/ingestion/primitives/build_research_review_csv/build_research_review_csv.py build \
+  --research-dir .powerpacks/messages/research \
+  --queue-csv .powerpacks/messages/research_queue.csv \
+  --output-csv .powerpacks/messages/research_review.csv
+
+# 2. Review in the native web UI:
+python packs/ingestion/primitives/review_research_web/review_research_web.py serve \
+  --csv .powerpacks/messages/research_review.csv \
+  --research-dir .powerpacks/messages/research \
+  --open
+
+```
+
+After review, the CSV is consumed locally by
+`packs/ingestion/primitives/import_contacts_pipeline/messages.py`. This workflow
+does not upload contacts to a Powerset set.
+
+## Network Review Cache
+
+LLM results are cached at `<research-dir>/<handle>/03_network_review.json`.
+Powerpacks treats that as the local source of truth for network review.
+There is no alternate bucket mode and no heuristic fallback; if the configured
+LLM cannot return a valid network review after retrying transient 429/5xx,
+timeout, and network errors, the build fails instead of guessing. The primitive
+uses `OPENROUTER_API_KEY` when present and falls back to direct `OPENAI_API_KEY`
+for `openai/...` models.
+
+Each canonical skill run regenerates the fixed review CSV from current source
+data and requires a fresh browser review. The lower-level hidden
+`--previous-csv` option can carry forward only human state (`exclude`,
+`enrich_decision`, `retarget_hint`) when an explicit caller supplies a previous
+artifact; `$import-messages` does not currently do that.
+
+## Pricing reference
+
+| Model | Input $/1M | Output $/1M |
+| --- | --- | --- |
+| anthropic/claude-sonnet-4-6 | 3.00 | 15.00 |
+| anthropic/claude-haiku-4-5 | 0.80 | 4.00 |
+| openai/gpt-4.1 | 2.00 | 8.00 |
+| openai/gpt-4.1-mini | 0.40 | 1.60 |
+| openai/gpt-4.1-nano | 0.10 | 0.40 |
+
+Per-contact tokens are roughly 600 in / 80 out, so 110 contacts on `gpt-4.1`
+costs ~$0.20.

@@ -376,7 +376,7 @@ def save_gmail_msgvault_accounts(
 def messages_open_privacy_command() -> str:
     return shell_join([
         "uv", "run", "--project", ".", "python",
-        "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
+        "packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
         "open-privacy-settings",
         "--target", "both",
     ])
@@ -385,7 +385,7 @@ def messages_open_privacy_command() -> str:
 def messages_whatsapp_auth_command() -> str:
     return shell_join([
         "uv", "run", "--project", ".", "python",
-        "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
+        "packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
         "auth",
         "--store", str(DEFAULT_WACLI_STORE),
     ])
@@ -394,14 +394,14 @@ def messages_whatsapp_auth_command() -> str:
 def messages_link_status(args: argparse.Namespace) -> dict[str, Any]:
     imessage_cmd = [
         sys.executable,
-        "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
+        "packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
         "check",
         "--strict",
     ]
     imessage_code, imessage_payload, imessage_stderr = run_command(imessage_cmd, timeout=args.import_timeout)
     whatsapp_cmd = [
         sys.executable,
-        "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
+        "packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
         "status",
         "--store", str(DEFAULT_WACLI_STORE),
     ]

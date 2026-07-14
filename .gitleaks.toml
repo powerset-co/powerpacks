@@ -21,7 +21,6 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "line"
 paths = [
-  '''packs/messages/primitives/powerset_auth/powerset_auth\.py''',
   '''packs/powerset/primitives/auth/auth\.py''',
 ]
 regexes = [

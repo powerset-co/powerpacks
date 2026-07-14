@@ -1,9 +1,8 @@
-"""End-to-end tests for the Powerset enrichment primitives.
+"""End-to-end tests for authentication and active message enrichment primitives.
 
 Covered primitives:
 - powerset_auth (login flow against fake Auth0 + browserless mode, whoami,
   token, logout)
-- sync_powerset_candidates (paginated /v2/contacts against fake search-api)
 - match_local_candidates (local matcher tiers)
 - llm_review_contacts (estimate + review against fake OpenRouter)
 
@@ -32,9 +31,8 @@ from packs.shared.csv_io import CsvIO
 
 ROOT = Path(__file__).resolve().parents[1]
 POWERSET_AUTH = ROOT / "packs/powerset/primitives/auth/auth.py"
-SYNC_CANDIDATES = ROOT / "packs/messages/primitives/sync_powerset_candidates/sync_powerset_candidates.py"
-MATCH_LOCAL = ROOT / "packs/messages/primitives/match_local_candidates/match_local_candidates.py"
-LLM_REVIEW = ROOT / "packs/messages/primitives/llm_review_contacts/llm_review_contacts.py"
+MATCH_LOCAL = ROOT / "packs/ingestion/primitives/match_local_candidates/match_local_candidates.py"
+LLM_REVIEW = ROOT / "packs/ingestion/primitives/llm_review_contacts/llm_review_contacts.py"
 
 
 def _free_port() -> int:
@@ -308,136 +306,6 @@ class PowersetAuthTests(unittest.TestCase):
             self.assertFalse(creds_path.exists())
 
 
-class SyncCandidatesTests(unittest.TestCase):
-    def test_sync_paginates_and_writes_csv(self) -> None:
-        port = _free_port()
-        # 250 rows so we exercise pagination at default page_size 200.
-        candidates = [
-            {
-                "id": f"c-{i}",
-                "first_name": f"First{i}",
-                "last_name": f"Last{i}",
-                "display_name": None,
-                "confirmed_linkedin_url": f"https://linkedin.com/in/last{i}",
-                "phone_number": f"+1415555{i:04d}",
-                "emails": [f"first{i}@example.com"],
-                "public_identifier": f"last{i}",
-            }
-            for i in range(250)
-        ]
-        _Handler.routes = {"candidates": candidates}
-        server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                tmp = Path(td)
-                creds_path = tmp / "creds.json"
-                creds_path.write_text(json.dumps({
-                    "access_token": "tok",
-                    "expires_at": time.time() + 3600,
-                    "email": "a@b.c",
-                }))
-                output = tmp / "powerset_contacts.csv"
-                manifest = tmp / "manifest.json"
-                result = subprocess.run(
-                    [
-                        "python3", str(SYNC_CANDIDATES), "sync",
-                        "--credentials-path", str(creds_path),
-                        "--api-base-url", f"http://127.0.0.1:{port}",
-                        "--output", str(output),
-                        "--manifest", str(manifest),
-                        "--page-size", "100",
-                    ],
-                    cwd=ROOT, capture_output=True, text=True, timeout=20,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                payload = json.loads(result.stdout)
-                self.assertEqual(payload["status"], "ok")
-                self.assertEqual(payload["rows"], 250)
-                self.assertEqual(payload["diagnostics"]["pages"], 3)
-                with output.open(newline="") as h:
-                    rows = list(CsvIO.dict_reader(h))
-                self.assertEqual(len(rows), 250)
-                self.assertEqual(rows[0]["id"], "c-0")
-                self.assertEqual(rows[0]["name"], "First0 Last0")
-                self.assertEqual(rows[0]["linkedin_url"], "https://linkedin.com/in/last0")
-                self.assertEqual(rows[0]["emails"], "first0@example.com")
-        finally:
-            server.shutdown()
-            server.server_close()
-
-    def test_sync_falls_back_to_cache_when_unauth(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            cache = tmp / "powerset_contacts.csv"
-            with cache.open("w", newline="") as h:
-                writer = csv.writer(h)
-                writer.writerow(["id", "name", "linkedin_url", "phone_number", "emails", "public_identifier"])
-                writer.writerow(["c1", "Cached User", "", "", "", ""])
-            result = subprocess.run(
-                [
-                    "python3", str(SYNC_CANDIDATES), "sync",
-                    "--credentials-path", str(tmp / "missing.json"),
-                    "--api-base-url", "https://api.example.test",
-                    "--output", str(cache),
-                ],
-                cwd=ROOT, capture_output=True, text=True, timeout=10,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            self.assertEqual(payload["status"], "cached_after_auth_error")
-            self.assertEqual(payload["rows"], 1)
-
-
-    def test_sync_candidates_requires_explicit_api_config_before_auth(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            env = os.environ.copy()
-            for key in ("POWERPACKS_API_BASE_URL", "POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL"):
-                env.pop(key, None)
-            result = subprocess.run(
-                [
-                    "python3", str(SYNC_CANDIDATES), "sync",
-                    "--credentials-path", str(tmp / "missing.json"),
-                    "--output", str(tmp / "powerset_contacts.csv"),
-                    "--manifest", str(tmp / "manifest.json"),
-                ],
-                cwd=ROOT, env=env, capture_output=True, text=True, timeout=10,
-            )
-        self.assertEqual(result.returncode, 2)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["status"], "failed")
-        self.assertIn("POWERPACKS_API_URL", payload["error"])
-        self.assertIn("env.powerset.example", payload["error"])
-
-    def test_sync_candidates_use_cached_does_not_need_api_or_credentials(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            cache = tmp / "powerset_contacts.csv"
-            cache.write_text(
-                "id,name,linkedin_url,phone_number,emails,public_identifier\n"
-                "c1,Cached User,,,,cached-user\n"
-            )
-            env = os.environ.copy()
-            for key in ("POWERPACKS_API_BASE_URL", "POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL"):
-                env.pop(key, None)
-            result = subprocess.run(
-                [
-                    "python3", str(SYNC_CANDIDATES), "sync",
-                    "--credentials-path", str(tmp / "missing.json"),
-                    "--output", str(cache),
-                    "--manifest", str(tmp / "manifest.json"),
-                    "--use-cached",
-                ],
-                cwd=ROOT, env=env, capture_output=True, text=True, timeout=10,
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["status"], "cached")
-        self.assertEqual(payload["rows"], 1)
-
-
 class MatchLocalTests(unittest.TestCase):
     def _write_contacts(self, path: Path, rows: list[dict[str, str]]) -> None:
         headers = [
@@ -459,6 +327,52 @@ class MatchLocalTests(unittest.TestCase):
             w.writeheader()
             for row in rows:
                 w.writerow({k: row.get(k, "") for k in headers})
+
+    def test_default_ignores_legacy_powerset_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            contacts = tmp / "contacts.csv"
+            local_people = tmp / "local-people.csv"
+            legacy_catalog = tmp / "powerset_contacts.csv"
+            self._write_contacts(contacts, [
+                {"phone": "+14155550101", "name": "Local Person", "source": "imessage"},
+                {"phone": "+14155550102", "name": "Legacy Person", "source": "imessage"},
+            ])
+            self._write_candidates(legacy_catalog, [
+                {"id": "legacy", "name": "Legacy Person", "linkedin_url": "https://l/in/legacy"},
+            ])
+            with local_people.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=[
+                    "id", "full_name", "linkedin_url", "public_identifier",
+                    "primary_phone", "all_phones", "primary_email", "all_emails",
+                ])
+                writer.writeheader()
+                writer.writerow({
+                    "id": "local",
+                    "full_name": "Local Person",
+                    "linkedin_url": "https://l/in/local",
+                    "public_identifier": "local",
+                })
+
+            result = subprocess.run(
+                [
+                    "python3", str(MATCH_LOCAL), "match",
+                    "--contacts", str(contacts),
+                    "--local-people", str(local_people),
+                    "--review", str(tmp / "missing-review.csv"),
+                ],
+                cwd=tmp, capture_output=True, text=True, timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["candidates_path"], "")
+            self.assertEqual(payload["explicit_catalog_candidates"], 0)
+            self.assertEqual(payload["local_people_candidates"], 1)
+            with contacts.open(newline="") as handle:
+                by_name = {row["name"]: row for row in CsvIO.dict_reader(handle)}
+            self.assertEqual(by_name["Local Person"]["matched_person_id"], "local")
+            self.assertEqual(by_name["Legacy Person"]["match_status"], "unmatched")
 
     def test_single_token_first_name_suggests_unique_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -482,7 +396,9 @@ class MatchLocalTests(unittest.TestCase):
             result = subprocess.run(
                 ["python3", str(MATCH_LOCAL), "match",
                  "--contacts", str(contacts),
-                 "--candidates", str(candidates)],
+                 "--candidates", str(candidates),
+                 "--no-local-people",
+                 "--review", str(tmp / "missing-review.csv")],
                 cwd=ROOT, capture_output=True, text=True, timeout=10, check=True,
             )
             payload = json.loads(result.stdout)
@@ -530,7 +446,9 @@ class MatchLocalTests(unittest.TestCase):
             result = subprocess.run(
                 ["python3", str(MATCH_LOCAL), "match",
                  "--contacts", str(contacts),
-                 "--candidates", str(candidates)],
+                 "--candidates", str(candidates),
+                 "--no-local-people",
+                 "--review", str(tmp / "missing-review.csv")],
                 cwd=ROOT, capture_output=True, text=True, timeout=10,
             )
             self.assertEqual(result.returncode, 0, result.stderr)

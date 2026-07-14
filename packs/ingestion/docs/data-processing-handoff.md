@@ -3,7 +3,7 @@
 > **Status: historical handoff.** Some skill names and orchestration details below
 > predate `$import-gmail` and `$import-messages`. Start with the
 > [ingestion docs index](README.md), [Gmail import pipeline](gmail-import-pipeline.md),
-> and [Messages import pipeline](../../messages/docs/message-import-pipeline.md).
+> and [Message import pipeline](message-import-pipeline.md).
 
 This handoff is for the data-processing worker. It describes the artifacts now
 emitted by local network ingestion and where RapidAPI enrichment happens.
@@ -34,9 +34,9 @@ primitives so runs are deterministic, ledgered, testable, and resumable.
 | User command / skill | Skill file | Runtime script(s) | Result |
 | --- | --- | --- | --- |
 | `$import-gmail` | `packs/ingestion/skills/import-gmail/SKILL.md` | bounded `gmail.py discover` -> directory/Parallel/RapidAPI import -> fan-in -> Modal index | msgvault Gmail metadata imported into the local network and search index. |
-| `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `discover_contacts_pipeline.py run ...` | End-to-end orchestrator for LinkedIn CSV + Gmail and optional existing messages/Twitter artifacts. |
+| `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `discover_contacts_pipeline.py run ...` | Discovery for LinkedIn CSV, Gmail, and optional Twitter artifacts. iMessage/WhatsApp route exclusively to `$import-messages`. |
 | `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter_network_import.py run/approve/continue`; then `$discover-contacts --include-existing-artifacts` | Twitter/X `people.csv`, then merged local network artifacts. |
-| `$import-messages` | `packs/messages/skills/import-messages/SKILL.md` | messages pack discovery/match/research/review -> source import -> fan-in -> Modal index | Reviewed iMessage/WhatsApp metadata in merged local network artifacts. |
+| `$import-messages` | `packs/ingestion/skills/import-messages/SKILL.md` | ingestion discovery/match/research/review -> source import -> fan-in -> Modal index | Reviewed iMessage/WhatsApp metadata in merged local network artifacts. |
 | LinkedIn CSV path | `$discover-contacts` or `import-linkedin-network` | `linkedin_network_import.py` -> `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
 
 ## Canonical CSV contracts
@@ -117,7 +117,7 @@ enrichment primitive for rows that already have LinkedIn identity.
 | Twitter/X import | Twitter follower crawl | `twitter_network_import.py` step `load_or_crawl` | Approval-gated. |
 | Twitter/X import | LinkedIn validation/enrichment for pre-resolved LinkedIn URLs | `twitter_network_import.py` step `validate_linkedin` | Approval-gated. |
 | Gmail/msgvault | Optional email/name/company-guess -> LinkedIn URL resolution; no profile hydration inside msgvault import | `gmail_network_import.py msgvault` emits `linkedin_resolution_queue.csv`; `resolve_linkedin_queue.py` runs harness or approval-gated Parallel; `gmail_network_import.py apply-resolutions` attaches URLs | msgvault import local-only; Parallel resolution spend-gated; RapidAPI only later through `enrich_people.py`. |
-| Messages/iMessage/WhatsApp | None in local import today | messages primitives | Local metadata/review only unless later resolver/enrichment is explicitly added. |
+| Messages/iMessage/WhatsApp | None in local import today | ingestion message primitives | Local metadata/review only unless later resolver/enrichment is explicitly added. |
 
 Target direction: source verticals should emit canonical `people.csv` or
 resolution queues, then share `resolve_linkedin_queue.py` for LinkedIn URL

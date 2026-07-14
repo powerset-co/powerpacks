@@ -1,59 +1,43 @@
 import path from "path";
 import fs from "fs";
-import { execSync, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
 
 import {
   accountsPath,
   discoverContactsSetupLedger,
   importRefreshLedgerPath,
-  messagesLedgerPath,
+  messagesDiscoveryManifestPath,
   messagesReviewCsvPath,
   powerpacksRepoRoot,
   powerpacksStateRoot,
   safeJoinPowerpacks,
   setupLedgerPath,
-  whatsAppWacliQrHtmlPath,
-  whatsAppWacliQrPngPath,
-  whatsAppWahaQrPngPath,
-  whatsAppWahaQrTxtPath,
 } from "../lib/paths";
-import { fileSummary, readJsonSync, removeLocalFiles, sha256File, writeJsonSync } from "../lib/fsUtils";
+import { fileSummary, readJsonSync, sha256File, writeJsonSync } from "../lib/fsUtils";
 import { setupProcessEnv } from "../lib/env";
 import { parseJsonFragment } from "../lib/subprocess";
-import { shellJoin, shellQuote, shellStage, setupStageSummaries, stagedCommand } from "../lib/shell";
+import { shellJoin, setupStageSummaries, stagedCommand } from "../lib/shell";
 import { parseCsvDocument } from "../lib/csv";
 import { accountRecords, configuredMsgvaultDb, resolveOperator, uniqueStrings } from "../lib/accounts";
 import {
   SETUP_SOURCE_LABELS,
   SETUP_SOURCE_ORDER,
-  clearWhatsAppLinkStatusCache,
   normalizeSetupSources,
   sourceSlug,
-  whatsAppProvider,
-  whatsAppQrPngRelativePath,
 } from "../lib/sources";
-import { messagesCurrentBlockForUi, messagesReviewResponse, resolveReviewCsvPath } from "../lib/messagesReview";
 import {
   enrichmentNetworkCommand,
   gmailDiscoveryCommand,
   gmailLinkCommand,
   indexContactsCommand,
   linkedinDiscoveryCommand,
-  messagesDiscoveryCommand,
   msgvaultHomeArgs,
   setupCommandArgs,
-  wahaRuntimeCommand,
-  wahaSessionCommand,
-  wahaWaitTimeoutSeconds,
 } from "../lib/commands";
 import { clearLocalDuckdbTableCountsCache, localDuckdbTableCounts } from "../lib/duckdb";
-import { readRequestJson, sendBinary, sendJson } from "../lib/http";
+import { readRequestJson, sendJson } from "../lib/http";
 import { setupJobs, setupJobsList, startSetupJob, startWhitelistedShellJob } from "../jobs";
 import type { RunState, SetupJob, SetupOperator } from "../lib/types";
-
-// Pre-existing latent reference: messagesImportLedgerStatus (currently unused)
-// reads this constant, which was never defined in the original plugin either.
-declare const messagesContactsCsvPath: string;
 
 type SetupImportSource = {
   id: string;
@@ -292,58 +276,6 @@ function ledgerStatus(filePath: string, fallback: string) {
   };
 }
 
-function messagesLedgerStatus(fallback: string) {
-  const ledger = readJsonSync(messagesLedgerPath) || {};
-  const summary = fileSummary(messagesLedgerPath);
-  let reviewCounts: Record<string, any> = {};
-  try {
-    reviewCounts = messagesReviewResponse("all", "", 0, 1).counts || {};
-  } catch {
-    reviewCounts = {};
-  }
-  const block = messagesCurrentBlockForUi(ledger, reviewCounts);
-  const rawStatus = String(block?.status || ledger.status || fallback);
-  return {
-    status: rawStatus === "selected_steps_completed" ? "completed" : rawStatus,
-    updatedAt: ledger.updated_at || ledger.completed_at || summary.updatedAt || null,
-    artifactDir: ledger.artifact_dir || ledger.run_dir || "",
-  };
-}
-
-function messagesImportLedgerStatus(fallback: string) {
-  const ledger = readJsonSync(messagesLedgerPath) || {};
-  const summary = fileSummary(messagesLedgerPath);
-  const steps = ledger.steps && typeof ledger.steps === "object" ? ledger.steps : {};
-  const importStepIds = [
-    "check_imessage",
-    "extract_imessage",
-    "normalize_imessage",
-    "extract_whatsapp",
-    "normalize_whatsapp",
-    "ensure_contacts",
-  ];
-  const importBlock = importStepIds
-    .map((id) => steps[id])
-    .find((step) => {
-      const status = String(step?.status || "").toLowerCase();
-      return status === "failed" || status === "blocked_user_action";
-    });
-  const contactsReady = Boolean(steps.ensure_contacts?.status === "completed" || ledger.artifacts?.contacts_csv || fs.existsSync(messagesContactsCsvPath));
-  const rawStatus = String(ledger.status || fallback);
-  const status = importBlock
-    ? String(importBlock.status)
-    : contactsReady || rawStatus === "selected_steps_completed"
-      ? "completed"
-      : rawStatus === "blocked_approval"
-        ? fallback
-        : rawStatus;
-  return {
-    status,
-    updatedAt: ledger.updated_at || ledger.completed_at || summary.updatedAt || null,
-    artifactDir: ledger.artifact_dir || ledger.run_dir || "",
-  };
-}
-
 function discoveryManifestState(sourceId: string, fallback: string) {
   const relPathBySource: Record<string, string> = {
     gmail: ".powerpacks/network-import/discover/gmail/manifest.json",
@@ -425,86 +357,17 @@ function buildImportSources(accounts: RunState | null, operatorId: string): Setu
         ? (id === "linkedin_csv" ? (state.updatedAt || sourceUpdatedAt("linkedin")) : state.updatedAt)
         : null,
       artifactDir: source?.linked && !source?.skipped ? state.artifactDir : "",
-      runnable: id === "twitter" ? false : undefined,
-      disabledReason: id === "twitter" ? "Twitter/X handle is recorded; follower import is not wired into setup yet." : undefined,
-      command: id === "messages"
-        ? messagesDiscoveryCommand()
+      runnable: id === "messages" || id === "twitter" ? false : undefined,
+      disabledReason: id === "messages"
+        ? "Messages import is harness-only; run $import-messages from Codex or Claude Code."
         : id === "twitter"
-          ? []
-          : linkedinDiscoveryCommand(),
+          ? "Twitter/X handle is recorded; follower import is not wired into setup yet."
+          : undefined,
+      command: id === "messages" || id === "twitter" ? [] : linkedinDiscoveryCommand(),
     });
   }
 
   return rows;
-}
-
-function messageChannelFlags(accounts: RunState | null, ledger: RunState | null): string[] {
-  const sources = normalizeSetupSources(accounts);
-  const messages = sources.find((source) => source.id === "messages");
-  const config = messages?.config || {};
-  const imessage = config.imessage && typeof config.imessage === "object" ? config.imessage as Record<string, any> : {};
-  const whatsapp = config.whatsapp && typeof config.whatsapp === "object" ? config.whatsapp as Record<string, any> : {};
-  const steps = ledger?.steps || {};
-  const flags: string[] = [];
-  if (steps.extract_imessage?.status === "completed" || imessage.status === "ready" || imessage.readable === true) {
-    flags.push("--include-imessage");
-  }
-  if (steps.extract_whatsapp?.status === "completed" || whatsapp.status === "linked" || whatsapp.status === "authenticated" || whatsapp.authenticated === true) {
-    flags.push("--include-whatsapp");
-  }
-  return flags;
-}
-
-function messagesCompleteReviewCommand(accounts: RunState | null): string[] {
-  const ledger = readJsonSync(messagesLedgerPath) || {};
-  const markAppReviewComplete = [
-    "uv", "run", "--project", ".", "python", "-c",
-    [
-      "import datetime, json",
-      "from pathlib import Path",
-      "p = Path('.powerpacks/messages/import-run.setup-messages.json')",
-      "now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')",
-      "data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}",
-      "step = data.setdefault('steps', {}).setdefault('review_research_web', {'id': 'review_research_web'})",
-      "step.update({'status': 'completed', 'finished_at': now, 'summary': {'source': 'powerpacks_setup_app', 'url': '/setup/imessage/review'}})",
-      "data.pop('current_block', None)",
-      "data['updated_at'] = now",
-      "p.parent.mkdir(parents=True, exist_ok=True)",
-      "p.write_text(json.dumps(data, indent=2, sort_keys=True) + '\\n', encoding='utf-8')",
-    ].join("; "),
-  ];
-  const materializeMessagesPeople = enrichmentNetworkCommand("local", "messages");
-  return ["/bin/zsh", "-lc", `${shellJoin(markAppReviewComplete)} && ${shellStage("materializing Messages people", materializeMessagesPeople)}`];
-}
-
-function messagesApproveAndContinueCommand(accounts: RunState | null): string[] {
-  const ledger = readJsonSync(messagesLedgerPath) || {};
-  const approve = [
-    "uv", "run", "--project", ".", "python",
-    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
-    "approve",
-    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
-    "--confirm",
-  ];
-  const continueAfterApproval = [
-    "uv", "run", "--project", ".", "python",
-    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
-    "continue",
-    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
-    "--parallel-timeout", String(process.env.POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS || "900"),
-    "--parallel-auto-approve-usd", "25",
-    "--reuse-existing-artifacts",
-    ...messageChannelFlags(accounts, ledger),
-    "--include-contact-merge",
-    "--include-powerset-candidates",
-    "--include-local-match",
-    "--include-llm-review",
-    "--include-research",
-    "--include-review",
-    "--no-open-browser",
-    "--force-prepare-queue",
-  ];
-  return ["/bin/zsh", "-lc", `${shellJoin(approve)} && ${shellJoin(continueAfterApproval)}`];
 }
 
 function csvPathCount(value: unknown): number {
@@ -626,28 +489,6 @@ function directoryLookupMatchCount(artifact: unknown, directoryRows: Record<stri
 function validLinkedInUrl(value: unknown): boolean {
   const text = String(value || "").trim();
   return /^https?:\/\/(?:[\w-]+\.)?linkedin\.com\/in\//i.test(text);
-}
-
-function messagesReviewStats(messagesLedger: RunState): { total: number; enrich: number; skipped: number; matched: number; profilesFound: number } {
-  const reviewRows = csvRowsForArtifact(".powerpacks/messages/research_review.csv");
-  const llmSummary = messagesLedger.steps?.llm_review?.summary || {};
-  const llmCounts = llmSummary.counts || {};
-  const matchStats = messagesLedger.steps?.match_local_contacts?.summary?.stats || {};
-  const reviewMatched = reviewRows.filter((row) => String(row.network_match_status || "").toLowerCase() === "matched").length;
-  const reviewProfiles = reviewRows.filter((row) =>
-    String(row.network_match_status || "").toLowerCase() === "matched"
-    && (validLinkedInUrl(row.linkedin_url) || validLinkedInUrl(row.network_linkedin_url))
-  ).length;
-  const matched = Math.max(Number(matchStats.matched || 0), reviewMatched);
-  const enrich = Number(llmCounts.enrich || 0);
-  const skipped = Number(llmCounts.skip || 0);
-  return {
-    total: Number(llmSummary.candidate_count || llmCounts.verdicts || enrich + skipped || 0),
-    enrich,
-    skipped,
-    matched,
-    profilesFound: Math.max(matched, reviewProfiles),
-  };
 }
 
 function localSearchRecordSummary(): { recordFiles: number; nonemptyRecordFiles: number } {
@@ -935,13 +776,21 @@ async function setupStatus(tabInput: unknown = "all") {
   const includeDiscover = tab === "all" || tab === "discover" || tab === "enrichment" || tab === "sources";
   const includeEnrichment = tab === "all" || tab === "enrichment" || tab === "sources";
   const includeIndex = tab === "all" || tab === "index";
-  const includeReview = tab === "all" || tab === "enrichment";
   const setupLedger = readJsonSync(setupLedgerPath) || {};
   const accounts = readJsonSync(accountsPath) || {};
   const importRefreshLedger = readJsonSync(importRefreshLedgerPath) || {};
-  const messagesLedger = includeReview ? readJsonSync(messagesLedgerPath) || {} : {};
-  const reviewPath = includeReview ? resolveReviewCsvPath() || messagesReviewCsvPath : messagesReviewCsvPath;
-  const reviewApi = includeReview ? messagesReviewResponse("all", "", 0, 1) : { counts: {} };
+  const messagesLedger = readJsonSync(messagesDiscoveryManifestPath) || {};
+  const reviewCounts = {
+    total: 0,
+    included: 0,
+    skipped: 0,
+    undecided: 0,
+    yes: 0,
+    maybe: 0,
+    no: 0,
+    inNetwork: 0,
+    retargetFeedback: 0,
+  };
   const phases = setupLedger.phases || {};
   const sources = normalizeSetupSources(accounts);
   const linkedSources = sources.filter((source) => source.linked).map((source) => source.id);
@@ -984,7 +833,6 @@ async function setupStatus(tabInput: unknown = "all") {
   } : lastIndexProcessingEstimate(peopleSha256);
   const indexCoverage = includeIndex ? localIndexCoverage(peopleSha256, duckdbPath) : { status: "not_loaded", totalPeople: 0, indexedPeople: 0, pendingPeople: 0 };
   const importLiveRefresh = phases.import?.live_refresh || importRefreshLedger.refresh || importRefreshLedger;
-  const messagesCurrentBlock = messagesCurrentBlockForUi(messagesLedger, reviewApi.counts || {});
 
   return {
     operator,
@@ -1007,14 +855,14 @@ async function setupStatus(tabInput: unknown = "all") {
       sources,
     },
     messages: {
-      ...fileSummary(messagesLedgerPath),
+      ...fileSummary(messagesDiscoveryManifestPath),
       status: messagesLedger.status || "unknown",
-      currentBlock: messagesCurrentBlock,
+      currentBlock: null,
       steps: Object.fromEntries(Object.entries(messagesLedger.steps || {}).map(([key, value]: [string, any]) => [key, value?.status || "unknown"])),
     },
     review: {
-      ...fileSummary(reviewPath),
-      counts: reviewApi.counts,
+      ...fileSummary(messagesReviewCsvPath),
+      counts: reviewCounts,
     },
     import: {
       ...importFile,
@@ -1240,129 +1088,15 @@ function buildSetupActionJob(body: Record<string, any>): SetupJob {
     ]));
   }
 
-  if (action === "messages-link") {
-    const extra: string[] = ["--messages-check"];
-    if (body.skipWhatsapp) extra.push("--skip-messages-whatsapp");
-    return startSetupJob(action, setupCommandArgs(operator.id, "link", extra), 10 * 60 * 1000);
-  }
-
-  if (action === "messages-continue") {
-    return startSetupJob(action, [
-      "uv", "run", "--project", ".", "python",
-      "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
-      "continue",
-      "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
-      "--reuse-existing-artifacts",
-      "--include-imessage",
-      "--include-whatsapp",
-      "--include-contact-merge",
-      "--include-powerset-candidates",
-      "--include-local-match",
-      "--include-llm-review",
-    ], 30 * 60 * 1000);
-  }
-
-  if (action === "messages-complete-review") {
-    return startSetupJob(action, messagesCompleteReviewCommand(accounts), 2 * 60 * 60 * 1000);
-  }
-
-  if (action === "messages-approve-continue") {
-    return startSetupJob(action, messagesApproveAndContinueCommand(accounts), 2 * 60 * 60 * 1000);
-  }
-
-  if (action === "whatsapp-auth") {
-    clearWhatsAppLinkStatusCache();
-    // Clean stale wacli lock if the holding process is dead
-    const wacliStore = path.resolve(powerpacksRepoRoot, ".powerpacks/messages/wacli");
-    const wacliLock = path.join(wacliStore, "LOCK");
-    if (fs.existsSync(wacliLock)) {
-      try {
-        const lockContent = fs.readFileSync(wacliLock, "utf8");
-        const pidMatch = lockContent.match(/pid=(\d+)/);
-        if (pidMatch) {
-          const lockPid = Number(pidMatch[1]);
-          try {
-            process.kill(lockPid, 0); // just checks if alive
-          } catch {
-            // Process is dead — remove stale lock
-            fs.unlinkSync(wacliLock);
-          }
-        }
-      } catch { /* ignore */ }
-    }
-    if (whatsAppProvider() === "waha") {
-      removeLocalFiles([whatsAppWahaQrPngPath, whatsAppWahaQrTxtPath]);
-      const runtimeUp = wahaRuntimeCommand("up");
-      const sessionStart = wahaSessionCommand("start", [
-        "--force",
-        "--open",
-        "--wait",
-        "--wait-timeout", wahaWaitTimeoutSeconds(),
-      ]);
-      return startSetupJob(action, [
-        "/bin/zsh", "-lc",
-        `${shellJoin(runtimeUp)} && ${shellJoin(sessionStart)}`,
-      ], 10 * 60 * 1000);
-    }
-    // Kill any lingering wacli processes before starting fresh auth
-    try {
-      execSync("pkill -f 'wacli.*--store.*wacli' 2>/dev/null || true", { timeout: 5000 });
-    } catch { /* ignore */ }
-    removeLocalFiles([whatsAppWacliQrPngPath, whatsAppWacliQrHtmlPath]);
-    // Run auth, then probe doctor and write status back to accounts.json
-    const authCmd = shellJoin([
-      "uv", "run", "--project", ".", "python",
-      "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
-      "auth", "--store", ".powerpacks/messages/wacli", "--no-open-qr-page",
-    ]);
-    const writeBackCmd = shellJoin([
-      "uv", "run", "--project", ".", "python", "-c",
-      [
-        "import json, subprocess, pathlib;",
-        "p=pathlib.Path('.powerpacks/ingestion/accounts.json');",
-        "d=json.loads(p.read_text()) if p.exists() else {'accounts':{},'version':2};",
-        "r=subprocess.run(['wacli','--store','.powerpacks/messages/wacli','doctor','--json'],capture_output=True,text=True,timeout=5);",
-        "ok=(json.loads(r.stdout).get('data',{}).get('authenticated') if r.stdout else False);",
-        "m=d.setdefault('accounts',{}).setdefault('messages',{});",
-        "c=m.setdefault('config',{});",
-        "c.setdefault('whatsapp',{}).update({'authenticated':bool(ok),'status':'authenticated' if ok else 'not_authenticated'});",
-        "m['linked']=bool(ok or c.get('imessage',{}).get('readable'));",
-        "p.write_text(json.dumps(d,indent=2)+'\\n');",
-        "print(json.dumps({'whatsapp_authenticated':bool(ok)}))",
-      ].join(""),
-    ]);
-    // Also clean QR files after successful auth
-    const cleanQr = `rm -f ${shellQuote(whatsAppWacliQrPngPath)} ${shellQuote(whatsAppWacliQrHtmlPath)} 2>/dev/null || true`;
-    return startSetupJob(action, [
-      "/bin/zsh", "-lc", `${authCmd} && ${writeBackCmd} && ${cleanQr}`,
-    ], 10 * 60 * 1000);
-  }
-
-  if (action === "open-message-permissions") {
-    const openCmd = shellJoin([
-      "uv", "run", "--project", ".", "python",
-      "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
-      "open-privacy-settings", "--target", "both",
-    ]);
-    const writeBackImessage = shellJoin([
-      "uv", "run", "--project", ".", "python", "-c",
-      [
-        "import json, os, pathlib;",
-        "p=pathlib.Path('.powerpacks/ingestion/accounts.json');",
-        "d=json.loads(p.read_text()) if p.exists() else {'accounts':{},'version':2};",
-        "chat_db=os.path.expanduser('~/Library/Messages/chat.db');",
-        "readable=os.access(chat_db, os.R_OK);",
-        "m=d.setdefault('accounts',{}).setdefault('messages',{});",
-        "c=m.setdefault('config',{});",
-        "c['imessage']={'readable':readable,'status':'ready' if readable else 'not_ready','chat_db':chat_db};",
-        "m['linked']=bool(readable or c.get('whatsapp',{}).get('authenticated'));",
-        "p.write_text(json.dumps(d,indent=2)+'\\n');",
-        "print(json.dumps({'imessage_readable':readable}))",
-      ].join(""),
-    ]);
-    return startSetupJob(action, [
-      "/bin/zsh", "-lc", `${openCmd}; sleep 2; ${writeBackImessage}`,
-    ], 2 * 60 * 1000);
+  if ([
+    "messages-link",
+    "messages-continue",
+    "messages-complete-review",
+    "messages-approve-continue",
+    "whatsapp-auth",
+    "open-message-permissions",
+  ].includes(action)) {
+    throw new Error("Messages import is harness-only; run $import-messages from Codex or Claude Code.");
   }
 
   if (action === "twitter-handle") {
@@ -1390,18 +1124,6 @@ export async function handleSetupRoutes(req: any, res: any, url: URL): Promise<b
 
   if (url.pathname === "/local-api/setup/status") {
     sendJson(res, await setupStatus(url.searchParams.get("tab") || url.searchParams.get("scope")));
-    return true;
-  }
-
-  if (url.pathname === "/local-api/setup/whatsapp-qr") {
-    const relativePath = String(url.searchParams.get("path") || whatsAppQrPngRelativePath());
-    const resolved = safeJoinPowerpacks(relativePath);
-    const messagesDir = `${path.join(powerpacksStateRoot, "messages")}${path.sep}`;
-    if (!resolved || !resolved.startsWith(messagesDir) || path.extname(resolved).toLowerCase() !== ".png" || !fs.existsSync(resolved)) {
-      sendJson(res, { error: "WhatsApp QR not found" }, 404);
-      return true;
-    }
-    sendBinary(res, fs.readFileSync(resolved), "image/png");
     return true;
   }
 

@@ -35,7 +35,7 @@ copy_powerpacks_bundle() {
   cp -R "$REPO_ROOT/docs" "$dest/powerpacks/docs"
   cp -R "$REPO_ROOT/templates" "$dest/powerpacks/templates"
   cp -R "$REPO_ROOT/config" "$dest/powerpacks/config"
-  # Domain packs (powerset, search, messages, sales-nav, ...) carry their own
+  # Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
   mkdir -p "$dest/powerpacks/scripts"
@@ -85,8 +85,8 @@ install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SK
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
-install_skill import-messages "$REPO_ROOT/packs/messages/skills/import-messages/SKILL.md"
-install_skill import-whatsapp "$REPO_ROOT/packs/messages/skills/import-whatsapp/SKILL.md"
+install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
+install_skill import-whatsapp "$REPO_ROOT/packs/ingestion/skills/import-whatsapp/SKILL.md"
 install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
 install_skill onboard "$REPO_ROOT/packs/ingestion/skills/onboard/SKILL.md"
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"

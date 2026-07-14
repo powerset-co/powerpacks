@@ -52,7 +52,7 @@ rm -rf "$TARGET/powerpacks/adapters"
 # schemas anymore — every domain lives in packs/).
 cp -R "$REPO_ROOT/docs" "$TARGET/powerpacks/docs"
 cp -R "$REPO_ROOT/templates" "$TARGET/powerpacks/templates"
-# Domain packs (powerset, search, messages, sales-nav, ...) carry their own
+# Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
 # primitives, schemas, contracts, tasks, evals, and docs.
 cp -R "$REPO_ROOT/packs" "$TARGET/powerpacks/packs"
 mkdir -p "$TARGET/powerpacks/adapters"

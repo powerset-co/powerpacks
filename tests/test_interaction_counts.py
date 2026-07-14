@@ -30,9 +30,6 @@ def load_module(name: str, relative: str):
     return module
 
 
-messages_mod = load_module(
-    "discover_messages_interactions", "packs/ingestion/primitives/discover_contacts_pipeline/messages.py"
-)
 merge_mod = load_module(
     "merge_network_sources_interactions", "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py"
 )
@@ -40,7 +37,7 @@ gmail_mod = load_module(
     "gmail_network_import_interactions", "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
 )
 match_mod = load_module(
-    "match_local_candidates_interactions", "packs/messages/primitives/match_local_candidates/match_local_candidates.py"
+    "match_local_candidates_interactions", "packs/ingestion/primitives/match_local_candidates/match_local_candidates.py"
 )
 messages_import_mod = load_module(
     "import_messages_interactions", "packs/ingestion/primitives/import_contacts_pipeline/messages.py"
@@ -99,14 +96,14 @@ class MessagesWriterTests(unittest.TestCase):
         return row
 
     def test_review_row_populates_interaction_columns(self):
-        person = messages_mod.review_row_to_messages_people(self.review_row(), Path("review.csv"), "in_network")
+        person = messages_import_mod.review_row_to_messages_people(self.review_row(), Path("review.csv"), "in_network")
         self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 87})
         self.assertEqual(person["last_interaction"], "2026-06-01T05:44:31+00:00")
         self.assertNotIn("messages_total=", person["summary"])
 
     def test_candidate_merge_takes_channel_max_and_latest(self):
-        left = messages_mod.review_row_to_messages_people(self.review_row(), Path("review.csv"), "in_network")
-        right = messages_mod.review_row_to_messages_people(
+        left = messages_import_mod.review_row_to_messages_people(self.review_row(), Path("review.csv"), "in_network")
+        right = messages_import_mod.review_row_to_messages_people(
             self.review_row(
                 imessage_message_count="40",
                 whatsapp_message_count="9",
@@ -116,7 +113,7 @@ class MessagesWriterTests(unittest.TestCase):
             Path("review.csv"),
             "in_network",
         )
-        merged = messages_mod.merge_messages_people_candidate(left, right)
+        merged = messages_import_mod.merge_messages_people_candidate(left, right)
         self.assertEqual(json.loads(merged["interaction_counts"]), {"imessage": 87, "whatsapp": 9})
         self.assertEqual(merged["last_interaction"], "2026-06-05T00:00:00+00:00")
 
@@ -134,22 +131,6 @@ class ImportSchemaStalenessTests(unittest.TestCase):
             self.assertTrue(messages_import_mod.people_csv_schema_stale(old))
             self.assertFalse(messages_import_mod.people_csv_schema_stale(new))
             self.assertFalse(messages_import_mod.people_csv_schema_stale(Path(tmp) / "absent.csv"))
-
-    def test_changed_counts_for_approved_contact_invalidate_import(self):
-        """New messages to already-approved contacts change counts without
-        adding rows; the import must refresh people.csv anyway."""
-        header = "id,public_identifier,interaction_counts,last_interaction\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            people = Path(tmp) / "people.csv"
-            people.write_text(header + 'p1,janedoe,"{""imessage"": 87}",2026-06-01T00:00:00+00:00\n')
-            same = Path(tmp) / "input_same.csv"
-            same.write_text(header + 'p1,janedoe,"{""imessage"": 87}",2026-06-01T00:00:00+00:00\n')
-            changed = Path(tmp) / "input_changed.csv"
-            changed.write_text(header + 'p1,janedoe,"{""imessage"": 120}",2026-06-10T00:00:00+00:00\n')
-            self.assertFalse(messages_import_mod.interaction_counts_stale(same, people))
-            self.assertTrue(messages_import_mod.interaction_counts_stale(changed, people))
-            self.assertFalse(messages_import_mod.interaction_counts_stale(Path(tmp) / "absent.csv", people))
-
 
 class GmailWriterTests(unittest.TestCase):
     def test_msgvault_rows_carry_gmail_counts(self):

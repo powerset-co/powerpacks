@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { GmailSyncPanel } from "./GmailSyncPanel";
-import { MessagesSyncPanel } from "./MessagesSyncPanel";
 import { MsgvaultSetupCard } from "./MsgvaultSetupCard";
 import {
   fetchGmailEnrichEstimate,
@@ -516,84 +515,30 @@ export function LinkedInSourcePage() {
 }
 
 export function MessagesSourcePage() {
-  const { status, refresh } = useSetupStatus();
-  const { running, error, run } = useSourceJob(refresh);
-  const syncing = useAutoDiscover("messages", status, refresh);
-
-  const loading = !status;
-  const accountSource = status?.accounts.sources.find((s: SetupSourceStatus) => s.id === "messages");
-  const enrich = status?.enrichment.sources.find((s: SetupEnrichmentSource) => s.id === "messages");
-  const imp = status?.import.sources.find((s: SetupImportSource) => s.sourceId === "messages");
-  const candidates = enrich?.candidates || 0;
-
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <SourceHeader
-          icon={MESSAGES_ICON}
-          title="Messages"
-          description="Sync the people you iMessage and WhatsApp, then enrich them into your network."
-        />
-        <div className="flex items-center gap-2">
-          {syncing && (
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Syncing latest contacts…
-            </span>
-          )}
-          <ConnectionBadge source={accountSource} loading={loading} />
-        </div>
-      </div>
-
-      <div className="mb-6 grid gap-4 sm:grid-cols-3">
-        <StatCard
-          loading={loading}
-          label="Contacts discovered"
-          value={candidates ? candidates.toLocaleString() : "—"}
-          hint={syncing ? "Syncing latest…" : "From your conversations"}
-        />
-        <StatCard
-          loading={loading}
-          label="In network"
-          value={enrich?.enriched ? enrich.enriched.toLocaleString() : "—"}
-          hint={enrich?.candidates ? "Approved and enriched" : "Approve contacts to enrich"}
-        />
-        <StatCard
-          loading={loading}
-          label="Last import"
-          value={formatDate(accountSource?.lastSuccessAt)}
-          hint={imp?.status ? `Import ${imp.status}` : "Sync below to update"}
-        />
-      </div>
-
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-base">Sync messages</CardTitle>
-          <CardDescription>Link iMessage and WhatsApp, then review who&apos;s worth enriching. No message contents are read.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <MessagesSyncPanel onChange={refresh} />
-        </CardContent>
-      </Card>
+      <SourceHeader
+        icon={MESSAGES_ICON}
+        title="Messages"
+        description="Import iMessage and WhatsApp contacts through the Powerpacks skill harness."
+      />
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Enrich &amp; index</CardTitle>
-          <CardDescription>Enrich your approved contacts into full profiles, then rebuild the local index. Review approval happens in the panel above.</CardDescription>
+          <CardTitle className="text-base">Run the supported Messages workflow</CardTitle>
+          <CardDescription>
+            The local app no longer runs Messages setup or review. Use the skill so permission,
+            QR, provider-spend, review, fan-in, and indexing gates stay in one audited flow.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2">
-          <Button
-            disabled={!accountSource?.linked || syncing || running !== null}
-            onClick={() => run("enrich", { action: "enrich-source", source: "messages", approveSpend: true })}
-          >
-            {running === "enrich" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-            {candidates ? `Enrich ${candidates.toLocaleString()} approved` : "Enrich approved contacts"}
-          </Button>
-          <Button variant="outline" disabled={running !== null} onClick={() => run("index", { action: "index" })}>
-            {running === "index" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Rebuild index
-          </Button>
-          <p className="w-full text-xs text-muted-foreground">Enrichment uses deep research — this is a paid lookup.</p>
-          {error && <p className="w-full text-sm text-destructive">{error}</p>}
+        <CardContent className="space-y-4">
+          <div className="rounded-lg border border-emerald-700/20 bg-emerald-700/5 px-4 py-3">
+            <code className="font-mono text-sm font-semibold text-emerald-800">$import-messages</code>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Run that command in Codex or Claude Code. Choose iMessage, WhatsApp, or both when
+            prompted. The workflow reads contact metadata only, never message bodies.
+          </p>
         </CardContent>
       </Card>
     </div>

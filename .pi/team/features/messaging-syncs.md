@@ -6,11 +6,13 @@ Own reusable messaging sync powerpacks for iMessage and WhatsApp.
 ## Primary scope
 
 ```txt
-packs/messages/
-primitives/
-scripts/smoke-messages.sh
+packs/ingestion/skills/import-messages/
+packs/ingestion/skills/import-whatsapp/
+packs/ingestion/primitives/{discover_contacts_pipeline/messages.py,import_contacts_pipeline/messages.py}
+packs/ingestion/primitives/{extract_imessage_contacts,import_whatsapp_wacli,normalize_message_contacts,merge_message_contacts}/
 tests/test_messages_pack.py
-tests/test_whatsapp_primitives.py
+tests/test_import_whatsapp_wacli.py
+tests/test_ingestion_messages_contract.py
 ```
 
 ## Responsibilities
@@ -31,12 +33,15 @@ tests/test_whatsapp_primitives.py
 ## Regression checks
 
 ```bash
-uv run pytest tests/test_messages_pack.py tests/test_whatsapp_primitives.py
-bash scripts/smoke-messages.sh
+uv run --project . python -m unittest \
+  tests.test_messages_pack \
+  tests.test_import_whatsapp_wacli \
+  tests.test_ingestion_messages_contract
 ```
 
 ## Startup checklist
 
 1. Read this dossier and `.pi/team/manifest.yaml`.
-2. Read `packs/messages/README.md` and relevant primitive docs.
-3. Summarize the current messaging pack contract before editing.
+2. Read `packs/ingestion/docs/message-import-pipeline.md` and the relevant
+   ingestion skill/primitive docs.
+3. Summarize the current message-ingestion contract before editing.

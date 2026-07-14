@@ -1,4 +1,3 @@
-import argparse
 import csv
 import json
 import sqlite3
@@ -15,7 +14,7 @@ from packs.ingestion.primitives.discover_contacts_pipeline import common as disc
 from packs.ingestion.primitives.discover_contacts_pipeline import directory as discover_directory
 from packs.ingestion.primitives.discover_contacts_pipeline import discover_contacts_pipeline
 from packs.ingestion.primitives.discover_contacts_pipeline import gmail as discover_gmail
-from packs.ingestion.primitives.discover_contacts_pipeline import messages as discover_messages
+from packs.ingestion.primitives.import_contacts_pipeline import messages as import_messages
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.shared.csv_io import CsvIO
 
@@ -70,7 +69,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                         "config": {"csv_path": str(linkedin), "source_label": "me"},
                     },
                     "twitter": {"skipped": True, "usernames": ["stale"]},
-                    "messages": {"linked": True, "config": {"review_csv": str(tmp / "research_review.csv")}},
                 },
             }), encoding="utf-8")
 
@@ -82,7 +80,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(args.linkedin_csv, str(linkedin))
             self.assertEqual(args.linkedin_source_user, "me")
             self.assertEqual(args.twitter_handle, "")
-            self.assertEqual(args.messages_review_csv, str(tmp / "research_review.csv"))
 
     def test_pending_gmail_accounts_are_not_discover_ready_until_linked(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -529,7 +526,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                     "gmail_account_emails": ["me@example.com"],
                     "linkedin_csv": str(tmp / "Connections.csv"),
                     "linkedin_source_user": "me",
-                    "messages_review_csv": str(tmp / "review.csv"),
                 },
                 "steps": {},
                 "artifacts": {},
@@ -537,66 +533,37 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             with mock.patch.object(discover_contacts_pipeline.gmail, "discover", return_value={"status": "completed", "contacts_csv": "gmail_contacts.csv", "linkedin_resolution_queue_csv": "gmail_queue.csv"}):
                 with mock.patch.object(discover_contacts_pipeline.linkedin, "discover", return_value={"status": "completed", "contacts_csv": "linkedin_contacts.csv"}):
-                    with mock.patch.object(discover_contacts_pipeline.messages, "discover", return_value={"status": "completed", "contacts_csv": "messages_contacts.csv"}):
-                        ok = discover_contacts_pipeline.run_source_import_workers(ledger_path, ledger)
+                    ok = discover_contacts_pipeline.run_source_import_workers(ledger_path, ledger)
 
             self.assertTrue(ok)
             self.assertEqual(ledger["steps"]["source_imports"]["status"], "completed")
             self.assertEqual(ledger["artifacts"]["gmail_contacts_csv"], "gmail_contacts.csv")
             self.assertEqual(ledger["artifacts"]["linkedin_contacts_csv"], "linkedin_contacts.csv")
-            self.assertEqual(ledger["artifacts"]["messages_contacts_csv"], "messages_contacts.csv")
             self.assertNotIn("merged_people_csv", ledger["artifacts"])
             self.assertNotIn("duckdb", ledger["artifacts"])
-
-    def test_materialize_approved_messages_review_uses_only_explicit_rows(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            review = tmp / "research_review.csv"
-            fields = [
-                "bucket", "full_name", "phone_e164", "total_messages", "message_source", "last_message",
-                "exclude", "approved", "upload_decision", "enrich_decision", "network_name",
-                "network_linkedin_url", "network_person_id", "network_match_method", "review_source",
-            ]
-            rows = [
-                {"bucket": "yes", "full_name": "Bucket Only", "phone_e164": "+100", "total_messages": "1", "message_source": "imessage", "exclude": "", "approved": "", "upload_decision": "", "enrich_decision": ""},
-                {"bucket": "maybe", "full_name": "Exclude No", "phone_e164": "+101", "total_messages": "2", "message_source": "whatsapp", "exclude": "no", "approved": "", "upload_decision": "", "enrich_decision": ""},
-                {"bucket": "maybe", "full_name": "Approved True", "phone_e164": "+102", "total_messages": "3", "message_source": "imessage", "exclude": "", "approved": "true", "upload_decision": "", "enrich_decision": ""},
-                {"bucket": "maybe", "full_name": "Upload Include", "phone_e164": "+103", "total_messages": "4", "message_source": "imessage", "exclude": "", "approved": "", "upload_decision": "include", "enrich_decision": ""},
-                {"bucket": "maybe", "full_name": "Rejected", "phone_e164": "+104", "total_messages": "5", "message_source": "imessage", "exclude": "yes", "approved": "true", "upload_decision": "", "enrich_decision": ""},
-            ]
-            write_csv(review, fields, rows)
-
-            scratch = tmp / "contacts.csv"
-            summary = discover_messages.materialize_approved_messages_review(review, scratch)
-            self.assertEqual(summary["contacts_csv"], str(scratch))
-            with scratch.open(newline="", encoding="utf-8") as handle:
-                materialized = list(CsvIO.dict_reader(handle))
-            self.assertEqual([row["name"] for row in materialized], ["Exclude No", "Approved True", "Upload Include"])
-            self.assertEqual([row["phone"] for row in materialized], ["+101", "+102", "+103"])
 
     def test_messages_review_people_materializer_uses_reviewed_linkedin_rows(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             review = tmp / "research_review.csv"
             output = tmp / "people.csv"
-            manifest = tmp / "manifest.json"
             fields = [
                 "bucket", "full_name", "phone_e164", "total_messages", "message_source",
                 "imessage_message_count", "whatsapp_message_count", "exclude", "approved",
-                "upload_decision", "enrich_decision", "in_network", "network_person_id",
+                "enrich_decision", "in_network", "network_person_id",
                 "network_name", "network_linkedin_url", "linkedin_url", "retarget_linkedin_url",
                 "review_source", "top_title_company_pairs", "short_reason",
             ]
             rows = [
-                {"bucket": "maybe", "full_name": "Network Person", "phone_e164": "+100", "total_messages": "5", "message_source": "imessage", "in_network": "true", "network_person_id": "p1", "network_name": "Network Person", "network_linkedin_url": "https://www.linkedin.com/in/network-person/"},
-                {"bucket": "maybe", "full_name": "Approved Person", "phone_e164": "+101", "total_messages": "6", "message_source": "whatsapp", "approved": "true", "linkedin_url": "https://www.linkedin.com/in/approved-person/"},
-                {"bucket": "maybe", "full_name": "Enrich Person", "phone_e164": "+102", "total_messages": "7", "message_source": "whatsapp", "enrich_decision": "yes", "linkedin_url": "https://www.linkedin.com/in/enrich-person/"},
-                {"bucket": "yes", "full_name": "Rejected Person", "phone_e164": "+104", "total_messages": "9", "message_source": "imessage", "exclude": "yes", "linkedin_url": "https://www.linkedin.com/in/rejected-person/"},
-                {"bucket": "maybe", "full_name": "Network Person Duplicate", "phone_e164": "+106", "total_messages": "11", "message_source": "whatsapp", "in_network": "true", "network_person_id": "p1", "network_linkedin_url": "https://www.linkedin.com/in/network-person/"},
+                {"bucket": "maybe", "full_name": "Network Person", "phone_e164": "+14155550100", "total_messages": "5", "message_source": "imessage", "in_network": "true", "network_person_id": "p1", "network_name": "Network Person", "network_linkedin_url": "https://www.linkedin.com/in/network-person/"},
+                {"bucket": "maybe", "full_name": "Approved Person", "phone_e164": "+14155550101", "total_messages": "6", "message_source": "whatsapp", "approved": "true", "linkedin_url": "https://www.linkedin.com/in/approved-person/"},
+                {"bucket": "maybe", "full_name": "Enrich Person", "phone_e164": "+14155550102", "total_messages": "7", "message_source": "whatsapp", "enrich_decision": "yes", "linkedin_url": "https://www.linkedin.com/in/enrich-person/"},
+                {"bucket": "yes", "full_name": "Rejected Person", "phone_e164": "+14155550104", "total_messages": "9", "message_source": "imessage", "exclude": "yes", "linkedin_url": "https://www.linkedin.com/in/rejected-person/"},
+                {"bucket": "maybe", "full_name": "Network Person Duplicate", "phone_e164": "+14155550106", "total_messages": "11", "message_source": "whatsapp", "in_network": "true", "network_person_id": "p1", "network_linkedin_url": "https://www.linkedin.com/in/network-person/"},
             ]
             write_csv(review, fields, rows)
 
-            summary = discover_messages.materialize_messages_review_people(review, output, manifest)
+            summary = import_messages.materialize_messages_review_people(review, output)
 
             self.assertEqual(summary["eligible_rows"], 4)
             self.assertEqual(summary["rows_written"], 3)
@@ -604,7 +571,10 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 materialized = list(CsvIO.dict_reader(handle))
             by_public = {row["public_identifier"]: row for row in materialized}
             self.assertEqual(set(by_public), {"approved-person", "enrich-person", "network-person"})
-            self.assertEqual(json.loads(by_public["network-person"]["all_phones"]), ["+100", "+106"])
+            self.assertEqual(
+                json.loads(by_public["network-person"]["all_phones"]),
+                ["+14155550100", "+14155550106"],
+            )
 
     def test_commit_people_csv_to_directory_records_source_identity(self) -> None:
         with tempfile.TemporaryDirectory() as td:

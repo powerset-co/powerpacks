@@ -100,7 +100,7 @@ Product and architecture walkthroughs live in the
 | [`search-sql`](packs/search/skills/search-sql/SKILL.md) | `$search-sql <question>` | Agentic read-only SQL over the local search DuckDB, for relational/aggregate people queries the filter DSL can't express (overlap joins, per-person aggregates, career-shape predicates). |
 | [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds the fixed local search index at `.powerpacks/search-index/local-search.duckdb` from the canonical merged people CSV without Modal, Postgres, or TurboPuffer. Planning is local-only; full builds may use configured providers for cache misses. |
 
-### Setup
+### Setup and ingestion
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
@@ -108,6 +108,8 @@ Product and architecture walkthroughs live in the
 | [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | Deterministic LinkedIn-only setup: credentials, Modal profile enrichment, local source merge, Modal indexing, DuckDB download, and read-only validation. Gmail and messages remain separate import skills. |
 | [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$local-msg-vault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 | [`import-gmail`](packs/ingestion/skills/import-gmail/SKILL.md) | `$import-gmail` | Bounded msgvault sync, metadata-only contact extraction, local-directory/Parallel LinkedIn lookup, profile hydration, source fan-in, and Modal index rebuild. See the [product guide](packs/ingestion/docs/gmail-import-pipeline.md). |
+| [`import-messages`](packs/ingestion/skills/import-messages/SKILL.md) | `$import-messages` | Adds iMessage and WhatsApp contact metadata to the local index, matches/reviews identities, merges sources, and rebuilds the Modal-backed local index. No message bodies. See the [product guide](packs/ingestion/docs/message-import-pipeline.md). |
+| [`import-whatsapp`](packs/ingestion/skills/import-whatsapp/SKILL.md) | `$import-whatsapp` | Isolated WhatsApp metadata sync/export using `wacli`; the [message import guide](packs/ingestion/docs/message-import-pipeline.md#isolated-import-whatsapp) explains where it stops. |
 | [`deep-context`](packs/ingestion/skills/deep-context/SKILL.md) | `$deep-context` | Builds message-body-derived dossiers, finds duplicate identities, and reviews/fixes attached LinkedIn profiles. See the [product guide](packs/ingestion/docs/deep-context-pipeline.md). |
 
 ### Sales Nav
@@ -117,19 +119,12 @@ Product and architecture walkthroughs live in the
 | [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator search through the `powerset-search` MCP. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Depends on `$powerset setup` having run first. |
 | [`build-outbound`](packs/apollo/skills/build-outbound/SKILL.md) | `$build-outbound setup`, `$build-outbound <instructions>` | Resolve Sales Nav leads, preview copy, enrich through Apollo, create an inactive Apollo sequence/campaign, enroll contacts, and activate only with a separate exact campaign confirmation. |
 
-### Messages pack
-
-| Skill | Trigger | What it does |
-| --- | --- | --- |
-| [`import-messages`](packs/messages/skills/import-messages/SKILL.md) | `$import-messages` | Adds iMessage and WhatsApp contact metadata to the local index, matches/reviews identities, merges sources, and rebuilds the Modal-backed local index. No message bodies. See the [product guide](packs/messages/docs/message-import-pipeline.md). |
-| [`import-whatsapp`](packs/messages/skills/import-whatsapp/SKILL.md) | `$import-whatsapp` | Isolated WhatsApp metadata sync/export using `wacli`; the [messages guide](packs/messages/docs/message-import-pipeline.md#isolated-import-whatsapp) explains where it stops. |
-
 ## Goal
 
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
 - give the agent operational entrypoints: `$search <query-or-jd>`,
-  `$search-company <query>`, `$powerset setup`, and the messages-pack import
+  `$search-company <query>`, `$powerset setup`, and the message import
   skill
 - interpret standard queries and decompose deep recruiting roles into bounded
   candidate-archetype probes
@@ -165,6 +160,12 @@ powerpacks/
 │   │   ├── primitives/     build_processing_pipeline + transform CLIs
 │   │   ├── lib/            contracts, identity, people/artifact builders
 │   │   └── tasks/          build-local-search-index.task.json
+│   ├── ingestion/          LinkedIn, Gmail, Twitter, iMessage, and WhatsApp imports
+│   │   ├── skills/         setup, import-gmail, import-messages,
+│   │   │                   import-whatsapp, deep-context
+│   │   ├── primitives/     source discovery/import + message leaf primitives
+│   │   ├── schemas/        people + message-contact contracts
+│   │   └── docs/           maintained ingestion product guides
 │   ├── search/             recruiting people / company search
 │   │   ├── skills/         search, search-company
 │   │   ├── primitives/     search CLIs + deep orchestration + shared lib/
@@ -176,16 +177,9 @@ powerpacks/
 │   │   ├── docs/           canonical architecture, backend contracts,
 │   │   │                   method, and benchmark evidence
 │   │   └── evals/          recall, company-search, founder parity
-│   └── messages/           iMessage + WhatsApp metadata import
-│       ├── skills/         import-messages, import-whatsapp
-│       ├── primitives/     iMessage / wacli / matching / LLM-review /
-│       │                   deep-research primitives
-│       ├── schemas/        message-contact, messages-run-manifest
-│       ├── tasks/          import-*.task.json
-│       └── docs/           product pipeline + legacy harness reference
 ├── adapters/               codex/, claude-code/, pi/, nanoclaw/ installers
 ├── docs/                   cross-pack docs (quickstart.md, testing.md)
-├── scripts/                test-powerpacks, lint-powerpacks, smoke-messages.sh
+├── scripts/                test-powerpacks, lint-powerpacks
 ├── tests/                  cross-pack test suite
 └── templates/              host-install templates (claude-fragments,
                             container.json)
@@ -389,10 +383,7 @@ ls ~/.codex/skills/                # or ~/.claude/skills/, ~/.pi/agent/skills/
 # 2. Powerpacks unit tests
 python3 -m unittest discover -s tests
 
-# 3. Messages-pack end-to-end smoke (synthetic data, no network/spend)
-scripts/smoke-messages.sh
-
-# 4. MCP reachability (after $powerset setup)
+# 3. MCP reachability (after $powerset setup)
 claude mcp list                    # "powerset-search ... ✓ Connected"
 uv run --project . python packs/powerset/primitives/doctor/doctor.py run
 ```

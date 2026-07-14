@@ -6,15 +6,10 @@ import {
   discoverContactsSetupLedger,
   importRefreshLedgerPath,
   setupLedgerPath,
-  whatsAppWahaEngine,
-  whatsAppWahaImage,
 } from "./paths";
 import { readJsonSync } from "./fsUtils";
-import { setupProcessEnv } from "./env";
 import { shellJoin, shellQuote, shellStage } from "./shell";
 import { resolveOperator } from "./accounts";
-import { normalizeSetupSources } from "./sources";
-import type { RunState } from "./types";
 
 export function setupCommandArgs(operatorId: string, phase: "status" | "next" | "link" | "import" | "fan-in" | "index" | "run", extra: string[] = []) {
   return [
@@ -163,33 +158,6 @@ export function gmailLinkCommand(
   return ["/bin/zsh", "-lc", parts.join(" && ")];
 }
 
-export function wahaRuntimeCommand(command: "up" | "status", extra: string[] = []): string[] {
-  return [
-    "uv", "run", "--project", ".", "python",
-    "packs/messages/primitives/waha_runtime/waha_runtime.py",
-    command,
-    "--engine", whatsAppWahaEngine,
-    "--image", whatsAppWahaImage,
-    ...extra,
-  ];
-}
-
-export function wahaSessionCommand(command: "start" | "status", extra: string[] = []): string[] {
-  return [
-    "uv", "run", "--project", ".", "python",
-    "packs/messages/primitives/waha_session/waha_session.py",
-    command,
-    "--engine", whatsAppWahaEngine,
-    ...extra,
-  ];
-}
-
-export function wahaWaitTimeoutSeconds(): string {
-  const raw = String(setupProcessEnv().POWERPACKS_WAHA_WAIT_TIMEOUT || "180").trim();
-  const seconds = Number.parseInt(raw, 10);
-  return Number.isFinite(seconds) && seconds > 0 ? String(seconds) : "180";
-}
-
 export function discoverContactsCommand(operatorId: string, extra: string[] = []) {
   const command = [
     "uv", "run", "--project", ".", "python",
@@ -222,18 +190,9 @@ export function linkedinDiscoveryCommand(): string[] {
   ];
 }
 
-export function messagesDiscoveryCommand(): string[] {
-  return [
-    "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/discover_contacts_pipeline/messages.py",
-    "discover",
-    "--accounts", ".powerpacks/ingestion/accounts.json",
-  ];
-}
-
 export function enrichmentNetworkCommand(operatorId: string, sourceId: string, options: { approveSpend?: boolean; force?: boolean } = {}): string[] {
   const source = sourceId === "linkedin_csv" ? "linkedin" : sourceId;
-  if (!["gmail", "linkedin", "messages"].includes(source)) return [];
+  if (!["gmail", "linkedin"].includes(source)) return [];
   const command = [
     "uv", "run", "--project", ".", "python",
     `packs/ingestion/primitives/import_contacts_pipeline/${source}.py`,
@@ -241,14 +200,10 @@ export function enrichmentNetworkCommand(operatorId: string, sourceId: string, o
     "--accounts", ".powerpacks/ingestion/accounts.json",
     "--operator-id", operatorId,
   ];
-  // Spend flags are per-source: messages = deep research (--confirm-import),
-  // gmail = Parallel.ai (--approve-parallel-spend). LinkedIn is RapidAPI (free)
-  // and its primitive accepts neither flag, so it gets none.
-  if (options.approveSpend && source === "messages") command.push("--confirm-import");
-  else if (options.approveSpend && source === "gmail") command.push("--approve-parallel-spend");
+  // Gmail uses Parallel.ai; LinkedIn uses RapidAPI and accepts no spend flag.
+  if (options.approveSpend && source === "gmail") command.push("--approve-parallel-spend");
   // Force a real re-run so Sync/Import never no-ops on an unchanged manifest.
-  // messages has its own ledger/resume, so --force only applies to gmail/linkedin.
-  if (options.force && source !== "messages") command.push("--force");
+  if (options.force) command.push("--force");
   return command;
 }
 
@@ -304,32 +259,6 @@ export function indexContactsCommand(operatorId: string, extra: string[] = []): 
     "--accounts", ".powerpacks/ingestion/accounts.json",
     ...extra,
   ];
-}
-
-export function messageImportCommand(source: ReturnType<typeof normalizeSetupSources>[number]) {
-  const whatsapp = source.config.whatsapp && typeof source.config.whatsapp === "object" ? source.config.whatsapp as Record<string, any> : {};
-  const imessage = source.config.imessage && typeof source.config.imessage === "object" ? source.config.imessage as Record<string, any> : {};
-  const includeFlags = [];
-  if (imessage.status !== "skipped") includeFlags.push("--include-imessage");
-  if (whatsapp.status === "linked" || whatsapp.authenticated === true) includeFlags.push("--include-whatsapp");
-  includeFlags.push("--include-contact-merge");
-  const refreshFlags = [];
-  if (includeFlags.includes("--include-imessage")) refreshFlags.push("--force-imessage");
-  if (includeFlags.includes("--include-whatsapp")) refreshFlags.push("--force-whatsapp");
-  return [
-    "uv", "run", "--project", ".", "python",
-    "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
-    "run",
-    "--ledger", ".powerpacks/messages/import-run.setup-messages.json",
-    "--parallel-timeout", String(process.env.POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS || "900"),
-    "--reuse-existing-artifacts",
-    ...includeFlags,
-    ...refreshFlags,
-  ];
-}
-
-export function messageEnrichmentCommand(accounts: RunState | null): string[] {
-  return enrichmentNetworkCommand(resolveOperator(readJsonSync(setupLedgerPath) || {}, accounts).id, "messages");
 }
 
 export function importAndFanInCommand(importCommand: string[], fanInCommand: string[], label: string): string[] {

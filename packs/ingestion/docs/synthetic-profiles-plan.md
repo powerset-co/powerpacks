@@ -35,7 +35,7 @@ index like a real profile — so these people stop being invisible in search.
 
 | Capability | Where |
 |---|---|
-| Parallel.ai task-group client (create/add/poll/result) | `packs/messages/primitives/deep_research_contacts/deep_research_contacts.py` → `ParallelClient` |
+| Parallel.ai task-group client (create/add/poll/result) | `packs/ingestion/primitives/deep_research_contacts/deep_research_contacts.py` → `ParallelClient` |
 | Research orchestration: queue build, cost gate ($25 / $0.05-per), eligibility | `packs/ingestion/primitives/deep_context/reconcile_deep_research.py` |
 | `parallel_to_research_json()` → `01_research_parallel.json` (person/positions/education/social) | `deep_research_contacts.py` |
 | Retarget proposal → enrich → people-row → merge auto-include | `reconcile_deep_research.py` + `apply_retargets.py` + `overrides/retarget-people.csv` |

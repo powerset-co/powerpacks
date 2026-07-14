@@ -45,11 +45,11 @@
       "why": "Discovery setup ledger is a checkpoint/log. Per-vertical manifests are more authoritative than stale status."
     },
     {
-      "id": "messages_ledger",
-      "path": ".powerpacks/messages/import-run.setup-messages.json",
+      "id": "messages_discovery_manifest",
+      "path": ".powerpacks/network-import/discover/messages/manifest.json",
       "kind": "file",
-      "policy": "report_only",
-      "why": "Messages ledger is useful diagnostics but can be stale/dirty."
+      "policy": "adopt_newer",
+      "why": "Canonical fixed-path Messages discovery state and diagnostics."
     },
     {
       "id": "messages_review_csv",

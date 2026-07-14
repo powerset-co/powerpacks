@@ -12,7 +12,7 @@ import threading
 import urllib.request
 import unittest
 from unittest import mock
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,16 +20,13 @@ from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NORMALIZE = ROOT / "packs/messages/primitives/normalize_message_contacts/normalize_message_contacts.py"
-HARNESS = ROOT / "packs/messages/primitives/powerset_contacts_harness/powerset_contacts_harness.py"
-IMESSAGE = ROOT / "packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py"
-UPLOAD_REVIEW = ROOT / "packs/messages/primitives/upload_research_review/upload_research_review.py"
-MIGRATE_REVIEW = ROOT / "packs/messages/primitives/migrate_review_schema/migrate_review_schema.py"
+NORMALIZE = ROOT / "packs/ingestion/primitives/normalize_message_contacts/normalize_message_contacts.py"
+IMESSAGE = ROOT / "packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py"
 
 
 class MessagesPackTests(unittest.TestCase):
-    def test_pack_json_contracts_parse(self) -> None:
-        for path in (ROOT / "packs/messages").rglob("*.json"):
+    def test_message_ingestion_json_contracts_parse(self) -> None:
+        for path in (ROOT / "packs/ingestion/schemas").rglob("*.json"):
             with self.subTest(path=path):
                 json.loads(path.read_text())
 
@@ -111,8 +108,6 @@ class MessagesPackTests(unittest.TestCase):
                     str(output_jsonl),
                     "--manifest",
                     str(manifest),
-                    "--run-id",
-                    "test-run",
                 ],
                 cwd=ROOT,
                 capture_output=True,
@@ -135,40 +130,6 @@ class MessagesPackTests(unittest.TestCase):
             self.assertTrue(rows[0]["skip"])
             self.assertIn("Operators", rows[0]["group_names"])
 
-    def test_harness_dry_run_uses_fake_cli(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            fake = tmp / "contact-exporter"
-            fake.write_text("#!/usr/bin/env sh\nprintf 'contact-exporter 0.test\\n'\n", encoding="utf-8")
-            fake.chmod(0o755)
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(HARNESS),
-                    "--contact-exporter",
-                    str(fake),
-                    "run",
-                    "--channel",
-                    "imessage",
-                    "--output",
-                    str(tmp / "contacts.csv"),
-                    "--run-root",
-                    str(tmp / "runs"),
-                    "--run-id",
-                    "dry-run",
-                    "--dry-run",
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            manifest = json.loads(result.stdout)
-            self.assertTrue(manifest["dry_run"])
-            self.assertEqual(manifest["channel"], "imessage")
-            self.assertIn("imessage", manifest["command"])
-            self.assertTrue((tmp / "runs/dry-run/manifest.json").exists())
-
     def test_extract_imessage_contacts_from_sqlite_fixtures(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -185,7 +146,9 @@ class MessagesPackTests(unittest.TestCase):
                       ROWID INTEGER PRIMARY KEY,
                       handle_id INTEGER,
                       date INTEGER,
-                      associated_message_type INTEGER
+                      associated_message_type INTEGER,
+                      text TEXT,
+                      attributedBody BLOB
                     );
                     CREATE TABLE chat (
                       ROWID INTEGER PRIMARY KEY,
@@ -195,10 +158,10 @@ class MessagesPackTests(unittest.TestCase):
                     );
                     CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
                     INSERT INTO handle (ROWID, id) VALUES (1, '+14155550101'), (2, 'not-an-email@example.com');
-                    INSERT INTO message (handle_id, date, associated_message_type)
-                      VALUES (1, 725846400000000000, NULL),
-                             (1, 725846500000000000, NULL),
-                             (2, 725846600000000000, NULL);
+                    INSERT INTO message (handle_id, date, associated_message_type, text, attributedBody)
+                      VALUES (1, 725846400000000000, NULL, 'SECRET MESSAGE BODY', X'534543524554'),
+                             (1, 725846500000000000, NULL, 'SECRET MESSAGE BODY', X'534543524554'),
+                             (2, 725846600000000000, NULL, 'SECRET MESSAGE BODY', X'534543524554');
                     INSERT INTO chat (ROWID, chat_identifier, display_name, room_name)
                       VALUES (1, 'chat123', 'Founders', NULL);
                     INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (1, 1);
@@ -254,8 +217,6 @@ class MessagesPackTests(unittest.TestCase):
                     str(output_jsonl),
                     "--manifest",
                     str(manifest),
-                    "--run-id",
-                    "fixture-run",
                 ],
                 cwd=ROOT,
                 capture_output=True,
@@ -274,6 +235,10 @@ class MessagesPackTests(unittest.TestCase):
             self.assertEqual(rows_by_phone["+14155550101"]["group_names"], ["Founders"])
             self.assertEqual(rows_by_phone["+14155550102"]["name"], "Grace Hopper")
             self.assertIsNone(rows_by_phone["+14155550102"]["message_count"])
+            emitted = "\n".join(
+                [result.stdout, output_csv.read_text(), output_jsonl.read_text(), manifest.read_text()]
+            )
+            self.assertNotIn("SECRET MESSAGE BODY", emitted)
 
     def test_extract_imessage_contacts_has_deterministic_order(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -340,8 +305,6 @@ class MessagesPackTests(unittest.TestCase):
                     str(tmp / "out.jsonl"),
                     "--manifest",
                     str(tmp / "manifest.json"),
-                    "--run-id",
-                    "fixture-order-run",
                 ],
                 cwd=ROOT,
                 capture_output=True,
@@ -355,274 +318,6 @@ class MessagesPackTests(unittest.TestCase):
                 [row["phone"] for row in rows],
                 ["+14155550101", "+14155550103", "+14155550102", "+14155550104"],
             )
-
-    def test_upload_research_review_summary_applies_approved_state(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            csv_path = Path(td) / "research_review.csv"
-            with csv_path.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=[
-                        "bucket", "handle", "top_title_company_pairs", "exclude",
-                        "in_network", "approved", "upload_decision",
-                    ],
-                )
-                writer.writeheader()
-                writer.writerow(
-                    {
-                        "bucket": "review",
-                        "handle": "phone-1",
-                        "top_title_company_pairs": "Founder @ Acme",
-                        "exclude": "no",
-                    }
-                )
-                writer.writerow(
-                    {
-                        "bucket": "confident",
-                        "handle": "phone-2",
-                        "top_title_company_pairs": "CEO @ Example",
-                        "exclude": "yes",
-                    }
-                )
-                writer.writerow(
-                    {
-                        "bucket": "medium",
-                        "handle": "phone-3",
-                        "top_title_company_pairs": "Engineer @ Widget",
-                        "exclude": "",
-                    }
-                )
-                writer.writerow(
-                    {
-                        "bucket": "medium",
-                        "handle": "phone-4",
-                        "top_title_company_pairs": "Designer @ Network",
-                        "exclude": "",
-                        "in_network": "true",
-                    }
-                )
-                writer.writerow(
-                    {
-                        "bucket": "medium",
-                        "handle": "phone-5",
-                        "top_title_company_pairs": "PM @ Approved",
-                        "exclude": "",
-                        "approved": "true",
-                    }
-                )
-                writer.writerow(
-                    {
-                        "bucket": "medium",
-                        "handle": "phone-6",
-                        "top_title_company_pairs": "Investor @ Include",
-                        "exclude": "",
-                        "upload_decision": "include",
-                    }
-                )
-
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(UPLOAD_REVIEW),
-                    "summarize",
-                    "--csv",
-                    str(csv_path),
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            payload = json.loads(result.stdout)
-            self.assertEqual(payload["approved_count"], 3)
-            self.assertEqual(payload["skipped_unapproved_count"], 3)
-            self.assertNotIn("yes_count", payload)
-            self.assertNotIn("maybe_count", payload)
-            self.assertNotIn("no_count", payload)
-            self.assertNotIn("explicit_include_count", payload)
-            self.assertNotIn("explicit_exclude_count", payload)
-            self.assertNotIn("bucket_default_count", payload)
-            self.assertNotIn("row_count", payload)
-
-
-    def test_upload_research_review_requires_explicit_api_url(self) -> None:
-        env = os.environ.copy()
-        for key in ("POWERPACKS_API_URL", "POWERSET_API_URL", "POWERPACKS_SEARCH_API_URL"):
-            env.pop(key, None)
-        result = subprocess.run(
-            [
-                "python3",
-                str(UPLOAD_REVIEW),
-                "upload",
-                "--token",
-                "test-token",
-                "--confirm-upload",
-            ],
-            cwd=ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        self.assertEqual(result.returncode, 1)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["status"], "failed")
-        self.assertIn("POWERPACKS_API_URL", payload["error"])
-        self.assertIn("env.powerset.example", payload["error"])
-
-    def test_upload_research_review_posts_multipart_csv(self) -> None:
-        observed: dict[str, object] = {}
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:  # noqa: N802
-                length = int(self.headers.get("Content-Length", "0"))
-                observed["path"] = self.path
-                observed["authorization"] = self.headers.get("Authorization")
-                observed["content_type"] = self.headers.get("Content-Type")
-                observed["body"] = self.rfile.read(length)
-                body = json.dumps(
-                    {
-                        "artifact_id": "artifact-1",
-                        "status": "ready",
-                        "created_at": "2026-05-05T00:00:00+00:00",
-                        "total_count": 1,
-                        "approved_count": 1,
-                    }
-                ).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, fmt: str, *args: object) -> None:
-                return
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-
-        with tempfile.TemporaryDirectory() as td:
-            csv_path = Path(td) / "research_review.csv"
-            with csv_path.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=["bucket", "handle", "top_title_company_pairs", "exclude"],
-                )
-                writer.writeheader()
-                writer.writerow(
-                    {
-                        "bucket": "review",
-                        "handle": "phone-1",
-                        "top_title_company_pairs": "Founder @ Acme",
-                        "exclude": "no",
-                    }
-                )
-                writer.writerow(
-                    {
-                        "bucket": "confident",
-                        "handle": "phone-2",
-                        "top_title_company_pairs": "CEO @ Example",
-                        "exclude": "yes",
-                    }
-                )
-
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(UPLOAD_REVIEW),
-                    "upload",
-                    "--csv",
-                    str(csv_path),
-                    "--api-url",
-                    f"http://127.0.0.1:{server.server_port}",
-                    "--token",
-                    "test-token",
-                    "--confirm-upload",
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["response"]["artifact_id"], "artifact-1")
-        self.assertEqual(payload["approved_count"], 1)
-        self.assertEqual(payload["prepared_summary"]["approved_count"], 1)
-        self.assertEqual(payload["prepared_summary"]["skipped_unapproved_count"], 1)
-        self.assertEqual(observed["path"], "/v2/messages-research/artifacts")
-        self.assertEqual(observed["authorization"], "Bearer test-token")
-        self.assertIn("multipart/form-data", str(observed["content_type"]))
-        body_text = bytes(observed["body"]).decode("utf-8", errors="replace")
-        self.assertIn("source_bucket", body_text)
-        self.assertIn("approved", body_text)
-        self.assertIn("yes,phone-1", body_text)
-        self.assertNotIn("upload_decision", body_text)
-        self.assertNotIn("phone-2", body_text)
-
-    def test_migrate_review_schema_canonicalizes_buckets_and_adds_network_rows(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            contacts = tmp / "contacts.csv"
-            review = tmp / "research_review.csv"
-            out = tmp / "final.csv"
-            contacts.write_text(
-                "phone,name,source,is_in_group_chats,group_names,message_count,imessage_message_count,whatsapp_message_count,last_message,imessage_last_message,whatsapp_last_message,skip,match_status,matched_person_id,matched_name,matched_linkedin_url,match_confidence,match_method,match_reason\n"
-                "+14155550101,Ada,imessage,false,,7,7,,2026-01-01,2026-01-01,,,matched,p1,Ada Lovelace,https://www.linkedin.com/in/ada,0.99,name_exact,exact\n"
-                "+14155550202,Bob,whatsapp,false,,3,,3,2026-01-02,,2026-01-02,,matched,p2,Bob Smith,https://www.linkedin.com/in/bob,0.98,name_exact,exact\n",
-                encoding="utf-8",
-            )
-            review.write_text(
-                "bucket,handle,full_name,phone_e164,total_messages,short_reason,signals,exclude,enrich_decision\n"
-                "medium,phone-4155550101,Ada,+14155550101,7,Some signal,founder,,\n"
-                "review,phone-4155550999,Carol,+14155550999,1,Needs review,,,\n",
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(MIGRATE_REVIEW),
-                    "migrate",
-                    "--review-csv", str(review),
-                    "--contacts-csv", str(contacts),
-                    "--output-csv", str(out),
-                    "--no-backup",
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            payload = json.loads(result.stdout)
-            self.assertEqual(payload["rows_in"], 2)
-            self.assertEqual(payload["rows_written"], 3)
-            self.assertEqual(payload["in_network_added"], 1)
-            self.assertEqual(payload["research_bucket_counts"], {"maybe": 1, "no": 0, "yes": 0})
-            self.assertEqual(payload["tab_counts"], {"in_network": 2, "maybe": 1, "no": 0, "yes": 0})
-
-            with out.open(newline="", encoding="utf-8") as handle:
-                rows = list(CsvIO.dict_reader(handle))
-            by_phone = {row["phone_e164"]: row for row in rows}
-            self.assertEqual(by_phone["+14155550101"]["bucket"], "maybe")
-            self.assertEqual(by_phone["+14155550101"]["in_network"], "true")
-            self.assertEqual(by_phone["+14155550101"]["network_person_id"], "p1")
-            self.assertEqual(by_phone["+14155550202"]["review_source"], "in_network_match")
-            self.assertEqual(by_phone["+14155550999"]["bucket"], "maybe")
-
-            upload_result = subprocess.run(
-                ["python3", str(UPLOAD_REVIEW), "summarize", "--csv", str(out)],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            upload_payload = json.loads(upload_result.stdout)
-            self.assertEqual(upload_payload["approved_count"], 0)
-            self.assertEqual(upload_payload["skipped_unapproved_count"], 3)
 
     def test_extract_imessage_privacy_settings_print_only(self) -> None:
         result = subprocess.run(
@@ -652,7 +347,7 @@ if __name__ == "__main__":
 
 
 class MergeMessageContactsTests(unittest.TestCase):
-    MERGE = ROOT / "packs/messages/primitives/merge_message_contacts/merge_message_contacts.py"
+    MERGE = ROOT / "packs/ingestion/primitives/merge_message_contacts/merge_message_contacts.py"
     HEADERS = [
         "phone",
         "name",
@@ -838,12 +533,12 @@ class MergeMessageContactsTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             combined = result.stdout + result.stderr
             self.assertIn("Please convert this file", combined)
-            self.assertIn("packs/messages/schemas/contacts-csv.md", combined)
+            self.assertIn("packs/ingestion/schemas/contacts-csv.md", combined)
             self.assertIn("display_name/full_name -> name", combined)
 
 
 class PrepareResearchQueueTests(unittest.TestCase):
-    PREPARE = ROOT / "packs/messages/primitives/prepare_research_queue/prepare_research_queue.py"
+    PREPARE = ROOT / "packs/ingestion/primitives/prepare_research_queue/prepare_research_queue.py"
     HEADERS = [
         "phone",
         "name",
@@ -1075,248 +770,8 @@ class PrepareResearchQueueTests(unittest.TestCase):
             self.assertEqual([row["display_name"] for row in rows], ["Grace Hopper", "Ada Lovelace"])
 
 
-class PrepareRetargetQueueTests(unittest.TestCase):
-    PREPARE = ROOT / "packs/messages/primitives/prepare_retarget_queue/prepare_retarget_queue.py"
-
-    def test_only_new_feedback_hashes_are_queued(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            review_csv = tmp / "research_review.csv"
-            base_queue = tmp / "research_queue.csv"
-            output = tmp / "retarget_queue.csv"
-            ledger = tmp / "retarget_attempts.json"
-            out_dir = tmp / "research_retarget"
-
-            with review_csv.open("w", newline="") as h:
-                w = csv.DictWriter(h, fieldnames=["handle", "full_name", "phone_e164", "total_messages", "retarget_hint"])
-                w.writeheader()
-                w.writerow({"handle": "phone-1", "full_name": "Jane Doe", "phone_e164": "+14155550101", "total_messages": "5", "retarget_hint": "LinkedIn: https://linkedin.test/jane"})
-                w.writerow({"handle": "phone-2", "full_name": "Bob Smith", "phone_e164": "+14155550202", "total_messages": "0", "retarget_hint": ""})
-
-            with base_queue.open("w", newline="") as h:
-                fields = ["handle", "display_name", "first_name", "last_name", "phone_e164", "total_messages", "source_channel", "retarget_hint"]
-                w = csv.DictWriter(h, fieldnames=fields)
-                w.writeheader()
-                w.writerow({"handle": "phone-1", "display_name": "Jane Doe", "first_name": "Jane", "last_name": "Doe", "phone_e164": "+14155550101", "total_messages": "5", "source_channel": "phone"})
-
-            cmd = [
-                "python3", str(self.PREPARE), "prepare",
-                "--review-csv", str(review_csv),
-                "--base-queue", str(base_queue),
-                "--output", str(output),
-                "--ledger", str(ledger),
-                "--retarget-output-dir", str(out_dir),
-            ]
-            first = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=True)
-            first_manifest = json.loads(first.stdout)
-            self.assertEqual(first_manifest["rows_written"], 1)
-            self.assertEqual(first_manifest["counts"]["with_feedback"], 1)
-            with output.open(newline="") as h:
-                rows = list(CsvIO.dict_reader(h))
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["retarget_source_handle"], "phone-1")
-            self.assertIn("__retarget_", rows[0]["handle"])
-            self.assertEqual(rows[0]["retarget_hint"], "LinkedIn: https://linkedin.test/jane")
-
-            second = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=True)
-            second_manifest = json.loads(second.stdout)
-            self.assertEqual(second_manifest["rows_written"], 0)
-            self.assertEqual(second_manifest["counts"]["skipped_already_attempted"], 1)
-
-            # Changing feedback text creates a new hash/attempt.
-            with review_csv.open("w", newline="") as h:
-                w = csv.DictWriter(h, fieldnames=["handle", "full_name", "phone_e164", "total_messages", "retarget_hint"])
-                w.writeheader()
-                w.writerow({"handle": "phone-1", "full_name": "Jane Doe", "phone_e164": "+14155550101", "total_messages": "5", "retarget_hint": "Jane Doe at Acme"})
-            third = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=True)
-            third_manifest = json.loads(third.stdout)
-            self.assertEqual(third_manifest["rows_written"], 1)
-
-            with output.open(newline="") as h:
-                rerun_rows = list(CsvIO.dict_reader(h))
-            retarget_handle = rerun_rows[0]["handle"]
-            profile_dir = out_dir / retarget_handle
-            profile_dir.mkdir(parents=True)
-            (profile_dir / "01_research_parallel.json").write_text(json.dumps({
-                "person": {"full_name": "Jane Acme", "confidence": 0.93},
-                "social": {"linkedin_url": "https://linkedin.test/jane-acme"},
-                "location": {"city": "San Francisco", "country": "United States"},
-                "positions": [{"title": "Founder", "company_name": "Acme"}],
-                "education": [{"school_name": "MIT"}],
-                "summary": {"text": "Retargeted profile."},
-                "metadata": {"research_notes": "Matched user feedback."},
-            }), encoding="utf-8")
-            marked = subprocess.run([
-                "python3", str(self.PREPARE), "mark-completed",
-                "--ledger", str(ledger),
-                "--retarget-output-dir", str(out_dir),
-                "--review-csv", str(review_csv),
-            ], cwd=ROOT, capture_output=True, text=True, check=True)
-            marked_manifest = json.loads(marked.stdout)
-            self.assertEqual(marked_manifest["review_rows_merged"], 1)
-            with review_csv.open(newline="") as h:
-                reviewed = list(CsvIO.dict_reader(h))
-            self.assertEqual(reviewed[0]["retarget_status"], "re_researched")
-            self.assertEqual(reviewed[0]["retarget_profile_status"], "new_profile")
-            self.assertEqual(reviewed[0]["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
-            self.assertEqual(reviewed[0]["top_title_company_pairs"], "Founder @ Acme")
-
-    def test_merge_cached_retarget_result_without_existing_attempt(self):
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            review_csv = tmp / "research_review.csv"
-            ledger = tmp / "retarget_attempts.json"
-            out_dir = tmp / "research_retarget"
-            hint = "Jane Doe at Acme"
-            with review_csv.open("w", newline="") as h:
-                w = csv.DictWriter(h, fieldnames=["handle", "full_name", "phone_e164", "total_messages", "retarget_hint"])
-                w.writeheader()
-                w.writerow({"handle": "phone-1", "full_name": "Jane Doe", "phone_e164": "+14155550101", "total_messages": "5", "retarget_hint": hint})
-            h = hashlib.sha256(hint.lower().encode("utf-8")).hexdigest()[:16]
-            retarget_handle = f"phone-1__retarget_{h[:10]}"
-            profile_dir = out_dir / retarget_handle
-            profile_dir.mkdir(parents=True)
-            (profile_dir / "01_research_parallel.json").write_text(json.dumps({
-                "person": {"full_name": "Jane Acme", "confidence": 0.93},
-                "social": {"linkedin_url": "https://linkedin.test/jane-acme"},
-                "positions": [{"title": "Founder", "company_name": "Acme"}],
-                "metadata": {"research_notes": "cached retarget"},
-            }), encoding="utf-8")
-
-            result = subprocess.run([
-                "python3", str(self.PREPARE), "merge-cached",
-                "--ledger", str(ledger),
-                "--retarget-output-dir", str(out_dir),
-                "--review-csv", str(review_csv),
-            ], cwd=ROOT, capture_output=True, text=True, check=True)
-            payload = json.loads(result.stdout)
-            self.assertEqual(payload["completed_recorded"], 1)
-            self.assertEqual(payload["review_rows_merged"], 1)
-            with review_csv.open(newline="") as h:
-                row = next(CsvIO.dict_reader(h))
-            self.assertEqual(row["retarget_status"], "re_researched")
-            self.assertEqual(row["retarget_linkedin_url"], "https://linkedin.test/jane-acme")
-
-
-class RefreshRetargetLinkedInProfilesTests(unittest.TestCase):
-    MODULE_PATH = ROOT / "packs/messages/primitives/refresh_retarget_linkedin_profiles/refresh_retarget_linkedin_profiles.py"
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        spec = importlib.util.spec_from_file_location("refresh_retarget_linkedin_profiles", cls.MODULE_PATH)
-        cls.mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.mod)  # type: ignore[union-attr]
-
-    def test_exact_linkedin_hint_overwrites_stale_cached_profile(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            review_csv = tmp / "research_review.csv"
-            ledger = tmp / "retarget_attempts.json"
-            out_dir = tmp / "research_retarget"
-            hint = "new profile: https://www.linkedin.com/in/charles-lin/"
-            with review_csv.open("w", newline="", encoding="utf-8") as h:
-                writer = csv.DictWriter(h, fieldnames=["handle", "full_name", "retarget_hint"])
-                writer.writeheader()
-                writer.writerow({"handle": "phone-1", "full_name": "Old Charles", "retarget_hint": hint})
-
-            hsh = hashlib.sha256(hint.lower().encode("utf-8")).hexdigest()[:16]
-            retarget_handle = f"phone-1__retarget_{hsh[:10]}"
-            profile_dir = out_dir / retarget_handle
-            profile_dir.mkdir(parents=True)
-            (profile_dir / "01_research_parallel.json").write_text(json.dumps({
-                "person": {"full_name": "Old Charles", "confidence": 0.4},
-                "social": {"linkedin_url": "https://www.linkedin.com/in/old-charles"},
-                "positions": [{"title": "Old Role", "company_name": "OldCo"}],
-                "metadata": {"research_method": "parallel-core2x"},
-            }), encoding="utf-8")
-
-            rapid_response = {
-                "data": {
-                    "full_name": "Charles Lin",
-                    "headline": "Founder at NewCo",
-                    "linkedin_url": "https://www.linkedin.com/in/charles-lin/",
-                    "city": "San Francisco",
-                    "country": "United States",
-                    "experiences": [
-                        {"title": "Founder", "company_name": "NewCo", "starts_at": {"year": 2022}},
-                    ],
-                    "education": [
-                        {"school_name": "Stanford University", "degree_name": "BS"},
-                    ],
-                }
-            }
-            args = SimpleNamespace(
-                review_csv=review_csv,
-                ledger=ledger,
-                retarget_output_dir=out_dir,
-                manifest=None,
-                force=False,
-                sleep_seconds=0,
-            )
-            with mock.patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "test-key"}, clear=False), \
-                    mock.patch.object(self.mod, "rapidapi_profile", return_value={"status_code": 200, "data": rapid_response, "error": ""}):
-                self.assertEqual(self.mod.cmd_run(args), 0)
-
-            profile = json.loads((profile_dir / "01_research_parallel.json").read_text(encoding="utf-8"))
-            self.assertEqual(profile["person"]["full_name"], "Charles Lin")
-            self.assertEqual(profile["social"]["linkedin_url"], "https://www.linkedin.com/in/charles-lin")
-            self.assertEqual(profile["positions"][0]["title"], "Founder")
-            self.assertEqual(profile["positions"][0]["company_name"], "NewCo")
-            self.assertEqual(profile["education"][0]["school_name"], "Stanford University")
-            self.assertEqual(profile["metadata"]["research_method"], "rapidapi-linkedin-retarget")
-
-            attempts = json.loads(ledger.read_text(encoding="utf-8"))["attempts"]["phone-1"]
-            self.assertEqual(attempts[-1]["status"], "completed")
-            self.assertEqual(attempts[-1]["provider"], "rapidapi")
-            rows, counts = self.mod.candidate_rows(review_csv, out_dir)
-            self.assertEqual(rows, [])
-            self.assertEqual(counts["skipped_already_refreshed"], 1)
-
-    def test_empty_rapidapi_profile_does_not_overwrite_cached_profile(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            review_csv = tmp / "research_review.csv"
-            ledger = tmp / "retarget_attempts.json"
-            out_dir = tmp / "research_retarget"
-            hint = "https://www.linkedin.com/in/test-contact/"
-            with review_csv.open("w", newline="", encoding="utf-8") as h:
-                writer = csv.DictWriter(h, fieldnames=["handle", "full_name", "retarget_hint"])
-                writer.writeheader()
-                writer.writerow({"handle": "phone-2", "full_name": "Test Contact", "retarget_hint": hint})
-
-            hsh = hashlib.sha256(hint.lower().encode("utf-8")).hexdigest()[:16]
-            retarget_handle = f"phone-2__retarget_{hsh[:10]}"
-            profile_dir = out_dir / retarget_handle
-            profile_dir.mkdir(parents=True)
-            cached = {
-                "person": {"full_name": "Cached Contact", "confidence": 0.8},
-                "social": {"linkedin_url": "https://www.linkedin.com/in/cached-contact"},
-                "positions": [{"title": "Founder", "company_name": "CachedCo"}],
-                "metadata": {"research_method": "parallel-core2x"},
-            }
-            (profile_dir / "01_research_parallel.json").write_text(json.dumps(cached), encoding="utf-8")
-
-            args = SimpleNamespace(
-                review_csv=review_csv,
-                ledger=ledger,
-                retarget_output_dir=out_dir,
-                manifest=None,
-                force=False,
-                sleep_seconds=0,
-            )
-            with mock.patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "test-key"}, clear=False), \
-                    mock.patch.object(self.mod, "rapidapi_profile", return_value={"status_code": 200, "data": {"data": {}}, "error": ""}):
-                self.assertEqual(self.mod.cmd_run(args), 0)
-
-            profile = json.loads((profile_dir / "01_research_parallel.json").read_text(encoding="utf-8"))
-            self.assertEqual(profile, cached)
-            manifest = json.loads((out_dir / "_rapidapi_retarget_manifest.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["status"], "ok_with_failures")
-            self.assertEqual(manifest["failed"], 1)
-
-
 class LlmReviewContactsTests(unittest.TestCase):
-    LLM = ROOT / "packs/messages/primitives/llm_review_contacts/llm_review_contacts.py"
+    LLM = ROOT / "packs/ingestion/primitives/llm_review_contacts/llm_review_contacts.py"
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -1433,7 +888,7 @@ class LlmReviewContactsTests(unittest.TestCase):
 
 
 class DeepResearchContactsTests(unittest.TestCase):
-    DR = ROOT / "packs/messages/primitives/deep_research_contacts/deep_research_contacts.py"
+    DR = ROOT / "packs/ingestion/primitives/deep_research_contacts/deep_research_contacts.py"
 
     def _fake_parallel_server(self, port: int):
         """Spin up an in-process server that mimics the Parallel.ai task-group API."""
@@ -1767,7 +1222,7 @@ class DeepResearchContactsTests(unittest.TestCase):
 
 
 class BuildResearchReviewCsvTests(unittest.TestCase):
-    BUILD = ROOT / "packs/messages/primitives/build_research_review_csv/build_research_review_csv.py"
+    BUILD = ROOT / "packs/ingestion/primitives/build_research_review_csv/build_research_review_csv.py"
 
     def _load_build_module(self):
         spec = importlib.util.spec_from_file_location("build_research_review_csv_test", self.BUILD)
@@ -2360,39 +1815,8 @@ class BuildResearchReviewCsvTests(unittest.TestCase):
             self.assertFalse((research_dir / handle / "03_network_review.json").exists())
 
 
-class ReviewContactsWebTests(unittest.TestCase):
-    WEB = ROOT / "packs/messages/primitives/review_contacts_web/review_contacts_web.py"
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        spec = importlib.util.spec_from_file_location("review_contacts_web", cls.WEB)
-        assert spec and spec.loader
-        cls.mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.mod)
-
-    def test_default_selection_drops_bad_names_but_keeps_matches(self) -> None:
-        rows = [
-            {"name": "", "phone": "+14155550101", "skip": ""},
-            {"name": "Alice Hinge", "phone": "+14155550202", "skip": ""},
-            {"name": "5550303", "phone": "+14155550303", "skip": ""},
-            {"name": "Tanner", "phone": "+14155550404", "skip": ""},
-            {"name": "Jane Doe", "phone": "+14155550505", "skip": ""},
-            {"name": "", "phone": "+14155550606", "skip": "", "matched_person_id": "p1", "match_status": "matched"},
-            {"name": "Bob Smith", "phone": "+14155550707", "skip": "true"},
-            {"name": "Charlie Raya", "phone": "+14155550808", "skip": "", "enrich_decision": "yes"},
-        ]
-        selected = [self.mod.contact_selected(row) for row in rows]
-        self.assertEqual(selected, [False, False, False, False, True, True, False, True])
-        self.assertEqual(self.mod.drop_reason(rows[0]), "no name")
-        self.assertEqual(self.mod.drop_reason(rows[1]), "blocked name token")
-        self.assertEqual(self.mod.drop_reason(rows[2]), "name is phone")
-        self.assertEqual(self.mod.drop_reason(rows[3]), "bad name")
-        summary = self.mod.summarize(rows)
-        self.assertEqual(summary["selected"], 3)
-
-
 class ReviewResearchWebTests(unittest.TestCase):
-    WEB = ROOT / "packs/messages/primitives/review_research_web/review_research_web.py"
+    WEB = ROOT / "packs/ingestion/primitives/review_research_web/review_research_web.py"
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -2401,13 +1825,13 @@ class ReviewResearchWebTests(unittest.TestCase):
         cls.mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.mod)
 
-    def test_decision_semantics_match_contact_exporter_upload(self) -> None:
+    def test_review_decision_semantics(self) -> None:
         rows = [
-            {"bucket": "confident", "exclude": ""},
-            {"bucket": "medium", "exclude": ""},
-            {"bucket": "review", "exclude": ""},
-            {"bucket": "medium", "exclude": "no"},
-            {"bucket": "confident", "exclude": "yes"},
+            {"bucket": "confident", "exclude": "", "full_name": "Ada One"},
+            {"bucket": "medium", "exclude": "", "full_name": "Ada Two"},
+            {"bucket": "review", "exclude": "", "full_name": "Ada Three"},
+            {"bucket": "medium", "exclude": "no", "full_name": "Ada Four"},
+            {"bucket": "confident", "exclude": "yes", "full_name": "Ada Five"},
         ]
         selected = [self.mod.is_selected(row) for row in rows]
         self.assertEqual(selected, [True, False, False, True, False])
@@ -2419,9 +1843,9 @@ class ReviewResearchWebTests(unittest.TestCase):
 
     def test_in_network_rows_have_separate_review_tab(self) -> None:
         rows = [
-            {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},
-            {"bucket": "yes", "exclude": "", "in_network": "", "network_person_id": ""},
-            {"bucket": "maybe", "exclude": "", "in_network": "", "network_person_id": ""},
+            {"bucket": "maybe", "exclude": "", "full_name": "Network Person", "in_network": "true", "network_person_id": "p1"},
+            {"bucket": "yes", "exclude": "", "full_name": "Yes Person", "in_network": "", "network_person_id": ""},
+            {"bucket": "maybe", "exclude": "", "full_name": "Maybe Person", "in_network": "", "network_person_id": ""},
         ]
         summary = self.mod.summarize(rows)
         self.assertEqual(summary, {"in_network": 1, "yes": 1, "maybe": 1, "no": 0})
@@ -2431,9 +1855,9 @@ class ReviewResearchWebTests(unittest.TestCase):
 
     def test_review_defaults_to_yes_tab(self) -> None:
         rows = [
-            {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},
-            {"bucket": "yes", "exclude": "", "in_network": "", "network_person_id": ""},
-            {"bucket": "maybe", "exclude": "", "in_network": "", "network_person_id": ""},
+            {"bucket": "maybe", "exclude": "", "full_name": "Network Person", "in_network": "true", "network_person_id": "p1"},
+            {"bucket": "yes", "exclude": "", "full_name": "Yes Person", "in_network": "", "network_person_id": ""},
+            {"bucket": "maybe", "exclude": "", "full_name": "Maybe Person", "in_network": "", "network_person_id": ""},
         ]
         self.assertTrue(self.mod.matches_filter(rows[1], {}, None))
         self.assertFalse(self.mod.matches_filter(rows[0], {}, None))
@@ -2486,6 +1910,8 @@ class ReviewResearchWebTests(unittest.TestCase):
         self.assertNotIn("&middot; <strong>msgs</strong>", html)
         self.assertIn("<strong>phone</strong>", html)
         self.assertIn("<strong>msgs</strong>", html)
+        self.assertIn("Saved: included", html)
+        self.assertNotIn("Saved: upload", html)
 
     def test_health_source_hash_identifies_running_ui_code(self) -> None:
         self.assertEqual(self.mod.SOURCE_SHA256, hashlib.sha256(self.WEB.read_bytes()).hexdigest())
@@ -2510,9 +1936,9 @@ class ReviewResearchWebTests(unittest.TestCase):
 
     def test_bulk_in_network_selection_targets_all_network_rows(self) -> None:
         rows = [
-            {"bucket": "maybe", "exclude": "", "in_network": "true", "network_person_id": "p1"},
-            {"bucket": "maybe", "exclude": "yes", "in_network": "true", "network_person_id": "p2"},
-            {"bucket": "maybe", "exclude": "", "in_network": "", "network_person_id": ""},
+            {"bucket": "maybe", "exclude": "", "full_name": "Network One", "in_network": "true", "network_person_id": "p1"},
+            {"bucket": "maybe", "exclude": "yes", "full_name": "Network Two", "in_network": "true", "network_person_id": "p2"},
+            {"bucket": "maybe", "exclude": "", "full_name": "Maybe Person", "in_network": "", "network_person_id": ""},
         ]
         changed = self.mod.apply_bulk_selection(rows, "in_network", False)
         self.assertEqual(changed, 1)
@@ -2590,45 +2016,3 @@ class ReviewResearchWebTests(unittest.TestCase):
             self.assertEqual(view["title_pairs"], "Founder @ Acme")
             self.assertEqual(view["schools"], "MIT")
             self.assertEqual(view["linkedin_url"], "https://linkedin.test/jane")
-
-
-class ImportContactsPipelineReviewServerTests(unittest.TestCase):
-    PIPELINE = ROOT / "packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py"
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        spec = importlib.util.spec_from_file_location("import_contacts_pipeline", cls.PIPELINE)
-        assert spec and spec.loader
-        cls.mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.mod)
-
-    def test_review_server_reuse_requires_current_ui_source_hash(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            review_csv = Path(td) / "research_review.csv"
-            review_csv.write_text("bucket,full_name\nyes,Jane Doe\n", encoding="utf-8")
-            args = SimpleNamespace(review_host="127.0.0.1", review_port=8787, review_csv=review_csv)
-            current_hash = "current-ui-hash"
-            base_health = {
-                "status": "ok",
-                "csv": str(review_csv.resolve()),
-                "source_sha256": current_hash,
-            }
-
-            with mock.patch.object(self.mod, "current_review_research_web_sha256", return_value=current_hash):
-                with mock.patch.object(self.mod, "read_review_server_health", return_value=base_health):
-                    self.assertTrue(self.mod.review_server_matches_current_csv(args))
-                with mock.patch.object(self.mod, "read_review_server_health", return_value={**base_health, "source_sha256": "old-ui-hash"}):
-                    self.assertFalse(self.mod.review_server_matches_current_csv(args))
-                stale_health = {k: v for k, v in base_health.items() if k != "source_sha256"}
-                with mock.patch.object(self.mod, "read_review_server_health", return_value=stale_health):
-                    self.assertFalse(self.mod.review_server_matches_current_csv(args))
-                other_csv = Path(td) / "other.csv"
-                other_csv.write_text("bucket,full_name\nyes,Other Person\n", encoding="utf-8")
-                with mock.patch.object(self.mod, "read_review_server_health", return_value={**base_health, "csv": str(other_csv.resolve())}):
-                    self.assertFalse(self.mod.review_server_matches_current_csv(args))
-
-    def test_review_server_source_summary_records_path_and_hash(self) -> None:
-        summary = self.mod.review_server_source_summary()
-        path = Path(summary["source_path"])
-        self.assertEqual(path, self.mod.review_research_web_path())
-        self.assertEqual(summary["source_sha256"], hashlib.sha256(path.read_bytes()).hexdigest())

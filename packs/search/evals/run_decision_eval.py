@@ -13,7 +13,7 @@ Spawn patterns follow the in-repo precedents:
 - codex: `codex exec -s read-only --skip-git-repo-check --ephemeral -o <tmp>`
   with the prompt on stdin (packs/search/primitives/deep_search/codex_judge.py)
 - claude / custom: a `--command-template` with a `{prompt_path}` placeholder
-  (packs/messages/primitives/harness_retarget_research/harness_retarget_research.py)
+  (the retired Messages retarget harness)
 
 Usage:
   uv run --project . python packs/search/evals/run_decision_eval.py --harness codex
@@ -31,7 +31,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
