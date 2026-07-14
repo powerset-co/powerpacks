@@ -21,6 +21,9 @@ Changelog:
   Powerset account to log in with (initializing .env from the hosted template
   on yes) instead of silently defaulting into Powerset login. New own-keys
   route: skip login/pull and verify the user's own Modal/OpenAI keys instead.
+- 2026-07-13: Step 6 now sets a count-based runtime expectation from the
+  LinkedIn import summary and distinguishes warm-cache runs from cache-cold
+  first runs so agents do not mistake a long, quiet Modal build for a hang.
 -->
 
 # setup
@@ -207,7 +210,9 @@ This runs only the Modal import/enrich stage (no local DuckDB) and writes the
 enriched `.powerpacks/network-import/import/linkedin/people.csv` for the merge.
 Because enrichment runs on Modal it needs no local RapidAPI key, and the shared
 volume cache keeps reruns cheap. It can take a few minutes; the command prints
-progress.
+progress. Record the command's reported connection count for the Step 6 runtime
+estimate (use the merged people count from Step 5 if the import summary is not
+available).
 
 ### Step 5 — Merge all sources
 
@@ -236,11 +241,27 @@ Run it in the background and keep Step 6 `in_progress` until the command
 **exits 0**. This stage is long and mostly quiet — set expectations and don't
 panic:
 
-- **Expect 5–30+ minutes.** Most of the work (embeddings, role/company
-  classification, duckdb build) runs **server-side on Modal**, so the local
-  process can print little or nothing for **many minutes at a stretch**. A long
-  silence with the process still alive is **normal and expected — not a hang**.
-  Do not interrupt it, do not retry, do not declare failure on quiet.
+- **Estimate from the Step 4 connection count** (or Step 5 merged people count)
+  and state the estimate before launching the command. These are planning
+  ranges, not deadlines:
+
+  | Connections / people | Expected Modal index time |
+  | ---: | ---: |
+  | Up to 1,000 | 10–30 minutes |
+  | 1,001–5,000 | 20–45 minutes |
+  | 5,001–10,000 | 30–75 minutes |
+  | 10,001–20,000 | 60–120 minutes |
+  | More than 20,000 | 90 minutes–3 hours |
+
+  Shared role/company/embedding caches usually put a repeat run toward the low
+  end. A first run with many uncached companies can approach the high end. For
+  example, about 15,000 connections should be introduced as **roughly a
+  one-hour warm-cache run; allow up to two hours if cache-cold**.
+- Most work (embeddings, role/company classification, cache materialization,
+  and DuckDB build) runs **server-side on Modal**, so the local process can
+  print little or nothing for **many minutes at a stretch**. A long silence with
+  the process still alive is **normal and expected — not a hang**. Do not
+  interrupt it, retry it, or declare failure because output is quiet.
 - **The authoritative signal is the process itself**, not a status file: it stays
   running until done and prints a final `{"status": "completed", ...}` on
   success. `index-people` writes progress to
@@ -249,14 +270,18 @@ panic:
   LinkedIn run; stages `enriching` → `importing` → `indexing` → `completed`) —
   poll that, but if it lags the live stdout, **trust the running process and its
   stdout.**
+- Poll the same process and status file about every **5 minutes**, or when the
+  harness reports new output. A harness command/display timeout is not proof of
+  failure if the original process is still alive. Do not launch a replacement
+  indexer while that process exists.
 - **Do not treat pre-existing files in `.powerpacks/search-index/` as this run's
   output.** They may be left over from a prior run. The index is done only when
   the command exits 0 and has freshly downloaded `local-search.duckdb` +
   `manifest.json`. Confirm with Step 7, not by eyeballing the directory.
 
-While it runs, reassure the user every poll, e.g. "Still indexing on Modal
-(~N min in) — quiet by design; the job is alive." Then proceed to Step 7 once it
-exits 0.
+While it runs, update the user only when the phase changes or roughly every
+5–10 minutes, e.g. "Still indexing on Modal (~N min in; estimated X–Y min) —
+the original job is alive." Then proceed to Step 7 once it exits 0.
 
 ### Step 7 — Validate the search index
 
