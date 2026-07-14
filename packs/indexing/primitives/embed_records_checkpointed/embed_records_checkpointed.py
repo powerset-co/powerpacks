@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
+from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
@@ -74,14 +75,16 @@ def load_input_embeddings(path: str | None, id_field: str, embedding_field: str)
     input_path = Path(path)
     if not input_path.exists():
         raise SystemExit(f"missing input embeddings: {input_path}")
-    # Stream rows and keep vectors as float64 arrays: ~12KB instead of ~49KB of
-    # boxed floats per 1536-dim vector, with bit-identical values on rewrite.
+    # JSONL stays float64 for backward-compatible rewrites. Parquet stores
+    # FLOAT[] and remains float32 in memory, cutting the largest replay maps in
+    # half without creating boxed Python floats.
     out: dict[str, array.array] = {}
-    for row in iter_jsonl(input_path):
+    for row in iter_artifact_rows(input_path, [id_field, embedding_field]):
         rid = clean(row.get(id_field))
         embedding = row.get(embedding_field)
         if rid and isinstance(embedding, list):
-            out[rid] = array.array("d", (float(v) for v in embedding))
+            typecode = "f" if input_path.suffix.lower() == ".parquet" else "d"
+            out[rid] = array.array(typecode, (float(v) for v in embedding))
     return out
 
 

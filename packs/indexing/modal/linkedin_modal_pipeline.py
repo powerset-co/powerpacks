@@ -83,10 +83,9 @@ def require_modal_credentials() -> None:
 
 APP_NAME = os.environ.get("POWERPACKS_MODAL_APP", "powerset-indexing")
 # Modal Volumes are workspace-scoped: anyone with a powerset-co token shares
-# this default volume; outsiders cannot reach it. Set POWERPACKS_MODAL_VOLUME
-# for an isolated volume (recommended once multiple operators run concurrently,
-# since input/ and runs/ paths are not yet per-operator prefixed).
-VOLUME_NAME = os.environ.get("POWERPACKS_MODAL_VOLUME", "powerset-indexing")
+# this default volume; outsiders cannot reach it. Inputs and runs remain
+# operator-prefixed; POWERPACKS_MODAL_VOLUME can select an isolated volume.
+VOLUME_NAME = os.environ.get("POWERPACKS_MODAL_VOLUME", "powerset-indexing-v2")
 DEFAULT_OPERATOR_ID = os.environ.get("POWERPACKS_OPERATOR_ID", "00000000-0000-0000-0000-000000000000")
 
 REPO = Path(__file__).resolve().parents[3]
@@ -502,6 +501,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         "--cache-root", cache_root,
         "--run-vol", index_vol,
         "--operator-id", DEFAULT_OPERATOR_ID,
+        "--compute-threads", "16",
         "--enrich", "--max-usd", str(args.max_usd),
         app=app,
         image=build_image(),
@@ -509,7 +509,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         # openai for LLM classification; rapidapi to hydrate company details for
         # the long-tail companies not in the corpus (cached on the volume).
         secrets=[modal.Secret.from_name("powerset-openai"), rapidapi_secret()],
-        cpu=4,
+        cpu=16,
         memory=16384,
         timeout=args.timeout,
     )
@@ -591,12 +591,13 @@ def cmd_index_people(args: argparse.Namespace) -> int:
         "--cache-root", cache_root,
         "--run-vol", index_vol,
         "--operator-id", DEFAULT_OPERATOR_ID,
+        "--compute-threads", "16",
         "--enrich", "--max-usd", str(args.max_usd),
         app=app,
         image=build_image(),
         volumes={"/data": vol},
         secrets=[modal.Secret.from_name("powerset-openai"), rapidapi_secret()],
-        cpu=4,
+        cpu=16,
         memory=16384,
         timeout=args.timeout,
     )
@@ -637,6 +638,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         "--cache-root", cache_root,
         "--run-vol", run_vol,
         "--operator-id", DEFAULT_OPERATOR_ID,
+        "--compute-threads", str(max(1, int(args.cpu))),
     ]
     if args.persist_artifacts:
         entrypoint.append("--persist-artifacts")
@@ -900,17 +902,18 @@ def cmd_amplify(args: argparse.Namespace) -> int:
         sb.terminate()
 
 
-def pipeline_cmd(people_csv: str, out_dir: str, artifacts: str) -> list[str]:
+def pipeline_cmd(people_csv: str, out_dir: str, artifacts: str, *, parquet_embeddings: bool = True) -> list[str]:
+    embedding_suffix = "parquet" if parquet_embeddings else "jsonl"
     return [
         "python", PIPELINE, "run",
         "--input", people_csv,
         "--output-dir", out_dir,
         "--default-operator-id", DEFAULT_OPERATOR_ID,
         "--role-input-classifications", f"{artifacts}/roles_with_dense_text.jsonl",
-        "--role-input-embeddings", f"{artifacts}/roles_with_embeddings.jsonl",
+        "--role-input-embeddings", f"{artifacts}/roles_with_embeddings.{embedding_suffix}",
         "--company-input-classifications", f"{artifacts}/companies_corpus_v3.jsonl",
-        "--company-input-embeddings", f"{artifacts}/company_embeddings_v3.jsonl",
-        "--summary-input-embeddings", f"{artifacts}/summary_embeddings.jsonl",
+        "--company-input-embeddings", f"{artifacts}/company_embeddings_v3.{embedding_suffix}",
+        "--summary-input-embeddings", f"{artifacts}/summary_embeddings.{embedding_suffix}",
         "--person-tech-skills-input", f"{artifacts}/person_tech_skills.jsonl",
     ]
 
@@ -951,7 +954,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         print("--- pipeline ---", flush=True)
         code, _ = sb_exec(sb, "python", BENCH, f"{run_vol}/bench-pipeline.json",
-                          *pipeline_cmd(people_csv, work, artifacts))
+                          *pipeline_cmd(people_csv, work, artifacts, parquet_embeddings=args.dataset == "real"))
         pipeline_ok = code == 0
 
         duckdb_ok = False
@@ -1042,7 +1045,7 @@ def main() -> int:
 
     run = sub.add_parser("run")
     run.add_argument("--dataset", choices=["real", "synthetic"], required=True)
-    run.add_argument("--cpu", type=float, default=4)
+    run.add_argument("--cpu", type=float, default=16)
     run.add_argument("--memory-mib", type=int, default=16384)
     run.add_argument("--timeout", type=int, default=7200)
     run.add_argument("--label")
@@ -1050,7 +1053,7 @@ def main() -> int:
 
     proc = sub.add_parser("process", help="dispatch server-side run, watch, auto-download")
     proc.add_argument("--dataset", choices=["real", "synthetic"], required=True)
-    proc.add_argument("--cpu", type=float, default=4)
+    proc.add_argument("--cpu", type=float, default=16)
     proc.add_argument("--memory-mib", type=int, default=16384)
     proc.add_argument("--timeout", type=int, default=7200)
     proc.add_argument("--label")

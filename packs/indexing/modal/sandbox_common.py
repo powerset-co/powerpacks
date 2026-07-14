@@ -8,6 +8,7 @@ genuinely share: volume status writes and the key-union cache merge.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,11 +32,102 @@ def row_key(row: dict, key_fields: tuple[str, ...]) -> str:
     return ""
 
 
-def merge_cache_file(new_rows_path: Path, cache_path: Path, key_fields: tuple[str, ...]) -> tuple[int, int]:
+def _qident(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _cache_key_sql(alias: str, key_fields: tuple[str, ...]) -> str:
+    fields = [
+        f"CASE WHEN NULLIF(trim(CAST({alias}.{_qident(field)} AS VARCHAR)), '') IS NOT NULL "
+        f"THEN '{field}=' || trim(CAST({alias}.{_qident(field)} AS VARCHAR)) END"
+        for field in key_fields
+    ]
+    return f"COALESCE({', '.join(fields)})"
+
+
+def merge_parquet_cache_file(
+    new_rows_path: Path,
+    cache_path: Path,
+    key_fields: tuple[str, ...],
+    vector_field: str,
+) -> tuple[int, int]:
+    """Atomically key-union JSONL run rows into a Parquet vector cache."""
+    import duckdb  # type: ignore
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache_path.parent / f".{cache_path.name}.tmp-{new_rows_path.stat().st_ino}"
+    tmp.unlink(missing_ok=True)
+    con = duckdb.connect(":memory:")
+    try:
+        con.execute("SET enable_progress_bar=false")
+        con.execute(f"SET threads={int(os.getenv('POWERPACKS_CACHE_THREADS', '8'))}")
+        con.execute("SET memory_limit='12GB'")
+        con.execute("SET preserve_insertion_order=false")
+        new_source = (
+            f"SELECT * REPLACE (list_transform({_qident(vector_field)}, value -> CAST(value AS FLOAT)) "
+            f"AS {_qident(vector_field)}) FROM read_json_auto({_sql_literal(str(new_rows_path))}, "
+            "format='newline_delimited', union_by_name=true, maximum_object_size=134217728)"
+        )
+        new_count = int(con.execute(f"SELECT count(*) FROM ({new_source})").fetchone()[0])
+        kept_count = 0
+        legacy_jsonl = cache_path.with_suffix(".jsonl")
+        if cache_path.exists() and cache_path.stat().st_size:
+            old_source = f"read_parquet({_sql_literal(str(cache_path))})"
+        elif legacy_jsonl.exists() and legacy_jsonl.stat().st_size:
+            old_source = (
+                f"(SELECT * REPLACE (list_transform({_qident(vector_field)}, value -> CAST(value AS FLOAT)) "
+                f"AS {_qident(vector_field)}) FROM read_json_auto({_sql_literal(str(legacy_jsonl))}, "
+                "format='newline_delimited', union_by_name=true, maximum_object_size=134217728))"
+            )
+        else:
+            old_source = ""
+        if old_source:
+            new_key = _cache_key_sql("new", key_fields)
+            old_key = _cache_key_sql("old", key_fields)
+            kept_count = int(con.execute(
+                f"SELECT count(*) FROM {old_source} old WHERE {old_key} IS NULL "
+                f"OR NOT EXISTS (SELECT 1 FROM ({new_source}) new WHERE {new_key} = {old_key})"
+            ).fetchone()[0])
+            merged = (
+                f"SELECT * FROM ({new_source}) new UNION ALL BY NAME "
+                f"SELECT old.* FROM {old_source} old WHERE {old_key} IS NULL "
+                f"OR NOT EXISTS (SELECT 1 FROM ({new_source}) new WHERE {new_key} = {old_key})"
+            )
+        else:
+            merged = new_source
+        con.execute(
+            f"COPY ({merged}) TO {_sql_literal(str(tmp))} "
+            "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 16384)"
+        )
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    finally:
+        con.close()
+    tmp.replace(cache_path)
+    return new_count, kept_count
+
+
+def merge_cache_file(
+    new_rows_path: Path,
+    cache_path: Path,
+    key_fields: tuple[str, ...],
+    *,
+    vector_field: str | None = None,
+) -> tuple[int, int]:
     """Union-merge JSONL caches: new rows win for shared keys, existing cache
     rows for keys the run did not touch are preserved. Streaming with a
     seen-key set; atomic tmp+rename so concurrent runs cannot corrupt the file
     (a lost race only delays a row until the next run re-adds it)."""
+    if cache_path.suffix.lower() == ".parquet":
+        if not vector_field:
+            raise ValueError("Parquet cache merges require vector_field")
+        return merge_parquet_cache_file(new_rows_path, cache_path, key_fields, vector_field)
+
     seen: set[str] = set()
     tmp = cache_path.parent / (cache_path.name + f".tmp-{new_rows_path.stat().st_ino}")
     tmp.parent.mkdir(parents=True, exist_ok=True)

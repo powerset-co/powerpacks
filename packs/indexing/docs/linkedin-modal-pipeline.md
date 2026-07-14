@@ -118,7 +118,7 @@ manifest, ledger, statistics, and optional records on the Modal Volume.
 
 ## Storage and isolation
 
-The default Modal Volume is `powerset-indexing` and has two kinds of paths:
+The default Modal Volume is `powerset-indexing-v2` and has two kinds of paths:
 
 ```text
 /data/
@@ -132,6 +132,12 @@ Shared caches make overlapping profiles, titles, and companies reusable across
 runs. Indexing refreshes them with a key union, so a run adds or updates its
 keys without replacing unrelated cached rows. Inputs and run outputs are
 intended to be isolated under an operator ID.
+
+The large role, company, and summary embedding caches use Zstandard-compressed
+Parquet with `FLOAT[]` vectors. Classification and other metadata caches remain
+JSONL. A first refresh can migrate legacy sibling JSONL embedding caches in
+place, while `POWERPACKS_MODAL_VOLUME=powerset-indexing` remains available as
+the rollback path.
 
 ### Current isolation limitation
 

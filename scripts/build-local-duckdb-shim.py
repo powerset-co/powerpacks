@@ -1105,6 +1105,9 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, increme
     memory_limit = os.environ.get("POWERPACKS_DUCKDB_MEMORY_LIMIT", "2GB")
     if memory_limit:
         con.execute(f"SET memory_limit='{memory_limit}'")
+    threads = int(os.environ.get("POWERPACKS_DUCKDB_THREADS", "0") or 0)
+    if threads > 0:
+        con.execute(f"SET threads={threads}")
     # Tables are queried by filters, never by insertion order; disabling order
     # preservation lets CREATE TABLE AS stream large JSONL loads in bounded memory.
     con.execute("SET preserve_insertion_order=false")
