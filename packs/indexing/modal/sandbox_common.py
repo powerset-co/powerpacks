@@ -74,15 +74,8 @@ def merge_parquet_cache_file(
         )
         new_count = int(con.execute(f"SELECT count(*) FROM ({new_source})").fetchone()[0])
         kept_count = 0
-        legacy_jsonl = cache_path.with_suffix(".jsonl")
         if cache_path.exists() and cache_path.stat().st_size:
             old_source = f"read_parquet({_sql_literal(str(cache_path))})"
-        elif legacy_jsonl.exists() and legacy_jsonl.stat().st_size:
-            old_source = (
-                f"(SELECT * REPLACE (list_transform({_qident(vector_field)}, value -> CAST(value AS FLOAT)) "
-                f"AS {_qident(vector_field)}) FROM read_json_auto({_sql_literal(str(legacy_jsonl))}, "
-                "format='newline_delimited', union_by_name=true, maximum_object_size=134217728))"
-            )
         else:
             old_source = ""
         if old_source:

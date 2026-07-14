@@ -75,19 +75,19 @@ class ParquetEmbeddingCacheTests(unittest.TestCase):
                 ["has-vector", "empty-vector"],
             )
 
-    def test_first_parquet_merge_migrates_legacy_jsonl_rows(self) -> None:
+    def test_first_parquet_merge_does_not_import_jsonl_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cache = root / "company_embeddings_v3.parquet"
-            legacy = root / "company_embeddings_v3.jsonl"
+            write_jsonl(
+                root / "company_embeddings_v3.jsonl",
+                [{"company_urn": "legacy", "company_name": "Legacy", "embedding": [0.1]}],
+            )
             update = root / "update.jsonl"
-            write_jsonl(legacy, [
-                {"company_urn": "legacy", "company_name": "Legacy", "embedding": [0.1]},
-                {"company_urn": "", "company_name": "new", "embedding": [0.15]},
-            ])
-            write_jsonl(update, [
-                {"company_urn": "new", "company_name": "New", "embedding": [0.2]},
-            ])
+            write_jsonl(
+                update,
+                [{"company_urn": "new", "company_name": "New", "embedding": [0.2]}],
+            )
 
             self.assertEqual(
                 merge_cache_file(
@@ -96,11 +96,9 @@ class ParquetEmbeddingCacheTests(unittest.TestCase):
                     ("company_urn", "company_name"),
                     vector_field="embedding",
                 ),
-                (1, 2),
+                (1, 0),
             )
-            rows = list(iter_artifact_rows(cache, ["company_urn", "company_name"]))
-            self.assertEqual(len(rows), 3)
-            self.assertEqual(artifact_id_set(cache, "company_urn"), {"legacy", "new"})
+            self.assertEqual(artifact_id_set(cache, "company_urn"), {"new"})
 
     def test_jsonl_embedding_loader_remains_float64(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

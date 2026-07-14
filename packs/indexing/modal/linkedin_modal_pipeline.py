@@ -134,10 +134,10 @@ def operator_volume_prefix() -> str:
 # local artifact path (relative to .powerpacks/search-index) -> volume artifact name
 REAL_ARTIFACTS = {
     "roles/roles_with_dense_text.jsonl": "roles_with_dense_text.jsonl",
-    "roles/roles_with_embeddings.jsonl": "roles_with_embeddings.jsonl",
+    "roles/roles_with_embeddings.parquet": "roles_with_embeddings.parquet",
     "company/companies_corpus_v3.jsonl": "companies_corpus_v3.jsonl",
-    "company/company_embeddings_v3.jsonl": "company_embeddings_v3.jsonl",
-    "unified/summary_embeddings.jsonl": "summary_embeddings.jsonl",
+    "company/company_embeddings_v3.parquet": "company_embeddings_v3.parquet",
+    "unified/summary_embeddings.parquet": "summary_embeddings.parquet",
     "unified/person_tech_skills.jsonl": "person_tech_skills.jsonl",
 }
 REAL_SEEDS = {
@@ -902,18 +902,17 @@ def cmd_amplify(args: argparse.Namespace) -> int:
         sb.terminate()
 
 
-def pipeline_cmd(people_csv: str, out_dir: str, artifacts: str, *, parquet_embeddings: bool = True) -> list[str]:
-    embedding_suffix = "parquet" if parquet_embeddings else "jsonl"
+def pipeline_cmd(people_csv: str, out_dir: str, artifacts: str) -> list[str]:
     return [
         "python", PIPELINE, "run",
         "--input", people_csv,
         "--output-dir", out_dir,
         "--default-operator-id", DEFAULT_OPERATOR_ID,
         "--role-input-classifications", f"{artifacts}/roles_with_dense_text.jsonl",
-        "--role-input-embeddings", f"{artifacts}/roles_with_embeddings.{embedding_suffix}",
+        "--role-input-embeddings", f"{artifacts}/roles_with_embeddings.parquet",
         "--company-input-classifications", f"{artifacts}/companies_corpus_v3.jsonl",
-        "--company-input-embeddings", f"{artifacts}/company_embeddings_v3.{embedding_suffix}",
-        "--summary-input-embeddings", f"{artifacts}/summary_embeddings.{embedding_suffix}",
+        "--company-input-embeddings", f"{artifacts}/company_embeddings_v3.parquet",
+        "--summary-input-embeddings", f"{artifacts}/summary_embeddings.parquet",
         "--person-tech-skills-input", f"{artifacts}/person_tech_skills.jsonl",
     ]
 
@@ -954,7 +953,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         print("--- pipeline ---", flush=True)
         code, _ = sb_exec(sb, "python", BENCH, f"{run_vol}/bench-pipeline.json",
-                          *pipeline_cmd(people_csv, work, artifacts, parquet_embeddings=args.dataset == "real"))
+                          *pipeline_cmd(people_csv, work, artifacts))
         pipeline_ok = code == 0
 
         duckdb_ok = False

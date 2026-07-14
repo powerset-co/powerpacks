@@ -62,15 +62,6 @@ CACHE_VECTOR_FIELDS = {
 }
 
 
-def embedding_cache_path(artifacts: Path, stem: str) -> Path:
-    parquet = artifacts / f"{stem}.parquet"
-    return parquet if parquet.exists() else artifacts / f"{stem}.jsonl"
-
-
-
-
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--people-csv", required=True)
@@ -131,10 +122,10 @@ def main() -> int:
         "--output-dir", str(work),
         "--default-operator-id", args.operator_id,
         "--role-input-classifications", str(artifacts / "roles_with_dense_text.jsonl"),
-        "--role-input-embeddings", str(embedding_cache_path(artifacts, "roles_with_embeddings")),
+        "--role-input-embeddings", str(artifacts / "roles_with_embeddings.parquet"),
         "--company-input-classifications", str(artifacts / "companies_corpus_v3.jsonl"),
-        "--company-input-embeddings", str(embedding_cache_path(artifacts, "company_embeddings_v3")),
-        "--summary-input-embeddings", str(embedding_cache_path(artifacts, "summary_embeddings")),
+        "--company-input-embeddings", str(artifacts / "company_embeddings_v3.parquet"),
+        "--summary-input-embeddings", str(artifacts / "summary_embeddings.parquet"),
         "--person-tech-skills-input", str(artifacts / "person_tech_skills.jsonl"),
     ]
     if not args.no_skip_unresolved_companies:

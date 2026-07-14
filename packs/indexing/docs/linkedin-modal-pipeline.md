@@ -135,15 +135,16 @@ intended to be isolated under an operator ID.
 
 The large role, company, and summary embedding caches use Zstandard-compressed
 Parquet with `FLOAT[]` vectors. Classification and other metadata caches remain
-JSONL. A first refresh can migrate legacy sibling JSONL embedding caches in
-place, while `POWERPACKS_MODAL_VOLUME=powerset-indexing` remains available as
-the rollback path.
+JSONL. The Modal indexing path requires those Parquet caches; it has no runtime
+format switch or JSONL fallback. Roll back the code change and volume selection
+together if the Parquet path must be reverted.
 
 After record assembly, the sandbox also writes fixed `*.records.parquet`
 siblings and casts their vector columns to `FLOAT[]`. The DuckDB materializer
-prefers those files and falls back to JSONL when they are absent. JSONL remains
-the pipeline validation contract; Parquet is the compact materialization
-format used for the downloadable local database.
+uses those files for the Modal build. JSONL remains the pipeline validation
+contract and a supported input for the separate local-only index builder;
+Parquet is the required compact materialization format for Modal and its
+downloadable local database.
 
 ### Current isolation limitation
 
