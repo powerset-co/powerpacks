@@ -10,6 +10,9 @@ only when you need that level of detail.
 | --- | --- | --- |
 | People search | [`$search` architecture](../packs/search/docs/search-architecture.md) | Product walkthrough of routing, fast search, deep recruiter search, review points, data boundaries, outputs, and roadmap. |
 | LinkedIn setup and indexing | [LinkedIn and Modal indexing pipeline](../packs/indexing/docs/linkedin-modal-pipeline.md) | How a LinkedIn `Connections.csv` becomes the local DuckDB queried by `$search local`. |
+| Gmail import | [Gmail import pipeline](../packs/ingestion/docs/gmail-import-pipeline.md) | How bounded msgvault sync, metadata extraction, directory reuse, LinkedIn lookup, hydration, fan-in, and indexing work. |
+| iMessage and WhatsApp import | [Message import pipeline](../packs/messages/docs/message-import-pipeline.md) | Source extraction, matching, provider payloads, human review, and the Modal boundary. |
+| Deep relationship context | [Deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md) | How message bodies become dossiers, duplicate clusters, LinkedIn self-heal decisions, and reviewed network overrides. |
 | Running deep search | [Deep-mode runbook](../packs/search/skills/search/deep-mode.md) | Exact operator commands, artifacts, approval boundary, and resume rules. |
 | Running setup | [`$setup` skill](../packs/ingestion/skills/setup/SKILL.md) | Exact LinkedIn-only setup checklist. |
 | All skills | [Root skill index](../README.md#skills) | GitHub-native list of supported skill entry points. |
@@ -21,18 +24,27 @@ only when you need that level of detail.
 flowchart TD
     HOME[Product documentation] --> SEARCH[Search product guide]
     HOME --> INDEX[LinkedIn and Modal indexing guide]
+    HOME --> GMAIL[Gmail import guide]
+    HOME --> MESSAGES[iMessage and WhatsApp guide]
+    HOME --> CONTEXT[Deep-context guide]
     SEARCH --> SEARCHSKILL[Search execution contract]
     SEARCH --> DEEP[Deep-mode runbook]
     SEARCH --> CONTRACTS[Search schemas and data contracts]
     INDEX --> SETUP[Setup execution contract]
     INDEX --> CODE[Indexing driver and pipeline code]
+    GMAIL --> GMAILSKILL[Import-gmail execution contract]
+    GMAIL --> INDEX
+    MESSAGES --> MESSAGESKILL[Import-messages execution contract]
+    MESSAGES --> INDEX
+    CONTEXT --> CONTEXTSKILL[Deep-context execution contract]
+    CONTEXT --> INDEX
 
     classDef home fill:#0f3d3e,color:#ffffff,stroke:#0f3d3e,stroke-width:2px;
     classDef guide fill:#e8f3f1,color:#102a2a,stroke:#2f6f6d,stroke-width:2px;
     classDef detail fill:#fff7e6,color:#3d2b0f,stroke:#b7791f;
     class HOME home;
-    class SEARCH,INDEX guide;
-    class SEARCHSKILL,DEEP,CONTRACTS,SETUP,CODE detail;
+    class SEARCH,INDEX,GMAIL,MESSAGES,CONTEXT guide;
+    class SEARCHSKILL,DEEP,CONTRACTS,SETUP,CODE,GMAILSKILL,MESSAGESKILL,CONTEXTSKILL detail;
 ```
 
 The product guides explain what the system does and why. `SKILL.md` files are

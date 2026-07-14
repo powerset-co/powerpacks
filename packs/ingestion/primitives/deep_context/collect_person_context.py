@@ -1,12 +1,13 @@
-"""[1/4] Collect per-person message context from Gmail + iMessage DMs + WhatsApp DMs.
+"""[1/4] Collect per-person message context from Gmail and chat DMs.
 
 For each person in the merged people.csv who has any message channel, stream a
 recent, adaptively-sampled window of their actual message BODIES into one
 ephemeral JSON bundle per person. Only people with >= 1 message produce a bundle;
 zero-interaction contacts are skipped.
 
-Reads message bodies — that deep inspection is the whole point. iMessage/WhatsApp
-read DMs only (group chats are never read). Bundles live under
+Reads message bodies - that deep inspection is the whole point. iMessage and
+WhatsApp read DMs by default. The explicit ``--include-groups`` option also reads
+small iMessage group-chat bodies; WhatsApp groups remain excluded. Bundles live under
 ``.powerpacks/deep-context/raw/`` (gitignored, ephemeral, purgeable); dossiers keep
 synthesized facts, not verbatim text.
 
@@ -20,6 +21,8 @@ Outputs (fixed dir, overwrite in place):
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import sqlite3
 import sys
 import time
@@ -44,6 +47,84 @@ from packs.ingestion.primitives.deep_context.common import (
 # regardless of pool size. A char cap guards memory (raised to fit ~3 full verticals).
 DEFAULT_DEEP_CAP = 1600
 SAFETY_CHAR_CAP = 1_800_000
+
+
+def _load_bundle(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _bundle_matches_policy(bundle: dict[str, Any], args: argparse.Namespace) -> bool:
+    policy = bundle.get("collection_policy")
+    if not isinstance(policy, dict):
+        return False
+    return (
+        policy.get("deep_cap") == args.deep_cap
+        and policy.get("include_groups") is bool(args.include_groups)
+        and (
+            not args.include_groups
+            or policy.get("max_group_size") == args.max_group_size
+        )
+    )
+
+
+def _validate_people_csv(path: Path) -> None:
+    with path.open(newline="", encoding="utf-8") as fh:
+        fields = set(csv.DictReader(fh).fieldnames or [])
+    missing = {"id", "source_channels"} - fields
+    if missing:
+        raise ValueError(f"people CSV missing required columns: {', '.join(sorted(missing))}")
+
+
+def _purge_group_scoped_or_untrusted_bundles(out_dir: Path, *, partial: bool) -> int:
+    """Discard unsafe raw bundles without deserializing their message bodies."""
+    bundle_paths = [path for path in sorted(out_dir.glob("*.json")) if path.name != "manifest.json"]
+    if not bundle_paths:
+        return 0
+    manifest = _load_bundle(out_dir / "manifest.json")
+    privacy = manifest.get("privacy")
+    safe_to_reuse = (
+        manifest.get("privacy_schema_version") == 2
+        and isinstance(privacy, dict)
+        and privacy.get("group_bodies_present") is False
+    )
+    if safe_to_reuse:
+        return 0
+    if partial:
+        raise ValueError(
+            "existing raw bundles have group-enabled or legacy privacy scope; "
+            "run a full default collection without --person/--limit to rebuild them safely"
+        )
+    for path in bundle_paths:
+        path.unlink()
+    return len(bundle_paths)
+
+
+def _retained_group_policy(out_dir: Path) -> tuple[int, int]:
+    """Return retained group-message count and the largest known group-size cap."""
+    message_count = 0
+    max_group_size = 0
+    for path in sorted(out_dir.glob("*.json")):
+        if path.name == "manifest.json":
+            continue
+        bundle = _load_bundle(path)
+        messages = bundle.get("messages")
+        if not isinstance(messages, list):
+            continue
+        groups = [
+            message for message in messages
+            if isinstance(message, dict) and message.get("channel") == "imessage_group"
+        ]
+        if not groups:
+            continue
+        message_count += len(groups)
+        policy = bundle.get("collection_policy")
+        if isinstance(policy, dict) and isinstance(policy.get("max_group_size"), int):
+            max_group_size = max(max_group_size, policy["max_group_size"])
+    return message_count, max_group_size
 
 
 def collect_one(
@@ -112,6 +193,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     chat_db = Path(args.chat_db).expanduser()
     wacli_db = Path(args.wacli_db)
     people_csv = Path(args.people_csv)
+    _validate_people_csv(people_csv)
 
     msgvault_con: sqlite3.Connection | None = None
     accounts: set[str] = set()
@@ -139,6 +221,13 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     if not args.dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
 
+    bundles_purged_for_scope = 0
+    if not args.dry_run and not args.include_groups:
+        bundles_purged_for_scope = _purge_group_scoped_or_untrusted_bundles(
+            out_dir,
+            partial=bool(args.person or args.limit),
+        )
+
     people_total = 0
     with_context = 0
     capped = 0
@@ -150,9 +239,11 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             people_total += 1
             bundle_path = out_dir / f"{person.person_id}.json"
             if bundle_path.exists() and not args.force and not args.dry_run:
-                skipped_existing += 1
-                with_context += 1
-                continue
+                existing = _load_bundle(bundle_path)
+                if _bundle_matches_policy(existing, args):
+                    skipped_existing += 1
+                    with_context += 1
+                    continue
             messages, available = collect_one(
                 person,
                 msgvault_con=msgvault_con,
@@ -167,6 +258,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             thread_participants = (sources.gmail_thread_participants(person, msgvault_con)
                                    if msgvault_con is not None and person.emails else [])
             if not messages and not groups:
+                if not args.dry_run:
+                    bundle_path.unlink(missing_ok=True)
                 continue
             with_context += 1
             total_messages += len(messages)
@@ -187,6 +280,11 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 "messages": messages,
                 "messages_available": available,
                 "capped": available > len(messages),
+                "collection_policy": {
+                    "deep_cap": args.deep_cap,
+                    "include_groups": bool(args.include_groups),
+                    "max_group_size": args.max_group_size if args.include_groups else 0,
+                },
                 "collected_at": now_iso(),
             })
             if with_context % 25 == 0:
@@ -196,9 +294,13 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             msgvault_con.close()
 
     elapsed_s = max(time.monotonic() - started, 1e-6)
+    retained_group_messages, retained_max_group_size = _retained_group_policy(out_dir)
+    group_access_requested = bool(args.include_groups)
+    group_bodies_present = retained_group_messages > 0
     manifest = {
         "source": "collect_person_context",
         "status": "completed",
+        "privacy_schema_version": 2,
         "dry_run": bool(args.dry_run),
         "people_total": people_total,
         "people_with_context": with_context,
@@ -212,6 +314,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "deep_cap_per_person": args.deep_cap,
         "groups_included": bool(args.include_groups),
         "max_group_size": args.max_group_size,
+        "bundles_purged_for_scope": bundles_purged_for_scope,
         "msgvault_available": msgvault_con is not None or msgvault_db.exists(),
         "chat_db_available": chat_db.exists(),
         "chat_db_probe": chat_probe,
@@ -221,8 +324,15 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "updated_at": now_iso(),
         "privacy": {
             "message_bodies_read": True,
-            "dms_only": True,
-            "groups_read": False,
+            "dms_only": not (group_access_requested or group_bodies_present),
+            "group_body_access_requested": group_access_requested,
+            "group_bodies_present": group_bodies_present,
+            "group_body_messages_present": retained_group_messages,
+            "groups_read": group_access_requested or group_bodies_present,
+            "group_source": "imessage" if group_access_requested or group_bodies_present else "",
+            "max_group_size": (
+                args.max_group_size if group_access_requested else retained_max_group_size
+            ),
             "network_called": False,
             "local_only": True,
         },
@@ -233,7 +343,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Collect per-person message bodies (Gmail + iMessage/WhatsApp DMs).")
+    p = argparse.ArgumentParser(description="Collect per-person message bodies (Gmail + chat DMs; optional small iMessage groups).")
     p.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     p.add_argument("--out-dir", default=str(RAW_DIR))
     p.add_argument("--msgvault-db", default=str(sources.gni.DEFAULT_MSGVAULT_DB))

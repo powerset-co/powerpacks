@@ -5,6 +5,10 @@ description: Isolated WhatsApp metadata import flow using openclaw/wacli instead
 
 # Import WhatsApp
 
+For the product boundary and how this isolated utility relates to the full
+`$import-messages` flow, see
+[`message-import-pipeline.md`](../../docs/message-import-pipeline.md).
+
 Use this skill for `$import-whatsapp` or when the user asks to sync WhatsApp
 through `openclaw/wacli` in isolation.
 

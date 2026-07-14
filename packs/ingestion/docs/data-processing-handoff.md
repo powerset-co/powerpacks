@@ -1,5 +1,10 @@
 # Data processing handoff: ingestion outputs, schemas, and enrichment boundary
 
+> **Status: historical handoff.** Some skill names and orchestration details below
+> predate `$import-gmail` and `$import-messages`. Start with the
+> [ingestion docs index](README.md), [Gmail import pipeline](gmail-import-pipeline.md),
+> and [Messages import pipeline](../../messages/docs/message-import-pipeline.md).
+
 This handoff is for the data-processing worker. It describes the artifacts now
 emitted by local network ingestion and where RapidAPI enrichment happens.
 
@@ -15,7 +20,7 @@ account linking / local source setup
 
 | Phase | Owner surface | Current scripts | Notes |
 | --- | --- | --- | --- |
-| Account linking / local source setup | source-specific onboarding | msgvault CLI, LinkedIn export UI, `$import-contacts`, Twitter RapidAPI key checks | Establish source access; avoid provider/API work unless explicitly approved. |
+| Account linking / local source setup | source-specific onboarding | msgvault CLI, LinkedIn export UI, `$import-messages`, Twitter RapidAPI key checks | Establish source access; avoid provider/API work unless explicitly approved. |
 | Ingestion/source import | ingestion skills + primitives | `gmail_network_import.py msgvault`, `linkedin_network_import.py`, `twitter_network_import.py`, messages primitives | Produces source-local normalized `people.csv` or message contacts artifacts. |
 | Enrichment / resolution | data processing + source-specific gates | `enrich_people.py`, Twitter `pre_resolve_linkedin`/`validate_linkedin`, future resolver queues | RapidAPI LinkedIn profile enrichment is centralized in `enrich_people` for LinkedIn-identified rows; Twitter still has source-specific validation. |
 | Merge + materialization | ingestion orchestration | `discover_contacts_pipeline.py`, `merge_network_sources.py`, `build_network_duckdb.py` | Produces merged CSV contracts and local DuckDB. |
@@ -28,10 +33,10 @@ primitives so runs are deterministic, ledgered, testable, and resumable.
 
 | User command / skill | Skill file | Runtime script(s) | Result |
 | --- | --- | --- | --- |
-| `$import-email` | `packs/ingestion/skills/import-email/SKILL.md` | `discover_contacts_pipeline.py run --gmail-account-email ...` -> `gmail_network_import.py msgvault` -> merge -> DuckDB | msgvault email metadata imported into local network artifacts. |
+| `$import-gmail` | `packs/ingestion/skills/import-gmail/SKILL.md` | bounded `gmail.py discover` -> directory/Parallel/RapidAPI import -> fan-in -> Modal index | msgvault Gmail metadata imported into the local network and search index. |
 | `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `discover_contacts_pipeline.py run ...` | End-to-end orchestrator for LinkedIn CSV + Gmail and optional existing messages/Twitter artifacts. |
 | `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter_network_import.py run/approve/continue`; then `$discover-contacts --include-existing-artifacts` | Twitter/X `people.csv`, then merged local network artifacts. |
-| `$import-contacts` | `packs/messages/skills/import-contacts/SKILL.md` | messages pack primitives; then `$discover-contacts --include-existing-artifacts` | iMessage/WhatsApp metadata, then merged local network artifacts. |
+| `$import-messages` | `packs/messages/skills/import-messages/SKILL.md` | messages pack discovery/match/research/review -> source import -> fan-in -> Modal index | Reviewed iMessage/WhatsApp metadata in merged local network artifacts. |
 | LinkedIn CSV path | `$discover-contacts` or `import-linkedin-network` | `linkedin_network_import.py` -> `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
 
 ## Canonical CSV contracts

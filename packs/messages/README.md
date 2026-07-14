@@ -1,87 +1,48 @@
-# Messages Pack
+# Messages pack
 
-`packs/messages` is a local-first import harness for relationship signals from
-iMessage and WhatsApp. No `contact-exporter` dependency for either channel.
+`packs/messages` provides the iMessage and WhatsApp metadata-import vertical for
+the local Powerpacks search index.
 
-The pack uses bare, inspectable, stdlib-only primitives. The current boundary
-is:
-
-- iMessage: local SQLite reads only, single primitive
-- WhatsApp: wacli-based metadata import by default, plus older WAHA primitives
-  for Docker-based fallback/testing
-- Powerpacks owns task state, primitive contracts, schemas, normalization,
-  manifests, and agent-facing workflow instructions
-- the harness captures local failures as repair artifacts so an agent can
-  patch a primitive for the machine in front of it
-
-## Primitive Surface
-
-iMessage:
-
-- `extract_imessage_contacts`: read local macOS Messages/Contacts SQLite
-  metadata with Python stdlib only
-
-WhatsApp (all stdlib-only, all gated on explicit user consent):
-
-- `import_whatsapp_wacli`: install/find wacli, QR auth, WhatsApp sync, metadata export
-- `waha_runtime`: Docker check + WAHA NOWEB container lifecycle
-- `waha_session`: WAHA session start/stop + QR PNG/text artifacts + auth poll
-- `extract_whatsapp_contacts`: pull contacts from an authenticated WAHA
-  session into the canonical CSV/JSONL shape
-
-Cross-channel:
-
-- `import_contacts_pipeline`: resumable orchestrator that runs the mechanical
-  import/match/review/research/upload sequence, tracks
-  `.powerpacks/messages/import-run.json`, and exits at approval gates
-- `messages_harness`: run message primitives tolerantly and emit repair notes
-- `normalize_message_contacts`: convert pack CSV output into a canonical JSONL
-  artifact and summary manifest
-- `merge_message_contacts`: dedupe and union N per-channel CSVs into a single
-  `contacts.csv` (e.g. iMessage + WhatsApp → unified)
-- `prepare_research_queue`: filter + reshape `contacts.csv` into the
-  deep-research input CSV (with per-processor cost estimates)
-- `prepare_retarget_queue`: build a targeted re-research queue from review
-  feedback hints, skipping hints already attempted for the same person
-- `deep_research_contacts`: run Parallel.ai deep research over the queue and
-  write per-handle `01_research_parallel.json` artifacts; native HTTP port of
-  the legacy `research_parallel.py` so Powerpacks does not depend on the
-  `parallel` SDK
-- `build_research_review_csv`: flatten the per-handle research artifacts into
-  a single CSV in the shape `contact-exporter`'s research-review TUI consumes
-  (`bucket / yes-maybe-no` view) and `/v2/messages-research/artifacts` accepts
-  on upload; reruns reuse `03_network_review.json` and carry forward explicit
-  human decisions from an archived review CSV
-- `review_research_web`: local browser port of the research-review TUI with
-  review tabs, profile cards, and autosaved approved/unapproved decisions
-- `upload_research_review`: upload only approved contacts to
-  `/v2/messages-research/artifacts` after explicit approval; legacy CSV/UI
-  columns are normalized into the product-level `approved` field
-- `sync_contact_datalake`: post approved rows plus joined deep-research profiles
-  to `/v2/contact-datalake/import` as datalake-only payloads for downstream
-  processing/materialization
-- `powerset_contacts_harness`: optional compatibility shim for non-WhatsApp
-  channels of `contact-exporter` (review/match-local/upload). Not used by the
-  WhatsApp skill.
-- `review_contacts_web`: local browser enrichment reviewer on the merged
-  contacts CSV, with tabs for matched, suggested, actionable unmatched,
-  low-signal, and skipped rows
+Start with the
+[iMessage and WhatsApp import pipeline](docs/message-import-pipeline.md). It is
+the canonical product walkthrough for source access, matching, external provider
+payloads, review, source fan-in, Modal indexing, resume behavior, and current
+gaps.
 
 ## Skills
 
-- `import-contacts`: one-command guided iMessage + WhatsApp import, merge,
-  candidate sync, local matching, web review, queue prep, and optional
-  Parallel deep research after cost approval
-- `import-whatsapp`: isolated WhatsApp metadata import test flow using wacli
-  instead of WAHA
+| Skill | Scope |
+| --- | --- |
+| [`$import-messages`](skills/import-messages/SKILL.md) | Full iMessage/WhatsApp flow: discover metadata, match local Gmail/LinkedIn people, research unresolved identities, mandatory review, import, fan-in, index, and validate. Never uploads contacts to a Powerset set. |
+| [`$import-whatsapp`](skills/import-whatsapp/SKILL.md) | Isolated wacli readiness/auth/sync/export utility. Stops at the metadata CSV and does not resolve or index people. |
 
-## Harness Stance
+## Current runtime surface
 
-Extraction is local and consentful. The harness can prepare and record
-commands, but an agent should not run iMessage, WhatsApp, Docker install, QR
-auth, extraction, Parallel paid research, or upload actions unless the user has
-explicitly asked for that action in the current task. OpenRouter review under
-`$10.00` may proceed after showing the cost; all Parallel research and all
-uploads require explicit approval.
+- `extract_imessage_contacts`: read-only Messages/Contacts SQLite metadata.
+- `import_whatsapp_wacli`: default WhatsApp provider setup, QR, local sync, and
+  metadata export.
+- `import_contacts_pipeline`: resumable extraction/merge orchestrator with
+  structured user-action blocks.
+- `match_local_candidates`: deterministic matching against existing local
+  Gmail/LinkedIn people.
+- `llm_review_contacts`: name-only OpenRouter enrichment triage.
+- `deep_research_contacts`: approved Parallel.ai public-web identity research.
+- `build_research_review_csv` and `review_research_web`: score and review
+  researched contacts.
+- `packs/ingestion/primitives/import_contacts_pipeline/messages.py`: materialize
+  reviewed rows into the canonical Messages source `people.csv`.
 
-Generated artifacts live under `.powerpacks/messages/` by default.
+WAHA/Docker primitives remain legacy fallback/testing surfaces. wacli is the
+normal provider and should be the default in product docs and agent behavior.
+
+## Privacy boundary
+
+Powerpacks never selects message bodies in `$import-messages`. It reads contact
+identity, counts, dates, source flags, and group metadata. wacli owns its local
+provider store, so Powerpacks does not claim that store contains no bodies.
+Approved metadata can leave the machine through the explicitly documented
+OpenRouter, Parallel, RapidAPI, and Modal stages; see the product guide for exact
+payloads.
+
+Generated artifacts live under `.powerpacks/messages/` and
+`.powerpacks/network-import/`. They are derivable and should not be committed.

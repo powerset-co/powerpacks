@@ -1,5 +1,9 @@
 # gmail_network_import
 
+This is the low-level metadata reader. For the current account-to-index product
+flow, lookup sequence, provider boundaries, and review limitation, see the
+[Gmail import pipeline](../../docs/gmail-import-pipeline.md).
+
 Resumable local Gmail network-import orchestrator.
 
 V1 supports both a one-person local seed and a local msgvault metadata import.
@@ -78,16 +82,12 @@ Gmail sync.
 Run artifacts live under `.powerpacks/network-import/discover/gmail/<account>/`:
 
 - `accounts.csv` — local account registry row, supports one run per Gmail account
-- `source_contact.jsonl`
-- `gmail_threads_<account>_<op>.csv`
-- `gmail_contacts_aggregated_<account>_<op>.csv`
-- `targeted_emails_<account>_<op>.csv`
+- `gmail_threads.csv`
+- `gmail_contacts_aggregated.csv`
+- `targeted_emails.csv`
 - `linkedin_resolution_queue.csv` — email/name/company-guess queue for LinkedIn resolution
 - `people.csv` — canonical Powerpacks people artifact for msgvault imports
-- `domain_context.json` — local domain/company heuristic, not OpenAI
 - `manifest.json`
-- `workspace.json`
-- `next-steps.json`
 
 ## Notes
 

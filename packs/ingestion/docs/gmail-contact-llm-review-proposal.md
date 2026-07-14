@@ -1,5 +1,9 @@
 # Proposal: LLM verification + review UI for Gmail-resolved contacts
 
+> **Status: proposed, not wired into `$import-gmail`.** Use the
+> [Gmail import pipeline](gmail-import-pipeline.md) for shipped behavior. Parallel
+> matches currently proceed to hydration without this judge or human-review gate.
+
 _Created 2026-06-18. Changelog: 2026-06-18 initial draft._
 
 ## Problem
