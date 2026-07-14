@@ -11,9 +11,10 @@ Each reader takes a ``Person`` and returns a list of normalized message dicts:
 Design goals: **stream + bound**. Every query uses a per-person ``LIMIT`` so only
 one person's recent window is ever materialized — RSS stays flat regardless of
 archive size. Gmail reuses ``build_email_context`` wholesale (thread dedup,
-signature-aware body cleaning, signal ranking). iMessage/WhatsApp read DM bodies
-ONLY (group chats are never read) and decode Apple's ``attributedBody`` blob when
-the plain ``text`` column is empty (newer macOS).
+signature-aware body cleaning, signal ranking). iMessage and WhatsApp read DM
+bodies by default. A separate opt-in reader can include small iMessage groups;
+WhatsApp groups remain excluded. The iMessage readers decode Apple's
+``attributedBody`` blob when the plain ``text`` column is empty (newer macOS).
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ for _sub in ("build_email_context", "gmail_network_import"):
         sys.path.insert(0, _p)
 
 import build_email_context as bec  # noqa: E402
-import gmail_network_import as gni  # noqa: E402
+import gmail_network_import as gni  # noqa: E402, F401 - re-exported for collector defaults
 
 # Every channel is its own vertical with the same deep cap: Gmail, iMessage, and
 # WhatsApp each pool up to CHAT_MESSAGE_CAP recent messages, and the incremental

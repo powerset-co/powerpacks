@@ -207,17 +207,23 @@ class CoreLayoutTests(unittest.TestCase):
         text = (ROOT / "packs/ingestion/skills/setup/SKILL.md").read_text()
         # Step 1 is an explicit choice, not a silent Powerset default.
         self.assertIn("Do you have a Powerset account you'd like to log in with?", text)
-        self.assertIn("own-keys route", text)
-        self.assertIn("1. Choose credentials (Powerset account or your own keys)", text)
+        self.assertIn("custom-workspace route", text)
+        self.assertIn("1. Choose credentials (Powerset or prepared Modal workspace)", text)
         # Powerset route initializes .env from the hosted template.
         self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
-        # Own-keys route verifies instead of provisioning.
+        # Powerset keys are verified after provisioning.
         self.assertIn("pull_runtime_keys.py check --env-file .env", text)
         # Large LinkedIn imports need realistic, count-based Modal expectations.
         self.assertIn("Estimate from the Step 4 connection count", text)
         self.assertIn("10,001–20,000 | 60–120 minutes", text)
         self.assertIn("one-hour warm-cache run; allow up to two hours if cache-cold", text)
         self.assertIn('about every **5 minutes**', text)
+        # Custom workspaces verify the actual named Modal secrets instead of
+        # treating a local OpenAI key as sandbox provisioning.
+        self.assertIn("modal secret list --json", text)
+        self.assertIn("powerset-openai", text)
+        self.assertIn("powerset-rapidapi", text)
+        self.assertIn("POWERPACKS_OPERATOR_ID", text)
 
         installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
         self.assertIn("only when the user chose Powerset", installer)

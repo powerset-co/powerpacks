@@ -188,12 +188,12 @@ $search-company crypto trading infra companies that raised series B
 Resolves to canonical TurboPuffer company IDs you can hand to
 `search` as `company_filter`.
 
-### Messages pack — `$import-contacts`
+### Messages pack — `$import-messages`
 
 Use the one-command guided harness for the normal path:
 
 ```text
-$import-contacts              # iMessage + WhatsApp → merge → match → review
+$import-messages              # iMessage + WhatsApp -> match -> research -> review -> index
 ```
 
 Use the underlying primitives directly for advanced/debug subflows.
@@ -205,17 +205,43 @@ Artifacts land under `.powerpacks/messages/`:
 ├── imessage.contacts.csv         per-channel exports
 ├── whatsapp.contacts.csv
 ├── contacts.csv                  unified, dedup'd by phone
-├── powerset_contacts.csv         your candidate catalog (after sync)
+├── research_queue.csv            unresolved contacts approved for research
+├── research_review.csv           browser-review decisions
 ├── *.manifest.json               per-step counts + diagnostics
 └── wacli-login-qr.html           browser QR page for WhatsApp auth
 ```
 
-The pack is privacy-first:
+The pack's message-content boundary is strict:
 
-- never reads or stores message bodies
-- LLM review only sends `name`, `source`, `message_count`, recency,
-  `is_in_group_chats`, and `group_names` — no phones, no content
-- every step requires explicit user approval
+- Powerpacks never selects or sends message bodies; wacli owns its local provider
+  store.
+- The first OpenRouter triage sends names only. Parallel receives approved
+  identity metadata. A second OpenRouter score receives the researched profile
+  plus phone and relationship metadata.
+- The final merged people CSV is processed in the operator's Modal workspace and
+  downloaded as a local DuckDB. It is not uploaded to a Powerset set.
+
+See the [iMessage and WhatsApp import pipeline](../packs/messages/docs/message-import-pipeline.md)
+for the complete diagram, payload table, approval gates, and current review
+semantics.
+
+### Gmail — `$import-gmail`
+
+`$import-gmail` links selected Gmail accounts through msgvault, performs one
+bounded multi-account discovery, reuses the local identity directory, looks
+up unresolved LinkedIn identities, merges sources, and rebuilds the local index.
+msgvault keeps a local full-message archive for that window and may store
+attachments; Powerpacks selects only contact/interaction metadata and does not
+send Gmail bodies or subjects to identity providers. See the
+[Gmail import pipeline](../packs/ingestion/docs/gmail-import-pipeline.md).
+
+### Relationship dossiers — `$deep-context`
+
+`$deep-context` is the explicit exception to metadata-only import: it reads
+Gmail and chat bodies to synthesize per-person dossiers, judge duplicates, and
+review attached LinkedIn identities. Small iMessage group bodies require an
+explicit current-run opt-in. See the
+[deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md).
 
 ---
 
@@ -224,7 +250,7 @@ The pack is privacy-first:
 | Symptom | Fix |
 | --- | --- |
 | `extract_imessage_contacts check` reports `chat_db.readable: false` | Grant Full Disk Access to the terminal app and restart it. |
-| `import_whatsapp_wacli run` says `wacli is not installed` | Install it with `brew install steipete/tap/wacli`, then rerun the import. |
+| `import_whatsapp_wacli run` cannot install `wacli` | Approve the Homebrew install when prompted; if `qrencode` is missing, install the exact dependency the primitive reports. |
 | `$powerset env pull` reports `not_provisioned` | Ask a Powerset admin to provision your Modal/OpenAI runtime keys, then rerun `$powerset setup`. |
 | `auth login` browser callback never returns | Make sure nothing else is listening on `127.0.0.1:9876`. |
 | `llm_review_contacts review` says "OPENROUTER_API_KEY not provided" | `export OPENROUTER_API_KEY=sk-or-...` or pass `--api-key`. |

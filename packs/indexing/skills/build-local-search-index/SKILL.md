@@ -1,11 +1,15 @@
 ---
 name: build-local-search-index
-description: Build deterministic local search-index artifacts from the canonical network-import people.csv. Use when the user asks to prepare or inspect a local indexing pipeline without uploads, embeddings, LLM, Postgres, Supabase, or TurboPuffer calls.
+description: Build or inspect the local search index from the canonical merged people.csv without Modal, Postgres, Supabase, or TurboPuffer. Planning and dry-run are local-only; a full build reuses caches and may call configured classification/embedding providers for uncovered work after its estimate.
 ---
 
 # Build Local Search Index
 
 Build local indexing artifacts from canonical Powerpacks people data.
+
+For the product-level distinction between the standard Modal setup path and
+this local execution path, read
+[`packs/indexing/README.md`](../../README.md).
 
 ## Canonical input
 
@@ -27,7 +31,19 @@ Plan inspection is local-only and safe:
 uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py plan --operator-id <operator-id>
 ```
 
-Run the full local contacts indexing pipeline:
+First inspect the processing estimate:
+
+```bash
+uv run --project . python packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py run \
+  --dry-run \
+  --input .powerpacks/network-import/merged/people.csv \
+  --output-dir .powerpacks/search-index \
+  --default-operator-id <operator-id>
+```
+
+If it reports paid provider calls or non-zero estimated cost, show it to the
+user and obtain explicit approval. Then run the full local contacts indexing
+pipeline:
 
 ```bash
 uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run --operator-id <operator-id>
@@ -82,10 +98,12 @@ are left untouched.
 
 ## Constraints
 
-- local files only
-- `plan`, `status`, and `run --dry-run` are local inspection only
-- no LLM/provider calls from dry-run/status/plan
-- no network calls unless explicitly approved by the generated plan
-- no Supabase/Postgres calls
-- no TurboPuffer calls
-- all generated people, company, school, position, education-edge, and summary IDs are stable UUIDv5 strings
+- No Modal dispatch or artifact upload.
+- `plan`, `status`, and processing `--dry-run` are local inspection only.
+- No LLM/provider calls from `plan`, `status`, or processing `--dry-run`.
+- A full run may use configured classification and embedding providers for
+  cache misses reported by the estimate.
+- No Supabase/Postgres calls.
+- No TurboPuffer calls.
+- All generated people, company, school, position, education-edge, and summary
+  IDs are stable UUIDv5 strings.

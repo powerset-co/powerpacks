@@ -1,5 +1,10 @@
 # Search Network Flow
 
+> **Legacy V1 design reference.** Primitive notes may remain useful, but this
+> is not the current `$search` lifecycle. See the canonical
+> [`$search` architecture](search-architecture.md) and executable
+> [`$search` skill](../skills/search/SKILL.md).
+
 Powerpacks V1 should expose one role-first search flow with explicit planning
 between expansion and review.
 

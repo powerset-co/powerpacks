@@ -1,5 +1,11 @@
 # Messages Harness
 
+> **Legacy implementation reference.** The current product flow uses wacli by
+> default and is documented in
+> [message-import-pipeline.md](message-import-pipeline.md). The WAHA/Docker and
+> upload-oriented sequence below is retained for fallback/debug history, not as
+> the canonical `$import-messages` contract.
+
 The messages harness treats each local extraction step as a small primitive
 with structured diagnostics.
 
@@ -44,8 +50,9 @@ Every primitive should:
 
 Use one user-facing skill:
 
-- `import-contacts`: guided iMessage + WhatsApp import, merge, review, and
-  upload-gated sync. Use primitives directly for narrow debugging.
+- `import-messages`: guided iMessage + WhatsApp metadata import, local matching,
+  review, source fan-in, and Modal-backed local index rebuild. Use primitives
+  directly for narrow debugging.
 
 Reasoning-only steps stay in the skill/task docs. Executable steps are the
 primitive scripts. This keeps the pack portable across Codex, NanoClaw, Claude

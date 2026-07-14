@@ -6,6 +6,9 @@ description: Add Gmail to your local search index. Use for $import-gmail. Sets u
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-13: Added the product architecture guide; fixed multi-account discovery
+  and authorization instructions; documented the local directory, Parallel,
+  RapidAPI, Modal, privacy, and missing identity-review boundaries.
 - 2026-06-20: New skill, split out of $setup (replaces the old discovery-only
   $import-email). Carries the Gmail/msgvault block (status -> ask accounts/years
   -> OAuth app -> authorize -> sync -> import) plus the shared fan-in + Modal
@@ -20,10 +23,16 @@ to LinkedIn on Parallel.ai), then **merge all imported sources + rebuild the
 index**. Run `$setup` (LinkedIn) first for the best results — Gmail merges on top
 of whatever is already imported.
 
+For a product-level walkthrough, lookup stages, provider payloads, approval
+boundaries, and architecture diagram, see
+[`gmail-import-pipeline.md`](../../docs/gmail-import-pipeline.md).
+
 It runs a **fixed checklist and always reruns it end to end**. Reruns are
 idempotent against fixed paths. The one exception is the msgvault store
 (`~/.msgvault/msgvault.db`): it is the durable, incrementally-synced archive —
-**never delete it**; re-syncs resume from the last message via `--after`.
+**never delete it**. With the explicit history window below, reruns rescan that
+window deterministically and msgvault skips messages already stored. Last-message
+resume inference applies only when no explicit window is supplied.
 
 ## How to run this skill
 
@@ -67,9 +76,12 @@ paths and rely on the primitives — don't pre-delete or invent folders.
   it is never a `sync-full`.** If discover fails, recover by syncing *less* (a
   narrower `--sync-after`), never the full mailbox.
 - **Consent gates (pause for the user):** msgvault browser/gcloud OAuth-app
-  creation and Gmail account authorization (Steps 3–4); and Gmail Parallel.ai
-  spend at/above the auto-approve threshold (Step 6). Everything else runs
-  without asking.
+  creation and Gmail account authorization (Steps 3-4); the external identity
+  resolution/profile hydration in Step 6; and the cloud upload/provider-backed
+  Modal indexing in Step 8. The Step 6 primitive auto-runs Parallel below 25
+  unresolved contacts and does not internally gate RapidAPI cache misses, so the
+  agent must obtain approval before invoking it rather than relying on the child
+  gates. `index-people --max-usd 0` is also currently uncapped internal mode.
 
 ### Repo root
 
@@ -145,8 +157,11 @@ Writes `~/.msgvault/config.toml`, the client secret, and `~/.msgvault/msgvault.d
 
 ### Step 4 — Authorize Gmail accounts
 
-For each **additional** account from Step 2 (the primary is already authorized) —
-**consent: per-account browser OAuth grant**:
+Re-run `msgvault_setup.py status` after Step 3, because a fresh
+`browser-setup --add-account` already authorized the primary. For **every requested
+account still absent from the current `status.accounts`**, run the per-account
+browser OAuth grant. This includes the primary only when OAuth configuration
+pre-existed and it is still absent:
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <email>
@@ -165,14 +180,16 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setu
 ```
 
 The account keeps every previously-synced message; Step 5's bounded `discover`
-then resumes from the last synced message (`--after`). **Never** re-authorize with
+rescans the chosen window and deduplicates stored messages. **Never** re-authorize with
 `msgvault sync-full <email>` — it re-pulls the entire mailbox.
 
 ### Step 5 — Sync Gmail archives
 
-For each authorized account, sync the archive and build the discover artifacts,
-using the window from Step 2. Compute `SYNC_AFTER` from `$SYNC_YEARS` (default `3`;
-`all` = full history) and pass it via `--sync-after` so the sync is bounded:
+Sync all authorized accounts and build the discover artifacts in **one command**,
+using the window from Step 2. Passing one account per separate invocation rewrites
+the stable discovery manifest and can leave only the last account available to
+Step 6. Compute `SYNC_AFTER` from `$SYNC_YEARS` (default `3`; `all` = full history)
+and repeat `--account-email` once per selected account:
 
 ```bash
 cd "$REPO"
@@ -183,10 +200,12 @@ else
   SYNC_AFTER="$(date -v-${SYNC_YEARS:-3}y +%Y-%m-%d 2>/dev/null || date -d "${SYNC_YEARS:-3} years ago" +%Y-%m-%d)"
 fi
 uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail.py discover \
-  --account-email <email> --sync-after "$SYNC_AFTER"
+  --account-email <first-email> \
+  --account-email <second-email> \
+  --sync-after "$SYNC_AFTER"
 ```
 
-(Repeat per account, or omit `--account-email` for all linked accounts.) Writes
+Omit extra repeated flags when only one account was selected. Writes
 `.powerpacks/network-import/discover/gmail/<account>/`. **Only sync through this
 `discover` command** — never `msgvault sync-full` (no `--after` bound → entire
 mailbox). If `discover` errors or the sync is too slow/large, recover by syncing
@@ -194,12 +213,28 @@ mailbox). If `discover` errors or the sync is too slow/large, recover by syncing
 fails, surface the error and stop. A large first sync can take a while; msgvault
 skips already-downloaded messages on reruns.
 
+Content boundary: the bounded `msgvault sync-full` child downloads messages into
+msgvault's local full-message archive. The current command does not request
+attachment suppression, so supported msgvault builds may also store attachments.
+Powerpacks' subsequent SQLite reader selects contact/interaction metadata only and
+does not send bodies, subjects, snippets, MIME, or attachments to identity providers.
+
 ### Step 6 — Import Gmail contacts
 
-Import resolves contacts to LinkedIn via **Parallel.ai**, then writes
+Import first reuses the local identity directory, resolves only the remaining
+contacts to LinkedIn via **Parallel.ai**, hydrates accepted LinkedIn URLs through
+the local profile cache or **RapidAPI**, then writes
 `.powerpacks/network-import/import/gmail/people.csv`. Run **without** the spend
 flag first — the primitive auto-approves small batches (under its threshold) and
 otherwise blocks:
+
+Before running it, explain that Parallel receives name, email, and an
+email-domain-derived company, while RapidAPI receives accepted LinkedIn URLs;
+then get explicit approval for those provider calls. The current flow has no
+human identity-verification gate: a normalized match at confidence 0.75 or above
+can proceed directly to hydration, and a found result with missing or zero provider
+confidence is currently normalized to 0.90. The separate Gmail verification/review
+proposal is not wired into `$import-gmail` yet.
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail.py run
@@ -231,6 +266,13 @@ Writes `.powerpacks/network-import/merged/people.csv` (default
 Index the merged people.csv on Modal (generic indexer, no import stage) and
 download the duckdb:
 
+This uploads the complete merged CSV, including email and interaction metadata,
+to a workspace-shared Modal volume. Input and run paths are prefixed by
+`POWERPACKS_OPERATOR_ID`, caches are shared, and a missing operator ID falls back
+to the all-zero path. Modal may use provider-backed classification and embeddings,
+and the current default `--max-usd 0` is uncapped internal mode. Show that boundary
+and obtain explicit approval before invoking the command.
+
 ```bash
 cd "$REPO" && uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
   --people-csv .powerpacks/network-import/merged/people.csv
@@ -261,6 +303,7 @@ the `errors`. Echo the `summary`.
 
 Report a terse summary: N Gmail accounts synced, contacts imported, merged network
 of M people, index validated. Remind the user that rerunning `$import-gmail`
-reruns the whole checklist (Gmail re-syncs incrementally; the msgvault db is
-preserved), and that LinkedIn (`$setup`) and iMessage/WhatsApp (`$import-messages`)
+reruns the whole checklist: an explicit history window is rescanned with
+`--noresume`, while msgvault deduplicates stored messages and preserves its db.
+LinkedIn (`$setup`) and iMessage/WhatsApp (`$import-messages`)
 are separate skills.

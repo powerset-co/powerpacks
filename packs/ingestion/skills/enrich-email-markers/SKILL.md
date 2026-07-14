@@ -38,7 +38,7 @@ Outputs to review: **`markers.csv`** (markers), then **`ab_comparison.csv`** /
 
 ## Prerequisites
 
-- msgvault synced for the account (see `$import-email` / `$msgvault`).
+- msgvault synced for the account (see `$import-gmail` / `$msgvault`).
 - `OPENAI_API_KEY` in `.env` (repo root).
 - Python env ready: `bin/setup-python` if `.venv/` is missing.
 

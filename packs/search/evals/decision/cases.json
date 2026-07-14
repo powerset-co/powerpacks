@@ -16,7 +16,7 @@
   { "id": "rec-vp-fusion", "query": "recruit a VP of Engineering for a fusion reactor company", "surface": "people", "backend": "powerset", "depth": "deep" },
   { "id": "rec-100-candidates-brief", "query": "find ~100 strong candidates for this role: technical co-founder who can build software products on top of cloud and AI infrastructure, no pure ML researchers", "surface": "people", "backend": "powerset", "depth": "deep" },
   { "id": "rec-fits-jd", "query": "who in my network fits this staff ML infrastructure JD", "surface": "people", "backend": "powerset", "depth": "deep", "acceptable_depth": ["fast"], "acceptable_backend": ["local"], "note": "JD-fit intent -> deep; 'my network' tempts fast/local" },
-  { "id": "rec-similar-person", "query": "find me more people like https://www.linkedin.com/in/janedoe", "surface": "people", "backend": "powerset", "depth": "deep" },
+  { "id": "rec-strongest-role", "query": "find me the strongest strategic finance leaders", "surface": "people", "backend": "powerset", "depth": "deep" },
   { "id": "rec-source-cofounder", "query": "source candidates for a technical cofounder, product builders on cloud and AI infra", "surface": "people", "backend": "powerset", "depth": "deep" },
 
   { "id": "co-lookup-anthropic", "query": "look up Anthropic", "surface": "company", "backend": "powerset", "depth": null },
@@ -47,9 +47,9 @@
 
   { "id": "adv-engineers-at-sequoia-cos", "query": "who are the engineers at companies backed by Sequoia", "surface": "people", "backend": "powerset", "depth": "fast", "note": "people filtered by a company attribute -> people search, not company resolution" },
   { "id": "adv-shortlist-companies", "query": "shortlist the fintech companies that raised a Series B", "surface": "company", "backend": "powerset", "depth": null, "note": "SEAM: 'shortlist' is a deep verb but the subject is companies" },
-  { "id": "adv-find-candidates-bare", "query": "find me candidates", "surface": "people", "backend": "powerset", "depth": "fast", "acceptable_depth": ["deep"], "note": "under-specified (no JD) -> default fast is defensible" },
+  { "id": "adv-find-candidates-bare", "query": "find me candidates", "surface": "people", "backend": "powerset", "depth": "fast", "note": "under-specified with no role context: stay fast/clarify rather than fabricate a hiring profile" },
   { "id": "adv-lookup-engineers-anthropic", "query": "look up the engineers at Anthropic", "surface": "people", "backend": "powerset", "depth": "fast", "note": "'look up' is a company verb but 'engineers' makes it a people search" },
-  { "id": "adv-bare-linkedin-url", "query": "https://www.linkedin.com/in/janedoe", "surface": "people", "backend": "powerset", "depth": "fast", "acceptable_depth": ["deep"], "note": "bare profile URL with no verb: lookup vs similar-person seed" },
+  { "id": "adv-bare-linkedin-url", "query": "https://www.linkedin.com/in/janedoe", "surface": "people", "backend": "powerset", "depth": "fast", "note": "bare profile URL is a person lookup; raw profile-to-role deep intake is not shipped" },
   { "id": "adv-overlap-now-founders", "query": "people who overlapped at Stripe and are now founders", "surface": "sql", "backend": "local", "depth": null },
   { "id": "adv-my-network-infra", "query": "search my network for infra people", "surface": "people", "backend": "powerset", "depth": "fast", "acceptable_backend": ["local"], "note": "'my network' != 'my contacts'; bare 'my network' is not a local trigger" },
   { "id": "adv-contacts-in-fintech", "query": "who are my contacts in fintech", "surface": "contacts", "backend": "powerset", "depth": null },

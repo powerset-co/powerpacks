@@ -1,4 +1,9 @@
-# 🔗 LinkedIn → searchable index on Modal (onboarding v3)
+# LinkedIn to searchable index on Modal (historical onboarding v3 plan)
+
+> **Historical design note, not the current product contract.** See the
+> canonical [LinkedIn and Modal indexing pipeline](linkedin-modal-pipeline.md)
+> for shipped behavior, data boundaries, limitations, and current commands.
+> This file is retained for implementation history.
 
 **Created:** 2026-06-12
 

@@ -7,6 +7,7 @@ compose -> cluster -> lookup flow over synthetic fixtures (no network, no DB).
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -64,6 +65,28 @@ class TestCommon(unittest.TestCase):
             self.assertEqual(people[0].person_id, "p1")
             self.assertIn("jane@acme.com", people[0].emails)
             self.assertIn("+14155551234", people[0].phones)
+
+
+class TestDeepContextRunnerSafety(unittest.TestCase):
+    def test_chained_paid_run_is_disabled(self):
+        runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
+        blocked = subprocess.run(
+            [str(runner), "run"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(blocked.returncode, 2)
+        self.assertIn("intentionally disabled", blocked.stderr)
+
+        help_result = subprocess.run(
+            [str(runner), "run", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0)
+        self.assertIn("paid stages require", help_result.stderr)
 
 
 import sqlite3  # noqa: E402  (local to the msgvault-con helper below)
@@ -154,6 +177,192 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
         channels = {m["channel"] for m in pool}
         self.assertIn("gmail", channels)            # gmail's capped vertical...
         self.assertIn("imessage", channels)         # ...still leaves room for chat
+
+    def test_manifest_reports_opted_in_group_body_access(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            people = base / "people.csv"
+            people.write_text(
+                "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n",
+                encoding="utf-8",
+            )
+            manifest = collect.build(_ns(
+                out_dir=base / "raw",
+                chat_db=base / "missing-chat.db",
+                wacli_db=base / "missing-wacli.db",
+                people_csv=people,
+                msgvault_db=base / "missing-msgvault.db",
+                dry_run=True,
+                limit=0,
+                person="",
+                force=False,
+                deep_cap=10,
+                include_groups=True,
+                max_group_size=12,
+            ))
+            self.assertTrue(manifest["privacy"]["groups_read"])
+            self.assertFalse(manifest["privacy"]["dms_only"])
+            self.assertEqual(manifest["privacy"]["group_source"], "imessage")
+            self.assertEqual(manifest["privacy"]["max_group_size"], 12)
+
+    def test_default_collection_rebuilds_retained_group_bundles(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw = base / "raw"
+            raw.mkdir()
+            people = base / "people.csv"
+            people.write_text(
+                "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n"
+                "p1,Person,,,+14155550000,,imessage\n",
+                encoding="utf-8",
+            )
+            bundle = raw / "p1.json"
+            bundle.write_text(json.dumps({
+                "messages": [
+                    {"channel": "imessage", "text": "dm"},
+                    {"channel": "imessage_group", "text": "group body"},
+                ],
+                "messages_available": 2,
+                "capped": False,
+                "collection_policy": {
+                    "deep_cap": 10,
+                    "include_groups": True,
+                    "max_group_size": 12,
+                },
+            }), encoding="utf-8")
+            (raw / "manifest.json").write_text(json.dumps({
+                "privacy_schema_version": 2,
+                "privacy": {"group_bodies_present": True},
+            }), encoding="utf-8")
+
+            dm_message = {
+                "channel": "imessage",
+                "at": "2026-07-13T00:00:00Z",
+                "direction": "from_them",
+                "text": "dm",
+            }
+            with mock.patch.object(collect, "collect_one", return_value=([dm_message], 1)):
+                manifest = collect.build(_ns(
+                    out_dir=raw,
+                    chat_db=base / "missing-chat.db",
+                    wacli_db=base / "missing-wacli.db",
+                    people_csv=people,
+                    msgvault_db=base / "missing-msgvault.db",
+                    dry_run=False,
+                    limit=0,
+                    person="",
+                    force=False,
+                    deep_cap=10,
+                    include_groups=False,
+                    max_group_size=25,
+                ))
+
+            saved = json.loads(bundle.read_text(encoding="utf-8"))
+            self.assertEqual([message["channel"] for message in saved["messages"]], ["imessage"])
+            self.assertFalse(saved["collection_policy"]["include_groups"])
+            self.assertEqual(manifest["bundles_purged_for_scope"], 1)
+            self.assertFalse(manifest["privacy"]["groups_read"])
+            self.assertTrue(manifest["privacy"]["dms_only"])
+
+            opted_in_message = {
+                "channel": "imessage_group",
+                "at": "2026-07-13T00:00:00Z",
+                "direction": "from_them",
+                "text": "approved group body",
+            }
+            with mock.patch.object(
+                collect,
+                "collect_one",
+                return_value=([opted_in_message], 1),
+            ) as collect_mock:
+                opted_in_manifest = collect.build(_ns(
+                    out_dir=raw,
+                    chat_db=base / "missing-chat.db",
+                    wacli_db=base / "missing-wacli.db",
+                    people_csv=people,
+                    msgvault_db=base / "missing-msgvault.db",
+                    dry_run=False,
+                    limit=0,
+                    person="",
+                    force=False,
+                    deep_cap=10,
+                    include_groups=True,
+                    max_group_size=12,
+                ))
+
+            collect_mock.assert_called_once()
+            restored = json.loads(bundle.read_text(encoding="utf-8"))
+            self.assertEqual(restored["messages"][0]["channel"], "imessage_group")
+            self.assertTrue(opted_in_manifest["privacy"]["groups_read"])
+            self.assertTrue(opted_in_manifest["privacy"]["group_bodies_present"])
+
+    def test_invalid_input_does_not_purge_retained_bundles(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw = base / "raw"
+            raw.mkdir()
+            bundle = raw / "p1.json"
+            bundle.write_text('{"messages":[{"channel":"imessage_group","text":"private"}]}',
+                              encoding="utf-8")
+            (raw / "manifest.json").write_text(json.dumps({
+                "privacy_schema_version": 2,
+                "privacy": {"group_bodies_present": True},
+            }), encoding="utf-8")
+
+            with self.assertRaises(FileNotFoundError):
+                collect.build(_ns(
+                    out_dir=raw,
+                    people_csv=base / "missing.csv",
+                    msgvault_db=base / "missing-msgvault.db",
+                    chat_db=base / "missing-chat.db",
+                    wacli_db=base / "missing-wacli.db",
+                    dry_run=False,
+                    limit=0,
+                    person="",
+                    force=False,
+                    deep_cap=10,
+                    include_groups=False,
+                    max_group_size=25,
+                ))
+            self.assertTrue(bundle.exists())
+
+    def test_partial_default_collection_refuses_group_scope_transition(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw = base / "raw"
+            raw.mkdir()
+            people = base / "people.csv"
+            people.write_text(
+                "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n"
+                "p1,Person,,,+14155550000,,imessage\n",
+                encoding="utf-8",
+            )
+            bundle = raw / "p1.json"
+            bundle.write_text('{"messages":[{"channel":"imessage_group","text":"private"}]}',
+                              encoding="utf-8")
+            (raw / "manifest.json").write_text(json.dumps({
+                "privacy_schema_version": 2,
+                "privacy": {"group_bodies_present": True},
+            }), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "full default collection"):
+                collect.build(_ns(
+                    out_dir=raw,
+                    people_csv=people,
+                    msgvault_db=base / "missing-msgvault.db",
+                    chat_db=base / "missing-chat.db",
+                    wacli_db=base / "missing-wacli.db",
+                    dry_run=False,
+                    limit=1,
+                    person="",
+                    force=False,
+                    deep_cap=10,
+                    include_groups=False,
+                    max_group_size=25,
+                ))
+            self.assertTrue(bundle.exists())
 
 
 class TestSampling(unittest.TestCase):
@@ -833,7 +1042,7 @@ class TestApplyRetargets(unittest.TestCase):
 
 
 class TestReconcileDeepResearch(unittest.TestCase):
-    """Phase 3 escalation: subset selection + $25 cost gate (no Parallel.ai spend)."""
+    """Phase 3 escalation: subset selection + explicit cost gate (no spend)."""
 
     def test_eligible_subset_filters(self):
         verdicts = [
@@ -872,12 +1081,94 @@ class TestReconcileDeepResearch(unittest.TestCase):
                      "linkedin": {"linkedin_url": "u"},
                      "verdict": _verdict("wrong_person", 0.95, dr=True, reason="wrong")} for i in range(600)]
             vj.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
-            man = dresearch.run(_ns(verdicts_jsonl=vj, people_csv=base / "nope.csv",
-                overrides_csv=base / "nope_ov.csv",
-                facts_dir=base / "f", raw_dir=base / "r", processor="core2x",
-                confirm_threshold=0.85, budget=25.0, approve=False, dry_run=False))
+            old_out, old_queue = dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV
+            dresearch.DR_OUT_DIR = base / "research"
+            dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
+            try:
+                man = dresearch.run(_ns(
+                    verdicts_jsonl=vj, people_csv=base / "nope.csv",
+                    overrides_csv=base / "nope_ov.csv",
+                    facts_dir=base / "f", raw_dir=base / "r", processor="core2x",
+                    confirm_threshold=0.85, budget=25.0, approve=True, dry_run=False,
+                ))
+            finally:
+                dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV = old_out, old_queue
             self.assertEqual(man["status"], "needs_approval")   # 600 * $0.05 = $30 > $25
             self.assertGreater(man["estimated_usd"], 25)
+
+    def test_cost_gate_requires_approval_under_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            vj = base / "verdicts.jsonl"
+            vj.write_text(json.dumps({
+                "parent_slug": "p1", "candidate_key": "wrong", "name": "N1",
+                "person_ids": ["x1"], "linkedin": {"linkedin_url": "u"},
+                "verdict": _verdict("wrong_person", 0.95, dr=True, reason="wrong"),
+            }) + "\n", encoding="utf-8")
+            old_out, old_queue = dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV
+            dresearch.DR_OUT_DIR = base / "research"
+            dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
+            try:
+                manifest = dresearch.run(_ns(
+                    verdicts_jsonl=vj, people_csv=base / "missing.csv",
+                    overrides_csv=base / "overrides.csv", facts_dir=base / "facts",
+                    raw_dir=base / "raw", processor="core2x", confirm_threshold=0.85,
+                    budget=25.0, approve=False, dry_run=False,
+                    include_plausibly_absent=False,
+                ))
+            finally:
+                dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV = old_out, old_queue
+            self.assertEqual(manifest["status"], "needs_approval")
+            self.assertLess(manifest["estimated_usd"], 25)
+
+    def test_cost_gate_runs_only_when_approved_under_budget(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            vj = base / "verdicts.jsonl"
+            vj.write_text(json.dumps({
+                "parent_slug": "p1", "candidate_key": "wrong", "name": "N1",
+                "person_ids": ["x1"], "linkedin": {"linkedin_url": "u"},
+                "verdict": _verdict("wrong_person", 0.95, dr=True, reason="wrong"),
+            }) + "\n", encoding="utf-8")
+            old_out, old_queue = dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV
+            dresearch.DR_OUT_DIR = base / "research"
+            dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
+            try:
+                with mock.patch.object(
+                    dresearch.subprocess,
+                    "run",
+                    return_value=mock.Mock(returncode=0),
+                ) as run_mock:
+                    manifest = dresearch.run(_ns(
+                        verdicts_jsonl=vj, people_csv=base / "missing.csv",
+                        overrides_csv=base / "overrides.csv", facts_dir=base / "facts",
+                        raw_dir=base / "raw", processor="core2x", confirm_threshold=0.85,
+                        budget=1.0, approve=True, dry_run=False,
+                        include_plausibly_absent=False,
+                    ))
+            finally:
+                dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV = old_out, old_queue
+            self.assertEqual(manifest["status"], "ran")
+            run_mock.assert_called_once()
+
+    def test_invalid_budget_cannot_bypass_gate(self):
+        manifest = dresearch.run(_ns(budget=float("nan")))
+        self.assertEqual(manifest["status"], "invalid_budget")
+        with self.assertRaises(SystemExit):
+            dresearch.build_parser().parse_args(["--budget", "nan"])
+
+    def test_retarget_reads_canonical_parallel_linkedin_shape(self):
+        profile = {
+            "social": {"linkedin_url": "https://www.linkedin.com/in/right-person"},
+            "metadata": {"research_notes": "Matched employer and location"},
+        }
+        self.assertEqual(
+            dresearch._find_linkedin(profile),
+            "https://www.linkedin.com/in/right-person",
+        )
+        self.assertIn("Matched employer", dresearch._find_reason(profile))
 
 
 class TestReviewWeb(unittest.TestCase):
@@ -1058,7 +1349,7 @@ class TestSelfReportedRetarget(unittest.TestCase):
 
 
 class TestDeepResearchEligibility(unittest.TestCase):
-    """Deep-research recovers BOTH model wrong_person detaches and USER-marked detaches."""
+    """Deep research targets model detaches and never overwrites user decisions."""
 
     VERDICTS = [
         {"parent_slug": "p1", "candidate_key": "goodlink",
@@ -1077,10 +1368,13 @@ class TestDeepResearchEligibility(unittest.TestCase):
         # model wrong_person+recommend eligible; the plausibly-absent one excluded
         self.assertEqual(self.keys({}), {"wronglink"})
 
-    def test_user_detach_adds_a_confirmed_link(self):
-        # user detaches a link the model had CONFIRMED -> now eligible for recovery
+    def test_user_detach_is_not_researched(self):
+        # The one-row override cannot hold a sticky detach and pending retarget together.
         self.assertEqual(self.keys({"goodlink": {"action": "detach", "approved": "yes"}}),
-                         {"wronglink", "goodlink"})
+                         {"wronglink"})
+
+    def test_user_decision_blocks_model_research(self):
+        self.assertEqual(self.keys({"wronglink": {"action": "detach", "approved": "yes"}}), set())
 
     def test_pending_user_detach_not_eligible(self):
         # a detach the user hasn't approved (still pending) does NOT trigger research

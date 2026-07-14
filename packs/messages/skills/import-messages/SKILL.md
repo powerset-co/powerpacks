@@ -1,11 +1,14 @@
 ---
 name: import-messages
-description: Add iMessage/WhatsApp contacts to your local search index. Use for $import-messages. Discovers message contacts (Full Disk Access + WhatsApp QR), matches them against your LinkedIn/Gmail people, deep-researches the unmatched (Parallel.ai), opens a mandatory review, then fan-in merges all imported sources and rebuilds the Modal search index. Local only — never uploads to Powerset.
+description: Add iMessage/WhatsApp contacts to your local search index. Use for $import-messages. Discovers message contacts (Full Disk Access + WhatsApp QR), matches LinkedIn/Gmail people, deep-researches eligible unresolved contacts, and requires review before any Messages rows materialize. Then fan-in merges sources and rebuilds the index through a workspace-shared Modal volume. Never uploads to a Powerset set.
 ---
 
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-13: Added the product architecture guide; documented both OpenRouter
+  calls, Parallel and Modal payloads, Contacts.app inclusion, provider gates, and
+  the current explicit-exclusion review semantics.
 - 2026-06-20: New skill, split out of $setup (replaces $import-contacts for the
   local-index use case). Carries the Messages block (choose channels -> discover
   -> match vs gmail+linkedin -> deep-research -> review -> import) plus the shared
@@ -20,6 +23,10 @@ LinkedIn/Gmail people (free), deep-research the rest, **review and approve**, th
 **merge all imported sources + rebuild the index**. Run `$setup` (LinkedIn) and
 `$import-gmail` first for the best matching — Messages merges on top of whatever
 is already imported.
+
+For a product-level walkthrough, source-specific privacy map, provider payloads,
+approval gates, and architecture diagram, see
+[`message-import-pipeline.md`](../../docs/message-import-pipeline.md).
 
 It runs a **fixed checklist and always reruns it end to end**, idempotent against
 fixed paths.
@@ -53,18 +60,26 @@ and rely on the primitives.
   Build the checklist and execute it directly.
 - **Do not edit code.** Only invoke the primitives below. Plain shell for
   `cp`/`test`/`wc`/`cat` is fine; no glue scripts.
-- **Local only.** Resolve message contacts using your already-imported Gmail +
-  LinkedIn data plus Parallel.ai deep research **only**. Never call Powerset
-  (`sync_powerset_candidates`) and never upload. No message bodies are read, only
-  contact metadata.
-- **Review is always required.** Message contacts are **never** persisted into
+- **No Powerset set upload.** Resolve message contacts using your already-imported
+  Gmail + LinkedIn data plus approved provider calls. Never call
+  `sync_powerset_candidates`. Powerpacks never selects message bodies, but wacli
+  owns its local provider store; OpenRouter/Parallel receive the stated metadata,
+  and the reviewed merged `people.csv` is uploaded to a workspace-shared Modal
+  volume to build the downloadable index. Inputs/runs are operator-prefixed,
+  caches are shared, and a missing operator ID uses the all-zero path.
+- **Review is required whenever a row can be materialized.** Message contacts are **never** persisted into
   `import/messages/people.csv` without the user reviewing them first. Step 5 (the
-  review UI + explicit "done") is mandatory on every run — never auto-approve it,
-  never skip it, and never run Step 6 before the user confirms. `people.csv`
-  contains only the rows the reviewer keeps.
+  review UI + explicit "done") is mandatory when unresolved candidates exist;
+  never auto-approve it or run Step 6 before the user confirms. The reviewer must
+  explicitly exclude every unwanted row. If deterministic matching leaves zero
+  unresolved rows, show that count and mark research/review/import as no-ops; the
+  review builder cannot open an empty first-run artifact.
 - **Consent gates (pause for the user):** macOS Full Disk Access (Step 2); the
-  WhatsApp QR scan (Step 2); the LLM "worth enriching" + Parallel deep-research
-  spend (Step 4); and the contact review (Step 5).
+  WhatsApp QR scan (Step 2); OpenRouter name triage, OpenRouter/direct OpenAI
+  scoring, and Parallel deep research
+  (Steps 4-5); contact review, any new-row import confirmation, and potential
+  RapidAPI profile-cache misses (Steps 5-6);
+  and the Modal cloud upload/provider-backed indexing (Step 8).
 
 ### Repo root
 
@@ -102,15 +117,18 @@ stop here. (Matching in Step 3 is best when LinkedIn (`$setup`) and Gmail
 
 Ask the user which channels to add: **iMessage**, **WhatsApp**, **both**, or
 **skip**. Record the choice. Messages **pull all history** — there is *no*
-sync-window question (unlike Gmail). If the user skips, stop. This flow is **local
-only** (no Powerset, no upload — see Guardrails).
+sync-window question (unlike Gmail). If the user skips, stop. Source extraction
+is local and the flow never uploads to a Powerset set; approved provider and
+Modal boundaries are listed in Guardrails.
 
 ### Step 2 — Link & discover message contacts
 
 Discover message contacts with the contacts orchestrator in **selective mode**
 (extract + merge only — it stops after the merge and never touches Powerset).
-Nothing is imported here; this only discovers who you've messaged. Pass only the
-channels chosen in Step 1:
+Nothing is imported here; this discovers message handles and local contact
+metadata. The current iMessage default also includes every Contacts.app row with
+a phone number, even when no message exists. Pass only the channels chosen in
+Step 1:
 
 ```bash
 cd "$REPO" && uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run \
@@ -162,10 +180,15 @@ gmail/linkedin source, so this run does not re-add them to the Messages people.c
 
 ### Step 4 — Deep-research discovered contacts
 
-Triage who is "worth enriching", queue the unmatched, then deep-research them:
+Triage who is "worth enriching", queue the unmatched, then deep-research them.
+The first OpenRouter call sends contact names only. Estimate it first, show the
+estimate, and obtain explicit approval before `review`:
 
 ```bash
 cd "$REPO"
+uv run --project . python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py estimate \
+  --input .powerpacks/messages/contacts.csv
+# Only after the user approves the displayed estimate:
 uv run --project . python packs/messages/primitives/llm_review_contacts/llm_review_contacts.py review \
   --input .powerpacks/messages/contacts.csv
 uv run --project . python packs/messages/primitives/prepare_research_queue/prepare_research_queue.py prepare \
@@ -173,9 +196,14 @@ uv run --project . python packs/messages/primitives/prepare_research_queue/prepa
   --output .powerpacks/messages/research_queue.csv
 ```
 
-`llm_review` uses OpenRouter and auto-approves small batches (under its ~$10
-threshold); if it blocks for spend, show the cost and ask. **If the research
-queue is empty** (everyone matched), skip the rest of this step. Otherwise
+The standalone `review` primitive does not enforce the orchestrator's historical
+$10 auto-approval threshold; the explicit estimate and approval above are the
+gate. **If the research queue is empty**, there are no eligible unresolved rows;
+that may mean local matches, OpenRouter `skip=yes`, or missing/blocked/unsearchable
+names. Report those counts separately rather than claiming everyone matched. Then
+mark the remaining research, review, and Messages import steps (4-6) as no-ops,
+and continue to fan-in. Do not invoke the review builder: without per-handle
+research artifacts it exits nonzero rather than opening an empty review. Otherwise
 estimate, then — **Parallel.ai spend gate: show the count + estimated cost and
 ask before running** — run deep research:
 
@@ -190,7 +218,13 @@ uv run --project . python packs/messages/primitives/deep_research_contacts/deep_
 
 ### Step 5 — Review contacts & approve for import
 
-Build the review CSV from the research, then open the review UI:
+Build the review CSV from the research, then open the review UI. Building the CSV
+performs a second scoring call over the public research profile plus
+phone, area code, message counts, source, timestamps, group names, and any
+retarget hint. It prefers OpenRouter but falls back to direct OpenAI when only
+`OPENAI_API_KEY` exists. The standalone primitive currently lacks a dry-run
+estimate or an internal approval gate, so disclose the selected provider and
+payload and obtain explicit approval before running `build`:
 
 ```bash
 cd "$REPO"
@@ -203,14 +237,15 @@ uv run --project . python packs/messages/primitives/review_research_web/review_r
   --research-dir .powerpacks/messages/research --open
 ```
 
-Tell the user the review URL and that they should **exclude** anyone they don't
-want indexed. **This review is mandatory and a hard user-action gate: always run
-it, never auto-approve, never skip it, and never start Step 6 until the user
-explicitly says they are done.** Only rows they keep become searchable. (If Step 4
-produced no contacts to review, the review opens empty — still confirm with the
-user before moving on; nothing is persisted in that case.)
+Tell the user the review URL and that they must **explicitly exclude** anyone they
+do not want indexed. Today the materializer can retain a researched row with a
+LinkedIn URL when `exclude` is blank, even if the UI initially renders it as
+unselected. **For a non-empty review this is a mandatory hard user-action gate:
+never auto-approve it, and never start Step 6 until the user explicitly says they
+are done.** Any row not explicitly excluded may become searchable; do not describe
+the behavior as "only clicked rows import."
 
-### Step 6 — Import approved message contacts
+### Step 6 — Import reviewed message contacts
 
 Materialize the reviewed contacts into this source's canonical
 `.powerpacks/network-import/import/messages/people.csv` — the file the Step 7
@@ -218,14 +253,18 @@ merge reads — and update the shared `directory.csv`. It converts your reviewed
 `research_review.csv` into the people schema, applying your Step 5 exclusions,
 deduping by LinkedIn identity, and attaching the message `interaction_counts`:
 
+This command can send eligible LinkedIn URLs to RapidAPI when the local profile
+cache misses. The child has no active cost preview or approval gate, so disclose
+that payload and obtain explicit current-run approval before invoking it.
+
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages.py run
 ```
 
-Only reviewer-kept rows are written. If it blocks with an import-confirmation,
-re-run with `--confirm-import`. If it surfaces an `enrich_people` spend gate
-(LinkedIn profile enrichment), show it and ask before approving. The new
-people.csv is then picked up by the merge in Step 7.
+Rows not explicitly rejected can be written; the Step 5 instruction to exclude
+every unwanted row is therefore load-bearing. If it blocks with an import-confirmation,
+re-run with `--confirm-import`. The new people.csv is then picked up by the merge
+in Step 7.
 
 ### Step 7 — Merge all sources
 
@@ -244,6 +283,13 @@ Writes `.powerpacks/network-import/merged/people.csv` (default
 
 Index the merged people.csv on Modal (generic indexer, no import stage) and
 download the duckdb:
+
+This uploads the complete merged CSV, including reviewed phone and interaction
+metadata, to a workspace-shared Modal volume. Input/run paths are prefixed by
+`POWERPACKS_OPERATOR_ID`, caches are shared, and a missing operator ID falls back
+to the all-zero path. Modal may use provider-backed classification and embeddings,
+and the current default `--max-usd 0` is uncapped internal mode. Show that boundary
+and obtain explicit approval first.
 
 ```bash
 cd "$REPO" && uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
@@ -272,7 +318,7 @@ the `errors`. Echo the `summary`.
 
 ## Done
 
-Report a terse summary: channels linked, N contacts discovered, K approved &
-imported, merged network of M people, index validated. Remind the user that
+Report a terse summary: channels linked, N contacts discovered, K reviewed and
+not explicitly excluded, merged network of M people, index validated. Remind the user that
 rerunning `$import-messages` reruns the whole checklist, and that LinkedIn
 (`$setup`) and Gmail (`$import-gmail`) are separate skills.

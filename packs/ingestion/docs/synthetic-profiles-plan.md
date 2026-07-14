@@ -1,5 +1,10 @@
 # Deep Context — synthetic profiles via deep research
 
+> **Status: design history with shipped implementation notes.** Use the
+> [deep-context pipeline](deep-context-pipeline.md) and
+> [`deep-context/SKILL.md`](../skills/deep-context/SKILL.md) for the current
+> end-to-end contract.
+
 _Created 2026-06-24._
 
 ## Changelog

@@ -14,8 +14,10 @@ emphasis so the rounds explore different regions instead of resampling the same 
   stop when net-new < saturation-min-new (or --max-rounds hit)
   -> <run-dir>/union.jsonl  (the saturated, redundant pool; feed straight to the free codex judge)
 
-No triage: the judge is free (codex_judge), so there is no reason to pre-filter and risk dropping
-reachable candidates. See packs/search/skills/search/SKILL.md.
+This primitive does not triage internally. The default deep-search loop applies
+conservative triage to the completed union before its selected judge; manual
+operators decide the downstream path themselves. See
+packs/search/skills/search/deep-mode.md.
 """
 from __future__ import annotations
 
