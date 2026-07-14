@@ -9,10 +9,9 @@ Stages:
   5. enrich     – Parallel.ai LinkedIn resolution
   6. source_people – Write messages people.csv
   7. merge_network – Merge into unified people.csv
-  8. network_duckdb – Prepare contact lookup database
-  9. index_estimate – Estimate search updates
- 10. index_records – Build searchable people records
- 11. search_duckdb – Update local search database
+  8. index_estimate – Estimate search updates
+  9. index_records – Build searchable people records
+ 10. search_duckdb – Update local search database
 """
 
 from __future__ import annotations
@@ -56,7 +55,6 @@ STAGES = [
     {"id": "enrich", "label": "Enrich message contacts"},
     {"id": "source_people", "label": "Save message people file"},
     {"id": "merge_network", "label": "Merge contact sources"},
-    {"id": "network_duckdb", "label": "Prepare contact lookup database"},
     {"id": "index_estimate", "label": "Estimate search updates"},
     {"id": "index_records", "label": "Build searchable people records"},
     {"id": "search_duckdb", "label": "Update local search database"},
@@ -146,6 +144,12 @@ def make_context(*, resume: bool = False) -> RunContext:
             status = json.loads(state_path.read_text(encoding="utf-8"))
             status["status"] = "running"
             status["updated_at"] = now_iso()
+            status["stage_order"] = STAGES
+            stages = dict(status.get("stages") or {})
+            stages.pop("network_duckdb", None)
+            status["stages"] = stages
+            if status.get("current_stage") == "network_duckdb":
+                status.pop("current_stage", None)
         except (json.JSONDecodeError, OSError):
             status = None
     else:

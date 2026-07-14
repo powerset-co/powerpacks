@@ -199,20 +199,6 @@ def merge_command(args: argparse.Namespace, input_paths: list[Path]) -> list[str
     return cmd
 
 
-def network_duckdb_command(args: argparse.Namespace) -> list[str]:
-    return [
-        sys.executable,
-        "packs/ingestion/primitives/build_network_duckdb/build_network_duckdb.py",
-        "--network-dir",
-        str(Path(args.artifact_dir) / "merged"),
-        "--output-dir",
-        str(Path(args.artifact_dir) / "duckdb"),
-        "--flavor",
-        "local",
-        "--force",
-    ]
-
-
 def processing_args(args: argparse.Namespace, *, dry_run: bool, allow_paid: bool) -> list[str]:
     cmd = [
         sys.executable,
@@ -314,26 +300,26 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
                 copy_if_changed(src, dst)
                 promoted[f"merged_{name}"] = str(dst.relative_to(ROOT))
 
-    duckdb = artifacts.get("duckdb")
-    if duckdb:
-        src = ROOT / Path(str(duckdb))
-        if src.exists():
-            dest_dir = ROOT / ".powerpacks/network-import/duckdb"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dst = dest_dir / "network.duckdb"
-            copy_if_changed(src, dst)
-            promoted["network_duckdb"] = str(dst.relative_to(ROOT))
-
-    duckdb_manifest = artifacts.get("duckdb_manifest")
-    if duckdb_manifest:
-        src = ROOT / Path(str(duckdb_manifest))
-        if src.exists():
-            dest_dir = ROOT / ".powerpacks/network-import/duckdb"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dst = dest_dir / "manifest.json"
-            copy_if_changed(src, dst)
-            promoted["network_duckdb_manifest"] = str(dst.relative_to(ROOT))
     return promoted
+
+
+def without_retired_contact_duckdb(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop legacy contact-lookup DB fields without deleting local artifacts."""
+    clean = dict(payload)
+    clean.pop("network_duckdb", None)
+    if isinstance(clean.get("artifacts"), dict):
+        clean["artifacts"] = {
+            key: value
+            for key, value in clean["artifacts"].items()
+            if key not in {"duckdb", "duckdb_manifest"}
+        }
+    if isinstance(clean.get("promoted"), dict):
+        clean["promoted"] = {
+            key: value
+            for key, value in clean["promoted"].items()
+            if key not in {"network_duckdb", "network_duckdb_manifest"}
+        }
+    return clean
 
 
 def read_manifest_people_csv(path: Path) -> Path | None:
@@ -402,16 +388,14 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
     fingerprints = input_fingerprints(inputs + FAN_IN_OVERRIDE_FILES)
     existing = status_payload(argparse.Namespace(manifest=str(manifest_path)))
     existing_fan_in = existing if existing.get("step") == "fan_in" else existing.get("fan_in") if isinstance(existing.get("fan_in"), dict) else {}
+    existing_fan_in = without_retired_contact_duckdb(existing_fan_in)
     existing_artifacts = existing_fan_in.get("artifacts") if isinstance(existing_fan_in.get("artifacts"), dict) else {}
-    existing_promoted = existing_fan_in.get("promoted") if isinstance(existing_fan_in.get("promoted"), dict) else {}
     if (
         existing_fan_in.get("status") == "completed"
         and existing_fan_in.get("step") == "fan_in"
         and fan_in_fingerprints_match(existing_fan_in.get("input_fingerprints"), fingerprints)
         and existing_artifacts.get("merged_people_csv")
         and (ROOT / Path(str(existing_artifacts.get("merged_people_csv")))).exists()
-        and existing_promoted.get("network_duckdb")
-        and (ROOT / Path(str(existing_promoted.get("network_duckdb")))).exists()
     ):
         payload = {
             **existing_fan_in,
@@ -420,7 +404,6 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
             "reason": "fan_in_inputs_unchanged",
         }
         notify_progress(progress_callback, "merge_network", "Source people merge is current", status="completed", payload=payload.get("merge") if isinstance(payload.get("merge"), dict) else payload)
-        notify_progress(progress_callback, "network_duckdb", "Contact lookup database is current", status="completed", payload=payload.get("network_duckdb") if isinstance(payload.get("network_duckdb"), dict) else payload)
         return payload, 0
     if not inputs:
         payload = {
@@ -463,36 +446,12 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
         return payload, 1
     notify_progress(progress_callback, "merge_network", "Source people CSVs are merged", status="completed", payload=merge_payload)
 
-    duck_cmd = network_duckdb_command(args)
-    notify_progress(progress_callback, "network_duckdb", "Preparing contact lookup database from merged contacts", payload={"people_csv": merge_payload.get("people_csv")})
-    duck_code, duck_payload, duck_stderr = run_json_command(duck_cmd, timeout=60 * 60)
-    if duck_code != 0:
-        payload = {
-            "status": "failed",
-            "stage": "index_contacts_pipeline",
-            "openai_usage_tier": selected_openai_usage_tier(args),
-            "step": "network_duckdb",
-            "command": command_text(duck_cmd),
-            "inputs": [str(path) for path in inputs],
-            "merge": merge_payload,
-            "network_duckdb": duck_payload,
-            "error": tail(duck_stderr) or duck_payload,
-            "started_at": started_at,
-            "updated_at": now_iso(),
-        }
-        write_manifest(manifest_path, payload)
-        notify_progress(progress_callback, "network_duckdb", "Contact lookup database build failed", status="failed", payload=payload)
-        return payload, 1
-    notify_progress(progress_callback, "network_duckdb", "Contact lookup database is ready", status="completed", payload=duck_payload)
-
     artifacts = {
         "merged_people_csv": merge_payload.get("people_csv"),
         "network_contacts_csv": merge_payload.get("network_contacts_csv"),
         "network_contact_sources_csv": merge_payload.get("network_contact_sources_csv"),
         "network_companies_csv": merge_payload.get("network_companies_csv"),
         "merge_manifest": merge_payload.get("manifest"),
-        "duckdb": duck_payload.get("duckdb"),
-        "duckdb_manifest": duck_payload.get("manifest"),
     }
     promoted = promote_network_artifacts(artifacts)
     payload = {
@@ -506,7 +465,6 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
         "artifacts": artifacts,
         "promoted": promoted,
         "merge": merge_payload,
-        "network_duckdb": duck_payload,
         "people_csv": str(args.people_csv),
         "people_sha256": sha256_file(ROOT / Path(args.people_csv)) if (ROOT / Path(args.people_csv)).exists() else "",
         "started_at": started_at,
@@ -899,7 +857,6 @@ def plan_payload(args: argparse.Namespace) -> dict[str, Any]:
         "fan_in_inputs": [str(path) for path in inputs],
         "commands": {
             "fan_in_merge": command_text(merge_command(args, inputs)) if inputs else "",
-            "fan_in_network_duckdb": command_text(network_duckdb_command(args)),
             "processing_dry_run": command_text(processing_args(args, dry_run=True, allow_paid=False)),
             "processing_run": command_text(processing_args(args, dry_run=False, allow_paid=True)),
             "local_duckdb": command_text(duckdb_command(args)),

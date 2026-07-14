@@ -88,7 +88,6 @@ const ONBOARDING_V2_LINKEDIN: OnboardingV2Vertical = {
     { id: "enrich", label: "Enrich LinkedIn profiles" },
     { id: "source_people", label: "Save LinkedIn people file" },
     { id: "merge_network", label: "Merge contact sources" },
-    { id: "network_duckdb", label: "Prepare contact lookup database" },
     { id: "index_estimate", label: "Estimate search updates" },
     { id: "index_records", label: "Build searchable people records" },
     { id: "search_duckdb", label: "Update local search database" },
@@ -106,7 +105,6 @@ const ONBOARDING_V2_GMAIL: OnboardingV2Vertical = {
     { id: "enrich", label: "Enrich Gmail contacts" },
     { id: "source_people", label: "Save Gmail people file" },
     { id: "merge_network", label: "Merge contact sources" },
-    { id: "network_duckdb", label: "Prepare contact lookup database" },
     { id: "index_estimate", label: "Estimate search updates" },
     { id: "index_records", label: "Build searchable people records" },
     { id: "search_duckdb", label: "Update local search database" },
@@ -126,7 +124,6 @@ const ONBOARDING_V2_MESSAGES: OnboardingV2Vertical = {
     { id: "enrich", label: "Enrich message contacts" },
     { id: "source_people", label: "Save message people file" },
     { id: "merge_network", label: "Merge contact sources" },
-    { id: "network_duckdb", label: "Prepare contact lookup database" },
     { id: "index_estimate", label: "Estimate search updates" },
     { id: "index_records", label: "Build searchable people records" },
     { id: "search_duckdb", label: "Update local search database" },
@@ -151,12 +148,25 @@ function runningOnboardingV2VerticalJob(config: OnboardingV2Vertical): SetupJob 
 
 function onboardingV2Status(config: OnboardingV2Vertical) {
   const statusPath = onboardingV2RunFilePath(config.runsDir, "status.json");
-  const status = readJsonSync(statusPath) || {
+  const persistedStatus = readJsonSync(statusPath) || {
     status: "missing",
     vertical: config.vertical,
     progress: 0,
     stage_order: config.defaultStages,
   };
+  const stageOrder = Array.isArray(persistedStatus.stage_order)
+    ? persistedStatus.stage_order.filter((stage: Record<string, any>) => String(stage?.id || "") !== "network_duckdb")
+    : config.defaultStages;
+  const stages = persistedStatus.stages && typeof persistedStatus.stages === "object" && !Array.isArray(persistedStatus.stages)
+    ? { ...persistedStatus.stages }
+    : {};
+  delete stages.network_duckdb;
+  const status: Record<string, any> = {
+    ...persistedStatus,
+    stage_order: stageOrder,
+    stages,
+  };
+  if (status.current_stage === "network_duckdb") delete status.current_stage;
   const resolvedRunId = String(status.run_id || "");
   // Prefer the job matching the persisted run id; fall back to any running job
   // for this vertical so a freshly started run (before Python overwrites

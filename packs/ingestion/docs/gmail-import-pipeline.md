@@ -54,7 +54,7 @@ flowchart TD
     Q0 --> R0
     R0 --> R["Canonical Gmail people.csv"]
 
-    R --> S["Local fan-in across sources<br/>merged people.csv + contact DuckDB"]
+    R --> S["Local fan-in across sources<br/>merged people.csv + provenance CSVs"]
     S --> T{"Modal upload and provider<br/>processing approved?"}
     T -->|No| K1["Stop before cloud indexing"]
     T -->|Yes| U["Upload to workspace-shared volume<br/>under operator-prefixed paths"]

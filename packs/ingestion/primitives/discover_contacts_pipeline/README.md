@@ -51,8 +51,8 @@ local research artifacts only, then delegates LinkedIn profile hydration to
 Twitter remains an existing-artifact or dedicated-skill worker unless explicitly
 approved; this orchestrator never runs `$import-messages` research implicitly.
 
-Fan-in is not owned by this primitive. The indexing pipeline owns merge,
-network DuckDB materialization, and local search indexing:
+Fan-in is not owned by this primitive. The indexing pipeline owns the merge and
+the single local search index:
 
 ```bash
 uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run \

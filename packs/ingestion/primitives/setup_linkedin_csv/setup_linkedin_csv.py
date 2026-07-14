@@ -57,7 +57,6 @@ STAGES = [
     {"id": "enrich", "label": "Enrich LinkedIn profiles"},
     {"id": "source_people", "label": "Save LinkedIn people file"},
     {"id": "merge_network", "label": "Merge contact sources"},
-    {"id": "network_duckdb", "label": "Prepare contact lookup database"},
     {"id": "index_estimate", "label": "Estimate search updates"},
     {"id": "index_records", "label": "Build searchable people records"},
     {"id": "search_duckdb", "label": "Update local search database"},

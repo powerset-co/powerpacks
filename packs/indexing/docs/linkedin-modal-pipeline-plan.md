@@ -23,7 +23,7 @@ no spend gates on this path.
 
 - `packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py` —
   the onboarding-v2 end-to-end pipeline: inspect → discover → enrich →
-  source_people → merge_network → network_duckdb → index_estimate →
+  source_people → merge_network → index_estimate →
   index_records → search_duckdb, with `RunContext.event()` writing atomic
   `status.json` + `events.jsonl` under `.powerpacks/runs/setup-linkedin-csv/`.
 - Console v2 page polls `/local-api/onboarding-v2/linkedin/status` every 2s
