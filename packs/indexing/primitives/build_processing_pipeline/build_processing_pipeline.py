@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -65,6 +66,30 @@ STEPS = [
     "build_vectors",
     "validate_contracts",
 ]
+
+STEP_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "flatten_people": (),
+    "build_roles": ("flatten_people",),
+    "embed_role_positions": ("build_roles",),
+    "build_company_corpus": ("flatten_people",),
+    "embed_companies": ("build_company_corpus",),
+    "build_education_corpus": ("flatten_people",),
+    "build_location_corpus": ("build_company_corpus",),
+    "detect_ceo_founders": ("flatten_people",),
+    "infer_ages": ("flatten_people",),
+    "build_people_records": (
+        "embed_role_positions",
+        "embed_companies",
+        "detect_ceo_founders",
+        "infer_ages",
+    ),
+    "build_unified_profiles": ("flatten_people",),
+    "build_summary_records": ("build_unified_profiles",),
+    "embed_summaries": ("build_summary_records",),
+    "build_vectors": ("build_people_records", "embed_companies", "embed_summaries"),
+    "validate_contracts": ("build_vectors", "build_education_corpus", "build_location_corpus"),
+}
+DEFAULT_PIPELINE_WORKERS = 4
 
 CHAT_MODEL_PRICES_PER_1K_USD = {
     "gpt-5.2": {"input": 0.00175, "output": 0.01400},
@@ -1207,12 +1232,14 @@ def paid_checkpoint_every(ledger: dict[str, Any]) -> int:
 
 def openai_concurrency(ledger: dict[str, Any]) -> int:
     profile = ledger.get("openai_usage_tier") if isinstance(ledger.get("openai_usage_tier"), dict) else {}
-    return env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", tier=str(profile.get("tier")) if profile.get("tier") else None, fallback=256)
+    configured = env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", tier=str(profile.get("tier")) if profile.get("tier") else None, fallback=256)
+    return max(1, configured // int(ledger.get("_parallel_provider_divisor") or 1))
 
 
 def embedding_concurrency(ledger: dict[str, Any]) -> int:
     profile = ledger.get("openai_usage_tier") if isinstance(ledger.get("openai_usage_tier"), dict) else {}
-    return env_or_profile_int("POWERPACKS_OPENAI_EMBEDDING_CONCURRENCY", "embedding_concurrency", tier=str(profile.get("tier")) if profile.get("tier") else None, fallback=8)
+    configured = env_or_profile_int("POWERPACKS_OPENAI_EMBEDDING_CONCURRENCY", "embedding_concurrency", tier=str(profile.get("tier")) if profile.get("tier") else None, fallback=8)
+    return max(1, configured // int(ledger.get("_parallel_provider_divisor") or 1))
 
 
 def step_roles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
@@ -2179,13 +2206,48 @@ def commit_processed_person_hashes(ledger: dict[str, Any], ps: dict[str, Path]) 
     return {"people": len(rows), "hashes": len(hashes), "hashes_written": save_hashes(hashes, ps["person_hashes"]), "path": str(ps["person_hashes"])}
 
 
-def execute(ledger_path: Path) -> dict[str, Any]:
+def pipeline_worker_count() -> int:
+    available = os.cpu_count() or DEFAULT_PIPELINE_WORKERS
+    return max(1, min(DEFAULT_PIPELINE_WORKERS, available, len(STEPS)))
+
+
+def _run_step_worker(
+    step: str,
+    ledger: dict[str, Any],
+    run_root: str,
+    provider_divisor: int,
+) -> dict[str, Any]:
+    worker_ledger = dict(ledger)
+    worker_ledger["_parallel_provider_divisor"] = max(1, provider_divisor)
+    started_at = now_iso()
+    started_perf = time.perf_counter()
+    try:
+        artifacts, stats = STEP_FUNCTIONS[step](worker_ledger, paths(Path(run_root)))
+    except PipelinePartial as partial:
+        return {
+            "status": "partial",
+            "step": partial.step_id,
+            "artifacts": partial.artifacts,
+            "stats": add_timing_stats(partial.stats, started_at=started_at, started_perf=started_perf),
+        }
+    return {
+        "status": "completed",
+        "step": step,
+        "artifacts": artifacts,
+        "stats": add_timing_stats(stats, started_at=started_at, started_perf=started_perf),
+    }
+
+
+def _prepare_ledger(ledger_path: Path) -> tuple[dict[str, Any], dict[str, Path]]:
     ledger = load_ledger(ledger_path)
     existing_steps = {str(item.get("id")) for item in ledger.get("steps", [])}
     for step in STEPS:
         if step not in existing_steps:
             ledger.setdefault("steps", []).append({"id": step, "status": "pending"})
-    ps = paths(Path(ledger["run_dir"]))
+    return ledger, paths(Path(ledger["run_dir"]))
+
+
+def _execute_serial(ledger_path: Path, ledger: dict[str, Any], ps: dict[str, Path]) -> dict[str, Any]:
     for step in STEPS:
         current = next(item for item in ledger["steps"] if item["id"] == step)
         if current.get("status") == "completed":
@@ -2216,6 +2278,152 @@ def execute(ledger_path: Path) -> dict[str, Any]:
     ledger["timings"] = ledger_timing_summary(ledger)
     save_ledger(ledger_path, ledger)
     return ledger
+
+
+def _execute_parallel(
+    ledger_path: Path,
+    ledger: dict[str, Any],
+    ps: dict[str, Path],
+    *,
+    max_workers: int,
+    executor_factory: Callable[..., concurrent.futures.Executor],
+) -> dict[str, Any]:
+    active_steps = set(STEPS)
+    dependencies = {
+        step: {dependency for dependency in STEP_DEPENDENCIES.get(step, ()) if dependency in active_steps}
+        for step in STEPS
+    }
+    completed = {
+        str(item.get("id"))
+        for item in ledger.get("steps", [])
+        if item.get("status") == "completed"
+    }
+    pending = {step for step in STEPS if step not in completed}
+    running: dict[concurrent.futures.Future, str] = {}
+    failure: BaseException | None = None
+    partial_seen = False
+    order = {step: index for index, step in enumerate(STEPS)}
+    executor = executor_factory(max_workers=max_workers)
+    print(f"[build-processing] parallel workers={max_workers}", file=sys.stderr, flush=True)
+    try:
+        while pending or running:
+            if failure is None and not partial_seen:
+                ready = sorted(
+                    (step for step in pending if dependencies[step].issubset(completed)),
+                    key=order.__getitem__,
+                )
+                for step in ready[: max(0, max_workers - len(running))]:
+                    current = next(item for item in ledger["steps"] if item["id"] == step)
+                    started_at = now_iso()
+                    current.update({"status": "running", "started_at": started_at, "updated_at": started_at})
+                    ledger["status"] = "running"
+                    pending.remove(step)
+                    print(f"[build-processing] start {step}", file=sys.stderr, flush=True)
+                    future = executor.submit(
+                        _run_step_worker,
+                        step,
+                        ledger,
+                        str(ps["ledger"].parent),
+                        max_workers,
+                    )
+                    running[future] = step
+                if ready:
+                    save_ledger(ledger_path, ledger)
+
+            if not running:
+                if failure is not None or partial_seen:
+                    break
+                if pending:
+                    blocked = {step: sorted(dependencies[step] - completed) for step in sorted(pending, key=order.__getitem__)}
+                    raise RuntimeError(f"processing dependency graph is blocked: {blocked}")
+                break
+
+            done, _ = concurrent.futures.wait(running, return_when=concurrent.futures.FIRST_COMPLETED)
+            finished: list[tuple[str, dict[str, Any] | None, BaseException | None]] = []
+            for future in done:
+                step = running.pop(future)
+                try:
+                    finished.append((step, future.result(), None))
+                except BaseException as exc:
+                    finished.append((step, None, exc))
+
+            for step, result, error in sorted(finished, key=lambda item: order[item[0]]):
+                if error is not None:
+                    if failure is None:
+                        failure = error
+                    continue
+                assert result is not None
+                result_step = str(result["step"])
+                stats = result["stats"]
+                if result["status"] == "partial":
+                    ledger = mark_step(
+                        ledger_path,
+                        ledger,
+                        result_step,
+                        "partial",
+                        artifacts=result["artifacts"],
+                        stats=stats,
+                    )
+                    ledger["status"] = "partial"
+                    partial_seen = True
+                    print(
+                        f"[build-processing] partial {result_step} in {stats['timing']['duration_seconds']:.3f}s",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                else:
+                    ledger = mark_step(
+                        ledger_path,
+                        ledger,
+                        result_step,
+                        "completed",
+                        artifacts=result["artifacts"],
+                        stats=stats,
+                    )
+                    completed.add(result_step)
+                    print(
+                        f"[build-processing] completed {result_step} in {stats['timing']['duration_seconds']:.3f}s",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                ledger["timings"] = ledger_timing_summary(ledger)
+                save_ledger(ledger_path, ledger)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    if failure is not None:
+        raise failure
+    if partial_seen:
+        ledger["status"] = "partial"
+        ledger["timings"] = ledger_timing_summary(ledger)
+        save_ledger(ledger_path, ledger)
+        return ledger
+
+    ledger["processed_person_hashes"] = commit_processed_person_hashes(ledger, ps)
+    ledger["status"] = "completed"
+    ledger["timings"] = ledger_timing_summary(ledger)
+    save_ledger(ledger_path, ledger)
+    return ledger
+
+
+def execute(
+    ledger_path: Path,
+    *,
+    executor_factory: Callable[..., concurrent.futures.Executor] | None = None,
+    max_workers: int | None = None,
+) -> dict[str, Any]:
+    ledger, ps = _prepare_ledger(ledger_path)
+    workers = max_workers if max_workers is not None else pipeline_worker_count()
+    workers = max(1, min(workers, len(STEPS)))
+    if any(step not in STEP_DEPENDENCIES for step in STEPS):
+        return _execute_serial(ledger_path, ledger, ps)
+    return _execute_parallel(
+        ledger_path,
+        ledger,
+        ps,
+        max_workers=workers,
+        executor_factory=executor_factory or concurrent.futures.ProcessPoolExecutor,
+    )
 
 
 def reset_processing_checkpoints(rd: Path) -> None:
