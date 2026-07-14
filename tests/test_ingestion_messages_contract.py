@@ -95,6 +95,10 @@ class IngestionMessagesContractTests(unittest.TestCase):
             ".yaml", ".yml",
         }
         for relative in result.stdout.splitlines():
+            # Gitleaks scans deleted commits, so its allowlist must retain the
+            # historical pack path even though no current source uses it.
+            if relative == ".gitleaks.toml":
+                continue
             path = ROOT / relative
             if not path.is_file() or path.suffix not in text_suffixes:
                 continue
