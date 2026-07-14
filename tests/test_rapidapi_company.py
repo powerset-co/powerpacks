@@ -1,5 +1,7 @@
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -136,6 +138,59 @@ class FetchCompanyDetailsBySlugTests(unittest.TestCase):
                 result = rapidapi_company.fetch_company_details_by_slug("acme-inc", api_key="", cache_dir=Path(td))
             self.assertIn("error", result)
             conn_cls.assert_not_called()
+
+
+class CachedCompanyBatchTests(unittest.TestCase):
+    def test_cached_id_reads_overlap_and_deduplicate(self) -> None:
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def delayed_read(key: str, _cache_dir: object = None) -> dict:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+            return {"data": {"name": key}}
+
+        with mock.patch.object(rapidapi_company, "_read_cache", side_effect=delayed_read):
+            result = rapidapi_company.load_cached_company_details(["1", "2", "1", "3"])
+
+        self.assertGreater(max_active, 1)
+        self.assertEqual(list(result), ["1", "2", "3"])
+        self.assertEqual(result["2"], {"data": {"name": "2"}})
+
+    def test_cached_slug_reads_return_original_slug_keys(self) -> None:
+        def read_slug_key(key: str, _cache_dir: object = None) -> dict:
+            return {"data": {"cache_key": key}}
+
+        with mock.patch.object(rapidapi_company, "_read_cache", side_effect=read_slug_key):
+            result = rapidapi_company.load_cached_company_details_by_slug(["Acme", "Beta"])
+
+        self.assertEqual(list(result), ["Acme", "Beta"])
+        self.assertEqual(result["Acme"]["data"]["cache_key"], "slug__acme")
+
+    def test_fetch_batch_only_sends_cache_misses_to_network(self) -> None:
+        def read_cache(key: str, _cache_dir: object = None) -> dict | None:
+            return {"data": {"name": "Cached"}} if key == "cached" else None
+
+        with mock.patch.object(rapidapi_company, "_read_cache", side_effect=read_cache), \
+                mock.patch.object(rapidapi_company._RATE_LIMITER, "wait"), \
+                mock.patch.object(
+                    rapidapi_company,
+                    "fetch_company_details",
+                    return_value={"data": {"name": "Fetched"}},
+                ) as fetch:
+            result = rapidapi_company.fetch_company_details_batch(
+                ["cached", "missing", "missing"], api_key="test-key", max_workers=2
+            )
+
+        self.assertEqual(set(result), {"cached", "missing"})
+        fetch.assert_called_once()
+        self.assertEqual(fetch.call_args.args[0], "missing")
 
 
 if __name__ == "__main__":
