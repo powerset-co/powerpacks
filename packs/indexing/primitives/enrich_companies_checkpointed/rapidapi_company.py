@@ -18,7 +18,7 @@ import random
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from packs.shared.rate_limiter import StartRateLimiter
 
@@ -26,6 +26,7 @@ from packs.shared.rate_limiter import StartRateLimiter
 DEFAULT_HOST = "professional-network-data.p.rapidapi.com"
 DEFAULT_TIMEOUT = 30
 DEFAULT_CACHE_DIR = ".powerpacks/rapidapi-company-cache"
+DEFAULT_CACHE_READ_WORKERS = 32
 
 # RapidAPI company-details rate limit. The 50-way fan-out below would otherwise
 # burst and trip RapidAPI's 429s (each one costs a retry + backoff), so we pace
@@ -61,6 +62,30 @@ def _read_cache(company_id: str, cache_dir: str | Path | None = None) -> dict[st
         except (json.JSONDecodeError, OSError):
             pass
     return None
+
+
+def _read_cached_values(
+    values: list[str],
+    *,
+    cache_key: Callable[[str], str],
+    cache_dir: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Read independent file-cache entries concurrently, preserving input order."""
+    unique_values = list(dict.fromkeys(values))
+    if not unique_values:
+        return {}
+
+    def _read_one(value: str) -> tuple[str, dict[str, Any] | None]:
+        return value, _read_cache(cache_key(value), cache_dir)
+
+    workers = min(DEFAULT_CACHE_READ_WORKERS, len(unique_values))
+    if workers == 1:
+        pairs = map(_read_one, unique_values)
+        return {value: cached for value, cached in pairs if cached is not None}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        pairs = pool.map(_read_one, unique_values)
+        return {value: cached for value, cached in pairs if cached is not None}
 
 
 def _write_cache(company_id: str, data: dict[str, Any], cache_dir: str | Path | None = None) -> None:
@@ -159,14 +184,9 @@ def fetch_company_details_batch(
         return {cid: {"error": "no API key"} for cid in company_ids}
 
     # Serve cache hits immediately, collect misses for network fetch.
-    results: dict[str, dict[str, Any]] = {}
-    need_fetch: list[str] = []
-    for cid in company_ids:
-        cached = _read_cache(cid, cache_dir)
-        if cached is not None:
-            results[cid] = cached
-        else:
-            need_fetch.append(cid)
+    unique_ids = list(dict.fromkeys(company_ids))
+    results = _read_cached_values(unique_ids, cache_key=lambda cid: cid, cache_dir=cache_dir)
+    need_fetch = [cid for cid in unique_ids if cid not in results]
 
     if not need_fetch:
         return results
@@ -192,12 +212,7 @@ def load_cached_company_details(
 
     Cache misses are simply omitted from the result.
     """
-    results: dict[str, dict[str, Any]] = {}
-    for cid in company_ids:
-        cached = _read_cache(cid, cache_dir)
-        if cached is not None:
-            results[cid] = cached
-    return results
+    return _read_cached_values(company_ids, cache_key=lambda cid: cid, cache_dir=cache_dir)
 
 
 def _slug_cache_key(slug: str) -> str:
@@ -281,14 +296,9 @@ def fetch_company_details_batch_by_slug(
     if not key:
         return {s: {"error": "no API key"} for s in slugs}
 
-    results: dict[str, dict[str, Any]] = {}
-    need_fetch: list[str] = []
-    for s in slugs:
-        cached = _read_cache(_slug_cache_key(s), cache_dir)
-        if cached is not None:
-            results[s] = cached
-        else:
-            need_fetch.append(s)
+    unique_slugs = list(dict.fromkeys(slugs))
+    results = _read_cached_values(unique_slugs, cache_key=_slug_cache_key, cache_dir=cache_dir)
+    need_fetch = [slug for slug in unique_slugs if slug not in results]
     if not need_fetch:
         return results
 
@@ -310,12 +320,7 @@ def load_cached_company_details_by_slug(
     cache_dir: str | Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return cached by-slug company responses only; never hits the network."""
-    results: dict[str, dict[str, Any]] = {}
-    for s in slugs:
-        cached = _read_cache(_slug_cache_key(s), cache_dir)
-        if cached is not None:
-            results[s] = cached
-    return results
+    return _read_cached_values(slugs, cache_key=_slug_cache_key, cache_dir=cache_dir)
 
 
 def extract_company_context(response: dict[str, Any]) -> dict[str, Any]:
