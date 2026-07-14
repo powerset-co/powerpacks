@@ -213,6 +213,11 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("cp packs/powerset/templates/env.powerset.example .env", text)
         # Own-keys route verifies instead of provisioning.
         self.assertIn("pull_runtime_keys.py check --env-file .env", text)
+        # Large LinkedIn imports need realistic, count-based Modal expectations.
+        self.assertIn("Estimate from the Step 4 connection count", text)
+        self.assertIn("10,001–20,000 | 60–120 minutes", text)
+        self.assertIn("one-hour warm-cache run; allow up to two hours if cache-cold", text)
+        self.assertIn('about every **5 minutes**', text)
 
         installer = (ROOT / "packs/powerset/skills/install-powerpacks/SKILL.md").read_text()
         self.assertIn("only when the user chose Powerset", installer)
