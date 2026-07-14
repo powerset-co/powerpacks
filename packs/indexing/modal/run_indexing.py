@@ -28,7 +28,7 @@ from pathlib import Path
 REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
-from packs.indexing.modal.sandbox_common import merge_cache_file, now_iso, write_status  # noqa: E402
+from packs.indexing.modal.sandbox_common import materialize_parquet_records, merge_cache_file, now_iso, write_status  # noqa: E402
 PIPELINE = REPO / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = REPO / "scripts/build-local-duckdb-shim.py"
 BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
@@ -36,10 +36,10 @@ BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
 # cache-relative path -> key fields (first non-empty wins) used for union merge
 CACHE_KEYS = {
     "artifacts/roles_with_dense_text.jsonl": ("title_hash",),
-    "artifacts/roles_with_embeddings.jsonl": ("title_hash",),
+    "artifacts/roles_with_embeddings.parquet": ("title_hash",),
     "artifacts/companies_corpus_v3.jsonl": ("company_urn", "company_name"),
-    "artifacts/company_embeddings_v3.jsonl": ("company_urn", "company_name"),
-    "artifacts/summary_embeddings.jsonl": ("person_id",),
+    "artifacts/company_embeddings_v3.parquet": ("company_urn", "company_name"),
+    "artifacts/summary_embeddings.parquet": ("person_id",),
     "artifacts/person_tech_skills.jsonl": ("person_id",),
     "seeds/founder_enrichment.jsonl": ("position_id",),
     "seeds/inferred_ages.jsonl": ("person_id",),
@@ -47,18 +47,19 @@ CACHE_KEYS = {
 # work-output path that feeds each cache file after a run
 WORK_TO_CACHE = {
     "roles/roles_with_dense_text.jsonl": "artifacts/roles_with_dense_text.jsonl",
-    "roles/roles_with_embeddings.jsonl": "artifacts/roles_with_embeddings.jsonl",
+    "roles/roles_with_embeddings.jsonl": "artifacts/roles_with_embeddings.parquet",
     "company/companies_corpus_v3.jsonl": "artifacts/companies_corpus_v3.jsonl",
-    "company/company_embeddings_v3.jsonl": "artifacts/company_embeddings_v3.jsonl",
-    "unified/summary_embeddings.jsonl": "artifacts/summary_embeddings.jsonl",
+    "company/company_embeddings_v3.jsonl": "artifacts/company_embeddings_v3.parquet",
+    "unified/summary_embeddings.jsonl": "artifacts/summary_embeddings.parquet",
     "unified/person_tech_skills.jsonl": "artifacts/person_tech_skills.jsonl",
     "unified/roles/founder_enrichment.jsonl": "seeds/founder_enrichment.jsonl",
     "unified/inferred_ages.jsonl": "seeds/inferred_ages.jsonl",
 }
-
-
-
-
+CACHE_VECTOR_FIELDS = {
+    "artifacts/roles_with_embeddings.parquet": "dense_embedding",
+    "artifacts/company_embeddings_v3.parquet": "embedding",
+    "artifacts/summary_embeddings.parquet": "embedding",
+}
 
 
 def main() -> int:
@@ -67,6 +68,7 @@ def main() -> int:
     ap.add_argument("--cache-root", required=True)
     ap.add_argument("--run-vol", required=True)
     ap.add_argument("--operator-id", required=True)
+    ap.add_argument("--compute-threads", type=int, default=16)
     ap.add_argument("--persist-artifacts", action="store_true")
     ap.add_argument("--no-refresh-cache", action="store_true")
     ap.add_argument("--enrich", action="store_true",
@@ -97,6 +99,8 @@ def main() -> int:
     # container's RAM, so a full-network build OOMs at ~1.8GB. The indexing
     # sandbox has 16GB, so lift the limit (leaving headroom for python + OS).
     os.environ.setdefault("POWERPACKS_DUCKDB_MEMORY_LIMIT", "12GB")
+    os.environ.setdefault("POWERPACKS_DUCKDB_THREADS", str(max(1, args.compute_threads)))
+    os.environ.setdefault("POWERPACKS_CACHE_THREADS", "8")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
     write_status(run_vol, status)
 
@@ -118,10 +122,10 @@ def main() -> int:
         "--output-dir", str(work),
         "--default-operator-id", args.operator_id,
         "--role-input-classifications", str(artifacts / "roles_with_dense_text.jsonl"),
-        "--role-input-embeddings", str(artifacts / "roles_with_embeddings.jsonl"),
+        "--role-input-embeddings", str(artifacts / "roles_with_embeddings.parquet"),
         "--company-input-classifications", str(artifacts / "companies_corpus_v3.jsonl"),
-        "--company-input-embeddings", str(artifacts / "company_embeddings_v3.jsonl"),
-        "--summary-input-embeddings", str(artifacts / "summary_embeddings.jsonl"),
+        "--company-input-embeddings", str(artifacts / "company_embeddings_v3.parquet"),
+        "--summary-input-embeddings", str(artifacts / "summary_embeddings.parquet"),
         "--person-tech-skills-input", str(artifacts / "person_tech_skills.jsonl"),
     ]
     if not args.no_skip_unresolved_companies:
@@ -182,8 +186,17 @@ def main() -> int:
             src = work / rel_src
             if not src.exists() or src.stat().st_size == 0:
                 continue
-            new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, CACHE_KEYS[rel_cache])
+            new_count, kept_count = merge_cache_file(
+                src,
+                cache_root / rel_cache,
+                CACHE_KEYS[rel_cache],
+                vector_field=CACHE_VECTOR_FIELDS.get(rel_cache),
+            )
             print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
+
+    write_status(run_vol, status | {"phase": "records-parquet"})
+    record_counts = materialize_parquet_records(work / "records")
+    print(f"[run-in-sandbox] parquet records: {record_counts}", flush=True)
 
     write_status(run_vol, status | {"phase": "duckdb"})
     # Feed the same people.csv that fed the processing pipeline as the

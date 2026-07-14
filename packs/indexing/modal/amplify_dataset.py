@@ -28,7 +28,9 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
 from packs.indexing.lib.artifacts import build_company_corpus  # noqa: E402
+from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
 from packs.indexing.lib.people import flatten_people  # noqa: E402
+from packs.indexing.modal.sandbox_common import merge_cache_file  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 CLASSIFIED_AT = "2026-06-11T00:00:00Z"
@@ -101,6 +103,30 @@ def stream_mutate_jsonl(src: Path, dst: Path, namespaces: int, mutate) -> int:
                 fout.write(json.dumps(mutate(row, ns)) + "\n")
                 count += 1
     return count
+
+
+def stream_mutate_artifact(src: Path, dst: Path, namespaces: int, mutate) -> int:
+    """Stream an artifact into JSONL scratch space with namespaced copies."""
+    count = 0
+    with dst.open("w", encoding="utf-8") as fout:
+        for row in iter_artifact_rows(src):
+            fout.write(json.dumps(row) + "\n")
+            count += 1
+            for ns in range(1, namespaces):
+                fout.write(json.dumps(mutate(row, ns)) + "\n")
+                count += 1
+    return count
+
+
+def finish_embedding_cache(
+    scratch: Path,
+    destination: Path,
+    key_fields: tuple[str, ...],
+    vector_field: str,
+) -> None:
+    """Materialize one synthetic embedding cache as Parquet and remove scratch."""
+    merge_cache_file(scratch, destination, key_fields, vector_field=vector_field)
+    scratch.unlink()
 
 
 def mutate_role_artifact(row: dict, ns: int) -> dict:
@@ -187,7 +213,19 @@ def main() -> int:
     # 2. role + company artifacts (streamed; embeddings files are the big ones)
     n = stream_mutate_jsonl(src / "roles_with_dense_text.jsonl", art_out / "roles_with_dense_text.jsonl", role_namespaces, mutate_role_artifact)
     print(f"[amplify] role classifications rows={n}", flush=True)
-    n = stream_mutate_jsonl(src / "roles_with_embeddings.jsonl", art_out / "roles_with_embeddings.jsonl", role_namespaces, mutate_role_artifact)
+    role_embedding_scratch = art_out / ".roles_with_embeddings.jsonl"
+    n = stream_mutate_artifact(
+        src / "roles_with_embeddings.parquet",
+        role_embedding_scratch,
+        role_namespaces,
+        mutate_role_artifact,
+    )
+    finish_embedding_cache(
+        role_embedding_scratch,
+        art_out / "roles_with_embeddings.parquet",
+        ("title_hash",),
+        "dense_embedding",
+    )
     print(f"[amplify] role embeddings rows={n}", flush=True)
     n = stream_mutate_jsonl(src / "companies_corpus_v3.jsonl", art_out / "companies_corpus_v3.jsonl", company_namespaces, mutate_company_artifact)
     print(f"[amplify] company corpus rows={n}", flush=True)
@@ -200,15 +238,15 @@ def main() -> int:
     # (uuid5 of the canonical company key), so derive them from the repo's own
     # corpus builder rather than mutating the real embeddings file.
     company_templates: list[list[float]] = []
-    with (src / "company_embeddings_v3.jsonl").open(encoding="utf-8") as f:
-        for line in f:
-            vec = json.loads(line).get("embedding")
-            if isinstance(vec, list):
-                company_templates.append(vec)
-            if len(company_templates) >= 64:
-                break
+    for row in iter_artifact_rows(src / "company_embeddings_v3.parquet", ["embedding"]):
+        vec = row.get("embedding")
+        if isinstance(vec, list):
+            company_templates.append(vec)
+        if len(company_templates) >= 64:
+            break
     corpus_rows = build_company_corpus(synth_flat)
-    with (art_out / "company_embeddings_v3.jsonl").open("w", encoding="utf-8") as f:
+    company_embedding_scratch = art_out / ".company_embeddings_v3.jsonl"
+    with company_embedding_scratch.open("w", encoding="utf-8") as f:
         for i, row in enumerate(corpus_rows):
             f.write(json.dumps({
                 "company_urn": row.get("company_urn") or row.get("id"),
@@ -216,25 +254,30 @@ def main() -> int:
                 "semantic_text": row.get("semantic_text", ""),
                 "embedding": company_templates[i % len(company_templates)],
             }) + "\n")
+    finish_embedding_cache(
+        company_embedding_scratch,
+        art_out / "company_embeddings_v3.parquet",
+        ("company_urn", "company_name"),
+        "embedding",
+    )
     print(f"[amplify] company embeddings rows={len(corpus_rows)} (corpus-derived)", flush=True)
     del corpus_rows
 
     # template vectors for summary embeddings (reuse real ones round-robin)
     templates: list[list[float]] = []
-    with (src / "summary_embeddings.jsonl").open(encoding="utf-8") as f:
-        for line in f:
-            row = json.loads(line)
-            vec = row.get("embedding")
-            if isinstance(vec, list):
-                templates.append(vec)
-            if len(templates) >= 64:
-                break
+    for row in iter_artifact_rows(src / "summary_embeddings.parquet", ["embedding"]):
+        vec = row.get("embedding")
+        if isinstance(vec, list):
+            templates.append(vec)
+        if len(templates) >= 64:
+            break
 
     seeds_dir = out / "seeds"
     seeds_dir.mkdir(parents=True, exist_ok=True)
     unique_roles: set[str] = set()
     unique_companies: set[str] = set()
-    with (art_out / "summary_embeddings.jsonl").open("w", encoding="utf-8") as emb_f, \
+    summary_embedding_scratch = art_out / ".summary_embeddings.jsonl"
+    with summary_embedding_scratch.open("w", encoding="utf-8") as emb_f, \
             (art_out / "person_tech_skills.jsonl").open("w", encoding="utf-8") as skills_f, \
             (seeds_dir / "founder_enrichment.jsonl").open("w", encoding="utf-8") as founder_f, \
             (seeds_dir / "inferred_ages.jsonl").open("w", encoding="utf-8") as ages_f:
@@ -264,6 +307,13 @@ def main() -> int:
                     "reasoning": "synthetic benchmark seed",
                     "classified_at": CLASSIFIED_AT,
                 }) + "\n")
+
+    finish_embedding_cache(
+        summary_embedding_scratch,
+        art_out / "summary_embeddings.parquet",
+        ("person_id",),
+        "embedding",
+    )
 
     summary = {
         "people": len(synth_flat),
