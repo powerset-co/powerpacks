@@ -1,5 +1,8 @@
 # Recall Parity
 
+> **Dated evaluation snapshot.** These May 2026 legacy-parity results are
+> historical evidence, not a current quality claim or roadmap.
+
 Last run: `2026-05-08T06:07:10Z`
 
 Scope: legacy recall YAMLs executed through Powerpacks primitives with deterministic decomposition.

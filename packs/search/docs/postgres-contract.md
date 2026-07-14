@@ -1,80 +1,35 @@
-# Postgres Contract
+# Postgres hydration contract
 
-Powerpacks does not introspect database columns at runtime. Primitives rely on
-this checked-in contract.
+Powerpacks does not introspect database columns during normal search. The
+checked-in JSON under [`contracts/postgres/`](../contracts/postgres/) is the
+source of truth for table names, required columns, types, and consumers. This
+page explains the human-facing boundary rather than duplicating those lists.
 
-## Required Credentials
+## Credentials
 
-Provide either:
+Provide one URL:
 
 - `DATABASE_URL`
 - `SUPABASE_DATABASE_URL`
 - `SUPABASE_DB_URL`
-- or `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`,
-  `POSTGRES_PASSWORD`
 
-`POSTGRES_SSLMODE` defaults to `require`.
+Or provide `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, and
+`POSTGRES_PASSWORD`. `POSTGRES_SSLMODE` defaults to `require`.
 
-## Hydration Tables
+## Search responsibilities
 
-### `persons`
+| Tables | Purpose |
+| --- | --- |
+| `sets`, `set_members`, `users` | Resolve a Powerset set to the operator IDs used to scope TurboPuffer retrieval. |
+| `persons` | Hydrate retrieved base person IDs into canonical profile evidence. |
+| `person_source_summary` | Optionally add interaction totals; missing rows or a missing optional table must not fail hydration. |
+| `companies` | Backfill company details and support company lookup or resolution. |
 
-Required columns:
+TurboPuffer results may be position-grained. Hydration must normalize them to a
+base person ID before reading `persons`; a position ID must not be used as if it
+were a person ID. `persons.hydrated_context` is the canonical nested profile
+passed to filtering, judging, persistence, and review.
 
-- `id`
-- `public_identifier`
-- `public_profile_url`
-- `full_name`
-- `headline`
-- `summary`
-- `profile_picture_url`
-- `location_raw`
-- `city`
-- `state`
-- `country`
-- `hydrated_context`
-- `x_twitter_handle`
-- `x_twitter_followers`
-- `linkedin_followers`
-- `linkedin_connections`
-- `ig_handle`
-- `ig_followers`
-- `inferred_birth_year`
-
-`persons.hydrated_context` is the source of truth for full profile context.
-It must contain, when available:
-
-- `positions[]`
-- `education[]`
-- `tech_skills[]`
-- `linkedin_url`
-- `name`
-- `headline`
-- `location`
-
-### `person_source_summary`
-
-Optional. If present, Powerpacks reads:
-
-- `person_id`
-- `total_interactions`
-
-### `companies`
-
-Required when company backfill or company detail lookup is used:
-
-- `id`
-- `name`
-- `harmonic_urn`
-- `domain`
-- `website_domain`
-- `linkedin_url`
-- `description`
-- `headcount`
-- `funding_total`
-- `funding_stage`
-- `entity_types`
-- `sector_types`
-- `founded_year`
-- `location`
-- `li_company_id`
+Use the checked-in contracts rather than copying column lists into prompts or
+guessing from a live database. The explicit contracts diagnostic is the only
+normal schema-inspection path.

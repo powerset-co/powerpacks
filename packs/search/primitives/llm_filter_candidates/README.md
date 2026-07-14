@@ -12,13 +12,13 @@ clearly bad candidates" pass:
 - keep candidates with score >= 0.3 by default
 - when uncertain, include the candidate
 - record filtered people with reason and score
-- batch 5 candidates per request and run batches concurrently, matching
-  `network-search-api`'s `SEARCH_V2_LLM_FILTER_MAX_CONCURRENT` behavior
+- run small batches concurrently
 
 Usage:
 
 ```bash
-python powerpacks/primitives/llm_filter_candidates/llm_filter_candidates.py \
+uv run --env-file .env --project . python \
+  packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --write-state
 ```
@@ -26,14 +26,15 @@ python powerpacks/primitives/llm_filter_candidates/llm_filter_candidates.py \
 Dry-run without calling OpenAI:
 
 ```bash
-python powerpacks/primitives/llm_filter_candidates/llm_filter_candidates.py \
+uv run --project . python \
+  packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --dry-run
 ```
 
 Inputs:
 
-- task state with `merge_candidate_frontier` or `direct_execute`
+- task state with a retrieved and hydrated candidate frontier
 - `hydrate_people.output.profiles_path` / `llm_profiles_path` covering the candidate frontier
 - `OPENAI_API_KEY`
 

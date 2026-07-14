@@ -474,6 +474,3 @@ packaged primitives when behavior needs to change.
 Use internals only after a blocker, failed run, inconsistent final summary, or
 explicit user request. Useful internal surfaces include the task state, ledger,
 hydration outputs, rerank handoff files, manifest, and primitive source.
-
-For the old manual normal-search orchestration notes, see:
-`packs/search/skills/search-network-legacy-normal-strategy-loop.txt`.

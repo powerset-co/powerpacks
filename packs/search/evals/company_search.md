@@ -1,5 +1,8 @@
 # Company Search Harness
 
+> **Dated evaluation snapshot.** This May 2026 dry run is historical evidence,
+> not a current quality claim or execution contract.
+
 Last run: `2026-05-08T04:08:21Z`
 Mode: `dry_run`
 Cases: `/path/to/powerpacks/packs/search/evals/company-search/cases.json`

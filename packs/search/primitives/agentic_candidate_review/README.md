@@ -3,6 +3,9 @@
 Prepare and reduce sharded candidate reviews for Codex, Claude Code, or another
 host harness.
 
+This is an optional standalone/manual review utility, not the automatic judge
+stage in current standard or deep `$search`.
+
 This primitive does not call an LLM. It creates immutable review shards from a
 hydrated search run, then merges completed shard outputs into one final sorted
 review file for the user.
@@ -10,7 +13,8 @@ review file for the user.
 ## Prepare Shards
 
 ```bash
-python powerpacks/primitives/agentic_candidate_review/agentic_candidate_review.py prepare \
+uv run --project . python \
+  packs/search/primitives/agentic_candidate_review/agentic_candidate_review.py prepare \
   --state .powerpacks/runs/search-network-<id>.json \
   --shard-size 25
 ```
@@ -49,7 +53,8 @@ Valid `decision` values are `strong_yes`, `yes`, `maybe`, and `no`.
 ## Reduce To One Sorted Review File
 
 ```bash
-python powerpacks/primitives/agentic_candidate_review/agentic_candidate_review.py reduce \
+uv run --project . python \
+  packs/search/primitives/agentic_candidate_review/agentic_candidate_review.py reduce \
   --manifest .powerpacks/runs/.../agentic_candidate_review/review_manifest.json \
   --write-state
 ```

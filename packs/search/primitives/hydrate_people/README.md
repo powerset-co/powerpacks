@@ -16,7 +16,8 @@ Supabase MCP.
 Hydrate the full frontier before `llm_filter_candidates`:
 
 ```bash
-python powerpacks/primitives/hydrate_people/hydrate_people.py \
+uv run --env-file .env --project . python \
+  packs/search/primitives/hydrate_people/hydrate_people.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --write-state
@@ -25,7 +26,8 @@ python powerpacks/primitives/hydrate_people/hydrate_people.py \
 Dry-run without connecting to Postgres:
 
 ```bash
-python powerpacks/primitives/hydrate_people/hydrate_people.py \
+uv run --project . python \
+  packs/search/primitives/hydrate_people/hydrate_people.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --dry-run
 ```

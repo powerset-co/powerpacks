@@ -1,18 +1,19 @@
 # count_candidates
 
-Run a cheap count using the same public filter contract before a full search.
+Run a cheap filter-only count against the checked-in backend contract.
 
-Use this to catch obviously over-broad or over-tight slices before retrieval.
-
-Command:
+This is a diagnostic and evaluation primitive. It is not a stage in the
+standard `$search` happy path, and a broad result does not trigger slice
+planning. Use it when an operator or eval explicitly needs population size
+before retrieval.
 
 ```bash
-python powerpacks/primitives/count_candidates/count_candidates.py \
+uv run --env-file .env --project . python \
+  packs/search/primitives/count_candidates/count_candidates.py \
   --state .powerpacks/runs/search-network-<id>.json \
-  --env-file .env \
   --write-state
 ```
 
-The primitive reads `expand_search_request.output.role_search_filters`,
-converts the schema payload into checked-in TurboPuffer filter fields, runs a
-filter-only query, and records `position_rows` plus deduped `unique_people`.
+The primitive reads `expand_search_request.output.role_search_filters`, maps the
+payload to checked-in TurboPuffer filters, and records position-row and
+deduplicated-person counts.

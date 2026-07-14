@@ -131,8 +131,9 @@ Product and architecture walkthroughs live in the
 - give the agent operational entrypoints: `$search <query-or-jd>`,
   `$search-company <query>`, `$powerset setup`, and the messages-pack import
   skill
-- decompose broad recruiting queries into bounded retrieval plans
-- persist task state and CSV/JSONL artifacts so users can refine prior runs
+- interpret standard queries and decompose deep recruiting roles into bounded
+  candidate-archetype probes
+- persist auditable plans, provenance, evaluations, and result artifacts
 - keep host-specific runtime glue isolated under `adapters/`
 
 ## Layout
@@ -166,14 +167,14 @@ powerpacks/
 │   │   └── tasks/          build-local-search-index.task.json
 │   ├── search/             recruiting people / company search
 │   │   ├── skills/         search, search-company
-│   │   ├── primitives/     ~21 search primitives + lib/ + contracts CLI +
-│   │   │                   task_state/
+│   │   ├── primitives/     search CLIs + deep orchestration + shared lib/
+│   │   │                   + task_state/
 │   │   ├── schemas/        decomposed-query, role-search-filters,
 │   │   │                   task-run.schema.json, etc.
 │   │   ├── contracts/      checked-in Postgres + TurboPuffer schemas
-│   │   ├── tasks/          search.task.json
-│   │   ├── docs/           search-surface, slice-planning, turbopuffer-*,
-│   │   │                   harnesses/, workflows/
+│   │   ├── tasks/          compatibility and evaluation task specifications
+│   │   ├── docs/           canonical architecture, backend contracts,
+│   │   │                   method, and benchmark evidence
 │   │   └── evals/          recall, company-search, founder parity
 │   └── messages/           iMessage + WhatsApp metadata import
 │       ├── skills/         import-messages, import-whatsapp
@@ -450,8 +451,8 @@ Start at [`docs/README.md`](docs/README.md). The canonical product guides are:
 - [`$search` architecture](packs/search/docs/search-architecture.md)
 - [LinkedIn and Modal indexing pipeline](packs/indexing/docs/linkedin-modal-pipeline.md)
 
-Historical task-flow and design-plan documents remain in their pack directories
-for implementation context, but they are not current product contracts.
+Retired task-flow, slice-planning, and design-plan bodies live in Git history
+rather than the current documentation tree.
 
 ## Development
 

@@ -170,14 +170,18 @@ credential-refresh/backcompat command.
 $search senior infra engineers at fintech infra startups in NYC, Stanford
 ```
 
-The skill walks you through decomposition → plan → user approval → retrieval →
-hydration → CSV/JSONL artifact. For complex JDs it may plan multiple probes,
-review up to the approved LLM budget, cluster above-cutoff exemplars, and fan out
-bounded follow-up searches before exporting. Outputs land under
-`.powerpacks/runs/...`.
+The skill first records the requested result surface, backend, and depth.
+Standard search prepares one query preview, confirms it once, then retrieves,
+hydrates, filters, and ranks. Deep search builds and critiques a recruiter
+contract, stops once for Review, then runs bounded candidate-archetype probes,
+evidence judging, deterministic gates, and anchor expansion autonomously.
+Artifacts land under `.powerpacks/search/...` or
+`.powerpacks/deep-search/...`.
 
-See `packs/search/docs/task-flow.md` for the full lifecycle and the
-`expand_search_request` parallel extractor boundary.
+See the [`$search` architecture](../packs/search/docs/search-architecture.md)
+for the full lifecycle and the
+[deep-mode runbook](../packs/search/skills/search/deep-mode.md) for exact deep
+commands and artifacts.
 
 ### `$search-company` — company resolution
 

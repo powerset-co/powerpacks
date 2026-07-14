@@ -15,16 +15,18 @@ Resolution order:
 Example:
 
 ```bash
-python packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
+uv run --env-file .env --project . python \
+  packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
   --set-id 00000000-0000-0000-0000-000000000000 \
   --env-file .env
 ```
 
-In a `search-network` task, run it before `resolve_companies`,
-`apply_prefilters`, `count_candidates`, or `execute_role_search`:
+The standard Powerset pipeline runs it before company/education resolution,
+prefiltering, and role retrieval:
 
 ```bash
-python packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
+uv run --env-file .env --project . python \
+  packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
   --state .powerpacks/runs/search-network-<id>.json \
   --env-file .env \
   --write-state

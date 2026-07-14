@@ -1,35 +1,33 @@
 ## Powerpacks Search Rules
 
-Use the Powerpacks docs as a hard contract when calling search tools.
+Use `$search` as the single people-search door. Before dispatch, record the
+requested result surface, candidate backend, and search depth in `decision.json`.
 
-- Decompose free text first.
-- Treat that decomposition as the `expand` phase.
-- Use `$search` as the top-level operational retrieval entrypoint. If a
-  `$search` request contains a complex JD, plan a recruiter loop
-  internally, show one search-plan approval, then orchestrate bounded per-query
-  probes, review, clustering, fan-out, and export. Default the LLM review budget
-  to 100 unique reviewed profiles unless the user states another number.
-- Create and update a JSON task run while searching.
-- Choose a strategy before retrieval: direct, count-first, slices, or clarify.
-- Generate multiple bounded retrieval slices only when the query warrants it.
-- Assess the frontier before hydration or presentation.
-- Prefer TurboPuffer for retrieval.
-- Prefer Postgres for hydration after retrieval.
-- Do not run expensive scoring in V1.
-- Do not invent field names, operators, or enum values.
-- If a filter shape is unclear, consult:
-  - `powerpacks/docs/turbopuffer-contract.md`
-  - `powerpacks/docs/task-harness.md`
-  - `powerpacks/tasks/search.task.json`
-  - `powerpacks/schemas/search-network-task.schema.json`
-  - `powerpacks/packs/search/schemas/task-run.schema.json`
-  - `powerpacks/schemas/role-search-filters.schema.json`
-  - `powerpacks/schemas/search-slice.schema.json`
-  - `powerpacks/schemas/search-strategy-decision.schema.json`
-  - `powerpacks/schemas/frontier-assessment.schema.json`
-  - `powerpacks/schemas/candidate-review-plan.schema.json`
+- Route company output to `$search-company`, relational or aggregate questions
+  to `$search-sql`, and known-contact queries to `$search-contacts`.
+- Treat explicit Powerset, set, team, or shared-network wording as binding to
+  the Powerset backend. Treat explicit local, offline, or imported-network
+  wording as binding to the local DuckDB backend. Never change retrieval
+  surfaces silently as a fallback.
+- Standard search (`depth: fast`) is the original one-pass `$search-network`
+  path: run `search_network_pipeline.py prepare`, show its exact preview once,
+  then run the emitted command with `--execute-approved` after confirmation.
+- Deep search is for JDs, role briefs, shortlists, and strongest-candidate
+  requests with a stated role or domain. Follow `deep-mode.md`: build the
+  recruiter contract, run the automated critic, stop once for Review, then
+  source diverse probes, judge evidence, apply deterministic gates, expand from
+  strong anchors, and converge without another human gate.
+- Deep probes preserve the approved backend, location, recruiter contract, and
+  plan binding. They are candidate-archetype hypotheses, not retrieval slices.
+- Powerset search uses TurboPuffer for retrieval and Postgres for set scope and
+  profile hydration. Local search uses the downloaded DuckDB index.
+- Do not invent fields, filter operators, enum values, or backend capabilities.
+  A stored backend attribute is not automatically a supported public filter.
 
-V1 public verticals:
+Current references:
 
-- `people_by_role`
-- `search_plan`
+- `packs/search/skills/search/SKILL.md`
+- `packs/search/skills/search/deep-mode.md`
+- `packs/search/docs/search-architecture.md`
+- `packs/search/docs/turbopuffer-contract.md`
+- `packs/search/contracts/README.md`

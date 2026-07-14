@@ -1,5 +1,9 @@
 # Pipeline Eval
 
+> **Dated evaluation snapshot.** These May 2026 results predate the current
+> standard/deep `$search` architecture. They are historical evidence, not a
+> current quality claim or execution contract.
+
 Last run: `2026-05-12T20:02:15Z`
 
 Scope: recall YAMLs → expand_search_request → search_network_pipeline (direct mode, no slicing).

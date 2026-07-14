@@ -2,36 +2,42 @@
 
 ## Start here
 
-- [`$search` architecture](search-architecture.md) is the canonical product and
-  system walkthrough.
-- [`$search` skill](../skills/search/SKILL.md) is the executable routing and
-  fast-search contract.
-- [Deep-mode runbook](../skills/search/deep-mode.md) is the executable
-  recruiter-loop contract.
-- [LinkedIn and Modal indexing](../../indexing/docs/linkedin-modal-pipeline.md)
-  explains how the standard setup path builds the local DuckDB backend.
+| Need | Document |
+| --- | --- |
+| Product and system walkthrough | [`$search` architecture](search-architecture.md) |
+| Standard-search (`depth: fast`) execution contract | [`$search` skill](../skills/search/SKILL.md) |
+| Deep-search operator runbook | [Deep-mode runbook](../skills/search/deep-mode.md) |
+| How the local DuckDB is built | [LinkedIn and Modal indexing](../../indexing/docs/linkedin-modal-pipeline.md) |
 
-## Current technical references
+The architecture page is the canonical prose description. `SKILL.md` files and
+primitive CLIs are the executable contracts when implementation details matter.
 
-- [Postgres contract](postgres-contract.md)
-- [TurboPuffer contract](turbopuffer-contract.md)
-- [TurboPuffer schema](turbopuffer-schema.md)
+## Data contracts
+
+- [Postgres hydration contract](postgres-contract.md)
+- [TurboPuffer query contract](turbopuffer-contract.md)
+- [TurboPuffer physical schema](turbopuffer-schema.md)
 - [Semantic query examples](semantic-query-examples.md)
-- [Local/production parity tracker](local-prod-parity.md)
-- [`packs/search/contracts/`](../contracts/README.md)
-- [`packs/search/schemas/`](../schemas/)
+- [Checked-in backend contracts](../contracts/README.md)
+- [JSON schemas](../schemas/)
 
-## History and benchmark evidence
+The TurboPuffer query contract explains allowed public filters and operators;
+the physical-schema page names the indexed namespaces and attributes. They are
+separate because a stored attribute is not automatically a supported public
+filter.
 
-These documents preserve design reasoning, experiments, and earlier V1
-lifecycle descriptions. They are not current execution contracts:
+## Method and evidence
 
-- [Foundational agentic-search method](agentic-search.md)
-- [Deep-search benchmark status](deep-search-ground-truth-status.md)
-- [Deep-search plan](deep-search-plan.md)
-- [Deep-search v2 plan](deep-search-v2-plan.md)
-- [Legacy search surface](search-surface.md)
-- [Legacy expand/execute flow](expand-execute.md)
-- [Legacy slice planning](slice-planning.md)
-- [Legacy task flow](task-flow.md)
-- [Legacy task harness](task-harness.md)
+- [Agentic search method](agentic-search.md) explains the recall-first sourcing
+  and evidence-first judging model in implementation-neutral terms.
+- [Deep-search benchmark findings](deep-search-ground-truth-status.md) preserves
+  the dated measurements that motivated the method, with explicit limitations.
+
+## Removed legacy material
+
+The V1 slice planner, per-slice harness body, frontier workflow fragments,
+README-only design primitives, session-specific parity tracker, and
+pre-implementation deep-search plans were removed. They described execution
+paths that neither standard nor deep search uses. Two short compatibility
+redirects preserve old task-flow and task-harness links; Git history remains the
+archive for the retired designs.

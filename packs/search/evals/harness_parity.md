@@ -1,5 +1,9 @@
 # Harness Parity
 
+> **Dated evaluation snapshot, not a current execution contract or roadmap.**
+> These April 2026 results predate the standard/deep `$search` split and should
+> be rerun before using their gaps to change current orchestration.
+
 Last run: `2026-04-30T06:37:22Z`
 
 Scope: founder recall YAMLs, executed through Powerpacks `search-network` primitives.
@@ -38,7 +42,8 @@ Summary: `10` pass, `5` fail, `0` unsupported.
 Open gaps:
 
 - Keep the TurboPuffer investors namespace fresh as investor source data changes.
-- Improve broad company-domain recall for devtools/infra and fintech with better company semantic queries or sliced company search.
-- Add people-side slicing for broad founder/date/location pools instead of relying on one ranked frontier.
+- Re-evaluate broad company-domain and founder/date/location recall with the
+  current standard and deep pipelines; the retired slicing recommendation is
+  not current guidance.
 - Reconcile staging recall files that appear to use a different person ID namespace.
 - Persist applied filters for every case in a compact report row.
