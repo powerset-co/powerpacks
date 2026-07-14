@@ -119,9 +119,9 @@ print(json.dumps({
   'full_compatible': not any(fake_providers),
   'mode': 'checkpoint_scaffold_with_local_fake_vectors' if any(fake_providers) else 'full_compatible_real_or_cache_enrichment',
   'green_criteria': {
-    'roles': 'Aleph-shaped roles_with_dense_text_remapped.jsonl and roles_with_embeddings.jsonl with real/cache classifications and dense_embedding',
-    'companies': 'Aleph-shaped companies_corpus_v3.jsonl and company_embeddings_v3.jsonl with real/cache embedding',
-    'summaries': 'Aleph-shaped unified_person.csv, summary_embeddings.jsonl, person_tech_skills.jsonl with real/cache embedding',
+    'roles': 'Aleph-shaped roles_with_dense_text_remapped.jsonl classifications and roles_with_embeddings.parquet with dense_embedding',
+    'companies': 'Aleph-shaped companies_corpus_v3.jsonl classifications and company_embeddings_v3.parquet with real/cache embedding',
+    'summaries': 'summary_embeddings.parquet vectors and person_tech_skills.jsonl metadata with real/cache embedding',
     'education': 'Aleph-shaped people_education.jsonl and schools_corpus.jsonl',
     'search': 'DuckDB kNN self-match and local hybrid role/company search from produced artifacts',
   },

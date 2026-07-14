@@ -31,15 +31,18 @@ artifacts:
 ├── manifest.json
 ├── local-search.duckdb
 ├── unified/
-│   └── flattened_people.jsonl
+│   ├── flattened_people.jsonl
+│   └── summary_embeddings.parquet
 ├── profiles/
 │   └── hydrated_profiles.jsonl
 ├── roles/
 │   ├── raw_titles.jsonl
 │   ├── role_mapping.csv
-│   └── roles_with_dense_text.jsonl
+│   ├── roles_with_dense_text.jsonl
+│   └── roles_with_embeddings.parquet
 ├── company/
-│   └── companies_corpus_v3.jsonl
+│   ├── companies_corpus_v3.jsonl
+│   └── company_embeddings_v3.parquet
 ├── education/
 │   ├── schools_corpus.jsonl
 │   └── people_education.jsonl
@@ -48,18 +51,18 @@ artifacts:
 ├── summaries/
 │   └── summary_records.jsonl
 ├── records/
-│   ├── people.records.jsonl
-│   ├── companies.records.jsonl
-│   ├── schools.records.jsonl
-│   ├── education.records.jsonl
-│   └── summaries.records.jsonl
+│   ├── people.records.parquet
+│   ├── companies.records.parquet
+│   ├── schools.records.parquet
+│   ├── education.records.parquet
+│   └── summaries.records.parquet
 └── stats/
 ```
 
 The standard Modal download intentionally copies only
 `local-search.duckdb` and `manifest.json` to the laptop. After a successful
 Modal run, the operator run directory holds the ledger, manifest, statistics,
-and DuckDB. Record JSONL is persisted there only when `--persist-artifacts` is
+and DuckDB. Record Parquet is persisted there only when `--persist-artifacts` is
 selected. Reusable enrichment caches live separately under the shared
 `/data/cache/` prefix. The sandbox's intermediate processing tree is ephemeral
 and is not a durable Modal artifact.

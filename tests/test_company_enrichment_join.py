@@ -2,8 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows
 from packs.indexing.lib.contracts import load_search_contract, normalize_record_for_contract
-from packs.indexing.lib.io import read_jsonl, write_jsonl
+from packs.indexing.lib.io import write_jsonl
 from packs.indexing.lib.people import build_roles
 from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import (
     _company_corpus_to_record,
@@ -135,7 +136,7 @@ class StepPeopleCompanyJoinTests(unittest.TestCase):
             run_dir = Path(td)
             ps = paths(run_dir)
             write_jsonl(ps["flattened"], [person])
-            write_jsonl(ps["companies_records"], [{
+            write_parquet_rows(ps["companies_records"], [{
                 "id": expected_company_id,
                 "company_urn": expected_company_id,
                 "company_name": "Acme AI",
@@ -151,7 +152,7 @@ class StepPeopleCompanyJoinTests(unittest.TestCase):
             ledger = {"run_dir": str(run_dir), "default_operator_id": "operator:test"}
             artifacts, stats = step_people(ledger, ps)
             self.assertEqual(stats["people_records"], 1)
-            record = read_jsonl(Path(artifacts["people"]))[0]
+            record = next(iter_artifact_rows(Path(artifacts["people"])))
             self.assertEqual(record["company_id"], expected_company_id)
             self.assertEqual(record["company_description"], "AI infrastructure for developers.")
             self.assertEqual(record["company_domain"], "acme.ai")
@@ -173,10 +174,10 @@ class StepPeopleCompanyJoinTests(unittest.TestCase):
             run_dir = Path(td)
             ps = paths(run_dir)
             write_jsonl(ps["flattened"], [person])
-            write_jsonl(ps["companies_records"], [])
+            write_parquet_rows(ps["companies_records"], [], schema={"id": "VARCHAR"})
             ledger = {"run_dir": str(run_dir), "default_operator_id": "operator:test"}
             artifacts, _stats = step_people(ledger, ps)
-            record = read_jsonl(Path(artifacts["people"]))[0]
+            record = next(iter_artifact_rows(Path(artifacts["people"])))
             self.assertEqual(record["company_description"], "")
             self.assertEqual(record["company_stage"], "")
             self.assertEqual(record["company_sector_types"], [])

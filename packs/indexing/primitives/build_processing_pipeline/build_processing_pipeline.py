@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
-from packs.indexing.lib.artifact_io import artifact_id_set  # noqa: E402
+from packs.indexing.lib.artifact_io import artifact_id_set, iter_artifact_rows, write_parquet_rows  # noqa: E402
 from packs.indexing.lib.artifacts import (  # noqa: E402
     build_company_corpus,
     build_education_corpus,
@@ -32,7 +32,7 @@ from packs.indexing.lib.contracts import (  # noqa: E402
     dropped_fields_for_records,
     load_search_contract,
     normalize_record_for_contract,
-    validate_jsonl,
+    validate_record,
 )
 from packs.indexing.lib.io import atomic_write_text, emit_json, read_jsonl, write_json, write_jsonl  # noqa: E402
 from packs.indexing.lib.ledger import load_ledger, mark_step, now_iso, save_ledger  # noqa: E402
@@ -126,7 +126,7 @@ def paths(rd: Path) -> dict[str, Path]:
         "raw_titles": rd / "roles/raw_titles.jsonl",
         "role_mapping": rd / "roles/role_mapping.csv",
         "roles_dense": rd / "roles/roles_with_dense_text.jsonl",
-        "roles_embeddings": rd / "roles/roles_with_embeddings.jsonl",
+        "roles_embeddings": rd / "roles/roles_with_embeddings.parquet",
         "companies_raw": rd / "company/companies.raw.jsonl",
         "companies_corpus": rd / "company/companies_corpus_v3.jsonl",
         "companies_corpus_v3": rd / "company/companies_corpus_v3.jsonl",
@@ -134,23 +134,20 @@ def paths(rd: Path) -> dict[str, Path]:
         "people_education": rd / "education/people_education.jsonl",
         "locations_corpus": rd / "location/locations_corpus.jsonl",
         "summary_internal": rd / "summaries/summary_records.jsonl",
-        "people_records": rd / "records/people.records.jsonl",
+        "people_records": rd / "records/people.records.parquet",
         "people_record_hashes": rd / "records/people.records.hashes.json",
-        "companies_records": rd / "records/companies.records.jsonl",
+        "companies_records": rd / "records/companies.records.parquet",
         "companies_record_hashes": rd / "records/companies.records.hashes.json",
-        "company_embeddings": rd / "company/company_embeddings_v3.jsonl",
-        "schools_records": rd / "records/schools.records.jsonl",
-        "education_records": rd / "records/education.records.jsonl",
-        "summaries_records": rd / "records/summaries.records.jsonl",
+        "company_embeddings": rd / "company/company_embeddings_v3.parquet",
+        "schools_records": rd / "records/schools.records.parquet",
+        "education_records": rd / "records/education.records.parquet",
+        "summaries_records": rd / "records/summaries.records.parquet",
         "summaries_record_hashes": rd / "records/summaries.records.hashes.json",
         "vector_checkpoint": rd / "vectors/checkpoint.json",
-        "summary_embeddings": rd / "unified/summary_embeddings.jsonl",
+        "summary_embeddings": rd / "unified/summary_embeddings.parquet",
         "person_tech_skills": rd / "unified/person_tech_skills.jsonl",
-        "summary_embeddings_legacy": rd / "summaries/summary_embeddings.jsonl",
-        "person_tech_skills_legacy": rd / "summaries/person_tech_skills.jsonl",
         "aleph_roles_dir": rd / "unified/roles",
         "aleph_roles_dense": rd / "unified/roles/roles_with_dense_text_remapped.jsonl",
-        "aleph_roles_embeddings": rd / "unified/roles/roles_with_embeddings.jsonl",
         "founder_enrichment": rd / "unified/roles/founder_enrichment.jsonl",
         "inferred_ages": rd / "unified/inferred_ages.jsonl",
     }
@@ -312,7 +309,7 @@ def _row_id_set(rows: list[dict[str, Any]], key: str) -> set[str]:
     return {str(row.get(key) or "").strip() for row in rows if str(row.get(key) or "").strip()}
 
 
-def _jsonl_id_set(path_text: str | Path | None, key: str, *, require_vector: bool = False) -> set[str]:
+def _artifact_id_set(path_text: str | Path | None, key: str, *, require_vector: bool = False) -> set[str]:
     if not path_text:
         return set()
     path = Path(path_text)
@@ -321,10 +318,10 @@ def _jsonl_id_set(path_text: str | Path | None, key: str, *, require_vector: boo
     return artifact_id_set(path, key, require_vector=require_vector)
 
 
-def _jsonl_id_set_any(paths: list[str | Path | None], key: str, *, require_vector: bool = False) -> set[str]:
+def _artifact_id_set_any(paths: list[str | Path | None], key: str, *, require_vector: bool = False) -> set[str]:
     out: set[str] = set()
     for path in paths:
-        out.update(_jsonl_id_set(path, key, require_vector=require_vector))
+        out.update(_artifact_id_set(path, key, require_vector=require_vector))
     return out
 
 
@@ -461,30 +458,26 @@ def write_jsonl_if_changed(path: Path, rows: list[dict[str, Any]]) -> bool:
     return True
 
 
-def write_record_jsonl_with_hashes(
-    path: Path,
-    rows: list[dict[str, Any]],
-    hash_file: Path,
-    *,
-    id_fn: Callable[[dict[str, Any]], str] | None = None,
-    id_fields: tuple[str, ...] = ("id",),
-) -> dict[str, Any]:
-    diff = compute_record_diff(rows, hash_file, id_fn=id_fn, id_fields=id_fields)
-    changed = bool(diff.get("new") or diff.get("changed") or diff.get("deleted_ids") or diff.get("skipped_unkeyed_rows"))
-    file_written = False
-    if changed or not path.exists():
-        file_written = write_jsonl_if_changed(path, rows)
-    hashes_written = save_hashes(diff["new_hashes"], hash_file)
-    return diff_summary(diff) | {"file_written": file_written, "hashes_written": hashes_written}
-
-
 def _record_json_default(value: Any) -> Any:
     if isinstance(value, array.array):
         return list(value)
     return str(value)
 
 
-def write_record_jsonl_stream_with_hashes(
+def _artifact_content_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    for row in iter_artifact_rows(path):
+        digest.update(json.dumps(
+            row,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=_record_json_default,
+        ).encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def write_record_parquet_with_hashes(
     path: Path,
     rows: Iterable[dict[str, Any]],
     hash_file: Path,
@@ -492,21 +485,18 @@ def write_record_jsonl_stream_with_hashes(
     id_fn: Callable[[dict[str, Any]], str] | None = None,
     id_fields: tuple[str, ...] = ("id",),
 ) -> dict[str, Any]:
-    """Streaming variant of write_record_jsonl_with_hashes.
-
-    Consumes rows one at a time: hashes/diffs against the sidecar and writes
-    to a temp file as it goes, so peak memory is one record plus the id->hash
-    maps instead of the whole record list (vectors included).
-    """
+    """Write final records as Parquet while computing hash diffs in one pass."""
     old_hashes = load_hashes(hash_file)
     new_hashes: dict[str, str] = {}
     skipped_unkeyed_rows = 0
     new_rows = 0
     changed_rows = 0
     unchanged_rows = 0
-    tmp = path.parent / (path.name + ".tmp")
+    tmp = path.parent / f".{path.name}.staging.parquet"
     tmp.parent.mkdir(parents=True, exist_ok=True)
-    with tmp.open("w", encoding="utf-8") as handle:
+
+    def hashed_rows() -> Iterable[dict[str, Any]]:
+        nonlocal skipped_unkeyed_rows, new_rows, changed_rows, unchanged_rows
         for record in rows:
             rid = str(id_fn(record) if id_fn else record_id(record, id_fields)).strip()
             if rid:
@@ -521,11 +511,17 @@ def write_record_jsonl_stream_with_hashes(
                     unchanged_rows += 1
             else:
                 skipped_unkeyed_rows += 1
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True, default=_record_json_default) + "\n")
+            yield record
+
+    write_parquet_rows(tmp, hashed_rows(), float_array_fields=("vector",), schema={"id": "VARCHAR"})
     deleted_rows = sum(1 for rid in old_hashes if rid not in new_hashes)
     changed = bool(new_rows or changed_rows or deleted_rows or skipped_unkeyed_rows)
     file_written = False
-    if changed or not path.exists():
+    should_write = changed or not path.exists()
+    content_changed = should_write and (
+        not path.exists() or _artifact_content_hash(tmp) != _artifact_content_hash(path)
+    )
+    if content_changed:
         tmp.replace(path)
         file_written = True
     else:
@@ -545,15 +541,14 @@ def write_record_jsonl_stream_with_hashes(
 
 
 def _processed_person_ids(output_dir: Path) -> set[str]:
-    return _jsonl_id_set_any(
+    return _artifact_id_set_any(
         [
-            output_dir / "unified/summary_embeddings.jsonl",
-            output_dir / "summaries/summary_embeddings.jsonl",
-            output_dir / "records/summaries.records.jsonl",
+            output_dir / "unified/summary_embeddings.parquet",
+            output_dir / "records/summaries.records.parquet",
         ],
         "person_id",
         require_vector=True,
-    ) | _jsonl_id_set(output_dir / "records/summaries.records.jsonl", "id", require_vector=True)
+    ) | _artifact_id_set(output_dir / "records/summaries.records.parquet", "id", require_vector=True)
 
 
 def _processed_person_ids_with_current_hashes(output_dir: Path, people: list[dict[str, Any]]) -> set[str]:
@@ -586,40 +581,42 @@ def _processed_person_ids_with_current_hashes(output_dir: Path, people: list[dic
 
 
 def _records_role_ids(output_dir: Path, *, require_vector: bool = False) -> set[str]:
-    return _jsonl_id_set(output_dir / "records/people.records.jsonl", "title_hash", require_vector=require_vector)
+    return _artifact_id_set(output_dir / "records/people.records.parquet", "title_hash", require_vector=require_vector)
 
 
 def _records_company_names(output_dir: Path) -> set[str]:
-    path = output_dir / "records/companies.records.jsonl"
+    path = output_dir / "records/companies.records.parquet"
     if not path.exists():
         return set()
-    return {_company_name_key(row.get("company_name")) for row in read_jsonl(path) if _company_name_key(row.get("company_name"))}
+    return {_company_name_key(row.get("company_name")) for row in _iter_rows(path) if _company_name_key(row.get("company_name"))}
 
 
 def _records_company_keys(output_dir: Path) -> set[str]:
     """Reuse keys (slug + name) for already-built company records — mirrors the
     enrich-companies reuse so a company is counted reused when its LinkedIn slug
     matches even if its name drifted."""
-    path = output_dir / "records/companies.records.jsonl"
+    path = output_dir / "records/companies.records.parquet"
     if not path.exists():
         return set()
     keys: set[str] = set()
-    for row in read_jsonl(path):
+    for row in _iter_rows(path):
         keys.update(enrich_companies_checkpointed.company_index_keys(row))
     return keys
 
 
 def _records_company_ids(output_dir: Path, *, require_vector: bool = False) -> set[str]:
-    return _jsonl_id_set(output_dir / "records/companies.records.jsonl", "company_urn", require_vector=require_vector) | _jsonl_id_set(
-        output_dir / "records/companies.records.jsonl",
+    return _artifact_id_set(output_dir / "records/companies.records.parquet", "company_urn", require_vector=require_vector) | _artifact_id_set(
+        output_dir / "records/companies.records.parquet",
         "id",
         require_vector=require_vector,
     )
 
 
-def _jsonl_has_rows(path: Path) -> bool:
+def _artifact_has_rows(path: Path) -> bool:
     if not path.exists():
         return False
+    if path.suffix.lower() == ".parquet":
+        return next(iter_artifact_rows(path), None) is not None
     with path.open(encoding="utf-8", errors="replace") as handle:
         return any(line.strip() for line in handle)
 
@@ -680,9 +677,9 @@ def restore_stage_artifacts_from_records(rd: Path) -> dict[str, Any]:
 
     ps = paths(rd)
     restored: dict[str, Any] = {}
-    people_records = read_jsonl(ps["people_records"]) if ps["people_records"].exists() else []
-    summary_records = read_jsonl(ps["summaries_records"]) if ps["summaries_records"].exists() else []
-    company_records = read_jsonl(ps["companies_records"]) if ps["companies_records"].exists() else []
+    people_records = list(_iter_rows(ps["people_records"])) if ps["people_records"].exists() else []
+    summary_records = list(_iter_rows(ps["summaries_records"])) if ps["summaries_records"].exists() else []
+    company_records = list(_iter_rows(ps["companies_records"])) if ps["companies_records"].exists() else []
 
     role_rows: dict[str, dict[str, Any]] = {}
     role_embedding_rows: dict[str, dict[str, Any]] = {}
@@ -709,15 +706,13 @@ def restore_stage_artifacts_from_records(rd: Path) -> dict[str, Any]:
         if vector:
             role_embedding_rows.setdefault(title_hash, role | {"dense_embedding": vector})
 
-    if role_rows and not _jsonl_has_rows(ps["roles_dense"]):
+    if role_rows and not _artifact_has_rows(ps["roles_dense"]):
         write_jsonl(ps["roles_dense"], role_rows.values())
         ps["aleph_roles_dir"].mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ps["roles_dense"], ps["aleph_roles_dense"])
         restored["roles_with_dense_text"] = {"path": str(ps["roles_dense"]), "rows": len(role_rows)}
-    if role_embedding_rows and not _jsonl_has_rows(ps["roles_embeddings"]):
-        write_jsonl(ps["roles_embeddings"], role_embedding_rows.values())
-        ps["aleph_roles_dir"].mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ps["roles_embeddings"], ps["aleph_roles_embeddings"])
+    if role_embedding_rows and not _artifact_has_rows(ps["roles_embeddings"]):
+        _write_embedding_parquet(ps["roles_embeddings"], role_embedding_rows.values(), vector_field="dense_embedding")
         restored["roles_with_embeddings"] = {"path": str(ps["roles_embeddings"]), "rows": len(role_embedding_rows)}
 
     age_rows = []
@@ -726,7 +721,7 @@ def restore_stage_artifacts_from_records(rd: Path) -> dict[str, Any]:
         birth_year = row.get("inferred_birth_year")
         if person_id and isinstance(birth_year, (int, float)) and int(birth_year) > 0:
             age_rows.append({"person_id": person_id, "birth_year": int(birth_year)})
-    if age_rows and not _jsonl_has_rows(ps["inferred_ages"]):
+    if age_rows and not _artifact_has_rows(ps["inferred_ages"]):
         write_jsonl(ps["inferred_ages"], age_rows)
         restored["inferred_ages"] = {"path": str(ps["inferred_ages"]), "rows": len(age_rows)}
 
@@ -743,20 +738,18 @@ def restore_stage_artifacts_from_records(rd: Path) -> dict[str, Any]:
         vector = _vector_value(row)
         if vector:
             summary_embedding_rows.append({"person_id": person_id, "embedding": vector})
-    if summary_internal_rows and not _jsonl_has_rows(ps["summary_internal"]):
+    if summary_internal_rows and not _artifact_has_rows(ps["summary_internal"]):
         write_jsonl(ps["summary_internal"], summary_internal_rows)
         restored["summary_internal"] = {"path": str(ps["summary_internal"]), "rows": len(summary_internal_rows)}
-    if tech_skill_rows and not _jsonl_has_rows(ps["person_tech_skills"]):
+    if tech_skill_rows and not _artifact_has_rows(ps["person_tech_skills"]):
         write_jsonl(ps["person_tech_skills"], tech_skill_rows)
-        write_jsonl(ps["person_tech_skills_legacy"], tech_skill_rows)
         restored["person_tech_skills"] = {"path": str(ps["person_tech_skills"]), "rows": len(tech_skill_rows)}
-    if summary_embedding_rows and not _jsonl_has_rows(ps["summary_embeddings"]):
-        write_jsonl(ps["summary_embeddings"], summary_embedding_rows)
-        shutil.copyfile(ps["summary_embeddings"], ps["summary_embeddings_legacy"])
+    if summary_embedding_rows and not _artifact_has_rows(ps["summary_embeddings"]):
+        _write_embedding_parquet(ps["summary_embeddings"], summary_embedding_rows, vector_field="embedding")
         restored["summary_embeddings"] = {"path": str(ps["summary_embeddings"]), "rows": len(summary_embedding_rows)}
 
     company_corpus_rows = [_record_company_to_aleph_corpus(row) for row in company_records if str(row.get("company_urn") or row.get("id") or "").strip()]
-    if company_corpus_rows and not _jsonl_has_rows(ps["companies_corpus_v3"]):
+    if company_corpus_rows and not _artifact_has_rows(ps["companies_corpus_v3"]):
         write_jsonl(ps["companies_corpus_v3"], company_corpus_rows)
         restored["companies_corpus_v3"] = {"path": str(ps["companies_corpus_v3"]), "rows": len(company_corpus_rows)}
     company_embedding_rows = []
@@ -770,8 +763,8 @@ def restore_stage_artifacts_from_records(rd: Path) -> dict[str, Any]:
                 "semantic_text": row.get("semantic_text") or row.get("description") or "",
                 "embedding": vector,
             })
-    if company_embedding_rows and not _jsonl_has_rows(ps["company_embeddings"]):
-        write_jsonl(ps["company_embeddings"], company_embedding_rows)
+    if company_embedding_rows and not _artifact_has_rows(ps["company_embeddings"]):
+        _write_embedding_parquet(ps["company_embeddings"], company_embedding_rows, vector_field="embedding")
         restored["company_embeddings"] = {"path": str(ps["company_embeddings"]), "rows": len(company_embedding_rows)}
 
     return restored
@@ -807,7 +800,7 @@ def _embedding_cost_stage(
 ) -> dict[str, Any]:
     required = _row_id_set(rows, id_field)
     available = set(available_ids or set())
-    available.update(_jsonl_id_set(input_embeddings, artifact_id_field or id_field))
+    available.update(_artifact_id_set(input_embeddings, artifact_id_field or id_field))
     coverage = _coverage(required, available, input_embeddings)
     if coverage["complete"]:
         return {
@@ -862,10 +855,10 @@ def _role_inputs_for_estimate(people: list[dict[str, Any]]) -> list[dict[str, An
 def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], companies: list[dict[str, Any]]) -> dict[str, Any]:
     output_dir = Path(args.output_dir)
     role_input = _arg_artifact(args, "role_input_classifications", "unified/roles/roles_with_dense_text_remapped.jsonl")
-    role_emb = _arg_artifact(args, "role_input_embeddings", "unified/roles/roles_with_embeddings.jsonl")
+    role_emb = _arg_artifact(args, "role_input_embeddings", "roles/roles_with_embeddings.parquet")
     company_input = _arg_artifact(args, "company_input_classifications", "company/companies_corpus_v3.jsonl")
-    company_emb = _arg_artifact(args, "company_input_embeddings", "company/company_embeddings_v3.jsonl")
-    summary_emb = _arg_artifact(args, "summary_input_embeddings", "unified/summary_embeddings.jsonl")
+    company_emb = _arg_artifact(args, "company_input_embeddings", "company/company_embeddings_v3.parquet")
+    summary_emb = _arg_artifact(args, "summary_input_embeddings", "unified/summary_embeddings.parquet")
     role_provider = str(getattr(args, "role_provider", "openai") or "openai")
     company_provider = "openai" if str(getattr(args, "company_provider", "openai") or "openai") == "llm" else str(getattr(args, "company_provider", "openai") or "openai")
     embedding_provider = str(getattr(args, "embedding_provider", "openai") or "openai")
@@ -875,7 +868,7 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
 
     role_inputs = _role_inputs_for_estimate(people)
     role_required = _row_id_set(role_inputs, "title_hash")
-    role_available = _jsonl_id_set(role_input, "title_hash") | _records_role_ids(output_dir)
+    role_available = _artifact_id_set(role_input, "title_hash") | _records_role_ids(output_dir)
     role_coverage = _coverage(role_required, role_available, role_input)
     role_missing = [role for role in role_inputs if str(role.get("title_hash") or "").strip() not in role_available]
     role_calls, role_input_tokens = enrich_roles_checkpointed.estimate_role_call_shape(role_missing, role_model)
@@ -950,7 +943,7 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     profile_rows = build_unified_profiles(people)
     summary_rows = build_summary_records(profile_rows, getattr(args, "default_operator_id", None))["internal_text"]
     # CEO/founder detection estimate: ~150 input + ~50 output tokens per candidate
-    existing_people_record_ids = _jsonl_id_set(output_dir / "records/people.records.jsonl", "person_id") | _jsonl_id_set(output_dir / "records/people.records.jsonl", "base_id")
+    existing_people_record_ids = _artifact_id_set(output_dir / "records/people.records.parquet", "person_id") | _artifact_id_set(output_dir / "records/people.records.parquet", "base_id")
     ceo_candidates = sum(
         1 for person in people
         for exp in (person.get("work_experiences") or [])
@@ -975,7 +968,7 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
         precomputed=False,
     )
     # Age inference estimate: ~400 input + ~30 output tokens per person
-    existing_age_ids = _jsonl_id_set(output_dir / "unified/inferred_ages.jsonl", "person_id") | existing_people_record_ids
+    existing_age_ids = _artifact_id_set(output_dir / "unified/inferred_ages.jsonl", "person_id") | existing_people_record_ids
     age_candidates = sum(1 for person in people if _person_id(person) and _person_id(person) not in existing_age_ids)
     age_stage = _chat_cost_stage(
         provider=role_provider, model=role_model,
@@ -1434,7 +1427,7 @@ def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[d
         "title_hash",
         "dense_text,raw_title,description",
         "title_hash,raw_title,description,dense_text,doc2query,inferred_skills,role_ids,role_track,seniority_band,cluster,role_type,specialization",
-        input_embeddings=_cache_path(ledger, "role_input_embeddings", "unified/roles/roles_with_embeddings.jsonl"),
+        input_embeddings=_cache_path(ledger, "role_input_embeddings", "roles/roles_with_embeddings.parquet"),
         input_id_field="title_hash",
         input_embedding_field="dense_embedding",
     )
@@ -1442,23 +1435,30 @@ def step_role_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[d
         stats = _embedding_stats(result, ledger)
         write_stats(ledger, "embed_role_positions", stats)
         raise PipelinePartial("embed_role_positions", {"role_embeddings_checkpoint": str(ps["roles_dense"].parent / "embedding_checkpoints/checkpoint.json")}, stats)
-    # Aleph upload contract names this field dense_embedding and keys by title_hash.
-    def _shaped_role_rows() -> Iterable[dict[str, Any]]:
-        for row in _iter_jsonl(ps["roles_embeddings"]):
-            shaped = {key: row.get(key) for key in ["cluster", "dense_text", "description", "doc2query", "inferred_skills", "raw_title", "role_ids", "role_track", "role_type", "seniority_band", "specialization", "title_hash"] if key in row}
-            shaped["dense_embedding"] = row.get("embedding", [])
-            yield shaped
-
-    _stream_write_jsonl(ps["roles_embeddings"], _shaped_role_rows())
-    ps["aleph_roles_dir"].mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ps["roles_embeddings"], ps["aleph_roles_embeddings"])
+    # The role cache contract names the vector dense_embedding and keys by title_hash.
+    role_fields = [
+        "cluster", "dense_text", "description", "doc2query", "inferred_skills",
+        "raw_title", "role_ids", "role_track", "role_type", "seniority_band",
+        "specialization", "title_hash",
+    ]
+    _rewrite_embedding_parquet(
+        ps["roles_embeddings"],
+        ", ".join(f'"{field}"' for field in role_fields)
+        + ', CAST("embedding" AS FLOAT[]) AS "dense_embedding"',
+    )
     stats = _embedding_stats(result, ledger)
     write_stats(ledger, "embed_role_positions", stats)
     return {"roles_with_embeddings": str(ps["roles_embeddings"])}, stats
 
 
 def _load_by_id(path: Path, key: str = "id") -> dict[str, dict[str, Any]]:
-    return {str(row.get(key)): row for row in read_jsonl(path) if row.get(key)}
+    return {str(row.get(key)): row for row in _iter_rows(path) if row.get(key)}
+
+
+def _iter_rows(path: Path) -> Iterable[dict[str, Any]]:
+    if not path.exists():
+        return
+    yield from iter_artifact_rows(path)
 
 
 def _iter_jsonl(path: Path):
@@ -1470,6 +1470,45 @@ def _iter_jsonl(path: Path):
             line = line.strip()
             if line:
                 yield json.loads(line)
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _rewrite_embedding_parquet(path: Path, projection: str) -> None:
+    """Atomically reshape a native Parquet embedding artifact in place."""
+    import duckdb  # type: ignore
+
+    tmp = path.with_name(f".{path.name}.shaped.tmp")
+    tmp.unlink(missing_ok=True)
+    con = duckdb.connect(":memory:")
+    try:
+        con.execute("SET enable_progress_bar=false")
+        if not int(con.execute(
+            f"SELECT count(*) FROM read_parquet({_sql_literal(str(path))})"
+        ).fetchone()[0]):
+            return
+        con.execute(
+            f"COPY (SELECT {projection} FROM read_parquet({_sql_literal(str(path))})) "
+            f"TO {_sql_literal(str(tmp))} (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 16384)"
+        )
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    finally:
+        con.close()
+    tmp.replace(path)
+
+
+def _write_embedding_parquet(
+    path: Path,
+    rows: Iterable[dict[str, Any]],
+    *,
+    vector_field: str,
+) -> int:
+    """Restore a native Parquet embedding artifact from final records."""
+    return write_parquet_rows(path, rows, float_array_fields=(vector_field,))
 
 
 def _stream_write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
@@ -1745,7 +1784,7 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
     write_jsonl(ps["companies_corpus_v3"], aleph_corpus_output)
     contract = load_search_contract("turbopuffer/companies.namespace.json")
     records = [normalize_record_for_contract(row, contract) for row in record_inputs]
-    record_diff = write_record_jsonl_with_hashes(ps["companies_records"], records, ps["companies_record_hashes"], id_fields=("id", "company_urn"))
+    record_diff = write_record_parquet_with_hashes(ps["companies_records"], records, ps["companies_record_hashes"], id_fields=("id", "company_urn"))
     counts = manifest.get("counts", {}) if isinstance(manifest.get("counts"), dict) else {}
     stats = {
         "status": "completed",
@@ -1782,7 +1821,7 @@ def step_company_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
         "company_urn",
         "semantic_text,word_text,d2q_text,company_name,description",
         "company_urn,company_name,semantic_text",
-        input_embeddings=_cache_path(ledger, "company_input_embeddings", "company/company_embeddings_v3.jsonl"),
+        input_embeddings=_cache_path(ledger, "company_input_embeddings", "company/company_embeddings_v3.parquet"),
         input_id_field="company_urn",
         input_embedding_field="embedding",
     )
@@ -1790,35 +1829,28 @@ def step_company_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
         stats = _embedding_stats(result, ledger)
         write_stats(ledger, "embed_companies", stats)
         raise PipelinePartial("embed_companies", {"company_embeddings_checkpoint": str(ps["companies_corpus"].parent / "embedding_checkpoints/checkpoint.json")}, stats)
-    # Memory: stream the shaping pass and keep only urn->vector resident as
-    # compact float64 arrays while attaching vectors to company records.
+    _rewrite_embedding_parquet(
+        ps["company_embeddings"],
+        '"company_urn", "company_name", "semantic_text", '
+        'CAST("embedding" AS FLOAT[]) AS "embedding"',
+    )
+    # Memory: stream the shaped Parquet and keep only urn->vector resident as
+    # compact float32 arrays while attaching vectors to company records.
     company_vectors: dict[str, array.array] = {}
-
-    def _shaped_company_rows() -> Iterable[dict[str, Any]]:
-        for row in _iter_jsonl(ps["company_embeddings"]):
-            urn = str(row.get("id") or row.get("company_urn") or "")
-            embedding = row.get("embedding", [])
-            if isinstance(embedding, list) and embedding:
-                embedding = array.array("d", embedding)
-            if urn and embedding:
-                company_vectors[urn] = embedding
-            yield {
-                "company_urn": urn,
-                "company_name": row.get("company_name", ""),
-                "semantic_text": row.get("semantic_text", ""),
-                "embedding": embedding,
-            }
-
-    _stream_write_jsonl(ps["company_embeddings"], _shaped_company_rows())
+    for row in _iter_rows(ps["company_embeddings"]):
+        urn = str(row.get("company_urn") or "")
+        embedding = row.get("embedding", [])
+        if urn and isinstance(embedding, list) and embedding:
+            company_vectors[urn] = array.array("f", embedding)
 
     def _company_record_rows() -> Iterable[dict[str, Any]]:
-        for row in _iter_jsonl(ps["companies_records"]):
+        for row in _iter_rows(ps["companies_records"]):
             emb = company_vectors.get(str(row.get("id")))
             if emb:
                 row["vector"] = emb
             yield row
 
-    record_diff = write_record_jsonl_stream_with_hashes(
+    record_diff = write_record_parquet_with_hashes(
         ps["companies_records"], _company_record_rows(), ps["companies_record_hashes"], id_fields=("id", "company_urn"))
     stats = _embedding_stats(result, ledger)
     stats["record_diff"] = record_diff
@@ -1858,8 +1890,8 @@ def step_education(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[st
     ]
     write_jsonl(ps["schools_corpus"], aleph_schools)
     write_jsonl(ps["people_education"], aleph_people_education)
-    write_jsonl(ps["schools_records"], school_records)
-    write_jsonl(ps["education_records"], education_records)
+    write_parquet_rows(ps["schools_records"], school_records, schema={"id": "VARCHAR"})
+    write_parquet_rows(ps["education_records"], education_records, schema={"id": "VARCHAR"})
     stats = {
         "schools": len(school_records),
         "education": len(education_records),
@@ -1927,13 +1959,13 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
     # compactly as float64 arrays (bit-identical values, so record hashes do not
     # churn), and the company vectors are never read here.
     role_vectors: dict[str, array.array] = {}
-    for row in _iter_jsonl(ps["roles_embeddings"]):
+    for row in _iter_rows(ps["roles_embeddings"]):
         key = str(row.get("title_hash") or "")
         vector = row.get("dense_embedding") or row.get("embedding")
         if key and vector:
-            role_vectors[key] = array.array("d", vector)
+            role_vectors[key] = array.array("f", vector)
     company_data: dict[str, dict[str, Any]] = {}
-    for row in _iter_jsonl(ps["companies_records"]):
+    for row in _iter_rows(ps["companies_records"]):
         key = str(row.get("id") or "")
         if key:
             row.pop("vector", None)
@@ -2019,7 +2051,7 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
                     totals["with_vectors"] += 1
                 yield out
 
-    record_diff = write_record_jsonl_stream_with_hashes(
+    record_diff = write_record_parquet_with_hashes(
         ps["people_records"], normalized_rows(), ps["people_record_hashes"], id_fields=("id", "person_id", "base_id"))
     dropped = sorted(dropped_fields)
     if dropped:
@@ -2058,8 +2090,7 @@ def step_summary(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         for record in records:
             record["tech_skills"] = skill_map.get(record["id"], record.get("tech_skills", []))
     write_jsonl(ps["person_tech_skills"], skills_rows)
-    write_jsonl(ps["person_tech_skills_legacy"], skills_rows)
-    record_diff = write_record_jsonl_with_hashes(ps["summaries_records"], records, ps["summaries_record_hashes"], id_fields=("id", "person_id"))
+    record_diff = write_record_parquet_with_hashes(ps["summaries_records"], records, ps["summaries_record_hashes"], id_fields=("id", "person_id"))
     stats = {"summaries": len(records), "person_tech_skills": len(records), "defaulted_numeric_fields": {"summaries": count_defaulted_numeric(result["summaries"], contract)}}
     stats["record_diff"] = record_diff
     write_stats(ledger, "build_summary_records", stats)
@@ -2075,7 +2106,7 @@ def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
         "person_id",
         "text",
         "person_id,base_id,text",
-        input_embeddings=_cache_path(ledger, "summary_input_embeddings", "unified/summary_embeddings.jsonl"),
+        input_embeddings=_cache_path(ledger, "summary_input_embeddings", "unified/summary_embeddings.parquet"),
         input_id_field="person_id",
         input_embedding_field="embedding",
     )
@@ -2083,15 +2114,14 @@ def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
         stats = _embedding_stats(result, ledger)
         write_stats(ledger, "embed_summaries", stats)
         raise PipelinePartial("embed_summaries", {"summary_embeddings_checkpoint": str(ps["summary_internal"].parent / "embedding_checkpoints/checkpoint.json")}, stats)
-    shaped_embeddings = []
-    for row in read_jsonl(ps["summary_embeddings"]):
-        shaped_embeddings.append({"person_id": row.get("id") or row.get("person_id"), "embedding": row.get("embedding", [])})
-    write_jsonl(ps["summary_embeddings"], shaped_embeddings)
-    shutil.copyfile(ps["summary_embeddings"], ps["summary_embeddings_legacy"])
+    _rewrite_embedding_parquet(
+        ps["summary_embeddings"],
+        '"person_id", CAST("embedding" AS FLOAT[]) AS "embedding"',
+    )
     embeddings = _load_by_id(ps["summary_embeddings"], "person_id")
     text_by_person = {str(row.get("person_id")): str(row.get("text") or "") for row in read_jsonl(ps["summary_internal"]) if row.get("person_id")}
     rows = []
-    for row in read_jsonl(ps["summaries_records"]):
+    for row in _iter_rows(ps["summaries_records"]):
         pid = str(row.get("id"))
         text = text_by_person.get(pid, "")
         row["summary"] = text
@@ -2100,7 +2130,7 @@ def step_summary_embeddings(ledger: dict[str, Any], ps: dict[str, Path]) -> tupl
         if emb:
             row["vector"] = emb
         rows.append(row)
-    record_diff = write_record_jsonl_with_hashes(ps["summaries_records"], rows, ps["summaries_record_hashes"], id_fields=("id", "person_id"))
+    record_diff = write_record_parquet_with_hashes(ps["summaries_records"], rows, ps["summaries_record_hashes"], id_fields=("id", "person_id"))
     stats = _embedding_stats(result, ledger)
     stats["record_diff"] = record_diff
     write_stats(ledger, "embed_summaries", stats)
@@ -2111,7 +2141,7 @@ def step_vectors(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
     """Compatibility aggregate vector checkpoint after per-surface embedding stages."""
 
     def count_vectors(path: Path) -> int:
-        return sum(1 for row in _iter_jsonl(path) if isinstance(row.get("vector"), list) and len(row.get("vector")) == 1536)
+        return sum(1 for row in _iter_rows(path) if isinstance(row.get("vector"), list) and len(row.get("vector")) == 1536)
 
     counts = {
         "people": count_vectors(ps["people_records"]),
@@ -2165,6 +2195,17 @@ def _allow_vector_only_validation(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _validate_record_artifact(path: Path, contract_path: str) -> dict[str, Any]:
+    contract = load_search_contract(contract_path)
+    errors: list[dict[str, Any]] = []
+    count = 0
+    for count, row in enumerate(_iter_rows(path), start=1):
+        result = validate_record(row, contract)
+        if not result["ok"]:
+            errors.append({"line": count, **result})
+    return {"ok": not errors, "path": str(path), "row_count": count, "errors": errors}
+
+
 def step_validate(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
     validation = {}
     for name, path, contract in [
@@ -2174,7 +2215,7 @@ def step_validate(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str
         ("education", ps["education_records"], "turbopuffer/education.namespace.json"),
         ("summaries", ps["summaries_records"], "turbopuffer/summaries.namespace.json"),
     ]:
-        validation[name] = _allow_vector_only_validation(validate_jsonl(path, contract))
+        validation[name] = _allow_vector_only_validation(_validate_record_artifact(path, contract))
     validation["locations"] = {"internal_only": True, "path": str(ps["locations_corpus"])}
     write_stats(ledger, "validate_contracts", validation)
     return {}, {"validation": validation}

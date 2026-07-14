@@ -28,9 +28,8 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
 
 from packs.indexing.lib.artifacts import build_company_corpus  # noqa: E402
-from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
+from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows  # noqa: E402
 from packs.indexing.lib.people import flatten_people  # noqa: E402
-from packs.indexing.modal.sandbox_common import merge_cache_file  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 CLASSIFIED_AT = "2026-06-11T00:00:00Z"
@@ -105,28 +104,12 @@ def stream_mutate_jsonl(src: Path, dst: Path, namespaces: int, mutate) -> int:
     return count
 
 
-def stream_mutate_artifact(src: Path, dst: Path, namespaces: int, mutate) -> int:
-    """Stream an artifact into JSONL scratch space with namespaced copies."""
-    count = 0
-    with dst.open("w", encoding="utf-8") as fout:
-        for row in iter_artifact_rows(src):
-            fout.write(json.dumps(row) + "\n")
-            count += 1
-            for ns in range(1, namespaces):
-                fout.write(json.dumps(mutate(row, ns)) + "\n")
-                count += 1
-    return count
-
-
-def finish_embedding_cache(
-    scratch: Path,
-    destination: Path,
-    key_fields: tuple[str, ...],
-    vector_field: str,
-) -> None:
-    """Materialize one synthetic embedding cache as Parquet and remove scratch."""
-    merge_cache_file(scratch, destination, key_fields, vector_field=vector_field)
-    scratch.unlink()
+def iter_mutated_artifact(src: Path, namespaces: int, mutate):
+    """Yield the source artifact followed by deterministic namespaced copies."""
+    for row in iter_artifact_rows(src):
+        yield row
+        for ns in range(1, namespaces):
+            yield mutate(row, ns)
 
 
 def mutate_role_artifact(row: dict, ns: int) -> dict:
@@ -213,18 +196,14 @@ def main() -> int:
     # 2. role + company artifacts (streamed; embeddings files are the big ones)
     n = stream_mutate_jsonl(src / "roles_with_dense_text.jsonl", art_out / "roles_with_dense_text.jsonl", role_namespaces, mutate_role_artifact)
     print(f"[amplify] role classifications rows={n}", flush=True)
-    role_embedding_scratch = art_out / ".roles_with_embeddings.jsonl"
-    n = stream_mutate_artifact(
-        src / "roles_with_embeddings.parquet",
-        role_embedding_scratch,
-        role_namespaces,
-        mutate_role_artifact,
-    )
-    finish_embedding_cache(
-        role_embedding_scratch,
+    n = write_parquet_rows(
         art_out / "roles_with_embeddings.parquet",
-        ("title_hash",),
-        "dense_embedding",
+        iter_mutated_artifact(
+            src / "roles_with_embeddings.parquet",
+            role_namespaces,
+            mutate_role_artifact,
+        ),
+        float_array_fields=("dense_embedding",),
     )
     print(f"[amplify] role embeddings rows={n}", flush=True)
     n = stream_mutate_jsonl(src / "companies_corpus_v3.jsonl", art_out / "companies_corpus_v3.jsonl", company_namespaces, mutate_company_artifact)
@@ -245,20 +224,19 @@ def main() -> int:
         if len(company_templates) >= 64:
             break
     corpus_rows = build_company_corpus(synth_flat)
-    company_embedding_scratch = art_out / ".company_embeddings_v3.jsonl"
-    with company_embedding_scratch.open("w", encoding="utf-8") as f:
-        for i, row in enumerate(corpus_rows):
-            f.write(json.dumps({
+    def company_embedding_rows(rows):
+        for i, row in enumerate(rows):
+            yield {
                 "company_urn": row.get("company_urn") or row.get("id"),
                 "company_name": row.get("company_name", ""),
                 "semantic_text": row.get("semantic_text", ""),
                 "embedding": company_templates[i % len(company_templates)],
-            }) + "\n")
-    finish_embedding_cache(
-        company_embedding_scratch,
+            }
+
+    write_parquet_rows(
         art_out / "company_embeddings_v3.parquet",
-        ("company_urn", "company_name"),
-        "embedding",
+        company_embedding_rows(corpus_rows),
+        float_array_fields=("embedding",),
     )
     print(f"[amplify] company embeddings rows={len(corpus_rows)} (corpus-derived)", flush=True)
     del corpus_rows
@@ -276,44 +254,42 @@ def main() -> int:
     seeds_dir.mkdir(parents=True, exist_ok=True)
     unique_roles: set[str] = set()
     unique_companies: set[str] = set()
-    summary_embedding_scratch = art_out / ".summary_embeddings.jsonl"
-    with summary_embedding_scratch.open("w", encoding="utf-8") as emb_f, \
-            (art_out / "person_tech_skills.jsonl").open("w", encoding="utf-8") as skills_f, \
+    with (art_out / "person_tech_skills.jsonl").open("w", encoding="utf-8") as skills_f, \
             (seeds_dir / "founder_enrichment.jsonl").open("w", encoding="utf-8") as founder_f, \
             (seeds_dir / "inferred_ages.jsonl").open("w", encoding="utf-8") as ages_f:
-        for i, person in enumerate(synth_flat):
-            pid = str(person["id"])
-            emb_f.write(json.dumps({"person_id": pid, "embedding": templates[i % len(templates)]}) + "\n")
-            skills_f.write(json.dumps({"person_id": pid, "tech_skills": []}) + "\n")
-            ages_f.write(json.dumps({"person_id": pid, "birth_year": "1990"}) + "\n")
-            exps = [e for e in (person.get("work_experiences") or []) if isinstance(e, dict)]
-            for idx, exp in enumerate(exps):
-                if exp.get("title_hash"):
-                    unique_roles.add(str(exp["title_hash"]))
-                name = str(exp.get("company_name") or exp.get("company") or "").strip().lower()
-                if name:
-                    unique_companies.add(name)
-                # mirror detect_ceo_founders' position_id fallback exactly
-                position_id = str(exp.get("id") or exp.get("position_id") or f"{pid}-{idx}").strip()
-                founder_f.write(json.dumps({
-                    "person_id": pid,
-                    "person_name": str(person.get("full_name") or ""),
-                    "position_id": position_id,
-                    "position_title": str(exp.get("title") or ""),
-                    "company_name": str(exp.get("company_name") or exp.get("company") or ""),
-                    "is_founder": "False",
-                    "confidence": "0.0",
-                    "model": "seed",
-                    "reasoning": "synthetic benchmark seed",
-                    "classified_at": CLASSIFIED_AT,
-                }) + "\n")
+        def summary_embedding_rows():
+            for i, person in enumerate(synth_flat):
+                pid = str(person["id"])
+                skills_f.write(json.dumps({"person_id": pid, "tech_skills": []}) + "\n")
+                ages_f.write(json.dumps({"person_id": pid, "birth_year": "1990"}) + "\n")
+                exps = [e for e in (person.get("work_experiences") or []) if isinstance(e, dict)]
+                for idx, exp in enumerate(exps):
+                    if exp.get("title_hash"):
+                        unique_roles.add(str(exp["title_hash"]))
+                    name = str(exp.get("company_name") or exp.get("company") or "").strip().lower()
+                    if name:
+                        unique_companies.add(name)
+                    # Mirror detect_ceo_founders' position_id fallback exactly.
+                    position_id = str(exp.get("id") or exp.get("position_id") or f"{pid}-{idx}").strip()
+                    founder_f.write(json.dumps({
+                        "person_id": pid,
+                        "person_name": str(person.get("full_name") or ""),
+                        "position_id": position_id,
+                        "position_title": str(exp.get("title") or ""),
+                        "company_name": str(exp.get("company_name") or exp.get("company") or ""),
+                        "is_founder": "False",
+                        "confidence": "0.0",
+                        "model": "seed",
+                        "reasoning": "synthetic benchmark seed",
+                        "classified_at": CLASSIFIED_AT,
+                    }) + "\n")
+                yield {"person_id": pid, "embedding": templates[i % len(templates)]}
 
-    finish_embedding_cache(
-        summary_embedding_scratch,
-        art_out / "summary_embeddings.parquet",
-        ("person_id",),
-        "embedding",
-    )
+        write_parquet_rows(
+            art_out / "summary_embeddings.parquet",
+            summary_embedding_rows(),
+            float_array_fields=("embedding",),
+        )
 
     summary = {
         "people": len(synth_flat),

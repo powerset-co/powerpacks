@@ -1,9 +1,9 @@
-import csv
 import json
 import re
 import unittest
 from pathlib import Path
 
+from packs.indexing.lib.artifact_io import iter_artifact_rows
 from packs.indexing.lib.artifacts import (
     build_company_corpus,
     build_education_corpus,
@@ -42,6 +42,12 @@ def first_jsonl(path):
             if line.strip():
                 return json.loads(line)
     raise AssertionError(f"empty jsonl: {path}")
+
+
+def first_artifact(path):
+    for row in iter_artifact_rows(path):
+        return row
+    raise AssertionError(f"empty artifact: {path}")
 
 
 def _word_tokenize(text):
@@ -216,12 +222,12 @@ class IndexingContractTest(unittest.TestCase):
 
     def test_copied_aleph_seed_artifacts_validate_against_contracts(self):
         seed = ROOT / ".powerpacks/aleph-seed/2026-05-08/pipeline_output"
-        if not seed.exists():
+        if not (seed / "roles/roles_with_embeddings.parquet").exists():
             self.skipTest("copied Aleph seed artifacts not present")
 
         people_contract = load_search_contract("turbopuffer/people.namespace.json")
         flattened = first_jsonl(seed / "unified/flattened_people.jsonl")
-        role_embedding = first_jsonl(seed / "unified/roles/roles_with_embeddings.jsonl")
+        role_embedding = first_artifact(seed / "roles/roles_with_embeddings.parquet")
         people_record = {
             "id": flattened["id"],
             "vector": role_embedding["dense_embedding"],
@@ -252,13 +258,13 @@ class IndexingContractTest(unittest.TestCase):
 
         company_contract = load_search_contract("turbopuffer/companies.namespace.json")
         company_corpus = first_jsonl(seed / "company/companies_corpus_v3.jsonl")
-        company_embedding = first_jsonl(seed / "company/company_embeddings_v3.jsonl")
+        company_embedding = first_artifact(seed / "company/company_embeddings_v3.parquet")
         company_record = _company_corpus_to_record(company_corpus)
         company_record["vector"] = company_embedding["embedding"]
         self.assertTrue(validate_record(company_record, company_contract)["ok"])
 
         summary_contract = load_search_contract("turbopuffer/summaries.namespace.json")
-        summary_embedding = first_jsonl(seed / "unified/summary_embeddings.jsonl")
+        summary_embedding = first_artifact(seed / "unified/summary_embeddings.parquet")
         summary_text = "summary fixture"
         summary_record = {
             "id": summary_embedding["person_id"],

@@ -3,8 +3,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import uuid
 from pathlib import Path
+
+from packs.indexing.lib.artifact_io import write_parquet_rows
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PEOPLE = ROOT / "tests/fixtures/indexing/people.csv"
@@ -44,18 +45,30 @@ class IndexingPipelineTests(unittest.TestCase):
                     roles.append(roles_stage.merge_role(base, {"role_ids": ["software_engineer"], "seniority_band": "senior-ic", "role_track": "engineering", "role_type": "engineering", "cluster": "engineering", "doc2query": ["engineering leadership"], "inferred_skills": ["software engineering"]}))
         role_classes = root / "roles_with_dense_text_remapped.jsonl"
         write_jsonl(role_classes, roles)
-        role_embeddings = root / "roles_with_embeddings.jsonl"
-        write_jsonl(role_embeddings, [{**row, "dense_embedding": [0.01] * 1536} for row in roles])
+        role_embeddings = root / "roles_with_embeddings.parquet"
+        write_parquet_rows(
+            role_embeddings,
+            [{**row, "dense_embedding": [0.01] * 1536} for row in roles],
+            float_array_fields=("dense_embedding",),
+        )
 
         companies = build_company_corpus(people, "operator:test")
         company_classes = root / "companies_corpus_v3.jsonl"
         write_jsonl(company_classes, [{"company_urn": row["id"], "company_name": row["company_name"], "entity_types": ["venture_backed_startup"], "sector_types": ["saas"], "technology_types": ["developer_tools"], "customer_type": "Business (B2B)", "funding_stage": "SEED", "company_type": "STARTUP", "ownership_status": "PRIVATE", "stage": "Seed", "accelerators": ["YC"], "yc_batches": ["W24"], "doc2query": ["b2b software"], "d2q_text": "b2b software", "word_text": "venture backed startup saas", "semantic_text": row.get("semantic_text") or row["company_name"], "confidence_score": 0.9} for row in companies])
-        company_embeddings = root / "company_embeddings_v3.jsonl"
-        write_jsonl(company_embeddings, [{"company_urn": row["id"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies])
+        company_embeddings = root / "company_embeddings_v3.parquet"
+        write_parquet_rows(
+            company_embeddings,
+            [{"company_urn": row["id"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies],
+            float_array_fields=("embedding",),
+        )
 
         summaries = build_summary_records(build_unified_profiles(people), "operator:test")["internal_text"]
-        summary_embeddings = root / "summary_embeddings.jsonl"
-        write_jsonl(summary_embeddings, [{"person_id": row["person_id"], "embedding": [0.03] * 1536} for row in summaries])
+        summary_embeddings = root / "summary_embeddings.parquet"
+        write_parquet_rows(
+            summary_embeddings,
+            [{"person_id": row["person_id"], "embedding": [0.03] * 1536} for row in summaries],
+            float_array_fields=("embedding",),
+        )
         return {"role_classes": role_classes, "role_embeddings": role_embeddings, "company_classes": company_classes, "company_embeddings": company_embeddings, "summary_embeddings": summary_embeddings}
 
     def test_dry_run_estimates_paid_stages_without_completed_artifacts(self) -> None:

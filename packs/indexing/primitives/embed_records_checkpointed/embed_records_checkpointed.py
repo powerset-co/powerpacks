@@ -13,9 +13,9 @@ import array
 import asyncio
 import hashlib
 import json
+import math
 import os
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +26,11 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
-from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
+from packs.indexing.lib.artifact_io import (  # noqa: E402
+    iter_artifact_rows,
+    merge_parquet_chunks,
+    write_parquet_rows,
+)
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
@@ -35,6 +39,7 @@ DEFAULT_MODEL = "text-embedding-3-small"
 DEFAULT_COST_PER_1K_TOKENS = 0.00002
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
 DEFAULT_OPENAI_CONCURRENCY = 256
+CHECKPOINT_ARTIFACT_FORMAT = "parquet-v1"
 
 
 def now_iso() -> str:
@@ -69,22 +74,37 @@ def iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
                 yield json.loads(line)
 
 
-def load_input_embeddings(path: str | None, id_field: str, embedding_field: str) -> dict[str, array.array]:
+def load_input_embeddings(
+    path: str | None,
+    id_field: str,
+    embedding_field: str,
+    *,
+    expected_dimension: int | None = None,
+) -> dict[str, array.array]:
     if not path:
         return {}
     input_path = Path(path)
     if not input_path.exists():
         raise SystemExit(f"missing input embeddings: {input_path}")
-    # JSONL stays float64 for backward-compatible rewrites. Parquet stores
-    # FLOAT[] and remains float32 in memory, cutting the largest replay maps in
-    # half without creating boxed Python floats.
+    if input_path.suffix.lower() != ".parquet":
+        raise SystemExit(f"input embeddings must use a .parquet path: {input_path}")
     out: dict[str, array.array] = {}
     for row in iter_artifact_rows(input_path, [id_field, embedding_field]):
         rid = clean(row.get(id_field))
         embedding = row.get(embedding_field)
         if rid and isinstance(embedding, list):
-            typecode = "f" if input_path.suffix.lower() == ".parquet" else "d"
-            out[rid] = array.array(typecode, (float(v) for v in embedding))
+            if expected_dimension and len(embedding) != expected_dimension:
+                raise SystemExit(
+                    f"input embedding dimension mismatch for id={rid}: "
+                    f"{len(embedding)} != {expected_dimension}"
+                )
+            try:
+                values = [float(value) for value in embedding]
+            except (TypeError, ValueError) as exc:
+                raise SystemExit(f"input embedding contains a non-numeric value for id={rid}") from exc
+            if not all(math.isfinite(value) for value in values):
+                raise SystemExit(f"input embedding contains a non-finite value for id={rid}")
+            out[rid] = array.array("f", values)
     return out
 
 
@@ -213,34 +233,12 @@ def openai_embedding_batches(
     ))
 
 
-def _json_default(value: Any) -> Any:
-    if isinstance(value, array.array):
-        return list(value)
-    return str(value)
-
-
-def atomic_write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    count = 0
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            for record in records:
-                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True, default=_json_default) + "\n")
-                count += 1
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-    return count
-
-
 def checkpoint_path(output_dir: Path) -> Path:
     return output_dir / "checkpoint.json"
 
 
 def chunk_path(output_dir: Path, chunk_index: int) -> Path:
-    return output_dir / "chunks" / f"embeddings.{chunk_index:06d}.jsonl"
+    return output_dir / "chunks" / f"embeddings.{chunk_index:06d}.parquet"
 
 
 def load_state(output_dir: Path, input_path: Path, checkpoint_every: int, provider: str, force: bool, dimension: int) -> dict[str, Any]:
@@ -250,7 +248,12 @@ def load_state(output_dir: Path, input_path: Path, checkpoint_every: int, provid
     output_dir.mkdir(parents=True, exist_ok=True)
     cp = checkpoint_path(output_dir)
     if cp.exists():
-        return read_json(cp)
+        state = read_json(cp)
+        if state.get("artifact_format") == CHECKPOINT_ARTIFACT_FORMAT:
+            return state
+        import shutil
+        shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
     state = {
         "status": "running",
         "created_at": now_iso(),
@@ -260,6 +263,7 @@ def load_state(output_dir: Path, input_path: Path, checkpoint_every: int, provid
         "checkpoint_every": checkpoint_every,
         "provider": provider,
         "dimension": dimension,
+        "artifact_format": CHECKPOINT_ARTIFACT_FORMAT,
         "input_rows_processed": 0,
         "embeddings_written": 0,
         "chunks_written": 0,
@@ -293,23 +297,17 @@ def copy_fields(record: dict[str, Any], fields: str) -> dict[str, Any]:
 
 def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict[str, Any]:
     finalize_started = time.perf_counter()
-    chunks = sorted((output_dir / "chunks").glob("embeddings.*.jsonl")) if (output_dir / "chunks").exists() else []
-    # Dedup (first occurrence wins) and sort by id with vectors held as compact
-    # float64 arrays so the merge does not balloon to GBs of boxed floats.
-    rows_by_id: dict[str, dict[str, Any]] = {}
-    for chunk in chunks:
-        for row in iter_jsonl(chunk):
-            rid = clean(row.get("id"))
-            if rid and rid not in rows_by_id:
-                embedding = row.get("embedding")
-                if isinstance(embedding, list):
-                    row["embedding"] = array.array("d", embedding)
-                rows_by_id[rid] = row
-    atomic_write_jsonl(output_path, (rows_by_id[rid] for rid in sorted(rows_by_id)))
+    chunks = sorted((output_dir / "chunks").glob("embeddings.*.parquet")) if (output_dir / "chunks").exists() else []
+    embeddings_written = merge_parquet_chunks(
+        chunks,
+        output_path,
+        id_field="id",
+        empty_schema={"id": "VARCHAR", "embedding": "FLOAT[]", "text_hash": "VARCHAR"},
+    )
     add_timing(state, "finalize_merge_write_seconds", time.perf_counter() - finalize_started)
     state["status"] = "completed"
     state["completed_at"] = now_iso()
-    state["embeddings_written"] = len(rows_by_id)
+    state["embeddings_written"] = embeddings_written
     save_state(output_dir, state)
     manifest = {
         "status": "completed",
@@ -322,7 +320,7 @@ def finalize(output_dir: Path, output_path: Path, state: dict[str, Any]) -> dict
         "output": str(output_path),
         "counts": {
             "input_rows_processed": state.get("input_rows_processed", 0),
-            "embeddings": len(rows_by_id),
+            "embeddings": embeddings_written,
             "chunks_written": len(chunks),
             "artifact_hits": state.get("artifact_hits", 0),
             "artifact_misses": state.get("artifact_misses", 0),
@@ -361,6 +359,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)
     output_path = Path(args.output)
+    if output_path.suffix.lower() != ".parquet":
+        raise SystemExit("embedding output must use a .parquet path")
     if not input_path.exists():
         raise SystemExit(f"missing input JSONL: {input_path}")
     if getattr(args, "dry_run", False):
@@ -369,7 +369,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit("embedding provider must be 'openai'; no fake/mock/local provider is available")
     fields = [field for field in str(args.text_fields).split(",") if field]
     dimension = int(getattr(args, "dimension", DEFAULT_DIMENSION) or DEFAULT_DIMENSION)
-    input_embeddings = load_input_embeddings(getattr(args, "input_embeddings", None), getattr(args, "input_id_field", None) or args.id_field, getattr(args, "input_embedding_field", "embedding"))
+    input_embeddings = load_input_embeddings(
+        getattr(args, "input_embeddings", None),
+        getattr(args, "input_id_field", None) or args.id_field,
+        getattr(args, "input_embedding_field", "embedding"),
+        expected_dimension=dimension,
+    )
     usage_tier = getattr(args, "openai_usage_tier", None)
     concurrency = int(
         getattr(args, "concurrency", None)
@@ -458,7 +463,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     outputs.append({"id": rid, "embedding": embedding, "text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(), **copied})
         chunk_started = time.perf_counter()
         chunk_index = int(state.get("chunks_written") or 0) + 1
-        written = atomic_write_jsonl(chunk_path(output_dir, chunk_index), outputs)
+        written = write_parquet_rows(
+            chunk_path(output_dir, chunk_index),
+            outputs,
+            float_array_fields=("embedding",),
+        )
         state["chunks_written"] = chunk_index
         state["embeddings_written"] = int(state.get("embeddings_written") or 0) + written
         add_timing(state, "checkpoint_chunk_write_seconds", time.perf_counter() - chunk_started)
@@ -513,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--concurrency", type=int, default=None)
     run_p.add_argument("--openai-usage-tier", default=None)
     run_p.add_argument("--cost-per-1k-tokens", type=float, default=DEFAULT_COST_PER_1K_TOKENS)
-    run_p.add_argument("--input-embeddings", help="Precomputed real embedding JSONL; not a provider")
+    run_p.add_argument("--input-embeddings", help="Precomputed real embedding Parquet; not a provider")
     run_p.add_argument("--input-id-field", default=None)
     run_p.add_argument("--input-embedding-field", default="embedding")
     run_p.add_argument("--allow-paid", action="store_true")

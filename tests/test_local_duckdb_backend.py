@@ -51,9 +51,22 @@ LONG_BACKEND_QUERY = (
 )
 
 
-def write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+def write_records(path: Path, rows: list[dict]) -> None:
+    table_by_name = {
+        Path(rel).name: table
+        for table, rel in {
+            **build_local_duckdb_shim.LOCAL_TABLES,
+            **build_local_duckdb_shim.OPTIONAL_LOCAL_TABLES,
+            "local_person_profiles": build_local_duckdb_shim.PERSON_PROFILE_RECORD,
+        }.items()
+    }
+    table = table_by_name[path.name]
+    build_local_duckdb_shim.write_parquet_rows(
+        path,
+        rows,
+        float_array_fields=("vector",),
+        schema=build_local_duckdb_shim.ALL_LOCAL_TABLE_CONTRACT[table],
+    )
 
 
 def write_people_csv(path: Path, rows: list[tuple[str, str]]) -> None:
@@ -684,7 +697,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             records = tmp / "normal-pipeline" / "records"
-            write_jsonl(records / "people.records.jsonl", [
+            write_records(records / "people.records.parquet", [
                 {
                     "id": "pos-artifact-engineer",
                     "position_id": "pos-artifact-engineer",
@@ -714,7 +727,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                     "role_ids": ["software_engineer", "backend_engineer"],
                 }
             ])
-            write_jsonl(records / "summaries.records.jsonl", [
+            write_records(records / "summaries.records.parquet", [
                 {
                     "id": "person-artifact",
                     "person_id": "person-artifact",
@@ -728,7 +741,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                     "vector": [0.0, 1.0, 0.0],
                 }
             ])
-            write_jsonl(records / "companies.records.jsonl", [
+            write_records(records / "companies.records.parquet", [
                 {
                     "id": "company-artifact-infra",
                     "company_urn": "company-artifact-infra",
@@ -759,7 +772,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                     "allowed_operator_ids": ["op-artifact"],
                 }
             ])
-            write_jsonl(records / "education.records.jsonl", [
+            write_records(records / "education.records.parquet", [
                 {
                     "id": "edu-artifact",
                     "person_id": "person-artifact",
@@ -776,7 +789,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                     "allowed_operator_ids": ["op-artifact"],
                 }
             ])
-            write_jsonl(records / "schools.records.jsonl", [
+            write_records(records / "schools.records.parquet", [
                 {"id": "school-artifact", "canonical_education_id": "school-artifact", "school_name": "Artifact University", "display_value": "Artifact University", "person_count": 1}
             ])
 
@@ -1315,25 +1328,82 @@ class LocalFilterEvalTests(unittest.TestCase):
 
 
 class LocalDuckDBIncrementalShimTests(unittest.TestCase):
-    def test_incremental_bootstraps_hashes_then_noops_without_force(self) -> None:
+    def test_records_dir_rejects_legacy_jsonl_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            records = tmp / "records"
+            records.mkdir()
+            (records / "people.records.jsonl").write_text('{"id":"legacy"}\n', encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/build-local-duckdb-shim.py"),
+                    "--records-dir",
+                    str(records),
+                    "--output-dir",
+                    str(tmp / "search-index"),
+                    "--force",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("no records artifacts found", proc.stderr)
+
+    def test_incremental_duplicate_ids_fall_back_without_collapsing_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            records = tmp / "records"
+            out = tmp / "search-index"
+            write_records(records / "people.records.parquet", [
+                {"id": "dup", "position_id": "dup", "person_id": "person-a", "position_title": "Alpha"},
+                {"id": "dup", "position_id": "dup", "person_id": "person-b", "position_title": "Beta"},
+            ])
+
+            first = run_shim_json(
+                "--records-dir", str(records), "--output-dir", str(out), "--force"
+            )
+            second = run_shim_json(
+                "--records-dir", str(records), "--output-dir", str(out), "--incremental"
+            )
+
+            self.assertEqual(second["table_diffs"]["local_people_positions"]["reason"], "duplicate_ids")
+            self.assertEqual(
+                query_duckdb(Path(first["duckdb"]), "select count(*) from local_people_positions"),
+                [(2,)],
+            )
+
+    def test_rebuild_skips_hashes_then_incremental_bootstraps_and_noops(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             records = tmp / "records"
             out = tmp / "search-index"
             people_csv = tmp / "people.csv"
             write_people_csv(people_csv, [("person-one", "Person One")])
-            write_jsonl(records / "people.records.jsonl", [{"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Engineer", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
-            write_jsonl(records / "summaries.records.jsonl", [{"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "Old", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
-            write_jsonl(records / "companies.records.jsonl", [{"company_urn": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_records(records / "people.records.parquet", [{"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Engineer", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_records(records / "summaries.records.parquet", [{"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "Old", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_records(records / "companies.records.parquet", [{"company_urn": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
 
             first = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--force")
+            self.assertEqual(
+                query_duckdb(
+                    Path(first["duckdb"]),
+                    "select count(*) from information_schema.tables where table_name = '_local_record_hashes'",
+                ),
+                [(0,)],
+            )
             bootstrap = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--incremental")
             noop = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--incremental")
 
             self.assertEqual(first["status"], "ok")
             self.assertEqual(bootstrap["duckdb_update_mode"], "incremental")
             for table in ["local_people_positions", "local_summaries", "local_companies", "local_person_profiles"]:
-                self.assertEqual(bootstrap["table_diffs"][table]["mode"], "noop")
+                self.assertEqual(bootstrap["table_diffs"][table]["mode"], "bootstrap_replace_missing_hashes")
                 self.assertEqual(noop["table_diffs"][table]["mode"], "noop")
                 self.assertEqual(noop["table_diffs"][table]["inserted_rows"], 0)
                 self.assertEqual(noop["table_diffs"][table]["updated_rows"], 0)
@@ -1348,15 +1418,15 @@ class LocalDuckDBIncrementalShimTests(unittest.TestCase):
             out = tmp / "search-index"
             people_csv = tmp / "people.csv"
             write_people_csv(people_csv, [("person-one", "Person One"), ("person-delete", "Person Delete")])
-            write_jsonl(records / "people.records.jsonl", [
+            write_records(records / "people.records.parquet", [
                 {"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Engineer", "company_id": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
                 {"id": "pos-delete", "position_id": "pos-delete", "person_id": "person-delete", "base_id": "person-delete", "position_title": "Delete", "vector": [0.0, 1.0], "allowed_operator_ids": ["op-test"]},
             ])
-            write_jsonl(records / "summaries.records.jsonl", [
+            write_records(records / "summaries.records.parquet", [
                 {"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "Old", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
                 {"id": "person-delete", "person_id": "person-delete", "base_id": "person-delete", "summary": "Delete", "vector": [0.0, 1.0], "allowed_operator_ids": ["op-test"]},
             ])
-            write_jsonl(records / "companies.records.jsonl", [
+            write_records(records / "companies.records.parquet", [
                 {"company_urn": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
                 {"company_urn": "company-delete", "company_name": "Company Delete", "vector": [0.0, 1.0], "allowed_operator_ids": ["op-test"]},
             ])
@@ -1364,15 +1434,15 @@ class LocalDuckDBIncrementalShimTests(unittest.TestCase):
             run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--incremental")
 
             write_people_csv(people_csv, [("person-one", "Person One Updated"), ("person-two", "Person Two")])
-            write_jsonl(records / "people.records.jsonl", [
+            write_records(records / "people.records.parquet", [
                 {"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Staff Engineer", "company_id": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
                 {"id": "pos-2", "position_id": "pos-2", "person_id": "person-two", "base_id": "person-two", "position_title": "Founder", "company_id": "company-two", "company_name": "Company Two", "vector": [0.5, 0.5], "allowed_operator_ids": ["op-test"]},
             ])
-            write_jsonl(records / "summaries.records.jsonl", [
+            write_records(records / "summaries.records.parquet", [
                 {"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "New", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
                 {"id": "person-two", "person_id": "person-two", "base_id": "person-two", "summary": "Two", "vector": [0.5, 0.5], "allowed_operator_ids": ["op-test"]},
             ])
-            write_jsonl(records / "companies.records.jsonl", [
+            write_records(records / "companies.records.parquet", [
                 {"company_urn": "company-one", "company_name": "Company One Updated", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]},
                 {"company_urn": "company-two", "company_name": "Company Two", "vector": [0.5, 0.5], "allowed_operator_ids": ["op-test"]},
             ])
@@ -1397,14 +1467,14 @@ class LocalDuckDBIncrementalShimTests(unittest.TestCase):
             out = tmp / "search-index"
             people_csv = tmp / "people.csv"
             write_people_csv(people_csv, [("person-one", "Person One")])
-            write_jsonl(records / "people.records.jsonl", [{"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Engineer", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
-            write_jsonl(records / "summaries.records.jsonl", [{"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "Correct", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
-            write_jsonl(records / "companies.records.jsonl", [{"company_urn": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_records(records / "people.records.parquet", [{"id": "pos-1", "position_id": "pos-1", "person_id": "person-one", "base_id": "person-one", "position_title": "Engineer", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_records(records / "summaries.records.parquet", [{"id": "person-one", "person_id": "person-one", "base_id": "person-one", "summary": "Correct", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
+            write_records(records / "companies.records.parquet", [{"company_urn": "company-one", "company_name": "Company One", "vector": [1.0, 0.0], "allowed_operator_ids": ["op-test"]}])
             first = run_shim_json("--records-dir", str(records), "--person-profiles-csv", str(people_csv), "--output-dir", str(out), "--operator-id", "op-test", "--force")
             db = Path(first["duckdb"])
             con = duckdb.connect(str(db))
             try:
-                con.execute("drop table _local_record_hashes")
+                con.execute("drop table if exists _local_record_hashes")
                 con.execute("update local_people_positions set position_title = 'Stale' where id = 'pos-1'")
                 con.execute("update local_summaries set summary = 'Stale' where id = 'person-one'")
                 con.execute("checkpoint")
@@ -1428,7 +1498,7 @@ class LocalPersonProfilesShimTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             records = tmp / "records"
-            write_jsonl(records / "people.records.jsonl", [
+            write_records(records / "people.records.parquet", [
                 {
                     "id": "role-1",
                     "position_id": "role-1",
@@ -1440,10 +1510,10 @@ class LocalPersonProfilesShimTest(unittest.TestCase):
                     "allowed_operator_ids": ["op-test"],
                 }
             ])
-            write_jsonl(records / "summaries.records.jsonl", [])
-            write_jsonl(records / "education.records.jsonl", [])
-            write_jsonl(records / "schools.records.jsonl", [])
-            write_jsonl(records / "companies.records.jsonl", [])
+            write_records(records / "summaries.records.parquet", [])
+            write_records(records / "education.records.parquet", [])
+            write_records(records / "schools.records.parquet", [])
+            write_records(records / "companies.records.parquet", [])
             people_csv = tmp / "people.csv"
             people_csv.write_text(
                 "id,linkedin_url,full_name,headline,summary,city,state,country,work_experiences,education,source_channels\n"
@@ -1483,7 +1553,7 @@ class LocalDuckDBHydrationInteractionCountsTest(unittest.TestCase):
 
     def _build_records_duckdb(self, tmp: Path, *, include_source_summary: bool) -> str:
         records = tmp / "records"
-        write_jsonl(records / "person_profiles.records.jsonl", [
+        write_records(records / "person_profiles.records.parquet", [
             {
                 "id": "person-interaction",
                 "person_id": "person-interaction",
@@ -1500,9 +1570,9 @@ class LocalDuckDBHydrationInteractionCountsTest(unittest.TestCase):
                 },
             }
         ])
-        write_jsonl(records / "people.records.jsonl", [])
+        write_records(records / "people.records.parquet", [])
         if include_source_summary:
-            write_jsonl(records / "person_source_summary.records.jsonl", [
+            write_records(records / "person_source_summary.records.parquet", [
                 {
                     "person_id": "person-interaction",
                     "operator_id": "operator-a",
@@ -1564,7 +1634,7 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             records = tmp / "records"
-            write_jsonl(records / "people.records.jsonl", [
+            write_records(records / "people.records.parquet", [
                 {
                     "id": "role-sf",
                     "position_id": "role-sf",
@@ -1589,10 +1659,10 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                     "allowed_operator_ids": ["op-test"],
                 },
             ])
-            write_jsonl(records / "summaries.records.jsonl", [])
-            write_jsonl(records / "education.records.jsonl", [])
-            write_jsonl(records / "schools.records.jsonl", [])
-            write_jsonl(records / "companies.records.jsonl", [])
+            write_records(records / "summaries.records.parquet", [])
+            write_records(records / "education.records.parquet", [])
+            write_records(records / "schools.records.parquet", [])
+            write_records(records / "companies.records.parquet", [])
             people_csv = tmp / "people.csv"
             people_csv.write_text(
                 "id,linkedin_url,full_name,headline,city,state,country,work_experiences,education,source_channels\n"
@@ -1629,7 +1699,7 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             records = tmp / "records"
-            write_jsonl(records / "people.records.jsonl", [
+            write_records(records / "people.records.parquet", [
                 {
                     "id": "role-young",
                     "position_id": "role-young",
@@ -1657,10 +1727,10 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                     "allowed_operator_ids": ["op-test"],
                 },
             ])
-            write_jsonl(records / "summaries.records.jsonl", [])
-            write_jsonl(records / "education.records.jsonl", [])
-            write_jsonl(records / "schools.records.jsonl", [])
-            write_jsonl(records / "companies.records.jsonl", [])
+            write_records(records / "summaries.records.parquet", [])
+            write_records(records / "education.records.parquet", [])
+            write_records(records / "schools.records.parquet", [])
+            write_records(records / "companies.records.parquet", [])
             people_csv = tmp / "people.csv"
             people_csv.write_text(
                 "id,linkedin_url,full_name,headline,city,state,country,work_experiences,education,source_channels\n"

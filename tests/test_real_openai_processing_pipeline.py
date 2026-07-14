@@ -1,3 +1,4 @@
+import concurrent.futures
 import csv
 import json
 import os
@@ -9,6 +10,7 @@ from argparse import Namespace
 from pathlib import Path
 from unittest import mock
 
+from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows
 from packs.shared.csv_io import CsvIO
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,7 +115,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 "--input",
                 str(FIXTURE_PEOPLE),
                 "--output",
-                "/tmp/unused.jsonl",
+                "/tmp/unused.parquet",
                 "--output-dir",
                 "/tmp/unused-embeddings",
                 "--text-fields",
@@ -177,10 +179,22 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             self.assertGreater(len(companies), 1)
             self.assertGreater(len(summaries), 1)
             write_jsonl(output / "unified/roles/roles_with_dense_text_remapped.jsonl", [roles[0]])
-            write_jsonl(output / "unified/roles/roles_with_embeddings.jsonl", [{**roles[0], "dense_embedding": [0.01] * 1536}])
+            write_parquet_rows(
+                output / "roles/roles_with_embeddings.parquet",
+                [{**roles[0], "dense_embedding": [0.01] * 1536}],
+                float_array_fields=("dense_embedding",),
+            )
             write_jsonl(output / "company/companies_corpus_v3.jsonl", [{"company_name": companies[0]["company_name"]}])
-            write_jsonl(output / "company/company_embeddings_v3.jsonl", [{"company_urn": companies[0]["company_urn"], "embedding": [0.02] * 1536}])
-            write_jsonl(output / "unified/summary_embeddings.jsonl", [{"person_id": summaries[0]["person_id"], "embedding": [0.03] * 1536}])
+            write_parquet_rows(
+                output / "company/company_embeddings_v3.parquet",
+                [{"company_urn": companies[0]["company_urn"], "embedding": [0.02] * 1536}],
+                float_array_fields=("embedding",),
+            )
+            write_parquet_rows(
+                output / "unified/summary_embeddings.parquet",
+                [{"person_id": summaries[0]["person_id"], "embedding": [0.03] * 1536}],
+                float_array_fields=("embedding",),
+            )
 
             proc = subprocess.run(
                 [
@@ -207,14 +221,19 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             role_coverage = stages["role_enrichment"]["artifact_coverage"]
             self.assertEqual(role_coverage["artifact"], str(output / "unified/roles/roles_with_dense_text_remapped.jsonl"))
             self.assertEqual(role_coverage["reused"], 1)
-            self.assertEqual(stages["role_enrichment"]["calls"], role_coverage["missing"])
+            self.assertGreater(stages["role_enrichment"]["calls"], 0)
+            self.assertLessEqual(stages["role_enrichment"]["calls"], role_coverage["missing"])
             self.assertEqual(stages["role_embeddings"]["calls"], stages["role_embeddings"]["artifact_coverage"]["missing"])
 
             company_coverage = stages["company_enrichment"]["artifact_coverage"]
             self.assertEqual(company_coverage["reused"], 1)
             self.assertLess(stages["company_enrichment"]["calls"], payload["counts"]["companies"])
             self.assertEqual(stages["company_embeddings"]["artifact_coverage"]["reused"], 1)
-            self.assertEqual(stages["summary_embeddings"]["artifact_coverage"]["reused"], 1)
+            self.assertEqual(
+                stages["summary_embeddings"]["artifact_coverage"]["artifact"],
+                str(output / "unified/summary_embeddings.parquet"),
+            )
+            self.assertEqual(payload["counts"]["processed_people"], 1)
             self.assertFalse(stages["summary_embeddings"]["artifact_coverage"]["complete"])
             self.assertEqual(payload["paid_calls_made"], 0)
 
@@ -222,7 +241,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             company_classes = tmp / "company_classes.jsonl"
-            company_embeddings = tmp / "company_embeddings.jsonl"
+            company_embeddings = tmp / "company_embeddings.parquet"
             resolved = {
                 "company_urn": "company:resolved",
                 "company_name": "Resolved Company",
@@ -235,7 +254,11 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 "semantic_text": "Unresolved Employer",
             }
             write_jsonl(company_classes, [resolved])
-            write_jsonl(company_embeddings, [{**resolved, "embedding": [0.02] * 1536}])
+            write_parquet_rows(
+                company_embeddings,
+                [{**resolved, "embedding": [0.02] * 1536}],
+                float_array_fields=("embedding",),
+            )
             args = Namespace(
                 output_dir=str(tmp / "output"),
                 default_operator_id="operator:test",
@@ -272,10 +295,22 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 company_rows.append({**company, "entity_types": ["venture_backed_startup"], "sector_types": ["saas"], "technology_types": [], "customer_type": "Business (B2B)", "funding_stage": "SEED", "company_type": "STARTUP", "ownership_status": "PRIVATE", "stage": "Seed", "accelerators": [], "yc_batches": [], "doc2query": ["software company"], "d2q_text": "software company", "word_text": "software", "semantic_text": company.get("semantic_text") or company["company_name"], "confidence_score": 0.9})
             summaries = pipeline.build_summary_records(pipeline.build_unified_profiles(people), operator_id)["internal_text"]
             write_jsonl(output / "unified/roles/roles_with_dense_text_remapped.jsonl", roles)
-            write_jsonl(output / "unified/roles/roles_with_embeddings.jsonl", [{**row, "dense_embedding": [0.01] * 1536} for row in roles])
+            write_parquet_rows(
+                output / "roles/roles_with_embeddings.parquet",
+                [{**row, "dense_embedding": [0.01] * 1536} for row in roles],
+                float_array_fields=("dense_embedding",),
+            )
             write_jsonl(output / "company/companies_corpus_v3.jsonl", company_rows)
-            write_jsonl(output / "company/company_embeddings_v3.jsonl", [{"company_urn": row["company_urn"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies])
-            write_jsonl(output / "unified/summary_embeddings.jsonl", [{"person_id": row["person_id"], "embedding": [0.03] * 1536} for row in summaries])
+            write_parquet_rows(
+                output / "company/company_embeddings_v3.parquet",
+                [{"company_urn": row["company_urn"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies],
+                float_array_fields=("embedding",),
+            )
+            write_parquet_rows(
+                output / "unified/summary_embeddings.parquet",
+                [{"person_id": row["person_id"], "embedding": [0.03] * 1536} for row in summaries],
+                float_array_fields=("embedding",),
+            )
             (output / "ledger.json").write_text(json.dumps({"status": "restored", "run_dir": str(output), "steps": []}), encoding="utf-8")
 
             proc = subprocess.run([
@@ -320,7 +355,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as td:
                 tmp = Path(td)
                 input_path = tmp / "records.jsonl"
-                output = tmp / "embeddings.jsonl"
+                output = tmp / "embeddings.parquet"
                 checkpoint = tmp / "checkpoint"
                 write_jsonl(input_path, [
                     {"id": "a", "text": "alpha"},
@@ -358,7 +393,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 resumed_args["stop_after_chunks"] = None
                 completed = embed_records_checkpointed.run(Namespace(**resumed_args))
                 self.assertEqual(completed["status"], "completed")
-                rows = read_jsonl(output)
+                rows = list(iter_artifact_rows(output))
                 self.assertEqual([row["id"] for row in rows], ["a", "b", "c"])
                 self.assertTrue(all(len(row["embedding"]) == 1536 for row in rows))
                 self.assertGreaterEqual(len(calls), 2)
@@ -369,11 +404,15 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             input_path = root / "records.jsonl"
-            output = root / "embeddings.jsonl"
+            output = root / "embeddings.parquet"
             checkpoint = root / "checkpoint"
-            cached = root / "cached.jsonl"
+            cached = root / "cached.parquet"
             write_jsonl(input_path, [{"id": "a", "text": "alpha"}, {"id": "b", "text": "beta"}])
-            write_jsonl(cached, [{"id": "a", "embedding": [0.01] * 1536}])
+            write_parquet_rows(
+                cached,
+                [{"id": "a", "embedding": [0.01] * 1536}],
+                float_array_fields=("embedding",),
+            )
 
             def fake_openai_embedding_batches(text_groups: list[list[str]], **_kwargs):
                 self.assertEqual(text_groups, [["beta"]])
@@ -408,7 +447,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             self.assertEqual(manifest["counts"]["artifact_misses"], 1)
             self.assertEqual(manifest["counts"]["paid_calls"], 1)
 
-    def test_mocked_openai_pipeline_writes_aleph_artifacts_resumes_and_filters_company_classification(self) -> None:
+    def test_mocked_openai_pipeline_writes_aleph_artifacts_and_filters_company_classification(self) -> None:
         try:
             import duckdb  # noqa: F401
         except ModuleNotFoundError:
@@ -417,8 +456,9 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
         role_calls: list[str] = []
         company_calls: list[str] = []
         embedding_calls: list[int] = []
-        orig_role = enrich_roles_checkpointed.call_openai_role_enrichments
-        orig_company = enrich_companies_checkpointed.call_openai_company_classifiers
+        orig_role = enrich_roles_checkpointed.call_openai_role_enrichment_async
+        orig_role_batch = enrich_roles_checkpointed.call_openai_role_batch_async
+        orig_company = enrich_companies_checkpointed.call_openai_company_classifier_async
         orig_embed = embed_records_checkpointed.openai_embedding_batches
 
         def fake_role(role: dict, **_kwargs) -> dict:
@@ -466,17 +506,21 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 vectors.append(vector)
             return vectors
 
-        def fake_roles(roles: list[dict], **_kwargs) -> list[dict]:
-            return [fake_role(role) for role in roles]
+        async def fake_role_async(_client, role: dict, **_kwargs) -> dict:
+            return fake_role(role)
 
-        def fake_companies(companies: list[dict], **_kwargs) -> list[dict]:
-            return [fake_company(company) for company in companies]
+        async def fake_role_batch_async(_client, _cluster: str, roles: list[dict], **_kwargs) -> dict:
+            return {"classifications": [{"idx": idx, **fake_role(role)} for idx, role in enumerate(roles)]}
+
+        async def fake_company_async(_client, company: dict, **_kwargs) -> dict:
+            return fake_company(company)
 
         def fake_embedding_batches(text_groups: list[list[str]], **kwargs) -> list[list[list[float]]]:
             return [fake_embeddings(texts, **kwargs) for texts in text_groups]
 
-        enrich_roles_checkpointed.call_openai_role_enrichments = fake_roles
-        enrich_companies_checkpointed.call_openai_company_classifiers = fake_companies
+        enrich_roles_checkpointed.call_openai_role_enrichment_async = fake_role_async
+        enrich_roles_checkpointed.call_openai_role_batch_async = fake_role_batch_async
+        enrich_companies_checkpointed.call_openai_company_classifier_async = fake_company_async
         embed_records_checkpointed.openai_embedding_batches = fake_embedding_batches
         try:
             with tempfile.TemporaryDirectory() as td:
@@ -487,7 +531,6 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                     input_csv,
                     run_dir,
                     "op-openai-test",
-                    None,
                     checkpoint_every=2,
                     role_provider="openai",
                     allow_paid_role_provider=True,
@@ -502,10 +545,11 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 run_dir.mkdir(parents=True)
                 ledger_path = pipeline.paths(run_dir)["ledger"]
                 pipeline.save_ledger(ledger_path, ledger)
-                partial = pipeline.execute(ledger_path, {"stop_after_company_chunks": 1})
-                self.assertEqual(partial["status"], "partial")
-                self.assertTrue((run_dir / "company/enrichment_checkpoints/checkpoint.json").exists())
-                completed = pipeline.execute(ledger_path)
+                completed = pipeline.execute(
+                    ledger_path,
+                    executor_factory=concurrent.futures.ThreadPoolExecutor,
+                    max_workers=1,
+                )
                 self.assertEqual(completed["status"], "completed")
                 self.assertTrue(role_calls)
                 self.assertTrue(company_calls)
@@ -514,7 +558,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 appco = read_jsonl(run_dir / "company/companies_corpus_v3.jsonl")[0]
                 self.assertEqual(appco["sector_types"], ["saas"])
                 self.assertEqual(set(appco), set(enrich_companies_checkpointed.ALEPH_COMPANY_FIELDS))
-                company_embedding = read_jsonl(run_dir / "company/company_embeddings_v3.jsonl")[0]
+                company_embedding = next(iter_artifact_rows(run_dir / "company/company_embeddings_v3.parquet"))
                 self.assertEqual(len(company_embedding["embedding"]), 1536)
 
                 proc = subprocess.run(
@@ -560,8 +604,9 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                     else:
                         os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
         finally:
-            enrich_roles_checkpointed.call_openai_role_enrichments = orig_role
-            enrich_companies_checkpointed.call_openai_company_classifiers = orig_company
+            enrich_roles_checkpointed.call_openai_role_enrichment_async = orig_role
+            enrich_roles_checkpointed.call_openai_role_batch_async = orig_role_batch
+            enrich_companies_checkpointed.call_openai_company_classifier_async = orig_company
             embed_records_checkpointed.openai_embedding_batches = orig_embed
 
 

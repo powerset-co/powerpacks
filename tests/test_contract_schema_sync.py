@@ -3,12 +3,12 @@
 import contextlib
 import importlib.util
 import io
-import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from packs.indexing.lib.artifact_io import write_parquet_rows
 from packs.indexing.lib.contracts import (
     attribute_names,
     contract_attribute_names,
@@ -93,17 +93,11 @@ class LocalDuckdbShimContractSyncTest(unittest.TestCase):
     """The shim's LOCAL_TABLE_CONTRACT must be the contract-derived columns plus
     explicitly declared local-only bookkeeping columns."""
 
-    def test_resolve_artifact_path_prefers_parquet_sibling(self):
+    def test_local_table_paths_are_native_parquet(self):
         shim = _load_shim()
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            jsonl = root / "records" / "people.records.jsonl"
-            parquet = root / "records" / "people.records.parquet"
-            jsonl.parent.mkdir()
-            jsonl.write_text("{}\n", encoding="utf-8")
-            self.assertEqual(shim.resolve_artifact_path(root, "records/people.records.jsonl"), jsonl)
-            parquet.write_bytes(b"PAR1")
-            self.assertEqual(shim.resolve_artifact_path(root, "records/people.records.jsonl"), parquet)
+        self.assertTrue(all(path.endswith(".parquet") for path in shim.LOCAL_TABLES.values()))
+        self.assertTrue(shim.PERSON_PROFILE_RECORD.endswith(".parquet"))
+        self.assertTrue(all(path.endswith(".parquet") for path in shim.OPTIONAL_LOCAL_TABLES.values()))
 
     def test_every_namespace_table_matches_contract_derived_columns(self):
         shim = _load_shim()
@@ -234,10 +228,10 @@ class PositionPersonDedupLoadTest(unittest.TestCase):
         run_dir = Path(cls.tmp.name)
         records = run_dir / "records"
         records.mkdir(parents=True)
-        (records / "people.records.jsonl").write_text(json.dumps(cls.POSITION) + "\n", encoding="utf-8")
-        (records / "person_profiles.records.jsonl").write_text(json.dumps(cls.PROFILE) + "\n", encoding="utf-8")
+        write_parquet_rows(records / "people.records.parquet", [cls.POSITION])
+        write_parquet_rows(records / "person_profiles.records.parquet", [cls.PROFILE])
         for name in ["summaries", "company_signals", "education", "schools", "companies"]:
-            (records / f"{name}.records.jsonl").write_text("", encoding="utf-8")
+            write_parquet_rows(records / f"{name}.records.parquet", [], schema={"id": "VARCHAR"})
         cls.db_path, cls.counts, _diffs = cls.shim.load_duckdb(run_dir, "op1", force=True)
 
     @classmethod

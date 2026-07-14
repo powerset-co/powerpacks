@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows
 from packs.shared.csv_io import CsvIO
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,9 +23,9 @@ SEARCH_LOCAL = SEARCH_PRIMITIVES / "local"
 SEARCH_TURBOPUFFER = SEARCH_PRIMITIVES / "turbopuffer"
 
 FULL_COMPATIBLE_GREEN_CRITERIA = {
-    "role_artifacts": "roles_with_dense_text_remapped.jsonl + roles_with_embeddings.jsonl keyed by 16-char title_hash with Aleph classifier fields and 1536-d dense_embedding",
-    "company_artifacts": "companies_corpus_v3.jsonl + company_embeddings_v3.jsonl keyed by company_urn with Aleph corpus fields and 1536-d embedding",
-    "summary_artifacts": "summary_embeddings.jsonl + person_tech_skills.jsonl keyed by person_id with 1536-d embedding",
+    "role_artifacts": "roles_with_dense_text_remapped.jsonl + roles_with_embeddings.parquet keyed by 16-char title_hash with Aleph classifier fields and 1536-d dense_embedding",
+    "company_artifacts": "companies_corpus_v3.jsonl + company_embeddings_v3.parquet keyed by company_urn with Aleph corpus fields and 1536-d embedding",
+    "summary_artifacts": "summary_embeddings.parquet + person_tech_skills.jsonl keyed by person_id with 1536-d embedding",
     "education_artifacts": "people_education.jsonl + schools_corpus.jsonl using education_id/entity_urn Aleph fields",
     "provider": "real provider output or copied/cache fixtures; local-fake vectors are scaffold-only and not full-compatible",
     "search": "materialized DuckDB supports vector kNN and role/company local search from those artifacts",
@@ -79,6 +80,16 @@ def first_jsonl(path: Path) -> dict:
             if line.strip():
                 return json.loads(line)
     raise AssertionError(f"empty jsonl: {path}")
+
+
+def read_artifact(path: Path) -> list[dict]:
+    return list(iter_artifact_rows(path))
+
+
+def first_artifact(path: Path) -> dict:
+    for row in iter_artifact_rows(path):
+        return row
+    raise AssertionError(f"empty artifact: {path}")
 
 
 def pipeline_has_unregistered_embedding_steps() -> bool:
@@ -144,8 +155,12 @@ def write_precomputed_pipeline_inputs(source: Path, root: Path, operator_id: str
                 roles.append(roles_stage.merge_role(base, _role_enrichment()))
     role_classes = root / "roles_with_dense_text_remapped.jsonl"
     write_jsonl(role_classes, roles)
-    role_embeddings = root / "roles_with_embeddings.jsonl"
-    write_jsonl(role_embeddings, [{**row, "dense_embedding": [0.01] * 1536} for row in roles])
+    role_embeddings = root / "roles_with_embeddings.parquet"
+    write_parquet_rows(
+        role_embeddings,
+        [{**row, "dense_embedding": [0.01] * 1536} for row in roles],
+        float_array_fields=("dense_embedding",),
+    )
 
     companies = build_company_corpus(people, operator_id)
     company_classes = root / "companies_corpus_v3.jsonl"
@@ -168,12 +183,20 @@ def write_precomputed_pipeline_inputs(source: Path, root: Path, operator_id: str
         "semantic_text": row.get("semantic_text") or row["company_name"],
         "confidence_score": 0.9,
     } for row in companies])
-    company_embeddings = root / "company_embeddings_v3.jsonl"
-    write_jsonl(company_embeddings, [{"company_urn": row["id"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies])
+    company_embeddings = root / "company_embeddings_v3.parquet"
+    write_parquet_rows(
+        company_embeddings,
+        [{"company_urn": row["id"], "company_name": row["company_name"], "semantic_text": row.get("semantic_text", ""), "embedding": [0.02] * 1536} for row in companies],
+        float_array_fields=("embedding",),
+    )
 
     summaries = build_summary_records(build_unified_profiles(people), operator_id)["internal_text"]
-    summary_embeddings = root / "summary_embeddings.jsonl"
-    write_jsonl(summary_embeddings, [{"person_id": row["person_id"], "embedding": [0.03] * 1536} for row in summaries])
+    summary_embeddings = root / "summary_embeddings.parquet"
+    write_parquet_rows(
+        summary_embeddings,
+        [{"person_id": row["person_id"], "embedding": [0.03] * 1536} for row in summaries],
+        float_array_fields=("embedding",),
+    )
     return {"role_classes": role_classes, "role_embeddings": role_embeddings, "company_classes": company_classes, "company_embeddings": company_embeddings, "summary_embeddings": summary_embeddings}
 
 
@@ -357,7 +380,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(partial["status"], "partial")
             self.assertEqual(partial["counts"]["build_roles"]["status"], "partial")
             resume_dir = resume_base
-            self.assertFalse((resume_dir / "records/people.records.jsonl").exists())
+            self.assertFalse((resume_dir / "records/people.records.parquet").exists())
 
             code, resumed, err = run_json([
                 sys.executable,
@@ -372,11 +395,14 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 "roles/roles_with_dense_text.jsonl",
                 "roles/raw_titles.jsonl",
                 "roles/role_mapping.csv",
-                "records/people.records.jsonl",
-                "records/companies.records.jsonl",
-                "records/summaries.records.jsonl",
+                "records/people.records.parquet",
+                "records/companies.records.parquet",
+                "records/summaries.records.parquet",
             ]:
-                self.assertEqual((resume_dir / rel).read_text(), (clean_dir / rel).read_text(), rel)
+                if rel.endswith(".parquet"):
+                    self.assertEqual(read_artifact(resume_dir / rel), read_artifact(clean_dir / rel), rel)
+                else:
+                    self.assertEqual((resume_dir / rel).read_text(), (clean_dir / rel).read_text(), rel)
 
     def test_pipeline_vectors_duckdb_knn_self_match_and_role_search(self) -> None:
         self.skipTest("obsolete local-fake E2E coverage replaced by mocked OpenAI pipeline test")
@@ -413,22 +439,22 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertTrue((run_dir / "roles/embedding_checkpoints/checkpoint.json").exists())
             self.assertTrue((run_dir / "company/embedding_checkpoints/checkpoint.json").exists())
             self.assertTrue((run_dir / "summaries/embedding_checkpoints/checkpoint.json").exists())
-            role_embedding = read_jsonl(run_dir / "roles/roles_with_embeddings.jsonl")[0]
+            role_embedding = first_artifact(run_dir / "roles/roles_with_embeddings.parquet")
             self.assertIn("title_hash", role_embedding)
             self.assertIn("dense_embedding", role_embedding)
             self.assertNotIn("embedding", role_embedding)
-            summary_embedding = read_jsonl(run_dir / "unified/summary_embeddings.jsonl")[0]
+            summary_embedding = first_artifact(run_dir / "unified/summary_embeddings.parquet")
             self.assertEqual(set(summary_embedding), {"person_id", "embedding"})
-            company_embedding = read_jsonl(run_dir / "company/company_embeddings_v3.jsonl")[0]
+            company_embedding = first_artifact(run_dir / "company/company_embeddings_v3.parquet")
             self.assertEqual(set(company_embedding), {"company_urn", "company_name", "semantic_text", "embedding"})
             self.assertTrue((run_dir / "company/companies_corpus_v3.jsonl").exists())
             self.assertTrue((run_dir / "unified/person_tech_skills.jsonl").exists())
 
-            product_row = next(row for row in read_jsonl(run_dir / "records/people.records.jsonl") if row.get("position_title") == "Product Manager")
+            product_row = next(row for row in iter_artifact_rows(run_dir / "records/people.records.parquet") if row.get("position_title") == "Product Manager")
             self.assertEqual(len(product_row["vector"]), 1536)
             self.assertTrue(any(value != 0.0 for value in product_row["vector"]))
-            summary_row = read_jsonl(run_dir / "records/summaries.records.jsonl")[0]
-            company_row = read_jsonl(run_dir / "records/companies.records.jsonl")[0]
+            summary_row = first_artifact(run_dir / "records/summaries.records.parquet")
+            company_row = first_artifact(run_dir / "records/companies.records.parquet")
             self.assertEqual(len(summary_row["vector"]), 1536)
             self.assertEqual(len(company_row["vector"]), 1536)
 
@@ -489,7 +515,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
     def test_pipeline_artifacts_match_copied_aleph_seed_field_shapes(self) -> None:
         self.skipTest("obsolete local-fake pipeline shape coverage replaced by mocked OpenAI artifact test")
         seed = ROOT / ".powerpacks/aleph-seed/2026-05-08/pipeline_output"
-        if not (seed / "unified/roles/roles_with_embeddings.jsonl").exists():
+        if not (seed / "roles/roles_with_embeddings.parquet").exists():
             self.skipTest("copied Aleph seed artifacts are not present")
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -514,22 +540,22 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
 
             comparisons = [
                 (run_dir / "unified/roles/roles_with_dense_text_remapped.jsonl", seed / "unified/roles/roles_with_dense_text_remapped.jsonl"),
-                (run_dir / "unified/roles/roles_with_embeddings.jsonl", seed / "unified/roles/roles_with_embeddings.jsonl"),
+                (run_dir / "roles/roles_with_embeddings.parquet", seed / "roles/roles_with_embeddings.parquet"),
                 (run_dir / "company/companies_corpus_v3.jsonl", seed / "company/companies_corpus_v3.jsonl"),
-                (run_dir / "company/company_embeddings_v3.jsonl", seed / "company/company_embeddings_v3.jsonl"),
-                (run_dir / "unified/summary_embeddings.jsonl", seed / "unified/summary_embeddings.jsonl"),
+                (run_dir / "company/company_embeddings_v3.parquet", seed / "company/company_embeddings_v3.parquet"),
+                (run_dir / "unified/summary_embeddings.parquet", seed / "unified/summary_embeddings.parquet"),
                 (run_dir / "unified/person_tech_skills.jsonl", seed / "unified/person_tech_skills.jsonl"),
                 (run_dir / "education/people_education.jsonl", seed / "education/people_education.jsonl"),
                 (run_dir / "education/schools_corpus.jsonl", seed / "education/schools_corpus.jsonl"),
             ]
             for produced, reference in comparisons:
-                produced_first = first_jsonl(produced)
-                reference_keys = set(first_jsonl(reference))
+                produced_first = first_artifact(produced)
+                reference_keys = set(first_artifact(reference))
                 self.assertEqual(set(produced_first), reference_keys, produced)
 
-            role_embedding = first_jsonl(run_dir / "unified/roles/roles_with_embeddings.jsonl")
-            company_embedding = first_jsonl(run_dir / "company/company_embeddings_v3.jsonl")
-            summary_embedding = first_jsonl(run_dir / "unified/summary_embeddings.jsonl")
+            role_embedding = first_artifact(run_dir / "roles/roles_with_embeddings.parquet")
+            company_embedding = first_artifact(run_dir / "company/company_embeddings_v3.parquet")
+            summary_embedding = first_artifact(run_dir / "unified/summary_embeddings.parquet")
             self.assertEqual(len(role_embedding["title_hash"]), 16)
             self.assertEqual(len(role_embedding["dense_embedding"]), 1536)
             self.assertEqual(len(company_embedding["embedding"]), 1536)
@@ -537,17 +563,17 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
 
     def test_copied_aleph_seed_cache_fixtures_define_full_compatible_green_criteria(self) -> None:
         seed = ROOT / ".powerpacks/aleph-seed/2026-05-08/pipeline_output"
-        if not (seed / "unified/roles/roles_with_embeddings.jsonl").exists():
+        if not (seed / "roles/roles_with_embeddings.parquet").exists():
             self.skipTest("copied Aleph seed artifacts are not present")
 
         role_dense = first_jsonl(seed / "unified/roles/roles_with_dense_text_remapped.jsonl")
-        role_embedding = first_jsonl(seed / "unified/roles/roles_with_embeddings.jsonl")
-        company_embedding = first_jsonl(seed / "company/company_embeddings_v3.jsonl")
+        role_embedding = first_artifact(seed / "roles/roles_with_embeddings.parquet")
+        company_embedding = first_artifact(seed / "company/company_embeddings_v3.parquet")
         company_corpus = next(
             row for row in read_jsonl(seed / "company/companies_corpus_v3.jsonl")
             if row.get("company_urn") == company_embedding.get("company_urn")
         )
-        summary_embedding = first_jsonl(seed / "unified/summary_embeddings.jsonl")
+        summary_embedding = first_artifact(seed / "unified/summary_embeddings.parquet")
         skills = first_jsonl(seed / "unified/person_tech_skills.jsonl")
         people_education = first_jsonl(seed / "education/people_education.jsonl")
         school = first_jsonl(seed / "education/schools_corpus.jsonl")
@@ -639,7 +665,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             records = tmp / "normal-run" / "records"
-            write_jsonl(records / "people.records.jsonl", [
+            write_parquet_rows(records / "people.records.parquet", [
                 {
                     "id": "pos-vector-backend",
                     "base_id": "person-vector",
@@ -655,11 +681,11 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                     "phrase_tokens": ["backend engin"],
                     "vector": [0.0, 1.0, 0.0],
                 }
-            ])
-            write_jsonl(records / "summaries.records.jsonl", [
+            ], float_array_fields=("vector",))
+            write_parquet_rows(records / "summaries.records.parquet", [
                 {"id": "person-vector", "base_id": "person-vector", "tech_skills": ["DuckDB"], "allowed_operator_ids": ["op-vector"], "vector": [0.0, 1.0, 0.0]}
-            ])
-            write_jsonl(records / "companies.records.jsonl", [
+            ], float_array_fields=("vector",))
+            write_parquet_rows(records / "companies.records.parquet", [
                 {
                     "id": "company-vector-db",
                     "company_urn": "company-vector-db",
@@ -674,9 +700,9 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                     "allowed_operator_ids": ["op-vector"],
                     "vector": [0.0, 1.0, 0.0],
                 }
-            ])
-            write_jsonl(records / "education.records.jsonl", [])
-            write_jsonl(records / "schools.records.jsonl", [])
+            ], float_array_fields=("vector",))
+            write_parquet_rows(records / "education.records.parquet", [], schema={"id": "VARCHAR"})
+            write_parquet_rows(records / "schools.records.parquet", [], schema={"id": "VARCHAR"})
 
             code, payload, err = run_json([
                 sys.executable,
@@ -756,7 +782,11 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["build_company_corpus"]["provider"], "artifact")
             self.assertGreaterEqual(payload["counts"]["build_company_corpus"]["artifact_hits"], 1)
             run_dir = tmp / "pipeline"
-            appco_record = next(row for row in read_jsonl(run_dir / "records/companies.records.jsonl") if row.get("company_name") == "AppCo")
+            appco_record = next(
+                row
+                for row in iter_artifact_rows(run_dir / "records/companies.records.parquet")
+                if row.get("company_name") == "AppCo"
+            )
             self.assertEqual(appco_record["entity_types"], ["venture_backed_startup"])
             self.assertEqual(appco_record["sector_types"], ["saas"])
             self.assertEqual(appco_record["customer_type"], ["B2B"])

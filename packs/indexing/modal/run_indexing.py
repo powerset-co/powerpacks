@@ -28,7 +28,7 @@ from pathlib import Path
 REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
-from packs.indexing.modal.sandbox_common import materialize_parquet_records, merge_cache_file, now_iso, write_status  # noqa: E402
+from packs.indexing.modal.sandbox_common import merge_cache_file, now_iso, write_status  # noqa: E402
 PIPELINE = REPO / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = REPO / "scripts/build-local-duckdb-shim.py"
 BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
@@ -47,18 +47,13 @@ CACHE_KEYS = {
 # work-output path that feeds each cache file after a run
 WORK_TO_CACHE = {
     "roles/roles_with_dense_text.jsonl": "artifacts/roles_with_dense_text.jsonl",
-    "roles/roles_with_embeddings.jsonl": "artifacts/roles_with_embeddings.parquet",
+    "roles/roles_with_embeddings.parquet": "artifacts/roles_with_embeddings.parquet",
     "company/companies_corpus_v3.jsonl": "artifacts/companies_corpus_v3.jsonl",
-    "company/company_embeddings_v3.jsonl": "artifacts/company_embeddings_v3.parquet",
-    "unified/summary_embeddings.jsonl": "artifacts/summary_embeddings.parquet",
+    "company/company_embeddings_v3.parquet": "artifacts/company_embeddings_v3.parquet",
+    "unified/summary_embeddings.parquet": "artifacts/summary_embeddings.parquet",
     "unified/person_tech_skills.jsonl": "artifacts/person_tech_skills.jsonl",
     "unified/roles/founder_enrichment.jsonl": "seeds/founder_enrichment.jsonl",
     "unified/inferred_ages.jsonl": "seeds/inferred_ages.jsonl",
-}
-CACHE_VECTOR_FIELDS = {
-    "artifacts/roles_with_embeddings.parquet": "dense_embedding",
-    "artifacts/company_embeddings_v3.parquet": "embedding",
-    "artifacts/summary_embeddings.parquet": "embedding",
 }
 
 
@@ -190,13 +185,8 @@ def main() -> int:
                 src,
                 cache_root / rel_cache,
                 CACHE_KEYS[rel_cache],
-                vector_field=CACHE_VECTOR_FIELDS.get(rel_cache),
             )
             print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
-
-    write_status(run_vol, status | {"phase": "records-parquet"})
-    record_counts = materialize_parquet_records(work / "records")
-    print(f"[run-in-sandbox] parquet records: {record_counts}", flush=True)
 
     write_status(run_vol, status | {"phase": "duckdb"})
     # Feed the same people.csv that fed the processing pipeline as the
