@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 
 from packs.indexing.lib.artifact_io import artifact_id_set, iter_artifact_rows
-from packs.indexing.modal.sandbox_common import merge_cache_file
+from packs.indexing.modal.sandbox_common import materialize_parquet_records, merge_cache_file
 from packs.indexing.primitives.embed_records_checkpointed.embed_records_checkpointed import load_input_embeddings
 
 
@@ -108,6 +108,24 @@ class ParquetEmbeddingCacheTests(unittest.TestCase):
             write_jsonl(source, [{"person_id": "one", "embedding": [0.1, 0.2]}])
             embeddings = load_input_embeddings(str(source), "person_id", "embedding")
             self.assertEqual(embeddings["one"].typecode, "d")
+
+    def test_final_record_parquet_uses_float_vectors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            records = Path(tmp) / "records"
+            records.mkdir()
+            source = records / "summaries.records.jsonl"
+            write_jsonl(source, [
+                {"id": "one", "person_id": "one", "vector": [0.1, 0.2], "summary": "One"},
+                {"id": "two", "person_id": "two", "vector": [0.3, 0.4], "summary": "Two"},
+            ])
+
+            counts = materialize_parquet_records(records)
+            parquet = records / "summaries.records.parquet"
+            self.assertEqual(counts, {"summaries.records.parquet": 2})
+            columns = duckdb.connect().execute(
+                "DESCRIBE SELECT * FROM read_parquet(?)", [str(parquet)]
+            ).fetchall()
+            self.assertEqual({row[0]: row[1] for row in columns}["vector"], "FLOAT[]")
 
 
 if __name__ == "__main__":

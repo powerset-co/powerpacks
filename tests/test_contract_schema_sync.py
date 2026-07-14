@@ -93,6 +93,18 @@ class LocalDuckdbShimContractSyncTest(unittest.TestCase):
     """The shim's LOCAL_TABLE_CONTRACT must be the contract-derived columns plus
     explicitly declared local-only bookkeeping columns."""
 
+    def test_resolve_artifact_path_prefers_parquet_sibling(self):
+        shim = _load_shim()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jsonl = root / "records" / "people.records.jsonl"
+            parquet = root / "records" / "people.records.parquet"
+            jsonl.parent.mkdir()
+            jsonl.write_text("{}\n", encoding="utf-8")
+            self.assertEqual(shim.resolve_artifact_path(root, "records/people.records.jsonl"), jsonl)
+            parquet.write_bytes(b"PAR1")
+            self.assertEqual(shim.resolve_artifact_path(root, "records/people.records.jsonl"), parquet)
+
     def test_every_namespace_table_matches_contract_derived_columns(self):
         shim = _load_shim()
         self.assertEqual(

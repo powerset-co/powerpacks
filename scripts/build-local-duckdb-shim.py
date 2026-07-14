@@ -40,6 +40,7 @@ sys.path.insert(0, str(ROOT))
 DUCKDB_LOCK_NAME = ".local-search-duckdb.lock"
 
 from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract  # noqa: E402
+from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
 from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
 from packs.ingestion.schemas.people_schema import parse_interaction_counts  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -261,6 +262,12 @@ def run(cmd: list[str]) -> None:
 
 def read_jsonl(path: Path, limit: int | None = None):
     if not path.exists():
+        return
+    if path.suffix.lower() == ".parquet":
+        for count, row in enumerate(iter_artifact_rows(path), start=1):
+            yield row
+            if limit is not None and count >= limit:
+                return
         return
     count = 0
     with path.open(encoding="utf-8") as handle:
@@ -887,10 +894,13 @@ def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_i
 def load_jsonl_table(con: Any, table: str, path: Path) -> int:
     con.execute(f"DROP TABLE IF EXISTS {qident(table)}")
     if has_records(path):
-        con.execute(
-            f"CREATE TABLE {qident(table)} AS SELECT * FROM read_json_auto(?, format='newline_delimited', union_by_name=true, maximum_object_size=134217728)",
-            [str(path)],
-        )
+        if path.suffix.lower() == ".parquet":
+            con.execute(f"CREATE TABLE {qident(table)} AS SELECT * FROM read_parquet(?)", [str(path)])
+        else:
+            con.execute(
+                f"CREATE TABLE {qident(table)} AS SELECT * FROM read_json_auto(?, format='newline_delimited', union_by_name=true, maximum_object_size=134217728)",
+                [str(path)],
+            )
     else:
         con.execute(f"CREATE TABLE {qident(table)} (id VARCHAR)")
     current_hashes, _rows, _skipped = current_hashes_from_file(path, table)
@@ -1081,7 +1091,9 @@ def postprocess_table(con: Any, table: str, operator_id: str) -> None:
 
 
 def resolve_artifact_path(run_dir: Path, rel: str) -> Path:
-    return run_dir / rel
+    jsonl = run_dir / rel
+    parquet = jsonl.with_suffix(".parquet")
+    return parquet if parquet.exists() else jsonl
 
 
 def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, incremental: bool = False, person_profiles_csv: Path | None = None, derive_positions_csv: Path | None = None) -> tuple[Path, dict[str, int], dict[str, Any]]:

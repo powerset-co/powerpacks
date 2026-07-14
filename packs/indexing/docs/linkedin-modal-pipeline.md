@@ -139,6 +139,12 @@ JSONL. A first refresh can migrate legacy sibling JSONL embedding caches in
 place, while `POWERPACKS_MODAL_VOLUME=powerset-indexing` remains available as
 the rollback path.
 
+After record assembly, the sandbox also writes fixed `*.records.parquet`
+siblings and casts their vector columns to `FLOAT[]`. The DuckDB materializer
+prefers those files and falls back to JSONL when they are absent. JSONL remains
+the pipeline validation contract; Parquet is the compact materialization
+format used for the downloadable local database.
+
 ### Current isolation limitation
 
 `linkedin_modal_pipeline.py` currently falls back to the all-zero operator ID

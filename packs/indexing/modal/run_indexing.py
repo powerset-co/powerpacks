@@ -28,7 +28,7 @@ from pathlib import Path
 REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
-from packs.indexing.modal.sandbox_common import merge_cache_file, now_iso, write_status  # noqa: E402
+from packs.indexing.modal.sandbox_common import materialize_parquet_records, merge_cache_file, now_iso, write_status  # noqa: E402
 PIPELINE = REPO / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = REPO / "scripts/build-local-duckdb-shim.py"
 BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
@@ -202,6 +202,10 @@ def main() -> int:
                 vector_field=CACHE_VECTOR_FIELDS.get(rel_cache),
             )
             print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
+
+    write_status(run_vol, status | {"phase": "records-parquet"})
+    record_counts = materialize_parquet_records(work / "records")
+    print(f"[run-in-sandbox] parquet records: {record_counts}", flush=True)
 
     write_status(run_vol, status | {"phase": "duckdb"})
     # Feed the same people.csv that fed the processing pipeline as the

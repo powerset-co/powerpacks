@@ -163,6 +163,50 @@ def merge_cache_file(
     return new_count, kept_count
 
 
+def materialize_parquet_records(records_dir: Path) -> dict[str, int]:
+    """Write fixed sibling Parquet files for non-empty final record JSONLs."""
+    import duckdb  # type: ignore
+
+    if not records_dir.is_dir():
+        return {}
+    con = duckdb.connect(":memory:")
+    counts: dict[str, int] = {}
+    try:
+        con.execute("SET enable_progress_bar=false")
+        con.execute(f"SET threads={int(os.getenv('POWERPACKS_CACHE_THREADS', '8'))}")
+        con.execute("SET memory_limit='12GB'")
+        con.execute("SET preserve_insertion_order=false")
+        for source in sorted(records_dir.glob("*.records.jsonl")):
+            if not source.stat().st_size:
+                continue
+            source_sql = (
+                f"read_json_auto({_sql_literal(str(source))}, format='newline_delimited', "
+                "union_by_name=true, maximum_object_size=134217728)"
+            )
+            columns = {str(row[0]) for row in con.execute(f"DESCRIBE SELECT * FROM {source_sql}").fetchall()}
+            projection = "*"
+            if "vector" in columns:
+                projection = "* REPLACE (CAST(vector AS FLOAT[]) AS vector)"
+            dest = source.with_suffix(".parquet")
+            tmp = dest.with_name(f".{dest.name}.tmp")
+            tmp.unlink(missing_ok=True)
+            try:
+                con.execute(
+                    f"COPY (SELECT {projection} FROM {source_sql}) TO {_sql_literal(str(tmp))} "
+                    "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 16384)"
+                )
+                counts[dest.name] = int(con.execute(
+                    f"SELECT count(*) FROM read_parquet({_sql_literal(str(tmp))})"
+                ).fetchone()[0])
+                tmp.replace(dest)
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                raise
+    finally:
+        con.close()
+    return counts
+
+
 def merge_file_dir(src_dir: Path, cache_dir: Path) -> tuple[int, int]:
     """Union-merge file-per-key caches (e.g. profile_cache_v2 keyed by slug
     filename): copy files absent from the shared cache, leave existing ones.
