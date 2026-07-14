@@ -61,7 +61,6 @@ STAGES = [
     {"id": "enrich", "label": "Enrich Gmail contacts"},
     {"id": "source_people", "label": "Save Gmail people file"},
     {"id": "merge_network", "label": "Merge contact sources"},
-    {"id": "network_duckdb", "label": "Prepare contact lookup database"},
     {"id": "index_estimate", "label": "Estimate search updates"},
     {"id": "index_records", "label": "Build searchable people records"},
     {"id": "search_duckdb", "label": "Update local search database"},
@@ -175,6 +174,12 @@ def make_context(run_id: str | None = None, *, resume: bool = False) -> RunConte
             status = json.loads(state_path.read_text(encoding="utf-8"))
             status["status"] = "running"
             status["updated_at"] = now_iso()
+            status["stage_order"] = STAGES
+            stages = dict(status.get("stages") or {})
+            stages.pop("network_duckdb", None)
+            status["stages"] = stages
+            if status.get("current_stage") == "network_duckdb":
+                status.pop("current_stage", None)
         except (json.JSONDecodeError, OSError):
             status = None
     else:

@@ -37,17 +37,6 @@ class IndexContactsPipelineTest(unittest.TestCase):
                         "people_csv": ".powerpacks/network-import/final/merged/people.csv",
                         "manifest": ".powerpacks/network-import/final/merged/merge_manifest.json",
                     }, ""
-                if "build_network_duckdb.py" in joined:
-                    duck = tmp / ".powerpacks/network-import/index/contacts/duckdb/network.local.duckdb"
-                    duck.parent.mkdir(parents=True)
-                    duck.write_text("duckdb", encoding="utf-8")
-                    manifest = duck.parent / "manifest.json"
-                    manifest.write_text("{}\n", encoding="utf-8")
-                    return 0, {
-                        "status": "completed",
-                        "duckdb": ".powerpacks/network-import/index/contacts/duckdb/network.local.duckdb",
-                        "manifest": ".powerpacks/network-import/index/contacts/duckdb/manifest.json",
-                    }, ""
                 if "build_processing_pipeline.py" in joined and "--dry-run" in cmd:
                     return 0, {
                         "status": "dry_run",
@@ -88,11 +77,63 @@ class IndexContactsPipelineTest(unittest.TestCase):
             self.assertEqual(payload["status"], "ready")
             self.assertTrue((tmp / ".powerpacks/network-import/merged/people.csv").exists())
             self.assertEqual(payload["people_sha256"], index_contacts_pipeline.sha256_file(tmp / ".powerpacks/network-import/merged/people.csv"))
+            self.assertNotIn("network_duckdb", payload["fan_in"])
             manifest = json.loads((tmp / ".powerpacks/network-import/index/contacts/manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["status"], "ready")
             self.assertTrue(any("merge_network_sources.py" in " ".join(cmd) for cmd in calls))
-            self.assertTrue(any("build_network_duckdb.py" in " ".join(cmd) for cmd in calls))
+            self.assertFalse(any("build_network_duckdb.py" in " ".join(cmd) for cmd in calls))
             self.assertTrue(any("build-local-duckdb-shim.py" in " ".join(cmd) for cmd in calls))
+
+    def test_fan_in_cache_only_requires_merged_people_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source = tmp / ".powerpacks/network-import/import/linkedin/people.csv"
+            source.parent.mkdir(parents=True)
+            source.write_text("id\np1\n", encoding="utf-8")
+            merged = tmp / ".powerpacks/network-import/merged/people.csv"
+            merged.parent.mkdir(parents=True)
+            merged.write_text("id\np1\n", encoding="utf-8")
+            manifest = tmp / ".powerpacks/network-import/index/contacts/manifest.json"
+            manifest.parent.mkdir(parents=True)
+
+            args = argparse.Namespace(
+                manifest=".powerpacks/network-import/index/contacts/manifest.json",
+                input=[],
+                include_existing_artifacts=False,
+                openai_usage_tier=None,
+            )
+            old_root = index_contacts_pipeline.ROOT
+            index_contacts_pipeline.ROOT = tmp
+            try:
+                inputs = index_contacts_pipeline.fan_in_input_paths(args)
+                manifest.write_text(json.dumps({
+                    "status": "completed",
+                    "step": "fan_in",
+                    "input_fingerprints": index_contacts_pipeline.input_fingerprints(
+                        inputs + index_contacts_pipeline.FAN_IN_OVERRIDE_FILES
+                    ),
+                    "artifacts": {
+                        "merged_people_csv": ".powerpacks/network-import/merged/people.csv",
+                        "duckdb": ".powerpacks/network-import/duckdb/network.duckdb",
+                    },
+                    "promoted": {
+                        "network_duckdb": ".powerpacks/network-import/duckdb/network.duckdb",
+                    },
+                    "network_duckdb": {"status": "completed"},
+                }), encoding="utf-8")
+
+                with mock.patch.object(index_contacts_pipeline, "run_json_command") as run_command:
+                    payload, code = index_contacts_pipeline.run_fan_in(args)
+            finally:
+                index_contacts_pipeline.ROOT = old_root
+
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["noop"])
+            self.assertEqual(payload["reason"], "fan_in_inputs_unchanged")
+            self.assertNotIn("network_duckdb", payload)
+            self.assertNotIn("duckdb", payload["artifacts"])
+            self.assertNotIn("network_duckdb", payload["promoted"])
+            run_command.assert_not_called()
 
 
 class FanInOverrideFingerprintTest(unittest.TestCase):

@@ -14,7 +14,7 @@ emitted by local network ingestion and where RapidAPI enrichment happens.
 account linking / local source setup
   -> ingestion/source import
   -> enrichment / identity resolution
-  -> merge + local materialization
+  -> merge
   -> processing / indexing / search
 ```
 
@@ -23,7 +23,7 @@ account linking / local source setup
 | Account linking / local source setup | source-specific onboarding | msgvault CLI, LinkedIn export UI, `$import-messages`, Twitter RapidAPI key checks | Establish source access; avoid provider/API work unless explicitly approved. |
 | Ingestion/source import | ingestion skills + primitives | `gmail_network_import.py msgvault`, `linkedin_network_import.py`, `twitter_network_import.py`, messages primitives | Produces source-local normalized `people.csv` or message contacts artifacts. |
 | Enrichment / resolution | data processing + source-specific gates | `enrich_people.py`, Twitter `pre_resolve_linkedin`/`validate_linkedin`, future resolver queues | RapidAPI LinkedIn profile enrichment is centralized in `enrich_people` for LinkedIn-identified rows; Twitter still has source-specific validation. |
-| Merge + materialization | ingestion orchestration | `discover_contacts_pipeline.py`, `merge_network_sources.py`, `build_network_duckdb.py` | Produces merged CSV contracts and local DuckDB. |
+| Merge | ingestion orchestration | `discover_contacts_pipeline.py`, `merge_network_sources.py` | Produces merged CSV contracts and contact/source provenance. |
 | Processing / indexing / search | data processing / indexing/search packs | indexing primitives consume merged artifacts | Should consume canonical CSVs/views, not source-specific raw dumps. |
 
 ## User-facing skills and runtime handlers
@@ -98,17 +98,12 @@ company_id, company_key, company_name, company_urn, source_channels,
 contact_count, contact_ids, contact_names
 ```
 
-## DuckDB materialization
+## Search materialization
 
-`packs/ingestion/primitives/build_network_duckdb/build_network_duckdb.py` loads
-the merged CSVs into local DuckDB.
-
-| CSV | Table | View |
-| --- | --- | --- |
-| `people.csv` | `local_network_people` | `network_people` |
-| `network_contacts.csv` | `local_network_contacts` | `network_contacts` |
-| `network_contact_sources.csv` | `local_network_contact_sources` | `network_contact_sources` |
-| `network_companies.csv` | `local_network_companies` | `network_companies` |
+The former separate contact lookup DuckDB was retired because nothing consumed
+it. The merged CSVs remain the source/provenance contract. Search, contact lookup,
+and local profile inspection use
+`.powerpacks/search-index/local-search.duckdb`, built by the indexing pipeline.
 
 ## RapidAPI enrichment boundary
 
@@ -135,7 +130,6 @@ vertical owning separate enrichment implementations.
 uv run --project . python -m unittest \
   tests/test_discover_contacts_pipeline.py \
   tests/test_merge_network_sources.py \
-  tests/test_network_duckdb.py \
   tests/test_enrich_people.py \
   tests/test_linkedin_network_import.py \
   tests/test_twitter_network_import.py \

@@ -49,7 +49,6 @@ flowchart TD
         direction TD
         SOURCE --> FANIN[9. Fan in every imported source]
         FANIN --> MERGED[10. Write canonical merged people.csv]
-        FANIN -.-> CONTACTDB[Separate contact lookup network.duckdb]
     end
 
     subgraph INDEX[Modal indexing sandbox]
@@ -72,7 +71,7 @@ flowchart TD
     classDef cloud fill:#e8f3f1,color:#102a2a,stroke:#2f6f6d,stroke-width:1.5px;
     classDef output fill:#eaf2ff,color:#14213d,stroke:#315a9b,stroke-width:2px;
     class START,READY user;
-    class CREDS,CSV,SOURCE,FANIN,MERGED,CONTACTDB,DOWNLOAD,VERIFY local;
+    class CREDS,CSV,SOURCE,FANIN,MERGED,DOWNLOAD,VERIFY local;
     class UPLOAD,PARSE,ENRICH,PCACHE,SEND,NORMALIZE,CLASSIFY,EMBED,CONTRACT,DUCK,ICACHE cloud;
 ```
 
@@ -82,7 +81,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | Credentials | Authorize the local driver to dispatch work into the selected Modal workspace. | Local machine plus Powerset login when used. | `.env` and local auth state. |
 | LinkedIn import | Convert LinkedIn's export into normalized people and fill in profile details not present in the CSV. | Modal import sandbox. | `.powerpacks/network-import/import/linkedin/people.csv`. |
-| Source fan-in | Combine all imported source rows referring to the same network into one canonical input. During `$setup`, LinkedIn is the source guaranteed to be present. It also builds a separate contact/source lookup database that `$search` does not query. | Local machine. | `.powerpacks/network-import/merged/people.csv` and `.powerpacks/network-import/duckdb/network.duckdb`. |
+| Source fan-in | Combine all imported source rows referring to the same network into one canonical input. During `$setup`, LinkedIn is the source guaranteed to be present. | Local machine. | `.powerpacks/network-import/merged/people.csv` plus contact/source provenance CSVs. |
 | Processing | Turn people and work history into role, company, school, location, profile, and summary records. | Modal indexing sandbox. | Validated JSONL records and `ledger.json`. |
 | Classification | Normalize ambiguous titles and company information into fields search can filter and rank. | Modal indexing sandbox, using cached or provider-backed results. | Role/company enrichment caches and records. |
 | Embedding | Convert relevant text into numeric representations used for semantic similarity search. | Modal indexing sandbox, using cached or OpenAI-backed results. | Role, company, and summary embedding artifacts. |

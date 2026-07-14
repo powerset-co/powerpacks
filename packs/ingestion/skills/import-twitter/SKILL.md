@@ -37,4 +37,4 @@ uv run --project . python packs/ingestion/primitives/twitter_network_import/twit
 - RapidAPI LinkedIn validation uses `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` and requires approval.
 - Final output should include `people.csv`; summarize as `x/10 linkedins` plus counts, not raw rows.
 
-After Twitter finishes, run `$discover-contacts --include-existing-artifacts` to merge into local network contacts and DuckDB.
+After Twitter finishes, run `$discover-contacts --include-existing-artifacts` to merge it into local network contacts before rebuilding the local search index.

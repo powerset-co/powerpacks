@@ -345,7 +345,7 @@ Routes:
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
 - `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
-  msgvault/messages/Twitter merge, DuckDB materialization →
+  msgvault/messages/Twitter source preparation →
   `packs/ingestion/skills/discover-contacts/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief

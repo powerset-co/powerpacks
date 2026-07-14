@@ -113,8 +113,9 @@ Use the result explicitly when needed:
 export POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb
 ```
 
-## Important distinction
+## Search database
 
-`.powerpacks/network-import/duckdb/network.duckdb` is a contact/source lookup
-database built during fan-in. It is not the search index. `$search local` reads
-`.powerpacks/search-index/local-search.duckdb`.
+`$search local`, contact lookup, and local profile inspection use the single
+`.powerpacks/search-index/local-search.duckdb` artifact. Fan-in retains contact
+and source provenance as CSVs under `.powerpacks/network-import/merged/`; it does
+not build a second DuckDB.

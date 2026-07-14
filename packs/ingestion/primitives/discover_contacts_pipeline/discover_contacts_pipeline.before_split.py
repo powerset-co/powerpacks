@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Orchestrate local network ingestion sources into merged CSVs + DuckDB.
+"""Orchestrate local network ingestion sources into merged CSVs.
 
 Sources handled here:
 - LinkedIn Connections.csv -> linkedin_network_import
@@ -125,6 +125,7 @@ MERGED_ARTIFACT_KEYS = {
     "network_contact_sources_csv",
     "network_companies_csv",
     "merge_manifest",
+    # Retain retired keys here so a source refresh discards stale ledger state.
     "duckdb",
     "duckdb_manifest",
 }
@@ -2481,7 +2482,7 @@ def source_worker_group(input_cfg: dict[str, Any]) -> dict[str, Any]:
             "requires_approval": ["rapidapi_linkedin_profile_enrichment"] if messages_review_csv else ["messages_review_flow"],
             "status": "approved_review_artifact" if messages_review_csv else "review_required",
         })
-    return {"parallel": True, "fan_in": "merge_network_sources_then_duckdb_after_nonblocked_workers", "jobs": jobs}
+    return {"parallel": True, "fan_in": "merge_network_sources_after_nonblocked_workers", "jobs": jobs}
 
 
 def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resume: bool = False) -> bool:
@@ -3000,30 +3001,6 @@ def run_merge(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     return True
 
 
-def run_duckdb(ledger_path: Path, ledger: dict[str, Any]) -> bool:
-    begin_step(ledger_path, ledger, "duckdb", "Building local network DuckDB.")
-    merge_dir = artifact_dir_from_ledger(ledger) / "merged"
-    duckdb_dir = artifact_dir_from_ledger(ledger) / "duckdb"
-    cmd = py_cmd(
-        "packs/ingestion/primitives/build_network_duckdb/build_network_duckdb.py",
-        "--network-dir", str(merge_dir),
-        "--output-dir", str(duckdb_dir),
-        "--flavor", "local",
-        "--force",
-    )
-    code, payload, stderr = run_cmd(cmd)
-    if code != 0:
-        mark_step(ledger, "duckdb", "failed", error=stderr or payload)
-        ledger["status"] = "failed"
-        save_ledger(ledger_path, ledger)
-        emit({"status": "failed", "step_id": "duckdb", "error": stderr or payload})
-        return False
-    mark_step(ledger, "duckdb", "completed", payload=payload)
-    ledger.setdefault("artifacts", {}).update({"duckdb": payload.get("duckdb"), "duckdb_manifest": payload.get("manifest")})
-    emit_progress("Local network DuckDB is ready.")
-    return True
-
-
 def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     ledger = load_ledger(ledger_path)
     if not ledger.get("input", {}).get("fan_in_only") and ledger.get("steps", {}).get("source_imports", {}).get("status") not in {"completed", "skipped"}:
@@ -3087,9 +3064,6 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
             return 20 if ledger.get("blocked") else 1
         save_ledger(ledger_path, ledger)
     if not run_merge(ledger_path, ledger):
-        return 1
-    save_ledger(ledger_path, ledger)
-    if not run_duckdb(ledger_path, ledger):
         return 1
     ledger["status"] = "completed"
     ledger.pop("blocked", None)
@@ -3276,7 +3250,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
             would_run = []
         else:
             would_run = [
-                step for step in ["linkedin", "gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich", "messages_enrich_people", "merge", "duckdb"]
+                step for step in ["linkedin", "gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich", "messages_enrich_people", "merge"]
                 if (steps.get(step) or {}).get("status") not in {"completed", "skipped"}
             ]
         child_paid = {}
@@ -3337,7 +3311,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
     if not source_import_only and messages_review_csv:
         would_run.append("messages_enrich_people")
     if not source_import_only:
-        would_run.extend(["merge", "duckdb"])
+        would_run.append("merge")
     return {
         "status": "dry_run",
         "ledger": str(ledger_path),
@@ -3453,10 +3427,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--messages-contacts-csv", default="", help=argparse.SUPPRESS)
     run.add_argument("--allow-unreviewed-messages", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--only-source", action="append", default=[], choices=SOURCE_NAMES, help="Run only a source import worker; skips fan-in merge unless --fan-in-only is set separately")
-    run.add_argument("--fan-in-only", action="store_true", help="Skip source import workers and run merge/DuckDB fan-in from existing artifacts")
-    run.add_argument("--source-import-only", action="store_true", help="Run raw source imports only; skip resolution, enrichment, merge, and DuckDB fan-in")
-    run.add_argument("--enrichment-only", action="store_true", help="Run source-specific enrichment and stop before merge/DuckDB")
-    run.add_argument("--merge-only", action="store_true", help="Run only merge/DuckDB materialization; skip source-specific enrichment")
+    run.add_argument("--fan-in-only", action="store_true", help="Skip source import workers and merge existing artifacts")
+    run.add_argument("--source-import-only", action="store_true", help="Run raw source imports only; skip resolution, enrichment, and merge")
+    run.add_argument("--enrichment-only", action="store_true", help="Run source-specific enrichment and stop before merge")
+    run.add_argument("--merge-only", action="store_true", help="Run only merge materialization; skip source-specific enrichment")
     run.add_argument("--dry-run", action="store_true", help="Inspect existing ledger/stage outputs and report work that would run")
     run.add_argument("--estimate", action="store_true", help="Alias for --dry-run")
     run.add_argument("--force", action="store_true")

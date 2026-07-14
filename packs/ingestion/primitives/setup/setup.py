@@ -1474,20 +1474,6 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
                 dst = dest_dir / name
                 shutil.copy2(src, dst)
                 promoted[f'merged_{name}'] = str(dst)
-    duckdb = artifacts.get('duckdb')
-    if duckdb and Path(str(duckdb)).exists():
-        dest_dir = ROOT / '.powerpacks/network-import/duckdb'
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dst = dest_dir / 'network.duckdb'
-        shutil.copy2(Path(str(duckdb)), dst)
-        promoted['network_duckdb'] = str(dst)
-    manifest = artifacts.get('duckdb_manifest')
-    if manifest and Path(str(manifest)).exists():
-        dest_dir = ROOT / '.powerpacks/network-import/duckdb'
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dst = dest_dir / 'manifest.json'
-        shutil.copy2(Path(str(manifest)), dst)
-        promoted['network_duckdb_manifest'] = str(dst)
     return promoted
 
 

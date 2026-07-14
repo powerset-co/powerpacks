@@ -148,6 +148,6 @@ Discovery writes stable per-source artifacts only:
 ```
 
 Import/enrichment owns `directory.csv` and source `people.csv` outputs. Indexing
-owns merged `people.csv`, network DuckDB, and local search-index artifacts.
+owns merged `people.csv` and the `local-search.duckdb` search artifact.
 
 Do not upload automatically. Report artifact paths and counts only.
