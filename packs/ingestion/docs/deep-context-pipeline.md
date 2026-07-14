@@ -32,9 +32,8 @@ flowchart TD
     B -->|review| D["Open local review UI<br/>actions update review.csv"]
     B -->|full build| E{"Owner profile cached?"}
     E -->|Yes| E2["Build owner context<br/>from local cache"]
-    E -->|No| E0{"RapidAPI owner lookup<br/>approved?"}
-    E0 -->|No| STOP["Stop before provider calls"]
-    E0 -->|Yes| E1["Hydrate owner profile<br/>through RapidAPI"]
+    E -->|No| E0["Approve RapidAPI<br/>owner lookup"]
+    E0 --> E1["Hydrate owner profile<br/>through RapidAPI"]
     E1 --> E2
 
     E2 --> F["Check Gmail, iMessage,<br/>WhatsApp, and keys"]
@@ -44,21 +43,18 @@ flowchart TD
     H --> J["Ephemeral raw bundles"]
     I --> J
 
-    J --> K{"Preview and approve<br/>OpenAI synthesis"}
-    K -->|Not approved| STOP
-    K -->|Approved| L["Adaptive fact extraction<br/>one checkpoint per person"]
+    J --> K["Preview and approve<br/>OpenAI synthesis"]
+    K --> L["Adaptive fact extraction<br/>one checkpoint per person"]
     L --> M["Compose Markdown dossiers<br/>and lookup index locally"]
     M --> N["Validate completeness"]
 
-    N --> O{"Preview and approve<br/>duplicate judging"}
-    O -->|Not approved| STOP
-    O -->|Approved| P["OpenAI judges plausible pairs<br/>with facts + message samples"]
+    N --> O["Preview and approve<br/>duplicate judging"]
+    O --> P["OpenAI judges plausible pairs<br/>with facts + message samples"]
     P --> P0["Inspect accepted-edge audit<br/>before creating parents"]
     P0 --> Q["Build canonical parent dossiers<br/>from connected components"]
 
-    Q --> R{"Preview and approve<br/>LinkedIn reconciliation"}
-    R -->|Not approved| STOP
-    R -->|Approved| S["OpenAI compares facts + message samples<br/>with attached LinkedIn"]
+    Q --> R["Preview and approve<br/>LinkedIn reconciliation"]
+    R --> S["OpenAI compares facts + message samples<br/>with attached LinkedIn"]
     S --> T["Write durable proposed actions<br/>review.csv"]
     T --> U{"Optional identity recovery"}
     U -->|approved| V["Parallel public-web research"]
@@ -68,14 +64,12 @@ flowchart TD
 
     D --> X{"User finishes review"}
     X --> X1{"Approved retarget needs<br/>RapidAPI cache miss?"}
-    X1 -->|Yes| X2{"RapidAPI hydration approved?"}
-    X2 -->|No| STOP
-    X2 -->|Yes| X3["Hydrate approved retarget"]
+    X1 -->|Yes| X2["Approve RapidAPI<br/>retarget hydration"]
+    X2 --> X3["Hydrate approved retarget"]
     X3 --> Y["Fan in reviewed overrides locally"]
     X1 -->|No| Y
-    Y --> Z0{"Modal upload and provider<br/>processing approved?"}
-    Z0 -->|No| STOP
-    Z0 -->|Yes| Z["Upload merged people.csv<br/>to workspace-shared Modal volume"]
+    Y --> Z0["Approve Modal upload<br/>and provider processing"]
+    Z0 --> Z["Upload merged people.csv<br/>to workspace-shared Modal volume"]
     Z --> AA["Build and download<br/>local-search.duckdb"]
 
     classDef gate fill:#fff4d6,stroke:#a66b00,color:#3d2a00,stroke-width:2px;
@@ -83,10 +77,14 @@ flowchart TD
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
     class E,E0,G,K,O,R,U,X,X1,X2,Z0 gate;
-    class C,D,E2,F,H,I,J,M,N,P0,Q,T,Y,STOP local;
+    class C,D,E2,F,H,I,J,M,N,P0,Q,T,Y local;
     class E1,L,P,S,V,X3,Z cloud;
     class AA output;
 ```
+
+Approval nodes are wait points on the normal path, not separate failure states.
+If a provider call is not approved, execution simply does not continue past that
+node; the repeated stop branches are omitted to keep the product flow readable.
 
 The all-in-one `bin/deep-context run` shortcut is intentionally disabled. A
 single process cannot pause, show each core model stage's measured estimate, and
