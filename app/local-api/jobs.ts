@@ -127,11 +127,6 @@ function whitelistedShellCommand(command: string): boolean {
     "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step",
     "uv run --project . python packs/ingestion/primitives/setup/setup.py ",
     "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/import_contacts_pipeline.py ",
-    "uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py ",
-    "uv run --project . python packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py auth",
-    "uv run --project . python packs/messages/primitives/waha_runtime/waha_runtime.py ",
-    "uv run --project . python packs/messages/primitives/waha_session/waha_session.py ",
-    "uv run --project . python packs/messages/primitives/extract_imessage_contacts/extract_imessage_contacts.py open-privacy-settings",
   ].some((prefix) => trimmed.startsWith(prefix));
 }
 

@@ -10,20 +10,20 @@ file 0600). Deliberately separate from `contact-exporter`'s
 
 ```bash
 # Interactive login: opens browser, captures Auth0 callback on 127.0.0.1:9876.
-python packs/messages/primitives/powerset_auth/powerset_auth.py login
+python packs/powerset/primitives/auth/auth.py login
 
 # Show stored credentials (no refresh).
-python packs/messages/primitives/powerset_auth/powerset_auth.py whoami
+python packs/powerset/primitives/auth/auth.py whoami
 
 # Get a fresh access token (auto-refreshes if expiring within 60s).
-python packs/messages/primitives/powerset_auth/powerset_auth.py token
+python packs/powerset/primitives/auth/auth.py token
 
 # Plain bearer token on stdout, useful for shell pipelines:
-TOKEN=$(python ... powerset_auth.py token --bearer-only)
+TOKEN=$(python packs/powerset/primitives/auth/auth.py token --bearer-only)
 curl -H "Authorization: Bearer $TOKEN" https://...
 
 # Wipe credentials.
-python packs/messages/primitives/powerset_auth/powerset_auth.py logout
+python packs/powerset/primitives/auth/auth.py logout
 ```
 
 ## Environment overrides

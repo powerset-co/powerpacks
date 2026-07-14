@@ -14,7 +14,7 @@ EXCLUDED by default — some people legitimately have no LinkedIn and "no profil
 is a valid final answer; we never force a match. Pass --include-plausibly-absent to
 research them anyway for SYNTHETIC profiles (assemble_synthetic_profile.py).
 
-Reuses `packs/messages/primitives/deep_research_contacts` (Parallel.ai core2x) — this
+Reuses `packs/ingestion/primitives/deep_research_contacts` (Parallel.ai core2x) — this
 step only builds the research queue, estimates cost, enforces the gate, and shells out.
 
 Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
@@ -48,7 +48,7 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import load_override_rows, upsert_retargets
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
-from packs.messages.primitives.deep_research_contacts.deep_research_contacts import PROCESSOR_PRICING_USD
+from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import PROCESSOR_PRICING_USD
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
@@ -297,7 +297,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # take minutes. Keep our own stdout clean for the final JSON manifest.
     print(f"[deep-research] researching {len(subset)} people via Parallel.ai ({args.processor}); "
           "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
-    cmd = [sys.executable, "-m", "packs.messages.primitives.deep_research_contacts.deep_research_contacts",
+    cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_research_contacts.deep_research_contacts",
            "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]
     proc = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, text=True)
     print(f"[deep-research] research process exited ({proc.returncode}).", file=sys.stderr, flush=True)

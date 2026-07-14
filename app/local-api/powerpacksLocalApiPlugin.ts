@@ -5,7 +5,6 @@ import { handleRunsRoutes } from "./routes/runs";
 import { handleSetupRoutes } from "./routes/setup";
 import { handleEnvRoutes } from "./routes/env";
 import { handleOnboardingRoutes } from "./routes/onboarding";
-import { handleMessagesRoutes } from "./routes/messages";
 import { handleContactsRoutes } from "./routes/contacts";
 import { handlePowersetRoutes } from "./routes/powerset";
 import { handlePersonDetailsRoutes } from "./routes/personDetails";
@@ -22,7 +21,6 @@ const routeHandlers: LocalApiRouteHandler[] = [
   handleSetupRoutes,
   handleEnvRoutes,
   handleOnboardingRoutes,
-  handleMessagesRoutes,
   handleContactsRoutes,
   handlePowersetRoutes,
   handlePersonDetailsRoutes,

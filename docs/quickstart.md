@@ -72,12 +72,16 @@ the skill from:
 The primitive is stdlib-only; no new Python packages required.
 
 WhatsApp uses the local
-[`wacli`](https://github.com/openclaw/wacli) helper by default. It will be
-installed through Homebrew if it is missing:
+[`wacli`](https://github.com/openclaw/wacli) helper by default. Canonical
+discovery does not install software silently: if wacli or its QR renderer is
+missing, `$import-messages` shows the exact Homebrew command and asks before
+running it. The wacli command is:
 
 ```bash
 brew install steipete/tap/wacli
 ```
+
+QR rendering may separately request `brew install qrencode`.
 
 You'll also need WhatsApp on your phone to scan the QR code that pops up
 during the auth step.
@@ -140,13 +144,6 @@ scripts/test-powerpacks    # runs the unit-test suite
 scripts/lint-powerpacks    # runs ruff + flake8
 ```
 
-The smoke script drives every messages-pack primitive end-to-end on synthetic
-data (no network, no spend, no QR scan):
-
-```bash
-scripts/smoke-messages.sh
-```
-
 ---
 
 ## 4. First run, per skill
@@ -192,7 +189,7 @@ $search-company crypto trading infra companies that raised series B
 Resolves to canonical TurboPuffer company IDs you can hand to
 `search` as `company_filter`.
 
-### Messages pack — `$import-messages`
+### Message ingestion - `$import-messages`
 
 Use the one-command guided harness for the normal path:
 
@@ -202,7 +199,8 @@ $import-messages              # iMessage + WhatsApp -> match -> research -> revi
 
 Use the underlying primitives directly for advanced/debug subflows.
 
-Artifacts land under `.powerpacks/messages/`:
+Intermediate extraction, provider, and review artifacts land under
+`.powerpacks/messages/`:
 
 ```text
 .powerpacks/messages/
@@ -211,11 +209,21 @@ Artifacts land under `.powerpacks/messages/`:
 ├── contacts.csv                  unified, dedup'd by phone
 ├── research_queue.csv            unresolved contacts approved for research
 ├── research_review.csv           browser-review decisions
-├── *.manifest.json               per-step counts + diagnostics
+├── *.manifest.json               leaf-primitive counts + diagnostics
 └── wacli-login-qr.html           browser QR page for WhatsApp auth
 ```
 
-The pack's message-content boundary is strict:
+The fixed source-stage contracts and final index live alongside those
+intermediates:
+
+```text
+.powerpacks/network-import/discover/messages/{contacts.csv,manifest.json}
+.powerpacks/network-import/import/messages/{people.input.csv,enrichment/,people.csv,manifest.json}
+.powerpacks/network-import/merged/people.csv
+.powerpacks/search-index/{local-search.duckdb,manifest.json}
+```
+
+The workflow's message-content boundary is strict:
 
 - Powerpacks never selects or sends message bodies; wacli owns its local provider
   store.
@@ -225,7 +233,7 @@ The pack's message-content boundary is strict:
 - The final merged people CSV is processed in the operator's Modal workspace and
   downloaded as a local DuckDB. It is not uploaded to a Powerset set.
 
-See the [iMessage and WhatsApp import pipeline](../packs/messages/docs/message-import-pipeline.md)
+See the [iMessage and WhatsApp import pipeline](../packs/ingestion/docs/message-import-pipeline.md)
 for the complete diagram, payload table, approval gates, and current review
 semantics.
 
@@ -260,6 +268,6 @@ explicit current-run opt-in. See the
 | `llm_review_contacts review` says "OPENROUTER_API_KEY not provided" | `export OPENROUTER_API_KEY=sk-or-...` or pass `--api-key`. |
 | Codex / Claude Code / Pi doesn't see the new skills | Restart the host. In Pi, `/reload` also reloads skills. |
 
-For deeper diagnostics, every primitive writes a JSON manifest with counts,
-diagnostics, and timings. Look under `.powerpacks/runs/` and
-`.powerpacks/messages/` for the latest artifacts.
+For deeper diagnostics, inspect the fixed stage manifests under
+`.powerpacks/network-import/`, the leaf manifests under
+`.powerpacks/messages/`, and indexing progress under `.powerpacks/runs/`.

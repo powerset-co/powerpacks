@@ -23,10 +23,6 @@ class CoreLayoutTests(unittest.TestCase):
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
         self.assertEqual(search_pack, ["search", "search-company", "search-sql"])
-        messages_pack = sorted(
-            path.name for path in (ROOT / "packs/messages/skills").iterdir() if path.is_dir()
-        )
-        self.assertEqual(messages_pack, ["import-contacts", "import-whatsapp"])
         ingestion_pack = sorted(
             path.name for path in (ROOT / "packs/ingestion/skills").iterdir() if path.is_dir()
         )
@@ -36,15 +32,18 @@ class CoreLayoutTests(unittest.TestCase):
                 "deep-context",
                 "discover-contacts",
                 "enrich-email-markers",
-                "import-email",
+                "import-gmail",
                 "import-gmail-network",
                 "import-linkedin-network",
+                "import-messages",
                 "import-twitter",
                 "import-twitter-network",
+                "import-whatsapp",
                 "ingestion-onboarding",
                 "linkedin-sync-csv",
                 "linkedin-sync-mcp",
                 "local-msg-vault",
+                "logbook",
                 "msgvault",
                 "onboard",
                 "setup",
@@ -96,16 +95,18 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "search" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-email" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-gmail" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-whatsapp" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "discover-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
-            self.assertTrue((skills_dir / "search-network" / "powerpacks" / "pyproject.toml").exists())
+            self.assertTrue((skills_dir / "search" / "powerpacks" / "pyproject.toml").exists())
             self.assertIn(
                 "turbopuffer",
-                (skills_dir / "search-network" / "powerpacks" / "pyproject.toml").read_text(),
+                (skills_dir / "search" / "powerpacks" / "pyproject.toml").read_text(),
             )
             self.assertFalse(
                 (skills_dir / "powerset" / "powerpacks" / "packs" / "powerset" / "skills" / "powerset" / "SKILL.md").exists()
@@ -134,15 +135,16 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((bundle / "scripts" / "run-powerpacks-console.sh").exists())
             self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-contacts" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "import-whatsapp" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
-            self.assertTrue((skills_dir / "import-contacts" / "powerpacks").is_symlink())
+            self.assertTrue((skills_dir / "import-messages" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "setup" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "build-outbound" / "powerpacks").is_symlink())
             self.assertEqual((skills_dir / "powerset" / "powerpacks").resolve(), bundle.resolve())
-            self.assertEqual((skills_dir / "import-contacts" / "powerpacks").resolve(), bundle.resolve())
+            self.assertEqual((skills_dir / "import-messages" / "powerpacks").resolve(), bundle.resolve())
             self.assertEqual((skills_dir / "setup" / "powerpacks").resolve(), bundle.resolve())
             self.assertEqual((skills_dir / "build-outbound" / "powerpacks").resolve(), bundle.resolve())
             nested_skill_files = sorted(path.relative_to(bundle) for path in bundle.glob("packs/*/skills/*/SKILL.md"))
@@ -278,8 +280,7 @@ class CoreLayoutTests(unittest.TestCase):
             ROOT / "packs/search/schemas",
             ROOT / "packs/search/tasks",
             ROOT / "packs/search/evals",
-            ROOT / "packs/messages/schemas",
-            ROOT / "packs/messages/tasks",
+            ROOT / "packs/ingestion/schemas",
             ROOT / "packs/indexing/tasks",
         ]
         for root in roots:
@@ -287,15 +288,13 @@ class CoreLayoutTests(unittest.TestCase):
                 for path in root.rglob("*.json"):
                     json.loads(path.read_text())
 
-    def test_import_contacts_documents_guided_flow(self) -> None:
-        text = (ROOT / "packs/messages/skills/import-contacts/SKILL.md").read_text()
-        self.assertIn("`$import-contacts` starts with a fresh run", text)
-        self.assertIn("only use", text)
-        self.assertIn("continue", text)
-        self.assertIn("approve", text)
-        self.assertIn("Starting work through sub-agent.", text)
-        self.assertIn("Never upload automatically.", text)
-        self.assertIn("Retarget feedback is automatic", text)
+    def test_import_messages_documents_reviewed_local_flow(self) -> None:
+        text = (ROOT / "packs/ingestion/skills/import-messages/SKILL.md").read_text()
+        self.assertIn("$import-messages", text)
+        self.assertIn("review_research_web.py", text)
+        self.assertIn("import_contacts_pipeline/messages.py run", text)
+        self.assertIn("index_contacts_pipeline.py fan-in", text)
+        self.assertIn("linkedin_modal_pipeline.py index-people", text)
 
     def test_search_network_uses_single_execute_preview_gate(self) -> None:
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()

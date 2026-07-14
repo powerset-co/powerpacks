@@ -1,6 +1,6 @@
 ---
 name: discover-contacts
-description: Discover local LinkedIn CSV, msgvault email, existing messages, and Twitter source artifacts. Use for $discover-contacts.
+description: Discover local LinkedIn CSV, msgvault email, and Twitter source artifacts. Use for $discover-contacts. Route iMessage and WhatsApp to $import-messages instead.
 ---
 
 # discover-contacts
@@ -20,7 +20,6 @@ Use this style instead:
 I found these connected sources:
 - Gmail: 2 accounts
 - LinkedIn: Connections.csv
-- Messages: contacts.csv
 
 I’m going to discover each source in parallel where possible. Import/enrichment
 and indexing run as separate stages.
@@ -71,6 +70,9 @@ confirmation. Do not ask again for routine local metadata work.
 - `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` to consume link-only state from `$setup` / `$onboard`.
 - `--include-existing-artifacts` is legacy and should not be used for merge.
 
+iMessage and WhatsApp are intentionally outside this generic runner. Route either
+source to `$import-messages`; do not consume an existing Messages artifact here.
+
 ## Command
 
 ```bash
@@ -80,9 +82,10 @@ uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/
 
 `run --dry-run --from-accounts ...` reports source discovery jobs with
 `parallelizable: true/false`. LinkedIn, Gmail/msgvault accounts, approved
-Twitter imports, and existing messages/iMessage/WhatsApp artifacts have no
-cross-source dependency, so `$setup` may dispatch them in parallel sub-agents.
-Merge and indexing are owned by `index_contacts_pipeline.py`, not this skill.
+Twitter imports have no cross-source dependency, so this skill may dispatch them
+in parallel sub-agents. `$setup` remains LinkedIn-only and `$import-messages`
+exclusively owns iMessage/WhatsApp. Merge and indexing are owned by
+`index_contacts_pipeline.py`, not this skill.
 
 That paragraph is for execution planning. Do not repeat it to the user. Say:
 
@@ -144,7 +147,6 @@ Discovery writes stable per-source artifacts only:
 .powerpacks/network-import/discover/gmail/contacts.csv
 .powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv
 .powerpacks/network-import/discover/linkedin/contacts.csv
-.powerpacks/network-import/discover/messages/contacts.csv
 ```
 
 Import/enrichment owns `directory.csv` and source `people.csv` outputs. Indexing

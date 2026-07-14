@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import os
@@ -20,10 +19,8 @@ ROOT = Path.cwd()
 SETUP_LEDGER = Path('.powerpacks/setup/setup-run.json')
 DEFAULT_REFRESH_INTERVAL_HOURS = 168
 DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS = int(os.environ.get('POWERPACKS_SETUP_GMAIL_SYNC_LOOKBACK_DAYS', '14'))
-DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS = int(os.environ.get('POWERPACKS_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS', '900'))
 EMPTY_LOCAL_SEARCH_DUCKDB_MAX_BYTES = int(os.environ.get('POWERPACKS_SETUP_EMPTY_DUCKDB_MAX_BYTES', str(1024 * 1024)))
 SETUP_REFRESH_LEDGER = Path('.powerpacks/network-import/discover/ledger.setup.json')
-SETUP_MESSAGES_LEDGER = Path('.powerpacks/messages/import-run.setup-messages.json')
 SETUP_SOURCE_CHANNELS = ['gmail', 'linkedin_csv', 'messages', 'twitter']
 SETUP_PHASES = ['link', 'import', 'index']
 APPROVALS = [
@@ -1189,7 +1186,6 @@ def run_fan_in_phase(args: argparse.Namespace) -> int:
         'after_people_sha256': after_hash,
         'promoted': promoted,
         'artifact_hashes': artifact_hashes(promoted),
-        'messages_ledger': str(SETUP_MESSAGES_LEDGER) if ((accounts.get('channels') or {}).get('messages') or {}).get('linked') else '',
     }
     ledger.setdefault('phases', {})['import'] = {
         'status': 'ready',
@@ -1326,21 +1322,9 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
             })
         else:
             if ch == 'messages':
-                whatsapp_cfg = cfg.get('whatsapp') if isinstance(cfg.get('whatsapp'), dict) else {}
-                imessage_cfg = cfg.get('imessage') if isinstance(cfg.get('imessage'), dict) else {}
-                include_flags = []
-                if imessage_cfg.get('status') != 'skipped':
-                    include_flags.append('--include-imessage')
-                if whatsapp_cfg.get('status') == 'linked' or whatsapp_cfg.get('authenticated') is True:
-                    include_flags.append('--include-whatsapp')
-                include_flags.append('--include-contact-merge')
-                command = (
-                    'uv run --project . python packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py run'
-                    ' --ledger .powerpacks/messages/import-run.setup-messages.json'
-                    f' {" ".join(include_flags)}'
-                )
-                requires_approval = ['whatsapp_qr'] if '--include-whatsapp' in include_flags else []
-                ledger = str(SETUP_MESSAGES_LEDGER)
+                command = ''
+                requires_approval = []
+                ledger = ''
             elif ch == 'twitter':
                 command = ''
                 requires_approval = []
@@ -1352,11 +1336,17 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
             worker_jobs.append({
                 'id': ch,
                 'source': ch,
-                'parallelizable': ch == 'messages',
+                'parallelizable': False,
                 'ledger': ledger,
                 'command': command,
                 'requires_approval': requires_approval,
-                **({'status': 'recorded_only', 'reason': 'Twitter/X handle is recorded; follower import is not wired into setup yet.'} if ch == 'twitter' else {}),
+                **(
+                    {'status': 'recorded_only', 'reason': 'Run $import-messages through the agent harness.'}
+                    if ch == 'messages'
+                    else {'status': 'recorded_only', 'reason': 'Twitter/X handle is recorded; follower import is not wired into setup yet.'}
+                    if ch == 'twitter'
+                    else {}
+                ),
             })
     worker_group = {'parallel': False, 'fan_in': 'setup import uses the single setup refresh ledger', 'jobs': worker_jobs}
     if not worker_jobs:
@@ -1385,37 +1375,6 @@ def handoff_payload(args: argparse.Namespace) -> dict[str, Any]:
 def run_handoff(args: argparse.Namespace) -> int:
     emit(handoff_payload(args))
     return 0
-
-
-def message_refresh_command(accounts: dict[str, Any], ledger_path: Path, *, force: bool = True) -> list[str] | None:
-    messages = (accounts.get('channels') or {}).get('messages')
-    if not isinstance(messages, dict) or not messages.get('linked'):
-        return None
-    cfg = messages.get('config') if isinstance(messages.get('config'), dict) else {}
-    whatsapp_cfg = cfg.get('whatsapp') if isinstance(cfg.get('whatsapp'), dict) else {}
-    imessage_cfg = cfg.get('imessage') if isinstance(cfg.get('imessage'), dict) else {}
-    include_flags = []
-    if imessage_cfg.get('status') != 'skipped':
-        include_flags.append('--include-imessage')
-    if whatsapp_cfg.get('status') == 'linked' or whatsapp_cfg.get('authenticated') is True:
-        include_flags.append('--include-whatsapp')
-    include_flags.append('--include-contact-merge')
-    cmd = [
-        sys.executable,
-        'packs/messages/primitives/import_contacts_pipeline/import_contacts_pipeline.py',
-        'run',
-        '--ledger',
-        str(ledger_path),
-        '--parallel-timeout',
-        str(DEFAULT_SETUP_MESSAGES_PARALLEL_TIMEOUT_SECONDS),
-        '--reuse-existing-artifacts',
-        *include_flags,
-    ]
-    if force and '--include-imessage' in include_flags:
-        cmd.append('--force-imessage')
-    if force and '--include-whatsapp' in include_flags:
-        cmd.append('--force-whatsapp')
-    return cmd
 
 
 def network_refresh_command(args: argparse.Namespace, *, force: bool, gmail_sync_after: str = '') -> list[str]:
@@ -1485,25 +1444,6 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
 
     refresh_reason = str(due.get('reason') or '')
     force_reasons = {'forced', 'refresh_interval_elapsed', 'linked_sources_changed', 'missing_import_artifact', 'import_artifact_drift'}
-    force_messages = refresh_reason in force_reasons
-    message_cmd = message_refresh_command(accounts, SETUP_MESSAGES_LEDGER, force=force_messages)
-    if message_cmd:
-        progress("Starting Messages import/enrichment prerequisites...")
-        progress("Command: " + ' '.join(shlex.quote(part) for part in message_cmd))
-        code, payload, stderr = run_json_command(message_cmd, stream_stderr=True)
-        progress(f"Messages step finished with code={code}, status={payload.get('status') or 'unknown'}")
-        results['messages'] = {'code': code, 'payload': payload, 'stderr': tail(stderr)}
-        if code in (20, 21) or str(payload.get('status', '')).startswith('blocked'):
-            results['status'] = 'blocked_user_action'
-            results['completed_at'] = now()
-            results['failed_step'] = 'messages'
-            return {'status': 'blocked_user_action', 'step': 'messages', 'refresh': results, 'payload': payload}, code or 20
-        if code != 0:
-            results['status'] = 'failed'
-            results['completed_at'] = now()
-            results['failed_step'] = 'messages'
-            return {'status': 'failed', 'step': 'messages', 'refresh': results, 'error': payload or tail(stderr)}, 1
-
     force_network = refresh_reason in force_reasons
     # Leave Gmail mailbox cursoring to discover_contacts_pipeline. That layer can
     # inspect msgvault per account and pass sync-full --after from the newest
@@ -1545,7 +1485,6 @@ def run_live_refresh(args: argparse.Namespace, ledger: dict[str, Any], accounts:
         'artifact_hashes': artifact_hashes(promoted),
         'gmail_sync_after': gmail_sync_after,
         'gmail_sync_lookback_days': int(getattr(args, 'gmail_sync_lookback_days', DEFAULT_GMAIL_SYNC_LOOKBACK_DAYS)),
-        'messages_ledger': str(SETUP_MESSAGES_LEDGER) if message_cmd else '',
     }
     return {'status': 'completed', 'refresh': completed, 'results': results}, 0
 

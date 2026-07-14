@@ -20,34 +20,36 @@ We have rich evidence to catch this — the **email markers/context** from
 `$enrich-email-markers` (employer, title, school, location, handles) — but it's
 never checked against the hydrated profile, and there's no human review gate.
 
-## Insight: this is exactly the messages-pack review pattern
+## Insight: this is the message-ingestion review pattern
 
-The messages pack already solved the analogous problem (match an iMessage/
+The message-ingestion workflow already solved the analogous problem (match an iMessage/
 WhatsApp contact to a LinkedIn person, then let a human confirm). We should
 **mirror that architecture**, not invent a new one:
 
-| Messages pack | Gmail analog (proposed) |
+| Message-ingestion workflow | Gmail analog (proposed) |
 |---|---|
 | `llm_review_contacts` (LLM judge) | `verify_gmail_resolution` (LLM judge) |
 | `build_research_review_csv` (bucket yes/maybe/no, `network_match_confidence`, `network_match_reason`) | same review-CSV shape, reused |
-| `LocalMessagesReviewPage.tsx` (web review UI, yes/no tabs) | `LocalGmailReviewPage.tsx` (or reuse the same component) |
-| `upload_research_review` (decisions → upload) | decisions → gate into `people.csv` |
+| `review_research_web` (local browser review) | a Gmail-specific or shared browser reviewer |
+| `import_contacts_pipeline/messages.py` (decisions → local source `people.csv`) | decisions → gate into Gmail `people.csv` |
 
-## Where it slots (setup skill)
+## Where it would slot (`$import-gmail`)
 
-Today: **Step 8** sync → **Step 9** resolve→people.csv → **Step 11** merge.
+The original draft used the retired combined-setup step numbers. In the current
+split workflow, the proposed verification sits between Gmail identity resolution
+and the Gmail source `people.csv` consumed by fan-in:
 
-Proposed — expand the resolution stage (Step 8.5 / 9) into a verified pipeline:
+Proposed:
 
 ```
-Step 8   Sync Gmail archives (msgvault)                       [unchanged]
-Step 8.5 Enrich markers ($enrich-email-markers)               [NEW — context]
-Step 9a  Resolve emails → LinkedIn candidates (Parallel)       [+ markers context]
-Step 9b  Hydrate top candidate (RapidAPI / enrich_people)      [existing]
-Step 9c  LLM VERIFY: email evidence vs hydrated profile        [NEW — judge]
-Step 9d  Human REVIEW UI: confirm / reject / needs-review      [NEW — UI, opt-in]
-Step 9e  Only CONFIRMED contacts → people.csv                  [gate]
-Step 11  Merge                                                 [unchanged]
+Sync Gmail archives (msgvault)                           [unchanged]
+Enrich markers ($enrich-email-markers)                   [NEW — context]
+Resolve emails → LinkedIn candidates (Parallel)          [+ markers context]
+Hydrate top candidate (RapidAPI / enrich_people)         [existing]
+LLM VERIFY: email evidence vs hydrated profile           [NEW — judge]
+Human REVIEW UI: confirm / reject / needs-review         [NEW — UI, opt-in]
+Only CONFIRMED contacts → Gmail people.csv               [gate]
+Fan in imported sources                                  [unchanged]
 ```
 
 The markers from `$enrich-email-markers` feed both 9a (as Parallel `context`)
@@ -82,19 +84,20 @@ bucket (yes|maybe|no), match_confidence, match_method, match_reason,
 evidence_agreed, evidence_contradicted`. Buckets map: `confirmed→yes`,
 `needs_review→maybe`, `wrong_person→no`.
 
-## Review UI (mirror `LocalMessagesReviewPage`)
+## Review UI (mirror the local message reviewer)
 
 Same three-tab layout (yes / maybe / no). Each card shows: contact email +
 recent-subject evidence on the left, the matched LinkedIn profile (photo,
 headline, company, location, URL) on the right, the judge's reason, and
 accept / reject toggles. Default selection = the judge's bucket; the human
-overrides the `maybe`s and any wrong-looking `yes`. Reuse the existing review
-component/route rather than building a new one where possible.
+overrides the `maybe`s and any wrong-looking `yes`. Reuse the current
+`review_research_web` local-browser pattern rather than restoring a retired app
+route.
 
 ## Gate into people.csv
 
 Only `confirmed` (post-review) contacts flow into the Gmail `people.csv` that
-Step 11 merges. `wrong_person` are dropped; `needs_review` left out unless the
+fan-in merges. `wrong_person` are dropped; `needs_review` left out unless the
 human accepts. This keeps same-name false positives out of the network.
 
 ## Cost
@@ -102,16 +105,16 @@ human accepts. This keeps same-name false positives out of the network.
 - Markers: ~$0.003/contact (already in `$enrich-email-markers`).
 - Judge: 1 LLM call/contact, similar size → ~$0.003–0.005/contact. For ~500
   contacts ≈ **$1.50–2.50**. Concurrent + checkpointed like the markers step.
-- No extra Parallel/RapidAPI beyond what Step 9 already spends.
+- No extra Parallel/RapidAPI beyond what Gmail resolution already spends.
 
 ## Open questions / decisions
 
 1. **Auto-drop threshold:** do we auto-drop `wrong_person` without review, or
    route everything through the UI? (Lean: auto-drop high-confidence
    contradictions, review the rest.)
-2. **Reuse vs. fork the review UI:** extend `LocalMessagesReviewPage` to a
-   generic contact-review page, or fork a Gmail-specific one?
-3. **Headless mode:** for non-interactive setup runs, do we skip the UI and just
+2. **Reuse vs. fork the review UI:** generalize the `review_research_web`
+   local-browser pattern, or add a Gmail-specific reviewer?
+3. **Headless mode:** for non-interactive harness runs, do we skip the UI and just
    apply the judge's verdicts (confirmed + needs_review in, wrong_person out)?
 4. **Where the gate lives:** new `gate_verified_contacts` primitive vs. a flag on
    the existing apply-resolutions step.
@@ -122,4 +125,4 @@ human accepts. This keeps same-name false positives out of the network.
   (confirmed in, wrong_person out). Immediately removes same-name false
   positives; reviewable as a CSV. Lowest lift, highest value.
 - **P2:** web review UI (mirror messages) for the `needs_review` bucket.
-- **P3:** wire both into setup Step 9 + `$enrich-email-markers`.
+- **P3:** wire both into `$import-gmail` + `$enrich-email-markers`.

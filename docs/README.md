@@ -11,7 +11,7 @@ only when you need that level of detail.
 | People search | [`$search` architecture](../packs/search/docs/search-architecture.md) | Product walkthrough of routing, standard (`depth: fast`) search, deep recruiter search, review points, data boundaries, outputs, and roadmap. |
 | LinkedIn setup and indexing | [LinkedIn and Modal indexing pipeline](../packs/indexing/docs/linkedin-modal-pipeline.md) | How a LinkedIn `Connections.csv` becomes the local DuckDB queried by `$search local`. |
 | Gmail import | [Gmail import pipeline](../packs/ingestion/docs/gmail-import-pipeline.md) | How bounded msgvault sync, metadata extraction, directory reuse, LinkedIn lookup, hydration, fan-in, and indexing work. |
-| iMessage and WhatsApp import | [Message import pipeline](../packs/messages/docs/message-import-pipeline.md) | Source extraction, matching, provider payloads, human review, and the Modal boundary. |
+| iMessage and WhatsApp import | [Message import pipeline](../packs/ingestion/docs/message-import-pipeline.md) | Source extraction, matching, provider payloads, human review, and the Modal boundary. |
 | Deep relationship context | [Deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md) | How message bodies become dossiers, duplicate clusters, LinkedIn self-heal decisions, and reviewed network overrides. |
 | Running deep search | [Deep-mode runbook](../packs/search/skills/search/deep-mode.md) | Exact operator commands, artifacts, approval boundary, and resume rules. |
 | Running setup | [`$setup` skill](../packs/ingestion/skills/setup/SKILL.md) | Exact LinkedIn-only setup checklist. |

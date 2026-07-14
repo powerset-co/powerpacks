@@ -328,53 +328,6 @@ export interface MessageReviewCounts {
   retargetFeedback: number;
 }
 
-export type MessageReviewDecision = "include" | "skip" | "undecided";
-export type MessageReviewTab = "yes" | "maybe" | "no" | "in_network";
-export type MessageReviewFilter = MessageReviewTab | "all" | "included" | "skipped" | "undecided" | "feedback";
-
-export interface MessageReviewRow {
-  index: number;
-  bucket: string;
-  tab: MessageReviewTab;
-  decision: MessageReviewDecision;
-  selected: boolean;
-  handle: string;
-  fullName: string;
-  phone: string;
-  messageSource: string;
-  totalMessages: number;
-  imessageMessages: number;
-  whatsappMessages: number;
-  groupNames: string;
-  networkName: string;
-  networkLinkedInUrl: string;
-  networkMatchStatus: string;
-  networkMatchConfidence: string;
-  titleCompanyPairs: string;
-  schools: string;
-  signals: string;
-  identityRisk: string;
-  shortReason: string;
-  retargetHint: string;
-  retargetStatus: string;
-  retargetLinkedInUrl: string;
-  retargetNotes: string;
-  reviewSource: string;
-}
-
-export interface MessageReviewResponse {
-  path: string;
-  exists: boolean;
-  updatedAt?: string | null;
-  sizeBytes?: number;
-  rows: MessageReviewRow[];
-  counts: MessageReviewCounts;
-  filteredCount: number;
-  offset: number;
-  limit: number;
-  hasMore: boolean;
-}
-
 function firstNonEmpty(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();

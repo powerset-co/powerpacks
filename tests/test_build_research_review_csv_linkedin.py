@@ -24,12 +24,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from packs.ingestion.primitives.discover_contacts_pipeline.messages import (  # noqa: E402
+from packs.ingestion.primitives.import_contacts_pipeline.messages import (  # noqa: E402
     materialize_messages_review_people,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-BUILD = ROOT / "packs/messages/primitives/build_research_review_csv/build_research_review_csv.py"
+BUILD = ROOT / "packs/ingestion/primitives/build_research_review_csv/build_research_review_csv.py"
 
 
 def _load_build_module():

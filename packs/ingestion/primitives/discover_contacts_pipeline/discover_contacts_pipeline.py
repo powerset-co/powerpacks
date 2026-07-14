@@ -3,7 +3,6 @@
 
 The source-specific discovery work lives in sibling modules:
 - gmail.py for msgvault/Gmail sync, directory matching, and LinkedIn resolution
-- messages.py for reviewed iMessage/WhatsApp contact promotion and enrichment
 - directory.py for directory.csv and people.csv materialization helpers
 
 Fan-in/merge/indexing is owned by packs/indexing/primitives/index_contacts_pipeline.
@@ -18,10 +17,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from packs.ingestion.primitives.discover_contacts_pipeline import common, directory, gmail, linkedin, messages
+    from packs.ingestion.primitives.discover_contacts_pipeline import common, directory, gmail, linkedin
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.discover_contacts_pipeline import common, directory, gmail, linkedin, messages
+    from packs.ingestion.primitives.discover_contacts_pipeline import common, directory, gmail, linkedin
 
 DEFAULT_BASE_DIR = common.DEFAULT_BASE_DIR
 DEFAULT_DISCOVER_DIR = common.DEFAULT_DISCOVER_DIR
@@ -31,20 +30,17 @@ DEFAULT_MSGVAULT_DB = common.DEFAULT_MSGVAULT_DB
 DEFAULT_CHILD_TIMEOUT_SECONDS = common.DEFAULT_CHILD_TIMEOUT_SECONDS
 DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = gmail.DEFAULT_GMAIL_ESTIMATE_MAX_PAGES
 
-SOURCE_NAMES = ["gmail", "linkedin_csv", "twitter", "messages"]
+SOURCE_NAMES = ["gmail", "linkedin_csv", "twitter"]
 SOURCE_ARTIFACT_PREFIXES = {
     "gmail": ("gmail_",),
     "linkedin_csv": ("linkedin_",),
     "twitter": ("twitter_",),
-    "messages": ("messages_",),
 }
 SOURCE_STEP_PREFIXES = {
     "gmail": ("gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich"),
     "linkedin_csv": ("linkedin",),
     "twitter": ("twitter",),
-    "messages": ("messages", "messages_enrich_people"),
 }
-MESSAGES_REVIEW_GATE_REASON = messages.MESSAGES_REVIEW_GATE_REASON
 GMAIL_ENRICHMENT_ARTIFACT_KEYS = {"gmail_directory_queue_csv", "gmail_linkedin_resolution_csv", "gmail_directory_csv", "gmail_merged_people_csv"}
 
 # Shared helper aliases keep the orchestrator readable and preserve direct CLI semantics.
@@ -84,9 +80,6 @@ run_gmail_directory = gmail.run_gmail_directory
 run_gmail_linkedin_resolution = gmail.run_gmail_linkedin_resolution
 run_gmail_msgvault = gmail.run_gmail_msgvault
 summarize_gmail_estimates = gmail.summarize_gmail_estimates
-
-materialize_approved_messages_review = messages.materialize_approved_messages_review
-run_messages_enrichment = messages.run_messages_enrichment
 
 def account_channels(path: str) -> dict[str, Any]:
     if not path:
@@ -165,11 +158,6 @@ def apply_account_sources(args: argparse.Namespace) -> argparse.Namespace:
     if twitter and not account_record_is_linked(twitter):
         twitter = {}
     twitter_cfg = twitter.get("config") if isinstance(twitter.get("config"), dict) else {}
-    messages = channels.get("messages") if isinstance(channels.get("messages"), dict) else {}
-    if messages and not account_record_is_linked(messages):
-        messages = {}
-    messages_cfg = messages.get("config") if isinstance(messages.get("config"), dict) else {}
-
     if not getattr(args, "msgvault_db", "") and gmail_cfg.get("msgvault_db"):
         args.msgvault_db = str(gmail_cfg.get("msgvault_db") or "")
     emails = unique_strings(getattr(args, "gmail_account_emails", []))
@@ -191,8 +179,6 @@ def apply_account_sources(args: argparse.Namespace) -> argparse.Namespace:
         args.twitter_handle = str(twitter_cfg.get("handle") or "")
         if not args.twitter_handle and twitter.get("usernames"):
             args.twitter_handle = str((twitter.get("usernames") or [""])[0])
-    if not getattr(args, "messages_review_csv", ""):
-        args.messages_review_csv = str(messages_cfg.get("review_csv") or "")
     return args
 
 
@@ -311,20 +297,6 @@ def source_worker_group(input_cfg: dict[str, Any]) -> dict[str, Any]:
             "requires_approval": ["rapidapi_twitter", "openai_moe", "rapidapi_linkedin_validation"],
             "status": "existing_artifacts_or_explicit_import_required",
         })
-    messages_review_csv = input_cfg.get("messages_review_csv") or ""
-    if messages_review_csv and not Path(str(messages_review_csv)).exists():
-        messages_review_csv = ""
-    if input_cfg.get("messages_contacts_csv") or messages_review_csv:
-        jobs.append({
-            "id": "messages",
-            "source": "messages",
-            "review_csv": messages_review_csv,
-            "contacts_csv": input_cfg.get("messages_contacts_csv") or ".powerpacks/messages/contacts.csv",
-            "parallelizable": True,
-            "reason": "reviewed Messages LinkedIn rows are materialized locally, then hydrated through enrich_people" if messages_review_csv else MESSAGES_REVIEW_GATE_REASON,
-            "requires_approval": ["rapidapi_linkedin_profile_enrichment"] if messages_review_csv else ["messages_review_flow"],
-            "status": "approved_review_artifact" if messages_review_csv else "review_required",
-        })
     return {"parallel": True, "jobs": jobs}
 
 
@@ -333,7 +305,7 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
     group = source_worker_group(input_cfg)
     ledger["worker_groups"] = {"import": group}
     selected = set(unique_strings(input_cfg.get("only_sources")))
-    runnable_sources = {"gmail", "linkedin_csv", "messages"}
+    runnable_sources = {"gmail", "linkedin_csv"}
     if selected:
         runnable_sources &= selected
     mark_step(ledger, "source_imports", "running", worker_group=group)
@@ -390,31 +362,6 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
             artifacts["linkedin_contacts_csv"] = payload["contacts_csv"]
         save_ledger(ledger_path, ledger)
 
-    if "messages" in runnable_sources:
-        begin_step(ledger_path, ledger, "messages", "Discovering iMessage/WhatsApp contacts.")
-        payload = messages.discover(
-            accounts_path=accounts_path,
-            ledger_path=DEFAULT_BASE_DIR / "messages" / "ledger.json",
-            output_dir=DEFAULT_BASE_DIR / "messages",
-        )
-        status = str(payload.get("status") or "")
-        if status in {"blocked_user_action", "blocked_approval"}:
-            ledger["blocked"] = {"step_id": "messages", "child": payload}
-            mark_step(ledger, "messages", "blocked", payload=payload)
-            mark_step(ledger, "source_imports", "blocked", worker_group=group)
-            save_ledger(ledger_path, ledger)
-            emit({"status": status, "step_id": "messages", "ledger": str(ledger_path), "child": payload})
-            return False
-        if status == "failed":
-            mark_step(ledger, "messages", "failed", payload=payload)
-            mark_step(ledger, "source_imports", "failed", worker_group=group)
-            save_ledger(ledger_path, ledger)
-            return False
-        mark_step(ledger, "messages", "completed" if status == "completed" else "skipped", payload=payload)
-        if payload.get("contacts_csv"):
-            artifacts["messages_contacts_csv"] = payload["contacts_csv"]
-        save_ledger(ledger_path, ledger)
-
     for source in ["twitter"]:
         if not selected or source in selected:
             if source == "twitter" and not input_cfg.get("twitter_handle"):
@@ -433,7 +380,6 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     enrichment_only = bool(ledger.get("input", {}).get("enrichment_only"))
     selected_enrichment_sources = selected_sources if enrichment_only else set()
     run_gmail_enrichment = not selected_enrichment_sources or "gmail" in selected_enrichment_sources
-    run_messages_profile_enrichment = not selected_enrichment_sources or "messages" in selected_enrichment_sources
     if enrichment_only:
         if run_gmail_enrichment:
             if not run_gmail_directory(ledger_path, ledger):
@@ -445,20 +391,12 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
             if not run_gmail_apply_and_enrich(ledger_path, ledger):
                 return 20 if ledger.get("blocked") else 1
             save_ledger(ledger_path, ledger)
-        if run_messages_profile_enrichment:
-            if not run_messages_enrichment(ledger_path, ledger):
-                return 20 if ledger.get("blocked") else 1
-            save_ledger(ledger_path, ledger)
         ledger["status"] = "source_enrichment_completed"
         ledger.pop("blocked", None)
         save_ledger(ledger_path, ledger)
         emit({"status": "source_enrichment_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
         return 0
     if ledger.get("input", {}).get("only_sources"):
-        if "messages" in selected_sources and ledger.get("steps", {}).get("messages_enrich_people", {}).get("status") not in {"completed", "skipped"}:
-            if not run_messages_enrichment(ledger_path, ledger):
-                return 20 if ledger.get("blocked") else 1
-            save_ledger(ledger_path, ledger)
         ledger["status"] = "source_import_completed"
         save_ledger(ledger_path, ledger)
         emit({"status": "source_import_completed", "ledger": str(ledger_path), "artifact_dir": str(artifact_dir_from_ledger(ledger)), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
@@ -545,11 +483,6 @@ def reset_selected_enrichment_state(preserved: dict[str, Any], selected_sources:
         for key in list(artifacts):
             if key in GMAIL_ENRICHMENT_ARTIFACT_KEYS or key.startswith("gmail_directory_by_slug") or key.startswith("gmail_") and "_enriched_" in key:
                 artifacts.pop(key, None)
-    if "messages" in selected_sources:
-        steps.pop("messages_enrich_people", None)
-        for key in list(artifacts):
-            if key.startswith("messages_enriched_") or key in {"messages_people_csv", "messages_people_csvs", "messages_final_people_csvs", "messages_merged_people_csv", "messages_merged_people", "messages_people_input_csv", "messages_people_input_manifest", "messages_enrich_people_ledger"}:
-                artifacts.pop(key, None)
     return preserved
 
 
@@ -617,9 +550,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             "only_sources": unique_strings(getattr(args, "only_source", [])),
             "enrichment_only": bool(getattr(args, "enrichment_only", False)),
             "twitter_handle": getattr(args, "twitter_handle", ""),
-            "messages_review_csv": getattr(args, "messages_review_csv", ""),
-            "messages_contacts_csv": getattr(args, "messages_contacts_csv", ""),
-            "allow_unreviewed_messages": bool(getattr(args, "allow_unreviewed_messages", False)),
         },
         "steps": {},
         "artifacts": {},
@@ -642,7 +572,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
             would_run = []
         else:
             would_run = [
-                step for step in ["linkedin", "gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich", "messages_enrich_people"]
+                step for step in ["linkedin", "gmail_msgvault", "gmail_directory", "gmail_linkedin_resolution", "gmail_apply_enrich"]
                 if (steps.get(step) or {}).get("status") not in {"completed", "skipped"}
             ]
         child_paid = {}
@@ -666,9 +596,6 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
     would_run = []
     if args.linkedin_csv:
         would_run.append("linkedin")
-    messages_review_csv = getattr(args, "messages_review_csv", "")
-    if messages_review_csv and not Path(str(messages_review_csv)).exists():
-        messages_review_csv = ""
     input_cfg = {
         "linkedin_csv": args.linkedin_csv,
         "msgvault_db": resolve_msgvault_db(args),
@@ -682,8 +609,6 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
         "skip_gmail_estimate": bool(getattr(args, "skip_gmail_estimate", False)),
         "gmail_estimate_max_pages": int(getattr(args, "gmail_estimate_max_pages", DEFAULT_GMAIL_ESTIMATE_MAX_PAGES) or DEFAULT_GMAIL_ESTIMATE_MAX_PAGES),
         "twitter_handle": getattr(args, "twitter_handle", ""),
-        "messages_review_csv": messages_review_csv,
-        "messages_contacts_csv": getattr(args, "messages_contacts_csv", ""),
         "include_existing_artifacts": getattr(args, "include_existing_artifacts", False),
         "linkedin_directory_csv": getattr(args, "linkedin_directory_csv", str(DEFAULT_DIRECTORY_CSV)),
         "linkedin_directory_source_csvs": unique_strings(getattr(args, "linkedin_directory_source_csv", [])),
@@ -700,8 +625,6 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
         would_run.append("gmail_linkedin_resolution")
     if enrichment_only and getattr(args, "gmail_resolutions_csv", ""):
         would_run.append("gmail_apply_enrich")
-    if enrichment_only and messages_review_csv:
-        would_run.append("messages_enrich_people")
     return {
         "status": "dry_run",
         "ledger": str(ledger_path),
@@ -746,15 +669,6 @@ def cmd_approve(args: argparse.Namespace) -> int:
         emit({"status": "approved", "ledger": str(ledger_path), "child": payload})
         return 0
     if blocked.get("step_id") == "gmail_apply_enrich" and blocked.get("child_ledger"):
-        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/enrich_people/enrich_people.py", "approve", "--ledger", blocked["child_ledger"]))
-        if code != 0:
-            emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
-            return 1
-        ledger.pop("blocked", None)
-        save_ledger(ledger_path, ledger)
-        emit({"status": "approved", "ledger": str(ledger_path), "child": payload})
-        return 0
-    if blocked.get("step_id") == "messages_enrich_people" and blocked.get("child_ledger"):
         code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/enrich_people/enrich_people.py", "approve", "--ledger", blocked["child_ledger"]))
         if code != 0:
             emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
@@ -810,12 +724,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--linkedin-directory-csv", default=str(DEFAULT_DIRECTORY_CSV), help=argparse.SUPPRESS)
     run.add_argument("--linkedin-directory-source-csv", action="append", default=[], help=argparse.SUPPRESS)
     run.add_argument("--no-default-linkedin-directory-sources", action="store_true", help=argparse.SUPPRESS)
-    run.add_argument("--include-existing-artifacts", action="store_true", help="Merge all discovered existing LinkedIn/Gmail/Twitter/message artifacts instead of only artifacts produced by this run")
+    run.add_argument("--include-existing-artifacts", action="store_true", help="Merge all discovered existing LinkedIn/Gmail/Twitter artifacts instead of only artifacts produced by this run")
     run.add_argument("--skip-msgvault-sync", action="store_true", help="Skip import-time msgvault sync-full and read the existing DB as-is")
     run.add_argument("--twitter-handle", default="", help=argparse.SUPPRESS)
-    run.add_argument("--messages-review-csv", default="", help=argparse.SUPPRESS)
-    run.add_argument("--messages-contacts-csv", default="", help=argparse.SUPPRESS)
-    run.add_argument("--allow-unreviewed-messages", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--only-source", action="append", default=[], choices=SOURCE_NAMES, help="Run only a source discovery worker")
     run.add_argument("--enrichment-only", action="store_true", help="Run source-specific enrichment only")
     run.add_argument("--dry-run", action="store_true", help="Inspect existing ledger/stage outputs and report work that would run")

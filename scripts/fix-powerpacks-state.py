@@ -323,7 +323,7 @@ def wacli_auth_status(canonical: Path, store: Path) -> dict[str, Any]:
         return {"status": "missing", "authenticated": False, "store": str(store)}
     cmd = [
         sys.executable,
-        "packs/messages/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
+        "packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
         "status",
         "--store",
         str(store),

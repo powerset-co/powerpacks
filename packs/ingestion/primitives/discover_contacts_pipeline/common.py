@@ -394,7 +394,12 @@ def run_cmd(cmd: list[str], *, timeout: int | None = None) -> tuple[int, dict[st
         emit_progress(timeout_message)
     for thread in threads:
         thread.join(timeout=1)
-    return code, parse_last_json("".join(stdout_chunks)), "".join(stderr_chunks)
+    payload = parse_last_json("".join(stdout_chunks))
+    stderr = "".join(stderr_chunks)
+    for stream in (proc.stdout, proc.stderr):
+        if stream is not None:
+            stream.close()
+    return code, payload, stderr
 
 
 def child_error(payload: dict[str, Any], stderr: str) -> Any:

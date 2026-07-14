@@ -493,7 +493,7 @@ def read_whatsapp(person: Person, wacli_db: Path = DEFAULT_WACLI_DB, cap: int = 
     return out
 
 
-# --- timestamp helpers (lazy import keeps the messages pack optional) -------
+# --- timestamp helpers (lazy import keeps message-source support optional) --
 
 def _apple_to_iso(value: Any) -> str | None:
     from datetime import datetime, timezone

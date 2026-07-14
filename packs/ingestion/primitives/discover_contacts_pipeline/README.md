@@ -3,7 +3,7 @@
 > **Legacy monolithic-orchestrator reference.** Current product flows use the
 > split source-specific skills and handlers. Start with the
 > [Gmail import pipeline](../../docs/gmail-import-pipeline.md),
-> [Messages import pipeline](../../../messages/docs/message-import-pipeline.md),
+> [Message import pipeline](../../docs/message-import-pipeline.md),
 > and their `SKILL.md` files. Some commands below are retained only in the
 > `before_split` compatibility module and are not exposed by the current CLI.
 
@@ -20,15 +20,17 @@ agent to a `SKILL.md`, and that skill calls this script.
 | `$import-gmail` | Uses the split Gmail discovery and import handlers | `discover_contacts_pipeline/gmail.py`, `import_contacts_pipeline/gmail.py` |
 | `$discover-contacts` | Calls this script for source discovery only | `linkedin_network_import.py`, `gmail_network_import.py msgvault` |
 | `$import-twitter` | Runs Twitter primitive directly | `twitter_network_import.py` |
-| `$import-messages` | Produces reviewed message artifacts through messages pack primitives | messages pack primitives |
+| `$import-messages` | Does not use this generic runner; it exclusively owns iMessage/WhatsApp | `discover_contacts_pipeline/messages.py`, `import_contacts_pipeline/messages.py`, and ingestion message primitives |
 
 ## Inputs
 
 - LinkedIn CSV: LinkedIn `Connections.csv`, handled by `linkedin_network_import`.
 - Gmail: local msgvault SQLite (`~/.msgvault/msgvault.db`), handled by `gmail_network_import msgvault`; multiple selected accounts from onboarding are imported into fixed per-account folders under `.powerpacks/network-import/discover/gmail/<account>/`.
-- Setup/account state: `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` fills in LinkedIn CSV/source label, msgvault DB, selected Gmail accounts, Twitter handle, and message contacts artifacts unless explicit CLI flags override them.
-- Messages: existing `.powerpacks/messages/research_review.csv`, produced by `$import-messages`. Reviewed rows with usable LinkedIn `/in/` URLs are materialized into a local people CSV and hydrated through `enrich_people.py` during import/enrichment. Raw `.powerpacks/messages/contacts.csv` remains review-gated.
+- Setup/account state: `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` fills in LinkedIn CSV/source label, msgvault DB, selected Gmail accounts, and Twitter handle unless explicit CLI flags override them.
 - Twitter/X: existing `.powerpacks/network-import/discover/twitter/*/people.csv`, produced by `twitter_network_import`; include with `--include-existing-artifacts`.
+
+Message artifacts are not generic discovery inputs. `$import-messages` owns
+iMessage/WhatsApp discovery, review, materialization, fan-in, and indexing.
 
 ## Run
 
@@ -40,16 +42,13 @@ uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/
 ## Parallel source discovery
 
 `run --dry-run --from-accounts ...` emits `worker_groups.import.jobs`. Jobs for
-Gmail accounts, LinkedIn CSV import/enrichment, Twitter, and messages artifacts
-are independent and marked with `parallelizable` plus a reason. Gmail account
+Gmail accounts, LinkedIn CSV import/enrichment, and Twitter artifacts are
+independent and marked with `parallelizable` plus a reason. Gmail account
 imports use fixed per-account output directories, so they can run concurrently
 without creating run-specific artifact roots. LinkedIn uses its own child ledger
 and hydrates LinkedIn profiles through the shared RapidAPI cache/fetch path.
-Messages uses reviewed
-local research artifacts only, then delegates LinkedIn profile hydration to
-`enrich_people.py`.
 Twitter remains an existing-artifact or dedicated-skill worker unless explicitly
-approved; this orchestrator never runs `$import-messages` research implicitly.
+approved; this orchestrator never dispatches `$import-messages` implicitly.
 
 Fan-in is not owned by this primitive. The indexing pipeline owns the merge and
 the single local search index:
@@ -100,11 +99,10 @@ The current split discovery CLI does not expose the old `approve` or `continue`
 commands. Follow the source-specific skill when a child blocks rather than using
 the compatibility examples from this historical document.
 
-Gmail msgvault import, directory application, and Messages materialization are
-local-only. Gmail email-to-LinkedIn provider resolution
+Gmail msgvault import and directory application are local-only. Gmail
+email-to-LinkedIn provider resolution
 is optional and only receives rows not already matched by `directory.csv`:
 `--gmail-linkedin-provider harness` only prepares prompts;
 `--gmail-linkedin-provider parallel` is spend-bearing and requires approval.
-RapidAPI profile hydration only happens after resolutions are applied, or after
-reviewed Messages LinkedIn rows are materialized, and is delegated to
-`enrich_people.py` with its normal cache/fetch behavior.
+RapidAPI profile hydration only happens after resolutions are applied and is
+delegated to `enrich_people.py` with its normal cache/fetch behavior.

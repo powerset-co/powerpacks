@@ -7,7 +7,6 @@ import {
   accountsPath,
   onboardingV2GmailRunsDir,
   onboardingV2LinkedInRunsDir,
-  onboardingV2MessagesRunsDir,
   onboardingV3LinkedInRunsDir,
   onboardingV3GmailRunsDir,
   powerpacksRepoRoot,
@@ -24,7 +23,7 @@ import {
   localGmailAccountsFromRecord,
   resolveOperator,
 } from "../lib/accounts";
-import { messagesLinkStatus, sourceSlug } from "../lib/sources";
+import { sourceSlug } from "../lib/sources";
 import { gmailEnrichEstimateCommand, gmailLinkCommand, msgvaultHomeArgs, normalizeEmailList, onboardingGmailRunCommand, onboardingV2LinkedInCommand, onboardingV3PipelineCommand } from "../lib/commands";
 import { shellJoin } from "../lib/shell";
 import { readRequestJson, sendJson } from "../lib/http";
@@ -104,25 +103,6 @@ const ONBOARDING_V2_GMAIL: OnboardingV2Vertical = {
     { id: "discover", label: "Sync and discover Gmail contacts" },
     { id: "enrich", label: "Enrich Gmail contacts" },
     { id: "source_people", label: "Save Gmail people file" },
-    { id: "merge_network", label: "Merge contact sources" },
-    { id: "index_estimate", label: "Estimate search updates" },
-    { id: "index_records", label: "Build searchable people records" },
-    { id: "search_duckdb", label: "Update local search database" },
-  ],
-};
-
-const ONBOARDING_V2_MESSAGES: OnboardingV2Vertical = {
-  vertical: "messages",
-  action: "onboarding-v2-messages",
-  actionKeyPrefix: "onboarding-v2:messages:",
-  runsDir: onboardingV2MessagesRunsDir,
-  defaultStages: [
-    { id: "inspect", label: "Check message sources" },
-    { id: "discover", label: "Discover message contacts" },
-    { id: "llm_review", label: "AI contact review" },
-    { id: "user_review", label: "Review contacts" },
-    { id: "enrich", label: "Enrich message contacts" },
-    { id: "source_people", label: "Save message people file" },
     { id: "merge_network", label: "Merge contact sources" },
     { id: "index_estimate", label: "Estimate search updates" },
     { id: "index_records", label: "Build searchable people records" },
@@ -409,45 +389,6 @@ function startOnboardingV2Gmail(body: Record<string, any>): SetupJob {
   });
 }
 
-function onboardingV2MessagesCommand(command: "dry-run" | "run", operatorId: string, options: { approveSpend?: boolean; maxEnrich?: number; continueRun?: boolean } = {}) {
-  const args = [
-    "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/setup_messages/setup_messages.py",
-    command,
-    "--operator-id", operatorId,
-    "--accounts", ".powerpacks/ingestion/accounts.json",
-  ];
-  if (options.approveSpend) args.push("--approve-spend");
-  if (options.maxEnrich && options.maxEnrich > 0) args.push("--max-enrich", String(options.maxEnrich));
-  if (options.continueRun) args.push("--continue");
-  return args;
-}
-
-function onboardingV2MessagesStatus() {
-  const status = onboardingV2Status(ONBOARDING_V2_MESSAGES);
-  const accounts = readJsonSync(accountsPath) || {};
-  const messagesRecord = accountRecords(accounts).messages || {};
-  const messagesConfig = messagesRecord.config && typeof messagesRecord.config === "object" ? messagesRecord.config : {};
-  const linkStatus = messagesLinkStatus(messagesConfig);
-  return { ...status, sources: linkStatus, messages_linked: Boolean(messagesRecord.linked) };
-}
-
-function startOnboardingV2Messages(body: Record<string, any>): SetupJob {
-  const setupLedger = readJsonSync(setupLedgerPath) || {};
-  const accounts = readJsonSync(accountsPath) || {};
-  const operator = resolveOperator(setupLedger, accounts);
-  const existing = runningOnboardingV2VerticalJob(ONBOARDING_V2_MESSAGES);
-  if (existing) return existing;
-  const approveSpend = body.approveSpend === true;
-  const maxEnrich = typeof body.maxEnrich === "number" ? body.maxEnrich : 0;
-  const continueRun = body.continueRun === true;
-  const command = onboardingV2MessagesCommand("run", operator.id, { approveSpend, maxEnrich: maxEnrich || undefined, continueRun });
-  return startSetupJob(ONBOARDING_V2_MESSAGES.action, command, 6 * 60 * 60 * 1000, {
-    source: ONBOARDING_V2_MESSAGES.vertical,
-    stages: onboardingV2JobStages(ONBOARDING_V2_MESSAGES),
-  });
-}
-
 // Onboarding v3 Gmail: estimate how much a date-windowed sync would pull,
 // per window, without syncing. Read-only and free (Gmail label/id counts).
 // Uses async spawn (never spawnSync) so the Gmail pagination — up to ~30s on a
@@ -701,13 +642,12 @@ export async function handleOnboardingRoutes(req: any, res: any, url: URL): Prom
   }
 
   if (url.pathname === "/local-api/onboarding/messages/status") {
-    sendJson(res, onboardingV2MessagesStatus());
+    sendJson(res, { status: "harness_only", skill: "$import-messages" });
     return true;
   }
 
   if (url.pathname === "/local-api/onboarding/messages/run" && req.method === "POST") {
-    const job = startOnboardingV2Messages(await readRequestJson(req));
-    sendJson(res, { job, status: onboardingV2MessagesStatus() });
+    sendJson(res, { status: "harness_only", skill: "$import-messages" });
     return true;
   }
 

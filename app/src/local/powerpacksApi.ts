@@ -3,8 +3,6 @@ import type {
   LocalProfileResponse,
   LocalRunResultsResponse,
   LocalRunSummary,
-  MessageReviewFilter,
-  MessageReviewResponse,
   SetupEnrichmentSource,
   SetupJob,
   SetupSourceStatus,
@@ -197,14 +195,6 @@ export function runGmailWindowSync(
   return postJson<{ job: SetupJob }>("/local-api/onboarding/gmail/sync", body);
 }
 
-export function fetchOnboardingMessagesStatus(): Promise<Record<string, unknown>> {
-  return getJson<Record<string, unknown>>("/local-api/onboarding/messages/status");
-}
-
-export function runOnboardingMessages(body: Record<string, unknown> = {}): Promise<{ job: SetupJob; status: Record<string, unknown> }> {
-  return postJson<{ job: SetupJob; status: Record<string, unknown> }>("/local-api/onboarding/messages/run", body);
-}
-
 export async function uploadLinkedInCsv(file: File): Promise<{ path: string }> {
   const content = await file.text();
   return postJson<{ path: string }>("/local-api/setup/linkedin-csv-upload", {
@@ -343,30 +333,6 @@ export function runPowersetLogin(): Promise<{ job: SetupJob }> {
 
 export function runPowersetPullKeys(): Promise<{ job: SetupJob }> {
   return postJson<{ job: SetupJob }>("/local-api/powerset/pull-keys", {});
-}
-
-export function fetchMessageReview(
-  options: { filter?: MessageReviewFilter; query?: string; offset?: number; limit?: number } = {}
-): Promise<MessageReviewResponse> {
-  const params = new URLSearchParams();
-  if (options.filter) params.set("filter", options.filter);
-  if (options.query) params.set("q", options.query);
-  if (options.offset != null) params.set("offset", String(options.offset));
-  if (options.limit != null) params.set("limit", String(options.limit));
-  const query = params.toString() ? `?${params.toString()}` : "";
-  return getJson<MessageReviewResponse>(`/local-api/messages/review${query}`);
-}
-
-export function toggleMessageReviewRow(index: number, selected: boolean): Promise<MessageReviewResponse> {
-  return postJson<MessageReviewResponse>("/local-api/messages/review/toggle", { row: index, selected });
-}
-
-export function saveMessageReviewHint(index: number, hint: string): Promise<MessageReviewResponse> {
-  return postJson<MessageReviewResponse>("/local-api/messages/review/hint", { row: index, hint });
-}
-
-export function bulkToggleMessageReview(tab: "in_network", selected: boolean): Promise<MessageReviewResponse> {
-  return postJson<MessageReviewResponse>("/local-api/messages/review/bulk-toggle", { tab, selected });
 }
 
 export type { SetupJob } from "./types";

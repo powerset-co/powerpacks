@@ -62,10 +62,6 @@ setup_gmail = load_module(
     "phase13_setup_gmail",
     "packs/ingestion/primitives/setup_gmail/setup_gmail.py",
 )
-setup_messages = load_module(
-    "phase13_setup_messages",
-    "packs/ingestion/primitives/setup_messages/setup_messages.py",
-)
 openai_usage_tiers = load_module(
     "phase13_openai_usage_tiers",
     "packs/indexing/lib/openai_usage_tiers.py",
@@ -585,40 +581,37 @@ class PipelinePhase13Tests(unittest.TestCase):
         with self.assertRaises(ValueError):
             setup_gmail.make_context("../bad")
 
-    def test_resumed_setup_drops_retired_contact_lookup_stage(self):
+    def test_resumed_gmail_setup_drops_retired_contact_lookup_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            for module, vertical in [(setup_gmail, "gmail"), (setup_messages, "messages")]:
-                with self.subTest(vertical=vertical):
-                    run_root = tmp_path / vertical
-                    run_root.mkdir(parents=True)
-                    status_path = run_root / "status.json"
-                    status_path.write_text(json.dumps({
-                        "schema_version": 1,
-                        "vertical": vertical,
-                        "run_id": "legacy-run",
-                        "status": "failed",
-                        "current_stage": "network_duckdb",
-                        "stage_order": [
-                            {"id": "merge_network", "label": "Merge contact sources"},
-                            {"id": "network_duckdb", "label": "Prepare contact lookup database"},
-                            {"id": "search_duckdb", "label": "Update local search database"},
-                        ],
-                        "stages": {
-                            "merge_network": {"status": "completed"},
-                            "network_duckdb": {"status": "failed"},
-                        },
-                    }), encoding="utf-8")
+            run_root = Path(tmp) / "gmail"
+            run_root.mkdir(parents=True)
+            status_path = run_root / "status.json"
+            status_path.write_text(json.dumps({
+                "schema_version": 1,
+                "vertical": "gmail",
+                "run_id": "legacy-run",
+                "status": "failed",
+                "current_stage": "network_duckdb",
+                "stage_order": [
+                    {"id": "merge_network", "label": "Merge contact sources"},
+                    {"id": "network_duckdb", "label": "Prepare contact lookup database"},
+                    {"id": "search_duckdb", "label": "Update local search database"},
+                ],
+                "stages": {
+                    "merge_network": {"status": "completed"},
+                    "network_duckdb": {"status": "failed"},
+                },
+            }), encoding="utf-8")
 
-                    with mock.patch.object(module, "RUN_ROOT", run_root):
-                        ctx = module.make_context(resume=True)
+            with mock.patch.object(setup_gmail, "RUN_ROOT", run_root):
+                ctx = setup_gmail.make_context(resume=True)
 
-                    self.assertEqual(ctx.status["stage_order"], module.STAGES)
-                    self.assertNotIn("network_duckdb", ctx.status["stages"])
-                    self.assertNotIn("current_stage", ctx.status)
-                    persisted = json.loads(status_path.read_text(encoding="utf-8"))
-                    self.assertEqual(persisted["stage_order"], module.STAGES)
-                    self.assertNotIn("network_duckdb", persisted["stages"])
+            self.assertEqual(ctx.status["stage_order"], setup_gmail.STAGES)
+            self.assertNotIn("network_duckdb", ctx.status["stages"])
+            self.assertNotIn("current_stage", ctx.status)
+            persisted = json.loads(status_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["stage_order"], setup_gmail.STAGES)
+            self.assertNotIn("network_duckdb", persisted["stages"])
 
     def test_setup_gmail_dry_run_lists_linked_accounts(self):
         with tempfile.TemporaryDirectory() as tmp:
