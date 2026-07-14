@@ -118,7 +118,7 @@ manifest, ledger, statistics, and optional records on the Modal Volume.
 
 ## Storage and isolation
 
-The default Modal Volume is `powerset-indexing` and has two kinds of paths:
+The default Modal Volume is `powerset-indexing-v2` and has two kinds of paths:
 
 ```text
 /data/
@@ -132,6 +132,19 @@ Shared caches make overlapping profiles, titles, and companies reusable across
 runs. Indexing refreshes them with a key union, so a run adds or updates its
 keys without replacing unrelated cached rows. Inputs and run outputs are
 intended to be isolated under an operator ID.
+
+The large role, company, and summary embedding caches use Zstandard-compressed
+Parquet with `FLOAT[]` vectors. Classification and other metadata caches remain
+JSONL. The Modal indexing path requires those Parquet caches; it has no runtime
+format switch or JSONL fallback. Roll back the code change and volume selection
+together if the Parquet path must be reverted.
+
+After record assembly, the sandbox also writes fixed `*.records.parquet`
+siblings and casts their vector columns to `FLOAT[]`. The DuckDB materializer
+uses those files for the Modal build. JSONL remains the pipeline validation
+contract and a supported input for the separate local-only index builder;
+Parquet is the required compact materialization format for Modal and its
+downloadable local database.
 
 ### Current isolation limitation
 

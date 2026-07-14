@@ -83,10 +83,9 @@ def require_modal_credentials() -> None:
 
 APP_NAME = os.environ.get("POWERPACKS_MODAL_APP", "powerset-indexing")
 # Modal Volumes are workspace-scoped: anyone with a powerset-co token shares
-# this default volume; outsiders cannot reach it. Set POWERPACKS_MODAL_VOLUME
-# for an isolated volume (recommended once multiple operators run concurrently,
-# since input/ and runs/ paths are not yet per-operator prefixed).
-VOLUME_NAME = os.environ.get("POWERPACKS_MODAL_VOLUME", "powerset-indexing")
+# this default volume; outsiders cannot reach it. Inputs and runs remain
+# operator-prefixed; POWERPACKS_MODAL_VOLUME can select an isolated volume.
+VOLUME_NAME = os.environ.get("POWERPACKS_MODAL_VOLUME", "powerset-indexing-v2")
 DEFAULT_OPERATOR_ID = os.environ.get("POWERPACKS_OPERATOR_ID", "00000000-0000-0000-0000-000000000000")
 
 REPO = Path(__file__).resolve().parents[3]
@@ -135,10 +134,10 @@ def operator_volume_prefix() -> str:
 # local artifact path (relative to .powerpacks/search-index) -> volume artifact name
 REAL_ARTIFACTS = {
     "roles/roles_with_dense_text.jsonl": "roles_with_dense_text.jsonl",
-    "roles/roles_with_embeddings.jsonl": "roles_with_embeddings.jsonl",
+    "roles/roles_with_embeddings.parquet": "roles_with_embeddings.parquet",
     "company/companies_corpus_v3.jsonl": "companies_corpus_v3.jsonl",
-    "company/company_embeddings_v3.jsonl": "company_embeddings_v3.jsonl",
-    "unified/summary_embeddings.jsonl": "summary_embeddings.jsonl",
+    "company/company_embeddings_v3.parquet": "company_embeddings_v3.parquet",
+    "unified/summary_embeddings.parquet": "summary_embeddings.parquet",
     "unified/person_tech_skills.jsonl": "person_tech_skills.jsonl",
 }
 REAL_SEEDS = {
@@ -502,6 +501,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         "--cache-root", cache_root,
         "--run-vol", index_vol,
         "--operator-id", DEFAULT_OPERATOR_ID,
+        "--compute-threads", "16",
         "--enrich", "--max-usd", str(args.max_usd),
         app=app,
         image=build_image(),
@@ -509,7 +509,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         # openai for LLM classification; rapidapi to hydrate company details for
         # the long-tail companies not in the corpus (cached on the volume).
         secrets=[modal.Secret.from_name("powerset-openai"), rapidapi_secret()],
-        cpu=4,
+        cpu=16,
         memory=16384,
         timeout=args.timeout,
     )
@@ -591,12 +591,13 @@ def cmd_index_people(args: argparse.Namespace) -> int:
         "--cache-root", cache_root,
         "--run-vol", index_vol,
         "--operator-id", DEFAULT_OPERATOR_ID,
+        "--compute-threads", "16",
         "--enrich", "--max-usd", str(args.max_usd),
         app=app,
         image=build_image(),
         volumes={"/data": vol},
         secrets=[modal.Secret.from_name("powerset-openai"), rapidapi_secret()],
-        cpu=4,
+        cpu=16,
         memory=16384,
         timeout=args.timeout,
     )
@@ -637,6 +638,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         "--cache-root", cache_root,
         "--run-vol", run_vol,
         "--operator-id", DEFAULT_OPERATOR_ID,
+        "--compute-threads", str(max(1, int(args.cpu))),
     ]
     if args.persist_artifacts:
         entrypoint.append("--persist-artifacts")
@@ -907,10 +909,10 @@ def pipeline_cmd(people_csv: str, out_dir: str, artifacts: str) -> list[str]:
         "--output-dir", out_dir,
         "--default-operator-id", DEFAULT_OPERATOR_ID,
         "--role-input-classifications", f"{artifacts}/roles_with_dense_text.jsonl",
-        "--role-input-embeddings", f"{artifacts}/roles_with_embeddings.jsonl",
+        "--role-input-embeddings", f"{artifacts}/roles_with_embeddings.parquet",
         "--company-input-classifications", f"{artifacts}/companies_corpus_v3.jsonl",
-        "--company-input-embeddings", f"{artifacts}/company_embeddings_v3.jsonl",
-        "--summary-input-embeddings", f"{artifacts}/summary_embeddings.jsonl",
+        "--company-input-embeddings", f"{artifacts}/company_embeddings_v3.parquet",
+        "--summary-input-embeddings", f"{artifacts}/summary_embeddings.parquet",
         "--person-tech-skills-input", f"{artifacts}/person_tech_skills.jsonl",
     ]
 
@@ -1042,7 +1044,7 @@ def main() -> int:
 
     run = sub.add_parser("run")
     run.add_argument("--dataset", choices=["real", "synthetic"], required=True)
-    run.add_argument("--cpu", type=float, default=4)
+    run.add_argument("--cpu", type=float, default=16)
     run.add_argument("--memory-mib", type=int, default=16384)
     run.add_argument("--timeout", type=int, default=7200)
     run.add_argument("--label")
@@ -1050,7 +1052,7 @@ def main() -> int:
 
     proc = sub.add_parser("process", help="dispatch server-side run, watch, auto-download")
     proc.add_argument("--dataset", choices=["real", "synthetic"], required=True)
-    proc.add_argument("--cpu", type=float, default=4)
+    proc.add_argument("--cpu", type=float, default=16)
     proc.add_argument("--memory-mib", type=int, default=16384)
     proc.add_argument("--timeout", type=int, default=7200)
     proc.add_argument("--label")

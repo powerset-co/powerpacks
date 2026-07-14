@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
+from packs.indexing.lib.artifact_io import artifact_id_set  # noqa: E402
 from packs.indexing.lib.artifacts import (  # noqa: E402
     build_company_corpus,
     build_education_corpus,
@@ -292,10 +293,7 @@ def _jsonl_id_set(path_text: str | Path | None, key: str, *, require_vector: boo
     path = Path(path_text)
     if not path.exists():
         return set()
-    rows = read_jsonl(path)
-    if require_vector:
-        rows = [row for row in rows if isinstance(row.get("vector") or row.get("embedding") or row.get("dense_embedding"), list) and bool(row.get("vector") or row.get("embedding") or row.get("dense_embedding"))]
-    return _row_id_set(rows, key)
+    return artifact_id_set(path, key, require_vector=require_vector)
 
 
 def _jsonl_id_set_any(paths: list[str | Path | None], key: str, *, require_vector: bool = False) -> set[str]:

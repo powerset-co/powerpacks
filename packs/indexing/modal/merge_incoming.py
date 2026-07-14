@@ -23,12 +23,12 @@ from packs.indexing.modal.sandbox_common import merge_cache_file, merge_file_dir
 INCOMING = Path("/data/incoming")
 
 JSONL_TARGETS = {
-    "roles_with_dense_text.jsonl": ("artifacts/roles_with_dense_text.jsonl", ("title_hash",)),
-    "roles_with_embeddings.jsonl": ("artifacts/roles_with_embeddings.jsonl", ("title_hash",)),
-    "companies_corpus_v3.jsonl": ("artifacts/companies_corpus_v3.jsonl", ("company_urn", "company_name")),
-    "company_embeddings_v3.jsonl": ("artifacts/company_embeddings_v3.jsonl", ("company_urn", "company_name")),
-    "summary_embeddings.jsonl": ("artifacts/summary_embeddings.jsonl", ("person_id",)),
-    "person_tech_skills.jsonl": ("artifacts/person_tech_skills.jsonl", ("person_id",)),
+    "roles_with_dense_text.jsonl": ("artifacts/roles_with_dense_text.jsonl", ("title_hash",), None),
+    "roles_with_embeddings.jsonl": ("artifacts/roles_with_embeddings.parquet", ("title_hash",), "dense_embedding"),
+    "companies_corpus_v3.jsonl": ("artifacts/companies_corpus_v3.jsonl", ("company_urn", "company_name"), None),
+    "company_embeddings_v3.jsonl": ("artifacts/company_embeddings_v3.parquet", ("company_urn", "company_name"), "embedding"),
+    "summary_embeddings.jsonl": ("artifacts/summary_embeddings.parquet", ("person_id",), "embedding"),
+    "person_tech_skills.jsonl": ("artifacts/person_tech_skills.jsonl", ("person_id",), None),
 }
 
 
@@ -38,11 +38,11 @@ def main() -> int:
     args = ap.parse_args()
     cache_root = Path(args.cache_root)
 
-    for name, (rel_cache, keys) in JSONL_TARGETS.items():
+    for name, (rel_cache, keys, vector_field) in JSONL_TARGETS.items():
         src = INCOMING / name
         if not src.exists():
             continue
-        new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, keys)
+        new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, keys, vector_field=vector_field)
         print(f"[merge-incoming] {rel_cache}: {new_count} incoming + {kept_count} existing kept", flush=True)
         src.unlink()
 
