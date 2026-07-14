@@ -113,6 +113,12 @@ shared caches.
 | Assemble search records | `build_people_records`, `build_unified_profiles`, `build_summary_records`, `build_vectors` | Join the normalized and enriched data into the records consumed by search. |
 | Verify | `validate_contracts` | Reject records that do not match the checked-in search schemas. |
 
+The processor schedules these steps as a dependency graph with up to four
+worker processes. The roles, companies, demographics, and
+education/location branches run concurrently after `flatten_people`; assembly
+steps wait for the outputs they consume. OpenAI request concurrency is divided
+across active workers so the aggregate limit does not increase.
+
 After those steps, `run_indexing.py` builds DuckDB and persists the run status,
 manifest, ledger, statistics, and optional records on the Modal Volume.
 
