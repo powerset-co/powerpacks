@@ -218,6 +218,44 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
             self.assertFalse(stages["summary_embeddings"]["artifact_coverage"]["complete"])
             self.assertEqual(payload["paid_calls_made"], 0)
 
+    def test_pipeline_dry_run_excludes_skipped_unresolved_company_embeddings(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            company_classes = tmp / "company_classes.jsonl"
+            company_embeddings = tmp / "company_embeddings.jsonl"
+            resolved = {
+                "company_urn": "company:resolved",
+                "company_name": "Resolved Company",
+                "linkedin_url": "https://www.linkedin.com/company/resolved-company",
+                "semantic_text": "Resolved Company",
+            }
+            unresolved = {
+                "company_urn": "company:unresolved",
+                "company_name": "Unresolved Employer",
+                "semantic_text": "Unresolved Employer",
+            }
+            write_jsonl(company_classes, [resolved])
+            write_jsonl(company_embeddings, [{**resolved, "embedding": [0.02] * 1536}])
+            args = Namespace(
+                output_dir=str(tmp / "output"),
+                default_operator_id="operator:test",
+                role_input_classifications=None,
+                role_input_embeddings=None,
+                company_input_classifications=str(company_classes),
+                company_input_embeddings=str(company_embeddings),
+                summary_input_embeddings=None,
+                skip_unresolved_companies=True,
+            )
+
+            stages = pipeline.estimate_costs(args, [], [resolved, unresolved])["stages"]
+
+            self.assertEqual(stages["company_enrichment"]["artifact_coverage"]["skipped_unresolved"], 1)
+            self.assertEqual(stages["company_embeddings"]["artifact_coverage"]["required"], 1)
+            self.assertEqual(stages["company_embeddings"]["artifact_coverage"]["reused"], 1)
+            self.assertEqual(stages["company_embeddings"]["artifact_coverage"]["missing"], 0)
+            self.assertEqual(stages["company_embeddings"]["artifact_coverage"]["skipped_unresolved"], 1)
+            self.assertEqual(stages["company_embeddings"]["calls"], 0)
+
     def test_completed_ledger_does_not_gate_incremental_rerun(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

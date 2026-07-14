@@ -930,6 +930,23 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
     )
     company_stage["artifact_coverage"] = company_coverage
 
+    skipped_company_urns = _row_id_set(company_skipped_rows, "company_urn")
+    company_embedding_rows = [
+        row for row in company_required_rows
+        if str(row.get("company_urn") or "").strip() not in skipped_company_urns
+    ]
+    company_embedding_stage = _embedding_cost_stage(
+        provider=embedding_provider,
+        model=embedding_model,
+        rows=company_embedding_rows,
+        id_field="company_urn",
+        text_fields="semantic_text,word_text,d2q_text,company_name,description",
+        input_embeddings=company_emb,
+        artifact_id_field="company_urn",
+        available_ids=_records_company_ids(output_dir, require_vector=True),
+    )
+    company_embedding_stage["artifact_coverage"]["skipped_unresolved"] = len(company_skipped_rows)
+
     profile_rows = build_unified_profiles(people)
     summary_rows = build_summary_records(profile_rows, getattr(args, "default_operator_id", None))["internal_text"]
     # CEO/founder detection estimate: ~150 input + ~50 output tokens per candidate
@@ -978,16 +995,7 @@ def estimate_costs(args: argparse.Namespace, people: list[dict[str, Any]], compa
             available_ids=_records_role_ids(output_dir, require_vector=True),
         ),
         "company_enrichment": company_stage,
-        "company_embeddings": _embedding_cost_stage(
-            provider=embedding_provider,
-            model=embedding_model,
-            rows=companies,
-            id_field="company_urn",
-            text_fields="semantic_text,word_text,d2q_text,company_name,description",
-            input_embeddings=company_emb,
-            artifact_id_field="company_urn",
-            available_ids=_records_company_ids(output_dir, require_vector=True),
-        ),
+        "company_embeddings": company_embedding_stage,
         "summary_embeddings": _embedding_cost_stage(
             provider=embedding_provider,
             model=embedding_model,
