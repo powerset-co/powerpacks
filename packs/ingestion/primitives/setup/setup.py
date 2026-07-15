@@ -497,7 +497,7 @@ def local_duckdb_processing_dq(processing_payload: dict[str, Any], duckdb_payloa
 
 def search_record_summary() -> dict[str, Any]:
     records = ROOT / '.powerpacks/search-index/records'
-    files = sorted(records.glob('*.records.jsonl')) if records.exists() else []
+    files = sorted(records.glob('*.records.parquet')) if records.exists() else []
     nonempty = []
     for path in files:
         try:

@@ -19,6 +19,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     parse_interaction_counts,
 )
 from packs.indexing.lib.people import build_unified_profiles, flatten_people  # noqa: E402
+from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
 
 
 def load_module(name: str, relative: str):
@@ -246,9 +247,9 @@ class IndexProfileTests(unittest.TestCase):
                 writer.writeheader()
                 writer.writerows(self.people_csv_rows())
             record_path = shim.materialize_person_profiles_from_csv(people_csv, tmp_path, "local:user")
-            record = json.loads(record_path.read_text().splitlines()[0])
+            record = next(iter_artifact_rows(record_path))
             self.assertEqual(record["total_interactions"], 229)
-            self.assertEqual(record["interaction_counts"], {"gmail": 142, "imessage": 87})
+            self.assertEqual(json.loads(record["interaction_counts"]), {"gmail": 142, "imessage": 87})
             self.assertEqual(record["last_interaction"], "2026-06-01T05:44:31+00:00")
 
             # The hydration probe reads any table with person_id + total_interactions.
@@ -262,7 +263,7 @@ class IndexProfileTests(unittest.TestCase):
             self.assertIn("local_person_profiles", hydrate.LOCAL_INTERACTION_SUMMARY_TABLES)
             conn = duckdb.connect(":memory:")
             conn.execute(
-                "CREATE TABLE local_person_profiles AS SELECT * FROM read_json_auto(?, format='newline_delimited')",
+                "CREATE TABLE local_person_profiles AS SELECT * FROM read_parquet(?)",
                 [str(record_path)],
             )
             counts = hydrate.local_interaction_counts(conn, [record["person_id"]])

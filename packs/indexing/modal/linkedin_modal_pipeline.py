@@ -155,6 +155,7 @@ def build_image() -> modal.Image:
             # phrase_tokens and record hashes).
             "duckdb==1.5.2",
             "openai==2.33.0",
+            "pyarrow==25.0.0",
             "python-dotenv==1.2.2",
             "pyyaml==6.0.3",
             "snowballstemmer==3.0.1",
@@ -842,16 +843,18 @@ def cmd_preload(args: argparse.Namespace) -> int:
     uploads: list[tuple[Path, str]] = []
     for flag, name in (
         ("role_classifications", "roles_with_dense_text.jsonl"),
-        ("role_embeddings", "roles_with_embeddings.jsonl"),
+        ("role_embeddings", "roles_with_embeddings.parquet"),
         ("company_classifications", "companies_corpus_v3.jsonl"),
-        ("company_embeddings", "company_embeddings_v3.jsonl"),
-        ("summary_embeddings", "summary_embeddings.jsonl"),
+        ("company_embeddings", "company_embeddings_v3.parquet"),
+        ("summary_embeddings", "summary_embeddings.parquet"),
     ):
         value = getattr(args, flag, None)
         if value:
             src = Path(value).expanduser()
             if not src.exists():
                 raise SystemExit(f"missing: {src}")
+            if name.endswith(".parquet") and src.suffix.lower() != ".parquet":
+                raise SystemExit(f"{flag.replace('_', '-')} must be a Parquet artifact: {src}")
             uploads.append((src, f"incoming/{name}"))
 
     tarball: Path | None = None

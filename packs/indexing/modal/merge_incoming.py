@@ -2,10 +2,11 @@
 """Merge uploaded cache payloads from /data/incoming into the shared cache.
 
 Runs inside a sandbox after `linkedin_modal_pipeline.py preload` uploads
-payloads. JSONL artifacts are key-union merged (rows for keys already in the
-cache are equivalent content, so either side winning is fine; nothing is ever
-dropped). A profile_cache_v2.tar.gz is extracted and copied file-by-file only
-where absent. Incoming payloads are removed after a successful merge.
+payloads. JSONL classification artifacts and Parquet embedding artifacts are
+key-union merged (rows for keys already in the cache are equivalent content,
+so either side winning is fine; nothing is ever dropped). A
+profile_cache_v2.tar.gz is extracted and copied file-by-file only where absent.
+Incoming payloads are removed after a successful merge.
 """
 from __future__ import annotations
 
@@ -22,13 +23,13 @@ from packs.indexing.modal.sandbox_common import merge_cache_file, merge_file_dir
 
 INCOMING = Path("/data/incoming")
 
-JSONL_TARGETS = {
-    "roles_with_dense_text.jsonl": ("artifacts/roles_with_dense_text.jsonl", ("title_hash",), None),
-    "roles_with_embeddings.jsonl": ("artifacts/roles_with_embeddings.parquet", ("title_hash",), "dense_embedding"),
-    "companies_corpus_v3.jsonl": ("artifacts/companies_corpus_v3.jsonl", ("company_urn", "company_name"), None),
-    "company_embeddings_v3.jsonl": ("artifacts/company_embeddings_v3.parquet", ("company_urn", "company_name"), "embedding"),
-    "summary_embeddings.jsonl": ("artifacts/summary_embeddings.parquet", ("person_id",), "embedding"),
-    "person_tech_skills.jsonl": ("artifacts/person_tech_skills.jsonl", ("person_id",), None),
+TARGETS = {
+    "roles_with_dense_text.jsonl": ("artifacts/roles_with_dense_text.jsonl", ("title_hash",)),
+    "roles_with_embeddings.parquet": ("artifacts/roles_with_embeddings.parquet", ("title_hash",)),
+    "companies_corpus_v3.jsonl": ("artifacts/companies_corpus_v3.jsonl", ("company_urn", "company_name")),
+    "company_embeddings_v3.parquet": ("artifacts/company_embeddings_v3.parquet", ("company_urn", "company_name")),
+    "summary_embeddings.parquet": ("artifacts/summary_embeddings.parquet", ("person_id",)),
+    "person_tech_skills.jsonl": ("artifacts/person_tech_skills.jsonl", ("person_id",)),
 }
 
 
@@ -38,11 +39,11 @@ def main() -> int:
     args = ap.parse_args()
     cache_root = Path(args.cache_root)
 
-    for name, (rel_cache, keys, vector_field) in JSONL_TARGETS.items():
+    for name, (rel_cache, keys) in TARGETS.items():
         src = INCOMING / name
         if not src.exists():
             continue
-        new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, keys, vector_field=vector_field)
+        new_count, kept_count = merge_cache_file(src, cache_root / rel_cache, keys)
         print(f"[merge-incoming] {rel_cache}: {new_count} incoming + {kept_count} existing kept", flush=True)
         src.unlink()
 

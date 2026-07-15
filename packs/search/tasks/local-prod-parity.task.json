@@ -113,7 +113,7 @@
           "type": "artifact_audit",
           "commands": [],
           "required_checks": [
-            "Gmail aggregate fields reconcile into records/person_source_summary.records.jsonl"
+            "Gmail aggregate fields reconcile into records/person_source_summary.records.parquet"
           ]
         },
         "session_scope": "tracked_not_active"
@@ -220,12 +220,12 @@
           "artifacts": [
             ".powerpacks/search-index/manifest.json",
             ".powerpacks/search-index/local-search.duckdb",
-            "records/person_profiles.records.jsonl",
-            "records/people.records.jsonl",
-            "records/summaries.records.jsonl",
-            "records/companies.records.jsonl",
-            "records/education.records.jsonl",
-            "records/schools.records.jsonl"
+            "records/person_profiles.records.parquet",
+            "records/people.records.parquet",
+            "records/summaries.records.parquet",
+            "records/companies.records.parquet",
+            "records/education.records.parquet",
+            "records/schools.records.parquet"
           ]
         },
         "target_behavior": "Validate DuckDB freshness against current manifest and concrete record artifacts; compare _local_record_hashes if that future table exists.",

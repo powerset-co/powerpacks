@@ -82,7 +82,7 @@ flowchart TD
 | Credentials | Authorize the local driver to dispatch work into the selected Modal workspace. | Local machine plus Powerset login when used. | `.env` and local auth state. |
 | LinkedIn import | Convert LinkedIn's export into normalized people and fill in profile details not present in the CSV. | Modal import sandbox. | `.powerpacks/network-import/import/linkedin/people.csv`. |
 | Source fan-in | Combine all imported source rows referring to the same network into one canonical input. During `$setup`, LinkedIn is the source guaranteed to be present. | Local machine. | `.powerpacks/network-import/merged/people.csv` plus contact/source provenance CSVs. |
-| Processing | Turn people and work history into role, company, school, location, profile, and summary records. | Modal indexing sandbox. | Validated JSONL records and `ledger.json`. |
+| Processing | Turn people and work history into role, company, school, location, profile, and summary records. | Modal indexing sandbox. | Validated Parquet records and `ledger.json`; non-vector metadata remains JSONL. |
 | Classification | Normalize ambiguous titles and company information into fields search can filter and rank. | Modal indexing sandbox, using cached or provider-backed results. | Role/company enrichment caches and records. |
 | Embedding | Convert relevant text into numeric representations used for semantic similarity search. | Modal indexing sandbox, using cached or OpenAI-backed results. | Role, company, and summary embedding artifacts. |
 | DuckDB materialization | Package the validated records into one local database that validation and search open read-only. | Modal indexing sandbox. | `local-search.duckdb`. |
@@ -145,12 +145,12 @@ JSONL. The Modal indexing path requires those Parquet caches; it has no runtime
 format switch or JSONL fallback. Roll back the code change and volume selection
 together if the Parquet path must be reverted.
 
-After record assembly, the sandbox also writes fixed `*.records.parquet`
-siblings and casts their vector columns to `FLOAT[]`. The DuckDB materializer
-uses those files for the Modal build. JSONL remains the pipeline validation
-contract and a supported input for the separate local-only index builder;
-Parquet is the required compact materialization format for Modal and its
-downloadable local database.
+After record assembly, the sandbox writes fixed `*.records.parquet` artifacts
+and casts their vector columns to `FLOAT[]`. The pipeline validates those
+Parquet records directly, and the DuckDB materializer consumes them without an
+intermediate record JSONL. JSONL remains intentional for classifications,
+flattened inputs, and other non-vector metadata; embeddings and final search
+records use Parquet in both Modal and local processing.
 
 ### Current isolation limitation
 

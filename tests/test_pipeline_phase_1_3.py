@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from packs.indexing.lib.artifact_io import write_parquet_rows
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -924,9 +925,9 @@ class PipelinePhase13Tests(unittest.TestCase):
             duckdb.parent.mkdir(parents=True)
             duckdb.write_bytes(b"x" * 2048)
             time.sleep(0.01)
-            records = root / ".powerpacks/search-index/records/people.records.jsonl"
+            records = root / ".powerpacks/search-index/records/people.records.parquet"
             records.parent.mkdir(parents=True)
-            records.write_text('{"id":"newer-record"}\n', encoding="utf-8")
+            write_parquet_rows(records, [{"id": "newer-record"}])
             args = SimpleNamespace(
                 people_csv=".powerpacks/network-import/merged/people.csv",
                 output_dir=".powerpacks/search-index",
@@ -935,7 +936,7 @@ class PipelinePhase13Tests(unittest.TestCase):
                 self.assertFalse(index_contacts.duckdb_current_for_processing_hashes(args))
                 freshness = index_contacts.duckdb_freshness_payload(args)
             self.assertEqual(freshness["reason"], "stale_duckdb_inputs")
-            self.assertIn(".powerpacks/search-index/records/people.records.jsonl", freshness["stale_inputs"])
+            self.assertIn(".powerpacks/search-index/records/people.records.parquet", freshness["stale_inputs"])
 
 
 if __name__ == "__main__":

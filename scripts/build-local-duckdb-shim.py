@@ -39,8 +39,8 @@ sys.path.insert(0, str(ROOT))
 
 DUCKDB_LOCK_NAME = ".local-search-duckdb.lock"
 
+from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows  # noqa: E402
 from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract  # noqa: E402
-from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
 from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
 from packs.ingestion.schemas.people_schema import parse_interaction_counts  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -51,15 +51,15 @@ DEFAULT_SOURCE = Path("people_harmonic_all.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 
 LOCAL_TABLES = {
-    "local_people_positions": "records/people.records.jsonl",
-    "local_summaries": "records/summaries.records.jsonl",
-    "local_company_signals": "records/company_signals.records.jsonl",
-    "local_people_education": "records/education.records.jsonl",
-    "local_education": "records/schools.records.jsonl",
-    "local_companies": "records/companies.records.jsonl",
+    "local_people_positions": "records/people.records.parquet",
+    "local_summaries": "records/summaries.records.parquet",
+    "local_company_signals": "records/company_signals.records.parquet",
+    "local_people_education": "records/education.records.parquet",
+    "local_education": "records/schools.records.parquet",
+    "local_companies": "records/companies.records.parquet",
 }
-PERSON_PROFILE_RECORD = "records/person_profiles.records.jsonl"
-PERSON_SOURCE_SUMMARY_RECORD = "records/person_source_summary.records.jsonl"
+PERSON_PROFILE_RECORD = "records/person_profiles.records.parquet"
+PERSON_SOURCE_SUMMARY_RECORD = "records/person_source_summary.records.parquet"
 OPTIONAL_LOCAL_TABLES = {
     "local_person_source_summary": PERSON_SOURCE_SUMMARY_RECORD,
 }
@@ -309,16 +309,6 @@ def write_jsonl(path: Path, rows) -> int:
     return count
 
 
-def write_jsonl_if_changed(path: Path, rows) -> int:
-    buffered = [json.dumps(row, sort_keys=True) + "\n" for row in rows]
-    text = "".join(buffered)
-    if path.exists() and path.read_text(encoding="utf-8") == text:
-        return len(buffered)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    return len(buffered)
-
-
 def has_records(path: Path) -> bool:
     if not path.exists() or path.stat().st_size == 0:
         return False
@@ -354,14 +344,6 @@ def record_source_path(records_dir: Path, rel: str) -> Path | None:
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    # Read old suffixed record files if an existing bootstrap directory still
-    # contains them, but never create new suffixed outputs.
-    for parent in [records_dir / Path(rel).parent, records_dir]:
-        if parent.exists():
-            matches = sorted(parent.glob(f"{Path(rel).stem}.*{Path(rel).suffix}"))
-            for match in matches:
-                if match.exists():
-                    return match
     return None
 
 
@@ -463,7 +445,7 @@ def _load_csv_by_id(path: Path) -> dict[str, dict[str, str]]:
 
 
 def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: str, *, limit: int | None = None, force: bool = False) -> dict[str, str]:
-    """Convert copied Aleph pipeline_output artifacts to local records JSONL.
+    """Convert copied Aleph pipeline_output artifacts to local Parquet records.
 
     This follows the checked-in Aleph upload scripts' artifact names and field
     shapes: companies_corpus_v3 + company_embeddings_v3, summary_embeddings +
@@ -546,8 +528,14 @@ def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: st
             if limit is not None and emitted >= limit:
                 return
 
-    records["records/companies.records.jsonl"] = str(run_dir / "records/companies.records.jsonl")
-    write_jsonl(run_dir / "records/companies.records.jsonl", company_rows())
+    companies_path = run_dir / LOCAL_TABLES["local_companies"]
+    records[LOCAL_TABLES["local_companies"]] = str(companies_path)
+    write_parquet_rows(
+        companies_path,
+        company_rows(),
+        float_array_fields=("vector",),
+        schema=LOCAL_TABLE_CONTRACT["local_companies"],
+    )
 
     # Summaries: data_pipeline_v2/pipelines/people/indexing/upload_summaries_turbopuffer.py
     skills = {str(row.get("person_id")): row.get("tech_skills") or [] for row in read_jsonl(aleph_dir / "unified/person_tech_skills.jsonl") if row.get("person_id")}
@@ -571,8 +559,14 @@ def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: st
                 "vector": row.get("embedding") or [],
             }
 
-    records["records/summaries.records.jsonl"] = str(run_dir / "records/summaries.records.jsonl")
-    write_jsonl(run_dir / "records/summaries.records.jsonl", summary_rows())
+    summaries_path = run_dir / LOCAL_TABLES["local_summaries"]
+    records[LOCAL_TABLES["local_summaries"]] = str(summaries_path)
+    write_parquet_rows(
+        summaries_path,
+        summary_rows(),
+        float_array_fields=("vector",),
+        schema=LOCAL_TABLE_CONTRACT["local_summaries"],
+    )
 
     # Education: data_pipeline_v2/pipelines/education upload scripts.
     schools_by_id = {str(row.get("entity_urn")): row for row in read_jsonl(aleph_dir / "education/schools_corpus.jsonl") if row.get("entity_urn")}
@@ -601,8 +595,13 @@ def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: st
                 "allowed_operator_ids": [operator_id],
             }
 
-    records["records/education.records.jsonl"] = str(run_dir / "records/education.records.jsonl")
-    write_jsonl(run_dir / "records/education.records.jsonl", education_rows())
+    education_path = run_dir / LOCAL_TABLES["local_people_education"]
+    records[LOCAL_TABLES["local_people_education"]] = str(education_path)
+    write_parquet_rows(
+        education_path,
+        education_rows(),
+        schema=LOCAL_TABLE_CONTRACT["local_people_education"],
+    )
 
     def school_rows():
         for row in read_jsonl(aleph_dir / "education/schools_corpus.jsonl", limit):
@@ -617,14 +616,25 @@ def materialize_aleph_output_dir(aleph_dir: Path, run_dir: Path, operator_id: st
                 "person_count": int(row.get("person_count") or 0),
             }
 
-    records["records/schools.records.jsonl"] = str(run_dir / "records/schools.records.jsonl")
-    write_jsonl(run_dir / "records/schools.records.jsonl", school_rows())
+    schools_path = run_dir / LOCAL_TABLES["local_education"]
+    records[LOCAL_TABLES["local_education"]] = str(schools_path)
+    write_parquet_rows(
+        schools_path,
+        school_rows(),
+        schema=LOCAL_TABLE_CONTRACT["local_education"],
+    )
 
     # People vectors require roles_with_embeddings + flattened_people.  The copied
     # seed bundle used by local tests does not include roles_with_embeddings, so
     # emit an empty Aleph-shaped people records file rather than inventing shape.
-    records["records/people.records.jsonl"] = str(run_dir / "records/people.records.jsonl")
-    write_jsonl(run_dir / "records/people.records.jsonl", [])
+    people_path = run_dir / LOCAL_TABLES["local_people_positions"]
+    records[LOCAL_TABLES["local_people_positions"]] = str(people_path)
+    write_parquet_rows(
+        people_path,
+        [],
+        float_array_fields=("vector",),
+        schema=LOCAL_TABLE_CONTRACT["local_people_positions"],
+    )
     return records
 
 
@@ -688,19 +698,25 @@ def row_id_sql(table: str, alias: str = "", available_columns: set[str] | None =
     return f"COALESCE({', '.join(parts)})"
 
 
-def current_hashes_from_file(path: Path, table: str) -> tuple[dict[str, str], dict[str, dict[str, Any]], int]:
+def current_hashes_from_file(
+    path: Path,
+    table: str,
+) -> tuple[dict[str, str], dict[str, dict[str, Any]], int, set[str]]:
     id_fields = table_id_fields(table)
     hashes: dict[str, str] = {}
     rows: dict[str, dict[str, Any]] = {}
     skipped_unkeyed_rows = 0
+    duplicate_ids: set[str] = set()
     for record in read_jsonl(path):
         rid = duckdb_record_id(record, id_fields)
         if not rid:
             skipped_unkeyed_rows += 1
             continue
+        if rid in rows:
+            duplicate_ids.add(rid)
         hashes[rid] = compute_record_hash(record)
         rows[rid] = record
-    return hashes, rows, skipped_unkeyed_rows
+    return hashes, rows, skipped_unkeyed_rows, duplicate_ids
 
 
 def stored_table_hashes(con: Any, table: str) -> dict[str, str]:
@@ -805,12 +821,17 @@ def _first_int(*values: Any) -> int | None:
 def materialize_positions_from_csv(source: Path, run_dir: Path, operator_id: str, *, force: bool = False) -> Path | None:
     if not source.exists():
         return None
-    out = run_dir / "records/people.records.jsonl"
+    out = run_dir / LOCAL_TABLES["local_people_positions"]
     if out.exists() and not force:
         return out
     people = flatten_people(source)
     records = build_people_records(people, default_operator_id=operator_id)
-    write_jsonl(out, records)
+    write_parquet_rows(
+        out,
+        records,
+        float_array_fields=("vector",),
+        schema=LOCAL_TABLE_CONTRACT["local_people_positions"],
+    )
     return out
 
 
@@ -887,36 +908,49 @@ def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_i
                 "allowed_operator_ids": [operator_id],
             }
 
-    write_jsonl_if_changed(out, rows())
+    write_parquet_rows(
+        out,
+        rows(),
+        schema=LOCAL_TABLE_CONTRACT["local_person_profiles"],
+    )
     return out
 
 
-def load_jsonl_table(con: Any, table: str, path: Path) -> int:
+def load_parquet_table(con: Any, table: str, path: Path, *, track_hashes: bool = True) -> int:
+    if path.suffix.lower() != ".parquet":
+        raise SystemExit(f"expected Parquet records artifact for {table}: {path}")
     con.execute(f"DROP TABLE IF EXISTS {qident(table)}")
     if has_records(path):
-        if path.suffix.lower() == ".parquet":
-            con.execute(f"CREATE TABLE {qident(table)} AS SELECT * FROM read_parquet(?)", [str(path)])
-        else:
-            con.execute(
-                f"CREATE TABLE {qident(table)} AS SELECT * FROM read_json_auto(?, format='newline_delimited', union_by_name=true, maximum_object_size=134217728)",
-                [str(path)],
-            )
+        con.execute(f"CREATE TABLE {qident(table)} AS SELECT * FROM read_parquet(?)", [str(path)])
     else:
         con.execute(f"CREATE TABLE {qident(table)} (id VARCHAR)")
-    current_hashes, _rows, _skipped = current_hashes_from_file(path, table)
-    save_table_hashes(con, table, current_hashes)
+    if track_hashes:
+        current_hashes, _rows, _skipped, _duplicates = current_hashes_from_file(path, table)
+        save_table_hashes(con, table, current_hashes)
     return int(con.execute(f"SELECT count(*) FROM {qident(table)}").fetchone()[0])
 
 
-def load_jsonl_table_incremental(con: Any, table: str, path: Path, run_dir: Path, operator_id: str) -> tuple[int, dict[str, Any]]:
+def load_parquet_table_incremental(con: Any, table: str, path: Path, run_dir: Path, operator_id: str) -> tuple[int, dict[str, Any]]:
     if not table_exists(con, table):
-        count = load_jsonl_table(con, table, path)
+        count = load_parquet_table(con, table, path)
         return count, {"mode": "create", "inserted_rows": count, "updated_rows": 0, "deleted_rows": 0, "unchanged_rows": 0, "fallback_full_rebuild": True, "reason": "missing_table"}
 
-    current_hashes, rows_by_id, skipped_unkeyed_rows = current_hashes_from_file(path, table)
+    current_hashes, rows_by_id, skipped_unkeyed_rows, duplicate_ids = current_hashes_from_file(path, table)
     old_hashes = stored_table_hashes(con, table)
+    if duplicate_ids:
+        count = load_parquet_table(con, table, path)
+        return count, {
+            "mode": "full_rebuild",
+            "inserted_rows": count,
+            "updated_rows": 0,
+            "deleted_rows": 0,
+            "unchanged_rows": 0,
+            "duplicate_ids": len(duplicate_ids),
+            "fallback_full_rebuild": True,
+            "reason": "duplicate_ids",
+        }
     if skipped_unkeyed_rows:
-        count = load_jsonl_table(con, table, path)
+        count = load_parquet_table(con, table, path)
         return count, {"mode": "full_rebuild", "inserted_rows": count, "updated_rows": 0, "deleted_rows": 0, "unchanged_rows": 0, "skipped_unkeyed_rows": skipped_unkeyed_rows, "fallback_full_rebuild": True, "reason": "unkeyed_rows"}
 
     existing_ids = table_ids(con, table) if not old_hashes else set()
@@ -933,15 +967,19 @@ def load_jsonl_table_incremental(con: Any, table: str, path: Path, run_dir: Path
     ids_to_delete = deleted_ids | changed_ids
     stage_name = f"_stage_{table}"
     ids_name = f"_ids_{table}"
-    changed_path = run_dir / ".duckdb-incremental" / f"{table}.changed.jsonl"
+    changed_path = run_dir / ".duckdb-incremental" / f"{table}.changed.parquet"
     in_tx = False
     ids_temp_created = False
     stage_temp_created = False
     try:
         if ids_to_write:
-            write_jsonl(changed_path, [rows_by_id[rid] for rid in sorted(ids_to_write)])
+            write_parquet_rows(
+                changed_path,
+                (rows_by_id[rid] for rid in sorted(ids_to_write)),
+                float_array_fields=("vector",),
+            )
             con.execute(
-                f"CREATE TEMP TABLE {qident(stage_name)} AS SELECT * FROM read_json_auto(?, format='newline_delimited', union_by_name=true, maximum_object_size=134217728)",
+                f"CREATE TEMP TABLE {qident(stage_name)} AS SELECT * FROM read_parquet(?)",
                 [str(changed_path)],
             )
             stage_temp_created = True
@@ -1090,12 +1128,6 @@ def postprocess_table(con: Any, table: str, operator_id: str) -> None:
             )
 
 
-def resolve_artifact_path(run_dir: Path, rel: str) -> Path:
-    jsonl = run_dir / rel
-    parquet = jsonl.with_suffix(".parquet")
-    return parquet if parquet.exists() else jsonl
-
-
 def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, incremental: bool = False, person_profiles_csv: Path | None = None, derive_positions_csv: Path | None = None) -> tuple[Path, dict[str, int], dict[str, Any]]:
     try:
         import duckdb  # type: ignore
@@ -1112,7 +1144,7 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, increme
         remove_duckdb_file_set(db_path)
 
     con = duckdb.connect(str(db_path))
-    # Cap DuckDB working memory so large vector-bearing JSONL loads spill to
+    # Cap DuckDB working memory so large vector-bearing Parquet loads spill to
     # disk instead of ballooning RSS; override via POWERPACKS_DUCKDB_MEMORY_LIMIT.
     memory_limit = os.environ.get("POWERPACKS_DUCKDB_MEMORY_LIMIT", "2GB")
     if memory_limit:
@@ -1121,7 +1153,7 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, increme
     if threads > 0:
         con.execute(f"SET threads={threads}")
     # Tables are queried by filters, never by insertion order; disabling order
-    # preservation lets CREATE TABLE AS stream large JSONL loads in bounded memory.
+    # preservation lets CREATE TABLE AS stream large Parquet loads in bounded memory.
     con.execute("SET preserve_insertion_order=false")
     counts: dict[str, int] = {}
     table_diffs: dict[str, Any] = {}
@@ -1130,29 +1162,29 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, increme
             profile_record = materialize_person_profiles_from_csv(person_profiles_csv, run_dir, operator_id)
             if profile_record:
                 if incremental:
-                    counts["local_person_profiles"], table_diffs["local_person_profiles"] = load_jsonl_table_incremental(con, "local_person_profiles", profile_record, run_dir, operator_id)
+                    counts["local_person_profiles"], table_diffs["local_person_profiles"] = load_parquet_table_incremental(con, "local_person_profiles", profile_record, run_dir, operator_id)
                 else:
-                    counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", profile_record)
+                    counts["local_person_profiles"] = load_parquet_table(con, "local_person_profiles", profile_record, track_hashes=False)
                 postprocess_table(con, "local_person_profiles", operator_id)
         elif has_records(run_dir / PERSON_PROFILE_RECORD):
             if incremental:
-                counts["local_person_profiles"], table_diffs["local_person_profiles"] = load_jsonl_table_incremental(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD, run_dir, operator_id)
+                counts["local_person_profiles"], table_diffs["local_person_profiles"] = load_parquet_table_incremental(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD, run_dir, operator_id)
             else:
-                counts["local_person_profiles"] = load_jsonl_table(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD)
+                counts["local_person_profiles"] = load_parquet_table(con, "local_person_profiles", run_dir / PERSON_PROFILE_RECORD, track_hashes=False)
             postprocess_table(con, "local_person_profiles", operator_id)
         if derive_positions_csv:
             materialize_positions_from_csv(derive_positions_csv, run_dir, operator_id, force=True)
         for table, rel in LOCAL_TABLES.items():
-            path = resolve_artifact_path(run_dir, rel)
+            path = run_dir / rel
             if incremental:
-                counts[table], table_diffs[table] = load_jsonl_table_incremental(con, table, path, run_dir, operator_id)
+                counts[table], table_diffs[table] = load_parquet_table_incremental(con, table, path, run_dir, operator_id)
             else:
-                counts[table] = load_jsonl_table(con, table, path)
+                counts[table] = load_parquet_table(con, table, path, track_hashes=False)
             postprocess_table(con, table, operator_id)
         for table, rel in OPTIONAL_LOCAL_TABLES.items():
-            path = resolve_artifact_path(run_dir, rel)
+            path = run_dir / rel
             if path.exists():
-                counts[table] = load_jsonl_table(con, table, path)
+                counts[table] = load_parquet_table(con, table, path, track_hashes=incremental)
                 postprocess_table(con, table, operator_id)
         postprocess_cross_tables(con)
         counts["local_person_profile_position_overlap"] = profile_position_id_overlap(con)
@@ -1264,8 +1296,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=str(DEFAULT_SOURCE), help="Input people CSV; defaults to people_harmonic_all.csv")
     parser.add_argument("--person-profiles-csv", help="One-row-per-person CSV used to populate local_person_profiles; defaults to --source, then .powerpacks/network-import/merged/people.csv when present")
-    parser.add_argument("--derive-positions-from-person-profiles", action="store_true", help="Rebuild records/people.records.jsonl deterministically from the same CSV used for local_person_profiles; no vectors or provider calls")
-    parser.add_argument("--records-dir", help="Existing normal pipeline run root or records/ directory containing *.records.jsonl; skips people.csv pipeline build")
+    parser.add_argument("--derive-positions-from-person-profiles", action="store_true", help="Rebuild records/people.records.parquet deterministically from the same CSV used for local_person_profiles; no vectors or provider calls")
+    parser.add_argument("--records-dir", help="Existing normal pipeline run root or records/ directory containing *.records.parquet; skips people.csv pipeline build")
     parser.add_argument("--aleph-output-dir", help="Copied Aleph pipeline_output directory; converts Aleph upload artifacts to local records without API calls")
     parser.add_argument("--operator-id", default=DEFAULT_OPERATOR_ID)
     parser.add_argument("--operator-email", default=DEFAULT_OPERATOR_EMAIL)

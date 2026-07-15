@@ -241,12 +241,12 @@ def duckdb_input_paths(args: argparse.Namespace) -> list[Path]:
     candidates = [
         ROOT / Path(args.people_csv),
         output_dir / "unified/person_hashes.json",
-        output_dir / "records/person_profiles.records.jsonl",
-        output_dir / "records/people.records.jsonl",
-        output_dir / "records/summaries.records.jsonl",
-        output_dir / "records/companies.records.jsonl",
-        output_dir / "records/education.records.jsonl",
-        output_dir / "records/schools.records.jsonl",
+        output_dir / "records/person_profiles.records.parquet",
+        output_dir / "records/people.records.parquet",
+        output_dir / "records/summaries.records.parquet",
+        output_dir / "records/companies.records.parquet",
+        output_dir / "records/education.records.parquet",
+        output_dir / "records/schools.records.parquet",
         output_dir / "records/people.records.hashes.json",
         output_dir / "records/summaries.records.hashes.json",
         output_dir / "records/companies.records.hashes.json",
@@ -568,7 +568,7 @@ def write_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 def maybe_materialize_existing_records(args: argparse.Namespace) -> dict[str, Any]:
     records = ROOT / Path(args.output_dir) / "records"
-    people_records = records / "people.records.jsonl"
+    people_records = records / "people.records.parquet"
     duckdb = ROOT / Path(args.output_dir) / "local-search.duckdb"
     if not people_records.exists() or people_records.stat().st_size <= 0:
         return {"status": "skipped", "reason": "missing_records"}

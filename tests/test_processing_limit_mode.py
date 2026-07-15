@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from packs.indexing.lib.artifact_io import write_parquet_rows
 from packs.indexing.lib.io import read_json, read_jsonl, write_json, write_jsonl
 from packs.indexing.primitives.build_processing_pipeline import build_processing_pipeline as pipeline
 from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed
@@ -19,7 +20,7 @@ from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeli
     primary_person_key,
     save_hashes,
     step_flatten,
-    write_record_jsonl_with_hashes,
+    write_record_parquet_with_hashes,
     reset_processing_checkpoints,
     upsert_people_jsonl,
 )
@@ -145,17 +146,17 @@ class ProcessingLimitModeTest(unittest.TestCase):
 
     def test_unkeyed_record_rows_force_content_check_and_show_in_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            records = Path(tmp) / "records/companies.records.jsonl"
+            records = Path(tmp) / "records/companies.records.parquet"
             hashes = Path(tmp) / "records/companies.records.hashes.json"
             rows = [{"company_name": "No Key"}]
-            write_jsonl(records, rows)
+            write_parquet_rows(records, rows, schema={"id": "VARCHAR"})
             first_mtime = records.stat().st_mtime_ns
             time.sleep(0.01)
 
-            stats = write_record_jsonl_with_hashes(records, rows, hashes, id_fields=("id", "company_urn"))
+            stats = write_record_parquet_with_hashes(records, rows, hashes, id_fields=("id", "company_urn"))
             same_mtime = records.stat().st_mtime_ns
             time.sleep(0.01)
-            changed = write_record_jsonl_with_hashes(records, [{"company_name": "No Key Changed"}], hashes, id_fields=("id", "company_urn"))
+            changed = write_record_parquet_with_hashes(records, [{"company_name": "No Key Changed"}], hashes, id_fields=("id", "company_urn"))
 
         self.assertEqual(same_mtime, first_mtime)
         self.assertFalse(stats["file_written"])
@@ -175,7 +176,7 @@ class ProcessingLimitModeTest(unittest.TestCase):
             output = root / "pipeline"
             current = flatten_people(input_csv)[0]
             old = {**current, "full_name": "Old"}
-            write_jsonl(output / "records/summaries.records.jsonl", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}])
+            write_parquet_rows(output / "records/summaries.records.parquet", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}], float_array_fields=("vector",))
             save_hashes({primary_person_key(old): compute_record_hash(old)}, output / "unified/person_hashes.json")
             write_json(output / "ledger.json", {"status": "completed"})
 
@@ -202,7 +203,7 @@ class ProcessingLimitModeTest(unittest.TestCase):
             )
             output = root / "pipeline"
             current = flatten_people(input_csv)[0]
-            write_jsonl(output / "records/summaries.records.jsonl", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}])
+            write_parquet_rows(output / "records/summaries.records.parquet", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}], float_array_fields=("vector",))
             save_hashes({primary_person_key(current): compute_record_hash(current)}, output / "unified/person_hashes.json")
             write_json(output / "ledger.json", {"status": "partial"})
 
@@ -229,7 +230,7 @@ class ProcessingLimitModeTest(unittest.TestCase):
             )
             output = root / "pipeline"
             current = flatten_people(input_csv)[0]
-            write_jsonl(output / "records/summaries.records.jsonl", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}])
+            write_parquet_rows(output / "records/summaries.records.parquet", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}], float_array_fields=("vector",))
             save_hashes({primary_person_key(current): compute_record_hash(current)}, output / "unified/person_hashes.json")
 
             class Args:
@@ -255,7 +256,7 @@ class ProcessingLimitModeTest(unittest.TestCase):
             )
             output = root / "pipeline"
             current = flatten_people(input_csv)[0]
-            write_jsonl(output / "records/summaries.records.jsonl", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}])
+            write_parquet_rows(output / "records/summaries.records.parquet", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}], float_array_fields=("vector",))
 
             class Args:
                 input = str(input_csv)
@@ -280,7 +281,7 @@ class ProcessingLimitModeTest(unittest.TestCase):
             )
             output = root / "pipeline"
             current = flatten_people(input_csv)[0]
-            write_jsonl(output / "records/summaries.records.jsonl", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}])
+            write_parquet_rows(output / "records/summaries.records.parquet", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}], float_array_fields=("vector",))
             write_json(output / "ledger.json", {"status": "partial"})
 
             class Args:
@@ -295,19 +296,19 @@ class ProcessingLimitModeTest(unittest.TestCase):
         self.assertEqual(payload["counts"]["processed_people"], 0)
         self.assertEqual(payload["counts"]["pending_people"], 1)
 
-    def test_record_hash_adoption_does_not_rewrite_existing_jsonl(self) -> None:
+    def test_record_hash_adoption_does_not_rewrite_existing_parquet(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            records = Path(tmp) / "records/people.records.jsonl"
+            records = Path(tmp) / "records/people.records.parquet"
             hashes = Path(tmp) / "records/people.records.hashes.json"
             rows = [{"id": "person-1", "name": "Person One", "vector": [0.1, 0.2]}]
-            write_jsonl(records, rows)
+            write_parquet_rows(records, rows, float_array_fields=("vector",))
             first_mtime = records.stat().st_mtime_ns
             time.sleep(0.01)
 
-            adoption = write_record_jsonl_with_hashes(records, rows, hashes)
+            adoption = write_record_parquet_with_hashes(records, rows, hashes)
             adopted_mtime = records.stat().st_mtime_ns
             time.sleep(0.01)
-            unchanged = write_record_jsonl_with_hashes(records, rows, hashes)
+            unchanged = write_record_parquet_with_hashes(records, rows, hashes)
 
         self.assertEqual(adopted_mtime, first_mtime)
         self.assertFalse(adoption["file_written"])
@@ -351,7 +352,7 @@ class ProcessingLimitModeTest(unittest.TestCase):
             ps = paths(output)
             current = flatten_people(input_csv)[0]
             write_jsonl(ps["flattened"], [current])
-            write_jsonl(output / "records/summaries.records.jsonl", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}])
+            write_parquet_rows(output / "records/summaries.records.parquet", [{"id": current["id"], "person_id": current["id"], "vector": [0.1]}], float_array_fields=("vector",))
             write_json(output / "ledger.json", {"status": "completed"})
 
             stats = commit_processed_person_hashes({"run_dir": str(output)}, ps)
@@ -374,14 +375,16 @@ class ProcessingLimitModeTest(unittest.TestCase):
             root = Path(tmp)
             keep_files = [
                 root / "roles/roles_with_dense_text_remapped.jsonl",
-                root / "roles/roles_with_embeddings.jsonl",
+                root / "roles/roles_with_embeddings.parquet",
                 root / "company/companies_corpus_v3.jsonl",
-                root / "company/company_embeddings_v3.jsonl",
-                root / "unified/summary_embeddings.jsonl",
+                root / "company/company_embeddings_v3.parquet",
+                root / "unified/summary_embeddings.parquet",
             ]
             for path in keep_files:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("{}\n", encoding="utf-8")
+                if path.suffix == ".parquet":
+                    write_parquet_rows(path, [{"id": "cached", "embedding": [0.1]}], float_array_fields=("embedding",))
+                else:
+                    write_jsonl(path, [{"id": "cached"}])
             remove_files = [
                 root / "roles/checkpoint.json",
                 root / "roles/manifest.json",
@@ -472,10 +475,10 @@ class ProcessingLimitModeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             input_path = root / "records.jsonl"
-            output_path = root / "embeddings.jsonl"
-            embeddings_path = root / "input_embeddings.jsonl"
+            output_path = root / "embeddings.parquet"
+            embeddings_path = root / "input_embeddings.parquet"
             write_jsonl(input_path, [{"id": "one", "text": "hello world"}])
-            write_jsonl(embeddings_path, [{"id": "one", "embedding": [0.1, 0.2]}])
+            write_parquet_rows(embeddings_path, [{"id": "one", "embedding": [0.1, 0.2]}], float_array_fields=("embedding",))
 
             manifest = embed_records_checkpointed.run(SimpleNamespace(
                 input=str(input_path),
@@ -494,7 +497,7 @@ class ProcessingLimitModeTest(unittest.TestCase):
                 base_url=None,
                 model=None,
                 concurrency=None,
-                dimension=1536,
+                dimension=2,
                 api_batch_size=128,
                 dry_run=False,
                 force=True,
@@ -572,10 +575,10 @@ class ProcessingLimitModeTest(unittest.TestCase):
             company_state = read_json(root / "company_checkpoints/checkpoint.json")
 
             embedding_input = root / "records.jsonl"
-            embedding_output = root / "embeddings.jsonl"
-            embedding_artifact = root / "input_embeddings.jsonl"
+            embedding_output = root / "embeddings.parquet"
+            embedding_artifact = root / "input_embeddings.parquet"
             write_jsonl(embedding_input, [{"id": "one", "text": "hello world"}])
-            write_jsonl(embedding_artifact, [{"id": "one", "embedding": [0.1, 0.2]}])
+            write_parquet_rows(embedding_artifact, [{"id": "one", "embedding": [0.1, 0.2]}], float_array_fields=("embedding",))
             embed_records_checkpointed.run(SimpleNamespace(
                 input=str(embedding_input),
                 output=str(embedding_output),
@@ -594,7 +597,7 @@ class ProcessingLimitModeTest(unittest.TestCase):
                 model=None,
                 concurrency=None,
                 openai_usage_tier=None,
-                dimension=1536,
+                dimension=2,
                 api_batch_size=128,
                 dry_run=False,
                 force=True,
