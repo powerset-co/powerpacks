@@ -71,7 +71,23 @@ SYSTEM_PROMPT = (
     "how I know them / our relationship, recurring topics we discuss, notable events with "
     "rough dates, and any identifiers (emails, phones, social handles, URLs). Prefer "
     "specific, evidence-backed facts over guesses; set low confidence when the signal is "
-    "thin. Leave a field empty rather than inventing it."
+    "thin. Leave a field empty rather than inventing it.\n\n"
+    "Also decide `network_worth`: is this contact worth adding to (or keeping in) my "
+    "professional network? Judge from the ACTUAL relationship the messages show, for a "
+    "startup/venture-oriented founder or operator network.\n"
+    "- yes: high-signal person likely worth knowing or staying connected to — founders, "
+    "investors, executives, strong operators, technical builders, researchers; elite "
+    "schools or professional tracks; credible influence, wealth, or network centrality; "
+    "OR a genuine personal/professional relationship with real conversational depth.\n"
+    "- maybe: some real signal, but the relationship is thin, one-sided, or the person's "
+    "identity/value is uncertain enough to need a human look.\n"
+    "- no: transactional or service contacts (drivers, support reps, local vendors, "
+    "schedulers, recruiters with no special signal), automated/broadcast senders, "
+    "group-only acquaintances with no direct relationship, or cold outreach I never "
+    "meaningfully engaged with.\n"
+    "Be discriminating — do not inflate weak candidates — but a real two-way human "
+    "relationship should not fall to `no` just because it is personal rather than "
+    "professional. Give a terse concrete reason."
 )
 
 # Appended when an owner.json bio is present: lets the model infer era/school/
@@ -139,11 +155,20 @@ FACT_SCHEMA: dict[str, Any] = {
         },
         "confidence": {"type": "number"},
         "is_owner": {"type": "boolean", "description": "True if this 'contact' is actually the mailbox owner on another email address."},
+        "network_worth": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "decision": {"type": "string", "enum": ["yes", "maybe", "no"]},
+                "reason": {"type": "string"},
+            },
+            "required": ["decision", "reason"],
+        },
     },
     "required": [
         "canonical_name", "aliases", "employers", "title", "school", "field_of_study",
         "location", "relationship_to_owner", "topics", "notable_events", "identifiers",
-        "shared_context", "confidence", "is_owner",
+        "shared_context", "confidence", "is_owner", "network_worth",
     ],
 }
 

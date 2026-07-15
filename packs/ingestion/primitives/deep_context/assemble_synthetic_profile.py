@@ -30,10 +30,12 @@ from packs.ingestion.primitives.deep_context.candidates import (
     candidate_carry,
     candidate_person_id,
     candidate_row,
+    effective_network_worth,
+    is_candidate_id,
 )
-from packs.ingestion.primitives.deep_context.common import now_iso
+from packs.ingestion.primitives.deep_context.common import LINKEDIN_OVERRIDES_CSV, now_iso
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import DR_OUT_DIR, QUEUE_CSV
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED
+from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED, load_override_rows
 from packs.ingestion.schemas.candidates_schema import candidate_key_for
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 
@@ -183,8 +185,9 @@ def main(argv: list[str] | None = None) -> None:
 
     by_email, by_phone = people_lookup(Path(args.people_csv))
     existing = load_rows(Path(args.out))
+    overrides = load_override_rows(LINKEDIN_OVERRIDES_CSV)
 
-    built = auto = pending = preserved = with_linkedin = unusable = 0
+    built = auto = pending = preserved = with_linkedin = unusable = worth_no = 0
     for pdir in sorted(research_dir.iterdir()) if research_dir.exists() else []:
         rj = pdir / "01_research_parallel.json"
         if not rj.is_file():
@@ -211,6 +214,9 @@ def main(argv: list[str] | None = None) -> None:
             if crow:
                 original = candidate_carry(crow)
                 person_id = candidate_person_id(crow.get("candidate_key", ""))
+        if is_candidate_id(person_id) and effective_network_worth(person_id, overrides)["decision"] == "no":
+            worth_no += 1  # user/LLM said not worth adding — never mint a synthetic row
+            continue
         row = build_synthetic_row(profile, contact, original, person_id, args.auto_completeness)
         pub = row["public_identifier"].lower()
         if (existing.get(pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
@@ -226,7 +232,8 @@ def main(argv: list[str] | None = None) -> None:
         "primitive": "assemble_synthetic_profile", "status": "completed",
         "built": built, "auto_approved": auto, "pending_review": pending,
         "preserved_user_rows": preserved, "skipped_with_linkedin": with_linkedin,
-        "skipped_unusable": unusable, "total_rows": len(existing),
+        "skipped_unusable": unusable, "skipped_worth_no": worth_no,
+        "total_rows": len(existing),
         "out": str(args.out), "elapsed_ms": int((time.monotonic() - started) * 1000),
     }, indent=2))
 
