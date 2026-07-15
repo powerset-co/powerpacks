@@ -79,40 +79,40 @@ class SchemaHelperTests(unittest.TestCase):
 
 
 class MessagesWriterTests(unittest.TestCase):
-    def review_row(self, **overrides):
+    def contact_row(self, **overrides):
         row = {
-            "phone_e164": "+14155550123",
-            "full_name": "Jane Doe",
-            "network_name": "Jane Doe",
-            "network_person_id": "person-1",
-            "linkedin_url": "https://www.linkedin.com/in/janedoe",
+            "phone": "+14155550123",
+            "name": "Jane Doe",
+            "source": "imessage",
+            "match_status": "matched",
+            "matched_person_id": "person-1",
+            "matched_name": "Jane Doe",
+            "matched_linkedin_url": "https://www.linkedin.com/in/janedoe",
             "imessage_message_count": "87",
             "whatsapp_message_count": "",
-            "total_messages": "87",
+            "message_count": "87",
             "last_message": "2026-06-01T05:44:31.758167+00:00",
             "imessage_last_message": "2026-06-01T05:44:31.758167+00:00",
-            "message_source": "imessage",
         }
         row.update(overrides)
         return row
 
-    def test_review_row_populates_interaction_columns(self):
-        person = messages_import_mod.review_row_to_messages_people(self.review_row(), Path("review.csv"), "in_network")
+    def test_contact_row_populates_interaction_columns(self):
+        person = messages_import_mod.contact_row_to_messages_people(self.contact_row(), Path("contacts.csv"))
         self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 87})
         self.assertEqual(person["last_interaction"], "2026-06-01T05:44:31+00:00")
         self.assertNotIn("messages_total=", person["summary"])
 
     def test_candidate_merge_takes_channel_max_and_latest(self):
-        left = messages_import_mod.review_row_to_messages_people(self.review_row(), Path("review.csv"), "in_network")
-        right = messages_import_mod.review_row_to_messages_people(
-            self.review_row(
+        left = messages_import_mod.contact_row_to_messages_people(self.contact_row(), Path("contacts.csv"))
+        right = messages_import_mod.contact_row_to_messages_people(
+            self.contact_row(
                 imessage_message_count="40",
                 whatsapp_message_count="9",
                 imessage_last_message="2026-06-05T00:00:00+00:00",
                 last_message="2026-06-05T00:00:00+00:00",
             ),
-            Path("review.csv"),
-            "in_network",
+            Path("contacts.csv"),
         )
         merged = messages_import_mod.merge_messages_people_candidate(left, right)
         self.assertEqual(json.loads(merged["interaction_counts"]), {"imessage": 87, "whatsapp": 9})

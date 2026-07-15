@@ -28,6 +28,10 @@ Changelog:
 - 2026-07-13: Step 6 now sets a count-based runtime expectation from the
   LinkedIn import summary and distinguishes warm-cache runs from cache-cold
   first runs so agents do not mistake a long, quiet Modal build for a hang.
+- 2026-07-14: New Step 8 tail — check per-source import status, suggest missing
+  sources ($import-gmail / $import-messages), and offer $deep-setup processing
+  when candidates are staged. $setup keeps its own Modal index (first-run
+  search works out of the box); the import skills no longer index.
 -->
 
 # setup
@@ -47,12 +51,12 @@ is already imported, then re-merges + re-indexes):
 ## How to run this skill
 
 **FIRST, before running anything: create a literal, visible checklist with all
-eight steps below and step through it, marking each item complete as you go.**
+nine steps below and step through it, marking each item complete as you go.**
 Mandatory. Use your harness's plan/todo/task tool:
 
-- **Claude Code:** `TaskCreate` one task per step (0–7), then `TaskUpdate` each
+- **Claude Code:** `TaskCreate` one task per step (0–8), then `TaskUpdate` each
   to `in_progress` then `completed`.
-- **Codex:** `update_plan` with the eight steps, updating status as you go.
+- **Codex:** `update_plan` with the nine steps, updating status as you go.
 - **Any other harness:** its equivalent todo/plan mechanism.
 
 Seed the checklist with these exact item titles:
@@ -66,6 +70,7 @@ Seed the checklist with these exact item titles:
 5. Merge all sources
 6. Index the merged network
 7. Validate the search index
+8. Suggest next sources & processing
 ```
 
 Steps 2 and 3 depend on the Step 1 choice (Step 2 is a no-op on the
@@ -74,7 +79,7 @@ and mark them complete.
 
 Then:
 
-1. **Work the checklist in order 0 → 7.** Exactly one item `in_progress` at a
+1. **Work the checklist in order 0 → 8.** Exactly one item `in_progress` at a
    time; mark it `completed` before the next. No batching, reordering, skipping.
    One-line result per step.
 2. **Run from the canonical repo root.** Resolve once and `cd` there (see *Repo
@@ -317,13 +322,31 @@ JSON with `status` (`ok`/`fail`/`missing`), per-table row counts,
 `total_people`, `summary`. Pass only on `status: ok` (exit 0); on `fail`/
 `missing` (exit 1) report the `errors`. Echo the `summary`.
 
+### Step 8 — Suggest next sources & processing
+
+LinkedIn is in and searchable. Check which other sources are imported and
+suggest the missing ones (skip the ones already present):
+
+```bash
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/status.py status
+```
+
+- `gmail.import.imported: false` → suggest **`$import-gmail`**.
+- `messages.import.imported: false` → suggest **`$import-messages`**.
+
+If either import shows staged candidates (`import.candidates > 0`), also ask:
+**"Would you like to process your contacts now? `$deep-setup` builds per-person
+context across Gmail + iMessage/WhatsApp, resolves unidentified contacts once
+(spend-gated, with review), and rebuilds the search index."** If nothing else is
+imported yet, just make the suggestions and finish.
+
 ---
 
 ## Done
 
 Report a terse summary: credential route (logged in as <email> + keys pulled,
 or prepared custom Modal workspace verified), LinkedIn imported, merged network of M
-people, index validated. Remind the user that rerunning
-`$setup` reruns the whole checklist, and that **Gmail** (`$import-gmail`) and
-**iMessage/WhatsApp** (`$import-messages`) are separate skills that add their
-source on top and re-merge + re-index.
+people, index validated, and which follow-up sources were suggested. Remind the
+user that rerunning `$setup` reruns the whole checklist, and that **Gmail**
+(`$import-gmail`) and **iMessage/WhatsApp** (`$import-messages`) are separate
+skills that add their source on top.

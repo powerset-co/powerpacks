@@ -25,6 +25,84 @@ def write_directory(path: Path, rows: list[dict[str, str]]) -> None:
             writer.writerow({column: row.get(column, "") for column in DIRECTORY_COLUMNS})
 
 
+class GmailCandidatesTests(unittest.TestCase):
+    QUEUE_FIELDS = [
+        "handle", "id", "account_emails", "source_ids", "display_name",
+        "full_name", "primary_email", "company_guess", "primary_email_type",
+        "total_messages", "thread_count", "last_interaction", "source",
+        "source_channels",
+    ]
+
+    def write_queue(self, path: Path, rows: list[dict[str, str]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.QUEUE_FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({column: row.get(column, "") for column in self.QUEUE_FIELDS})
+
+    def test_directory_only_default_disables_providers(self) -> None:
+        args = gmail_import.build_parser().parse_args(["run"])
+        self.assertFalse(args.resolve_legacy)
+        legacy = gmail_import.build_parser().parse_args(["run", "--resolve-legacy"])
+        self.assertTrue(legacy.resolve_legacy)
+
+    def test_queue_row_to_candidate_maps_and_skips(self) -> None:
+        row = {
+            "handle": "jane@corp.com",
+            "primary_email": "Jane@Corp.com",
+            "full_name": "Jane Doe",
+            "company_guess": "Corp",
+            "total_messages": "42",
+            "thread_count": "7",
+            "last_interaction": "2026-05-01T10:00:00+00:00",
+            "account_emails": "me@gmail.com",
+        }
+        candidate = gmail_import.queue_row_to_candidate(row, cached_negative=True)
+        self.assertEqual(candidate["candidate_key"], "email:jane@corp.com")
+        self.assertEqual(candidate["source"], "gmail")
+        self.assertEqual(json.loads(candidate["interaction_counts"]), {"gmail": 42})
+        self.assertTrue(json.loads(candidate["evidence"])["cached_negative"])
+        self.assertIsNone(gmail_import.queue_row_to_candidate({"primary_email": ""}, cached_negative=False))
+
+    def test_write_gmail_candidates_unions_and_dedups_queues(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            unresolved = tmp / "unresolved.csv"
+            negative = tmp / "negative.csv"
+            self.write_queue(unresolved, [
+                {"handle": "a@x.com", "primary_email": "a@x.com", "full_name": "Alice Adams", "total_messages": "3"},
+                {"handle": "b@x.com", "primary_email": "b@x.com", "full_name": "Bob Brown", "total_messages": "5"},
+            ])
+            self.write_queue(negative, [
+                {"handle": "b@x.com", "primary_email": "b@x.com", "full_name": "Bob Brown", "total_messages": "5"},
+                {"handle": "c@x.com", "primary_email": "c@x.com", "full_name": "Cara Cole", "total_messages": "1"},
+            ])
+            artifacts = {
+                "gmail_unresolved_linkedin_resolution_queue_csvs": [
+                    {"queue_csv": str(unresolved), "account_email": "me@gmail.com"},
+                ],
+                "gmail_cached_negative_linkedin_resolution_queue_csvs": [
+                    {"queue_csv": str(negative), "account_email": "me@gmail.com"},
+                ],
+            }
+            import_dir = tmp / "import" / "gmail"
+            import_dir.mkdir(parents=True)
+            result = gmail_import.write_gmail_candidates(artifacts, import_dir)
+            self.assertEqual(result["candidates"], 3)
+            self.assertEqual(result["skipped"], {"no_email": 0, "duplicate_email": 1})
+            with (import_dir / "candidates.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(CsvIO.dict_reader(handle))
+            by_key = {row["candidate_key"]: row for row in rows}
+            self.assertEqual(
+                sorted(by_key),
+                ["email:a@x.com", "email:b@x.com", "email:c@x.com"],
+            )
+            # First-seen (unresolved) wins the dedup: b@x.com is not cached-negative.
+            self.assertFalse(json.loads(by_key["email:b@x.com"]["evidence"])["cached_negative"])
+            self.assertTrue(json.loads(by_key["email:c@x.com"]["evidence"])["cached_negative"])
+
+
 class ImportContactsQualityTests(unittest.TestCase):
     def test_gmail_import_uses_per_account_people_records_from_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as td:

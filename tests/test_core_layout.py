@@ -288,13 +288,18 @@ class CoreLayoutTests(unittest.TestCase):
                 for path in root.rglob("*.json"):
                     json.loads(path.read_text())
 
-    def test_import_messages_documents_reviewed_local_flow(self) -> None:
+    def test_import_messages_documents_contact_sync_flow(self) -> None:
         text = (ROOT / "packs/ingestion/skills/import-messages/SKILL.md").read_text()
         self.assertIn("$import-messages", text)
-        self.assertIn("review_research_web.py", text)
+        self.assertIn("match_local_candidates/match_local_candidates.py match", text)
         self.assertIn("import_contacts_pipeline/messages.py run", text)
         self.assertIn("index_contacts_pipeline.py fan-in", text)
-        self.assertIn("linkedin_modal_pipeline.py index-people", text)
+        self.assertIn("import_contacts_pipeline/status.py status", text)
+        self.assertIn("candidates.csv", text)
+        self.assertIn("$deep-setup", text)
+        # Research/review and indexing left this skill for $deep-setup.
+        self.assertNotIn("review_research_web.py", text)
+        self.assertNotIn("linkedin_modal_pipeline.py index-people", text)
 
     def test_search_network_uses_single_execute_preview_gate(self) -> None:
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()

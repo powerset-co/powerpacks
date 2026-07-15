@@ -1,7 +1,6 @@
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +29,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "skills/import-messages/SKILL.md",
             "skills/import-whatsapp/SKILL.md",
             "schemas/contacts-csv.schema.json",
+            "schemas/candidates_schema.py",
             "primitives/extract_imessage_contacts/extract_imessage_contacts.py",
             "primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
             "primitives/merge_message_contacts/merge_message_contacts.py",
@@ -40,6 +40,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "primitives/build_research_review_csv/build_research_review_csv.py",
             "primitives/review_research_web/review_research_web.py",
             "primitives/import_contacts_pipeline/messages.py",
+            "primitives/import_contacts_pipeline/status.py",
         ]
         for relative in expected:
             with self.subTest(relative=relative):
@@ -54,16 +55,37 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertIn("linkedin_modal_pipeline.py import-linkedin", setup)
         self.assertNotIn("discover_contacts_pipeline/messages.py discover", setup)
         self.assertNotIn("discover_contacts_pipeline/gmail.py discover", setup)
+        self.assertIn("import_contacts_pipeline/status.py status", setup)
 
         self.assertIn("discover_contacts_pipeline/gmail.py discover", gmail)
         self.assertIn("import_contacts_pipeline/gmail.py run", gmail)
         self.assertNotIn("discover_contacts_pipeline/messages.py discover", gmail)
+        self.assertIn("import_contacts_pipeline/status.py status", gmail)
 
         self.assertIn("$import-messages", messages)
         self.assertIn("import_contacts_pipeline/messages.py run", messages)
         self.assertIn("index_contacts_pipeline.py fan-in", messages)
-        self.assertIn("linkedin_modal_pipeline.py index-people", messages)
+        self.assertIn("import_contacts_pipeline/status.py status", messages)
         self.assertNotIn("discover_contacts_pipeline/gmail.py discover", messages)
+
+        # Contact-sync boundary: the import skills never index and never run
+        # the retired in-skill research/review flow — $deep-setup owns both.
+        for skill_name, text in (("gmail", gmail), ("messages", messages)):
+            with self.subTest(skill=skill_name):
+                self.assertNotIn("linkedin_modal_pipeline.py index-people", text)
+                self.assertNotIn("validate_search_index", text)
+        for retired in (
+            "llm_review_contacts",
+            "prepare_research_queue",
+            "deep_research_contacts",
+            "build_research_review_csv",
+            "review_research_web",
+            "reconcile-empty",
+            "--approve-parallel-spend",
+        ):
+            with self.subTest(retired=retired):
+                self.assertNotIn(retired, messages)
+                self.assertNotIn(retired, gmail)
 
     def test_installers_source_message_skills_from_ingestion(self) -> None:
         expected = {
@@ -113,7 +135,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
             INGESTION / "skills/import-messages/SKILL.md",
             INGESTION / "primitives/discover_contacts_pipeline/messages.py",
             INGESTION / "primitives/import_contacts_pipeline/messages.py",
-            INGESTION / "primitives/build_research_review_csv/build_research_review_csv.py",
         ]
         forbidden = [
             "--include-powerset-candidates",
@@ -205,6 +226,17 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "begin_step",
             "mark_step",
             "save_ledger",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, text)
+        # Contacts-direct: the importer never touches the retired research/
+        # review artifacts and never calls providers.
+        for token in (
+            "research_review",
+            "research_queue",
+            "enrich_people",
+            "rapidapi",
+            "parallel",
         ):
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
@@ -363,47 +395,53 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
 
 class MessagesImportRuntimeTests(unittest.TestCase):
-    REVIEW_FIELDS = [
-        "bucket",
-        "full_name",
-        "phone_e164",
-        "message_source",
+    CONTACT_FIELDS = [
+        "phone",
+        "name",
+        "source",
+        "is_in_group_chats",
+        "group_names",
+        "message_count",
         "imessage_message_count",
         "whatsapp_message_count",
         "last_message",
         "imessage_last_message",
         "whatsapp_last_message",
-        "exclude",
-        "approved",
-        "enrich_decision",
-        "in_network",
-        "network_person_id",
-        "network_name",
-        "network_linkedin_url",
-        "linkedin_url",
-        "retarget_linkedin_url",
-        "review_source",
-        "top_title_company_pairs",
-        "short_reason",
-        "text",
-        "body",
+        "skip",
+        "match_status",
+        "matched_person_id",
+        "matched_name",
+        "matched_linkedin_url",
+        "match_confidence",
+        "match_method",
+        "match_reason",
     ]
 
-    @staticmethod
-    def review_row(**overrides: str) -> dict[str, str]:
-        row = {
-            "bucket": "maybe",
-            "full_name": "Jane Doe",
-            "phone_e164": "+14155550123",
-            "message_source": "imessage",
+    @classmethod
+    def contact_row(cls, **overrides: str) -> dict[str, str]:
+        row = {field: "" for field in cls.CONTACT_FIELDS}
+        row.update({
+            "phone": "+14155550123",
+            "name": "Jane Doe",
+            "source": "imessage",
+            "is_in_group_chats": "false",
+            "message_count": "87",
             "imessage_message_count": "87",
             "last_message": "2026-06-01T05:44:31+00:00",
             "imessage_last_message": "2026-06-01T05:44:31+00:00",
-            "exclude": "",
-            "linkedin_url": "https://www.linkedin.com/in/jane-doe",
-            "review_source": "deep_research",
-            "top_title_company_pairs": "Finance Lead at Sail",
-        }
+        })
+        row.update(overrides)
+        return row
+
+    @classmethod
+    def matched_row(cls, **overrides: str) -> dict[str, str]:
+        row = cls.contact_row(
+            match_status="matched",
+            matched_person_id="net-1",
+            matched_name="Jane Doe",
+            matched_linkedin_url="https://www.linkedin.com/in/jane-doe",
+            match_method="phone",
+        )
         row.update(overrides)
         return row
 
@@ -417,27 +455,14 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             accounts = root / ".powerpacks" / "ingestion" / "accounts.json"
             accounts.parent.mkdir(parents=True, exist_ok=True)
             accounts.write_text("{}\n", encoding="utf-8")
-            calls: list[Path] = []
-
-            def fake_enrich(input_csv: Path, enrichment_dir: Path) -> dict[str, object]:
-                calls.append(input_csv)
-                enrichment_dir.mkdir(parents=True, exist_ok=True)
-                output = enrichment_dir / "people.csv"
-                shutil.copyfile(input_csv, output)
-                return {
-                    "status": "completed",
-                    "people_csv": str(output),
-                    "prepare": {"input_rows": self.csv_count(input_csv)},
-                    "provider": {"processed": 0, "fetched": 0},
-                    "merge": {"rows": self.csv_count(output)},
-                    "artifacts": {"people_csv": str(output)},
-                }
+            contacts = root / ".powerpacks" / "messages" / "contacts.csv"
+            match_manifest = root / ".powerpacks" / "messages" / "contacts.csv.match.manifest.json"
 
             stack.enter_context(mock.patch.object(import_messages, "DEFAULT_BASE_DIR", state))
             stack.enter_context(mock.patch.object(import_messages, "DEFAULT_IMPORT_DIR", import_dir))
             stack.enter_context(mock.patch.object(import_messages, "DEFAULT_DIRECTORY_CSV", directory))
-            stack.enter_context(mock.patch.object(import_messages, "DEFAULT_PROFILE_CACHE_DIR", state / "profile_cache_v2"))
-            stack.enter_context(mock.patch.object(import_messages, "enrich_messages_people", side_effect=fake_enrich))
+            stack.enter_context(mock.patch.object(import_messages, "WORKING_CONTACTS_CSV", contacts))
+            stack.enter_context(mock.patch.object(import_messages, "MATCH_MANIFEST_JSON", match_manifest))
             previous = Path.cwd()
             os.chdir(root)
             try:
@@ -447,9 +472,8 @@ class MessagesImportRuntimeTests(unittest.TestCase):
                     "import_dir": import_dir / "messages",
                     "directory": directory,
                     "accounts": accounts,
-                    "review": root / ".powerpacks" / "messages" / "research_review.csv",
-                    "queue": root / ".powerpacks" / "messages" / "research_queue.csv",
-                    "calls": calls,
+                    "contacts": contacts,
+                    "match_manifest": match_manifest,
                 }
             finally:
                 os.chdir(previous)
@@ -459,55 +483,65 @@ class MessagesImportRuntimeTests(unittest.TestCase):
         with path.open(newline="", encoding="utf-8") as handle:
             return sum(1 for _ in CsvIO.dict_reader(handle))
 
-    def write_review(self, env: dict[str, object], rows: list[dict[str, str]]) -> None:
-        write_csv_rows(env["review"], self.REVIEW_FIELDS, rows)
+    @staticmethod
+    def csv_rows(path: Path) -> list[dict[str, str]]:
+        with path.open(newline="", encoding="utf-8") as handle:
+            return list(CsvIO.dict_reader(handle))
+
+    def write_contacts(self, env: dict[str, object], rows: list[dict[str, str]]) -> None:
+        write_csv_rows(env["contacts"], self.CONTACT_FIELDS, rows)
+        env["match_manifest"].parent.mkdir(parents=True, exist_ok=True)
+        env["match_manifest"].write_text("{}\n", encoding="utf-8")
 
     @staticmethod
-    def write_queue(env: dict[str, object], rows: list[dict[str, str]]) -> None:
-        write_csv_rows(env["queue"], import_messages.RESEARCH_COLUMNS, rows)
-
-    @staticmethod
-    def artifact_snapshot(env: dict[str, object]) -> dict[str, bytes]:
-        paths = {
-            "people_input": env["import_dir"] / "people.input.csv",
-            "people": env["import_dir"] / "people.csv",
-            "manifest": env["import_dir"] / "manifest.json",
-            "review": env["review"],
-            "directory": env["directory"],
+    def run_import(env: dict[str, object], *, confirm: bool, **overrides: object) -> dict[str, object]:
+        args = {
+            "accounts": env["accounts"],
+            "operator_id": "local",
+            "confirm_import": confirm,
+            "min_message_count": import_messages.DEFAULT_MIN_MESSAGE_COUNT,
+            "include_group_only": False,
+            "allow_unmatched": False,
         }
-        return {name: path.read_bytes() for name, path in paths.items()}
+        args.update(overrides)
+        return import_messages.run(SimpleNamespace(**args))
 
-    @staticmethod
-    def run_import(env: dict[str, object], *, confirm: bool) -> dict[str, object]:
-        return import_messages.run(
-            SimpleNamespace(
-                accounts=env["accounts"],
-                operator_id="local",
-                confirm_import=confirm,
-            )
-        )
+    def seed_directory(self, env: dict[str, object]) -> None:
+        unrelated = {column: "" for column in DIRECTORY_COLUMNS}
+        unrelated.update({
+            "source": "gmail_msgvault",
+            "source_key": "gmail:me@example.com:friend@example.com",
+            "source_account": "me@example.com",
+            "source_channels": "gmail_msgvault",
+            "status": "found",
+            "name": "Existing Friend",
+            "linkedin_url": "https://www.linkedin.com/in/existing-friend",
+            "public_identifier": "existing-friend",
+            "confidence": "1.00",
+        })
+        write_csv_rows(env["directory"], DIRECTORY_COLUMNS, [unrelated])
 
-    def test_block_confirm_refresh_noop_and_exclusion_lifecycle(self) -> None:
-        sentinel = "SECRET MESSAGE BODY MUST NOT LEAK"
+    def test_block_confirm_noop_refresh_and_removal_lifecycle(self) -> None:
         with self.sandbox() as env:
-            unrelated = {column: "" for column in DIRECTORY_COLUMNS}
-            unrelated.update({
-                "source": "gmail_msgvault",
-                "source_key": "gmail:me@example.com:friend@example.com",
-                "source_account": "me@example.com",
-                "source_channels": "gmail_msgvault",
-                "status": "found",
-                "name": "Existing Friend",
-                "linkedin_url": "https://www.linkedin.com/in/existing-friend",
-                "public_identifier": "existing-friend",
-                "confidence": "1.00",
-            })
-            write_csv_rows(env["directory"], DIRECTORY_COLUMNS, [unrelated])
-            self.write_review(env, [self.review_row(text=sentinel, body=sentinel)])
+            self.seed_directory(env)
+            sentinel = "SECRET GROUP NAME MUST NOT LEAK"
+            self.write_contacts(env, [
+                self.matched_row(group_names=sentinel),
+                self.contact_row(
+                    phone="+14155550999",
+                    name="John Smith",
+                    source="whatsapp",
+                    message_count="12",
+                    imessage_message_count="",
+                    whatsapp_message_count="12",
+                    whatsapp_last_message="2026-06-05T00:00:00+00:00",
+                    group_names=sentinel,
+                ),
+                self.contact_row(phone="+14155550777", name="AAA", message_count="4"),
+            ])
 
             blocked = self.run_import(env, confirm=False)
             self.assertEqual(blocked["status"], "blocked_approval")
-            self.assertEqual(env["calls"], [])
             self.assertFalse((env["import_dir"] / "people.csv").exists())
             self.assertEqual(
                 [path.name for path in env["import_dir"].iterdir()],
@@ -516,171 +550,168 @@ class MessagesImportRuntimeTests(unittest.TestCase):
 
             completed = self.run_import(env, confirm=True)
             self.assertEqual(completed["status"], "completed")
-            self.assertEqual(len(env["calls"]), 1)
             people_csv = env["import_dir"] / "people.csv"
+            candidates_csv = env["import_dir"] / "candidates.csv"
             self.assertEqual(self.csv_count(people_csv), 1)
+            self.assertEqual(self.csv_count(candidates_csv), 1)
+            self.assertEqual(completed["stats"], {"people": 1, "candidates": 1})
+            self.assertEqual(
+                completed["materialized"]["skipped"].get("bad_name"), 1
+            )
             manifests = list(env["import_dir"].rglob("manifest.json"))
             self.assertEqual(manifests, [env["import_dir"] / "manifest.json"])
             self.assertEqual(list(env["import_dir"].rglob("*ledger*")), [])
+            self.assertFalse((env["import_dir"] / "people.input.csv").exists())
+            self.assertFalse((env["import_dir"] / "enrichment").exists())
 
-            manifest = json.loads((env["import_dir"] / "manifest.json").read_text())
-            self.assertNotIn(str(env["directory"]), json.dumps(manifest["fingerprints"]))
-            self.assertEqual(manifest["directory"]["path"], str(env["directory"]))
-            derived_text = "\n".join(
-                path.read_text(encoding="utf-8", errors="ignore")
-                for path in [
-                    env["import_dir"] / "people.input.csv",
-                    people_csv,
-                    env["import_dir"] / "manifest.json",
-                    env["directory"],
-                ]
-            )
+            person = self.csv_rows(people_csv)[0]
+            self.assertEqual(person["id"], "net-1")
+            self.assertEqual(person["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
+            self.assertEqual(person["enrichment_provider"], "")
+            self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 87})
+            candidate = self.csv_rows(candidates_csv)[0]
+            self.assertEqual(candidate["candidate_key"], "phone:+14155550999")
+            self.assertEqual(candidate["source"], "whatsapp")
+            self.assertEqual(candidate["full_name"], "John Smith")
+            derived_text = people_csv.read_text() + candidates_csv.read_text()
             self.assertNotIn(sentinel, derived_text)
 
             noop = self.run_import(env, confirm=False)
             self.assertTrue(noop["noop"])
-            self.assertEqual(len(env["calls"]), 1)
 
-            self.write_review(env, [self.review_row(
-                top_title_company_pairs="VP Finance at Sail",
-                imessage_message_count="120",
-                last_message="2026-06-10T00:00:00+00:00",
-                imessage_last_message="2026-06-10T00:00:00+00:00",
-            )])
-            refreshed = self.run_import(env, confirm=False)
+            self.write_contacts(env, [
+                self.matched_row(
+                    message_count="120",
+                    imessage_message_count="120",
+                    last_message="2026-06-10T00:00:00+00:00",
+                    imessage_last_message="2026-06-10T00:00:00+00:00",
+                ),
+            ])
+            refreshed = self.run_import(env, confirm=True)
             self.assertEqual(refreshed["status"], "completed")
-            self.assertEqual(len(env["calls"]), 2)
-            with people_csv.open(newline="", encoding="utf-8") as handle:
-                person = next(CsvIO.dict_reader(handle))
-            self.assertEqual(person["current_title"], "VP Finance")
+            person = self.csv_rows(people_csv)[0]
             self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 120})
+            self.assertEqual(self.csv_count(candidates_csv), 0)
 
-            self.write_review(env, [self.review_row(exclude="yes")])
-            excluded = self.run_import(env, confirm=False)
-            self.assertEqual(excluded["status"], "completed")
+            self.write_contacts(env, [
+                self.contact_row(phone="+14155550777", name="AAA", message_count="4"),
+            ])
+            removed = self.run_import(env, confirm=True)
+            self.assertEqual(removed["status"], "completed")
             self.assertEqual(self.csv_count(people_csv), 0)
-            with env["directory"].open(newline="", encoding="utf-8") as handle:
-                directory_rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual(self.csv_count(candidates_csv), 0)
+            directory_rows = self.csv_rows(env["directory"])
             self.assertEqual([row["source"] for row in directory_rows], ["gmail_msgvault"])
 
-    def test_review_policy_merges_duplicates_and_honors_explicit_exclusion(self) -> None:
-        sentinel = "DO NOT COPY THIS BODY"
+    def test_floor_reasons_and_suggested_not_attached(self) -> None:
+        cases = [
+            ({"phone": "jane@icloud.com"}, "email_handle"),
+            ({"phone": "777888"}, "short_code_or_invalid_phone"),
+            ({"skip": "true"}, "skip_flag"),
+            ({"name": ""}, "no_name"),
+            ({"name": "AAA"}, "bad_name"),
+            ({"name": "Jane Hinge"}, "blocked_name_token"),
+            ({"name": "4155550123", "phone": "+14155550123"}, "name_is_phone"),
+            ({"message_count": "0", "imessage_message_count": "0"}, "below_min_messages"),
+            ({"is_in_group_chats": "true", "message_count": "3", "imessage_message_count": "3"}, "group_only_low_signal"),
+        ]
+        for overrides, expected in cases:
+            with self.subTest(expected=expected):
+                row = self.contact_row(**overrides)
+                self.assertEqual(
+                    import_messages.contact_floor_reason(
+                        row, min_message_count=1, include_group_only=False
+                    ),
+                    expected,
+                )
+        # Group-only contacts pass with the opt-in flag.
+        row = self.contact_row(is_in_group_chats="true", message_count="3", imessage_message_count="3")
+        self.assertEqual(
+            import_messages.contact_floor_reason(row, min_message_count=1, include_group_only=True),
+            "",
+        )
+
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            review = root / "review.csv"
-            output = root / "people.csv"
-            self.write_review(
-                {"review": review},
-                [
-                    self.review_row(text=sentinel),
-                    self.review_row(
-                        phone_e164="+14155550999",
-                        message_source="whatsapp",
-                        imessage_message_count="40",
-                        whatsapp_message_count="9",
-                        last_message="2026-06-05T00:00:00+00:00",
-                        whatsapp_last_message="2026-06-05T00:00:00+00:00",
-                    ),
-                    self.review_row(
-                        phone_e164="+14155550888",
-                        message_source="imessage",
-                        imessage_message_count="12",
-                    ),
-                    self.review_row(
-                        full_name="Rejected Person",
-                        phone_e164="+14155550000",
-                        linkedin_url="https://www.linkedin.com/in/rejected-person",
-                        exclude="yes",
-                    ),
-                ],
+            contacts = Path(td) / "contacts.csv"
+            write_csv_rows(contacts, self.CONTACT_FIELDS, [
+                self.contact_row(
+                    match_status="suggested",
+                    matched_person_id="net-9",
+                    matched_name="Maybe Jane",
+                    matched_linkedin_url="https://www.linkedin.com/in/maybe-jane",
+                ),
+            ])
+            summary, people_rows, candidate_rows = import_messages.selected_contacts_people(contacts)
+            self.assertEqual(people_rows, [])
+            self.assertEqual(len(candidate_rows), 1)
+            self.assertEqual(summary["skipped"].get("suggested_not_attached"), 1)
+            evidence = json.loads(candidate_rows[0]["evidence"])
+            self.assertEqual(evidence["suggested_person_id"], "net-9")
+            self.assertEqual(
+                evidence["suggested_linkedin_url"],
+                "https://www.linkedin.com/in/maybe-jane",
             )
-            summary = import_messages.materialize_messages_review_people(review, output)
-            self.assertEqual(summary["eligible_rows"], 3)
-            self.assertEqual(summary["rows_written"], 1)
-            with output.open(newline="", encoding="utf-8") as handle:
-                person = next(CsvIO.dict_reader(handle))
+
+    def test_matched_duplicates_merge_and_email_handles(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            contacts = Path(td) / "contacts.csv"
+            write_csv_rows(contacts, self.CONTACT_FIELDS, [
+                self.matched_row(),
+                self.matched_row(
+                    phone="+14155550999",
+                    source="whatsapp",
+                    message_count="9",
+                    imessage_message_count="",
+                    whatsapp_message_count="9",
+                    whatsapp_last_message="2026-06-05T00:00:00+00:00",
+                ),
+                self.matched_row(
+                    phone="jane@icloud.com",
+                    source="imessage",
+                    message_count="3",
+                    imessage_message_count="3",
+                ),
+            ])
+            summary, people_rows, candidate_rows = import_messages.selected_contacts_people(contacts)
+            self.assertEqual(candidate_rows, [])
+            self.assertEqual(len(people_rows), 1)
+            self.assertEqual(summary["skipped"].get("duplicate_matched_person"), 2)
+            person = people_rows[0]
             self.assertEqual(
                 json.loads(person["all_phones"]),
-                ["+14155550123", "+14155550999", "+14155550888"],
+                ["+14155550123", "+14155550999"],
             )
+            self.assertEqual(person["primary_email"], "jane@icloud.com")
             self.assertEqual(person["source_channels"], "imessage,whatsapp")
-            self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 87, "whatsapp": 9})
+            self.assertEqual(
+                json.loads(person["interaction_counts"]),
+                {"imessage": 87, "whatsapp": 9},
+            )
             self.assertEqual(person["last_interaction"], "2026-06-05T00:00:00+00:00")
-            self.assertNotIn(sentinel, output.read_text())
 
-    def test_empty_queue_reconciliation_clears_stale_messages_slice(self) -> None:
+    def test_missing_inputs_and_empty_contacts(self) -> None:
         with self.sandbox() as env:
-            unrelated = {column: "" for column in DIRECTORY_COLUMNS}
-            unrelated.update({
-                "source": "gmail_msgvault",
-                "source_key": "gmail:me@example.com:friend@example.com",
-                "source_account": "me@example.com",
-                "source_channels": "gmail_msgvault",
-                "status": "found",
-                "name": "Existing Friend",
-                "linkedin_url": "https://www.linkedin.com/in/existing-friend",
-                "public_identifier": "existing-friend",
-                "confidence": "1.00",
-            })
-            write_csv_rows(env["directory"], DIRECTORY_COLUMNS, [unrelated])
-            self.write_review(env, [self.review_row()])
-            self.assertEqual(self.run_import(env, confirm=True)["status"], "completed")
+            missing = self.run_import(env, confirm=True)
+            self.assertEqual(missing["status"], "failed")
+            self.assertEqual(missing["reason"], "messages_contacts_missing")
+
+            write_csv_rows(env["contacts"], self.CONTACT_FIELDS, [self.matched_row()])
+            unmatched = self.run_import(env, confirm=True)
+            self.assertEqual(unmatched["status"], "failed")
+            self.assertEqual(unmatched["reason"], "messages_contacts_not_matched")
+
+            allowed = self.run_import(env, confirm=True, allow_unmatched=True)
+            self.assertEqual(allowed["status"], "completed")
             self.assertEqual(self.csv_count(env["import_dir"] / "people.csv"), 1)
 
-            preserved = self.artifact_snapshot(env)
-            missing = import_messages.reconcile_empty(
-                SimpleNamespace(
-                    accounts=env["accounts"], operator_id="local", queue=env["queue"]
-                )
-            )
-            self.assertEqual(missing["reason"], "messages_research_queue_missing")
-            self.assertEqual(self.artifact_snapshot(env), preserved)
-
-            write_csv_rows(env["queue"], ["handle"], [])
-            malformed = import_messages.reconcile_empty(
-                SimpleNamespace(
-                    accounts=env["accounts"], operator_id="local", queue=env["queue"]
-                )
-            )
-            self.assertEqual(malformed["reason"], "messages_research_queue_schema_invalid")
-            self.assertEqual(self.artifact_snapshot(env), preserved)
-
-            self.write_queue(env, [{"handle": "phone-4155550123"}])
-            non_empty = import_messages.reconcile_empty(
-                SimpleNamespace(
-                    accounts=env["accounts"], operator_id="local", queue=env["queue"]
-                )
-            )
-            self.assertEqual(non_empty["reason"], "messages_research_queue_not_empty")
-            self.assertEqual(self.artifact_snapshot(env), preserved)
-
-            self.write_queue(env, [])
-            cleared = import_messages.reconcile_empty(
-                SimpleNamespace(
-                    accounts=env["accounts"], operator_id="local", queue=env["queue"]
-                )
-            )
+            self.seed_directory(env)
+            self.write_contacts(env, [])
+            cleared = self.run_import(env, confirm=True)
             self.assertEqual(cleared["status"], "completed")
-            self.assertEqual(cleared["reason"], "empty_current_research_queue")
+            self.assertEqual(cleared["stats"], {"people": 0, "candidates": 0})
             self.assertEqual(self.csv_count(env["import_dir"] / "people.csv"), 0)
-            self.assertEqual(self.csv_count(env["import_dir"] / "people.input.csv"), 0)
-            self.assertFalse(env["review"].exists())
-            self.assertEqual(len(env["calls"]), 1)
-            with env["directory"].open(newline="", encoding="utf-8") as handle:
-                directory_rows = list(CsvIO.dict_reader(handle))
+            directory_rows = self.csv_rows(env["directory"])
             self.assertEqual([row["source"] for row in directory_rows], ["gmail_msgvault"])
-            manifest = json.loads((env["import_dir"] / "manifest.json").read_text())
-            self.assertEqual(manifest["input"]["research_queue_csv"], str(env["queue"]))
-            self.assertIn(str(env["queue"]), manifest["fingerprints"]["input_artifacts"])
-
-            self.write_review(env, [self.review_row(
-                full_name="New Person",
-                phone_e164="+14155550777",
-                linkedin_url="https://www.linkedin.com/in/new-person",
-            )])
-            blocked = self.run_import(env, confirm=False)
-            self.assertEqual(blocked["status"], "blocked_approval")
-            self.assertFalse(blocked.get("noop", False))
 
     def test_cli_status_exit_codes(self) -> None:
         cases = [

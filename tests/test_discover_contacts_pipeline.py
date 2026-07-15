@@ -542,39 +542,41 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertNotIn("merged_people_csv", ledger["artifacts"])
             self.assertNotIn("duckdb", ledger["artifacts"])
 
-    def test_messages_review_people_materializer_uses_reviewed_linkedin_rows(self) -> None:
+    def test_messages_contacts_direct_selects_matched_and_candidates(self) -> None:
+        # The review-CSV materializer is gone: import is contacts-direct.
+        # Matched rows become people rows; floor-passing unmatched rows become
+        # research candidates for $deep-setup.
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            review = tmp / "research_review.csv"
-            output = tmp / "people.csv"
+            contacts = tmp / "contacts.csv"
             fields = [
-                "bucket", "full_name", "phone_e164", "total_messages", "message_source",
-                "imessage_message_count", "whatsapp_message_count", "exclude", "approved",
-                "enrich_decision", "in_network", "network_person_id",
-                "network_name", "network_linkedin_url", "linkedin_url", "retarget_linkedin_url",
-                "review_source", "top_title_company_pairs", "short_reason",
+                "phone", "name", "source", "is_in_group_chats", "group_names",
+                "message_count", "imessage_message_count", "whatsapp_message_count",
+                "last_message", "imessage_last_message", "whatsapp_last_message",
+                "skip", "match_status", "matched_person_id", "matched_name",
+                "matched_linkedin_url", "match_confidence", "match_method", "match_reason",
             ]
+            base = {field: "" for field in fields}
             rows = [
-                {"bucket": "maybe", "full_name": "Network Person", "phone_e164": "+14155550100", "total_messages": "5", "message_source": "imessage", "in_network": "true", "network_person_id": "p1", "network_name": "Network Person", "network_linkedin_url": "https://www.linkedin.com/in/network-person/"},
-                {"bucket": "maybe", "full_name": "Approved Person", "phone_e164": "+14155550101", "total_messages": "6", "message_source": "whatsapp", "approved": "true", "linkedin_url": "https://www.linkedin.com/in/approved-person/"},
-                {"bucket": "maybe", "full_name": "Enrich Person", "phone_e164": "+14155550102", "total_messages": "7", "message_source": "whatsapp", "enrich_decision": "yes", "linkedin_url": "https://www.linkedin.com/in/enrich-person/"},
-                {"bucket": "yes", "full_name": "Rejected Person", "phone_e164": "+14155550104", "total_messages": "9", "message_source": "imessage", "exclude": "yes", "linkedin_url": "https://www.linkedin.com/in/rejected-person/"},
-                {"bucket": "maybe", "full_name": "Network Person Duplicate", "phone_e164": "+14155550106", "total_messages": "11", "message_source": "whatsapp", "in_network": "true", "network_person_id": "p1", "network_linkedin_url": "https://www.linkedin.com/in/network-person/"},
+                base | {"phone": "+14155550100", "name": "Network Person", "source": "imessage", "message_count": "5", "imessage_message_count": "5", "match_status": "matched", "matched_person_id": "p1", "matched_name": "Network Person", "matched_linkedin_url": "https://www.linkedin.com/in/network-person/"},
+                base | {"phone": "+14155550106", "name": "Network Person", "source": "whatsapp", "message_count": "11", "whatsapp_message_count": "11", "match_status": "matched", "matched_person_id": "p1", "matched_name": "Network Person", "matched_linkedin_url": "https://www.linkedin.com/in/network-person/"},
+                base | {"phone": "+14155550101", "name": "Research Person", "source": "whatsapp", "message_count": "6", "whatsapp_message_count": "6"},
+                base | {"phone": "+14155550104", "name": "AAA", "source": "imessage", "message_count": "9", "imessage_message_count": "9"},
             ]
-            write_csv(review, fields, rows)
+            write_csv(contacts, fields, rows)
 
-            summary = import_messages.materialize_messages_review_people(review, output)
+            summary, people_rows, candidate_rows = import_messages.selected_contacts_people(contacts)
 
-            self.assertEqual(summary["eligible_rows"], 4)
-            self.assertEqual(summary["rows_written"], 3)
-            with output.open(newline="", encoding="utf-8") as handle:
-                materialized = list(CsvIO.dict_reader(handle))
-            by_public = {row["public_identifier"]: row for row in materialized}
-            self.assertEqual(set(by_public), {"approved-person", "enrich-person", "network-person"})
+            self.assertEqual(summary["people_rows"], 1)
+            self.assertEqual(summary["candidate_rows"], 1)
+            self.assertEqual(summary["skipped"].get("bad_name"), 1)
+            by_public = {row["public_identifier"]: row for row in people_rows}
+            self.assertEqual(set(by_public), {"network-person"})
             self.assertEqual(
                 json.loads(by_public["network-person"]["all_phones"]),
                 ["+14155550100", "+14155550106"],
             )
+            self.assertEqual(candidate_rows[0]["candidate_key"], "phone:+14155550101")
 
     def test_commit_people_csv_to_directory_records_source_identity(self) -> None:
         with tempfile.TemporaryDirectory() as td:

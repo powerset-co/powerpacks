@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
-"""Import/enrich reviewed Messages contacts."""
+"""Import matched Messages contacts + research candidates (contacts-direct).
+
+Reads the match-annotated `.powerpacks/messages/contacts.csv` and materializes
+two stage outputs, with no LLM, no research queue, and no enrichment call:
+
+- `import/messages/people.csv` — contacts MATCHED to an existing network
+  person (message activity attaches to that person at fan-in).
+- `import/messages/candidates.csv` — unmatched contacts passing a
+  deterministic "worth researching" floor (real phone, plausibly-real saved
+  name, message-count minimum). Identity resolution happens later in the
+  deep-setup processing layer with cross-channel context.
+"""
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import re
 import shutil
@@ -21,6 +31,11 @@ try:
         normalize_linkedin_url,
         normalize_people_row,
     )
+    from packs.ingestion.schemas.candidates_schema import (
+        CANDIDATES_SCHEMA_COLUMNS,
+        candidate_key_for,
+        normalize_candidate_row,
+    )
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_BASE_DIR,
         DEFAULT_DIRECTORY_CSV,
@@ -39,21 +54,15 @@ try:
         people_directory_source_key,
         phones_from_value,
     )
-    from packs.ingestion.primitives.enrich_people import enrich_people
     from packs.ingestion.primitives.import_contacts_pipeline.common import (
         DEFAULT_ACCOUNTS,
         DEFAULT_IMPORT_DIR,
-        DEFAULT_PROFILE_CACHE_DIR,
-        copy_people_csv,
         csv_count,
         directory_row_matches_source,
         directory_source_account_quality,
         import_manifest_current,
         normalize_directory_source_accounts,
         write_manifest,
-    )
-    from packs.ingestion.primitives.prepare_research_queue.prepare_research_queue import (
-        RESEARCH_COLUMNS,
     )
     from packs.shared.csv_io import CsvIO
 except ModuleNotFoundError:
@@ -66,6 +75,11 @@ except ModuleNotFoundError:
         normalize_linkedin_url,
         normalize_people_row,
     )
+    from packs.ingestion.schemas.candidates_schema import (
+        CANDIDATES_SCHEMA_COLUMNS,
+        candidate_key_for,
+        normalize_candidate_row,
+    )
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_BASE_DIR,
         DEFAULT_DIRECTORY_CSV,
@@ -84,12 +98,9 @@ except ModuleNotFoundError:
         people_directory_source_key,
         phones_from_value,
     )
-    from packs.ingestion.primitives.enrich_people import enrich_people
     from packs.ingestion.primitives.import_contacts_pipeline.common import (
         DEFAULT_ACCOUNTS,
         DEFAULT_IMPORT_DIR,
-        DEFAULT_PROFILE_CACHE_DIR,
-        copy_people_csv,
         csv_count,
         directory_row_matches_source,
         directory_source_account_quality,
@@ -97,24 +108,31 @@ except ModuleNotFoundError:
         normalize_directory_source_accounts,
         write_manifest,
     )
-    from packs.ingestion.primitives.prepare_research_queue.prepare_research_queue import (
-        RESEARCH_COLUMNS,
-    )
     from packs.shared.csv_io import CsvIO
 
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 FALSY = {"0", "false", "no", "n", "off"}
-INCLUDE_DECISIONS = {"include", "approved", "approve", "yes", "true", "1"}
-EXCLUDE_DECISIONS = {"exclude", "excluded", "skip", "skipped", "no", "false", "0"}
-RESEARCH_REVIEW_SOURCES = {
-    "llm_network_review",
-    "retarget_research",
-    "retarget_refresh",
-    "deep_research",
-}
-MESSAGES_IMPORT_CONTRACT = "messages-stateless-v2"
-DEFAULT_RESEARCH_QUEUE = Path(".powerpacks/messages/research_queue.csv")
+MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v3"
+WORKING_CONTACTS_CSV = Path(".powerpacks/messages/contacts.csv")
+MATCH_MANIFEST_JSON = Path(".powerpacks/messages/contacts.csv.match.manifest.json")
+DEFAULT_MIN_MESSAGE_COUNT = 1
+# Group-appearance-only contacts below this DM volume are low-signal noise
+# (someone from a group thread, not a relationship) unless opted in.
+GROUP_ONLY_MIN_MESSAGES = 10
+
+# Deterministic "worth researching" floor: the historical pre-LLM eligibility
+# ruleset from the retired queue-preparer primitive, copied rather than
+# imported because that primitive is orphaned from the runtime path and this
+# floor is now THIS stage's contract.
+MIN_NAME_TOKENS = 2
+MIN_TOKEN_LEN = 2
+MIN_TOTAL_ALPHA = 5
+BLOCKED_LAST_NAME_TOKENS = {"hinge", "raya", "tinder", "bumble"}
+NAME_CLEAN_RE = re.compile(r"[^A-Za-zÀ-ÿ'’\-\s]")
+MULTISPACE_RE = re.compile(r"\s+")
+MIN_PHONE_DIGITS = 10
+MAX_PHONE_DIGITS = 15
 
 
 def normalize_bool(value: Any) -> bool | None:
@@ -126,102 +144,14 @@ def normalize_bool(value: Any) -> bool | None:
     return None
 
 
-def normalize_include_decision(value: Any) -> bool | None:
-    raw = str(value or "").strip().lower()
-    if raw in INCLUDE_DECISIONS:
-        return True
-    if raw in EXCLUDE_DECISIONS:
-        return False
-    return None
-
-
-def normalize_exclude_decision(value: Any) -> bool | None:
-    raw = str(value or "").strip().lower()
-    if raw in TRUTHY:
-        return False
-    if raw in FALSY:
-        return True
-    return None
-
-
-def explicitly_approved_message_review_row(row: dict[str, str]) -> bool:
-    """Return True only for explicit human/upload approval, never bucket defaults."""
-    approved = normalize_bool(row.get("approved", ""))
-    upload_decision = normalize_include_decision(row.get("upload_decision", ""))
-    exclude_decision = normalize_exclude_decision(row.get("exclude", ""))
-    if approved is False or upload_decision is False or exclude_decision is False:
-        return False
-    return approved is True or upload_decision is True or exclude_decision is True
-
-
-def messages_review_linkedin_url(row: dict[str, str]) -> str:
-    for key in ("retarget_linkedin_url", "linkedin_url", "network_linkedin_url"):
-        normalized = normalize_linkedin_url(row.get(key, ""))
-        if extract_public_identifier(normalized):
-            return normalized
-    return ""
-
-
-def messages_review_row_rejected(row: dict[str, str]) -> bool:
-    approved = normalize_bool(row.get("approved", ""))
-    upload_decision = normalize_include_decision(row.get("upload_decision", ""))
-    exclude_decision = normalize_exclude_decision(row.get("exclude", ""))
-    enrich_decision = normalize_include_decision(row.get("enrich_decision", ""))
-    return (
-        approved is False
-        or upload_decision is False
-        or exclude_decision is False
-        or enrich_decision is False
-    )
-
-
-def messages_review_row_in_network(row: dict[str, str]) -> bool:
-    raw = normalize_bool(row.get("in_network", ""))
-    if raw is not None:
-        return raw
-    return bool((row.get("network_person_id") or "").strip())
-
-
-def messages_review_row_approved_for_local(row: dict[str, str]) -> bool:
-    if messages_review_row_rejected(row):
-        return False
-    if explicitly_approved_message_review_row(row):
-        return True
-    return (row.get("bucket") or "").strip().lower() in {"yes", "confident"}
-
-
-def messages_review_row_researched(row: dict[str, str]) -> bool:
-    review_source = (row.get("review_source") or "").strip().lower()
-    if review_source in RESEARCH_REVIEW_SOURCES:
-        return True
-    if review_source and review_source != "in_network_match":
-        return True
-    return any(
-        (row.get(key) or "").strip()
-        for key in (
-            "top_title_company_pairs",
-            "top_titles",
-            "top_companies",
-            "schools",
-            "short_reason",
-        )
-    )
-
-
-def messages_review_people_selection_reason(row: dict[str, str]) -> str:
-    if messages_review_row_rejected(row):
-        return ""
-    if not messages_review_linkedin_url(row):
-        return ""
-    if messages_review_row_in_network(row):
-        return "in_network"
-    if messages_review_row_approved_for_local(row):
-        return "approved"
-    if normalize_include_decision(row.get("enrich_decision", "")) is True:
-        return "enrich_decision"
-    if messages_review_row_researched(row):
-        return "researched"
-    return ""
+def parse_int_field(value: Any) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(float(text))
+    except ValueError:
+        return 0
 
 
 def split_full_name(full_name: str) -> tuple[str, str]:
@@ -231,21 +161,82 @@ def split_full_name(full_name: str) -> tuple[str, str]:
     return parts[0], parts[1] if len(parts) > 1 else ""
 
 
-def split_title_company(pair_text: str) -> tuple[str, str]:
-    first = next(
-        (part.strip() for part in re.split(r"\s*\|\s*", pair_text or "") if part.strip()),
-        "",
-    )
-    for marker in (" at ", " @ ", " - "):
-        if marker in first:
-            title, company = first.split(marker, 1)
-            return title.strip(), company.strip()
-    return first.strip(), ""
+def normalize_name(name: str) -> str:
+    cleaned = NAME_CLEAN_RE.sub(" ", name or "")
+    return MULTISPACE_RE.sub(" ", cleaned).strip()
+
+
+def normalize_last_name_tokens(name: str) -> set[str]:
+    cleaned = normalize_name(name).lower()
+    parts = cleaned.split()
+    if len(parts) < 2:
+        return set()
+    return {token for token in parts[1:] if token}
+
+
+def normalize_phoneish(value: str) -> str:
+    return "".join(ch for ch in value or "" if ch.isdigit())
+
+
+def has_searchable_name(name: str) -> bool:
+    cleaned = normalize_name(name)
+    if not cleaned:
+        return False
+    tokens = [t for t in cleaned.split(" ") if len(t) >= MIN_TOKEN_LEN]
+    if len(tokens) < MIN_NAME_TOKENS:
+        return False
+    alpha = sum(1 for ch in cleaned if ch.isalpha())
+    return alpha >= MIN_TOTAL_ALPHA
+
+
+def bad_name_reason(name: str, phone: str = "") -> str:
+    phone_digits = normalize_phoneish(phone)
+    raw_name_digits = normalize_phoneish(name)
+    if phone_digits and raw_name_digits and phone_digits.endswith(raw_name_digits):
+        return "name_is_phone"
+    cleaned = normalize_name(name)
+    if not cleaned:
+        return "no_name"
+    if normalize_last_name_tokens(cleaned) & BLOCKED_LAST_NAME_TOKENS:
+        return "blocked_name_token"
+    if not has_searchable_name(cleaned):
+        return "bad_name"
+    return ""
+
+
+def contact_floor_reason(
+    row: dict[str, str],
+    *,
+    min_message_count: int,
+    include_group_only: bool,
+) -> str:
+    """First failing floor reason for an unmatched contact ("" = passes)."""
+    phone = (row.get("phone") or "").strip()
+    if "@" in phone:
+        return "email_handle"
+    digits = normalize_phoneish(phone)
+    if not (MIN_PHONE_DIGITS <= len(digits) <= MAX_PHONE_DIGITS):
+        return "short_code_or_invalid_phone"
+    if normalize_bool(row.get("skip", "")) is True:
+        return "skip_flag"
+    name_reason = bad_name_reason(row.get("name") or "", phone)
+    if name_reason:
+        return name_reason
+    message_count = parse_int_field(row.get("message_count"))
+    if message_count < min_message_count:
+        return "below_min_messages"
+    if (
+        not include_group_only
+        and normalize_bool(row.get("is_in_group_chats", "")) is True
+        and message_count < GROUP_ONLY_MIN_MESSAGES
+    ):
+        return "group_only_low_signal"
+    return ""
 
 
 def messages_source_channels(row: dict[str, str]) -> list[str]:
     channels: list[str] = []
-    raw = (row.get("message_source") or "").strip().lower()
+    raw = str(row.get("source") or row.get("message_source") or "").strip().lower()
     for token in re.split(r"[,|+/;\s]+", raw):
         if token in {"imessage", "whatsapp"} and token not in channels:
             channels.append(token)
@@ -253,78 +244,109 @@ def messages_source_channels(row: dict[str, str]) -> list[str]:
         ("imessage_message_count", "imessage"),
         ("whatsapp_message_count", "whatsapp"),
     ):
-        try:
-            count = int(float(row.get(key) or 0))
-        except ValueError:
-            count = 0
-        if count > 0 and channel not in channels:
+        if parse_int_field(row.get(key)) > 0 and channel not in channels:
             channels.append(channel)
     return channels or ["messages"]
 
 
-def review_row_to_messages_people(
-    row: dict[str, str],
-    review_csv: Path,
-    reason: str,
-) -> dict[str, str]:
-    linkedin_url = messages_review_linkedin_url(row)
-    public_identifier = extract_public_identifier(linkedin_url)
-    full_name = (
-        (row.get("network_name") if reason == "in_network" else "")
-        or row.get("full_name")
-        or row.get("network_name")
-        or ""
-    )
-    first_name, last_name = split_full_name(full_name)
-    current_title, current_company = split_title_company(
-        row.get("top_title_company_pairs") or row.get("top_titles", "")
-    )
-    phone = (row.get("phone_e164") or "").strip()
-    channels = messages_source_channels(row)
-    summary_parts = [f"selection={reason}"]
-    if row.get("short_reason"):
-        summary_parts.append(f"review_reason={row.get('short_reason')}")
-    interaction_counts: dict[str, int] = {}
+def contact_interaction_counts(row: dict[str, str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for count_key, channel in (
         ("imessage_message_count", "imessage"),
         ("whatsapp_message_count", "whatsapp"),
     ):
-        try:
-            count = int(float(row.get(count_key) or 0))
-        except (TypeError, ValueError):
-            count = 0
+        count = parse_int_field(row.get(count_key))
         if count > 0:
-            interaction_counts[channel] = count
-    last_interaction = latest_interaction(
+            counts[channel] = count
+    return counts
+
+
+def contact_last_interaction(row: dict[str, str]) -> str:
+    return latest_interaction(
         row.get("imessage_last_message"),
         row.get("whatsapp_last_message"),
         row.get("last_message"),
     )
+
+
+def contact_row_to_messages_people(
+    row: dict[str, str],
+    contacts_csv: Path,
+) -> dict[str, str]:
+    """Map a MATCHED contacts.csv row onto the canonical people schema."""
+    linkedin_url = normalize_linkedin_url(row.get("matched_linkedin_url") or "")
+    public_identifier = extract_public_identifier(linkedin_url)
+    full_name = (row.get("matched_name") or "").strip() or (row.get("name") or "").strip()
+    first_name, last_name = split_full_name(full_name)
+    phone = (row.get("phone") or "").strip()
+    is_email_handle = "@" in phone
+    summary_parts = ["selection=matched"]
+    if row.get("match_method"):
+        summary_parts.append(f"match_method={row.get('match_method')}")
+    interaction_counts = contact_interaction_counts(row)
     people = {
-        "id": row.get("network_person_id")
+        "id": (row.get("matched_person_id") or "").strip()
         or f"message-linkedin:{sha(public_identifier or linkedin_url, 16)}",
         "public_identifier": public_identifier,
         "linkedin_url": linkedin_url,
         "first_name": first_name,
         "last_name": last_name,
         "full_name": full_name,
-        "headline": row.get("top_title_company_pairs") or row.get("top_titles", ""),
-        "summary": "; ".join(part for part in summary_parts if part),
-        "city": row.get("location_city", ""),
-        "country": row.get("location_country", ""),
-        "current_title": current_title,
-        "current_company": current_company,
-        "primary_phone": phone,
-        "all_phones": json.dumps([phone], ensure_ascii=False) if phone else "",
-        "source_channels": ",".join(channels),
-        "source_artifacts": str(review_csv),
-        "enrichment_provider": f"messages_review:{reason}",
+        "summary": "; ".join(summary_parts),
+        # Deliberately blank so the fan-in merge keeps the enriched source
+        # row's provider (including the `synthetic` keep-gate token).
+        "enrichment_provider": "",
+        "primary_email": phone if is_email_handle else "",
+        "all_emails": json.dumps([phone], ensure_ascii=False) if is_email_handle else "",
+        "primary_phone": "" if is_email_handle else phone,
+        "all_phones": (
+            "" if is_email_handle or not phone else json.dumps([phone], ensure_ascii=False)
+        ),
+        "source_channels": ",".join(messages_source_channels(row)),
+        "source_artifacts": str(contacts_csv),
         "interaction_counts": (
             json.dumps(interaction_counts, ensure_ascii=False) if interaction_counts else ""
         ),
-        "last_interaction": last_interaction,
+        "last_interaction": contact_last_interaction(row),
     }
     return normalize_people_row(people)
+
+
+def contact_row_to_candidate(
+    row: dict[str, str],
+    contacts_csv: Path,
+) -> dict[str, str]:
+    """Map a floor-passing UNMATCHED contacts.csv row onto the candidates schema."""
+    phone = (row.get("phone") or "").strip()
+    channels = messages_source_channels(row)
+    counts = contact_interaction_counts(row)
+    # Single primary channel by DM volume (ties -> first listed channel).
+    source = max(counts, key=lambda ch: counts[ch]) if counts else channels[0]
+    evidence: dict[str, Any] = {
+        "channels": channels,
+        "message_count": parse_int_field(row.get("message_count")),
+        "is_in_group_chats": normalize_bool(row.get("is_in_group_chats", "")) is True,
+        "source_artifacts": str(contacts_csv),
+    }
+    if (row.get("match_status") or "").strip().lower() == "suggested":
+        evidence["suggested_person_id"] = (row.get("matched_person_id") or "").strip()
+        evidence["suggested_name"] = (row.get("matched_name") or "").strip()
+        evidence["suggested_linkedin_url"] = normalize_linkedin_url(
+            row.get("matched_linkedin_url") or ""
+        )
+        if row.get("match_confidence"):
+            evidence["match_confidence"] = row.get("match_confidence")
+    candidate = {
+        "candidate_key": candidate_key_for("", phone),
+        "source": source,
+        "full_name": (row.get("name") or "").strip(),
+        "primary_phone": phone,
+        "all_phones": json.dumps([phone], ensure_ascii=False) if phone else "",
+        "interaction_counts": json.dumps(counts, ensure_ascii=False) if counts else "",
+        "last_interaction": contact_last_interaction(row),
+        "evidence": evidence,
+    }
+    return normalize_candidate_row(candidate)
 
 
 def merge_messages_people_candidate(
@@ -334,6 +356,7 @@ def merge_messages_people_candidate(
     merged = dict(existing)
     for key in (
         "primary_phone",
+        "primary_email",
         "full_name",
         "first_name",
         "last_name",
@@ -377,74 +400,81 @@ def merge_messages_people_candidate(
     return normalize_people_row(merged)
 
 
-def selected_messages_review_people(
-    review_csv: Path,
-) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    if not review_csv.exists():
+def selected_contacts_people(
+    contacts_csv: Path,
+    *,
+    min_message_count: int = DEFAULT_MIN_MESSAGE_COUNT,
+    include_group_only: bool = False,
+) -> tuple[dict[str, Any], list[dict[str, str]], list[dict[str, str]]]:
+    """Split matched contacts into people rows and floor-passing unmatched
+    contacts into candidate rows."""
+    if not contacts_csv.exists():
         return ({
-            "review_csv": str(review_csv),
-            "people_csv": "",
+            "contacts_csv": str(contacts_csv),
             "total_rows": 0,
-            "eligible_rows": 0,
-            "rows_written": 0,
+            "people_rows": 0,
+            "candidate_rows": 0,
             "selection_counts": {},
-            "skipped": {"missing_review_csv": 1},
-        }, [])
-    _fields, rows = read_csv_rows(review_csv)
-    by_public_identifier: dict[str, dict[str, str]] = {}
+            "skipped": {"missing_contacts_csv": 1},
+        }, [], [])
+    _fields, rows = read_csv_rows(contacts_csv)
+    people_by_key: dict[str, dict[str, str]] = {}
+    candidates_by_key: dict[str, dict[str, str]] = {}
     selection_counts: dict[str, int] = {}
-    skipped = {
-        "rejected": 0,
-        "missing_linkedin_url": 0,
-        "not_selected": 0,
-        "duplicate_public_identifier": 0,
-    }
-    eligible_rows = 0
+    skipped: dict[str, int] = {}
+
+    def skip(reason: str) -> None:
+        skipped[reason] = skipped.get(reason, 0) + 1
+
     for row in rows:
-        linkedin_url = messages_review_linkedin_url(row)
-        if not linkedin_url:
-            skipped["missing_linkedin_url"] += 1
+        match_status = (row.get("match_status") or "").strip().lower()
+        matched_person_id = (row.get("matched_person_id") or "").strip()
+        if match_status == "matched" and matched_person_id:
+            candidate = contact_row_to_messages_people(row, contacts_csv)
+            key = candidate.get("public_identifier") or candidate.get("id", "")
+            if key in people_by_key:
+                skip("duplicate_matched_person")
+                people_by_key[key] = merge_messages_people_candidate(
+                    people_by_key[key], candidate
+                )
+            else:
+                people_by_key[key] = candidate
+                selection_counts["matched"] = selection_counts.get("matched", 0) + 1
             continue
-        if messages_review_row_rejected(row):
-            skipped["rejected"] += 1
+        if match_status == "suggested":
+            # Never auto-attach a suggestion (that was the review gate);
+            # the deep-setup cluster judge decides. Recorded in evidence.
+            skip("suggested_not_attached")
+        reason = contact_floor_reason(
+            row,
+            min_message_count=min_message_count,
+            include_group_only=include_group_only,
+        )
+        if reason:
+            skip(reason)
             continue
-        reason = messages_review_people_selection_reason(row)
-        if not reason:
-            skipped["not_selected"] += 1
+        candidate_row = contact_row_to_candidate(row, contacts_csv)
+        key = candidate_row.get("candidate_key", "")
+        if not key:
+            skip("short_code_or_invalid_phone")
             continue
-        eligible_rows += 1
-        selection_counts[reason] = selection_counts.get(reason, 0) + 1
-        candidate = review_row_to_messages_people(row, review_csv, reason)
-        public_identifier = candidate.get("public_identifier", "")
-        if public_identifier in by_public_identifier:
-            skipped["duplicate_public_identifier"] += 1
-            by_public_identifier[public_identifier] = merge_messages_people_candidate(
-                by_public_identifier[public_identifier], candidate
-            )
-        else:
-            by_public_identifier[public_identifier] = candidate
-    output_rows = [by_public_identifier[key] for key in sorted(by_public_identifier)]
+        if key in candidates_by_key:
+            skip("duplicate_phone")
+            continue
+        candidates_by_key[key] = candidate_row
+        selection_counts["phone_only"] = selection_counts.get("phone_only", 0) + 1
+
+    people_rows = [people_by_key[key] for key in sorted(people_by_key)]
+    candidate_rows = [candidates_by_key[key] for key in sorted(candidates_by_key)]
     summary = {
-        "review_csv": str(review_csv),
-        "people_csv": "",
+        "contacts_csv": str(contacts_csv),
         "total_rows": len(rows),
-        "eligible_rows": eligible_rows,
-        "rows_written": len(output_rows),
+        "people_rows": len(people_rows),
+        "candidate_rows": len(candidate_rows),
         "selection_counts": selection_counts,
         "skipped": skipped,
     }
-    return summary, output_rows
-
-
-def materialize_messages_review_people(
-    review_csv: Path,
-    output_csv: Path,
-) -> dict[str, Any]:
-    summary, output_rows = selected_messages_review_people(review_csv)
-    if review_csv.exists():
-        write_csv_rows(output_csv, PEOPLE_SCHEMA_COLUMNS, output_rows)
-        summary["people_csv"] = str(output_csv)
-    return summary
+    return summary, people_rows, candidate_rows
 
 
 def directory_source_keys(path: Path) -> set[str]:
@@ -477,15 +507,45 @@ def messages_people_directory_keys(rows: list[dict[str, str]]) -> set[str]:
     return keys
 
 
-def messages_import_diff(review_csv: Path) -> dict[str, Any]:
-    materialized, people_rows = selected_messages_review_people(review_csv)
-    candidate_keys = messages_people_directory_keys(people_rows)
-    existing_keys = directory_source_keys(DEFAULT_DIRECTORY_CSV)
+def existing_csv_column(path: Path, column: str) -> set[str]:
+    if not path.exists():
+        return set()
+    return {
+        (row.get(column) or "").strip()
+        for row in read_csv_rows(path)[1]
+        if (row.get(column) or "").strip()
+    }
+
+
+def messages_import_diff(
+    contacts_csv: Path,
+    import_dir: Path,
+    *,
+    min_message_count: int = DEFAULT_MIN_MESSAGE_COUNT,
+    include_group_only: bool = False,
+) -> dict[str, Any]:
+    materialized, people_rows, candidate_rows = selected_contacts_people(
+        contacts_csv,
+        min_message_count=min_message_count,
+        include_group_only=include_group_only,
+    )
+    people_ids = {row.get("id", "") for row in people_rows if row.get("id")}
+    candidate_keys = {
+        row.get("candidate_key", "") for row in candidate_rows if row.get("candidate_key")
+    }
+    existing_people_ids = existing_csv_column(import_dir / "people.csv", "id")
+    existing_candidate_keys = existing_csv_column(
+        import_dir / "candidates.csv", "candidate_key"
+    )
+    new_people = len(people_ids - existing_people_ids)
+    new_candidates = len(candidate_keys - existing_candidate_keys)
     return {
         "materialized": materialized,
+        "people_rows": len(people_ids),
         "candidate_rows": len(candidate_keys),
-        "new_rows": len(candidate_keys - existing_keys),
-        "existing_directory_rows": len(existing_keys),
+        "new_people": new_people,
+        "new_candidates": new_candidates,
+        "new_rows": new_people + new_candidates,
     }
 
 
@@ -498,38 +558,6 @@ def people_csv_schema_stale(path: Path) -> bool:
     with path.open(newline="", encoding="utf-8") as handle:
         header = next(CsvIO.reader(handle), [])
     return bool(header) and "interaction_counts" not in header
-
-
-def enrich_messages_people(input_csv: Path, enrichment_dir: Path) -> dict[str, Any]:
-    if enrichment_dir.exists():
-        shutil.rmtree(enrichment_dir)
-    context: dict[str, Any] = {
-        "artifact_dir": str(enrichment_dir),
-        "input": {
-            "input_csv": str(input_csv),
-            "limit": None,
-            "force": False,
-            "profile_cache_dir": str(DEFAULT_PROFILE_CACHE_DIR),
-            "refresh_cache": False,
-            "company_corpus_jsonl": [],
-            "sleep_seconds": 0.0,
-            "max_workers": enrich_people.DEFAULT_RAPIDAPI_MAX_WORKERS,
-            "max_rpm": enrich_people.DEFAULT_RAPIDAPI_MAX_RPM,
-            "failure_retry_hours": enrich_people.DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
-        },
-        "artifacts": {},
-    }
-    prepare = enrich_people.step_prepare_queue(context)
-    provider = enrich_people.step_enrich_linkedin(context)
-    merge = enrich_people.step_merge_people(context)
-    return {
-        "status": "completed",
-        "people_csv": str(context["artifacts"]["people_csv"]),
-        "prepare": prepare,
-        "provider": provider,
-        "merge": merge,
-        "artifacts": context["artifacts"],
-    }
 
 
 def replace_messages_directory_rows(
@@ -562,118 +590,17 @@ def replace_messages_directory_rows(
     }
 
 
-def empty_research_queue_error(queue_csv: Path) -> dict[str, Any] | None:
-    if not queue_csv.is_file():
-        return {
-            "status": "failed",
-            "reason": "messages_research_queue_missing",
-            "message": f"Research queue not found: {queue_csv}",
-            "queue_csv": str(queue_csv),
-        }
-    try:
-        fields, rows = read_csv_rows(queue_csv)
-    except (OSError, UnicodeError, ValueError, csv.Error) as exc:
-        return {
-            "status": "failed",
-            "reason": "messages_research_queue_unreadable",
-            "message": f"Could not read research queue {queue_csv}: {exc}",
-            "queue_csv": str(queue_csv),
-        }
-    missing_fields = sorted(set(RESEARCH_COLUMNS) - set(fields))
-    if missing_fields:
-        return {
-            "status": "failed",
-            "reason": "messages_research_queue_schema_invalid",
-            "message": "Research queue does not match the canonical schema.",
-            "queue_csv": str(queue_csv),
-            "missing_fields": missing_fields,
-        }
-    if rows:
-        return {
-            "status": "failed",
-            "reason": "messages_research_queue_not_empty",
-            "message": (
-                f"Refusing to clear Messages artifacts: research queue contains {len(rows)} row(s)."
-            ),
-            "queue_csv": str(queue_csv),
-            "rows": len(rows),
-        }
-    return None
-
-
-def reconcile_empty(args: argparse.Namespace) -> dict[str, Any]:
-    """Clear the Messages source slice only after proving the current queue is empty."""
-    queue_csv = Path(getattr(args, "queue", DEFAULT_RESEARCH_QUEUE))
-    queue_error = empty_research_queue_error(queue_csv)
-    if queue_error:
-        return queue_error
-
-    read_accounts(args.accounts)
-    import_dir = DEFAULT_IMPORT_DIR / "messages"
-    input_people = import_dir / "people.input.csv"
-    people_csv = import_dir / "people.csv"
-    enrichment_dir = import_dir / "enrichment"
-    if enrichment_dir.exists():
-        shutil.rmtree(enrichment_dir)
-    write_csv_rows(input_people, PEOPLE_SCHEMA_COLUMNS, [])
-    write_csv_rows(people_csv, PEOPLE_SCHEMA_COLUMNS, [])
-
-    review_csv = Path(".powerpacks/messages/research_review.csv")
-    if review_csv.exists():
-        review_csv.unlink()
-
-    directory_replacement = replace_messages_directory_rows(people_csv)
-    directory_normalization = normalize_directory_source_accounts("messages")
-    directory_quality = directory_source_account_quality("messages")
-    status = "completed" if directory_quality["status"] == "ok" else "failed"
-    return write_manifest("messages", {
-        "status": status,
-        "reason": (
-            "empty_current_research_queue"
-            if status == "completed"
-            else "directory_source_account_quality_failed"
-        ),
-        "input": {
-            "pipeline_contract": MESSAGES_IMPORT_CONTRACT,
-            "mode": "empty",
-            "discovery_manifest": str(
-                DEFAULT_BASE_DIR / "discover" / "messages" / "manifest.json"
-            ),
-            "contacts_csv": str(
-                DEFAULT_BASE_DIR / "discover" / "messages" / "contacts.csv"
-            ),
-            "research_queue_csv": str(queue_csv),
-        },
-        "outputs": {
-            "people_input_csv": str(input_people),
-            "people_csv": str(people_csv),
-        },
-        "stats": {"people": 0, "candidates": 0},
-        "materialized": {
-            "review_csv": "",
-            "people_csv": str(input_people),
-            "total_rows": 0,
-            "eligible_rows": 0,
-            "rows_written": 0,
-            "selection_counts": {},
-            "skipped": {"empty_current_research_queue": 1},
-        },
-        "directory": {
-            "path": str(DEFAULT_DIRECTORY_CSV),
-            "replacement": directory_replacement,
-            "normalization": directory_normalization,
-            "quality": directory_quality,
-        },
-    }, import_dir=DEFAULT_IMPORT_DIR)
-
-
 def run(args: argparse.Namespace) -> dict:
     import_dir = DEFAULT_IMPORT_DIR / "messages"
     people_csv_path = import_dir / "people.csv"
     schema_stale = people_csv_schema_stale(people_csv_path)
+    min_message_count = int(getattr(args, "min_message_count", DEFAULT_MIN_MESSAGE_COUNT))
+    include_group_only = bool(getattr(args, "include_group_only", False))
     expected_input = {
         "pipeline_contract": MESSAGES_IMPORT_CONTRACT,
-        "mode": "review",
+        "mode": "contacts-direct",
+        "min_message_count": min_message_count,
+        "include_group_only": include_group_only,
     }
     current = None if schema_stale else import_manifest_current(
         "messages",
@@ -683,87 +610,104 @@ def run(args: argparse.Namespace) -> dict:
     if current:
         return current
     read_accounts(args.accounts)
-    review_csv = Path(".powerpacks/messages/research_review.csv")
+    contacts_csv = WORKING_CONTACTS_CSV
     manifest_input = {
         **expected_input,
-        "review_csv": str(review_csv),
+        "contacts_csv": str(contacts_csv),
+        "match_manifest": str(MATCH_MANIFEST_JSON),
         "discovery_manifest": str(DEFAULT_BASE_DIR / "discover" / "messages" / "manifest.json"),
-        "contacts_csv": str(DEFAULT_BASE_DIR / "discover" / "messages" / "contacts.csv"),
     }
-    if not review_csv.exists():
+    if not contacts_csv.exists():
         return write_manifest("messages", {
             "status": "failed",
-            "reason": "messages_review_csv_missing",
-            "message": f"Review Messages contacts before import: {review_csv}",
+            "reason": "messages_contacts_missing",
+            "message": (
+                f"Discover Messages contacts before import: {contacts_csv}. "
+                "Run: uv run --project . python packs/ingestion/primitives/"
+                "discover_contacts_pipeline/messages.py discover"
+            ),
             "input": manifest_input,
             "outputs": {},
             "stats": {"people": 0, "candidates": 0},
         }, import_dir=DEFAULT_IMPORT_DIR)
-    diff = messages_import_diff(review_csv)
+    if not MATCH_MANIFEST_JSON.exists() and not args.allow_unmatched:
+        return write_manifest("messages", {
+            "status": "failed",
+            "reason": "messages_contacts_not_matched",
+            "message": (
+                "Match contacts against your network before import (or pass "
+                "--allow-unmatched). Run: uv run --project . python packs/ingestion/"
+                f"primitives/match_local_candidates/match_local_candidates.py match "
+                f"--contacts {contacts_csv}"
+            ),
+            "input": manifest_input,
+            "outputs": {},
+            "stats": {"people": 0, "candidates": 0},
+        }, import_dir=DEFAULT_IMPORT_DIR)
+    diff = messages_import_diff(
+        contacts_csv,
+        import_dir,
+        min_message_count=min_message_count,
+        include_group_only=include_group_only,
+    )
     if diff["new_rows"] > 0 and not args.confirm_import:
+        message = (
+            f"Import Messages contacts: attach message activity to {diff['people_rows']} "
+            f"matched people and add {diff['candidate_rows']} research candidates?"
+        )
         return write_manifest("messages", {
             "status": "blocked_approval",
             "approval_type": "import_confirmation",
-            "message": f"Import {diff['new_rows']} reviewed Messages LinkedIn profiles into your local network?",
+            "message": message,
             "blocked": {
                 "status": "blocked_approval",
                 "approval_type": "import_confirmation",
                 "source": "messages",
-                "message": f"Import {diff['new_rows']} reviewed Messages LinkedIn profiles into your local network?",
+                "message": message,
                 "payload": diff,
             },
             "input": manifest_input,
             "outputs": {},
             "stats": {
                 "people": 0,
-                "candidates": csv_count(str(review_csv)),
-                "candidate_directory_rows": diff["candidate_rows"],
-                "new_directory_rows": diff["new_rows"],
+                "candidates": diff["candidate_rows"],
             },
             "diff": diff,
         }, import_dir=DEFAULT_IMPORT_DIR)
-    input_people = import_dir / "people.input.csv"
-    materialized = materialize_messages_review_people(review_csv, input_people)
-    try:
-        enrichment = enrich_messages_people(input_people, import_dir / "enrichment")
-    except Exception as exc:
-        return write_manifest("messages", {
-            "status": "failed",
-            "reason": "messages_profile_enrichment_failed",
-            "error": str(exc),
-            "input": manifest_input,
-            "outputs": {"people_input_csv": str(input_people)},
-            "stats": {
-                "people": 0,
-                "candidates": csv_count(str(review_csv)),
-            },
-            "diff": diff,
-            "materialized": materialized,
-        }, import_dir=DEFAULT_IMPORT_DIR)
-    people_csv = copy_people_csv(
-        "messages",
-        enrichment["people_csv"],
-        import_dir=DEFAULT_IMPORT_DIR,
+    materialized, people_rows, candidate_rows = selected_contacts_people(
+        contacts_csv,
+        min_message_count=min_message_count,
+        include_group_only=include_group_only,
     )
-    directory_replacement = replace_messages_directory_rows(Path(people_csv))
+    import_dir.mkdir(parents=True, exist_ok=True)
+    # Legacy review-era artifacts: no longer part of this stage's contract.
+    legacy_input = import_dir / "people.input.csv"
+    if legacy_input.exists():
+        legacy_input.unlink()
+    legacy_enrichment = import_dir / "enrichment"
+    if legacy_enrichment.exists():
+        shutil.rmtree(legacy_enrichment)
+    write_csv_rows(people_csv_path, PEOPLE_SCHEMA_COLUMNS, people_rows)
+    candidates_csv_path = import_dir / "candidates.csv"
+    write_csv_rows(candidates_csv_path, CANDIDATES_SCHEMA_COLUMNS, candidate_rows)
+    directory_replacement = replace_messages_directory_rows(people_csv_path)
     directory_normalization = normalize_directory_source_accounts("messages")
     directory_quality = directory_source_account_quality("messages")
     status = "completed" if directory_quality["status"] == "ok" else "failed"
     return write_manifest("messages", {
         "status": status,
-        "reason": "directory_source_account_quality_failed" if status == "failed" and directory_quality.get("status") == "failed" else "",
+        "reason": "directory_source_account_quality_failed" if status == "failed" else "",
         "input": manifest_input,
         "outputs": {
-            "people_input_csv": str(input_people),
-            "people_csv": people_csv,
+            "people_csv": str(people_csv_path),
+            "candidates_csv": str(candidates_csv_path),
         },
         "stats": {
-            "people": csv_count(people_csv),
-            "candidates": csv_count(str(review_csv)),
+            "people": csv_count(str(people_csv_path)),
+            "candidates": csv_count(str(candidates_csv_path)),
         },
         "diff": diff,
         "materialized": materialized,
-        "artifacts": {"enrichment": enrichment},
         "directory": {
             "path": str(DEFAULT_DIRECTORY_CSV),
             "replacement": directory_replacement,
@@ -774,18 +718,31 @@ def run(args: argparse.Namespace) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Import/enrich reviewed Messages contacts")
-    parser.add_argument("command", choices=["run", "reconcile-empty"])
+    parser = argparse.ArgumentParser(
+        description="Import matched Messages contacts + research candidates"
+    )
+    parser.add_argument("command", choices=["run"])
     parser.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     parser.add_argument("--operator-id", default="local")
     parser.add_argument("--confirm-import", action="store_true")
-    parser.add_argument("--queue", type=Path, default=DEFAULT_RESEARCH_QUEUE)
+    parser.add_argument(
+        "--min-message-count", type=int, default=DEFAULT_MIN_MESSAGE_COUNT,
+        help="Minimum total DM messages for an unmatched contact to become a candidate",
+    )
+    parser.add_argument(
+        "--include-group-only", action="store_true",
+        help="Keep low-DM contacts that only appear via group chats",
+    )
+    parser.add_argument(
+        "--allow-unmatched", action="store_true",
+        help="Proceed without a match manifest (all contacts floor-tested as unmatched)",
+    )
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    payload = reconcile_empty(args) if args.command == "reconcile-empty" else run(args)
+    payload = run(args)
     emit(payload)
     return 20 if payload.get("status") == "blocked_approval" else 1 if payload.get("status") == "failed" else 0
 
