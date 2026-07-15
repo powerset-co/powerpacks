@@ -30,6 +30,7 @@ class CoreLayoutTests(unittest.TestCase):
             ingestion_pack,
             [
                 "deep-context",
+                "deep-setup",
                 "discover-contacts",
                 "enrich-email-markers",
                 "import-gmail",

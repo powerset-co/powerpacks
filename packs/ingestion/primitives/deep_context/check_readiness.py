@@ -21,8 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context import sources
+from packs.ingestion.primitives.deep_context.candidates import (
+    candidate_person_id,
+    iter_candidate_rows,
+)
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
+    FACTS_DIR,
     GMAIL_CHANNEL,
     IMESSAGE_CHANNEL,
     OWNER_JSON,
@@ -44,6 +49,20 @@ def count_message_people(people_csv: Path) -> int:
             if channels & msg_channels:
                 n += 1
     return n
+
+
+def count_candidates(facts_dir: Path = FACTS_DIR) -> dict[str, Any]:
+    """Import-candidate pool scope: per-source counts + how many already have facts."""
+    per_source: dict[str, int] = {}
+    total = with_dossiers = 0
+    for row in iter_candidate_rows():
+        total += 1
+        source = str(row.get("source") or "unknown").strip().lower() or "unknown"
+        per_source[source] = per_source.get(source, 0) + 1
+        pid = candidate_person_id(str(row.get("candidate_key") or "").strip())
+        if (facts_dir / f"{pid}.jsonl").exists():
+            with_dossiers += 1
+    return {"total": total, "per_source": per_source, "with_dossiers": with_dossiers}
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -85,6 +104,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "status": "completed",
         "ready": ready,
         "message_people": people_n,
+        "candidates": count_candidates(),
         "checks": checks,
         "advice": advice,
         "updated_at": now_iso(),

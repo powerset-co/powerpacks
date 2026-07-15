@@ -91,6 +91,7 @@ install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
 install_skill enrich-email-markers "$REPO_ROOT/packs/ingestion/skills/enrich-email-markers/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
+install_skill deep-setup "$REPO_ROOT/packs/ingestion/skills/deep-setup/SKILL.md"
 install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
@@ -113,5 +114,5 @@ EOF
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set sales-nav-search build-outbound"
-echo "  setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context discover-contacts import-twitter"
+echo "  setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context deep-setup discover-contacts import-twitter"
 echo

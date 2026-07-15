@@ -8,6 +8,7 @@ identity logic and nothing drifts.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 import sys
@@ -116,7 +117,14 @@ def normalize_name(raw: str) -> str:
 def slugify(name: str, person_id: str) -> str:
     """Stable dossier filename stem: name-slug + short id suffix (collision-proof)."""
     base = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "person"
-    suffix = re.sub(r"[^a-z0-9]+", "", (person_id or "").lower())[:8] or "unknown"
+    pid = (person_id or "").lower()
+    if pid.startswith("candidate:"):
+        # Every candidate id shares the "candidate:" prefix, so the first-8
+        # alnum suffix below would collapse to "candidat" for all of them and
+        # same-named candidates would collide. Hash the whole id instead.
+        suffix = hashlib.sha1(pid.encode("utf-8")).hexdigest()[:8]
+    else:
+        suffix = re.sub(r"[^a-z0-9]+", "", pid)[:8] or "unknown"
     return f"{base}-{suffix}"
 
 
