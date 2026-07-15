@@ -1,27 +1,33 @@
 ---
 name: import-gmail
-description: Add Gmail to your local search index. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs + imports Gmail contacts (resolved to LinkedIn via Parallel.ai), then fan-in merges all imported sources and rebuilds the Modal search index. Always reruns the full checklist; overwrites in place.
+description: Add Gmail contacts to your local network. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs mail down, and imports contacts free and locally (shared identity directory only) — unresolved contacts go to a research-candidates pool. No Parallel.ai, no RapidAPI, no index build — identity resolution and indexing happen later in $deep-setup. Always reruns the full checklist; overwrites in place.
 ---
 
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-14: Refocused on contact sync only. Step 6 import is now free/local
+  (directory reuse only): Parallel.ai LinkedIn resolution + RapidAPI hydration
+  move to the centralized $deep-setup processing layer, and unresolved contacts
+  land in import/gmail/candidates.csv. Dropped the Modal index/validate steps;
+  ends by suggesting missing sources and offering to process contacts.
 - 2026-07-13: Added the product architecture guide; fixed multi-account discovery
   and authorization instructions; documented the local directory, Parallel,
   RapidAPI, Modal, privacy, and missing identity-review boundaries.
 - 2026-06-20: New skill, split out of $setup (replaces the old discovery-only
-  $import-email). Carries the Gmail/msgvault block (status -> ask accounts/years
-  -> OAuth app -> authorize -> sync -> import) plus the shared fan-in + Modal
-  index + validate so Gmail can be added on its own and merged into the index.
+  $import-email).
 -->
 
 # import-gmail
 
-`$import-gmail` adds **Gmail** to your local search index: set up msgvault, sync
-the chosen accounts (bounded by a years-back window), import contacts (resolved
-to LinkedIn on Parallel.ai), then **merge all imported sources + rebuild the
-index**. Run `$setup` (LinkedIn) first for the best results — Gmail merges on top
-of whatever is already imported.
+`$import-gmail` adds **Gmail** contacts to your local network: set up msgvault,
+sync the chosen accounts (bounded by a years-back window), then import contacts
+**free and locally** — people already known to your identity directory attach
+immediately; everyone else worth researching goes to a **candidates pool** for
+the `$deep-setup` processing layer, which builds cross-channel context and
+resolves identities once. This skill itself calls **no paid providers and builds
+no index**. Run `$setup` (LinkedIn) first for the best results — Gmail merges on
+top of whatever is already imported.
 
 For a product-level walkthrough, lookup stages, provider payloads, approval
 boundaries, and architecture diagram, see
@@ -36,7 +42,7 @@ resume inference applies only when no explicit window is supplied.
 
 ## How to run this skill
 
-**FIRST, create a literal, visible checklist with all ten steps below and step
+**FIRST, create a literal, visible checklist with all nine steps below and step
 through it, marking each complete as you go.** Mandatory (TaskCreate / update_plan
 / your harness's todo tool). Seed it with these exact titles:
 
@@ -47,16 +53,15 @@ through it, marking each complete as you go.** Mandatory (TaskCreate / update_pl
 3. Create msgvault OAuth app (browser, if not configured)
 4. Authorize Gmail accounts
 5. Sync Gmail archives
-6. Import Gmail contacts
+6. Import Gmail contacts (free, local)
 7. Merge all sources
-8. Index the merged network
-9. Validate the search index
+8. Suggest next sources & processing
 ```
 
 Step 3 is conditional (no-op if OAuth already configured). Keep it in the
 checklist and mark it complete as a no-op when it doesn't apply.
 
-Then: **work the checklist 0 → 9, one item `in_progress` at a time**; run from the
+Then: **work the checklist 0 → 8, one item `in_progress` at a time**; run from the
 canonical repo root (resolve once, see *Repo root*); overwrite fixed derived
 paths and rely on the primitives — don't pre-delete or invent folders.
 **Never delete `~/.msgvault/msgvault.db`.**
@@ -75,13 +80,14 @@ paths and rely on the primitives — don't pre-delete or invent folders.
   `msgvault_setup.py add-account --force-auth` (OAuth only, no sync) — see Step 4;
   it is never a `sync-full`.** If discover fails, recover by syncing *less* (a
   narrower `--sync-after`), never the full mailbox.
+- **No paid providers, no index.** This skill never calls Parallel.ai, RapidAPI,
+  OpenAI, or Modal. Identity resolution for unresolved contacts and the index
+  rebuild belong to `$deep-setup`. (The import primitive keeps a
+  `--resolve-legacy` escape hatch for the old in-import behavior; do not use it
+  in this flow.)
 - **Consent gates (pause for the user):** msgvault browser/gcloud OAuth-app
-  creation and Gmail account authorization (Steps 3-4); the external identity
-  resolution/profile hydration in Step 6; and the cloud upload/provider-backed
-  Modal indexing in Step 8. The Step 6 primitive auto-runs Parallel below 25
-  unresolved contacts and does not internally gate RapidAPI cache misses, so the
-  agent must obtain approval before invoking it rather than relying on the child
-  gates. `index-people --max-usd 0` is also currently uncapped internal mode.
+  creation and Gmail account authorization (Steps 3-4). Everything after OAuth
+  is free and local.
 
 ### Repo root
 
@@ -219,34 +225,22 @@ attachment suppression, so supported msgvault builds may also store attachments.
 Powerpacks' subsequent SQLite reader selects contact/interaction metadata only and
 does not send bodies, subjects, snippets, MIME, or attachments to identity providers.
 
-### Step 6 — Import Gmail contacts
+### Step 6 — Import Gmail contacts (free, local)
 
-Import first reuses the local identity directory, resolves only the remaining
-contacts to LinkedIn via **Parallel.ai**, hydrates accepted LinkedIn URLs through
-the local profile cache or **RapidAPI**, then writes
-`.powerpacks/network-import/import/gmail/people.csv`. Run **without** the spend
-flag first — the primitive auto-approves small batches (under its threshold) and
-otherwise blocks:
-
-Before running it, explain that Parallel receives name, email, and an
-email-domain-derived company, while RapidAPI receives accepted LinkedIn URLs;
-then get explicit approval for those provider calls. The current flow has no
-human identity-verification gate: a normalized match at confidence 0.75 or above
-can proceed directly to hydration, and a found result with missing or zero provider
-confidence is currently normalized to 0.90. The separate Gmail verification/review
-proposal is not wired into `$import-gmail` yet.
+Import applies the **local identity directory** to the discovered Gmail queues
+(people already resolved by prior imports attach immediately), writes
+`.powerpacks/network-import/import/gmail/people.csv`, and stages every
+still-unresolved contact worth researching in
+`.powerpacks/network-import/import/gmail/candidates.csv` for `$deep-setup`.
+No Parallel.ai, no RapidAPI, no spend prompt:
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail.py run
 ```
 
-- If it completes (small batch auto-approved), proceed.
-- **If it blocks reporting pending Parallel contacts** (at/above the threshold),
-  tell the user the contact count and ask to approve the spend. On approval:
-
-  ```bash
-  cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail.py run --approve-parallel-spend
-  ```
+Report the manifest's `stats`: people imported and candidates staged. Identity
+resolution for the candidates (Parallel.ai with dossier context, judged and
+user-reviewable) happens in `$deep-setup`, not here.
 
 ### Step 7 — Merge all sources
 
@@ -261,49 +255,35 @@ cd "$REPO" && uv run --project . python packs/indexing/primitives/index_contacts
 Writes `.powerpacks/network-import/merged/people.csv` (default
 `--include-existing-artifacts` picks up every imported source).
 
-### Step 8 — Index the merged network
+### Step 8 — Suggest next sources & processing
 
-Index the merged people.csv on Modal (generic indexer, no import stage) and
-download the duckdb:
-
-This uploads the complete merged CSV, including email and interaction metadata,
-to a workspace-shared Modal volume. Input and run paths are prefixed by
-`POWERPACKS_OPERATOR_ID`, caches are shared, and a missing operator ID falls back
-to the all-zero path. Modal may use provider-backed classification and embeddings,
-and the current default `--max-usd 0` is uncapped internal mode. Show that boundary
-and obtain explicit approval before invoking the command.
+Check which sources are imported and suggest the missing ones (skip the ones
+already present):
 
 ```bash
-cd "$REPO" && uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
-  --people-csv .powerpacks/network-import/merged/people.csv
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/status.py status
 ```
 
-Run it in the background and keep Step 8 `in_progress` until the command
-**exits 0**. **Expect 5–30+ minutes**; most work (embeddings, classification,
-duckdb build) runs server-side on Modal, so long quiet stretches are **normal —
-not a hang**. It prints a final `{"status": "completed", ...}` on success and
-writes progress to `.powerpacks/runs/setup-gmail-modal/status.json`; if that lags
-the live stdout, **trust the running process**. Do not treat pre-existing
-`.powerpacks/search-index/` files as this run's output — confirm with Step 9.
-Reassure the user every poll while it runs.
+- `messages.import.imported: false` → suggest **`$import-messages`**
+  (iMessage/WhatsApp contacts give `$deep-setup` cross-channel context).
+- `linkedin.import.imported: false` → suggest **`$setup`** (LinkedIn is the
+  identity backbone).
+- Report candidate counts (`import.candidates` per source) so the user knows how
+  many contacts are waiting for research.
 
-### Step 9 — Validate the search index
-
-```bash
-cd "$REPO" && uv run --project . python packs/indexing/primitives/validate_search_index/validate_search_index.py
-```
-
-JSON with `status` (`ok`/`fail`/`missing`), per-table row counts, `total_people`,
-`summary`. Pass only on `status: ok` (exit 0); on `fail`/`missing` (exit 1) report
-the `errors`. Echo the `summary`.
+Then ask: **"Would you like to process your contacts now? `$deep-setup` builds
+per-person context across Gmail + iMessage/WhatsApp, resolves the candidates'
+identities once (spend-gated, with review), and rebuilds the search index."**
+If yes → route to `$deep-setup`. If no → remind them their new contacts become
+searchable after `$deep-setup` (or the next index rebuild) runs.
 
 ---
 
 ## Done
 
-Report a terse summary: N Gmail accounts synced, contacts imported, merged network
-of M people, index validated. Remind the user that rerunning `$import-gmail`
-reruns the whole checklist: an explicit history window is rescanned with
-`--noresume`, while msgvault deduplicates stored messages and preserves its db.
-LinkedIn (`$setup`) and iMessage/WhatsApp (`$import-messages`)
-are separate skills.
+Report a terse summary: N Gmail accounts synced, K contacts imported (directory
+hits), C research candidates staged, merged network of M people, and whether the
+user chose to process now. Remind the user that rerunning `$import-gmail` reruns
+the whole checklist: an explicit history window is rescanned with `--noresume`,
+while msgvault deduplicates stored messages and preserves its db. LinkedIn
+(`$setup`) and iMessage/WhatsApp (`$import-messages`) are separate skills.

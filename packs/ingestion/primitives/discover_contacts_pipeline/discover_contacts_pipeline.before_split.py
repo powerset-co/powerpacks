@@ -2785,7 +2785,9 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
         artifacts.setdefault("gmail_resolved_people_csvs", []).append(resolved_people)
         artifacts["gmail_resolved_people_csv"] = resolved_people
         result = {"account_email": record.get("account_email", ""), "slug": slug, "apply": payload, "people_csv": resolved_people}
-        if int(payload.get("resolved") or 0) > 0:
+        # enrich_resolved=False: attach resolutions only, no RapidAPI profile
+        # hydration (the deep-setup processing layer owns enrichment).
+        if int(payload.get("resolved") or 0) > 0 and input_cfg.get("enrich_resolved", True):
             emit_progress(f"Enriching {payload.get('resolved')} resolved Gmail LinkedIn profiles for {record.get('account_email') or slug}.")
             enrich_dir = account_dir / "enrichment"
             child_ledger = account_dir / "enrich_people.ledger.json"

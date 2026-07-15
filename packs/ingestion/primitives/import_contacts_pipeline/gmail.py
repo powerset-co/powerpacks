@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
-"""Import/enrich discovered Gmail contacts."""
+"""Import discovered Gmail contacts (directory-only by default).
+
+Default mode is free and local: apply the shared identity directory to the
+discovered Gmail queues, materialize `import/gmail/people.csv`, and write the
+still-unresolved contacts to `import/gmail/candidates.csv` for the deep-setup
+processing layer (which owns Parallel.ai resolution + RapidAPI enrichment).
+`--resolve-legacy` restores the old in-import Parallel + RapidAPI behavior.
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
 
 try:
+    from packs.ingestion.schemas.candidates_schema import (
+        CANDIDATES_SCHEMA_COLUMNS,
+        candidate_key_for,
+        normalize_candidate_row,
+    )
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_BASE_DIR,
         DEFAULT_DIRECTORY_CSV,
@@ -18,6 +31,7 @@ try:
         read_accounts,
         read_json,
         source_slug,
+        write_csv_rows,
         write_json,
     )
     from packs.ingestion.primitives.import_contacts_pipeline.common import (
@@ -35,6 +49,11 @@ try:
     )
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from packs.ingestion.schemas.candidates_schema import (
+        CANDIDATES_SCHEMA_COLUMNS,
+        candidate_key_for,
+        normalize_candidate_row,
+    )
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_BASE_DIR,
         DEFAULT_DIRECTORY_CSV,
@@ -44,6 +63,7 @@ except ModuleNotFoundError:
         read_accounts,
         read_json,
         source_slug,
+        write_csv_rows,
         write_json,
     )
     from packs.ingestion.primitives.import_contacts_pipeline.common import (
@@ -62,6 +82,7 @@ except ModuleNotFoundError:
 
 
 GMAIL_PARALLEL_AUTO_APPROVE_UNDER = 25
+GMAIL_IMPORT_CONTRACT = "gmail-directory-only-v2"
 
 
 def _child_artifacts(child: dict[str, Any]) -> dict[str, Any]:
@@ -188,8 +209,84 @@ def auto_approve_gmail_parallel(ledger: dict[str, Any], contacts: int, reason: s
     })
 
 
+def queue_row_to_candidate(row: dict[str, str], *, cached_negative: bool) -> dict[str, str] | None:
+    primary_email = (row.get("primary_email") or "").strip().lower()
+    if not primary_email or "@" not in primary_email:
+        return None
+    total_messages = 0
+    try:
+        total_messages = int(float(row.get("total_messages") or 0))
+    except (TypeError, ValueError):
+        total_messages = 0
+    evidence: dict[str, Any] = {
+        "handle": (row.get("handle") or "").strip(),
+        "account_emails": (row.get("account_emails") or "").strip(),
+        "primary_email_type": (row.get("primary_email_type") or "").strip(),
+        "thread_count": (row.get("thread_count") or "").strip(),
+        "cached_negative": cached_negative,
+    }
+    candidate = {
+        "candidate_key": candidate_key_for(primary_email, ""),
+        "source": "gmail",
+        "full_name": (row.get("full_name") or row.get("display_name") or "").strip(),
+        "primary_email": primary_email,
+        "all_emails": json.dumps([primary_email], ensure_ascii=False),
+        "company_guess": (row.get("company_guess") or "").strip(),
+        "interaction_counts": (
+            json.dumps({"gmail": total_messages}, ensure_ascii=False) if total_messages else ""
+        ),
+        "last_interaction": (row.get("last_interaction") or "").strip(),
+        "evidence": evidence,
+    }
+    return normalize_candidate_row(candidate)
+
+
+def write_gmail_candidates(artifacts: dict[str, Any], import_dir: Path) -> dict[str, Any]:
+    """Union the post-directory unresolved (+ cached-negative, flagged) queues
+    into import/gmail/candidates.csv for the deep-setup processing layer."""
+    candidates_csv = import_dir / "candidates.csv"
+    by_key: dict[str, dict[str, str]] = {}
+    skipped = {"no_email": 0, "duplicate_email": 0}
+    groups = (
+        (artifacts.get("gmail_unresolved_linkedin_resolution_queue_csvs") or [], False),
+        (artifacts.get("gmail_cached_negative_linkedin_resolution_queue_csvs") or [], True),
+    )
+    for records, cached_negative in groups:
+        for record in records:
+            if not isinstance(record, dict) or not record.get("queue_csv"):
+                continue
+            queue_path = Path(str(record["queue_csv"]))
+            if not queue_path.exists():
+                continue
+            for row in read_csv_rows(queue_path)[1]:
+                candidate = queue_row_to_candidate(row, cached_negative=cached_negative)
+                if candidate is None:
+                    skipped["no_email"] += 1
+                    continue
+                key = candidate.get("candidate_key", "")
+                if not key:
+                    skipped["no_email"] += 1
+                    continue
+                if key in by_key:
+                    skipped["duplicate_email"] += 1
+                    continue
+                by_key[key] = candidate
+    rows = [by_key[key] for key in sorted(by_key)]
+    write_csv_rows(candidates_csv, CANDIDATES_SCHEMA_COLUMNS, rows)
+    return {
+        "candidates_csv": str(candidates_csv),
+        "candidates": len(rows),
+        "skipped": skipped,
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    current = import_manifest_current("gmail", import_dir=DEFAULT_IMPORT_DIR)
+    resolve_legacy = bool(getattr(args, "resolve_legacy", False))
+    expected_input = {
+        "pipeline_contract": GMAIL_IMPORT_CONTRACT,
+        "mode": "resolve-legacy" if resolve_legacy else "directory-only",
+    }
+    current = import_manifest_current("gmail", expected_input, import_dir=DEFAULT_IMPORT_DIR)
     if current and not getattr(args, "force", False):
         return current
     accounts = read_accounts(args.accounts)
@@ -208,7 +305,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "operator_id": args.operator_id,
             "from_accounts": str(args.accounts),
             "gmail_account_emails": emails,
-            "resolve_gmail_linkedin": True,
+            # Directory-only default: the Parallel stage self-skips when
+            # resolve_gmail_linkedin is falsy, and enrich_resolved=False keeps
+            # apply-resolutions free of RapidAPI hydration. deep-setup owns both.
+            "resolve_gmail_linkedin": resolve_legacy,
+            "enrich_resolved": resolve_legacy,
             "approve_parallel_spend": bool(args.approve_parallel_spend),
             "linkedin_directory_csv": str(DEFAULT_DIRECTORY_CSV),
             "profile_cache_dir": str(DEFAULT_PROFILE_CACHE_DIR),
@@ -229,13 +330,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         }, import_dir=DEFAULT_IMPORT_DIR)
     write_json(ledger_path, ledger)
     for func_name in ("run_gmail_directory", "run_gmail_linkedin_resolution", "run_gmail_apply_and_enrich"):
-        if func_name == "run_gmail_linkedin_resolution" and not ledger.get("input", {}).get("approve_parallel_spend"):
+        if resolve_legacy and func_name == "run_gmail_linkedin_resolution" and not ledger.get("input", {}).get("approve_parallel_spend"):
             contacts = pending_gmail_parallel_contacts(ledger)
             if 0 < contacts < GMAIL_PARALLEL_AUTO_APPROVE_UNDER:
                 auto_approve_gmail_parallel(ledger, contacts, "gmail_parallel_queue_below_threshold")
                 legacy.save_ledger(ledger_path, ledger)
         ok = getattr(legacy, func_name)(ledger_path, ledger)
-        if not ok and func_name == "run_gmail_linkedin_resolution" and not ledger.get("input", {}).get("approve_parallel_spend"):
+        if not ok and resolve_legacy and func_name == "run_gmail_linkedin_resolution" and not ledger.get("input", {}).get("approve_parallel_spend"):
             contacts = blocked_parallel_contacts(ledger)
             if 0 < contacts < GMAIL_PARALLEL_AUTO_APPROVE_UNDER:
                 ledger.pop("blocked", None)
@@ -256,6 +357,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ledger["status"] = "completed"
     legacy.save_ledger(ledger_path, ledger)
     people_csv = copy_people_csv("gmail", str(ledger.get("artifacts", {}).get("gmail_merged_people_csv") or ledger.get("artifacts", {}).get("gmail_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
+    candidates = write_gmail_candidates(ledger.get("artifacts", {}), import_dir)
     directory_normalization = normalize_directory_source_accounts("gmail")
     directory_quality = directory_source_account_quality("gmail")
     if directory_quality["status"] != "ok":
@@ -279,18 +381,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "ledger": str(ledger_path),
         "artifact_dir": str(import_dir),
         "input": {
+            **expected_input,
             "discovery_manifest": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json"),
             "contacts_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "contacts.csv"),
             "linkedin_resolution_queue_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "linkedin_resolution_queue.csv"),
         },
         "outputs": {
             "people_csv": people_csv,
+            "candidates_csv": candidates["candidates_csv"],
             "directory_csv": str(DEFAULT_DIRECTORY_CSV),
         },
         "stats": {
             "people": csv_count(people_csv),
-            "candidates": csv_count(str(DEFAULT_BASE_DIR / "discover" / "gmail" / "linkedin_resolution_queue.csv")),
+            "candidates": candidates["candidates"],
         },
+        "candidates": candidates,
         "steps": ledger.get("steps", {}),
         "auto_approvals": ledger.get("auto_approvals", []),
         "directory_normalization": directory_normalization,
@@ -300,10 +405,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Import/enrich discovered Gmail contacts")
+    parser = argparse.ArgumentParser(description="Import discovered Gmail contacts (directory-only by default)")
     parser.add_argument("command", choices=["run"])
     parser.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     parser.add_argument("--operator-id", default="local")
+    parser.add_argument(
+        "--resolve-legacy", action="store_true",
+        help="Legacy in-import identity resolution: Parallel.ai + RapidAPI enrichment (deep-setup owns this now)",
+    )
     parser.add_argument("--approve-parallel-spend", action="store_true")
     parser.add_argument("--force", action="store_true", help="Re-run even if the import manifest is current (no no-op skip)")
     return parser

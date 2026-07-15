@@ -1,15 +1,17 @@
 """Regression: build_research_review_csv must carry the deep-research LinkedIn URL.
 
 Created: 2026-06-18
+Changelog:
+- 2026-07-14: Dropped the materialization half — the messages importer is now
+  contacts-direct and no longer reads research_review.csv. The column contract
+  of the (runtime-orphaned) build primitive itself is still pinned.
 
-Context: the local ($setup) Messages path resolves contacts to LinkedIn via Parallel
-deep research, then dumps reviewer-kept rows to import/messages/people.csv via
-materialize_messages_review_people. That materializer only keeps a row if one of
-linkedin_url / network_linkedin_url / retarget_linkedin_url is populated. Before the
-fix, build_research_review_csv.flatten_row() never wrote the researched
-social.linkedin_url into any of those columns, so every deep-research-resolved
-contact silently produced zero people rows. These tests pin the column through the
-real `build` command and through materialization.
+Context: the historical Messages path resolved contacts to LinkedIn via Parallel
+deep research and materialized reviewer-kept rows through the review CSV. Before
+the fix, build_research_review_csv.flatten_row() never wrote the researched
+social.linkedin_url into the output columns, so every deep-research-resolved
+contact silently produced zero people rows. These tests pin the column through
+the real `build` command.
 """
 import csv
 import importlib.util
@@ -24,9 +26,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from packs.ingestion.primitives.import_contacts_pipeline.messages import (  # noqa: E402
-    materialize_messages_review_people,
-)
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 BUILD = ROOT / "packs/ingestion/primitives/build_research_review_csv/build_research_review_csv.py"
@@ -106,7 +105,7 @@ class BuildToMaterializeTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_build_writes_linkedin_url_and_row_materializes(self) -> None:
+    def test_build_writes_linkedin_url(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             research_dir = tmp / "research"
@@ -154,26 +153,7 @@ class BuildToMaterializeTests(unittest.TestCase):
             self.assertIn("linkedin_url", rows[0])
             by_handle = {r["handle"]: r for r in rows}
             self.assertEqual(by_handle["phone-1111111111"]["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
-
-            # Reviewer excludes Anita; Jane is kept.
-            for r in rows:
-                if r["handle"] == "phone-3333333333":
-                    r["exclude"] = "yes"
-            with review.open("w", newline="") as h:
-                w = csv.DictWriter(h, fieldnames=list(rows[0].keys()))
-                w.writeheader()
-                w.writerows(rows)
-
-            people_csv = tmp / "people.csv"
-            summary = materialize_messages_review_people(review, people_csv)
-
-            self.assertEqual(summary["rows_written"], 1)
-            self.assertGreaterEqual(summary["skipped"].get("rejected", 0), 1)
-            with people_csv.open(newline="") as h:
-                people = list(CsvIO.dict_reader(h))
-            self.assertEqual(len(people), 1)
-            self.assertEqual(people[0]["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
-            self.assertTrue(people[0]["public_identifier"])
+            self.assertEqual(by_handle["phone-3333333333"]["linkedin_url"], "https://www.linkedin.com/in/anita-kapadia")
 
 
 if __name__ == "__main__":

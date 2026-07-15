@@ -305,8 +305,9 @@ Routes:
   prepare `.powerpacks/search-index` artifacts →
   `packs/indexing/skills/build-local-search-index/SKILL.md`
 - `$setup`, one-time LinkedIn-only setup: import LinkedIn Connections.csv +
-  fan-in merge + Modal index + validate (for Gmail use `$import-gmail`; for
-  iMessage/WhatsApp use `$import-messages`) →
+  fan-in merge + Modal index + validate + a final step that suggests missing
+  sources and offers `$deep-setup` processing (for Gmail use `$import-gmail`;
+  for iMessage/WhatsApp use `$import-messages`) →
   `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
   `packs/sales-nav/skills/sales-nav-search/SKILL.md`
@@ -318,9 +319,12 @@ Routes:
   `packs/powerset/skills/update-powerpacks/SKILL.md`
 - `$fix-powerpacks`, diagnose/fix local Powerpacks state paths, copy newer `.powerpacks` state into canonical repo, validate linked source wiring →
   `packs/powerset/skills/fix-powerpacks/SKILL.md`
-- `$import-messages`, iMessage/WhatsApp, message-contact local import (discover →
-  match vs LinkedIn/Gmail → deep-research → mandatory review → import) + fan-in
-  merge + Modal index; local only, never uploads to Powerset →
+- `$import-messages`, iMessage/WhatsApp, message-contact local import, contact
+  sync only (discover → match vs LinkedIn/Gmail → import matched people + a
+  research-candidates pool → fan-in merge → suggest/process tail); no LLM,
+  research, review, or index build in-skill — processing/identity
+  resolution/indexing is `$deep-setup` (landing in the companion PR); local
+  only, never uploads to Powerset →
   `packs/ingestion/skills/import-messages/SKILL.md`
 - `$import-whatsapp`, isolated WhatsApp metadata sync/export through wacli; no
   identity resolution, fan-in, or indexing →
@@ -330,8 +334,11 @@ Routes:
 - `$onboard`, `$ingestion-onboarding`, local ingestion onboarding, link/export
   local network sources →
   `packs/ingestion/skills/onboard/SKILL.md`
-- `$import-gmail`, Gmail, email, msgvault setup + sync + import + fan-in merge +
-  Modal index →
+- `$import-gmail`, Gmail, email, contact sync only: msgvault setup + sync +
+  free directory-only import (matched people + a research-candidates pool) +
+  fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index
+  build in-skill — processing/identity resolution/indexing is `$deep-setup`
+  (landing in the companion PR) →
   `packs/ingestion/skills/import-gmail/SKILL.md`
 - `$enrich-email-markers`, gmail LLM enrichment, mine email bodies for LinkedIn
   markers, preview the context/markers we'd send to an LLM →
