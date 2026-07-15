@@ -975,5 +975,41 @@ class TestReadinessCandidateCounts(unittest.TestCase):
                                   "with_dossiers": 1})
 
 
+class TestLinkedInConnectionGuard(unittest.TestCase):
+    """LinkedIn connections are GROUND TRUTH: a machine no never rejects them in
+    the UI; only the user's own No/Exclude can."""
+
+    def test_connection_never_machine_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts = Path(d)
+            rows = {"connfriend": {"public_identifier": "connfriend", "person_id": "pid-li",
+                                   "llm_worth": "no", "llm_worth_reason": "looks transactional",
+                                   "network_worth": "", "action": "", "approved": ""}}
+            state = web.effective_no_for_key("connfriend", rows, facts,
+                                             connections={"pid-li"})
+            self.assertFalse(state["rejected"])
+            self.assertTrue(state["connected"])
+            # without connection membership, the same machine no rejects
+            state = web.effective_no_for_key("connfriend", rows, facts, connections=set())
+            self.assertTrue(state["rejected"])
+            # the user's own no still rejects a connection (user wins)
+            rows["connfriend"]["network_worth"] = "no"
+            state = web.effective_no_for_key("connfriend", rows, facts,
+                                             connections={"pid-li"})
+            self.assertTrue(state["rejected"])
+
+    def test_load_connection_keys_reads_linkedin_csv_channel(self):
+        with tempfile.TemporaryDirectory() as d:
+            people = Path(d) / "people.csv"
+            people.write_text(
+                "id,public_identifier,source_channels\n"
+                "pid-li,connfriend,\"linkedin_csv,gmail_msgvault\"\n"
+                "pid-gm,gmailonly,gmail_msgvault\n",
+                encoding="utf-8",
+            )
+            keys = web.load_connection_keys(people)
+        self.assertEqual(keys, {"pid-li", "connfriend"})
+
+
 if __name__ == "__main__":
     unittest.main()
