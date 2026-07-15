@@ -870,6 +870,97 @@ class TestSyntheticWorthGateSync(unittest.TestCase):
             self.assertTrue(web.parent_in_tab(parents[0], "rejected"))
 
 
+class TestLiveEndpoints(unittest.TestCase):
+    """Acceptance: every decision endpoint persists to CSV AND returns everything the
+    client needs to live-update the page in the same click — the row's decision state
+    (action/approved), its effective worth (+source), the unified `rejected` flag, and
+    fresh GLOBAL tab counts for the header stats / nav pills. Both directions."""
+
+    COUNT_KEYS = {"total", "review", "verified", "detached", "conflict",
+                  "fixed", "excluded", "decided", "rejected"}
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        base = Path(self._tmp.name)
+        self.facts = base / "facts"
+        self.facts.mkdir()
+        self.review = base / "review.csv"
+        self.verdicts = _verdict_jsonl(base / "verdicts.jsonl", [TestUnifiedRejected.VERDICT])
+        row = {k: "" for k in reconcile.OVERRIDE_COLUMNS}
+        row.update({"public_identifier": "bob-1", "person_id": "pid-bob",
+                    "llm_worth": "no", "llm_worth_reason": "vendor"})
+        reconcile._write_override_rows(self.review, {"bob-1": row})
+        self.synthetic = base / "synthetic-people.csv"
+        self.synthetic.write_text(
+            "id,public_identifier,full_name,enrichment_provider,approved\n"
+            "pid-9,synth-email-abc,Ross Nordeen,synthetic,auto\n", encoding="utf-8")
+        # keep live_counts off any real candidate pools in the repo checkout
+        self._pools = mock.patch.object(candidates, "CANDIDATE_CSVS", [])
+        self._pools.start()
+        handler = web.make_handler(self.review, self.verdicts, base / "parents",
+                                   base / "dossiers", 0.7, 0.85,
+                                   synthetic_path=self.synthetic, facts_dir=self.facts,
+                                   people_csv=base / "people.csv")
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.port = self.server.server_address[1]
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self._pools.stop()
+        self._tmp.cleanup()
+
+    def _post(self, path: str, **form) -> dict:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=urllib.parse.urlencode(form).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read())
+
+    def test_worth_no_and_rescue_round_trip_with_live_counts(self):
+        # machine no (llm_worth) -> rejected; the response carries global counts
+        j = self._post("/worth", pub="bob-1", worth="")
+        self.assertTrue(j["rejected"])
+        self.assertEqual((j["effective"], j["source"]), ("no", "llm"))
+        self.assertLessEqual(self.COUNT_KEYS, set(j["counts"]))
+        self.assertEqual((j["counts"]["rejected"], j["counts"]["review"]), (1, 0))
+        # worth-Yes rescues in the same click: rejected flips, counts move tabs
+        j = self._post("/worth", pub="bob-1", worth="yes")
+        self.assertFalse(j["rejected"])
+        self.assertEqual((j["effective"], j["source"]), ("yes", "user"))
+        self.assertEqual((j["action"], j["approved"]), ("", ""))   # chip repaint fields
+        self.assertEqual((j["counts"]["rejected"], j["counts"]["review"]), (0, 1))
+        self.assertEqual(reconcile.load_override_rows(self.review)["bob-1"]["network_worth"],
+                         "yes")                                     # ...and the CSV persisted
+
+    def test_exclude_then_keep_report_live_state_both_ways(self):
+        j = self._post("/decide", pub="bob-1", decision="exclude")
+        self.assertTrue(j["rejected"])                              # exclude IS the unified no
+        self.assertEqual((j["action"], j["approved"]), ("exclude", "yes"))
+        self.assertEqual((j["effective"], j["source"]), ("no", "user"))
+        self.assertEqual((j["counts"]["rejected"], j["counts"]["excluded"]), (1, 1))
+        j = self._post("/decide", pub="bob-1", decision="keep")     # keep-ish rescue
+        self.assertFalse(j["rejected"])
+        self.assertEqual(j["counts"]["rejected"], 0)
+        self.assertEqual(reconcile.load_override_rows(self.review)["bob-1"]["action"], "verify")
+
+    def test_synthetic_worth_and_decide_report_gate_state(self):
+        j = self._post("/worth", pub="pid-9", worth="no")           # the mint gate follows
+        self.assertTrue(j["rejected"])
+        self.assertEqual((j["action"], j["approved"]), ("verify", "no"))
+        with self.synthetic.open(newline="", encoding="utf-8") as fh:
+            (row,) = list(csv.DictReader(fh))
+        self.assertEqual(row["approved"], "no")
+        j = self._post("/worth", pub="pid-9", worth="yes")
+        self.assertFalse(j["rejected"])
+        self.assertEqual(j["approved"], "yes")
+        j = self._post("/decide", pub="synth-email-abc", decision="detach")
+        self.assertEqual((j["action"], j["approved"]), ("verify", "no"))
+        self.assertIn("counts", j)
+
+
 class TestReadinessCandidateCounts(unittest.TestCase):
     def test_counts_per_source_and_with_dossiers(self):
         with tempfile.TemporaryDirectory() as d:
