@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Deterministically reset the canonical checkout to origin/main and reinstall
+# Powerpacks skills for exactly one agent harness.
+set -euo pipefail
+
+HARNESS="${1:-}"
+SKILLS_DIR="${2:-}"
+
+case "$HARNESS" in
+  codex|claude-code|pi) ;;
+  *)
+    echo "usage: update-powerpacks <codex|claude-code|pi> [skills-dir]" >&2
+    exit 2
+    ;;
+esac
+
+stamp_candidates=()
+case "$HARNESS" in
+  codex)
+    stamp_candidates+=(
+      "${CODEX_HOME:-$HOME/.codex}/skills/.powerpacks-install.json"
+      "${CODEX_HOME:-$HOME/.codex}/powerpacks/.powerpacks-install.json"
+    )
+    ;;
+  claude-code)
+    stamp_candidates+=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/.powerpacks-install.json")
+    ;;
+  pi)
+    stamp_candidates+=("${PI_HOME:-$HOME/.pi/agent}/skills/.powerpacks-install.json")
+    ;;
+esac
+
+stamp_repo_roots=()
+for stamp in "${stamp_candidates[@]}"; do
+  [[ -f "$stamp" ]] || continue
+  stamp_root="$(python3 - "$stamp" <<'PY'
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get("repo_root", "")
+except (OSError, json.JSONDecodeError):
+    value = ""
+print(value if isinstance(value, str) else "")
+PY
+)"
+  [[ -n "$stamp_root" ]] && stamp_repo_roots+=("$stamp_root")
+done
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+is_powerpacks_repo() {
+  local candidate="$1"
+  [[ -n "$candidate" ]] || return 1
+  [[ "$candidate" != *"/.codex/"* ]] || return 1
+  [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" && -x "$candidate/install.sh" ]] || return 1
+  git -C "$candidate" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+REPO=""
+candidates=(
+  "${POWERPACKS_REPO_ROOT:-}"
+)
+for stamp_root in "${stamp_repo_roots[@]:-}"; do
+  [[ -n "$stamp_root" ]] && candidates+=("$stamp_root")
+done
+candidates+=("$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks" "$SCRIPT_ROOT")
+for candidate in "${candidates[@]}"; do
+  if is_powerpacks_repo "$candidate"; then
+    REPO="$(cd "$candidate" && pwd)"
+    break
+  fi
+done
+
+if [[ -z "$REPO" ]]; then
+  echo "error: no canonical Powerpacks git checkout found" >&2
+  exit 1
+fi
+
+cd "$REPO"
+
+stash_commit=""
+stash_message=""
+stash_ref="none"
+
+report_exit() {
+  local exit_code=$?
+  if ((exit_code != 0)) && [[ -n "$stash_commit" ]]; then
+    echo "recovery_stash_commit=$stash_commit" >&2
+    echo "recovery_stash_ref=$stash_ref" >&2
+    echo "recovery_stash_restored=false" >&2
+  fi
+  trap - EXIT
+  exit "$exit_code"
+}
+trap report_exit EXIT
+
+for protected_path in .powerpacks .env; do
+  if git ls-files -- "$protected_path" | grep -q .; then
+    echo "error: refusing to update because $protected_path contains tracked files" >&2
+    exit 1
+  fi
+  if [[ -e "$protected_path" ]] && ! git check-ignore -q "$protected_path"; then
+    echo "error: refusing to update because $protected_path is not ignored by Git" >&2
+    exit 1
+  fi
+done
+
+git remote get-url origin >/dev/null
+git fetch --prune origin main
+
+for protected_path in .powerpacks .env; do
+  if git ls-tree -r --name-only origin/main -- "$protected_path" | grep -q .; then
+    echo "error: refusing to update because origin/main tracks $protected_path" >&2
+    exit 1
+  fi
+done
+
+if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+  stash_message="update-powerpacks $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  git stash push --include-untracked -m "$stash_message" >/dev/null
+  stash_commit="$(git rev-parse refs/stash)"
+  stash_ref='stash@{0}'
+fi
+
+if git show-ref --verify --quiet refs/heads/main; then
+  git switch --force main >/dev/null
+else
+  git switch --track -c main origin/main >/dev/null
+fi
+git reset --hard origin/main >/dev/null
+git branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
+
+"$REPO/bin/sync-agent-files.sh"
+
+case "$HARNESS" in
+  codex)
+    if [[ -n "$SKILLS_DIR" ]]; then
+      POWERPACKS_SKIP_AGENT_BOOTSTRAP=1 "$REPO/install.sh" codex "$SKILLS_DIR"
+      stamp_path="$SKILLS_DIR/.powerpacks-install.json"
+    else
+      POWERPACKS_SKIP_AGENT_BOOTSTRAP=1 "$REPO/install.sh" codex
+      stamp_path="${CODEX_HOME:-$HOME/.codex}/skills/.powerpacks-install.json"
+    fi
+    ;;
+  claude-code)
+    if [[ -n "$SKILLS_DIR" ]]; then
+      "$REPO/install.sh" claude-code "$SKILLS_DIR"
+      stamp_path="$SKILLS_DIR/.powerpacks-install.json"
+    else
+      "$REPO/install.sh" claude-code
+      stamp_path="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/.powerpacks-install.json"
+    fi
+    ;;
+  pi)
+    if [[ -n "$SKILLS_DIR" ]]; then
+      "$REPO/install.sh" pi "$SKILLS_DIR"
+      stamp_path="$SKILLS_DIR/.powerpacks-install.json"
+    else
+      "$REPO/install.sh" pi
+      stamp_path="${PI_HOME:-$HOME/.pi/agent}/skills/.powerpacks-install.json"
+    fi
+    ;;
+esac
+
+echo
+echo "status=ok"
+echo "repo=$REPO"
+echo "harness=$HARNESS"
+echo "commit=$(git rev-parse HEAD)"
+echo "stash_commit=${stash_commit:-none}"
+echo "stash_ref=$stash_ref"
+echo "stash_message=${stash_message:-none}"
+echo "stash_restored=false"
+echo "preserved=.powerpacks,.env"
+echo "install_stamp=$stamp_path"
+echo "restart_required=true"

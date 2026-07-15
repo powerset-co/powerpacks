@@ -84,6 +84,7 @@ install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
+install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
 install_skill import-whatsapp "$REPO_ROOT/packs/ingestion/skills/import-whatsapp/SKILL.md"
@@ -97,6 +98,19 @@ install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-cont
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
+
+version="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["."])' "$REPO_ROOT/.release-please-manifest.json" 2>/dev/null || echo unknown)"
+commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+cat > "$SKILLS_DIR/.powerpacks-install.json" <<EOF
+{
+  "package": "powerpacks",
+  "version": "$version",
+  "commit": "$commit",
+  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "harness": "pi",
+  "repo_root": "$REPO_ROOT"
+}
+EOF
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
 printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'

@@ -24,6 +24,10 @@ done
 
 install_powerpacks_bundle() {
   local tmp="$BUNDLE_DIR.tmp"
+  local backup="$BUNDLE_DIR.backup"
+  if [[ ! -e "$BUNDLE_DIR" && -e "$backup" ]]; then
+    mv "$backup" "$BUNDLE_DIR"
+  fi
   rm -rf "$tmp"
   mkdir -p "$tmp"
   cp "$REPO_ROOT/pyproject.toml" "$tmp/pyproject.toml"
@@ -75,14 +79,25 @@ run from any Codex working directory.
 EOF
 
   if [[ -d "$BUNDLE_DIR/.powerpacks" ]]; then
-    mv "$BUNDLE_DIR/.powerpacks" "$tmp/.powerpacks"
+    cp -R "$BUNDLE_DIR/.powerpacks" "$tmp/.powerpacks"
   fi
   if [[ -f "$BUNDLE_DIR/.env" ]]; then
     cp "$BUNDLE_DIR/.env" "$tmp/.env"
   fi
 
-  rm -rf "$BUNDLE_DIR"
-  mv "$tmp" "$BUNDLE_DIR"
+  rm -rf "$backup"
+  if [[ -e "$BUNDLE_DIR" ]]; then
+    mv "$BUNDLE_DIR" "$backup"
+  fi
+  if mv "$tmp" "$BUNDLE_DIR"; then
+    rm -rf "$backup"
+  else
+    status=$?
+    if [[ ! -e "$BUNDLE_DIR" && -e "$backup" ]]; then
+      mv "$backup" "$BUNDLE_DIR"
+    fi
+    return "$status"
+  fi
 }
 
 install_skill() {
@@ -107,6 +122,7 @@ install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
+install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
 install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
