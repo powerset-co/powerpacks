@@ -6,6 +6,10 @@ description: Add Gmail contacts to your local network. Use for $import-gmail. Se
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-15: Added an all-account OAuth health preflight before sync. The
+  workflow now collects every missing/expired account in one pass, asks once
+  before authorizing that set, rechecks all selected accounts, and starts no
+  mailbox sync until every selected token is healthy.
 - 2026-07-14: Refocused on contact sync only. Step 6 import is now free/local
   (directory reuse only): Parallel.ai LinkedIn resolution + RapidAPI hydration
   move to the centralized $deep-setup processing layer, and unresolved contacts
@@ -51,7 +55,7 @@ through it, marking each complete as you go.** Mandatory (TaskCreate / update_pl
 1. Check msgvault status
 2. Ask which Gmail accounts to link + how far back to sync
 3. Create msgvault OAuth app (browser, if not configured)
-4. Authorize Gmail accounts
+4. Check OAuth health + authorize unhealthy Gmail accounts
 5. Sync Gmail archives
 6. Import Gmail contacts (free, local)
 7. Merge all sources
@@ -88,6 +92,12 @@ paths and rely on the primitives — don't pre-delete or invent folders.
 - **Consent gates (pause for the user):** msgvault browser/gcloud OAuth-app
   creation and Gmail account authorization (Steps 3-4). Everything after OAuth
   is free and local.
+- **Check every selected token before syncing any mailbox.** Step 1's local
+  status proves only that an account row/token file exists; it cannot prove a
+  refresh token is still accepted by Google. Step 4's `auth-check` is the
+  authority for token health. It checks the complete selected set without
+  downloading mail or opening a browser. Step 5 starts only after it returns
+  `status: ok` for that exact set.
 
 ### Repo root
 
@@ -129,8 +139,10 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setu
 ```
 
 The JSON reports `gcloud`, `config.oauth_configured`, `database.exists`, and
-authorized `accounts`. If `oauth_configured` is true and the db exists, Step 3 is
-a no-op.
+stored `accounts`. This is a **local configuration/presence check only**: an
+account can appear here even when Google has revoked or expired its refresh
+token. If `oauth_configured` is true and the db exists, Step 3 is a no-op. Do
+not call an account healthy until Step 4's explicit `auth-check` passes.
 
 ### Step 2 — Ask which Gmail accounts to link (and how far back to sync)
 
@@ -161,35 +173,57 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setu
 Writes `~/.msgvault/config.toml`, the client secret, and `~/.msgvault/msgvault.db`
 (do not delete the db). If already configured, mark this step a no-op.
 
-### Step 4 — Authorize Gmail accounts
+### Step 4 — Check OAuth health + authorize unhealthy Gmail accounts
 
 Re-run `msgvault_setup.py status` after Step 3, because a fresh
-`browser-setup --add-account` already authorized the primary. For **every requested
-account still absent from the current `status.accounts`**, run the per-account
-browser OAuth grant. This includes the primary only when OAuth configuration
-pre-existed and it is still absent:
+`browser-setup --add-account` already authorized the primary. Then check **every
+requested account in one command** before syncing anything:
+
+```bash
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py auth-check \
+  --email <first-email> \
+  --email <second-email>
+```
+
+Repeat `--email` for the exact Step 2 selection. `auth-check` runs msgvault's
+zero-download verification probe (`verify --skip-db-check --sample 0`) with
+non-interactive stdin. It may refresh a still-valid access token, but it does
+not sync/download mail, inspect message bodies, or open a browser. It aggregates
+the whole requested set instead of stopping at the first bad account:
+
+- `healthy` → no action.
+- `missing_token` → needs a normal `add-account` grant.
+- `reauthorization_required` → needs `add-account --force-auth`.
+- `transient_error` → stop and surface the error; never destroy/replace a token
+  because of a timeout, DNS failure, or Google 5xx.
+
+If any accounts need authorization, show the **complete list** (missing and
+expired separately) and ask once for explicit consent to open OAuth for all of
+them sequentially. After approval, run the normal grant for every missing
+account:
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <email>
 ```
 
-Re-run `msgvault_setup.py status` and confirm every requested account appears
-under `accounts`.
-
-**Re-authorizing a lapsed account.** If an account is *already in the vault* but
-its token is **expired, revoked, or missing**, re-authorize the same way with
-`--force-auth` (msgvault replaces the stale token; **OAuth only, downloads no
-mail**):
+For every expired/revoked account, use `--force-auth` (OAuth only; it downloads
+no mail and preserves already archived messages):
 
 ```bash
 cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <email> --force-auth
 ```
 
-The account keeps every previously-synced message; Step 5's bounded `discover`
-rescans the chosen window and deduplicates stored messages. **Never** re-authorize with
-`msgvault sync-full <email>` — it re-pulls the entire mailbox.
+After all grants complete, rerun the **same all-account `auth-check`**. Do not
+advance until it reports `status: ok` and every selected account is `healthy`.
+The accounts keep every previously-synced message; Step 5's bounded `discover`
+rescans the chosen window and deduplicates stored messages. **Never**
+re-authorize with `msgvault sync-full <email>` — it re-pulls the mailbox.
 
 ### Step 5 — Sync Gmail archives
+
+Hard precondition: Step 4's `auth-check` returned `status: ok` for the exact
+selected account list. If any account is missing, expired, or in transient
+error, start **none** of the mailbox syncs.
 
 Sync all authorized accounts and build the discover artifacts in **one command**,
 using the window from Step 2. Passing one account per separate invocation rewrites

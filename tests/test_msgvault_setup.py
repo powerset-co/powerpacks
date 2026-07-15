@@ -1,7 +1,10 @@
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -49,6 +52,14 @@ class MsgvaultSetupTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+
+    def test_run_command_does_not_inherit_interactive_stdin(self):
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(msgvault_setup.subprocess, "run", return_value=completed) as run:
+            result = msgvault_setup.run_command(["fake-child"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(run.call_args.kwargs["stdin"], msgvault_setup.subprocess.DEVNULL)
 
     def test_validate_client_secret_accepts_installed_app(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -133,6 +144,211 @@ class MsgvaultSetupTests(unittest.TestCase):
         self.assertEqual(emails, ["Me@Example.com", "other@example.com"])
         with self.assertRaises(ValueError):
             msgvault_setup.normalize_email_list(["not-an-email"])
+
+    def test_auth_check_aggregates_healthy_expired_and_missing_accounts(self):
+        calls = []
+
+        def fake_run_msgvault(args, home, timeout=120):
+            calls.append(args)
+            if args[1] == "healthy@example.com":
+                return {"ok": True, "returncode": 0, "stdout": "verified", "stderr": ""}
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "oauth2: invalid_grant: token is expired or revoked",
+            }
+
+        current = {
+            "msgvault": {"installed": True},
+            "config": {"oauth_configured": True},
+            "database": {"exists": True},
+            "accounts_error": "",
+            "accounts": [
+                {"email": "healthy@example.com"},
+                {"email": "expired@example.com"},
+            ]
+        }
+        with mock.patch.object(msgvault_setup, "status_payload", return_value=current), \
+            mock.patch.object(msgvault_setup, "run_msgvault", side_effect=fake_run_msgvault):
+            code, payload = self.invoke([
+                "auth-check",
+                "--home",
+                "/tmp/msgvault-test",
+                "--email",
+                "healthy@example.com",
+                "--email",
+                "expired@example.com",
+                "--email",
+                "missing@example.com",
+            ])
+
+        self.assertEqual(code, 20)
+        self.assertEqual(payload["status"], "needs_user_action")
+        self.assertEqual(payload["healthy_accounts"], ["healthy@example.com"])
+        self.assertEqual(payload["expired_accounts"], ["expired@example.com"])
+        self.assertEqual(payload["missing_accounts"], ["missing@example.com"])
+        self.assertEqual(
+            payload["accounts_to_authorize"],
+            ["expired@example.com", "missing@example.com"],
+        )
+        self.assertEqual(
+            calls,
+            [
+                ["verify", "healthy@example.com", "--skip-db-check", "--sample", "0", "--local"],
+                ["verify", "expired@example.com", "--skip-db-check", "--sample", "0", "--local"],
+            ],
+        )
+        by_email = {item["email"]: item for item in payload["accounts"]}
+        self.assertIn("--force-auth", by_email["expired@example.com"]["authorize_command"])
+        self.assertNotIn("--force-auth", by_email["missing@example.com"]["authorize_command"])
+        self.assertFalse(payload["browser_opened"])
+        self.assertFalse(payload["mail_downloaded"])
+        self.assertTrue(payload["network_called"])
+
+    def test_auth_check_cli_blocks_all_accounts_when_one_token_is_revoked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            call_log = root / "msgvault-calls.jsonl"
+            fake_msgvault = fake_bin / "msgvault"
+            fake_msgvault.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import os
+                    import sys
+
+                    args = sys.argv[1:]
+                    with open(os.environ["FAKE_MSGVAULT_LOG"], "a", encoding="utf-8") as log:
+                        log.write(json.dumps({"args": args, "stdin_isatty": sys.stdin.isatty()}) + "\\n")
+                    if args == ["version"]:
+                        print("msgvault fake-1.0")
+                        raise SystemExit(0)
+                    if len(args) >= 3 and args[0] == "--home":
+                        args = args[2:]
+                    if args[:1] == ["list-accounts"]:
+                        print(json.dumps([
+                            {"email": "healthy@example.com"},
+                            {"email": "expired@example.com"},
+                        ]))
+                        raise SystemExit(0)
+                    if args[:2] == ["verify", "healthy@example.com"]:
+                        print("verified")
+                        raise SystemExit(0)
+                    if args[:2] == ["verify", "expired@example.com"]:
+                        print(
+                            "oauth2: invalid_grant: token is expired or revoked",
+                            file=sys.stderr,
+                        )
+                        raise SystemExit(1)
+                    print(f"unexpected fake msgvault call: {args}", file=sys.stderr)
+                    raise SystemExit(2)
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_msgvault.chmod(0o755)
+            for command in ("codex", "gcloud"):
+                fake_command = fake_bin / command
+                fake_command.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+                fake_command.chmod(0o755)
+
+            home = root / "msgvault-home"
+            home.mkdir()
+            secret = home / "client_secret.json"
+            self.write_secret(secret)
+            (home / "config.toml").write_text(
+                f'[oauth]\nclient_secrets = "{secret}"\n',
+                encoding="utf-8",
+            )
+            (home / "msgvault.db").touch()
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+            env["FAKE_MSGVAULT_LOG"] = str(call_log)
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(
+                        ROOT
+                        / "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py"
+                    ),
+                    "auth-check",
+                    "--home",
+                    str(home),
+                    "--email",
+                    "healthy@example.com",
+                    "--email",
+                    "expired@example.com",
+                ],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 20, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "needs_user_action")
+            self.assertEqual(payload["healthy_accounts"], ["healthy@example.com"])
+            self.assertEqual(payload["expired_accounts"], ["expired@example.com"])
+            self.assertEqual(payload["accounts_to_authorize"], ["expired@example.com"])
+            self.assertFalse(payload["browser_opened"])
+            self.assertFalse(payload["mail_downloaded"])
+
+            calls = [
+                json.loads(line)
+                for line in call_log.read_text(encoding="utf-8").splitlines()
+            ]
+            verify_calls = [
+                call for call in calls if "verify" in call["args"]
+            ]
+            self.assertEqual(len(verify_calls), 2)
+            self.assertTrue(all(not call["stdin_isatty"] for call in verify_calls))
+            self.assertFalse(
+                any(
+                    command in call["args"]
+                    for call in calls
+                    for command in ("sync", "sync-full", "add-account")
+                )
+            )
+
+    def test_auth_check_does_not_misclassify_transient_errors_as_expired(self):
+        current = {
+            "msgvault": {"installed": True},
+            "config": {"oauth_configured": True},
+            "database": {"exists": True},
+            "accounts_error": "",
+            "accounts": [{"email": "me@example.com"}],
+        }
+        transient = {
+            "ok": False,
+            "returncode": 124,
+            "stdout": "",
+            "stderr": "request timed out connecting to Gmail",
+        }
+        with mock.patch.object(msgvault_setup, "status_payload", return_value=current), \
+            mock.patch.object(msgvault_setup, "run_msgvault", return_value=transient):
+            code, payload = self.invoke(["auth-check", "--email", "me@example.com"])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["expired_accounts"], [])
+        self.assertEqual(payload["error_accounts"], ["me@example.com"])
+        self.assertEqual(payload["accounts"][0]["status"], "transient_error")
+        self.assertNotIn("authorize_command", payload["accounts"][0])
+
+    def test_import_gmail_skill_requires_all_account_auth_preflight(self):
+        skill = (ROOT / "packs/ingestion/skills/import-gmail/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("auth-check", skill)
+        self.assertIn("complete list", skill)
+        self.assertIn("start **none** of the mailbox syncs", skill)
+        self.assertIn("every selected account is `healthy`", skill)
 
     def test_ensure_gcloud_auth_reauths_stale_selected_account(self):
         calls = []

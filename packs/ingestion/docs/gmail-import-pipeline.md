@@ -125,6 +125,14 @@ identity judge or human review — a key reason resolution moved to
 After OAuth, the canonical `$import-gmail` run stays on-device: msgvault talks
 to Gmail, and everything else is local file processing.
 
+Before any mailbox sync, the workflow runs one zero-download OAuth health probe
+for every selected account (`msgvault_setup.py auth-check`). Stored account
+presence is not treated as proof that Google still accepts the refresh token.
+The probe aggregates every missing/expired account, the agent asks once before
+opening those browser grants sequentially, and the full selected set is checked
+again before the bounded sync starts. Network/DNS/Google 5xx failures remain
+transient errors and never trigger forced reauthorization.
+
 ## Artifacts and resume
 
 ```text
@@ -169,8 +177,6 @@ output CSV rows and LinkedIn profile caches are reused only on the
   judge or human review, normalizes missing/zero resolver confidence to
   `0.90`, and hits RapidAPI cache misses without a primitive-owned approval —
   the main reasons resolution moved to `$deep-setup`.
-- Discovery can exit `0` while returning `status: failed`; callers must inspect
-  JSON status rather than relying only on the process exit code.
 - The repo has three distinct surfaces: the harness skill, current local app v3
   endpoints, and legacy `setup_gmail.py`. They share primitives but should not be
   presented as one command contract.

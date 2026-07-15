@@ -357,6 +357,11 @@ def run_cmd(cmd: list[str], *, timeout: int | None = None) -> tuple[int, dict[st
     proc = subprocess.Popen(
         cmd,
         cwd=Path(__file__).resolve().parents[4],
+        # Discovery primitives are automation-only. Inheriting a terminal here
+        # lets tools such as msgvault start an implicit browser OAuth flow and
+        # wait for a hidden callback until the six-hour child timeout. Explicit
+        # authorization belongs to the setup primitive and its consent gate.
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

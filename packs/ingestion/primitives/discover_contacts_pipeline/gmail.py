@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -22,6 +23,7 @@ try:
         DEFAULT_MSGVAULT_DB,
         GMAIL_INTERACTION_CALCULATION_VERSION,
         emit,
+        emit_progress,
         now_iso,
         ordered_unique,
         parse_jsonish,
@@ -48,6 +50,7 @@ except ModuleNotFoundError:
         DEFAULT_MSGVAULT_DB,
         GMAIL_INTERACTION_CALCULATION_VERSION,
         emit,
+        emit_progress,
         now_iso,
         ordered_unique,
         parse_jsonish,
@@ -87,6 +90,13 @@ GMAIL_DISCOVERY_COLUMNS = [
 DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = 4
 GMAIL_CALCULATION_FULL_RECOUNT = "full_recount"
 GMAIL_CALCULATION_INCREMENTAL_DELTA = "incremental_delta"
+MSGVAULT_REAUTH_ERROR_MARKERS = (
+    "expired or revoked",
+    "cannot re-authorize",
+    "invalid_grant",
+    "missing token",
+    "token is missing",
+)
 
 
 def _as_list(value: Any) -> list[str]:
@@ -293,6 +303,19 @@ def msgvault_sync_supports_no_attachments() -> bool:
     return "--no-attachments" in help_text
 
 
+def msgvault_reauthorization_required(payload: dict[str, Any], stderr: str) -> bool:
+    error_text = "\n".join((stderr, json.dumps(payload, default=str))).lower()
+    return any(marker in error_text for marker in MSGVAULT_REAUTH_ERROR_MARKERS)
+
+
+def msgvault_reauthorize_command(email: str) -> str:
+    return (
+        "uv run --project . python "
+        "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py "
+        f"add-account --email {shlex.quote(email)} --force-auth"
+    )
+
+
 def sync_msgvault_account(
     email: str,
     db: str,
@@ -343,13 +366,16 @@ def sync_msgvault_account(
         cmd.extend(["--limit", str(int(limit))])
     if no_attachments_applied:
         cmd.append("--no-attachments")
+    window_label = f" after {sync_after}" if sync_after else ""
+    emit_progress(f"Starting Gmail sync for {email}{window_label}.")
     code, payload, stderr = run_cmd(cmd)
-    return {
+    error: Any = (stderr or payload) if code != 0 else ""
+    result = {
         "status": "completed" if code == 0 else "failed",
         "account_email": email,
         "code": code,
         "messages_added": payload.get("messages_added") if isinstance(payload, dict) else "",
-        "error": stderr or payload if code != 0 else "",
+        "error": error,
         "sync_after": sync_after,
         "sync_after_source": sync_after_source,
         "sync_before": sync_before,
@@ -359,6 +385,24 @@ def sync_msgvault_account(
         "no_attachments_requested": bool(no_attachments),
         "no_attachments_applied": no_attachments_applied,
     }
+    if code != 0 and msgvault_reauthorization_required(payload, stderr):
+        reauthorize_command = msgvault_reauthorize_command(email)
+        result.update({
+            "error_code": "gmail_reauthorization_required",
+            "error": (
+                f"Gmail authorization expired or was revoked for {email}. "
+                f"Re-authorize it explicitly before retrying: {reauthorize_command}"
+            ),
+            "error_detail": error,
+            "reauthorize_command": reauthorize_command,
+        })
+    if code == 0:
+        emit_progress(f"Gmail sync completed for {email}.")
+    elif result.get("error_code") == "gmail_reauthorization_required":
+        emit_progress(str(result["error"]))
+    else:
+        emit_progress(f"Gmail sync failed for {email} (exit {code}).")
+    return result
 
 
 def normalize_label_names(labels: Any) -> list[str]:
@@ -625,7 +669,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    emit(discover(
+    payload = discover(
         accounts_file=args.accounts,
         selected_accounts=args.account_email or None,
         msgvault_db=args.msgvault_db,
@@ -636,8 +680,9 @@ def main() -> int:
         fresh=args.fresh,
         limit=args.limit,
         no_attachments=args.no_attachments,
-    ))
-    return 0
+    )
+    emit(payload)
+    return 1 if payload.get("status") == "failed" else 0
 
 
 if __name__ == "__main__":

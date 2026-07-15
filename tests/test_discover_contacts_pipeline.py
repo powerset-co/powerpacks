@@ -1,4 +1,5 @@
 import csv
+import io
 import json
 import sqlite3
 import sys
@@ -48,6 +49,20 @@ def write_csv(path: Path, fields: list[str], rows: list[dict[str, str]]) -> None
 
 
 class DiscoverContactsPipelineTests(unittest.TestCase):
+    def test_child_commands_do_not_inherit_interactive_stdin(self) -> None:
+        proc = mock.Mock()
+        proc.stdout = io.StringIO('{"status": "ok"}\n')
+        proc.stderr = io.StringIO("")
+        proc.wait.return_value = 0
+
+        with mock.patch.object(discover_common.subprocess, "Popen", return_value=proc) as popen:
+            code, payload, stderr = discover_common.run_cmd(["fake-child"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload, {"status": "ok"})
+        self.assertEqual(stderr, "")
+        self.assertEqual(popen.call_args.kwargs["stdin"], discover_common.subprocess.DEVNULL)
+
     def test_from_accounts_populates_linked_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -143,6 +158,46 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["sync_after"], "2026-05-20")
             self.assertEqual(payload["sync_after_source"], "msgvault.sources.last_sync_at")
             self.assertEqual(calls, [["msgvault", "--home", str(tmp), "sync-full", "me@example.com", "--after", "2026-05-20", "--query", "-category:social"]])
+
+    def test_gmail_sync_expired_token_returns_actionable_reauthorization_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "msgvault.db"
+            calls: list[list[str]] = []
+            expired_error = (
+                "token for me@example.com is expired or revoked, but cannot re-authorize "
+                "in a non-interactive session"
+            )
+
+            def fake_run_cmd(cmd, timeout=None):
+                calls.append(cmd)
+                return 1, {}, expired_error
+
+            with mock.patch.object(discover_gmail.shutil, "which", return_value="/usr/bin/msgvault"):
+                with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                    payload = discover_gmail.sync_msgvault_account(
+                        "me@example.com",
+                        str(db),
+                        "-category:social",
+                        sync_after_override="2023-07-15",
+                    )
+
+            self.assertEqual(payload["status"], "failed")
+            self.assertEqual(payload["error_code"], "gmail_reauthorization_required")
+            self.assertEqual(payload["account_email"], "me@example.com")
+            self.assertIn("me@example.com", payload["error"])
+            self.assertIn("--force-auth", payload["reauthorize_command"])
+            self.assertEqual(payload["error_detail"], expired_error)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("--after", calls[0])
+            self.assertEqual(calls[0][calls[0].index("--after") + 1], "2023-07-15")
+            self.assertIn("--noresume", calls[0])
+            self.assertNotIn("add-account", calls[0])
+
+    def test_gmail_cli_returns_nonzero_when_discovery_fails(self) -> None:
+        with mock.patch.object(discover_gmail, "discover", return_value={"status": "failed"}):
+            with mock.patch.object(discover_gmail, "emit"):
+                with mock.patch.object(sys, "argv", ["gmail.py", "discover"]):
+                    self.assertEqual(discover_gmail.main(), 1)
 
     def test_gmail_discovery_writes_only_stable_manifest_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:
