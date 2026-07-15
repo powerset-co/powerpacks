@@ -1,35 +1,5 @@
 #!/usr/bin/env bash
-# Refresh this checkout and reinstall Powerpacks into Claude Code.
-#
-# Intended for agent-native use:
-#   claude -p "cd /path/to/powerpacks && bin/update-claude-code"
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SKILLS_DIR="${1:-}"
-
-cd "$ROOT"
-
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "warning: working tree has local changes; git pull may stop if files overlap." >&2
-  fi
-  if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    git pull --ff-only
-  else
-    echo "warning: no upstream branch configured; skipping git pull." >&2
-  fi
-else
-  echo "warning: $ROOT is not a git checkout; skipping git pull." >&2
-fi
-
-"$ROOT/bin/sync-agent-files.sh"
-
-if [[ -n "$SKILLS_DIR" ]]; then
-  "$ROOT/install.sh" claude-code "$SKILLS_DIR"
-else
-  "$ROOT/install.sh" claude-code
-fi
-
-echo
-echo "Powerpacks Claude Code update complete."
+exec "$ROOT/bin/update-powerpacks" claude-code "$@"

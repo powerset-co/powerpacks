@@ -27,4 +27,5 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_enrich_primitives \
   tests.test_mcp_install \
   tests.test_pull_runtime_keys \
+  tests.test_update_powerpacks \
   -v
