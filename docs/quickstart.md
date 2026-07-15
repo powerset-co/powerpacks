@@ -247,12 +247,34 @@ Powerpacks selects only contact/interaction metadata and does not send Gmail
 bodies or subjects to identity providers. See the
 [Gmail import pipeline](../packs/ingestion/docs/gmail-import-pipeline.md).
 
+### Process your contacts — `$deep-setup`
+
+After any import finishes it asks *"process your contacts now?"* — a yes runs
+`$deep-setup`, the centralized processing layer (it never runs silently; every
+paid stage previews its cost and the review step is a hard stop):
+
+```text
+$deep-setup                   # or: "process my contacts"
+```
+
+It builds one dossier per contact from message bodies — including the imports'
+research candidates — and the synthesis LLM judges each contact's
+**network worth (yes / maybe / no)** from the actual relationship. You review
+in the browser UI: mark Yes/Maybe/No per person (your mark overrules the LLM
+and sticks), filter by worth and by source (gmail / imessage / whatsapp), and
+keep/detach/fix LinkedIn attachments. Contacts marked **No** cost nothing —
+they're excluded from the paid reverse lookup. Then one Parallel.ai reverse
+lookup resolves the survivors, no-LinkedIn people get synthetic profiles, and
+the finale re-merges and rebuilds the Modal index so everything becomes
+searchable. See the
+[deep-setup pipeline](../packs/ingestion/docs/deep-setup-pipeline.md).
+
 ### Relationship dossiers — `$deep-context`
 
-`$deep-context` is the explicit exception to metadata-only import: it reads
-Gmail and chat bodies to synthesize per-person dossiers, judge duplicates, and
-review attached LinkedIn identities. Small iMessage group bodies require an
-explicit current-run opt-in. See the
+`$deep-context` is the ad-hoc surface over the same dossiers: person lookups
+("who is <name/phone>?"), re-reviews, and the review UI. It reads Gmail and
+chat bodies (the explicit exception to metadata-only import); small iMessage
+group bodies require an explicit current-run opt-in. See the
 [deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md).
 
 ---

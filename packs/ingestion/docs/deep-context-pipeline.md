@@ -8,6 +8,12 @@ This guide explains the product and trust boundaries. The executable contract is
 the [`deep-context` skill](../skills/deep-context/SKILL.md); the primitives remain
 the authority for schemas and CLI behavior.
 
+The same primitives power [`$deep-setup`](deep-setup-pipeline.md), the
+orchestrated post-import processing flow that also covers the imports'
+research candidates, the network-worth triage, and the index rebuild.
+`$deep-context` remains the ad-hoc surface: dossier lookups, re-reviews, and
+the review UI over existing artifacts.
+
 ## At a glance
 
 - **Input:** `.powerpacks/network-import/merged/people.csv`, local msgvault Gmail,
@@ -131,6 +137,12 @@ table is `.powerpacks/network-import/overrides/review.csv`.
 - `approved=auto` is a high-confidence machine decision applied by fan-in.
 - `approved=yes` or `approved=no` is a sticky human decision.
 - Blank approval is pending.
+- `network_worth` (yes|maybe|no) is a sticky USER-owned mark that overrules the
+  synthesis LLM's own network-worth judgment; the machine never writes it. The
+  review UI renders Yes/Maybe/No buttons (with the LLM's decision + reason as
+  secondary text), moves effective-`no` rows to the Rejected tab, and offers
+  worth and source (gmail/imessage/whatsapp) filter chips. Effective `no`
+  excludes a candidate from paid deep research and synthetic minting.
 - A retarget is not materialized until it is approved and `apply-retargets` has
   hydrated the replacement profile.
 - Synthetic profiles at completeness `>= 0.6` are `approved=auto` and will merge

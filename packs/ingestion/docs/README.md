@@ -13,24 +13,24 @@ namespace stays unchanged so upgrades do not invalidate user data.
 
 | Workflow | Guide | Executable skill |
 | --- | --- | --- |
-| Gmail metadata import and identity lookup | [Gmail import pipeline](gmail-import-pipeline.md) | [`$import-gmail`](../skills/import-gmail/SKILL.md) |
-| iMessage and WhatsApp metadata import | [Message import pipeline](message-import-pipeline.md) | [`$import-messages`](../skills/import-messages/SKILL.md) |
-| Message-derived dossiers and identity self-heal | [Deep-context pipeline](deep-context-pipeline.md) | [`$deep-context`](../skills/deep-context/SKILL.md) |
+| Gmail contact sync (free, local) | [Gmail import pipeline](gmail-import-pipeline.md) | [`$import-gmail`](../skills/import-gmail/SKILL.md) |
+| iMessage and WhatsApp contact sync | [Message import pipeline](message-import-pipeline.md) | [`$import-messages`](../skills/import-messages/SKILL.md) |
+| Post-import processing: dossiers, worth triage, identity resolution, review, index | [Deep-setup pipeline](deep-setup-pipeline.md) | [`$deep-setup`](../skills/deep-setup/SKILL.md) |
+| Ad-hoc dossier lookups and identity self-heal | [Deep-context pipeline](deep-context-pipeline.md) | [`$deep-context`](../skills/deep-context/SKILL.md) |
 
 For LinkedIn ingestion and the shared cloud index build, see the
 [LinkedIn and Modal indexing pipeline](../../indexing/docs/linkedin-modal-pipeline.md).
 
 ## Shared pipeline seam
 
-`$setup`, `$import-gmail`, and `$import-messages` are currently end-to-end user
-workflows. Each source import nevertheless writes the same fixed contract at
-`.powerpacks/network-import/import/<source>/people.csv`. Shared fan-in through
-`index_contacts_pipeline.py fan-in` and the subsequent Modal or local indexing
-stage are separate primitives.
-
-That boundary is an implementation seam, not a second shipped workflow. A later
-PR can add selective import-then-index orchestration by composing chosen source
-imports, one shared fan-in, and one index build without changing source outputs.
+Each source import writes the same fixed contracts:
+`.powerpacks/network-import/import/<source>/people.csv` (resolved identities)
+and, for gmail/messages, `.../candidates.csv` (the research pool). Shared
+fan-in through `index_contacts_pipeline.py fan-in` merges the people files;
+`$deep-setup` consumes the candidate pools, mints approved identities back
+through the override files the merge auto-ingests, and owns the single Modal
+index rebuild. `$setup` (LinkedIn first run) is the one import that still
+builds an index so search works out of the box.
 
 ## Historical and specialist references
 
