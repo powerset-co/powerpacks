@@ -16,6 +16,7 @@ import os
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -42,6 +43,14 @@ INSTALL_COMMAND = "curl -fsSL https://msgvault.io/install.sh | bash"
 OAUTH_APP_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MSGVAULT_REAUTH_ERROR_MARKERS = (
+    "expired or revoked",
+    "cannot re-authorize",
+    "invalid_grant",
+    "missing token",
+    "no valid token",
+    "token is missing",
+)
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -58,7 +67,14 @@ def expand(path: str | Path) -> Path:
 
 def run_command(cmd: list[str], *, timeout: int = 90, env: dict[str, str] | None = None) -> dict[str, Any]:
     try:
-        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        completed = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
     except FileNotFoundError:
         return {"ok": False, "returncode": 127, "stdout": "", "stderr": f"{cmd[0]} not found"}
     except subprocess.TimeoutExpired as exc:
@@ -618,6 +634,139 @@ def normalize_email_list(values: list[str]) -> list[str]:
     return emails
 
 
+def msgvault_reauthorization_required(text: str) -> bool:
+    haystack = (text or "").lower()
+    return any(marker in haystack for marker in MSGVAULT_REAUTH_ERROR_MARKERS)
+
+
+def msgvault_account_authorize_command(home: Path, email: str, *, force: bool) -> str:
+    cmd = [
+        "uv",
+        "run",
+        "--project",
+        ".",
+        "python",
+        "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+        "add-account",
+        "--home",
+        str(home),
+        "--email",
+        email,
+    ]
+    if force:
+        cmd.append("--force-auth")
+    return shlex.join(cmd)
+
+
+def check_accounts_payload(home: Path, requested_emails: list[str]) -> dict[str, Any]:
+    requested = normalize_email_list(requested_emails)
+    current = status_payload(home)
+    setup_errors: list[str] = []
+    if not current.get("msgvault", {}).get("installed"):
+        setup_errors.append("msgvault is not installed")
+    if not current.get("config", {}).get("oauth_configured"):
+        setup_errors.append("msgvault OAuth is not configured")
+    if not current.get("database", {}).get("exists"):
+        setup_errors.append("msgvault database is missing")
+    if current.get("accounts_error"):
+        setup_errors.append(str(current["accounts_error"]))
+    if setup_errors:
+        error = "; ".join(setup_errors)
+        return {
+            "status": "error",
+            "home": str(home),
+            "requested_accounts": requested,
+            "healthy_accounts": [],
+            "missing_accounts": [],
+            "expired_accounts": [],
+            "accounts_to_authorize": [],
+            "error_accounts": requested,
+            "accounts": [
+                {
+                    "email": email,
+                    "status": "transient_error",
+                    "error_code": "gmail_auth_check_unavailable",
+                    "error": error,
+                }
+                for email in requested
+            ],
+            "browser_opened": False,
+            "mail_downloaded": False,
+            "network_called": False,
+        }
+    stored_accounts = {
+        str(account.get("email") or account.get("identifier") or "").strip().lower(): account
+        for account in (current.get("accounts") or [])
+        if isinstance(account, dict)
+    }
+    checks: list[dict[str, Any]] = []
+    network_called = False
+    for email in requested:
+        normalized = email.lower()
+        if normalized not in stored_accounts:
+            checks.append({
+                "email": email,
+                "status": "missing_token",
+                "error_code": "gmail_authorization_missing",
+                "authorize_command": msgvault_account_authorize_command(home, email, force=False),
+            })
+            continue
+        network_called = True
+        result = run_msgvault(
+            ["verify", email, "--skip-db-check", "--sample", "0", "--local"],
+            home,
+            timeout=60,
+        )
+        if result["ok"]:
+            checks.append({"email": email, "status": "healthy"})
+            continue
+        error = tail(result.get("stderr") or result.get("stdout") or "")
+        if msgvault_reauthorization_required(error):
+            checks.append({
+                "email": email,
+                "status": "reauthorization_required",
+                "error_code": "gmail_reauthorization_required",
+                "error": error,
+                "authorize_command": msgvault_account_authorize_command(home, email, force=True),
+            })
+            continue
+        checks.append({
+            "email": email,
+            "status": "transient_error",
+            "error_code": "gmail_auth_check_failed",
+            "error": error or f"msgvault verify exited with {result.get('returncode')}",
+        })
+    healthy_accounts = [item["email"] for item in checks if item["status"] == "healthy"]
+    missing_accounts = [item["email"] for item in checks if item["status"] == "missing_token"]
+    expired_accounts = [item["email"] for item in checks if item["status"] == "reauthorization_required"]
+    errors = [item["email"] for item in checks if item["status"] == "transient_error"]
+    accounts_to_authorize = [
+        item["email"]
+        for item in checks
+        if item["status"] in {"missing_token", "reauthorization_required"}
+    ]
+    if errors:
+        status = "error"
+    elif accounts_to_authorize:
+        status = "needs_user_action"
+    else:
+        status = "ok"
+    return {
+        "status": status,
+        "home": str(home),
+        "requested_accounts": requested,
+        "healthy_accounts": healthy_accounts,
+        "missing_accounts": missing_accounts,
+        "expired_accounts": expired_accounts,
+        "accounts_to_authorize": accounts_to_authorize,
+        "error_accounts": errors,
+        "accounts": checks,
+        "browser_opened": False,
+        "mail_downloaded": False,
+        "network_called": network_called,
+    }
+
+
 def validate_client_secret(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -1018,6 +1167,14 @@ def build_user_action(
 def cmd_status(args: argparse.Namespace) -> int:
     emit(status_payload(expand(args.home)))
     return 0
+
+
+def cmd_auth_check(args: argparse.Namespace) -> int:
+    payload = check_accounts_payload(expand(args.home), args.email)
+    emit(payload)
+    if payload["status"] == "needs_user_action":
+        return 20
+    return 1 if payload["status"] == "error" else 0
 
 
 def cmd_create_oauth_app(args: argparse.Namespace) -> int:
@@ -1541,6 +1698,11 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="Check local msgvault setup")
     add_common(status)
     status.set_defaults(func=cmd_status)
+
+    auth_check = sub.add_parser("auth-check", help="Check Gmail OAuth health without downloading mail")
+    add_common(auth_check)
+    auth_check.add_argument("--email", action="append", required=True, help="Gmail address to check (repeatable)")
+    auth_check.set_defaults(func=cmd_auth_check)
 
     setup = sub.add_parser("setup", help="Install/configure msgvault and optionally authorize an account")
     add_setup_args(setup)
