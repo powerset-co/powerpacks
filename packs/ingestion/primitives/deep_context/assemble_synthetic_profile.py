@@ -26,9 +26,15 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.apply_retargets import CARRY_COLUMNS
+from packs.ingestion.primitives.deep_context.candidates import (
+    candidate_carry,
+    candidate_person_id,
+    candidate_row,
+)
 from packs.ingestion.primitives.deep_context.common import now_iso
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import DR_OUT_DIR, QUEUE_CSV
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED
+from packs.ingestion.schemas.candidates_schema import candidate_key_for
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -155,7 +161,7 @@ def people_lookup(people_csv: Path) -> tuple[dict[str, dict[str, str]], dict[str
     return by_email, by_phone
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Build synthetic people-rows for researched people with no real LinkedIn (free, local — reads existing research artifacts).")
     ap.add_argument("--research-dir", default=str(DR_OUT_DIR))
     ap.add_argument("--queue-csv", default=str(QUEUE_CSV))
@@ -163,7 +169,7 @@ def main() -> None:
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     ap.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS,
                     help="Research completeness at/above this auto-approves the row (default %(default)s)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     started = time.monotonic()
     research_dir = Path(args.research_dir)
@@ -198,6 +204,13 @@ def main() -> None:
         digits = "".join(c for c in (contact.get("phone_e164") or "") if c.isdigit())[-10:]
         original = by_email.get(email) or (by_phone.get(digits) if digits else None)
         person_id = (original or {}).get("id", "")
+        if original is None:
+            # Not in people.csv -> the subject is an import candidate: carry its
+            # contact identity (emails/phones/counts/channels) onto the minted row.
+            crow = candidate_row(candidate_key_for(email, contact.get("phone_e164") or ""))
+            if crow:
+                original = candidate_carry(crow)
+                person_id = candidate_person_id(crow.get("candidate_key", ""))
         row = build_synthetic_row(profile, contact, original, person_id, args.auto_completeness)
         pub = row["public_identifier"].lower()
         if (existing.get(pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:

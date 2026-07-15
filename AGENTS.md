@@ -323,7 +323,7 @@ Routes:
   sync only (discover → match vs LinkedIn/Gmail → import matched people + a
   research-candidates pool → fan-in merge → suggest/process tail); no LLM,
   research, review, or index build in-skill — processing/identity
-  resolution/indexing is `$deep-setup` (landing in the companion PR); local
+  resolution/indexing is `$deep-setup`; local
   only, never uploads to Powerset →
   `packs/ingestion/skills/import-messages/SKILL.md`
 - `$import-whatsapp`, isolated WhatsApp metadata sync/export through wacli; no
@@ -337,9 +337,14 @@ Routes:
 - `$import-gmail`, Gmail, email, contact sync only: msgvault setup + sync +
   free directory-only import (matched people + a research-candidates pool) +
   fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index
-  build in-skill — processing/identity resolution/indexing is `$deep-setup`
-  (landing in the companion PR) →
+  build in-skill — processing/identity resolution/indexing is `$deep-setup` →
   `packs/ingestion/skills/import-gmail/SKILL.md`
+- `$deep-setup`, process my contacts, resolve my imported contacts, the
+  post-import processing layer (dossiers over people + the imports' research
+  candidates → duplicate merge → LinkedIn self-heal → ONE dossier-informed
+  Parallel reverse lookup → synthetic profiles → review → fan-in + Modal index
+  + validate); spend-gated throughout, hard-stop human review →
+  `packs/ingestion/skills/deep-setup/SKILL.md`
 - `$enrich-email-markers`, gmail LLM enrichment, mine email bodies for LinkedIn
   markers, preview the context/markers we'd send to an LLM →
   `packs/ingestion/skills/enrich-email-markers/SKILL.md`

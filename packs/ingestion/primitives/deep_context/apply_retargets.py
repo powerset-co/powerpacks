@@ -22,6 +22,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from packs.ingestion.primitives.deep_context.candidates import (
+    candidate_carry,
+    candidate_key_of,
+    candidate_row,
+)
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     LINKEDIN_OVERRIDES_CSV,
@@ -128,7 +133,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         enriched += 1
         cache_hits += bool(result["from_cache"])
         misses += not result["from_cache"]
-        original = by_pub.get(old_pub) or by_id.get((r.get("person_id") or "").strip()) or {}
+        pid = (r.get("person_id") or "").strip()
+        original = by_pub.get(old_pub) or by_id.get(pid) or {}
+        if not original:
+            # candidate:<key> parent -> contact identity lives in candidates.csv, not people.csv
+            crow = candidate_row(candidate_key_of(pid) or candidate_key_of(old_pub))
+            if crow:
+                original = candidate_carry(crow)
         rows.append(build_retarget_row(new_url, new_pub, result["raw"], original))
         details.append({"old": old_pub, "new": new_pub, "status": "enriched",
                         "from_cache": result["from_cache"]})

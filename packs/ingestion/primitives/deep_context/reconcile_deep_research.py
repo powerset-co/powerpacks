@@ -34,6 +34,14 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
+from packs.ingestion.primitives.deep_context.build_parents import parent_id_for
+from packs.ingestion.primitives.deep_context.candidates import (
+    candidate_carry,
+    candidate_key_of,
+    candidate_row,
+    is_candidate_id,
+    load_candidates,
+)
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     FACTS_DIR,
@@ -44,8 +52,13 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     now_iso,
     parse_list,
+    slugify,
 )
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import load_override_rows, upsert_retargets
+from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
+    USER_APPROVED,
+    load_override_rows,
+    upsert_retargets,
+)
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
 from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import PROCESSOR_PRICING_USD
@@ -134,6 +147,37 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
     return out
 
 
+def candidate_subset(facts_dir: Path,
+                     overrides: dict[str, dict[str, str]] | None = None) -> list[dict[str, Any]]:
+    """Dossier-bearing import candidates as research subjects (opt-in via
+    --include-candidates). Candidates have no resolved LinkedIn by definition;
+    eligibility means their facts file exists — the facts ARE the dossier context
+    the queue bio is built from. Entries mirror the verdict-row shape so
+    build_queue / propose_retargets consume them unchanged; the review.csv key for
+    a candidate is its person_id (candidate:<key>)."""
+    overrides = overrides or {}
+    decided = {pub for pub, r in overrides.items()
+               if (r.get("action") or "").strip().lower() in {"retarget", "exclude"}
+               or (r.get("approved") or "").strip().lower() in USER_APPROVED}
+    out: list[dict[str, Any]] = []
+    for person in load_candidates():
+        pid = person.person_id
+        if pid.lower() in decided or not (facts_dir / f"{pid}.jsonl").exists():
+            continue
+        out.append({
+            "parent_slug": slugify(person.full_name, parent_id_for([pid])),
+            "name": person.full_name,
+            "person_ids": [pid],
+            "candidate_key": pid,   # retarget proposals key review.csv on this
+            "linkedin": {},
+            "verdict": {"verdict": "no_linkedin_candidate", "confidence": 0.0,
+                        "reason": "unresolved import candidate — no LinkedIn attached"},
+            "match_emails": person.emails,
+            "match_phones": person.phones,
+        })
+    return out
+
+
 def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
     records: list[dict[str, Any]] = []
     for pid in child_pids:
@@ -166,13 +210,21 @@ def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
     for r in subset:
         pids = r.get("person_ids") or []
         row = next((people[p] for p in pids if p in people), {})
+        if not row:
+            crow = next((candidate_row(candidate_key_of(p)) for p in pids if is_candidate_id(p)), None)
+            if crow:
+                row = candidate_carry(crow)
         emails = [row.get("primary_email", "")] + parse_list(row.get("all_emails"))
         phones = [row.get("primary_phone", "")] + parse_list(row.get("all_phones"))
         email = next((e for e in emails if e and "@" in e), "")
         phone = next((p for p in phones if p), "")
         rejected = (r.get("linkedin") or {}).get("linkedin_url", "")
-        hint = (f"The previously attached LinkedIn {rejected} was judged WRONG "
-                f"({(r.get('verdict') or {}).get('reason', '')}). Find the correct person.")
+        if any(is_candidate_id(p) for p in pids):
+            hint = ("No LinkedIn is attached yet (unresolved import candidate). "
+                    "Find this person's correct LinkedIn if one exists.")
+        else:
+            hint = (f"The previously attached LinkedIn {rejected} was judged WRONG "
+                    f"({(r.get('verdict') or {}).get('reason', '')}). Find the correct person.")
         queue.append({
             "handle": r.get("parent_slug", ""),
             "display_name": r.get("name", ""),
@@ -254,6 +306,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     overrides = load_override_rows(Path(args.overrides_csv))
     subset = eligible_subset(verdicts, args.confirm_threshold, overrides,
                              include_plausibly_absent=getattr(args, "include_plausibly_absent", False))
+    candidates = (candidate_subset(Path(args.facts_dir), overrides)
+                  if getattr(args, "include_candidates", False) else [])
+    subset += candidates
     people = load_people_rows(Path(args.people_csv))
     cost_per = PROCESSOR_PRICING_USD.get(args.processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])
     est_usd = round(len(subset) * cost_per, 2)
@@ -261,6 +316,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     base = {
         "source": "reconcile_deep_research",
         "eligible": len(subset),
+        "eligible_candidates": len(candidates),
         "processor": args.processor,
         "cost_per_person_usd": cost_per,
         "estimated_usd": est_usd,
@@ -336,6 +392,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="Build the queue + estimate only; no Parallel.ai spend")
     p.add_argument("--include-plausibly-absent", action="store_true",
                    help="Also research people the judge flagged linkedin_plausibly_absent — the synthetic-profile candidates (synthetic-profiles-plan §5)")
+    p.add_argument("--include-candidates", action="store_true",
+                   help="Also research dossier-bearing import candidates (import/*/candidates.csv) — contacts with no resolved LinkedIn at all")
     return p
 
 
