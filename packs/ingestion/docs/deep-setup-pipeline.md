@@ -19,7 +19,7 @@ imports (contact sync only)                deep-setup (this guide)
         |                                    reconcile attached-LinkedIn self-heal (OpenAI, gated)
         v                                    reverse lookup ONCE (Parallel.ai, budget-gated)
   fan-in -> merged/people.csv                assemble synthetic profiles (free)
-  + "process your contacts now?" ask         review UI (hard stop: human decides)
+  + "enrich your contacts?" ask              review UI (hard stop: human decides)
                                              realize: fan-in -> Modal index -> validate
 ```
 
@@ -50,10 +50,19 @@ message context**. During synthesis the model outputs, per profiled contact,
 
 Resolution order: **user mark > LLM judgment > default `maybe`**. The user
 mark lives in a sticky, user-owned `network_worth` column in
-`overrides/review.csv` (the machine never writes it). Effective `no` excludes
-a candidate from the paid reverse lookup (`candidates_skipped_worth_no`) and
-from synthetic minting (`skipped_worth_no`) — marking No is free and stops
-spend for that contact.
+`overrides/review.csv` (the machine never writes it); the machine's judgment
+is mirrored into machine-owned `llm_worth`/`llm_worth_reason` columns by
+reconcile/re-review, with the spam screen folded in as just another way the
+LLM says `no`.
+
+**Effective `no` = Rejected = out of the network.** One concept, whoever said
+it: the row moves to the Rejected tab, a candidate is excluded from the paid
+reverse lookup (`candidates_skipped_worth_no`) and synthetic minting
+(`skipped_worth_no`), and an already-imported person is dropped from
+`merged/people.csv` at the next fan-in merge (`worth_dropped` in the merge
+manifest). A user **Yes** (or keep-ish approve) rescues anyone from a machine
+`no`; a user **No** drops regardless. Nothing is destructive — flipping the
+mark restores the person at the next merge.
 
 ## Review surface
 
@@ -61,9 +70,11 @@ spend for that contact.
 
 - Dossier-bearing **candidates appear pre-research** with a
   "candidate — no LinkedIn" badge.
-- **Yes / Maybe / No** buttons (+ ↺ reset-to-LLM) on candidate and synthetic
-  rows; the LLM's decision + reason shows as secondary text. Marking No moves
-  the row to the **Rejected** tab (same mechanism as the spam flag).
+- **Yes / Maybe / No** buttons (+ ↺ reset-to-LLM) on **every row type** —
+  candidates, synthetic rows, and plain verdict rows alike; the LLM's decision
+  + reason shows as secondary text (a spam-sourced `no` shows the spam
+  reason). Marking No moves the row to the **Rejected** tab; Yes/Keep rescues
+  it back out.
 - Filter chips: **worth** (yes/maybe/no) and **source** (gmail / imessage /
   whatsapp — shown only when more than one source is imported).
 
@@ -91,8 +102,10 @@ searchable.
 ## Does it run automatically after imports?
 
 No — deliberately. Each import skill's final step runs the source-status
-primitive, suggests any missing source, and **asks** "process your contacts
-now?". A yes routes into `$deep-setup` in the same session; a no leaves the
+primitive, suggests any missing source, and **asks** in product words grounded
+in what it found — e.g. "I see iMessage and WhatsApp are imported — do you
+want to enrich your contacts?" (the skill name never appears in the ask).
+A yes routes into `$deep-setup` in the same session; a no leaves the
 candidates staged (nothing is lost — the pools are durable). It can never run
 silently because every paid stage requires a fresh, explicit confirmation and
 the review step is a hard stop.

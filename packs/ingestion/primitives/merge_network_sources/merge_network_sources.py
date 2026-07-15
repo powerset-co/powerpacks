@@ -213,12 +213,14 @@ def has_rapidapi_profile(row: dict[str, Any]) -> bool:
 
 def keep_people_csv_row(row: dict[str, Any]) -> bool:
     # Synthetic rows (deep-researched people with NO real LinkedIn) have neither a
-    # LinkedIn key nor a rapidapi payload by design — keep them iff they carry an
-    # approved gate (auto = high research completeness, yes = user approved). Real
-    # rows keep the strict LinkedIn+rapidapi requirement unchanged.
+    # LinkedIn key nor a rapidapi payload by design. Their approved gate
+    # (auto = high research completeness, yes = user approved) is enforced at
+    # LOAD time in load_people_file — normalization strips the non-schema
+    # `approved` column, so a synthetic row reaching this gate either passed the
+    # load filter or was already admitted into a prior merge. Real rows keep the
+    # strict LinkedIn+rapidapi requirement unchanged.
     if (row.get("enrichment_provider") or "").strip().lower() == "synthetic":
-        return bool((row.get("public_identifier") or "").strip()) and \
-            (row.get("approved") or "").strip().lower() in APPLIED_APPROVALS
+        return bool((row.get("public_identifier") or "").strip())
     return bool(stable_linkedin_key(row)) and has_rapidapi_profile(row)
 
 
@@ -274,10 +276,14 @@ def load_overrides(path: Path | None) -> dict[str, dict[str, Any]]:
                 "phones": {_phone10(p) for p in (row.get("match_phones") or "").split("|") if _phone10(p)},
                 "confidence": row.get("confidence", ""),
                 "reason": row.get("reason", ""),
-                # machine-owned spam-screen columns (absent in older files -> blank)
+                # machine-owned columns (absent in older files -> blank): the spam screen
+                # plus the mirrored network-worth judgment ($deep-context reconcile).
                 "person_id": (row.get("person_id") or "").strip(),
                 "llm_reject": (row.get("llm_reject") or "").strip().lower(),
                 "llm_reject_confidence": row.get("llm_reject_confidence", ""),
+                "llm_worth": (row.get("llm_worth") or "").strip().lower(),
+                # user-owned worth mark (yes|maybe|no) — the unified 'effective no' input.
+                "network_worth": (row.get("network_worth") or "").strip().lower(),
             }
     return overrides
 
@@ -285,27 +291,91 @@ def load_overrides(path: Path | None) -> dict[str, dict[str, Any]]:
 # Decisions apply only when high-confidence (auto) or the user approved (yes).
 APPLIED_APPROVALS = {"auto", "yes"}
 
-# The LLM spam flag drops a person only at high confidence — and NEVER overrides a human:
-# any user-approved (yes) decision other than detach on that person keeps them indexed.
+# --- unified "effective no" (worth drop) ------------------------------------
+# ONE concept: a user no (network_worth=no mark, or an approved `exclude` action) or a
+# machine no (reconcile's mirrored `llm_worth=no`, or the spam flag at/above the
+# confidence bar) drops the person from the searchable network. A user rescue
+# (network_worth=yes, or a keep-ish approved=yes decision) protects from any MACHINE
+# no; the user's own no is unconditional. Nothing destructive: flip the mark back and
+# the person returns at the next merge.
+
+# The LLM spam flag drops a person only at high confidence — it is one way the machine
+# says network_worth=no (reconcile mirrors it into `llm_worth`).
 SPAM_DROP_CONFIDENCE = 0.85
+
+# Actions that are NOT keep-ish: an approved detach/exclude never rescues a person.
+_NON_KEEP_ACTIONS = {"detach", "exclude"}
+
+
+def _spam_flagged(ov: dict[str, Any]) -> bool:
+    """LLM spam flag at/above the drop bar."""
+    if ov.get("llm_reject") != "spam":
+        return False
+    try:
+        conf = float(ov.get("llm_reject_confidence") or 0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    return conf >= SPAM_DROP_CONFIDENCE
+
+
+def _user_no(ov: dict[str, Any]) -> bool:
+    """The user's own no: an explicit network_worth mark wins either way; with no mark,
+    an approved `exclude` action counts as the same user no."""
+    mark = ov.get("network_worth") or ""
+    if mark in ("yes", "maybe", "no"):
+        return mark == "no"
+    return ov.get("action") == "exclude" and ov.get("approved") in APPLIED_APPROVALS
+
+
+def _machine_no(ov: dict[str, Any]) -> bool:
+    return ov.get("llm_worth") == "no" or _spam_flagged(ov)
+
+
+def _user_rescued(ov: dict[str, Any]) -> bool:
+    return ov.get("network_worth") == "yes" or (
+        ov.get("approved") == "yes" and ov.get("action") not in _NON_KEEP_ACTIONS)
+
+
+def _row_effective_no(ov: dict[str, Any]) -> bool:
+    """Unified 'effective no' for ONE override row: the user said no (unconditional),
+    or the machine said no and no user rescue protects the row."""
+    if _user_no(ov):
+        return True
+    return _machine_no(ov) and not _user_rescued(ov)
+
+
+def worth_dropped_person_ids(overrides: dict[str, dict[str, Any]]) -> set[str]:
+    """person_ids to drop entirely at merge — the unified 'effective no': a user
+    network_worth=no or approved exclude (unconditional), or a machine no
+    (`llm_worth=no`, or the spam flag at/above the confidence bar) unless the user
+    rescued the person (network_worth=yes, or a keep-ish approved=yes decision)."""
+    user_no: set[str] = set()
+    flagged: set[str] = set()
+    rescued: set[str] = set()
+    for ov in overrides.values():
+        pid = ov.get("person_id") or ""
+        if not pid:
+            continue
+        if _user_no(ov):
+            user_no.add(pid)
+        if _machine_no(ov):
+            flagged.add(pid)
+        if _user_rescued(ov):
+            rescued.add(pid)
+    return user_no | (flagged - rescued)
 
 
 def spam_dropped_person_ids(overrides: dict[str, dict[str, Any]]) -> set[str]:
-    """person_ids to drop entirely at merge: LLM-flagged spam at/above the confidence bar,
-    unless the user made any keep-ish decision (approved=yes with action != detach)."""
+    """person_ids the legacy spam screen alone would drop — now a subset of the worth
+    drop, kept for the spam observability counter."""
     flagged: set[str] = set()
     protected: set[str] = set()
     for ov in overrides.values():
         pid = ov.get("person_id") or ""
         if not pid:
             continue
-        if ov.get("llm_reject") == "spam":
-            try:
-                conf = float(ov.get("llm_reject_confidence") or 0)
-            except ValueError:
-                conf = 0.0
-            if conf >= SPAM_DROP_CONFIDENCE:
-                flagged.add(pid)
+        if _spam_flagged(ov):
+            flagged.add(pid)
         if ov.get("approved") == "yes" and ov.get("action") != "detach":
             protected.add(pid)
     return flagged - protected
@@ -319,32 +389,49 @@ def _scope_matches(ov: dict[str, Any], row: dict[str, Any]) -> bool:
     return bool(ov["emails"] & _row_emails(row)) or bool(ov["phones"] & _row_phones(row))
 
 
-def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, Any]]) -> dict[str, int]:
-    """Re-apply reconcile's self-heal during the fan-in, but ONLY for approved decisions
-    (auto = high-confidence, or a user `yes`): `exclude` drops the person entirely (marks the
-    row `__excluded__` so the caller removes it regardless of LinkedIn — "I don't want this
-    person indexed"); `detach`/`retarget` clear the wrong LinkedIn (so the LinkedIn-only
-    people.csv drops that old row — for a retarget the correct enriched row arrives via
-    retarget-people.csv); `verify` annotates the surviving row. Idempotent."""
-    detached = verified = retargeted = excluded = spam_dropped = 0
+def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Re-apply reconcile's self-heal during the fan-in. The unified worth drop
+    ('effective no' — user network_worth=no / approved `exclude`, or a machine no via
+    `llm_worth`/confident spam flag with no user rescue) removes the person entirely,
+    regardless of the per-row decision state. Then, ONLY for approved decisions
+    (auto = high-confidence, or a user `yes`): `detach`/`retarget` clear the wrong
+    LinkedIn (so the LinkedIn-only people.csv drops that old row — for a retarget the
+    correct enriched row arrives via retarget-people.csv); `verify` annotates the
+    surviving row. Idempotent."""
+    detached = verified = retargeted = excluded = spam_dropped = worth_dropped = 0
+    dropped_pids: set[str] = set()
     if not overrides:
-        return {"detached": 0, "verified": 0, "retargeted": 0, "excluded": 0, "spam_dropped": 0}
+        return {"detached": 0, "verified": 0, "retargeted": 0, "excluded": 0,
+                "spam_dropped": 0, "worth_dropped": 0, "worth_dropped_person_ids": []}
+    worth_pids = worth_dropped_person_ids(overrides)
     spam_pids = spam_dropped_person_ids(overrides)
     for row in rows:
+        # A synthetic row's review.csv row is keyed by its ORIGINAL person id (the
+        # row's `id`), not its synth- public_identifier: a user no there blocks the merge.
+        if (row.get("enrichment_provider") or "").strip().lower() == "synthetic":
+            ov = overrides.get((row.get("id") or "").strip().lower())
+            if ov and _user_no(ov):
+                row["__excluded__"] = True
+                worth_dropped += 1
+                dropped_pids.add(ov.get("person_id") or (row.get("id") or "").strip().lower())
+                continue
         ov = overrides.get(row_public_identifier(row))
         if not ov or not _scope_matches(ov, row):
             continue
-        # LLM spam screen: person-level drop, independent of the per-row decision state.
-        if spam_pids and (ov.get("person_id") or "") in spam_pids:
+        # Unified worth drop: person-level when the override knows its person_id (one
+        # effective no drops every row of that person), else this row's own state.
+        pid = ov.get("person_id") or ""
+        if (pid in worth_pids) if pid else _row_effective_no(ov):
             row["__excluded__"] = True
-            spam_dropped += 1
+            worth_dropped += 1
+            # sibling counters: which kind of no did it (exclude action / spam screen)
+            excluded += ov.get("action") == "exclude" and ov.get("approved") in APPLIED_APPROVALS
+            spam_dropped += (pid in spam_pids) if pid else _spam_flagged(ov)
+            dropped_pids.add(pid or row_public_identifier(row))
             continue
         if ov["approved"] not in APPLIED_APPROVALS:
             continue
-        if ov["action"] == "exclude":
-            row["__excluded__"] = True
-            excluded += 1
-        elif ov["action"] in ("detach", "retarget"):
+        if ov["action"] in ("detach", "retarget"):
             row["linkedin_url"] = ""
             row["public_identifier"] = ""
             detached += ov["action"] == "detach"
@@ -355,7 +442,8 @@ def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, A
             row["linkedin_verified_reason"] = ov["reason"]
             verified += 1
     return {"detached": detached, "verified": verified, "retargeted": retargeted, "excluded": excluded,
-            "spam_dropped": spam_dropped}
+            "spam_dropped": spam_dropped, "worth_dropped": worth_dropped,
+            "worth_dropped_person_ids": sorted(dropped_pids)}
 
 
 def stable_source_key(row: dict[str, str]) -> str:
@@ -425,6 +513,14 @@ def load_people_file(path: Path) -> list[dict[str, str]]:
         if path.name == "contacts.csv" and label == "messages":
             normalized = message_row_to_people(row, path)
         else:
+            # The synthetic approved gate (auto/yes) must be decided HERE, on the
+            # raw row: `approved` is not a people-schema column, so
+            # normalize_people_row strips it and no later stage can see it.
+            if (
+                path.name == "synthetic-people.csv"
+                and (row.get("approved") or "").strip().lower() not in APPLIED_APPROVALS
+            ):
+                continue
             normalized = normalize_people_row(row)
             normalized["source_artifacts"] = normalized.get("source_artifacts") or str(path)
             normalized["source_channels"] = normalized.get("source_channels") or label
@@ -743,6 +839,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         "overrides_verified": override_stats["verified"],
         "overrides_retargeted": override_stats["retargeted"],
         "overrides_excluded": override_stats["excluded"],
+        "overrides_spam_dropped": override_stats["spam_dropped"],
+        "overrides_worth_dropped": override_stats["worth_dropped"],
+        "worth_dropped_person_ids": override_stats["worth_dropped_person_ids"],
         "merged_rows": len(merged_rows),
         "rapidapi_payload_rows": len(merged_rows),
         "linkedin_groups": len(groups),

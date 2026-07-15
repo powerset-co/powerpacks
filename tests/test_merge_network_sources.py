@@ -613,5 +613,147 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
 
+class WorthDropAtMergeTests(unittest.TestCase):
+    """The unified 'effective no' drop rule: user no (mark or approved exclude) is
+    unconditional; a machine no (llm_worth / confident spam) drops unless the user
+    rescued (network_worth=yes, or a keep-ish approved=yes decision)."""
+
+    invoke = MergeNetworkSourcesTests.invoke
+    write_people_row = MergeNetworkSourcesTests.write_people_row
+
+    def _ov(self, **kw) -> dict:
+        base = {"action": "verify", "approved": "", "emails": set(), "phones": set(),
+                "confidence": "", "reason": "", "person_id": "pid-1",
+                "llm_reject": "", "llm_reject_confidence": "", "llm_worth": "", "network_worth": ""}
+        base.update(kw)
+        return {"row-key": base}
+
+    def test_worth_drop_matrix(self):
+        wd = merge_network_sources.worth_dropped_person_ids
+        self.assertEqual(wd(self._ov(network_worth="no")), {"pid-1"})                       # user no drops
+        self.assertEqual(wd(self._ov(network_worth="no", approved="yes")), {"pid-1"})       # …even keep-ish
+        self.assertEqual(wd(self._ov(llm_worth="no")), {"pid-1"})                           # llm no drops
+        self.assertEqual(wd(self._ov(llm_worth="no", network_worth="yes")), set())          # user yes rescues
+        self.assertEqual(wd(self._ov(llm_worth="no", approved="yes")), set())               # keep-ish rescues
+        self.assertEqual(wd(self._ov(llm_worth="no", approved="yes", action="detach")), {"pid-1"})
+        # the spam screen folds into the same path
+        self.assertEqual(wd(self._ov(llm_reject="spam", llm_reject_confidence="0.9")), {"pid-1"})
+        self.assertEqual(wd(self._ov(llm_reject="spam", llm_reject_confidence="0.9",
+                                     network_worth="yes")), set())                          # yes rescues spam
+        self.assertEqual(wd(self._ov(llm_reject="spam", llm_reject_confidence="0.5")), set())
+        # an approved exclude is the same user no
+        self.assertEqual(wd(self._ov(action="exclude", approved="yes")), {"pid-1"})
+        self.assertEqual(wd(self._ov(action="exclude", approved="yes", llm_worth="yes")), {"pid-1"})
+        self.assertEqual(wd(self._ov(action="exclude", approved="yes", network_worth="yes")), set())
+        self.assertEqual(wd(self._ov(action="exclude", approved="")), set())                # pending: no drop
+
+    def test_row_level_effective_no_without_person_id(self):
+        # A review row written by a worth click alone has no person_id; the drop still
+        # applies row-level through the matched public identifier.
+        rows = [{"public_identifier": "vendorguy", "linkedin_url": "https://linkedin.com/in/vendorguy"}]
+        ov = self._ov(llm_worth="no", person_id="")
+        ov["vendorguy"] = ov.pop("row-key")
+        counts = merge_network_sources.apply_overrides(rows, ov)
+        self.assertTrue(rows[0].get("__excluded__"))
+        self.assertEqual(counts["worth_dropped"], 1)
+        self.assertEqual(counts["worth_dropped_person_ids"], ["vendorguy"])
+
+    def test_synthetic_user_no_blocks_merge_by_row_id(self):
+        # A synthetic row's review.csv row is keyed by its ORIGINAL person id (row `id`).
+        def synth_row() -> dict:
+            return {"id": "candidate:email:cass@x.com", "public_identifier": "synth-email-abc",
+                    "enrichment_provider": "synthetic", "approved": "auto", "full_name": "Cass Doe"}
+
+        ov = self._ov(action="", network_worth="no", person_id="")
+        ov["candidate:email:cass@x.com"] = ov.pop("row-key")
+        rows = [synth_row()]
+        counts = merge_network_sources.apply_overrides(rows, ov)
+        self.assertTrue(rows[0].get("__excluded__"))
+        self.assertEqual(counts["worth_dropped"], 1)
+        # a user yes leaves the synthetic admission gate alone (rescued)
+        ov["candidate:email:cass@x.com"]["network_worth"] = "yes"
+        rows = [synth_row()]
+        merge_network_sources.apply_overrides(rows, ov)
+        self.assertFalse(rows[0].get("__excluded__"))
+        self.assertTrue(merge_network_sources.keep_people_csv_row(rows[0]))  # admission unchanged
+        # a MACHINE no never blocks a synthetic row by id — only the user's no does
+        ov["candidate:email:cass@x.com"].update({"network_worth": "", "llm_worth": "no"})
+        rows = [synth_row()]
+        merge_network_sources.apply_overrides(rows, ov)
+        self.assertFalse(rows[0].get("__excluded__"))
+
+    def test_user_no_drops_at_merge_and_manifest_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                keep = Path(".powerpacks/network-import/gmail/run-1/keep.csv")
+                drop = Path(".powerpacks/network-import/gmail/run-1/drop.csv")
+                self.write_people_row(keep, {"id": "id-keep", "public_identifier": "patlee",
+                    "linkedin_url": "https://www.linkedin.com/in/patlee", "full_name": "Pat Lee",
+                    "source_channels": "gmail_msgvault"})
+                self.write_people_row(drop, {"id": "id-drop", "public_identifier": "vendorguy",
+                    "linkedin_url": "https://www.linkedin.com/in/vendorguy", "full_name": "Vendor Guy",
+                    "source_channels": "gmail_msgvault"})
+                overrides = Path(".powerpacks/network-import/overrides/review.csv")
+                overrides.parent.mkdir(parents=True, exist_ok=True)
+                fields = ["public_identifier", "action", "approved", "person_id",
+                          "llm_worth", "network_worth"]
+
+                def write_review(mark: str) -> None:
+                    with overrides.open("w", newline="", encoding="utf-8") as fh:
+                        w = csv.DictWriter(fh, fieldnames=fields)
+                        w.writeheader()
+                        w.writerow({"public_identifier": "vendorguy", "action": "verify",
+                                    "approved": "", "person_id": "pid-vendor",
+                                    "network_worth": mark})
+
+                write_review("no")
+                out_dir = Path(tmp) / "merged"
+                argv = ["run", "--output-dir", str(out_dir), "--input", str(keep),
+                        "--input", str(drop), "--overrides", str(overrides), "--retarget-people", ""]
+                code, payload = self.invoke(argv)
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["overrides_worth_dropped"], 1)
+                self.assertEqual(payload["worth_dropped_person_ids"], ["pid-vendor"])
+                with (out_dir / "people.csv").open() as fh:
+                    names = [r["full_name"] for r in csv.DictReader(fh)]
+                self.assertNotIn("Vendor Guy", names)     # user no -> dropped from the network
+                self.assertIn("Pat Lee", names)
+                # flipping the mark back brings the person back — nothing destructive
+                write_review("")
+                _, payload = self.invoke(argv)
+                self.assertEqual(payload["overrides_worth_dropped"], 0)
+                with (out_dir / "people.csv").open() as fh:
+                    names = [r["full_name"] for r in csv.DictReader(fh)]
+                self.assertIn("Vendor Guy", names)
+            finally:
+                os.chdir(old_cwd)
+
+    def test_exclude_counts_as_worth_drop_in_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                drop = Path(".powerpacks/network-import/gmail/run-1/drop.csv")
+                self.write_people_row(drop, {"id": "id-drop", "public_identifier": "samspam",
+                    "linkedin_url": "https://www.linkedin.com/in/samspam", "full_name": "Sam Spam",
+                    "source_channels": "gmail_msgvault"})
+                overrides = Path(tmp) / "ov.csv"
+                with overrides.open("w", newline="", encoding="utf-8") as fh:
+                    w = csv.DictWriter(fh, fieldnames=["public_identifier", "action", "approved"])
+                    w.writeheader()
+                    w.writerow({"public_identifier": "samspam", "action": "exclude", "approved": "yes"})
+                out_dir = Path(tmp) / "merged"
+                _, payload = self.invoke(["run", "--output-dir", str(out_dir), "--input", str(drop),
+                    "--overrides", str(overrides), "--retarget-people", ""])
+                self.assertEqual(payload["overrides_excluded"], 1)        # sibling counter kept
+                self.assertEqual(payload["overrides_worth_dropped"], 1)   # …inside the unified drop
+                with (out_dir / "people.csv").open() as fh:
+                    self.assertEqual(list(csv.DictReader(fh)), [])
+            finally:
+                os.chdir(old_cwd)
+
+
 if __name__ == "__main__":
     unittest.main()

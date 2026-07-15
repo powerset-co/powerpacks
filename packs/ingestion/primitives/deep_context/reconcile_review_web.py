@@ -19,10 +19,14 @@ serves a parent-grouped table:
   * quick filters (needs-review / verified / detached / conflicts / fixed / my
     decisions), search, and a risk sort that floats the lowest-confidence parents up,
   * dossier-bearing import candidates (no LinkedIn at all yet) surface as review rows
-    BEFORE any paid research, each with a Yes/Maybe/No "worth adding?" mark that writes
-    the user-owned `network_worth` column in review.csv (effective-`no` rows group with
-    Rejected, like spam-flagged people), plus source (gmail/imessage/whatsapp) and
-    worth filter chips.
+    BEFORE any paid research, plus source (gmail/imessage/whatsapp) and worth filter
+    chips,
+  * EVERY row (verdict, candidate, synthetic) carries a Yes/Maybe/No "worth adding?"
+    mark that writes the user-owned `network_worth` column in review.csv. The Rejected
+    tab is the ONE unified effective-no grouping — a user no (worth mark or approved
+    Exclude), or a machine no (reconcile's `llm_worth`, incl. the spam screen) with no
+    user rescue (worth-Yes or a keep-ish Keep) — and mirrors what the fan-in merge
+    drops from the searchable network.
 
 It only reads the deep-context artifacts and writes `review.csv` (the same durable
 table the fan-in merge re-applies). A `Fix…` decision is enriched + re-attached later
@@ -345,26 +349,34 @@ def load_candidate_parents(facts_dir: Path, overrides: dict[str, dict[str, str]]
 
 def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
                    facts_dir: Path) -> None:
-    """Attach the effective network-worth (user review.csv mark > synthesis LLM >
-    default 'maybe') to candidate + synthetic rows — the rows a Yes/Maybe/No mark
-    applies to. The mark's review.csv row key is the row's person_id."""
+    """Attach the effective network-worth (user review.csv mark / approved exclude >
+    synthesis LLM > review.csv llm_worth > default 'maybe') to EVERY row — verdict,
+    candidate, and synthetic alike — plus the machine's own view (for the secondary
+    text and the unified Rejected grouping). The mark's review.csv key is the primary
+    candidate's LinkedIn pub for verdict rows, else the row's person_id."""
     for p in parents:
         cands = p["candidates"]
-        if len(cands) != 1 or not (cands[0].get("synthetic") or cands[0].get("import_candidate")):
+        if not cands:
             continue
-        pid = (p["person_ids"] or [""])[0]
-        if not pid:
+        primary = min(cands, key=_cand_rank) if len(cands) > 1 else cands[0]
+        key = ""
+        if not (primary.get("synthetic") or primary.get("import_candidate")):
+            key = (primary.get("pub") or "").strip()
+        key = key or (p["person_ids"] or [""])[0]
+        if not key:
             continue
-        worth = effective_network_worth(pid, overrides, facts_dir)
-        p["worth"] = worth
-        cands[0]["worth"] = worth
-        cands[0]["worth_key"] = pid
+        state = effective_no_for_key(key, overrides, facts_dir)
+        p["worth"], p["machine_worth"] = state["worth"], state["machine"]
+        primary["worth"], primary["machine_worth"] = state["worth"], state["machine"]
+        primary["worth_key"] = key
 
 
 def apply_worth_decision(review_path: Path, pub: str, worth: str) -> dict[str, str]:
     """Upsert the USER-owned `network_worth` mark for one review.csv row (keyed by the
-    row's key — a candidate/synthetic row's person_id). '' clears the mark (back to the
-    LLM's judgment). Never touches action/approved — worth is not a link decision."""
+    row's key — a verdict row's pub, a candidate/synthetic row's person_id). '' clears
+    the mark (back to the LLM's judgment). Never touches action/approved — with ONE
+    exception: a worth-Yes on an excluded row clears the exclude (an approved exclude
+    IS a user no, so the rescue must clear both stores)."""
     pub = (pub or "").strip().lower()
     worth = (worth or "").strip().lower()
     if not pub:
@@ -375,11 +387,73 @@ def apply_worth_decision(review_path: Path, pub: str, worth: str) -> dict[str, s
     row = rows.get(pub) or {k: "" for k in OVERRIDE_COLUMNS}
     row["public_identifier"] = pub
     row["network_worth"] = worth
+    if worth == "yes" and (row.get("action") or "").strip().lower() == "exclude":
+        row["action"], row["approved"] = "", ""
     row["source"] = row.get("source") or "deep-context-review"
     row["updated_at"] = now_iso()
     rows[pub] = row
     _write_override_rows(review_path, rows)
     return {"network_worth": worth}
+
+
+def effective_no_for_key(key: str, override_rows: dict[str, dict[str, str]],
+                         facts_dir: Path, *, keepish: bool | None = None) -> dict[str, Any]:
+    """Single-row mirror of is_effective_no (the unified Rejected / merge-drop rule)
+    for one review.csv key: {'worth', 'machine', 'rejected'}. `keepish` overrides the
+    rescue signal when it lives outside review.csv (the synthetic approved gate)."""
+    key_l = (key or "").strip().lower()
+    worth = effective_network_worth(key, override_rows, facts_dir)
+    row = override_rows.get(key_l) or {}
+    machine = worth
+    if worth["source"] == "user":  # strip the user's signals to see the machine's own view
+        machine = effective_network_worth(key, {key_l: {**row, "network_worth": "", "action": ""}},
+                                          facts_dir)
+    user_mark = worth["decision"] if worth["source"] == "user" else ""
+    if keepish is None:
+        keepish = (row.get("approved") or "").strip().lower() == "yes" and \
+            (row.get("action") or "").strip().lower() not in ("detach", "exclude")
+    machine_no = machine["decision"] == "no" or (row.get("llm_reject") or "").strip().lower() == "spam"
+    rejected = user_mark == "no" or (user_mark != "yes" and machine_no and not keepish)
+    return {"worth": worth, "machine": machine, "rejected": rejected}
+
+
+# Worth mark -> synthetic approved gate (so the mint gate agrees with the mark):
+# No behaves like Detach, Yes like Keep, ↺ restores pending. 'maybe' is not a gate
+# decision and leaves the gate alone.
+_WORTH_TO_SYNTHETIC = {"no": "detach", "yes": "keep", "": "reset"}
+
+
+def sync_synthetic_gate(path: Path, worth_key: str, worth: str) -> dict[str, str] | None:
+    """Mirror a worth mark onto the synthetic-people.csv approved gate when the key
+    belongs to a synthetic row. Returns the gate's resulting decision state
+    ({'action','approved'} — flipped for no/yes/↺, current for 'maybe') so the client
+    can repaint the row's status chip in place; None when the key is not synthetic."""
+    key = (worth_key or "").strip().lower()
+    if not key or not path.exists():
+        return None
+    decision = _WORTH_TO_SYNTHETIC.get((worth or "").strip().lower())
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            pub = (row.get("public_identifier") or "").strip().lower()
+            if pub.startswith("synth-") and ((row.get("id") or "").strip().lower() or pub) == key:
+                if decision is not None:
+                    result = apply_synthetic_decision(path, pub, decision)
+                    return {"action": result["action"], "approved": result["approved"]}
+                return {"action": "verify", "approved": (row.get("approved") or "").strip().lower()}
+    return None
+
+
+def synthetic_worth_key(path: Path, pub: str) -> str:
+    """A synthetic row's worth key — its ORIGINAL person id (the csv row's `id`),
+    matching load_synthetic_parents and the merge's id-keyed user-no lookup."""
+    pub = (pub or "").strip().lower()
+    if not pub or not path.exists():
+        return ""
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if (row.get("public_identifier") or "").strip().lower() == pub:
+                return (row.get("id") or "").strip() or pub
+    return ""
 
 
 def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
@@ -439,6 +513,33 @@ def is_worth_no(parent: dict[str, Any]) -> bool:
     return (parent.get("worth") or {}).get("decision") == "no"
 
 
+def _keepish(parent: dict[str, Any]) -> bool:
+    """A keep-ish user decision on any candidate (approved=yes and a keeping action) —
+    the same rescue the fan-in merge honors against a machine no."""
+    return any((c.get("approved") or "").strip().lower() == "yes"
+               and (c.get("action") or "").strip().lower() not in ("detach", "exclude")
+               for c in parent["candidates"])
+
+
+def is_effective_no(parent: dict[str, Any]) -> bool:
+    """The unified 'effective no' (== the Rejected tab == dropped at the next fan-in
+    merge): the user said no (worth mark or approved Exclude — both surface as a
+    user-sourced worth of no), or the machine said no (worth judgment or spam flag)
+    with no user rescue (worth-Yes or a keep-ish decision)."""
+    worth = parent.get("worth") or {}
+    user_mark = (worth.get("decision") or "") if worth.get("source") == "user" else ""
+    if user_mark == "no":
+        return True
+    if user_mark == "yes":
+        return False
+    # a synthetic row's Detach/Exclude lives in its approved gate, not review.csv
+    if any(c.get("synthetic") and (c.get("approved") or "").strip().lower() == "no"
+           for c in parent["candidates"]):
+        return True
+    machine_no = (parent.get("machine_worth") or {}).get("decision") == "no" or is_llm_rejected(parent)
+    return machine_no and not _keepish(parent)
+
+
 def parent_in_tab(parent: dict[str, Any], tab: str) -> bool:
     if tab in ("", "all"):
         return True
@@ -447,10 +548,10 @@ def parent_in_tab(parent: dict[str, Any], tab: str) -> bool:
     if tab == "conflict":
         return any(c.get("conflict") for c in parent["candidates"]) or len(parent["candidates"]) > 1
     if tab == "rejected":
-        return is_llm_rejected(parent) or is_worth_no(parent)
+        return is_effective_no(parent)
     if tab == "review":
-        # spam-flagged and not-worth-adding people live on the Rejected tab, not the review pile
-        return parent_status(parent) == "review" and not is_llm_rejected(parent) and not is_worth_no(parent)
+        # effective-no people (spam, worth-no, excluded) live on the Rejected tab
+        return parent_status(parent) == "review" and not is_effective_no(parent)
     return parent_status(parent) == tab
 
 
@@ -481,12 +582,32 @@ def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
             s["conflict"] += 1
         if is_decided(p):
             s["decided"] += 1
-        if is_llm_rejected(p) or is_worth_no(p):
+        if is_effective_no(p):
             s["rejected"] += 1
-    # user-facing: a retarget ("fixed") reads as verified; spam-flagged/worth-no leave the review pile
+    # user-facing: a retarget ("fixed") reads as verified; effective-no rows leave the review pile
     s["verified"] += s["fixed"]
     s["review"] = sum(1 for p in parents if parent_in_tab(p, "review"))
     return s
+
+
+def extend_and_annotate(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
+                        synthetic_path: Path, facts_dir: Path) -> list[dict[str, Any]]:
+    """Add the synthetic + pre-research candidate rows to the verdict parents and
+    annotate everyone's worth — the full row set page_html/summarize operate on."""
+    parents.extend(load_synthetic_parents(synthetic_path))
+    shown = {pid.lower() for p in parents for pid in p["person_ids"]}
+    parents.extend(load_candidate_parents(facts_dir, overrides, shown))
+    annotate_worth(parents, overrides, facts_dir)
+    return parents
+
+
+def live_counts(verdicts_path: Path, review_path: Path, synthetic_path: Path,
+                facts_dir: Path) -> dict[str, int]:
+    """Fresh GLOBAL tab counts after a mutation. Every POST returns these so the client
+    repaints the header stats and tab pills authoritatively — recomputing counts from
+    the DOM would drift on filtered views (only the visible subset is in the DOM)."""
+    parents, overrides = build_parents(verdicts_path, review_path)
+    return summarize(extend_and_annotate(parents, overrides, synthetic_path, facts_dir))
 
 
 # --- decision writer (the only mutation: upsert one row in review.csv) ------
@@ -732,9 +853,10 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
 
 
 def render_worth_row(cand: dict[str, Any]) -> str:
-    """Yes/Maybe/No network-worth marks for candidate + synthetic rows. Highlights the
-    EFFECTIVE value; when it came from the synthesis LLM, its reason shows alongside.
-    ↺ clears the user's mark (back to the LLM's judgment)."""
+    """Yes/Maybe/No network-worth marks — on EVERY row type (verdict, candidate,
+    synthetic). Highlights the EFFECTIVE value; the machine's own decision + reason
+    (the synthesis judgment, or the spam screen's reason) shows alongside. ↺ clears
+    the user's mark (back to the machine's judgment)."""
     worth = cand.get("worth")
     if not worth or not cand.get("worth_key"):
         return ""
@@ -742,8 +864,9 @@ def render_worth_row(cand: dict[str, Any]) -> str:
     buttons = "".join(
         f"<button class='btn worth worth-{v}{' on' if v == dec else ''}' data-worth='{v}'>{v.capitalize()}</button>"
         for v in NETWORK_WORTH_VALUES)
-    hint = (f"<span class='worth-llm'>LLM: {esc(dec)} — {esc(worth.get('reason') or '')}</span>"
-            if worth.get("source") == "llm" else "")
+    machine = cand.get("machine_worth") or {}
+    hint = (f"<span class='worth-llm'>LLM: {esc(machine.get('decision'))} — {esc(machine.get('reason') or '')}</span>"
+            if machine.get("source") == "llm" else "")
     return (f"<div class='actions worthrow' data-worthkey='{esc(cand['worth_key'])}'>"
             f"<span class='worth-label'>Worth adding?</span>{buttons}"
             f"<button class='btn reset worth-clear' data-worth='' title='clear your mark — back to the LLM call'>↺</button>"
@@ -838,9 +961,7 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
     if n_people > 1:
         doss_label += f" ({n_people} clusters)"
     parent_cls = "parent multi" if multi else "parent"
-    if is_llm_rejected(parent):
-        parent_cls += " llmrejected"
-    if is_worth_no(parent):
+    if is_effective_no(parent):
         parent_cls += " worthno"
     summary_pic = next((c.get("profile_pic_url") for c in cands_list if c.get("profile_pic_url")), "")
     summary_avatar = (f"<img class='avatar avatar-sm' src='{esc(summary_pic)}' alt='' loading='lazy' "
@@ -1157,9 +1278,9 @@ function parentStatusFromCands(parent){
 function updateCounts(){
   const c={review:0,verified:0,detached:0,fixed:0,excluded:0,decided:0};
   document.querySelectorAll('.parent').forEach(p=>{c[parentStatusFromCands(p)]++;if(p.classList.contains('decided'))c.decided++;});
-  // mirror the server's user-facing folds: retargets read as verified; spam-flagged / worth-no aren't "needs review"
+  // mirror the server's user-facing folds: retargets read as verified; effective-no rows aren't "needs review"
   c.verified+=c.fixed;
-  document.querySelectorAll('.parent.llmrejected,.parent.worthno').forEach(p=>{if(parentStatusFromCands(p)==='review')c.review--;});
+  document.querySelectorAll('.parent.worthno').forEach(p=>{if(parentStatusFromCands(p)==='review')c.review--;});
   ['review','verified','detached','excluded','decided'].forEach(k=>{
     const el=document.querySelector('.stat strong[data-count="'+k+'"]');if(el)el.textContent=c[k];});
 }
@@ -1222,6 +1343,11 @@ async function decide(cand,act){
       }
     }
     refreshParent(parent);
+    // unified Rejected state: a Keep/Fix (approved=yes) rescues a machine-no row
+    if(typeof j.rejected!=='undefined'){
+      parent.classList.toggle('worthno',j.rejected);
+      if(!j.rejected&&activeTab()==='rejected'&&(act==='keep'||act==='fix'))evictParent(parent);
+    }
     const base={keep:'Kept',detach:'Detached',fix:'Re-targeted',reset:'Reset to model'}[act]||'Saved';
     showToast(auto?base+' — detached the other '+auto+' LinkedIn'+(auto===1?'':'s')+' for you':base);
   }catch(e){showToast('Save failed: '+e.message)}
@@ -1238,10 +1364,12 @@ document.querySelectorAll('.worthrow .btn').forEach(b=>b.addEventListener('click
     if(!r.ok)throw new Error(await r.text());
     const j=await r.json();
     row.querySelectorAll('.btn.worth').forEach(x=>x.classList.toggle('on',x.dataset.worth===j.effective));
-    parent.classList.toggle('worthno',j.effective==='no');
+    parent.classList.toggle('worthno',j.rejected);
     updateCounts();
-    // "no" means "not worth adding" — the row leaves the review pile for the Rejected tab
-    if(j.effective==='no'&&activeTab()==='review')evictParent(parent);
+    // unified Rejected membership live-updates BOTH ways: an effective-no leaves the
+    // review pile for Rejected; a rescue (Yes / cleared machine call) leaves Rejected.
+    if(j.rejected&&activeTab()==='review')evictParent(parent);
+    else if(!j.rejected&&activeTab()==='rejected')evictParent(parent);
     showToast(b.dataset.worth?'Marked '+j.effective:'Cleared — '+j.source+' says '+j.effective);
   }catch(err){showToast('Save failed: '+err.message)}
 }));
@@ -1321,17 +1449,20 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             pub = (form.get("pub") or [""])[0]
             if parsed.path == "/worth":
                 # Yes/Maybe/No mark (or '' to clear) — user-owned network_worth column.
+                worth_val = (form.get("worth") or [""])[0]
                 try:
-                    result = apply_worth_decision(review_path, pub, (form.get("worth") or [""])[0])
+                    result = apply_worth_decision(review_path, pub, worth_val)
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode(), "text/plain", status=400)
                     return
-                effective = effective_network_worth(pub.strip().lower(),
-                                                    load_override_rows(review_path), facts_dir)
+                # a synthetic row's mint gate must agree: No = Detach, Yes = Keep, ↺ = pending
+                sync_synthetic_gate(synthetic_path, pub, worth_val)
+                state = effective_no_for_key(pub, load_override_rows(review_path), facts_dir)
                 self.send_bytes(json.dumps({"ok": True, "pub": pub, **result,
-                                            "effective": effective["decision"],
-                                            "source": effective["source"],
-                                            "reason": effective["reason"]}).encode(),
+                                            "effective": state["worth"]["decision"],
+                                            "source": state["worth"]["source"],
+                                            "reason": state["worth"]["reason"],
+                                            "rejected": state["rejected"]}).encode(),
                                 "application/json")
                 return
             decision = (form.get("decision") or [""])[0]
@@ -1343,13 +1474,21 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 if pub.strip().lower().startswith("synth-"):
                     # synthetic rows live in synthetic-people.csv, gated by `approved` only
                     result = apply_synthetic_decision(synthetic_path, pub, decision)
+                    worth_key = synthetic_worth_key(synthetic_path, pub)
+                    keepish = result["approved"] == "yes"
                 else:
                     result = apply_decision(review_path, verdicts_path, pub, decision, new_url,
                                             confirm_threshold, detach_threshold)
+                    worth_key, keepish = pub, None
             except ValueError as exc:
                 self.send_bytes(str(exc).encode(), "text/plain", status=400)
                 return
-            self.send_bytes(json.dumps({"ok": True, "pub": pub, **result}).encode(), "application/json")
+            # the unified Rejected state after this decision (a Keep rescues a machine no)
+            state = (effective_no_for_key(worth_key, load_override_rows(review_path), facts_dir,
+                                          keepish=keepish)
+                     if worth_key else {"rejected": False})
+            self.send_bytes(json.dumps({"ok": True, "pub": pub, **result,
+                                        "rejected": state["rejected"]}).encode(), "application/json")
 
         def log_message(self, fmt: str, *args: Any) -> None:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)

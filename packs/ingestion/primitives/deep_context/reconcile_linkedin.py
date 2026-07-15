@@ -57,6 +57,7 @@ from packs.indexing.lib.openai_responses import (
     usage_tokens,
 )
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
+from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
@@ -657,9 +658,16 @@ OVERRIDE_COLUMNS = ["public_identifier", "action", "approved", "new_linkedin_url
                     "new_public_identifier", "linkedin_url", "match_emails", "match_phones",
                     "confidence", "reason", "person_id", "source", "updated_at",
                     # Machine-owned spam screen (backwards compatible: older files simply lack
-                    # them). The LLM may ALWAYS refresh these three — and ONLY these three — on
-                    # any row, including user-decided ones; action/approved stay user-owned.
+                    # them). The LLM may ALWAYS refresh the machine-owned llm_* columns — and
+                    # ONLY those — on any row, including user-decided ones; action/approved
+                    # stay user-owned.
                     "llm_reject", "llm_reject_confidence", "llm_reject_reason",
+                    # Machine-owned network-worth judgment (like the llm_reject trio: ALWAYS
+                    # refreshed, never a decision). A confident spam screen is folded in as one
+                    # way the LLM says `no`; otherwise it mirrors the synthesis LLM's facts
+                    # judgment so the fan-in merge and the review UI agree even when facts
+                    # aren't on disk.
+                    "llm_worth", "llm_worth_reason",
                     # USER-owned network-worth mark (yes|maybe|no; blank = defer to the
                     # synthesis LLM's network_worth in facts). Sticky like approved —
                     # the machine never writes it.
@@ -703,7 +711,24 @@ def _llm_reject_fields(v: dict[str, Any]) -> dict[str, str]:
     return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": ""}
 
 
-def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+# Spam at/above this bar is the LLM saying network_worth=no (mirrors the fan-in merge's
+# SPAM_DROP_CONFIDENCE); below it the spam flag stays informational only.
+SPAM_WORTH_CONFIDENCE = 0.85
+
+
+def _llm_worth_fields(v: dict[str, Any], person_ids: list[str], facts_dir: Path) -> dict[str, str]:
+    """The machine-owned network-worth columns — refreshed everywhere _llm_reject_fields
+    is (they never carry a decision either). A confident spam screen is just one way the
+    LLM says no (the llm_reject trio keeps the spam detail); otherwise the synthesis
+    LLM's facts judgment is mirrored here so merge/UI agree without the facts dir."""
+    if v.get("spam_contact") and float(v.get("spam_confidence") or 0) >= SPAM_WORTH_CONFIDENCE:
+        return {"llm_worth": "no", "llm_worth_reason": v.get("spam_reason", "")}
+    worth = llm_network_worth(person_ids[0], facts_dir) if person_ids else {"decision": "", "reason": ""}
+    return {"llm_worth": worth["decision"],
+            "llm_worth_reason": worth["reason"] if worth["decision"] else ""}
+
+
+def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = FACTS_DIR) -> dict[str, Any]:
     """Upsert EVERY judged row into the single durable, approval-aware decisions table — the
     one file the user edits and the fan-in merge re-applies.
 
@@ -724,8 +749,11 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         if (existing.get(pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
             # sticky: never overwrite a user decision — but the machine-owned llm_* columns
-            # are always refreshed, so a re-review can flag spam without touching the decision.
-            existing[pub].update(_llm_reject_fields(t.get("verdict") or {}))
+            # are always refreshed, so a re-review can flag spam / update the worth judgment
+            # without touching the decision (or the user-owned network_worth mark).
+            existing[pub].update({**_llm_reject_fields(t.get("verdict") or {}),
+                                  **_llm_worth_fields(t.get("verdict") or {},
+                                                      t.get("person_ids") or [], facts_dir)})
             preserved += 1
             continue
         v = t.get("verdict") or {}
@@ -746,6 +774,7 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": v.get("reason", ""), "person_id": (t.get("person_ids") or [""])[0],
             "source": "deep-context-reconcile", "updated_at": now_iso(),
             **_llm_reject_fields(v),
+            **_llm_worth_fields(v, t.get("person_ids") or [], facts_dir),
             # user-owned; survives machine rebuilds even on non-user-approved rows
             "network_worth": existing.get(pub, {}).get("network_worth", ""),
         }
@@ -1140,7 +1169,7 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
     consolidation = {"consolidated_parents": 0}
     self_retargets = {"proposed": 0}
     if not args.no_overrides:
-        override_stats = write_overrides(Path(args.overrides_csv), tasks)
+        override_stats = write_overrides(Path(args.overrides_csv), tasks, Path(args.facts_dir))
         # Free recovery: retarget to a LinkedIn the contact shared themselves (overrides any
         # detach/verify on the wrong attached link). Sticky — won't clobber a user decision.
         self_retargets = upsert_retargets(Path(args.overrides_csv), self_reported_retargets(tasks))
