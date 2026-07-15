@@ -27,4 +27,4 @@ Run exactly one command for the current harness:
 
 Do not inspect Git state first. Do not run any other Git command. Do not pop or
 repair the stash. Do not run setup, doctor, imports, or state repair afterward.
-Report the script's final key/value lines and tell the user to reload the agent.
+Report the script's final key/value lines.
