@@ -45,8 +45,11 @@ class UpdatePowerpacksTests(unittest.TestCase):
         self.assertNotIn("git status", text)
         self.assertNotIn("git stash", text)
         self.assertNotIn("git reset", text)
+        self.assertNotIn("reload", text.lower())
+        self.assertNotIn("restart", text.lower())
         self.assertIn("skills/update-powerpacks/update-powerpacks", text)
         self.assertIn("Do not run any other Git command", text)
+        self.assertNotIn("restart_required", UPDATE_SCRIPT.read_text(encoding="utf-8"))
 
         for adapter in (
             ROOT / "adapters/codex/install.sh",
