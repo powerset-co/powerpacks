@@ -344,6 +344,12 @@ def _row_effective_no(ov: dict[str, Any]) -> bool:
     return _machine_no(ov) and not _user_rescued(ov)
 
 
+def user_no_person_ids(overrides: dict[str, dict[str, Any]]) -> set[str]:
+    """person_ids the USER explicitly rejected (worth mark or approved exclude)."""
+    return {ov.get("person_id") or "" for ov in overrides.values()
+            if ov.get("person_id") and _user_no(ov)}
+
+
 def worth_dropped_person_ids(overrides: dict[str, dict[str, Any]]) -> set[str]:
     """person_ids to drop entirely at merge — the unified 'effective no': a user
     network_worth=no or approved exclude (unconditional), or a machine no
@@ -404,6 +410,7 @@ def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, A
         return {"detached": 0, "verified": 0, "retargeted": 0, "excluded": 0,
                 "spam_dropped": 0, "worth_dropped": 0, "worth_dropped_person_ids": []}
     worth_pids = worth_dropped_person_ids(overrides)
+    user_no_pids = user_no_person_ids(overrides)
     spam_pids = spam_dropped_person_ids(overrides)
     for row in rows:
         # A synthetic row's review.csv row is keyed by its ORIGINAL person id (the
@@ -421,7 +428,15 @@ def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, A
         # Unified worth drop: person-level when the override knows its person_id (one
         # effective no drops every row of that person), else this row's own state.
         pid = ov.get("person_id") or ""
-        if (pid in worth_pids) if pid else _row_effective_no(ov):
+        effective_no = (pid in worth_pids) if pid else _row_effective_no(ov)
+        if effective_no:
+            # LinkedIn connections are GROUND TRUTH: the user is literally
+            # connected, so a MACHINE no (worth judgment / spam) never drops a
+            # linkedin_csv person — only the user's own no/exclude can.
+            user_said_no = (pid in user_no_pids) if pid else _user_no(ov)
+            if not user_said_no and "linkedin_csv" in row_source_channels(row):
+                effective_no = False
+        if effective_no:
             row["__excluded__"] = True
             worth_dropped += 1
             # sibling counters: which kind of no did it (exclude action / spam screen)

@@ -628,6 +628,41 @@ class WorthDropAtMergeTests(unittest.TestCase):
         base.update(kw)
         return {"row-key": base}
 
+    def test_linkedin_connection_never_machine_dropped(self):
+        # LinkedIn connections are GROUND TRUTH: a machine no (worth judgment or
+        # spam) can never drop a linkedin_csv person — only the user's own no can.
+        def conn_row(**kw) -> dict:
+            row = {"id": "pid-li", "public_identifier": "connfriend",
+                   "linkedin_url": "https://www.linkedin.com/in/connfriend",
+                   "source_channels": "linkedin_csv,gmail_msgvault"}
+            row.update(kw)
+            return row
+
+        ov = self._ov(action="", llm_worth="no", person_id="pid-li")
+        ov["connfriend"] = ov.pop("row-key")
+        rows = [conn_row()]
+        counts = merge_network_sources.apply_overrides(rows, ov)
+        self.assertFalse(rows[0].get("__excluded__"))
+        self.assertEqual(counts["worth_dropped"], 0)
+        # confident spam likewise cannot drop a connection
+        ov["connfriend"].update({"llm_worth": "", "llm_reject": "spam",
+                                 "llm_reject_confidence": "0.95"})
+        rows = [conn_row()]
+        merge_network_sources.apply_overrides(rows, ov)
+        self.assertFalse(rows[0].get("__excluded__"))
+        # the USER's no still drops a connection (user wins in both directions)
+        ov["connfriend"].update({"network_worth": "no"})
+        rows = [conn_row()]
+        counts = merge_network_sources.apply_overrides(rows, ov)
+        self.assertTrue(rows[0].get("__excluded__"))
+        self.assertEqual(counts["worth_dropped"], 1)
+        # the same machine no on a NON-connection row does drop
+        ov["connfriend"].update({"network_worth": "", "llm_worth": "no",
+                                 "llm_reject": "", "llm_reject_confidence": ""})
+        rows = [conn_row(source_channels="gmail_msgvault")]
+        counts = merge_network_sources.apply_overrides(rows, ov)
+        self.assertTrue(rows[0].get("__excluded__"))
+
     def test_worth_drop_matrix(self):
         wd = merge_network_sources.worth_dropped_person_ids
         self.assertEqual(wd(self._ov(network_worth="no")), {"pid-1"})                       # user no drops

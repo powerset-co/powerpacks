@@ -111,6 +111,26 @@ def load_people_sources(people_csv: Path) -> dict[str, list[str]]:
     return out
 
 
+def load_connection_keys(people_csv: Path) -> set[str]:
+    """Keys (person ids + LinkedIn pubs, lowercased) of first-degree LinkedIn
+    connections — people whose source_channels include linkedin_csv. Connections
+    are GROUND TRUTH in this product: the user is literally connected, so a
+    MACHINE no (worth judgment / spam flag) never rejects or drops them; only
+    the user's own No/Exclude can."""
+    out: set[str] = set()
+    if not people_csv.exists():
+        return out
+    with people_csv.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            channels = {c.strip() for c in (row.get("source_channels") or "").split(",")}
+            if "linkedin_csv" not in channels:
+                continue
+            for key in ((row.get("id") or "").strip(), (row.get("public_identifier") or "").strip()):
+                if key:
+                    out.add(key.lower())
+    return out
+
+
 def annotate_sources(parents: list[dict[str, Any]], people_sources: dict[str, list[str]]) -> None:
     """Fill missing parent 'sources' from people.csv (candidate/synthetic rows carry their own)."""
     for p in parents:
@@ -348,7 +368,7 @@ def load_candidate_parents(facts_dir: Path, overrides: dict[str, dict[str, str]]
 
 
 def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
-                   facts_dir: Path) -> None:
+                   facts_dir: Path, connections: set[str] | None = None) -> None:
     """Attach the effective network-worth (user review.csv mark / approved exclude >
     synthesis LLM > review.csv llm_worth > default 'maybe') to EVERY row — verdict,
     candidate, and synthetic alike — plus the machine's own view (for the secondary
@@ -365,8 +385,10 @@ def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str,
         key = key or (p["person_ids"] or [""])[0]
         if not key:
             continue
-        state = effective_no_for_key(key, overrides, facts_dir)
+        state = effective_no_for_key(key, overrides, facts_dir, connections=connections)
         p["worth"], p["machine_worth"] = state["worth"], state["machine"]
+        p["connection"] = state["connected"] or any(
+            pid.lower() in (connections or set()) for pid in p["person_ids"])
         primary["worth"], primary["machine_worth"] = state["worth"], state["machine"]
         primary["worth_key"] = key
 
@@ -397,10 +419,13 @@ def apply_worth_decision(review_path: Path, pub: str, worth: str) -> dict[str, s
 
 
 def effective_no_for_key(key: str, override_rows: dict[str, dict[str, str]],
-                         facts_dir: Path, *, keepish: bool | None = None) -> dict[str, Any]:
+                         facts_dir: Path, *, keepish: bool | None = None,
+                         connections: set[str] | None = None) -> dict[str, Any]:
     """Single-row mirror of is_effective_no (the unified Rejected / merge-drop rule)
-    for one review.csv key: {'worth', 'machine', 'rejected'}. `keepish` overrides the
-    rescue signal when it lives outside review.csv (the synthetic approved gate)."""
+    for one review.csv key: {'worth', 'machine', 'rejected', 'connected'}. `keepish`
+    overrides the rescue signal when it lives outside review.csv (the synthetic
+    approved gate). A first-degree LinkedIn connection (`connections` membership by
+    key or the row's person_id) is never machine-rejected — only a user no."""
     key_l = (key or "").strip().lower()
     worth = effective_network_worth(key, override_rows, facts_dir)
     row = override_rows.get(key_l) or {}
@@ -412,9 +437,13 @@ def effective_no_for_key(key: str, override_rows: dict[str, dict[str, str]],
     if keepish is None:
         keepish = (row.get("approved") or "").strip().lower() == "yes" and \
             (row.get("action") or "").strip().lower() not in ("detach", "exclude")
+    connected = bool(connections) and (
+        key_l in connections
+        or (row.get("person_id") or "").strip().lower() in connections)
     machine_no = machine["decision"] == "no" or (row.get("llm_reject") or "").strip().lower() == "spam"
-    rejected = user_mark == "no" or (user_mark != "yes" and machine_no and not keepish)
-    return {"worth": worth, "machine": machine, "rejected": rejected}
+    rejected = user_mark == "no" or (
+        user_mark != "yes" and machine_no and not keepish and not connected)
+    return {"worth": worth, "machine": machine, "rejected": rejected, "connected": connected}
 
 
 # Worth mark -> synthetic approved gate (so the mint gate agrees with the mark):
@@ -536,6 +565,9 @@ def is_effective_no(parent: dict[str, Any]) -> bool:
     if any(c.get("synthetic") and (c.get("approved") or "").strip().lower() == "no"
            for c in parent["candidates"]):
         return True
+    # LinkedIn connections are GROUND TRUTH — a machine no never rejects them
+    if parent.get("connection"):
+        return False
     machine_no = (parent.get("machine_worth") or {}).get("decision") == "no" or is_llm_rejected(parent)
     return machine_no and not _keepish(parent)
 
@@ -591,23 +623,25 @@ def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def extend_and_annotate(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
-                        synthetic_path: Path, facts_dir: Path) -> list[dict[str, Any]]:
+                        synthetic_path: Path, facts_dir: Path,
+                        connections: set[str] | None = None) -> list[dict[str, Any]]:
     """Add the synthetic + pre-research candidate rows to the verdict parents and
     annotate everyone's worth — the full row set page_html/summarize operate on."""
     parents.extend(load_synthetic_parents(synthetic_path))
     shown = {pid.lower() for p in parents for pid in p["person_ids"]}
     parents.extend(load_candidate_parents(facts_dir, overrides, shown))
-    annotate_worth(parents, overrides, facts_dir)
+    annotate_worth(parents, overrides, facts_dir, connections)
     return parents
 
 
 def live_counts(verdicts_path: Path, review_path: Path, synthetic_path: Path,
-                facts_dir: Path) -> dict[str, int]:
+                facts_dir: Path, connections: set[str] | None = None) -> dict[str, int]:
     """Fresh GLOBAL tab counts after a mutation. Every POST returns these so the client
     repaints the header stats and tab pills authoritatively — recomputing counts from
     the DOM would drift on filtered views (only the visible subset is in the DOM)."""
     parents, overrides = build_parents(verdicts_path, review_path)
-    return summarize(extend_and_annotate(parents, overrides, synthetic_path, facts_dir))
+    return summarize(extend_and_annotate(parents, overrides, synthetic_path, facts_dir,
+                                         connections))
 
 
 # --- decision writer (the only mutation: upsert one row in review.csv) ------
@@ -1451,7 +1485,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             parents, overrides = build_parents(verdicts_path, review_path)
             auto_resolve_merged(parents, review_path, confirm_threshold)
-            extend_and_annotate(parents, overrides, synthetic_path, facts_dir)
+            extend_and_annotate(parents, overrides, synthetic_path, facts_dir,
+                                load_connection_keys(people_csv))
             annotate_sources(parents, load_people_sources(people_csv))
             params = urllib.parse.parse_qs(parsed.query)
             self.send_bytes(page_html(parents, params, review_path))
@@ -1475,8 +1510,10 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 # a synthetic row's mint gate must agree: No = Detach, Yes = Keep, ↺ = pending
                 gate = sync_synthetic_gate(synthetic_path, pub, worth_val)
                 rows_now = load_override_rows(review_path)
+                conns = load_connection_keys(people_csv)
                 state = effective_no_for_key(pub, rows_now, facts_dir,
-                                             keepish=(gate["approved"] == "yes") if gate else None)
+                                             keepish=(gate["approved"] == "yes") if gate else None,
+                                             connections=conns)
                 # the row's decision state (a worth-Yes may have cleared an exclude; a
                 # synthetic mark flips its gate) so the client repaints chips in place
                 row_now = rows_now.get(pub.strip().lower()) or {}
@@ -1491,7 +1528,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                             "reason": state["worth"]["reason"],
                                             "rejected": state["rejected"],
                                             "counts": live_counts(verdicts_path, review_path,
-                                                                  synthetic_path, facts_dir)}).encode(),
+                                                                  synthetic_path, facts_dir,
+                                                                  conns)}).encode(),
                                 "application/json")
                 return
             decision = (form.get("decision") or [""])[0]
@@ -1514,12 +1552,13 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             # the unified Rejected state after this decision (a Keep rescues a machine no;
             # an Exclude IS a user no) + fresh global counts for the header/tab pills
+            conns = load_connection_keys(people_csv)
             payload: dict[str, Any] = {"ok": True, "pub": pub, **result,
                                        "counts": live_counts(verdicts_path, review_path,
-                                                             synthetic_path, facts_dir)}
+                                                             synthetic_path, facts_dir, conns)}
             if worth_key:
                 state = effective_no_for_key(worth_key, load_override_rows(review_path),
-                                             facts_dir, keepish=keepish)
+                                             facts_dir, keepish=keepish, connections=conns)
                 payload.update({"rejected": state["rejected"],
                                 "effective": state["worth"]["decision"],
                                 "source": state["worth"]["source"]})
