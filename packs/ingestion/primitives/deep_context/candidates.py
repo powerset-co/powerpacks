@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from packs.ingestion.primitives.deep_context.common import (
+    FACTS_DIR,
     GMAIL_CHANNEL,
     IMESSAGE_CHANNEL,
     WHATSAPP_CHANNEL,
@@ -140,3 +141,64 @@ def candidate_carry(row: dict[str, str]) -> dict[str, Any]:
         "last_interaction": row.get("last_interaction", ""),
         "source_channels": ",".join(candidate_channels(row)),
     }
+
+
+# --- Network-worth (yes | maybe | no) ----------------------------------------
+# The synthesis LLM judges every profiled contact's `network_worth` from the
+# actual message relationship (facts/<person_id>.jsonl). The user may overrule
+# it per row via the sticky, user-owned `network_worth` column in
+# overrides/review.csv. `no` gates a candidate out of paid reverse lookup and
+# synthetic minting.
+
+NETWORK_WORTH_VALUES = ("yes", "maybe", "no")
+DEFAULT_NETWORK_WORTH = "maybe"
+
+
+def llm_network_worth(person_id: str, facts_dir: Path = FACTS_DIR) -> dict[str, str]:
+    """The synthesis LLM's {'decision','reason'} for a person ('' when absent).
+
+    The incremental synthesizer refines ONE running profile, so the last record
+    carries the final judgment."""
+    path = facts_dir / f"{person_id}.jsonl"
+    if not path.exists():
+        return {"decision": "", "reason": ""}
+    worth: dict[str, str] = {"decision": "", "reason": ""}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return worth
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        # The synthesizer nests the extracted profile under "facts" (see
+        # synthesize_person_context.on_result); tolerate a bare facts record too.
+        value = (record.get("facts") or {}).get("network_worth") or record.get("network_worth")
+        if isinstance(value, dict) and str(value.get("decision") or "").lower() in NETWORK_WORTH_VALUES:
+            worth = {
+                "decision": str(value.get("decision")).lower(),
+                "reason": str(value.get("reason") or ""),
+            }
+    return worth
+
+
+def effective_network_worth(
+    person_id: str,
+    override_rows: dict[str, dict[str, str]] | None = None,
+    facts_dir: Path = FACTS_DIR,
+) -> dict[str, str]:
+    """Resolved worth for a person: the user's review.csv mark wins, else the
+    synthesis LLM's judgment, else the default ('maybe' — needs a human look).
+    Returns {'decision', 'reason', 'source': user|llm|default}."""
+    row = (override_rows or {}).get(person_id.lower()) or {}
+    user_mark = str(row.get("network_worth") or "").strip().lower()
+    if user_mark in NETWORK_WORTH_VALUES:
+        return {"decision": user_mark, "reason": "user decision", "source": "user"}
+    llm = llm_network_worth(person_id, facts_dir)
+    if llm["decision"]:
+        return {**llm, "source": "llm"}
+    return {"decision": DEFAULT_NETWORK_WORTH, "reason": "not yet judged", "source": "default"}

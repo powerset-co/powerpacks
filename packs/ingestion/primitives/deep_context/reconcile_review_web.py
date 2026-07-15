@@ -17,7 +17,12 @@ serves a parent-grouped table:
         Detach -> action=detach   approved=yes
         Fix…   -> action=retarget approved=yes  (paste the correct LinkedIn URL)
   * quick filters (needs-review / verified / detached / conflicts / fixed / my
-    decisions), search, and a risk sort that floats the lowest-confidence parents up.
+    decisions), search, and a risk sort that floats the lowest-confidence parents up,
+  * dossier-bearing import candidates (no LinkedIn at all yet) surface as review rows
+    BEFORE any paid research, each with a Yes/Maybe/No "worth adding?" mark that writes
+    the user-owned `network_worth` column in review.csv (effective-`no` rows group with
+    Rejected, like spam-flagged people), plus source (gmail/imessage/whatsapp) and
+    worth filter chips.
 
 It only reads the deep-context artifacts and writes `review.csv` (the same durable
 table the fan-in merge re-applies). A `Fix…` decision is enriched + re-attached later
@@ -37,14 +42,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from packs.ingestion.primitives.deep_context.candidates import (
+    NETWORK_WORTH_VALUES,
+    effective_network_worth,
+    load_candidates,
+)
 from packs.ingestion.primitives.deep_context.common import (
+    DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
+    FACTS_DIR,
+    GMAIL_CHANNEL,
+    IMESSAGE_CHANNEL,
     LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
     VERDICTS_JSONL,
+    WHATSAPP_CHANNEL,
     now_iso,
     read_jsonl,
+    slugify,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
@@ -59,6 +75,49 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier, nor
 
 APPLIED_APPROVED = {"auto", "yes"}
 VALID_TABS = {"all", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided", "rejected"}
+
+# people.csv / candidates.csv channel label -> user-facing source filter value.
+CHANNEL_TO_SOURCE = {GMAIL_CHANNEL: "gmail", IMESSAGE_CHANNEL: "imessage", WHATSAPP_CHANNEL: "whatsapp"}
+SOURCE_FILTERS = ("gmail", "imessage", "whatsapp")
+
+
+def _sources_of(channels: list[str]) -> list[str]:
+    """Filterable source labels for a row's source_channels (unknown labels dropped)."""
+    out: list[str] = []
+    for channel in channels:
+        source = CHANNEL_TO_SOURCE.get(str(channel or "").strip())
+        if source and source not in out:
+            out.append(source)
+    return out
+
+
+def load_people_sources(people_csv: Path) -> dict[str, list[str]]:
+    """person_id -> message-source labels from people.csv `source_channels`."""
+    out: dict[str, list[str]] = {}
+    if not people_csv.exists():
+        return out
+    with people_csv.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            pid = str(row.get("id") or "").strip()
+            if not pid:
+                continue
+            sources = _sources_of((row.get("source_channels") or "").split(","))
+            if sources:
+                out[pid] = sources
+    return out
+
+
+def annotate_sources(parents: list[dict[str, Any]], people_sources: dict[str, list[str]]) -> None:
+    """Fill missing parent 'sources' from people.csv (candidate/synthetic rows carry their own)."""
+    for p in parents:
+        if p.get("sources"):
+            continue
+        sources: list[str] = []
+        for pid in p["person_ids"]:
+            for s in people_sources.get(pid, []):
+                if s not in sources:
+                    sources.append(s)
+        p["sources"] = sources
 
 
 # --- model: join verdicts.jsonl (display) with review.csv (decisions) -------
@@ -175,6 +234,7 @@ def load_synthetic_parents(path: Path) -> list[dict[str, Any]]:
             gaps = ", ".join(meta.get("gaps") or [])
             parents.append({
                 "slug": f"synthetic-{pub}", "name": name, "person_ids": [row.get("id") or pub],
+                "sources": _sources_of((row.get("source_channels") or "").split(",")),
                 "candidates": [{
                     "pub": pub, "url": "", "full_name": name,
                     "headline": row.get("headline") or "",
@@ -226,6 +286,100 @@ def apply_synthetic_decision(path: Path, pub: str, decision: str) -> dict[str, s
         w.writeheader()
         w.writerows(rows)
     return {"action": "verify", "approved": approved, "new_url": ""}
+
+
+def _facts_canonical_name(facts_dir: Path, person_id: str) -> str:
+    """The synthesis LLM's canonical_name (last record wins). Compose names the
+    dossier file with it, so the row's dossier slug must be derived the same way."""
+    name = ""
+    for rec in read_jsonl(facts_dir / f"{person_id}.jsonl"):
+        value = str((rec.get("facts") or {}).get("canonical_name") or "").strip()
+        if value:
+            name = value
+    return name
+
+
+def load_candidate_parents(facts_dir: Path, overrides: dict[str, dict[str, str]],
+                           shown_person_ids: set[str]) -> list[dict[str, Any]]:
+    """Dossier-bearing import candidates (facts exist, NO research/synthetic result yet)
+    as review rows — they ARE the needs-review pile of the candidate flow: mark worth
+    (Yes/Maybe/No) BEFORE any paid research. The review.csv key for a candidate is its
+    person_id; Fix… retargets it, Exclude keeps it out of research. Candidates already
+    shown via a synthetic/retarget row are deduped by person_id."""
+    parents: list[dict[str, Any]] = []
+    for person in load_candidates():
+        pid = person.person_id
+        if pid.lower() in shown_person_ids or not (facts_dir / f"{pid}.jsonl").exists():
+            continue
+        name = _facts_canonical_name(facts_dir, pid) or person.full_name or pid
+        dec = overrides.get(pid.lower(), {})
+        parents.append({
+            "slug": slugify(name, pid),  # the composed CHILD dossier's slug (no parent stub needed)
+            "name": name,
+            "person_ids": [pid],
+            "sources": _sources_of(person.source_channels),
+            "candidates": [{
+                "pub": pid,  # candidates key review.csv on their person_id
+                "url": "", "full_name": name,
+                "headline": "",
+                "profile_pic_url": "",
+                "experiences": [], "education": [], "location": "",
+                "has_profile": False,
+                "verdict": "no_linkedin_candidate",
+                "confidence": 0.0,
+                "supporting": [], "contradicting": [],
+                "reason": "unresolved import candidate — no LinkedIn attached yet",
+                "plausibly_absent": False, "recommend_dr": False,
+                "match_emails": person.emails, "match_phones": person.phones,
+                "conflict": False, "import_candidate": True,
+                "action": dec.get("action", ""),
+                "approved": (dec.get("approved") or "").strip().lower(),
+                "new_url": dec.get("new_linkedin_url", ""),
+                "llm_reject": (dec.get("llm_reject") or "").strip().lower(),
+                "llm_reject_confidence": dec.get("llm_reject_confidence", ""),
+                "llm_reject_reason": dec.get("llm_reject_reason", ""),
+            }],
+        })
+    return parents
+
+
+def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
+                   facts_dir: Path) -> None:
+    """Attach the effective network-worth (user review.csv mark > synthesis LLM >
+    default 'maybe') to candidate + synthetic rows — the rows a Yes/Maybe/No mark
+    applies to. The mark's review.csv row key is the row's person_id."""
+    for p in parents:
+        cands = p["candidates"]
+        if len(cands) != 1 or not (cands[0].get("synthetic") or cands[0].get("import_candidate")):
+            continue
+        pid = (p["person_ids"] or [""])[0]
+        if not pid:
+            continue
+        worth = effective_network_worth(pid, overrides, facts_dir)
+        p["worth"] = worth
+        cands[0]["worth"] = worth
+        cands[0]["worth_key"] = pid
+
+
+def apply_worth_decision(review_path: Path, pub: str, worth: str) -> dict[str, str]:
+    """Upsert the USER-owned `network_worth` mark for one review.csv row (keyed by the
+    row's key — a candidate/synthetic row's person_id). '' clears the mark (back to the
+    LLM's judgment). Never touches action/approved — worth is not a link decision."""
+    pub = (pub or "").strip().lower()
+    worth = (worth or "").strip().lower()
+    if not pub:
+        raise ValueError("worth mark needs a row key")
+    if worth not in ("", *NETWORK_WORTH_VALUES):
+        raise ValueError(f"unknown worth mark: {worth}")
+    rows = load_override_rows(review_path)
+    row = rows.get(pub) or {k: "" for k in OVERRIDE_COLUMNS}
+    row["public_identifier"] = pub
+    row["network_worth"] = worth
+    row["source"] = row.get("source") or "deep-context-review"
+    row["updated_at"] = now_iso()
+    rows[pub] = row
+    _write_override_rows(review_path, rows)
+    return {"network_worth": worth}
 
 
 def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
@@ -280,6 +434,11 @@ def is_llm_rejected(parent: dict[str, Any]) -> bool:
     return any(c.get("llm_reject") == "spam" for c in parent["candidates"])
 
 
+def is_worth_no(parent: dict[str, Any]) -> bool:
+    """'Not worth adding' — the row's effective network-worth is `no` (user or LLM)."""
+    return (parent.get("worth") or {}).get("decision") == "no"
+
+
 def parent_in_tab(parent: dict[str, Any], tab: str) -> bool:
     if tab in ("", "all"):
         return True
@@ -288,10 +447,10 @@ def parent_in_tab(parent: dict[str, Any], tab: str) -> bool:
     if tab == "conflict":
         return any(c.get("conflict") for c in parent["candidates"]) or len(parent["candidates"]) > 1
     if tab == "rejected":
-        return is_llm_rejected(parent)
+        return is_llm_rejected(parent) or is_worth_no(parent)
     if tab == "review":
-        # spam-flagged people are handled on the Rejected tab, not the review pile
-        return parent_status(parent) == "review" and not is_llm_rejected(parent)
+        # spam-flagged and not-worth-adding people live on the Rejected tab, not the review pile
+        return parent_status(parent) == "review" and not is_llm_rejected(parent) and not is_worth_no(parent)
     return parent_status(parent) == tab
 
 
@@ -305,6 +464,14 @@ def parent_matches_query(parent: dict[str, Any], q: str) -> bool:
     return q in " ".join(hay).lower()
 
 
+def parent_matches_source(parent: dict[str, Any], source: str) -> bool:
+    return source not in SOURCE_FILTERS or source in (parent.get("sources") or [])
+
+
+def parent_matches_worth(parent: dict[str, Any], worth: str) -> bool:
+    return worth not in NETWORK_WORTH_VALUES or (parent.get("worth") or {}).get("decision") == worth
+
+
 def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
     s = {k: 0 for k in ("total", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided", "rejected")}
     s["total"] = len(parents)
@@ -314,9 +481,9 @@ def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
             s["conflict"] += 1
         if is_decided(p):
             s["decided"] += 1
-        if is_llm_rejected(p):
+        if is_llm_rejected(p) or is_worth_no(p):
             s["rejected"] += 1
-    # user-facing: a retarget ("fixed") reads as verified; spam-flagged leave the review pile
+    # user-facing: a retarget ("fixed") reads as verified; spam-flagged/worth-no leave the review pile
     s["verified"] += s["fixed"]
     s["review"] = sum(1 for p in parents if parent_in_tab(p, "review"))
     return s
@@ -386,6 +553,11 @@ def render_dossier(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
     the real per-person context (summary, topics, timeline, identifiers) lives in the children."""
     pmd = parents_dir / f"{Path(slug).name}.md"
     if not pmd.exists():
+        # Candidate rows point straight at their composed CHILD dossier (no parent
+        # stub exists before research mints a person for them).
+        child = dossier_dir / f"{Path(slug).name}.md"
+        if child.exists():
+            return _strip_frontmatter(child.read_text(encoding="utf-8")).strip()
         return "(no dossier on file)"
     ptext = pmd.read_text(encoding="utf-8")
     m = _CHILDREN_RE.search(ptext)
@@ -469,6 +641,9 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
     if cand.get("synthetic"):
         judgment = (f"<div class='judgment j-review'>Researched profile · "
                     f"{cand['confidence'] * 100:.0f}% complete — keep to make them searchable</div>")
+    elif cand.get("import_candidate"):
+        judgment = ("<div class='judgment j-review'>Unresolved contact — no LinkedIn attached yet. "
+                    "Mark whether they're worth adding; Yes/Maybe stay eligible for research.</div>")
     else:
         judgment = judgment_line(cand["verdict"], cand["confidence"])
     profile = []
@@ -505,17 +680,32 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
         flags.append("<span class='flag flag-synth' title='Deep-researched profile — this person has no "
                      "real LinkedIn. Keep = merge into your searchable network; Detach = discard.'>"
                      "synthetic — no LinkedIn</span>")
+    if cand.get("import_candidate"):
+        flags.append("<span class='flag flag-synth' title='An imported contact we could not resolve to a "
+                     "LinkedIn yet. Mark their worth, paste the right LinkedIn if you know it, or exclude.'>"
+                     "candidate — no LinkedIn</span>")
     fixed_note = f"<div class='fixednote'>✓ verified — corrected LinkedIn: <a href='{esc(cand['new_url'])}' target='_blank' rel='noreferrer'>{esc(cand['new_url'])}</a></div>" if st == "fixed" and cand["new_url"] else ""
     pic = cand.get("profile_pic_url") or ""
     avatar = (f"<img class='avatar' src='{esc(pic)}' alt='' loading='lazy' referrerpolicy='no-referrer' "
               f"onerror='this.style.display=&quot;none&quot;'>" if pic else "<span class='avatar avatar-empty'></span>")
+    if cand.get("synthetic"):
+        ident = f"<span class='nopick'>{esc(cand['pub'])} (researched — no LinkedIn)</span>"
+    elif cand.get("import_candidate"):
+        ident = "<span class='nopick'>no LinkedIn attached yet</span>"
+    else:
+        ident = f"<a href='{esc(cand['url'])}' target='_blank' rel='noreferrer'>{esc(cand['url'] or cand['pub'])}</a>"
+    # No LinkedIn is attached to an import candidate, so Keep/Detach have nothing to act
+    # on — worth marks, Fix… (paste the right LinkedIn) and Exclude are the actions.
+    keep_detach = "" if cand.get("import_candidate") else (
+        f"<button class='btn keep{' suggested' if parent_label and st == 'review' else ''}' data-act='keep'>Keep this LinkedIn</button>"
+        f"<button class='btn detach{' suggested' if using_parent and st == 'review' else ''}' data-act='detach'>Detach (wrong person)</button>")
     return f"""
     <div class='cand cand-{st}{" cand-parent" if parent_label else ""}' data-pub='{esc(cand['pub'])}'>
       <div class='cand-top'>
         {avatar}
         <div class='cand-id'>
           {badge}{option}
-          {f"<span class='nopick'>{esc(cand['pub'])} (researched — no LinkedIn)</span>" if cand.get("synthetic") else f"<a href='{esc(cand['url'])}' target='_blank' rel='noreferrer'>{esc(cand['url'] or cand['pub'])}</a>"}
+          {ident}
           {''.join(flags)}
           {f"<div class='contacts'><strong>from your messages</strong> <b class='cval'>{esc(contacts)}</b></div>" if contacts else ""}
         </div>
@@ -530,15 +720,34 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], *,
         </div>
       </div>
       {fixed_note}
+      {render_worth_row(cand)}
       <div class='actions'>
-        <button class='btn keep{" suggested" if parent_label and st == "review" else ""}' data-act='keep'>Keep this LinkedIn</button>
-        <button class='btn detach{" suggested" if using_parent and st == "review" else ""}' data-act='detach'>Detach (wrong person)</button>
+        {keep_detach}
         <span class='fixwrap'><input class='fixurl' placeholder='paste correct LinkedIn URL'>
           <button class='btn fix' data-act='fix'>Fix</button></span>
         {"<button class='btn exclude' data-act='exclude-person' title=\"Don't index this person at all — drops them from people.csv (whole person, all LinkedIns)\">✕ Exclude person</button>" if show_exclude else ""}
         <button class='btn reset' data-act='reset' title='revert to the model decision'>↺</button>
       </div>
     </div>"""
+
+
+def render_worth_row(cand: dict[str, Any]) -> str:
+    """Yes/Maybe/No network-worth marks for candidate + synthetic rows. Highlights the
+    EFFECTIVE value; when it came from the synthesis LLM, its reason shows alongside.
+    ↺ clears the user's mark (back to the LLM's judgment)."""
+    worth = cand.get("worth")
+    if not worth or not cand.get("worth_key"):
+        return ""
+    dec = (worth.get("decision") or "").lower()
+    buttons = "".join(
+        f"<button class='btn worth worth-{v}{' on' if v == dec else ''}' data-worth='{v}'>{v.capitalize()}</button>"
+        for v in NETWORK_WORTH_VALUES)
+    hint = (f"<span class='worth-llm'>LLM: {esc(dec)} — {esc(worth.get('reason') or '')}</span>"
+            if worth.get("source") == "llm" else "")
+    return (f"<div class='actions worthrow' data-worthkey='{esc(cand['worth_key'])}'>"
+            f"<span class='worth-label'>Worth adding?</span>{buttons}"
+            f"<button class='btn reset worth-clear' data-worth='' title='clear your mark — back to the LLM call'>↺</button>"
+            f"{hint}</div>")
 
 
 def auto_resolve_merged(parents: list[dict[str, Any]], review_path: Path,
@@ -631,6 +840,8 @@ def render_parent(idx: int, parent: dict[str, Any], expanded: bool) -> str:
     parent_cls = "parent multi" if multi else "parent"
     if is_llm_rejected(parent):
         parent_cls += " llmrejected"
+    if is_worth_no(parent):
+        parent_cls += " worthno"
     summary_pic = next((c.get("profile_pic_url") for c in cands_list if c.get("profile_pic_url")), "")
     summary_avatar = (f"<img class='avatar avatar-sm' src='{esc(summary_pic)}' alt='' loading='lazy' "
                       f"referrerpolicy='no-referrer' onerror='this.style.display=&quot;none&quot;'>"
@@ -663,9 +874,12 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         tab = "review"
     q = (params.get("q") or [""])[0].strip()
     sort = (params.get("sort") or ["risk"])[0].strip().lower()
+    source = (params.get("source") or ["all"])[0].strip().lower()
+    worth = (params.get("worth") or ["all"])[0].strip().lower()
     summary = summarize(parents)
 
-    visible = [p for p in parents if parent_in_tab(p, tab) and parent_matches_query(p, q.lower())]
+    visible = [p for p in parents if parent_in_tab(p, tab) and parent_matches_query(p, q.lower())
+               and parent_matches_source(p, source) and parent_matches_worth(p, worth)]
     if sort == "name":
         visible.sort(key=lambda p: p["name"].lower())
     elif sort == "conf":
@@ -708,6 +922,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         "</nav>",
         "<form class='filters' method='get' action='/'>",
         f"<input type='hidden' name='tab' value='{esc(tab)}'>",
+        f"<input type='hidden' name='source' value='{esc(source)}'>" if source in SOURCE_FILTERS else "",
+        f"<input type='hidden' name='worth' value='{esc(worth)}'>" if worth in NETWORK_WORTH_VALUES else "",
         f"<input name='q' placeholder='Search name, company, email, LinkedIn' value='{esc(q)}'>",
         "<select name='sort'>",
     ]
@@ -715,6 +931,26 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         sel = " selected" if sort == value else ""
         parts.append(f"<option value='{value}'{sel}>{esc(label)}</option>")
     parts.append("</select><button type='submit'>Apply</button><a class='clear' href='/'>clear</a></form>")
+
+    def chip_bar(label: str, param: str, options: list[str], current: str) -> str:
+        def href(value: str) -> str:
+            qp = {k: v[0] for k, v in params.items() if k != param and v and v[0]}
+            if value != "all":
+                qp[param] = value
+            return "/?" + urllib.parse.urlencode(qp)
+        chips = "".join(
+            f"<a class='fchip{' active' if current == o or (o == 'all' and current not in options) else ''}'"
+            f" href='{esc(href(o))}'>{esc(o)}</a>"
+            for o in ["all", *options])
+        return f"<div class='chips'><span class='chips-label'>{esc(label)}</span>{chips}</div>"
+
+    # Source chips only when the rendered rows actually span >1 message source;
+    # worth chips only when there are candidate/synthetic rows to mark.
+    sources_present = sorted({s for p in parents for s in (p.get("sources") or [])})
+    if len(sources_present) > 1:
+        parts.append(chip_bar("source", "source", sources_present, source))
+    if any(p.get("worth") for p in parents):
+        parts.append(chip_bar("worth adding", "worth", list(NETWORK_WORTH_VALUES), worth))
 
     if not visible:
         parts.append("<div class='empty'>Nothing matches this view.</div>")
@@ -868,6 +1104,18 @@ summary::-webkit-details-marker{display:none}
 .btn.suggested::after{content:" · suggested";font-size:10.5px;font-weight:600;opacity:.75}
 .flag-spam{background:var(--badbg);color:var(--bad);border:1px solid var(--bad)}
 .flag-synth{background:#f0ebfa;color:var(--fix);border:1px solid var(--fix)}
+/* source / worth filter chips + the Yes/Maybe/No worth marks */
+.chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
+.chips-label{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.fchip{font-size:12px;color:var(--muted);text-decoration:none;background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 11px}
+.fchip:hover{background:var(--soft)}
+.fchip.active{background:#17202a;border-color:#17202a;color:#fff}
+.worth-label{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.btn.worth-yes.on{background:var(--ok);border-color:var(--ok);color:#fff}
+.btn.worth-maybe.on{background:var(--warn);border-color:var(--warn);color:#fff}
+.btn.worth-no.on{background:var(--bad);border-color:var(--bad);color:#fff}
+.worth-llm{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.parent.worthno>summary .pname{opacity:.75}
 .wrongones{margin-top:4px;border-top:1px dashed var(--line);padding-top:6px}
 .wrongones>summary{color:var(--bad);background:#fff;border:1px solid var(--line)}
 .wrongones>summary:hover{background:var(--soft)}
@@ -892,9 +1140,9 @@ function setCandState(cand,action,approved,newUrl){
   cand.querySelectorAll('.btn').forEach(b=>b.classList.remove('on'));
   // a real decision replaces the pre-highlighted suggestion
   if(st!=='review')cand.querySelectorAll('.btn.suggested').forEach(b=>b.classList.remove('suggested'));
-  if(st==='verified')cand.querySelector('.btn.keep').classList.add('on');
-  if(st==='detached')cand.querySelector('.btn.detach').classList.add('on');
-  if(st==='fixed')cand.querySelector('.btn.fix').classList.add('on');
+  if(st==='verified')cand.querySelector('.btn.keep')?.classList.add('on');
+  if(st==='detached')cand.querySelector('.btn.detach')?.classList.add('on');
+  if(st==='fixed')cand.querySelector('.btn.fix')?.classList.add('on');
   if(st==='excluded')cand.querySelector('.btn.exclude')?.classList.add('on');
 }
 function parentStatusFromCands(parent){
@@ -909,9 +1157,9 @@ function parentStatusFromCands(parent){
 function updateCounts(){
   const c={review:0,verified:0,detached:0,fixed:0,excluded:0,decided:0};
   document.querySelectorAll('.parent').forEach(p=>{c[parentStatusFromCands(p)]++;if(p.classList.contains('decided'))c.decided++;});
-  // mirror the server's user-facing folds: retargets read as verified; spam-flagged aren't "needs review"
+  // mirror the server's user-facing folds: retargets read as verified; spam-flagged / worth-no aren't "needs review"
   c.verified+=c.fixed;
-  document.querySelectorAll('.parent.llmrejected').forEach(p=>{if(parentStatusFromCands(p)==='review')c.review--;});
+  document.querySelectorAll('.parent.llmrejected,.parent.worthno').forEach(p=>{if(parentStatusFromCands(p)==='review')c.review--;});
   ['review','verified','detached','excluded','decided'].forEach(k=>{
     const el=document.querySelector('.stat strong[data-count="'+k+'"]');if(el)el.textContent=c[k];});
 }
@@ -923,16 +1171,20 @@ function activeTab(){
   const m=a&&(a.getAttribute('href')||'').match(/[?&]tab=([a-z]+)/);
   return m?m[1]:'all';
 }
-// Once a row's new status no longer matches the status tab you're on (e.g. you Fix/Keep/Detach
-// someone while on "needs review"), slide it off the list — it lives on its own tab now.
-function reconcileTabMembership(parent){
-  const t=activeTab();
-  if(!STATUS_TABS.has(t)||parentStatusFromCands(parent)===t)return;
+// Slide a row off the current list (fired when it no longer belongs on this tab).
+function evictParent(parent){
   parent.style.transition='opacity .28s ease';parent.style.opacity='0';
   setTimeout(()=>{parent.remove();updateCounts();
     const list=document.querySelector('.list');
     if(list&&!list.querySelector('.parent'))list.innerHTML="<div class='empty'>All clear on this tab — nothing left to review here.</div>";
   },280);
+}
+// Once a row's new status no longer matches the status tab you're on (e.g. you Fix/Keep/Detach
+// someone while on "needs review"), slide it off the list — it lives on its own tab now.
+function reconcileTabMembership(parent){
+  const t=activeTab();
+  if(!STATUS_TABS.has(t)||parentStatusFromCands(parent)===t)return;
+  evictParent(parent);
 }
 // The fix for "looks like nothing happened": after any decision, repaint the PARENT row's
 // chip + the header counts, not just the inner card.
@@ -974,7 +1226,25 @@ async function decide(cand,act){
     showToast(auto?base+' — detached the other '+auto+' LinkedIn'+(auto===1?'':'s')+' for you':base);
   }catch(e){showToast('Save failed: '+e.message)}
 }
-document.querySelectorAll('.cand .btn:not(.exclude)').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();decide(b.closest('.cand'),b.dataset.act)}));
+document.querySelectorAll('.cand .btn[data-act]:not(.exclude)').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();decide(b.closest('.cand'),b.dataset.act)}));
+// Yes / Maybe / No network-worth marks on candidate + synthetic rows: writes the user-owned
+// network_worth column in review.csv ('' clears the mark — back to the LLM's judgment).
+document.querySelectorAll('.worthrow .btn').forEach(b=>b.addEventListener('click',async e=>{
+  e.preventDefault();
+  const row=b.closest('.worthrow'),parent=b.closest('.parent');
+  const body=new URLSearchParams({pub:row.dataset.worthkey,worth:b.dataset.worth||''});
+  try{
+    const r=await fetch('/worth',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    if(!r.ok)throw new Error(await r.text());
+    const j=await r.json();
+    row.querySelectorAll('.btn.worth').forEach(x=>x.classList.toggle('on',x.dataset.worth===j.effective));
+    parent.classList.toggle('worthno',j.effective==='no');
+    updateCounts();
+    // "no" means "not worth adding" — the row leaves the review pile for the Rejected tab
+    if(j.effective==='no'&&activeTab()==='review')evictParent(parent);
+    showToast(b.dataset.worth?'Marked '+j.effective:'Cleared — '+j.source+' says '+j.effective);
+  }catch(err){showToast('Save failed: '+err.message)}
+}));
 // "Exclude person" sits with the per-candidate buttons but acts on the WHOLE person:
 // excludes — or restores — every candidate at once. Click again to undo.
 document.querySelectorAll('.btn.exclude').forEach(x=>x.addEventListener('click',async e=>{
@@ -987,9 +1257,9 @@ document.querySelectorAll('.btn.exclude').forEach(x=>x.addEventListener('click',
 }));
 // initialize button highlight from current state
 document.querySelectorAll('.cand').forEach(c=>{
-  if(c.classList.contains('cand-verified'))c.querySelector('.btn.keep').classList.add('on');
-  if(c.classList.contains('cand-detached'))c.querySelector('.btn.detach').classList.add('on');
-  if(c.classList.contains('cand-fixed'))c.querySelector('.btn.fix').classList.add('on');
+  if(c.classList.contains('cand-verified'))c.querySelector('.btn.keep')?.classList.add('on');
+  if(c.classList.contains('cand-detached'))c.querySelector('.btn.detach')?.classList.add('on');
+  if(c.classList.contains('cand-fixed'))c.querySelector('.btn.fix')?.classList.add('on');
   if(c.classList.contains('cand-excluded'))c.querySelector('.btn.exclude')?.classList.add('on');});
 // merged people carry one "exclude whole person" button at the row top — light it if excluded
 document.querySelectorAll('.parent').forEach(p=>{
@@ -1007,7 +1277,8 @@ document.querySelectorAll('details.dossier').forEach(d=>d.addEventListener('togg
 
 def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, dossier_dir: Path,
                  confirm_threshold: float, detach_threshold: float,
-                 synthetic_path: Path = SYNTHETIC_PEOPLE_CSV):
+                 synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
+                 facts_dir: Path = FACTS_DIR, people_csv: Path = DEFAULT_PEOPLE_CSV):
     class Handler(BaseHTTPRequestHandler):
         def send_bytes(self, body: bytes, content_type: str = "text/html; charset=utf-8", status: int = 200) -> None:
             self.send_response(status)
@@ -1029,20 +1300,40 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             if parsed.path != "/":
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
-            parents, _ = build_parents(verdicts_path, review_path)
+            parents, overrides = build_parents(verdicts_path, review_path)
             auto_resolve_merged(parents, review_path, confirm_threshold)
             parents.extend(load_synthetic_parents(synthetic_path))
+            # Pre-research candidate rows, deduped against everything already shown.
+            shown = {pid.lower() for p in parents for pid in p["person_ids"]}
+            parents.extend(load_candidate_parents(facts_dir, overrides, shown))
+            annotate_worth(parents, overrides, facts_dir)
+            annotate_sources(parents, load_people_sources(people_csv))
             params = urllib.parse.parse_qs(parsed.query)
             self.send_bytes(page_html(parents, params, review_path))
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path != "/decide":
+            if parsed.path not in {"/decide", "/worth"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             length = int(self.headers.get("Content-Length", "0"))
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
             pub = (form.get("pub") or [""])[0]
+            if parsed.path == "/worth":
+                # Yes/Maybe/No mark (or '' to clear) — user-owned network_worth column.
+                try:
+                    result = apply_worth_decision(review_path, pub, (form.get("worth") or [""])[0])
+                except ValueError as exc:
+                    self.send_bytes(str(exc).encode(), "text/plain", status=400)
+                    return
+                effective = effective_network_worth(pub.strip().lower(),
+                                                    load_override_rows(review_path), facts_dir)
+                self.send_bytes(json.dumps({"ok": True, "pub": pub, **result,
+                                            "effective": effective["decision"],
+                                            "source": effective["source"],
+                                            "reason": effective["reason"]}).encode(),
+                                "application/json")
+                return
             decision = (form.get("decision") or [""])[0]
             new_url = (form.get("new_url") or [""])[0]
             if not pub or decision not in {"keep", "detach", "fix", "reset", "exclude"}:
@@ -1077,7 +1368,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
     parents, _ = build_parents(verdicts_path, review_path)
     server = ThreadingHTTPServer((args.host, args.port),
                                  make_handler(review_path, verdicts_path, parents_dir, Path(args.dossier_dir),
-                                              args.confirm_threshold, args.detach_threshold))
+                                              args.confirm_threshold, args.detach_threshold,
+                                              facts_dir=Path(args.facts_dir), people_csv=Path(args.people_csv)))
     host, port = server.server_address
     url = f"http://{host}:{port}/"
     print(json.dumps({"primitive": "reconcile_review_web", "status": "serving", "url": url,
@@ -1099,6 +1391,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--verdicts", default=str(VERDICTS_JSONL))
     serve.add_argument("--parents-dir", default=str(PARENTS_DIR))
     serve.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
+    serve.add_argument("--facts-dir", default=str(FACTS_DIR))
+    serve.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     serve.add_argument("--confirm-threshold", type=float, default=DEFAULT_CONFIRM)
     serve.add_argument("--detach-threshold", type=float, default=DEFAULT_DETACH)
     serve.add_argument("--host", default="127.0.0.1")

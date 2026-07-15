@@ -21,6 +21,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from packs.ingestion.primitives.deep_context.candidates import NETWORK_WORTH_VALUES
 from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     FACTS_DIR,
@@ -103,6 +104,15 @@ def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     relationships = [str(f.get("relationship_to_owner") or "").strip() for f in facts]
     relationship = max((r for r in relationships if r), key=len, default="")
 
+    # Same rule as candidates.llm_network_worth: the incremental synthesizer refines
+    # ONE running profile, so the last valid judgment wins.
+    worth: dict[str, str] = {}
+    for f in facts:
+        value = f.get("network_worth")
+        if isinstance(value, dict) and str(value.get("decision") or "").lower() in NETWORK_WORTH_VALUES:
+            worth = {"decision": str(value.get("decision")).lower(),
+                     "reason": str(value.get("reason") or "").strip()}
+
     shared: dict[str, dict[str, str]] = {}
     for f in facts:
         for sc in f.get("shared_context") or []:
@@ -127,6 +137,7 @@ def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
         "notable_events": sorted(events.values(), key=lambda e: e["date"] or "9999"),
         "identifiers": identifiers,
         "shared_context": list(shared.values()),
+        "network_worth": worth,
         "confidence": max((f.get("confidence") or 0.0 for f in facts), default=0.0),
     }
 
@@ -180,6 +191,10 @@ def render_dossier(meta: dict[str, Any], merged: dict[str, Any], depth: dict[str
         "",
         headline(merged) or "_No summary yet._",
     ]
+    worth = merged.get("network_worth") or {}
+    if worth.get("decision"):
+        reason = f" — {worth['reason']}" if worth.get("reason") else ""
+        lines += ["", f"**Network worth:** {worth['decision']}{reason}"]
     rel = merged.get("relationship_to_owner")
     if rel:
         used = depth.get("messages_used", len(msgs))

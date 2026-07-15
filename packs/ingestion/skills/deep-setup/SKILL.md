@@ -6,6 +6,13 @@ description: The centralized post-import processing layer. Use for $deep-setup, 
 <!--
 Created: 2026-07-16
 Changelog:
+- 2026-07-16b: Network-worth triage (yes/maybe/no), the context-informed
+  successor to the old messages-flow buckets. Synthesis now judges every
+  profiled contact's `network_worth` from the actual message relationship;
+  the review UI shows it, lets the user mark yes/maybe/no (sticky, user-owned
+  `network_worth` column in overrides/review.csv), and filter by worth and by
+  source (gmail / imessage / whatsapp). Effective "no" (user mark, else LLM)
+  gates candidates out of the paid reverse lookup and synthetic minting.
 - 2026-07-16: Initial skill — the processing half of the import refocus. The
   import skills ($setup / $import-gmail / $import-messages) now only sync
   contacts down (people.csv + candidates.csv); this skill owns everything that
@@ -141,8 +148,12 @@ Identical to `$deep-context` Phase 1, with one addition: **collect takes
 4. **Estimate** — `bin/deep-context dry` with the exact synthesis scope flags.
 5. **Confirm the cost** — present floor/ceiling; explicit OK; no spend before.
 6. **Synthesize** — run the exact command `dry` printed (OpenAI, checkpointed,
-   resumable; ~$0.005/contact).
-7. **Compose** — `bin/deep-context compose` (free; dossiers + lookup index).
+   resumable; ~$0.005/contact). Besides the profile facts, the model judges
+   each contact's **network worth** (`yes` / `maybe` / `no` — worth adding to
+   the network?) from the actual relationship the messages show; this is the
+   context-informed successor to the old name-only triage.
+7. **Compose** — `bin/deep-context compose` (free; dossiers + lookup index;
+   each dossier carries the network-worth line).
 
 ### [Merge] — duplicates, including candidate→person matches
 
@@ -165,7 +176,10 @@ Identical to `$deep-context` Phase 1, with one addition: **collect takes
 - **Reverse-lookup identities ONCE** — the single research pass this whole
   redesign exists for. Eligible: the imports' **candidates** (now carrying
   dossiers) plus high-confidence wrong-link **detaches**, plus — with the
-  plausibly-absent opt-in — people the judge thinks may have no LinkedIn:
+  plausibly-absent opt-in — people the judge thinks may have no LinkedIn.
+  Candidates whose effective network worth is **`no`** (the user's mark, else
+  the synthesis LLM's judgment) are excluded — never pay to research someone
+  not worth adding; the manifest reports `candidates_skipped_worth_no`:
 
   ```bash
   bin/deep-context reconcile-deep-research --dry-run --include-candidates --include-plausibly-absent
@@ -183,8 +197,12 @@ Identical to `$deep-context` Phase 1, with one addition: **collect takes
   completeness ≥ 0.6 auto-approves, the rest wait pending for the review UI.
 - **Open the review page** — `bin/deep-context review`. One row per person:
   matched LinkedIn(s), verdicts, evidence, dossier; candidates and synthetic
-  rows carry their no-LinkedIn badge. Keep / Detach / Fix autosave into
-  `overrides/review.csv`.
+  rows carry their no-LinkedIn badge plus the LLM's **yes/maybe/no network
+  worth** with its reason. The user can mark **Yes / Maybe / No** per row
+  (sticky, user-owned — overrules the LLM), and filter by worth and by
+  **source** (gmail / iMessage / WhatsApp) when several sources are imported.
+  Keep / Detach / Fix autosave into `overrides/review.csv`. Tell the user:
+  marking No costs nothing and removes the contact from paid research.
 - **Wait for the user to finish reviewing — hard stop.** Tell them the page is
   open; do not proceed until they say they're done. Opening the page is not
   reviewing it.

@@ -659,7 +659,11 @@ OVERRIDE_COLUMNS = ["public_identifier", "action", "approved", "new_linkedin_url
                     # Machine-owned spam screen (backwards compatible: older files simply lack
                     # them). The LLM may ALWAYS refresh these three — and ONLY these three — on
                     # any row, including user-decided ones; action/approved stay user-owned.
-                    "llm_reject", "llm_reject_confidence", "llm_reject_reason"]
+                    "llm_reject", "llm_reject_confidence", "llm_reject_reason",
+                    # USER-owned network-worth mark (yes|maybe|no; blank = defer to the
+                    # synthesis LLM's network_worth in facts). Sticky like approved —
+                    # the machine never writes it.
+                    "network_worth"]
 # A user-touched approval is sticky — re-runs never overwrite these rows.
 USER_APPROVED = {"yes", "no"}
 
@@ -742,6 +746,8 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
             "reason": v.get("reason", ""), "person_id": (t.get("person_ids") or [""])[0],
             "source": "deep-context-reconcile", "updated_at": now_iso(),
             **_llm_reject_fields(v),
+            # user-owned; survives machine rebuilds even on non-user-approved rows
+            "network_worth": existing.get(pub, {}).get("network_worth", ""),
         }
         if approved == "auto":
             detach += ov_action == "detach"
@@ -787,6 +793,8 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
             "confidence": f"{float(p.get('confidence') or 0):.3f}",
             "reason": p.get("reason", ""), "person_id": p.get("person_id", prior.get("person_id", "")),
             "source": p.get("source", "deep-research"), "updated_at": now_iso(),
+            # user-owned; survives machine rebuilds even on non-user-approved rows
+            "network_worth": prior.get("network_worth", ""),
         }
         proposed += 1
     _write_override_rows(path, existing)

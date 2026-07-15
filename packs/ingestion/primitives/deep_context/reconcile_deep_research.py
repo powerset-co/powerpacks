@@ -39,6 +39,7 @@ from packs.ingestion.primitives.deep_context.candidates import (
     candidate_carry,
     candidate_key_of,
     candidate_row,
+    effective_network_worth,
     is_candidate_id,
     load_candidates,
 )
@@ -148,13 +149,19 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
 
 
 def candidate_subset(facts_dir: Path,
-                     overrides: dict[str, dict[str, str]] | None = None) -> list[dict[str, Any]]:
+                     overrides: dict[str, dict[str, str]] | None = None,
+                     *,
+                     worth_skipped: list[str] | None = None) -> list[dict[str, Any]]:
     """Dossier-bearing import candidates as research subjects (opt-in via
     --include-candidates). Candidates have no resolved LinkedIn by definition;
     eligibility means their facts file exists — the facts ARE the dossier context
     the queue bio is built from. Entries mirror the verdict-row shape so
     build_queue / propose_retargets consume them unchanged; the review.csv key for
-    a candidate is its person_id (candidate:<key>)."""
+    a candidate is its person_id (candidate:<key>).
+
+    A candidate whose effective network_worth is `no` (the user's review.csv mark,
+    else the synthesis LLM's judgment) is excluded — not worth paid research;
+    excluded ids are appended to ``worth_skipped`` when provided."""
     overrides = overrides or {}
     decided = {pub for pub, r in overrides.items()
                if (r.get("action") or "").strip().lower() in {"retarget", "exclude"}
@@ -163,6 +170,10 @@ def candidate_subset(facts_dir: Path,
     for person in load_candidates():
         pid = person.person_id
         if pid.lower() in decided or not (facts_dir / f"{pid}.jsonl").exists():
+            continue
+        if effective_network_worth(pid, overrides, facts_dir)["decision"] == "no":
+            if worth_skipped is not None:
+                worth_skipped.append(pid)
             continue
         out.append({
             "parent_slug": slugify(person.full_name, parent_id_for([pid])),
@@ -306,7 +317,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     overrides = load_override_rows(Path(args.overrides_csv))
     subset = eligible_subset(verdicts, args.confirm_threshold, overrides,
                              include_plausibly_absent=getattr(args, "include_plausibly_absent", False))
-    candidates = (candidate_subset(Path(args.facts_dir), overrides)
+    worth_skipped: list[str] = []
+    candidates = (candidate_subset(Path(args.facts_dir), overrides, worth_skipped=worth_skipped)
                   if getattr(args, "include_candidates", False) else [])
     subset += candidates
     people = load_people_rows(Path(args.people_csv))
@@ -317,6 +329,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source": "reconcile_deep_research",
         "eligible": len(subset),
         "eligible_candidates": len(candidates),
+        "candidates_skipped_worth_no": len(worth_skipped),
         "processor": args.processor,
         "cost_per_person_usd": cost_per,
         "estimated_usd": est_usd,

@@ -6,6 +6,12 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-07-16: Network-worth triage (shared with $deep-setup). Synthesis judges each
+  profiled contact's network_worth (yes/maybe/no + reason) from message context;
+  overrides/review.csv gained a USER-owned sticky `network_worth` column (machine
+  never writes it); the review UI shows worth badges, Yes/Maybe/No marking, and
+  worth + source (gmail/imessage/whatsapp) filters. Effective "no" excludes a
+  candidate from reconcile-deep-research and synthetic minting.
 - 2026-07-13: Added the product architecture guide; corrected the opt-in iMessage
   group-body privacy contract and merge threshold docs; disabled the unsafe chained
   `run` shortcut so core model stages are previewed and approved separately; made

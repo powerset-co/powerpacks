@@ -26,6 +26,7 @@ from packs.ingestion.primitives.deep_context import (
     common,
     compose_dossier as compose,
     reconcile_deep_research as dresearch,
+    reconcile_linkedin as reconcile,
     reconcile_review_web as web,
     synthesize_person_context as synth,
 )
@@ -352,6 +353,243 @@ class TestMintingFromCandidateResearch(unittest.TestCase):
             self.assertEqual(json.loads(row["interaction_counts"]), {"imessage": 5, "whatsapp": 2})
             self.assertEqual(row["source_channels"], "imessage,whatsapp")
             self.assertEqual(row["last_interaction"], "2026-05-01T00:00:00Z")
+
+
+def _facts_record(decision: str = "", reason: str = "", name: str = "") -> str:
+    """One facts JSONL line exactly as synthesize_person_context.on_result writes it
+    (the extracted profile nested under 'facts')."""
+    facts: dict = {"canonical_name": name}
+    if decision:
+        facts["network_worth"] = {"decision": decision, "reason": reason}
+    return json.dumps({"chunk_index": 0, "facts": facts})
+
+
+class TestNetworkWorth(unittest.TestCase):
+    """The yes|maybe|no worth judgment: schema pins, LLM read, and precedence."""
+
+    def test_fact_schema_and_prompt_pin_network_worth(self):
+        self.assertIn("network_worth", synth.FACT_SCHEMA["required"])
+        prop = synth.FACT_SCHEMA["properties"]["network_worth"]
+        self.assertEqual(prop["properties"]["decision"]["enum"], ["yes", "maybe", "no"])
+        self.assertEqual(prop["required"], ["decision", "reason"])
+        self.assertIn("network_worth", synth.SYSTEM_PROMPT)
+        self.assertEqual(candidates.NETWORK_WORTH_VALUES, ("yes", "maybe", "no"))
+        self.assertIn("network_worth", reconcile.OVERRIDE_COLUMNS)
+
+    def test_llm_worth_last_record_wins_and_absent_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts = Path(d)
+            pid = "candidate:email:cass@x.com"
+            (facts / f"{pid}.jsonl").write_text(
+                _facts_record("yes", "founder") + "\n" + _facts_record("no", "actually a vendor") + "\n",
+                encoding="utf-8")
+            self.assertEqual(candidates.llm_network_worth(pid, facts),
+                             {"decision": "no", "reason": "actually a vendor"})
+            self.assertEqual(candidates.llm_network_worth("ghost", facts),
+                             {"decision": "", "reason": ""})
+
+    def test_effective_worth_precedence_user_llm_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts = Path(d)
+            pid = "candidate:email:cass@x.com"
+            (facts / f"{pid}.jsonl").write_text(_facts_record("no", "vendor") + "\n", encoding="utf-8")
+            got = candidates.effective_network_worth(pid, {pid: {"network_worth": "yes"}}, facts)
+            self.assertEqual((got["decision"], got["source"]), ("yes", "user"))          # user wins
+            got = candidates.effective_network_worth(pid, {pid: {"network_worth": "dunno"}}, facts)
+            self.assertEqual((got["decision"], got["source"]), ("no", "llm"))            # invalid mark -> LLM
+            self.assertEqual(got["reason"], "vendor")
+            got = candidates.effective_network_worth("ghost", {}, facts)
+            self.assertEqual((got["decision"], got["source"]), ("maybe", "default"))     # nothing -> maybe
+
+
+class TestCandidateSubsetWorthGate(unittest.TestCase):
+    def test_effective_no_is_excluded_and_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            (facts / "candidate:email:cass@x.com.jsonl").write_text(
+                _facts_record("maybe", "thin signal") + "\n", encoding="utf-8")
+            (facts / "candidate:phone:+14155551234.jsonl").write_text(
+                _facts_record("no", "food delivery updates") + "\n", encoding="utf-8")
+            pools = _pools(base, [GMAIL_ROW], [PHONE_ROW])
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
+                skipped: list[str] = []
+                subset = dresearch.candidate_subset(facts, {}, worth_skipped=skipped)
+                self.assertEqual([r["candidate_key"] for r in subset],
+                                 ["candidate:email:cass@x.com"])                         # maybe stays in
+                self.assertEqual(skipped, ["candidate:phone:+14155551234"])              # no is gated out
+                # a user "yes" mark overrides the LLM's no -> back in the paid queue
+                skipped = []
+                subset = dresearch.candidate_subset(
+                    facts, {"candidate:phone:+14155551234": {"network_worth": "yes"}},
+                    worth_skipped=skipped)
+                self.assertEqual(len(subset), 2)
+                self.assertEqual(skipped, [])
+
+
+class TestAssembleWorthGate(unittest.TestCase):
+    def _profile(self) -> dict:
+        return {
+            "person": {"full_name": "Cass Doe", "first_name": "Cass", "last_name": "Doe", "confidence": 0.9},
+            "location": {"city": "Oakland", "country": "United States", "raw": ""},
+            "headline": {"text": "builder"}, "summary": {"text": "s"},
+            "positions": [{"title": "CTO", "company_name": "StealthCo", "is_current": True}],
+            "education": [], "social": {"linkedin_url": None},
+            "metadata": {"estimated_completeness": 0.7, "gaps": []},
+        }
+
+    def _run(self, base: Path, pools: list[Path], review: Path) -> dict:
+        research = base / "research"
+        common.write_json(research / "cass-doe-parentab" / "01_research_parallel.json", self._profile())
+        queue = base / "research_queue.csv"
+        queue.write_text("handle,display_name,primary_email,phone_e164,source_channel\n"
+                         "cass-doe-parentab,Cass Doe,cass@x.com,,email\n", encoding="utf-8")
+        people = base / "people.csv"
+        people.write_text("id,primary_email,primary_phone\n", encoding="utf-8")
+        buf = io.StringIO()
+        with mock.patch.object(candidates, "CANDIDATE_CSVS", pools), \
+             mock.patch.object(asp, "LINKEDIN_OVERRIDES_CSV", review), \
+             contextlib.redirect_stdout(buf):
+            asp.main(["--research-dir", str(research), "--queue-csv", str(queue),
+                      "--people-csv", str(people), "--out", str(base / "synthetic-people.csv")])
+        return json.loads(buf.getvalue())
+
+    def test_no_candidate_is_never_minted_yes_still_is(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            pools = _pools(base, [GMAIL_ROW], [])
+            review = base / "review.csv"
+            web.apply_worth_decision(review, "candidate:email:cass@x.com", "no")
+            man = self._run(base, pools, review)
+            self.assertEqual((man["built"], man["skipped_worth_no"]), (0, 1))
+            with (base / "synthetic-people.csv").open(newline="", encoding="utf-8") as fh:
+                self.assertEqual(list(csv.DictReader(fh)), [])                           # nothing minted
+            # flip the mark to yes -> the same research result mints a row
+            web.apply_worth_decision(review, "candidate:email:cass@x.com", "yes")
+            man = self._run(base, pools, review)
+            self.assertEqual((man["built"], man["skipped_worth_no"]), (1, 0))
+            with (base / "synthetic-people.csv").open(newline="", encoding="utf-8") as fh:
+                (row,) = list(csv.DictReader(fh))
+            self.assertEqual(row["id"], "candidate:email:cass@x.com")
+
+
+class TestWorthCarryForward(unittest.TestCase):
+    """The USER-owned network_worth column survives every machine rewrite of a
+    non-user-approved row (write_overrides rebuilds + retarget upserts)."""
+
+    def test_machine_rebuild_preserves_user_worth_mark(self):
+        with tempfile.TemporaryDirectory() as d:
+            review = Path(d) / "review.csv"
+            web.apply_worth_decision(review, "janedoe", "yes")   # mark a PENDING row
+            task = {"no_link": False, "candidate_key": "janedoe", "action": "review",
+                    "person_ids": ["pid-1"], "match_emails": [], "match_phones": [],
+                    "linkedin": {"linkedin_url": "https://www.linkedin.com/in/janedoe"},
+                    "verdict": {"verdict": "needs_review", "confidence": 0.5, "reason": "r"}}
+            reconcile.write_overrides(review, [task])
+            row = reconcile.load_override_rows(review)["janedoe"]
+            self.assertEqual(row["source"], "deep-context-reconcile")  # the machine rebuilt the row…
+            self.assertEqual(row["approved"], "")                       # …it is NOT user-approved…
+            self.assertEqual(row["network_worth"], "yes")               # …but the mark carried forward
+            reconcile.upsert_retargets(review, [{
+                "old_public_identifier": "janedoe",
+                "new_linkedin_url": "https://www.linkedin.com/in/jane-real"}])
+            row = reconcile.load_override_rows(review)["janedoe"]
+            self.assertEqual(row["action"], "retarget")
+            self.assertEqual(row["network_worth"], "yes")               # retarget upsert too
+
+
+class TestReviewWebWorth(unittest.TestCase):
+    def test_worth_mark_writes_and_reset_clears(self):
+        with tempfile.TemporaryDirectory() as d:
+            review = Path(d) / "review.csv"
+            pid = "candidate:email:cass@x.com"
+            self.assertEqual(web.apply_worth_decision(review, pid, "no"), {"network_worth": "no"})
+            row = reconcile.load_override_rows(review)[pid]
+            self.assertEqual(row["network_worth"], "no")
+            self.assertEqual((row["action"], row["approved"]), ("", ""))  # worth is not a link decision
+            # marking worth never clobbers an existing decision…
+            web.apply_decision(review, Path(d) / "verdicts.jsonl", pid, "detach", "", 0.85)
+            web.apply_worth_decision(review, pid, "maybe")
+            row = reconcile.load_override_rows(review)[pid]
+            self.assertEqual((row["action"], row["approved"], row["network_worth"]),
+                             ("detach", "yes", "maybe"))
+            # …and ↺ (empty mark) clears it back to the LLM/default
+            web.apply_worth_decision(review, pid, "")
+            self.assertEqual(reconcile.load_override_rows(review)[pid]["network_worth"], "")
+            with self.assertRaises(ValueError):
+                web.apply_worth_decision(review, pid, "sometimes")
+            with self.assertRaises(ValueError):
+                web.apply_worth_decision(review, "", "yes")
+
+
+class TestReviewWebCandidateRows(unittest.TestCase):
+    def _fixture(self, base: Path) -> tuple[Path, list[Path]]:
+        facts = base / "facts"
+        facts.mkdir()
+        (facts / "candidate:email:cass@x.com.jsonl").write_text(
+            _facts_record("yes", "strong founder", name="Cassandra Doe") + "\n", encoding="utf-8")
+        (facts / "candidate:phone:+14155551234.jsonl").write_text(
+            _facts_record("no", "delivery updates") + "\n", encoding="utf-8")
+        return facts, _pools(base, [GMAIL_ROW], [PHONE_ROW])
+
+    def test_candidate_rows_shape_worth_grouping_and_filters(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts, pools = self._fixture(Path(d))
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
+                parents = web.load_candidate_parents(facts, {}, set())
+            web.annotate_worth(parents, {}, facts)
+            by = {p["person_ids"][0]: p for p in parents}
+            cass, tex = by["candidate:email:cass@x.com"], by["candidate:phone:+14155551234"]
+            self.assertEqual(cass["name"], "Cassandra Doe")                # canonical name from facts
+            self.assertEqual(cass["sources"], ["gmail"])
+            self.assertEqual(tex["sources"], ["imessage", "whatsapp"])
+            cand = cass["candidates"][0]
+            self.assertTrue(cand["import_candidate"])
+            self.assertEqual(cand["pub"], "candidate:email:cass@x.com")    # review.csv key = person_id
+            self.assertEqual(web.candidate_state(cand), "review")          # pending -> Needs review pile
+            self.assertEqual((cass["worth"]["decision"], cass["worth"]["source"]), ("yes", "llm"))
+            # effective-no groups with Rejected (like spam), not the review pile
+            self.assertTrue(web.is_worth_no(tex))
+            self.assertTrue(web.parent_in_tab(tex, "rejected"))
+            self.assertFalse(web.parent_in_tab(tex, "review"))
+            self.assertTrue(web.parent_in_tab(cass, "review"))
+            # source + worth filters
+            self.assertTrue(web.parent_matches_source(cass, "gmail"))
+            self.assertFalse(web.parent_matches_source(cass, "imessage"))
+            self.assertTrue(web.parent_matches_source(cass, "all"))
+            self.assertTrue(web.parent_matches_worth(cass, "yes"))
+            self.assertFalse(web.parent_matches_worth(cass, "no"))
+            # the card renders the badge, the worth buttons, and the LLM's reasoning
+            html = web.render_candidate(0, 1, cand)
+            self.assertIn("candidate — no LinkedIn", html)
+            self.assertIn("Worth adding?", html)
+            self.assertIn("worth-yes on", html)                            # effective value highlighted
+            self.assertIn("LLM: yes — strong founder", html)
+            self.assertNotIn("Keep this LinkedIn", html)                   # nothing attached to keep
+
+    def test_candidate_rows_dedupe_against_shown_person_ids(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts, pools = self._fixture(Path(d))
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
+                parents = web.load_candidate_parents(facts, {}, {"candidate:email:cass@x.com"})
+        self.assertEqual([p["person_ids"][0] for p in parents], ["candidate:phone:+14155551234"])
+
+
+class TestComposeNetworkWorth(unittest.TestCase):
+    def test_merge_carries_last_worth_and_dossier_renders_it(self):
+        chunks = [json.loads(_facts_record("maybe", "early read", name="Cass Doe")),
+                  json.loads(_facts_record("yes", "founder with real traction", name="Cass Doe"))]
+        merged = compose.merge_facts(chunks)
+        self.assertEqual(merged["network_worth"],
+                         {"decision": "yes", "reason": "founder with real traction"})
+        md = compose.render_dossier({"person_id": "p1", "full_name": "Cass Doe"}, merged)
+        self.assertIn("**Network worth:** yes — founder with real traction", md)
+        # absent worth -> no line
+        merged = compose.merge_facts([json.loads(_facts_record(name="Cass Doe"))])
+        self.assertEqual(merged["network_worth"], {})
+        md = compose.render_dossier({"person_id": "p1", "full_name": "Cass Doe"}, merged)
+        self.assertNotIn("Network worth", md)
 
 
 class TestReadinessCandidateCounts(unittest.TestCase):
