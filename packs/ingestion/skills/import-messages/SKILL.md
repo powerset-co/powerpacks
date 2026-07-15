@@ -233,11 +233,17 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contac
 - Report candidate counts (`import.candidates` per source) so the user knows how
   many contacts are waiting for research.
 
-Then ask: **"Would you like to process your contacts now? `$deep-setup` builds
-per-person context across Gmail + iMessage/WhatsApp, resolves the candidates'
-identities once (spend-gated, with review), and rebuilds the search index."**
-If yes → route to `$deep-setup`. If no → remind them their new contacts become
-searchable after `$deep-setup` (or the next index rebuild) runs.
+Then ask, **in plain product words grounded in what the status check just
+found — name the imported sources, never the skill**. Pattern:
+
+> "I see Gmail and LinkedIn are imported alongside iMessage/WhatsApp — do you
+> want to enrich your contacts?"
+
+(Adapt the source list to what's actually imported; `$deep-setup` is the
+internal route — do not say its name or describe its machinery in the ask.)
+If yes → run the `$deep-setup` flow. If no → say their new contacts become
+searchable after the next enrichment run; nothing is lost, the candidates
+stay staged.
 
 ---
 

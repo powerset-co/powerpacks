@@ -6,6 +6,13 @@ description: The centralized post-import processing layer. Use for $deep-setup, 
 <!--
 Created: 2026-07-16
 Changelog:
+- 2026-07-16c: Rejected and worth-no are ONE concept. Effective "no" (user
+  mark, or the LLM's — the spam screen folds in as an LLM no) = the Rejected
+  tab = dropped from the searchable network at the next fan-in merge
+  (machine-owned llm_worth/llm_worth_reason columns in review.csv; worth
+  buttons on every row type incl. plain verdict rows). User Yes/Keep rescues
+  from any machine no; user No drops regardless; flipping a mark restores the
+  person at the next merge.
 - 2026-07-16b: Network-worth triage (yes/maybe/no), the context-informed
   successor to the old messages-flow buckets. Synthesis now judges every
   profiled contact's `network_worth` from the actual message relationship;
@@ -26,8 +33,8 @@ Changelog:
 # deep-setup
 
 Use this for `$deep-setup`, "process my contacts", "resolve my imported
-contacts", or when an import skill's final step asked *"process your contacts
-now?"* and the user said yes.
+contacts", "enrich my contacts/network", or when an import skill's final step
+asked *"do you want to enrich your contacts?"* and the user said yes.
 
 The import skills are contact-sync only. This skill is where identity happens:
 it builds one **markdown dossier per contact** from actual message bodies —
@@ -140,9 +147,15 @@ Identical to `$deep-context` Phase 1, with one addition: **collect takes
    cache miss calls RapidAPI and get approval; then
    `bin/deep-context owner --linkedin-url <their-url> --email <their-email>`.
    Skip the ask if `owner.json` exists — confirm its values instead.
-2. **Group / cap ask** — DM bodies only by default; offer `--include-groups`
-   (iMessage small groups, costs more, reads other members' messages) and
-   `--deep-cap` (default 1600 per source pool). Explicit answers this run.
+2. **Group / depth ask** — two questions, explicit answers this run:
+   - **Groups:** DM bodies only by default; offer `--include-groups` (small
+     iMessage groups — costs more and reads other members' messages; WhatsApp
+     group bodies are never read).
+   - **Depth:** offer named tiers, not a bare number:
+     **shallow** (~400 recent messages per channel per person — fastest,
+     cheapest), **medium** (~1,600 — the default), **deep** (~6,400 — most
+     context, costs more at synthesis). The choice sets `--deep-cap`; a
+     custom number is fine if the user gives one. Recommend medium.
 3. **Collect** (free, local, FDA terminal):
    `bin/deep-context collect --include-candidates` plus the chosen flags.
 4. **Estimate** — `bin/deep-context dry` with the exact synthesis scope flags.
@@ -197,12 +210,17 @@ Identical to `$deep-context` Phase 1, with one addition: **collect takes
   completeness ≥ 0.6 auto-approves, the rest wait pending for the review UI.
 - **Open the review page** — `bin/deep-context review`. One row per person:
   matched LinkedIn(s), verdicts, evidence, dossier; candidates and synthetic
-  rows carry their no-LinkedIn badge plus the LLM's **yes/maybe/no network
-  worth** with its reason. The user can mark **Yes / Maybe / No** per row
-  (sticky, user-owned — overrules the LLM), and filter by worth and by
-  **source** (gmail / iMessage / WhatsApp) when several sources are imported.
+  rows carry their no-LinkedIn badge. **Every row** shows the LLM's
+  **yes/maybe/no network worth** with its reason (the spam screen is just one
+  way the LLM says no) and **Yes / Maybe / No** buttons — the user's mark is
+  sticky, user-owned, and overrules the LLM. Filter by worth and by **source**
+  (gmail / iMessage / WhatsApp) when several sources are imported.
+  **Rejected = effective no = out of the searchable network** at the next
+  realize, whoever said it; a Yes (or Keep) click rescues anyone, and flipping
+  a mark back restores the person at the next merge — nothing is destructive.
   Keep / Detach / Fix autosave into `overrides/review.csv`. Tell the user:
-  marking No costs nothing and removes the contact from paid research.
+  marking No costs nothing, removes the contact from paid research, and
+  excludes them from the index.
 - **Wait for the user to finish reviewing — hard stop.** Tell them the page is
   open; do not proceed until they say they're done. Opening the page is not
   reviewing it.

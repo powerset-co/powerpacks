@@ -334,11 +334,12 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contac
 - `gmail.import.imported: false` → suggest **`$import-gmail`**.
 - `messages.import.imported: false` → suggest **`$import-messages`**.
 
-If either import shows staged candidates (`import.candidates > 0`), also ask:
-**"Would you like to process your contacts now? `$deep-setup` builds per-person
-context across Gmail + iMessage/WhatsApp, resolves unidentified contacts once
-(spend-gated, with review), and rebuilds the search index."** If nothing else is
-imported yet, just make the suggestions and finish.
+If either import shows staged candidates (`import.candidates > 0`), also ask —
+in plain product words grounded in what the status check found, naming the
+imported sources and never the skill, e.g. *"I see Gmail and iMessage/WhatsApp
+are imported — do you want to enrich your contacts?"* (a yes runs the
+`$deep-setup` flow). If nothing else is imported yet, just make the
+suggestions and finish.
 
 ---
 

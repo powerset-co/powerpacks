@@ -6,6 +6,10 @@ description: Build the richest per-person markdown dossier from local message bo
 <!--
 Created: 2026-06-21
 Changelog:
+- 2026-07-16b: Rejected == worth-no (one concept, shared with $deep-setup).
+  Machine-owned llm_worth/llm_worth_reason columns mirror the synthesis judgment
+  into review.csv (spam folds in as an LLM no); worth buttons on every row; the
+  fan-in merge drops effective-no people (user Yes/Keep rescues, user No wins).
 - 2026-07-16: Network-worth triage (shared with $deep-setup). Synthesis judges each
   profiled contact's network_worth (yes/maybe/no + reason) from message context;
   overrides/review.csv gained a USER-owned sticky `network_worth` column (machine
@@ -342,10 +346,13 @@ source pool independently; a 1.8M-character safety cap bounds the combined bundl
      small shared groups (`--max-group-size`, default 25). Tell them this **costs
      more** (more messages → more synthesis tokens) and pulls in other group
      members' messages.
-  2. **Message cap** — `--deep-cap` defaults to **1600 per source pool**, not per
-     person overall. Gmail, iMessage DMs, WhatsApp DMs, and opted-in iMessage groups
-     can each contribute up to that amount before the combined character cap.
-     Raising it can increase synthesis cost.
+  2. **Depth** — offer named tiers, not a bare number: **shallow** (~400
+     recent messages per channel per person — fastest, cheapest), **medium**
+     (~1,600 — the default), **deep** (~6,400 — most context, costs more at
+     synthesis). The choice sets `--deep-cap`, which applies **per source
+     pool** (Gmail, iMessage DMs, WhatsApp DMs, and opted-in iMessage groups
+     each contribute up to the cap before the combined character cap). A
+     custom number is fine if the user gives one; recommend medium.
 - **[Context] Gather each person's messages** (free, local) — `bin/deep-context collect` with the chosen flags
   (e.g. `--include-groups --deep-cap 1600`). `people_capped` is reliable for Gmail
   and iMessage DMs but can under-report capped WhatsApp/group pools.

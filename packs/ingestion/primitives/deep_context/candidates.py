@@ -191,14 +191,23 @@ def effective_network_worth(
     override_rows: dict[str, dict[str, str]] | None = None,
     facts_dir: Path = FACTS_DIR,
 ) -> dict[str, str]:
-    """Resolved worth for a person: the user's review.csv mark wins, else the
-    synthesis LLM's judgment, else the default ('maybe' — needs a human look).
+    """Resolved worth for a person: the user's review.csv mark wins (an approved
+    `exclude` action counts as a user `no` — one unified way of saying no), else the
+    synthesis LLM's judgment from facts, else the machine-owned `llm_worth` column
+    reconcile mirrors onto the review row (so the merge and the UI agree even when
+    facts aren't on disk), else the default ('maybe' — needs a human look).
     Returns {'decision', 'reason', 'source': user|llm|default}."""
     row = (override_rows or {}).get(person_id.lower()) or {}
     user_mark = str(row.get("network_worth") or "").strip().lower()
     if user_mark in NETWORK_WORTH_VALUES:
         return {"decision": user_mark, "reason": "user decision", "source": "user"}
+    if str(row.get("action") or "").strip().lower() == "exclude" and \
+            str(row.get("approved") or "").strip().lower() in ("auto", "yes"):
+        return {"decision": "no", "reason": "user excluded this person", "source": "user"}
     llm = llm_network_worth(person_id, facts_dir)
     if llm["decision"]:
         return {**llm, "source": "llm"}
+    row_llm = str(row.get("llm_worth") or "").strip().lower()
+    if row_llm in NETWORK_WORTH_VALUES:
+        return {"decision": row_llm, "reason": str(row.get("llm_worth_reason") or ""), "source": "llm"}
     return {"decision": DEFAULT_NETWORK_WORTH, "reason": "not yet judged", "source": "default"}

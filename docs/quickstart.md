@@ -249,7 +249,8 @@ bodies or subjects to identity providers. See the
 
 ### Process your contacts — `$deep-setup`
 
-After any import finishes it asks *"process your contacts now?"* — a yes runs
+After any import finishes it asks — naming the sources it sees — *"do you want
+to enrich your contacts?"*; a yes runs
 `$deep-setup`, the centralized processing layer (it never runs silently; every
 paid stage previews its cost and the review step is a hard stop):
 

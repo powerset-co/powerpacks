@@ -339,7 +339,9 @@ Routes:
   fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index
   build in-skill — processing/identity resolution/indexing is `$deep-setup` →
   `packs/ingestion/skills/import-gmail/SKILL.md`
-- `$deep-setup`, process my contacts, resolve my imported contacts, the
+- `$deep-setup`, enrich my contacts/network, process my contacts, resolve my
+  imported contacts, the yes after an import's "do you want to enrich your
+  contacts?" ask — the
   post-import processing layer (dossiers over people + the imports' research
   candidates → duplicate merge → LinkedIn self-heal → ONE dossier-informed
   Parallel reverse lookup → synthetic profiles → review → fan-in + Modal index

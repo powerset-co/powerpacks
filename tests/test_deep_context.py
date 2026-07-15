@@ -6,6 +6,7 @@ compose -> cluster -> lookup flow over synthetic fixtures (no network, no DB).
 """
 from __future__ import annotations
 
+import csv
 import json
 import subprocess
 import tempfile
@@ -1678,7 +1679,11 @@ class TestSpamDropAtMerge(unittest.TestCase):
         self.assertEqual(counts["spam_dropped"], 1)
         self.assertTrue(rows[0].get("__excluded__"))
 
-    def test_keep_filter_admits_only_approved_synthetic_rows(self) -> None:
+    def test_synthetic_admission_gate_lives_at_load_time(self) -> None:
+        # The approved gate is enforced in load_people_file on the RAW row:
+        # normalize_people_row strips the non-schema `approved` column, so a
+        # keep-gate check on the normalized row can never see it (that was the
+        # bug: approved synthetic rows never merged).
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "merge_network_sources",
@@ -1687,11 +1692,25 @@ class TestSpamDropAtMerge(unittest.TestCase):
         assert spec and spec.loader
         spec.loader.exec_module(merge)
 
-        synth = {"public_identifier": "synth-email-abc123", "enrichment_provider": "synthetic"}
-        self.assertTrue(merge.keep_people_csv_row({**synth, "approved": "auto"}))
-        self.assertTrue(merge.keep_people_csv_row({**synth, "approved": "yes"}))
-        self.assertFalse(merge.keep_people_csv_row({**synth, "approved": ""}))    # pending stays out
-        self.assertFalse(merge.keep_people_csv_row({**synth, "approved": "no"}))  # user-rejected stays out
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "synthetic-people.csv"
+            fields = ["id", "public_identifier", "enrichment_provider", "full_name", "approved"]
+            with path.open("w", newline="", encoding="utf-8") as fh:
+                w = csv.DictWriter(fh, fieldnames=fields)
+                w.writeheader()
+                for approved, pub in (("auto", "synth-a"), ("yes", "synth-b"),
+                                      ("", "synth-c"), ("no", "synth-d")):
+                    w.writerow({"id": f"candidate:email:{pub}@x.com", "public_identifier": pub,
+                                "enrichment_provider": "synthetic", "full_name": "Synth Person",
+                                "approved": approved})
+            loaded = merge.load_people_file(path)
+        # only auto/yes survive load; pending and user-no never enter the merge
+        self.assertEqual(sorted(r["public_identifier"] for r in loaded), ["synth-a", "synth-b"])
+        # ...and the loaded (normalized, approved-stripped) rows pass the keep gate
+        for row in loaded:
+            self.assertTrue(merge.keep_people_csv_row(row))
+        # a synthetic row without an identity never passes
+        self.assertFalse(merge.keep_people_csv_row({"enrichment_provider": "synthetic"}))
         # real rows still require LinkedIn + rapidapi — the relaxation is synthetic-only
         self.assertFalse(merge.keep_people_csv_row({"public_identifier": "someone", "approved": "auto"}))
 

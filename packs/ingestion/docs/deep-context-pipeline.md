@@ -138,11 +138,14 @@ table is `.powerpacks/network-import/overrides/review.csv`.
 - `approved=yes` or `approved=no` is a sticky human decision.
 - Blank approval is pending.
 - `network_worth` (yes|maybe|no) is a sticky USER-owned mark that overrules the
-  synthesis LLM's own network-worth judgment; the machine never writes it. The
-  review UI renders Yes/Maybe/No buttons (with the LLM's decision + reason as
-  secondary text), moves effective-`no` rows to the Rejected tab, and offers
-  worth and source (gmail/imessage/whatsapp) filter chips. Effective `no`
-  excludes a candidate from paid deep research and synthetic minting.
+  machine; `llm_worth`/`llm_worth_reason` are machine-owned mirrors of the
+  synthesis LLM's judgment (the spam screen folds in as an LLM `no`). The
+  review UI renders Yes/Maybe/No buttons on every row (with the machine's
+  decision + reason as secondary text), moves effective-`no` rows to the
+  Rejected tab, and offers worth and source (gmail/imessage/whatsapp) filter
+  chips. Effective `no` is ONE concept: it excludes a candidate from paid deep
+  research and synthetic minting, and drops an already-imported person from
+  the merged network at the next fan-in (user Yes/Keep rescues; user No wins).
 - A retarget is not materialized until it is approved and `apply-retargets` has
   hydrated the replacement profile.
 - Synthetic profiles at completeness `>= 0.6` are `approved=auto` and will merge

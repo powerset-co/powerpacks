@@ -401,6 +401,40 @@ class TestNetworkWorth(unittest.TestCase):
             got = candidates.effective_network_worth("ghost", {}, facts)
             self.assertEqual((got["decision"], got["source"]), ("maybe", "default"))     # nothing -> maybe
 
+    def test_effective_worth_row_llm_worth_fallback(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts = Path(d)
+            # facts absent: the review row's mirrored llm_worth supplies the LLM signal
+            got = candidates.effective_network_worth(
+                "janedoe", {"janedoe": {"llm_worth": "no", "llm_worth_reason": "cold outreach"}}, facts)
+            self.assertEqual((got["decision"], got["source"], got["reason"]),
+                             ("no", "llm", "cold outreach"))
+            # facts on disk win over the mirrored row value
+            (facts / "janedoe.jsonl").write_text(_facts_record("yes", "founder") + "\n", encoding="utf-8")
+            got = candidates.effective_network_worth(
+                "janedoe", {"janedoe": {"llm_worth": "no", "llm_worth_reason": "stale"}}, facts)
+            self.assertEqual((got["decision"], got["source"], got["reason"]), ("yes", "llm", "founder"))
+            # the user's mark still beats every machine signal
+            got = candidates.effective_network_worth(
+                "janedoe", {"janedoe": {"network_worth": "no", "llm_worth": "yes"}}, facts)
+            self.assertEqual((got["decision"], got["source"]), ("no", "user"))
+
+    def test_effective_worth_treats_approved_exclude_as_user_no(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts = Path(d)
+            # an approved exclude IS a user no — even against a machine yes
+            got = candidates.effective_network_worth(
+                "janedoe", {"janedoe": {"action": "exclude", "approved": "yes", "llm_worth": "yes"}}, facts)
+            self.assertEqual((got["decision"], got["source"]), ("no", "user"))
+            # a pending exclude is not a decision
+            got = candidates.effective_network_worth(
+                "janedoe", {"janedoe": {"action": "exclude", "approved": ""}}, facts)
+            self.assertEqual((got["decision"], got["source"]), ("maybe", "default"))
+            # an explicit user mark wins over a stale exclude
+            got = candidates.effective_network_worth(
+                "janedoe", {"janedoe": {"action": "exclude", "approved": "yes", "network_worth": "yes"}}, facts)
+            self.assertEqual((got["decision"], got["source"]), ("yes", "user"))
+
 
 class TestCandidateSubsetWorthGate(unittest.TestCase):
     def test_effective_no_is_excluded_and_reported(self):
@@ -590,6 +624,238 @@ class TestComposeNetworkWorth(unittest.TestCase):
         self.assertEqual(merged["network_worth"], {})
         md = compose.render_dossier({"person_id": "p1", "full_name": "Cass Doe"}, merged)
         self.assertNotIn("Network worth", md)
+
+
+class TestLlmWorthColumns(unittest.TestCase):
+    """The machine-owned llm_worth/llm_worth_reason columns: written from facts or the
+    spam screen, ALWAYS refreshed (sticky rows included), never touching the
+    user-owned network_worth mark."""
+
+    def _task(self, pub: str, pid: str, spam: bool = False, spam_conf: float = 0.9) -> dict:
+        return {"no_link": False, "candidate_key": pub, "action": "review",
+                "person_ids": [pid], "match_emails": [], "match_phones": [],
+                "linkedin": {"linkedin_url": f"https://www.linkedin.com/in/{pub}"},
+                "verdict": {"verdict": "needs_review", "confidence": 0.5, "reason": "r",
+                            "spam_contact": spam, "spam_confidence": spam_conf,
+                            "spam_reason": "cold outreach" if spam else ""}}
+
+    def test_fresh_row_mirrors_facts_worth(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            (facts / "pid-1.jsonl").write_text(_facts_record("no", "vendor") + "\n", encoding="utf-8")
+            review = base / "review.csv"
+            reconcile.write_overrides(review, [self._task("janedoe", "pid-1"),
+                                               self._task("ghost", "pid-ghost")], facts)
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual((rows["janedoe"]["llm_worth"], rows["janedoe"]["llm_worth_reason"]),
+                             ("no", "vendor"))
+            self.assertEqual(rows["janedoe"]["network_worth"], "")     # user column stays user-owned
+            # no facts + no spam -> the machine columns stay blank
+            self.assertEqual((rows["ghost"]["llm_worth"], rows["ghost"]["llm_worth_reason"]), ("", ""))
+
+    def test_confident_spam_is_an_llm_no_and_keeps_reject_detail(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            review = base / "review.csv"
+            reconcile.write_overrides(review, [self._task("spammy", "pid-2", spam=True),
+                                               self._task("softspam", "pid-3", spam=True, spam_conf=0.5)],
+                                      facts)
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual((rows["spammy"]["llm_worth"], rows["spammy"]["llm_worth_reason"]),
+                             ("no", "cold outreach"))                  # spam is one way the LLM says no
+            self.assertEqual(rows["spammy"]["llm_reject"], "spam")     # detail columns kept as-is
+            # below the bar the flag stays informational: worth falls back to facts (blank here)
+            self.assertEqual(rows["softspam"]["llm_worth"], "")
+            self.assertEqual(rows["softspam"]["llm_reject"], "spam")
+
+    def test_sticky_user_row_refreshes_llm_worth_without_touching_user_columns(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            (facts / "pid-1.jsonl").write_text(_facts_record("no", "vendor") + "\n", encoding="utf-8")
+            review = base / "review.csv"
+            reconcile._write_override_rows(review, {"janedoe": {
+                **{k: "" for k in reconcile.OVERRIDE_COLUMNS},
+                "public_identifier": "janedoe", "action": "verify", "approved": "yes",
+                "network_worth": "yes"}})
+            reconcile.write_overrides(review, [self._task("janedoe", "pid-1")], facts)
+            row = reconcile.load_override_rows(review)["janedoe"]
+            self.assertEqual((row["action"], row["approved"]), ("verify", "yes"))  # decision untouched
+            self.assertEqual(row["network_worth"], "yes")                          # user mark untouched
+            self.assertEqual((row["llm_worth"], row["llm_worth_reason"]), ("no", "vendor"))
+
+
+def _verdict_jsonl(path: Path, rows: list[dict]) -> Path:
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    return path
+
+
+class TestUnifiedRejected(unittest.TestCase):
+    """Worth buttons on plain verdict rows + the unified effective-no Rejected
+    grouping (== what the fan-in merge drops), with rescue in both directions."""
+
+    VERDICT = {"parent_slug": "bob-jones", "name": "Bob Jones", "candidate_key": "bob-1",
+               "person_ids": ["pid-bob"], "conflict": False, "no_link": False,
+               "linkedin": {"linkedin_url": "https://www.linkedin.com/in/bob-1", "has_profile": True},
+               "verdict": {"verdict": "needs_review", "confidence": 0.0, "reason": "thin"}, "error": ""}
+
+    def test_verdict_row_worth_round_trip_and_rejected_grouping(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            (facts / "pid-bob.jsonl").write_text(_facts_record("no", "pure vendor thread") + "\n",
+                                                 encoding="utf-8")
+            review = base / "review.csv"
+            reconcile.write_overrides(review, [dict(self.VERDICT, action="review")], facts)
+            verdicts = _verdict_jsonl(base / "verdicts.jsonl", [self.VERDICT])
+            empty_facts = base / "nofacts"
+            empty_facts.mkdir()
+            parents, overrides = web.build_parents(verdicts, review)
+            web.annotate_worth(parents, overrides, empty_facts)  # UI must work from llm_worth alone
+            (p,) = parents
+            cand = p["candidates"][0]
+            self.assertEqual(cand["worth_key"], "bob-1")         # verdict rows key worth by their pub
+            self.assertEqual((p["worth"]["decision"], p["worth"]["source"]), ("no", "llm"))
+            self.assertTrue(web.is_effective_no(p))
+            self.assertTrue(web.parent_in_tab(p, "rejected"))
+            self.assertFalse(web.parent_in_tab(p, "review"))
+            html = web.render_candidate(0, 1, cand)
+            self.assertIn("Worth adding?", html)                 # worth buttons on a plain verdict row
+            self.assertIn("worth-no on", html)
+            self.assertIn("LLM: no — pure vendor thread", html)  # machine decision + reason alongside
+            # a user Yes rescues: round-trips through the /worth writer + live rejected state
+            web.apply_worth_decision(review, "bob-1", "yes")
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual(rows["bob-1"]["network_worth"], "yes")
+            self.assertEqual(rows["bob-1"]["llm_worth"], "no")   # the machine column is untouched
+            self.assertFalse(web.effective_no_for_key("bob-1", rows, empty_facts)["rejected"])
+            parents, overrides = web.build_parents(verdicts, review)
+            web.annotate_worth(parents, overrides, empty_facts)
+            self.assertFalse(web.is_effective_no(parents[0]))    # evicted from Rejected
+            # clearing the mark brings the machine no back — nothing destructive
+            web.apply_worth_decision(review, "bob-1", "")
+            self.assertTrue(web.effective_no_for_key(
+                "bob-1", reconcile.load_override_rows(review), empty_facts)["rejected"])
+
+    def test_keep_click_rescues_a_machine_no(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            review = base / "review.csv"
+            verdicts = _verdict_jsonl(base / "verdicts.jsonl", [self.VERDICT])
+            row = {k: "" for k in reconcile.OVERRIDE_COLUMNS}
+            row.update({"public_identifier": "bob-1", "person_id": "pid-bob",
+                        "llm_worth": "no", "llm_worth_reason": "vendor"})
+            reconcile._write_override_rows(review, {"bob-1": row})
+            parents, overrides = web.build_parents(verdicts, review)
+            web.annotate_worth(parents, overrides, facts)
+            self.assertTrue(web.is_effective_no(parents[0]))
+            web.apply_decision(review, verdicts, "bob-1", "keep", "", 0.7)   # keep-ish rescue
+            self.assertFalse(web.effective_no_for_key(
+                "bob-1", reconcile.load_override_rows(review), facts)["rejected"])
+            parents, overrides = web.build_parents(verdicts, review)
+            web.annotate_worth(parents, overrides, facts)
+            self.assertFalse(web.is_effective_no(parents[0]))
+
+    def test_no_link_row_keys_worth_by_person_id(self):
+        # The acceptance case: a plain "no link chosen" verdict row still gets worth
+        # buttons, keyed by its person_id, with the LLM judgment read from facts.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            (facts / "pid-leon.jsonl").write_text(_facts_record("no", "newsletter blasts") + "\n",
+                                                  encoding="utf-8")
+            verdicts = _verdict_jsonl(base / "verdicts.jsonl", [{
+                "parent_slug": "leon-james", "name": "Leon James", "candidate_key": "",
+                "person_ids": ["pid-leon"], "conflict": False, "no_link": True,
+                "linkedin": {}, "verdict": {"verdict": "needs_review", "confidence": 0.0,
+                                            "reason": "no usable LinkedIn profile"}, "error": ""}])
+            parents, overrides = web.build_parents(verdicts, base / "review.csv")
+            web.annotate_worth(parents, overrides, facts)
+            (p,) = parents
+            self.assertEqual(p["candidates"][0]["worth_key"], "pid-leon")    # falls back to person_id
+            self.assertEqual((p["worth"]["decision"], p["worth"]["source"]), ("no", "llm"))
+            self.assertTrue(web.parent_in_tab(p, "rejected"))
+            self.assertFalse(web.parent_in_tab(p, "review"))
+            self.assertIn("Worth adding?", web.render_candidate(0, 1, p["candidates"][0]))
+
+
+class TestExcludeIsUnifiedNo(unittest.TestCase):
+    def test_excluded_row_lands_in_rejected_and_worth_yes_rescues(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            review = base / "review.csv"
+            verdicts = _verdict_jsonl(base / "verdicts.jsonl", [TestUnifiedRejected.VERDICT])
+            web.apply_decision(review, verdicts, "bob-1", "exclude", "", 0.7)
+            parents, overrides = web.build_parents(verdicts, review)
+            web.annotate_worth(parents, overrides, facts)
+            (p,) = parents
+            # an approved exclude reads as a user no everywhere
+            self.assertEqual((p["worth"]["decision"], p["worth"]["source"]), ("no", "user"))
+            self.assertTrue(web.is_effective_no(p))
+            self.assertTrue(web.parent_in_tab(p, "rejected"))
+            self.assertIn("worth-no on", web.render_candidate(0, 1, p["candidates"][0]))
+            # worth-Yes rescues AND clears the exclude so both stores agree
+            web.apply_worth_decision(review, "bob-1", "yes")
+            row = reconcile.load_override_rows(review)["bob-1"]
+            self.assertEqual((row["action"], row["approved"], row["network_worth"]), ("", "", "yes"))
+            parents, overrides = web.build_parents(verdicts, review)
+            web.annotate_worth(parents, overrides, facts)
+            self.assertFalse(web.is_effective_no(parents[0]))
+
+
+class TestSyntheticWorthGateSync(unittest.TestCase):
+    """A worth mark on a synthetic row mirrors onto its approved mint gate:
+    No == Detach, Yes == Keep, ↺ restores pending; maybe leaves the gate alone."""
+
+    CSV_HEADER = "id,public_identifier,full_name,enrichment_provider,approved\n"
+
+    def _path(self, base: Path, approved: str = "auto") -> Path:
+        path = base / "synthetic-people.csv"
+        path.write_text(self.CSV_HEADER
+                        + f"pid-9,synth-email-abc,Ross Nordeen,synthetic,{approved}\n",
+                        encoding="utf-8")
+        return path
+
+    def _approved(self, path: Path) -> str:
+        with path.open(newline="", encoding="utf-8") as fh:
+            (row,) = list(csv.DictReader(fh))
+        return row["approved"]
+
+    def test_worth_marks_mirror_the_approved_gate(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self._path(Path(d))
+            self.assertEqual(web.synthetic_worth_key(path, "synth-email-abc"), "pid-9")
+            self.assertEqual(web.synthetic_worth_key(path, "synth-ghost"), "")
+            self.assertTrue(web.sync_synthetic_gate(path, "pid-9", "no"))
+            self.assertEqual(self._approved(path), "no")           # No == Detach: mint gate agrees
+            self.assertTrue(web.sync_synthetic_gate(path, "pid-9", "yes"))
+            self.assertEqual(self._approved(path), "yes")          # Yes == Keep
+            self.assertFalse(web.sync_synthetic_gate(path, "pid-9", "maybe"))
+            self.assertEqual(self._approved(path), "yes")          # maybe is not a gate decision
+            self.assertTrue(web.sync_synthetic_gate(path, "pid-9", ""))
+            self.assertEqual(self._approved(path), "")             # ↺ restores pending
+            self.assertFalse(web.sync_synthetic_gate(path, "pid-ghost", "no"))
+
+    def test_detached_synthetic_row_is_effective_no(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            parents = web.load_synthetic_parents(self._path(base, approved="no"))
+            web.annotate_worth(parents, {}, facts)
+            self.assertTrue(web.is_effective_no(parents[0]))       # gate no == unified Rejected
+            self.assertTrue(web.parent_in_tab(parents[0], "rejected"))
 
 
 class TestReadinessCandidateCounts(unittest.TestCase):
