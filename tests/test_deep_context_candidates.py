@@ -13,7 +13,11 @@ import csv
 import io
 import json
 import tempfile
+import threading
 import unittest
+import urllib.parse
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -837,15 +841,23 @@ class TestSyntheticWorthGateSync(unittest.TestCase):
             path = self._path(Path(d))
             self.assertEqual(web.synthetic_worth_key(path, "synth-email-abc"), "pid-9")
             self.assertEqual(web.synthetic_worth_key(path, "synth-ghost"), "")
-            self.assertTrue(web.sync_synthetic_gate(path, "pid-9", "no"))
+            self.assertEqual(web.sync_synthetic_gate(path, "pid-9", "no"),
+                             {"action": "verify", "approved": "no"})
             self.assertEqual(self._approved(path), "no")           # No == Detach: mint gate agrees
-            self.assertTrue(web.sync_synthetic_gate(path, "pid-9", "yes"))
+            self.assertEqual(web.sync_synthetic_gate(path, "pid-9", "yes"),
+                             {"action": "verify", "approved": "yes"})
             self.assertEqual(self._approved(path), "yes")          # Yes == Keep
-            self.assertFalse(web.sync_synthetic_gate(path, "pid-9", "maybe"))
-            self.assertEqual(self._approved(path), "yes")          # maybe is not a gate decision
-            self.assertTrue(web.sync_synthetic_gate(path, "pid-9", ""))
+            # maybe is not a gate decision: state is returned for the repaint,
+            # but the approved gate is left untouched
+            self.assertEqual(
+                web.sync_synthetic_gate(path, "pid-9", "maybe"),
+                {"action": "verify", "approved": "yes"},
+            )
+            self.assertEqual(self._approved(path), "yes")
+            self.assertEqual(web.sync_synthetic_gate(path, "pid-9", ""),
+                             {"action": "verify", "approved": ""})
             self.assertEqual(self._approved(path), "")             # ↺ restores pending
-            self.assertFalse(web.sync_synthetic_gate(path, "pid-ghost", "no"))
+            self.assertIsNone(web.sync_synthetic_gate(path, "pid-ghost", "no"))
 
     def test_detached_synthetic_row_is_effective_no(self):
         with tempfile.TemporaryDirectory() as d:

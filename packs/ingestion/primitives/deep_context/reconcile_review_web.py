@@ -1016,7 +1016,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
 
     def tab_link(name: str, label: str, key: str) -> str:
         klass = "tab active" if tab == name else "tab"
-        return f"<a class='{klass}' href='{esc(tab_href(name))}'><span>{esc(label)}</span><strong>{summary[key]}</strong></a>"
+        return (f"<a class='{klass}' href='{esc(tab_href(name))}'><span>{esc(label)}</span>"
+                f"<strong data-tabcount='{esc(key)}'>{summary[key]}</strong></a>")
 
     parts = [
         "<!doctype html><html><head><meta charset='utf-8'>",
@@ -1031,14 +1032,15 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         "</div><div class='stats'>",
         f"<div class='stat'><span>needs review</span><strong data-count='review'>{summary['review']}</strong></div>",
         f"<div class='stat'><span>verified</span><strong data-count='verified'>{summary['verified']}</strong></div>",
-        f"<div class='stat'><span>excluded</span><strong data-count='excluded'>{summary['excluded']}</strong></div>",
+        f"<div class='stat'><span>rejected</span><strong data-count='rejected'>{summary['rejected']}</strong></div>",
         f"<div class='stat'><span>you decided</span><strong data-count='decided'>{summary['decided']}</strong></div>",
         "</div></header>",
         "<nav class='tabs'>",
         tab_link("conflict", "Multiple emails", "conflict"),
         tab_link("review", "Needs review", "review"),
+        # Excluded rows are effective-no, so they live on Rejected — one tab,
+        # one concept (?tab=excluded still works as a URL filter for drill-down).
         tab_link("rejected", "Rejected", "rejected"),
-        tab_link("excluded", "Excluded", "excluded"),
         tab_link("all", "All", "total"),
         "</nav>",
         "<form class='filters' method='get' action='/'>",
@@ -1151,6 +1153,7 @@ summary::-webkit-details-marker{display:none}
 .cand-parent{border-color:#a8d5cd;background:#f6fbf9;box-shadow:inset 3px 0 0 var(--ok)}
 .cand-verified{border-color:#a8d5cd;background:#f6fbf9}
 .cand-detached{opacity:.66}
+.cand-rejected{opacity:.66}
 .cand-fixed{border-color:#c9bce8}
 .cand-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:7px}
 .avatar{width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--soft);border:1px solid var(--line);flex:0 0 auto}
@@ -1164,7 +1167,7 @@ summary::-webkit-details-marker{display:none}
 .flag{font-size:10.5px;border-radius:999px;padding:2px 6px;background:#eef1f5;color:#5b6876}
 .flag.conflict{background:#fff;border:1px solid var(--line);color:var(--warn)}
 .cand-state{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
-.state-verified{color:var(--ok)}.state-detached{color:var(--bad)}.state-fixed{color:var(--ok)}.state-review{color:var(--warn)}
+.state-verified{color:var(--ok)}.state-detached{color:var(--bad)}.state-fixed{color:var(--ok)}.state-review{color:var(--warn)}.state-rejected{color:var(--bad)}
 .profile .hl{font-size:13px;color:#334155;font-weight:600}
 .profile .loc{font-size:12px;color:var(--muted)}
 .exp{margin:5px 0;padding-left:18px;font-size:12.5px;color:#334155}
@@ -1248,21 +1251,22 @@ summary::-webkit-details-marker{display:none}
 JS = r"""
 const toast=document.getElementById('toast');let tt=null;
 function showToast(t){toast.textContent=t;toast.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>toast.classList.remove('show'),1300)}
-const LBL={review:'needs review',verified:'verified',detached:'detached',fixed:'verified',excluded:'excluded'};
+const LBL={review:'needs review',verified:'verified',detached:'detached',fixed:'verified',excluded:'excluded',rejected:'rejected'};
 function candStateOf(c){return ([...c.classList].find(x=>x.startsWith('cand-')&&x!=='cand')||'cand-review').slice(5)}
 function setCandState(cand,action,approved,newUrl){
-  cand.classList.remove('cand-verified','cand-detached','cand-fixed','cand-review','cand-excluded');
+  cand.classList.remove('cand-verified','cand-detached','cand-fixed','cand-review','cand-excluded','cand-rejected');
   const ok=(approved==='yes'||approved==='auto');let st='review';
   if(action==='exclude'&&ok)st='excluded';
   else if(action==='retarget'&&ok)st='fixed';
   else if(ok)st=(action==='detach')?'detached':'verified';
+  else if(approved==='no')st='rejected';
   cand.classList.add('cand-'+st);
   const se=cand.querySelector('.cand-state');se.className='cand-state state-'+st;se.textContent=LBL[st];
-  cand.querySelectorAll('.btn').forEach(b=>b.classList.remove('on'));
+  cand.querySelectorAll('.btn:not(.worth)').forEach(b=>b.classList.remove('on'));
   // a real decision replaces the pre-highlighted suggestion
   if(st!=='review')cand.querySelectorAll('.btn.suggested').forEach(b=>b.classList.remove('suggested'));
   if(st==='verified')cand.querySelector('.btn.keep')?.classList.add('on');
-  if(st==='detached')cand.querySelector('.btn.detach')?.classList.add('on');
+  if(st==='detached'||st==='rejected')cand.querySelector('.btn.detach')?.classList.add('on');
   if(st==='fixed')cand.querySelector('.btn.fix')?.classList.add('on');
   if(st==='excluded')cand.querySelector('.btn.exclude')?.classList.add('on');
 }
@@ -1275,15 +1279,16 @@ function parentStatusFromCands(parent){
   if(states.length&&states.every(s=>s==='detached'||s==='rejected'))return 'detached';
   return 'review';
 }
-function updateCounts(){
-  const c={review:0,verified:0,detached:0,fixed:0,excluded:0,decided:0};
-  document.querySelectorAll('.parent').forEach(p=>{c[parentStatusFromCands(p)]++;if(p.classList.contains('decided'))c.decided++;});
-  // mirror the server's user-facing folds: retargets read as verified; effective-no rows aren't "needs review"
-  c.verified+=c.fixed;
-  document.querySelectorAll('.parent.worthno').forEach(p=>{if(parentStatusFromCands(p)==='review')c.review--;});
-  ['review','verified','detached','excluded','decided'].forEach(k=>{
-    const el=document.querySelector('.stat strong[data-count="'+k+'"]');if(el)el.textContent=c[k];});
+// Every POST response carries fresh GLOBAL counts from the server (`counts`) — the
+// only correct source on filtered views, where the DOM holds just the visible subset.
+// Repaints both the header stat cards and the nav tab pills.
+function applyCounts(c){
+  if(!c)return;
+  document.querySelectorAll('.stat strong[data-count]').forEach(el=>{const k=el.dataset.count;if(k in c)el.textContent=c[k]});
+  document.querySelectorAll('.tab strong[data-tabcount]').forEach(el=>{const k=el.dataset.tabcount;if(k in c)el.textContent=c[k]});
 }
+// The active worth filter chip value ('' when unfiltered) — rows that stop matching disappear.
+function worthFilter(){const v=new URLSearchParams(location.search).get('worth');return ['yes','maybe','no'].includes(v)?v:''}
 // Which status-filtered tab are we on? (the Merged/decided/all tabs aren't pure-status, so a
 // decision never evicts a row from them — only the status tabs below do.)
 const STATUS_TABS=new Set(['review','verified','detached','fixed','excluded']);
@@ -1294,8 +1299,9 @@ function activeTab(){
 }
 // Slide a row off the current list (fired when it no longer belongs on this tab).
 function evictParent(parent){
+  if(parent.dataset.evicting)return;parent.dataset.evicting='1';
   parent.style.transition='opacity .28s ease';parent.style.opacity='0';
-  setTimeout(()=>{parent.remove();updateCounts();
+  setTimeout(()=>{parent.remove();
     const list=document.querySelector('.list');
     if(list&&!list.querySelector('.parent'))list.innerHTML="<div class='empty'>All clear on this tab — nothing left to review here.</div>";
   },280);
@@ -1318,8 +1324,21 @@ function refreshParent(parent){
     chip.classList.add('chip-'+st);chip.textContent=LBL[st];}
   const top=parent.querySelector(':scope > .pbody > .parent-actions .btn.exclude');
   if(top)top.classList.toggle('on',st==='excluded');
-  updateCounts();
   reconcileTabMembership(parent);
+}
+// Shared post-response repaint: Rejected membership (both directions), worth-button
+// highlight, worth-filter membership, and the authoritative header/tab counts.
+function applyLiveState(parent,cand,j){
+  applyCounts(j.counts);
+  if(typeof j.rejected==='undefined')return;
+  parent.classList.toggle('worthno',j.rejected);
+  const wr=cand&&cand.querySelector('.worthrow');
+  if(wr&&typeof j.effective!=='undefined')
+    wr.querySelectorAll('.btn.worth').forEach(x=>x.classList.toggle('on',x.dataset.worth===j.effective));
+  if(j.rejected&&activeTab()==='review')evictParent(parent);
+  if(!j.rejected&&activeTab()==='rejected')evictParent(parent);
+  const wf=worthFilter();
+  if(wf&&typeof j.effective!=='undefined'&&j.effective!==wf)evictParent(parent);
 }
 async function postDecide(cand,act,newUrl){
   const body=new URLSearchParams({pub:cand.dataset.pub,decision:act});
@@ -1335,19 +1354,18 @@ async function decide(cand,act){
     // Keeping/fixing one LinkedIn on a merged person IS the decision for the whole person:
     // auto-detach the other still-undecided LinkedIns (incl. ones tucked in the likely-wrong
     // expander) so one click resolves the row. Explicit user decisions are never overridden.
-    let auto=0;
+    let auto=0,counts=j.counts;
     if((act==='keep'||act==='fix')&&parent.classList.contains('multi')){
       for(const sib of parent.querySelectorAll('.cand')){
         if(sib!==cand&&candStateOf(sib)==='review'){
-          const sj=await postDecide(sib,'detach','');setCandState(sib,sj.action,sj.approved,sj.new_url);auto++;}
+          const sj=await postDecide(sib,'detach','');setCandState(sib,sj.action,sj.approved,sj.new_url);
+          counts=sj.counts;auto++;}
       }
     }
     refreshParent(parent);
-    // unified Rejected state: a Keep/Fix (approved=yes) rescues a machine-no row
-    if(typeof j.rejected!=='undefined'){
-      parent.classList.toggle('worthno',j.rejected);
-      if(!j.rejected&&activeTab()==='rejected'&&(act==='keep'||act==='fix'))evictParent(parent);
-    }
+    // unified Rejected state (a Keep/Fix rescues a machine no; an Exclude IS a user no)
+    // + authoritative counts, all from the response — no reload needed.
+    applyLiveState(parent,cand,{...j,counts});
     const base={keep:'Kept',detach:'Detached',fix:'Re-targeted',reset:'Reset to model'}[act]||'Saved';
     showToast(auto?base+' — detached the other '+auto+' LinkedIn'+(auto===1?'':'s')+' for you':base);
   }catch(e){showToast('Save failed: '+e.message)}
@@ -1357,19 +1375,19 @@ document.querySelectorAll('.cand .btn[data-act]:not(.exclude)').forEach(b=>b.add
 // network_worth column in review.csv ('' clears the mark — back to the LLM's judgment).
 document.querySelectorAll('.worthrow .btn').forEach(b=>b.addEventListener('click',async e=>{
   e.preventDefault();
-  const row=b.closest('.worthrow'),parent=b.closest('.parent');
+  const row=b.closest('.worthrow'),cand=b.closest('.cand'),parent=b.closest('.parent');
   const body=new URLSearchParams({pub:row.dataset.worthkey,worth:b.dataset.worth||''});
   try{
     const r=await fetch('/worth',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
     if(!r.ok)throw new Error(await r.text());
     const j=await r.json();
-    row.querySelectorAll('.btn.worth').forEach(x=>x.classList.toggle('on',x.dataset.worth===j.effective));
-    parent.classList.toggle('worthno',j.rejected);
-    updateCounts();
+    // a mark can change the row's decision state too (worth-Yes clears an exclude; a
+    // synthetic mark flips its mint gate) — repaint chip + status from the response.
+    setCandState(cand,j.action,j.approved,j.new_url||'');
+    refreshParent(parent);
     // unified Rejected membership live-updates BOTH ways: an effective-no leaves the
     // review pile for Rejected; a rescue (Yes / cleared machine call) leaves Rejected.
-    if(j.rejected&&activeTab()==='review')evictParent(parent);
-    else if(!j.rejected&&activeTab()==='rejected')evictParent(parent);
+    applyLiveState(parent,cand,j);
     showToast(b.dataset.worth?'Marked '+j.effective:'Cleared — '+j.source+' says '+j.effective);
   }catch(err){showToast('Save failed: '+err.message)}
 }));
@@ -1379,14 +1397,17 @@ document.querySelectorAll('.btn.exclude').forEach(x=>x.addEventListener('click',
   e.preventDefault();
   const parent=x.closest('.parent');const cands=[...parent.querySelectorAll('.cand')];
   const excluding=parentStatusFromCands(parent)!=='excluded';const act=excluding?'exclude':'reset';
-  try{for(const c of cands){const j=await postDecide(c,act,'');setCandState(c,j.action,j.approved,j.new_url);}
-    refreshParent(parent);showToast(excluding?"Excluded — won’t be indexed":'Restored');
+  try{let j=null;
+    for(const c of cands){j=await postDecide(c,act,'');setCandState(c,j.action,j.approved,j.new_url);}
+    refreshParent(parent);
+    if(j)applyLiveState(parent,cands[0],j);   // exclude == unified no: Rejected + counts live-update
+    showToast(excluding?"Excluded — won’t be indexed":'Restored');
   }catch(err){showToast('Save failed: '+err.message)}
 }));
 // initialize button highlight from current state
 document.querySelectorAll('.cand').forEach(c=>{
   if(c.classList.contains('cand-verified'))c.querySelector('.btn.keep')?.classList.add('on');
-  if(c.classList.contains('cand-detached'))c.querySelector('.btn.detach')?.classList.add('on');
+  if(c.classList.contains('cand-detached')||c.classList.contains('cand-rejected'))c.querySelector('.btn.detach')?.classList.add('on');
   if(c.classList.contains('cand-fixed'))c.querySelector('.btn.fix')?.classList.add('on');
   if(c.classList.contains('cand-excluded'))c.querySelector('.btn.exclude')?.classList.add('on');});
 // merged people carry one "exclude whole person" button at the row top — light it if excluded
@@ -1430,11 +1451,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             parents, overrides = build_parents(verdicts_path, review_path)
             auto_resolve_merged(parents, review_path, confirm_threshold)
-            parents.extend(load_synthetic_parents(synthetic_path))
-            # Pre-research candidate rows, deduped against everything already shown.
-            shown = {pid.lower() for p in parents for pid in p["person_ids"]}
-            parents.extend(load_candidate_parents(facts_dir, overrides, shown))
-            annotate_worth(parents, overrides, facts_dir)
+            extend_and_annotate(parents, overrides, synthetic_path, facts_dir)
             annotate_sources(parents, load_people_sources(people_csv))
             params = urllib.parse.parse_qs(parsed.query)
             self.send_bytes(page_html(parents, params, review_path))
@@ -1456,13 +1473,25 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(str(exc).encode(), "text/plain", status=400)
                     return
                 # a synthetic row's mint gate must agree: No = Detach, Yes = Keep, ↺ = pending
-                sync_synthetic_gate(synthetic_path, pub, worth_val)
-                state = effective_no_for_key(pub, load_override_rows(review_path), facts_dir)
+                gate = sync_synthetic_gate(synthetic_path, pub, worth_val)
+                rows_now = load_override_rows(review_path)
+                state = effective_no_for_key(pub, rows_now, facts_dir,
+                                             keepish=(gate["approved"] == "yes") if gate else None)
+                # the row's decision state (a worth-Yes may have cleared an exclude; a
+                # synthetic mark flips its gate) so the client repaints chips in place
+                row_now = rows_now.get(pub.strip().lower()) or {}
+                decided = gate or {"action": (row_now.get("action") or "").strip().lower(),
+                                   "approved": (row_now.get("approved") or "").strip().lower()}
                 self.send_bytes(json.dumps({"ok": True, "pub": pub, **result,
+                                            "action": decided["action"],
+                                            "approved": decided["approved"],
+                                            "new_url": row_now.get("new_linkedin_url", ""),
                                             "effective": state["worth"]["decision"],
                                             "source": state["worth"]["source"],
                                             "reason": state["worth"]["reason"],
-                                            "rejected": state["rejected"]}).encode(),
+                                            "rejected": state["rejected"],
+                                            "counts": live_counts(verdicts_path, review_path,
+                                                                  synthetic_path, facts_dir)}).encode(),
                                 "application/json")
                 return
             decision = (form.get("decision") or [""])[0]
@@ -1483,12 +1512,18 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             except ValueError as exc:
                 self.send_bytes(str(exc).encode(), "text/plain", status=400)
                 return
-            # the unified Rejected state after this decision (a Keep rescues a machine no)
-            state = (effective_no_for_key(worth_key, load_override_rows(review_path), facts_dir,
-                                          keepish=keepish)
-                     if worth_key else {"rejected": False})
-            self.send_bytes(json.dumps({"ok": True, "pub": pub, **result,
-                                        "rejected": state["rejected"]}).encode(), "application/json")
+            # the unified Rejected state after this decision (a Keep rescues a machine no;
+            # an Exclude IS a user no) + fresh global counts for the header/tab pills
+            payload: dict[str, Any] = {"ok": True, "pub": pub, **result,
+                                       "counts": live_counts(verdicts_path, review_path,
+                                                             synthetic_path, facts_dir)}
+            if worth_key:
+                state = effective_no_for_key(worth_key, load_override_rows(review_path),
+                                             facts_dir, keepish=keepish)
+                payload.update({"rejected": state["rejected"],
+                                "effective": state["worth"]["decision"],
+                                "source": state["worth"]["source"]})
+            self.send_bytes(json.dumps(payload).encode(), "application/json")
 
         def log_message(self, fmt: str, *args: Any) -> None:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
