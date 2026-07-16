@@ -1083,6 +1083,7 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn("aria-label='Scroll down'", html)
         self.assertIn("<section class='details' data-slug='ada-lovelace'>", html)
         self.assertIn("<h3 class='details-heading'>Details</h3>", html)
+        self.assertIn("<h4 class='dossier-heading'>Context</h4>", html)
         self.assertNotIn("<summary>Details", html)
         self.assertNotIn("AI is unsure", html)
         self.assertNotIn("data-worth='maybe'", html)

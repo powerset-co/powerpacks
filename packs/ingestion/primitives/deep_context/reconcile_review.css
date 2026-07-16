@@ -367,6 +367,14 @@ h1 {
 .details dt { color: var(--muted); font-size: 12px; font-weight: 700; }
 .details dd { margin: 0; color: var(--foreground); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 
+.dossier-heading {
+  margin: 0 0 8px;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
 .dossier-text {
   max-height: 320px;
   overflow-x: hidden;

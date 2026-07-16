@@ -1228,6 +1228,7 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
     return (f"<section class='details' data-slug='{esc(dossier_slug)}'>"
             f"<h3 class='details-heading'>Details</h3>"
             f"<div class='details-body'>{extra}"
+            "<h4 class='dossier-heading'>Context</h4>"
             "<div class='dossier-text' aria-busy='true'>Loading…</div></div></section>")
 
 
