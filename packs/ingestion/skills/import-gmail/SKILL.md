@@ -1,6 +1,6 @@
 ---
 name: import-gmail
-description: Add Gmail contacts to your local network. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs mail down, and imports contacts free and locally (shared identity directory only) — unresolved contacts go to a research-candidates pool. No Parallel.ai, no RapidAPI, no index build — identity resolution and indexing happen later in $deep-setup. Always reruns the full checklist; overwrites in place.
+description: Add Gmail contacts to your local network. Use for $import-gmail. Sets up msgvault/Gmail (OAuth + authorize), asks which accounts and how many years to sync, syncs mail down, and imports contacts free and locally (shared identity directory only) — unresolved contacts go to a research-candidates pool. No Parallel.ai, no RapidAPI, no index build — identity resolution and indexing happen later in $deep-context. Always reruns the full checklist; overwrites in place.
 ---
 
 <!--
@@ -12,7 +12,7 @@ Changelog:
   mailbox sync until every selected token is healthy.
 - 2026-07-14: Refocused on contact sync only. Step 6 import is now free/local
   (directory reuse only): Parallel.ai LinkedIn resolution + RapidAPI hydration
-  move to the centralized $deep-setup processing layer, and unresolved contacts
+  move to the centralized $deep-context processing layer, and unresolved contacts
   land in import/gmail/candidates.csv. Dropped the Modal index/validate steps;
   ends by suggesting missing sources and offering to process contacts.
 - 2026-07-13: Added the product architecture guide; fixed multi-account discovery
@@ -28,7 +28,7 @@ Changelog:
 sync the chosen accounts (bounded by a years-back window), then import contacts
 **free and locally** — people already known to your identity directory attach
 immediately; everyone else worth researching goes to a **candidates pool** for
-the `$deep-setup` processing layer, which builds cross-channel context and
+the `$deep-context` processing layer, which builds cross-channel context and
 resolves identities once. This skill itself calls **no paid providers and builds
 no index**. Run `$setup` (LinkedIn) first for the best results — Gmail merges on
 top of whatever is already imported.
@@ -86,7 +86,7 @@ paths and rely on the primitives — don't pre-delete or invent folders.
   narrower `--sync-after`), never the full mailbox.
 - **No paid providers, no index.** This skill never calls Parallel.ai, RapidAPI,
   OpenAI, or Modal. Identity resolution for unresolved contacts and the index
-  rebuild belong to `$deep-setup`. (The import primitive keeps a
+  rebuild belong to `$deep-context`. (The import primitive keeps a
   `--resolve-legacy` escape hatch for the old in-import behavior; do not use it
   in this flow.)
 - **Consent gates (pause for the user):** msgvault browser/gcloud OAuth-app
@@ -265,7 +265,7 @@ Import applies the **local identity directory** to the discovered Gmail queues
 (people already resolved by prior imports attach immediately), writes
 `.powerpacks/network-import/import/gmail/people.csv`, and stages every
 still-unresolved contact worth researching in
-`.powerpacks/network-import/import/gmail/candidates.csv` for `$deep-setup`.
+`.powerpacks/network-import/import/gmail/candidates.csv` for `$deep-context`.
 No Parallel.ai, no RapidAPI, no spend prompt:
 
 ```bash
@@ -274,7 +274,7 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contac
 
 Report the manifest's `stats`: people imported and candidates staged. Identity
 resolution for the candidates (Parallel.ai with dossier context, judged and
-user-reviewable) happens in `$deep-setup`, not here.
+user-reviewable) happens in `$deep-context`, not here.
 
 ### Step 7 — Merge all sources
 
@@ -299,7 +299,7 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contac
 ```
 
 - `messages.import.imported: false` → suggest **`$import-messages`**
-  (iMessage/WhatsApp contacts give `$deep-setup` cross-channel context).
+  (iMessage/WhatsApp contacts give `$deep-context` cross-channel context).
 - `linkedin.import.imported: false` → suggest **`$setup`** (LinkedIn is the
   identity backbone).
 - Report candidate counts (`import.candidates` per source) so the user knows how
@@ -311,9 +311,9 @@ found — name the imported sources, never the skill**. Pattern:
 > "I see iMessage and WhatsApp are imported alongside Gmail — do you want to
 > enrich your contacts?"
 
-(Adapt the source list to what's actually imported; `$deep-setup` is the
+(Adapt the source list to what's actually imported; `$deep-context` is the
 internal route — do not say its name or describe its machinery in the ask.)
-If yes → run the `$deep-setup` flow. If no → say their new contacts become
+If yes → run the `$deep-context` flow. If no → say their new contacts become
 searchable after the next enrichment run; nothing is lost, the candidates
 stay staged.
 

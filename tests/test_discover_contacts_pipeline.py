@@ -600,7 +600,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
     def test_messages_contacts_direct_selects_matched_and_candidates(self) -> None:
         # The review-CSV materializer is gone: import is contacts-direct.
         # Matched rows become people rows; floor-passing unmatched rows become
-        # research candidates for $deep-setup.
+        # research candidates for $deep-context.
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             contacts = tmp / "contacts.csv"

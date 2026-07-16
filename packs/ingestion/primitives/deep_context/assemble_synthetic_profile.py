@@ -33,7 +33,11 @@ from packs.ingestion.primitives.deep_context.candidates import (
     effective_network_worth,
     is_candidate_id,
 )
-from packs.ingestion.primitives.deep_context.common import LINKEDIN_OVERRIDES_CSV, now_iso
+from packs.ingestion.primitives.deep_context.common import (
+    LINKEDIN_OVERRIDES_CSV,
+    VERDICTS_JSONL,
+    now_iso,
+)
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import DR_OUT_DIR, QUEUE_CSV
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED, load_override_rows
 from packs.ingestion.schemas.candidates_schema import candidate_key_for
@@ -42,7 +46,16 @@ from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OUT = ROOT / ".powerpacks/network-import/overrides/synthetic-people.csv"
 DEFAULT_PEOPLE_CSV = ROOT / ".powerpacks/network-import/merged/people.csv"
-SYNTHETIC_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["approved", "synthetic_metadata"]
+SYNTHETIC_PROVENANCE_COLUMNS = [
+    "source_parent_slug",
+    "source_person_ids",
+    "source_candidate_public_identifier",
+]
+SYNTHETIC_COLUMNS = (
+    PEOPLE_SCHEMA_COLUMNS
+    + SYNTHETIC_PROVENANCE_COLUMNS
+    + ["approved", "synthetic_metadata"]
+)
 
 # Auto-approve bar: research completeness at/above this flows straight into the
 # merge (approved=auto); below it the row waits for the user in the review file.
@@ -71,7 +84,8 @@ def profile_is_usable(profile: dict[str, Any]) -> bool:
 
 def build_synthetic_row(profile: dict[str, Any], contact: dict[str, str],
                         original: dict[str, str] | None, person_id: str,
-                        auto_completeness: float = DEFAULT_AUTO_COMPLETENESS) -> dict[str, str]:
+                        auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
+                        provenance: dict[str, str] | None = None) -> dict[str, str]:
     """Pure mapping: research JSON + contact identity (+ original people row for carry
     columns) -> synthetic people-schema row. No IO."""
     person = profile.get("person") or {}
@@ -81,6 +95,7 @@ def build_synthetic_row(profile: dict[str, Any], contact: dict[str, str],
     positions = [p for p in profile.get("positions") or [] if p.get("company_name") or p.get("title")]
     education = profile.get("education") or []
     current = next((p for p in positions if p.get("is_current")), None)
+    provenance = provenance or {}
 
     row = {col: "" for col in SYNTHETIC_COLUMNS}
     pub = synth_public_identifier(contact.get("primary_email", ""), contact.get("phone_e164", ""),
@@ -107,6 +122,11 @@ def build_synthetic_row(profile: dict[str, Any], contact: dict[str, str],
         "enrichment_provider": "synthetic",
         "enriched_at": now_iso(),
         "twitter_handle": social.get("twitter_handle") or "",
+        "source_parent_slug": provenance.get("source_parent_slug") or "",
+        "source_person_ids": provenance.get("source_person_ids") or "",
+        "source_candidate_public_identifier": (
+            provenance.get("source_candidate_public_identifier") or ""
+        ),
         "approved": "auto" if completeness >= auto_completeness else "",
         "synthetic_metadata": json.dumps({
             "completeness": completeness,
@@ -136,6 +156,49 @@ def load_rows(path: Path) -> dict[str, dict[str, str]]:
                 if pub:
                     rows[pub] = row
     return rows
+
+
+def _json_list(value: str) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return list(dict.fromkeys(str(item).strip() for item in parsed if str(item).strip()))
+
+
+def load_verdict_provenance(path: Path) -> dict[str, dict[str, str]]:
+    """Recover stable dossier lineage for legacy research directories.
+
+    The current research queue carries these fields directly. Older fixed-name
+    queues were overwritten between runs, so verdicts.jsonl is the durable local
+    fallback for already-produced research output such as detached LinkedIns.
+    """
+    by_parent: dict[str, dict[str, str]] = {}
+    if not path.exists():
+        return by_parent
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        parent_slug = str(row.get("parent_slug") or "").strip()
+        if not parent_slug:
+            continue
+        emails = [str(value).strip() for value in row.get("match_emails") or [] if str(value).strip()]
+        phones = [str(value).strip() for value in row.get("match_phones") or [] if str(value).strip()]
+        by_parent[parent_slug] = {
+            "source_parent_slug": parent_slug,
+            "source_person_ids": json.dumps(row.get("person_ids") or [], ensure_ascii=False),
+            "source_candidate_public_identifier": str(row.get("candidate_key") or "").strip(),
+            "display_name": str(row.get("name") or "").strip(),
+            "primary_email": emails[0] if emails else "",
+            "phone_e164": phones[0] if phones else "",
+        }
+    return by_parent
 
 
 def write_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
@@ -168,6 +231,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--research-dir", default=str(DR_OUT_DIR))
     ap.add_argument("--queue-csv", default=str(QUEUE_CSV))
     ap.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
+    ap.add_argument("--verdicts-jsonl", default=str(VERDICTS_JSONL))
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     ap.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS,
                     help="Research completeness at/above this auto-approves the row (default %(default)s)")
@@ -185,6 +249,7 @@ def main(argv: list[str] | None = None) -> None:
 
     by_email, by_phone = people_lookup(Path(args.people_csv))
     existing = load_rows(Path(args.out))
+    verdict_provenance = load_verdict_provenance(Path(args.verdicts_jsonl))
     overrides = load_override_rows(LINKEDIN_OVERRIDES_CSV)
 
     built = auto = pending = preserved = with_linkedin = unusable = worth_no = 0
@@ -202,11 +267,24 @@ def main(argv: list[str] | None = None) -> None:
         if not profile_is_usable(profile):
             unusable += 1
             continue
-        contact = queue.get(pdir.name) or {"handle": pdir.name}
+        contact: dict[str, str] = {"handle": pdir.name}
+        for source in (verdict_provenance.get(pdir.name) or {}, queue.get(pdir.name) or {}):
+            for key, value in source.items():
+                if value:
+                    contact[key] = value
+        source_parent_slug = contact.get("source_parent_slug") or pdir.name
+        source_person_ids = _json_list(contact.get("source_person_ids") or "")
+        provenance = {
+            "source_parent_slug": source_parent_slug,
+            "source_person_ids": json.dumps(source_person_ids, ensure_ascii=False),
+            "source_candidate_public_identifier": (
+                contact.get("source_candidate_public_identifier") or ""
+            ),
+        }
         email = (contact.get("primary_email") or "").strip().lower()
         digits = "".join(c for c in (contact.get("phone_e164") or "") if c.isdigit())[-10:]
         original = by_email.get(email) or (by_phone.get(digits) if digits else None)
-        person_id = (original or {}).get("id", "")
+        person_id = (original or {}).get("id", "") or (source_person_ids[0] if source_person_ids else "")
         if original is None:
             # Not in people.csv -> the subject is an import candidate: carry its
             # contact identity (emails/phones/counts/channels) onto the minted row.
@@ -217,10 +295,31 @@ def main(argv: list[str] | None = None) -> None:
         if is_candidate_id(person_id) and effective_network_worth(person_id, overrides)["decision"] == "no":
             worth_no += 1  # user/LLM said not worth adding — never mint a synthetic row
             continue
-        row = build_synthetic_row(profile, contact, original, person_id, args.auto_completeness)
+        row = build_synthetic_row(
+            profile,
+            contact,
+            original,
+            person_id,
+            args.auto_completeness,
+            provenance=provenance,
+        )
+        # Before provenance was persisted, handle-only subjects minted a
+        # ``synth-x-<parent>`` key. Keep that stable identity when backfilling so
+        # review decisions and any prior fan-in references do not fork.
+        legacy_pub = f"synth-x-{pdir.name}".lower()
+        if legacy_pub in existing:
+            row["public_identifier"] = legacy_pub
+            row["id"] = existing[legacy_pub].get("id") or row["id"]
+            row["entity_urn"] = existing[legacy_pub].get("entity_urn") or f"synthetic:{row['id']}"
         pub = row["public_identifier"].lower()
-        if (existing.get(pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
-            preserved += 1  # sticky: the user already decided this synthetic row
+        previous = existing.get(pub) or {}
+        if (previous.get("approved") or "").strip().lower() in USER_APPROVED:
+            # The user's gate is sticky, but missing lineage is safe to repair.
+            for field in SYNTHETIC_PROVENANCE_COLUMNS:
+                if not previous.get(field) and row.get(field):
+                    previous[field] = row[field]
+            existing[pub] = previous
+            preserved += 1
             continue
         existing[pub] = row
         built += 1

@@ -30,7 +30,6 @@ class CoreLayoutTests(unittest.TestCase):
             ingestion_pack,
             [
                 "deep-context",
-                "deep-setup",
                 "discover-contacts",
                 "enrich-email-markers",
                 "import-gmail",
@@ -297,8 +296,8 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("index_contacts_pipeline.py fan-in", text)
         self.assertIn("import_contacts_pipeline/status.py status", text)
         self.assertIn("candidates.csv", text)
-        self.assertIn("$deep-setup", text)
-        # Research/review and indexing left this skill for $deep-setup.
+        self.assertIn("$deep-context", text)
+        # Research/review and indexing live in the single deep-context workflow.
         self.assertNotIn("review_research_web.py", text)
         self.assertNotIn("linkedin_modal_pipeline.py index-people", text)
 

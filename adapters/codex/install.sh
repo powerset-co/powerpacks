@@ -12,6 +12,7 @@ MANAGED_SKILLS=(
   search-profile search-highlight extract-search-query recruit
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks install-powerpacks sales-nav-search build-outbound
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
+  # deep-setup was consolidated into deep-context; keep it managed so stale installs are removed
   import-email import-gmail enrich-email-markers discover-contacts import-twitter deep-context deep-setup logbook
   import-messages import-imessage import-contacts-review
 )
@@ -135,7 +136,6 @@ install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
 install_skill enrich-email-markers "$REPO_ROOT/packs/ingestion/skills/enrich-email-markers/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
-install_skill deep-setup "$REPO_ROOT/packs/ingestion/skills/deep-setup/SKILL.md"
 install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
 install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
@@ -173,4 +173,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context deep-setup logbook discover-contacts import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context logbook discover-contacts import-twitter"

@@ -40,6 +40,8 @@ RECONCILE_DIR = ROOT / "reconcile"
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"   # full per-candidate judge record
 VERDICTS_CSV = RECONCILE_DIR / "verdicts.csv"       # flat review table
 SUMMARY_MD = RECONCILE_DIR / "summary.md"           # the ONE report to read (what changed + review)
+REVIEW_DIR = ROOT / "review"                         # staged human review UI state + cached avatars
+REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # fixed completion signal for the agent
 
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 # RapidAPI LinkedIn lookup cache (one JSON per public_identifier) — the "linkedin lookups".

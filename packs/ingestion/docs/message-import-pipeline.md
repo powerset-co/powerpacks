@@ -4,7 +4,7 @@ Changelog:
   research queue, Parallel deep research, LLM-scored review UI, RapidAPI
   enrichment, and Modal index stages from the canonical flow; import is now
   contacts-direct (matched people + a research-candidates pool). Identity
-  research, spam screening, and indexing move to the $deep-setup processing
+  research, spam screening, and indexing move to the $deep-context processing
   layer.
 -->
 
@@ -15,7 +15,7 @@ local network. It extracts metadata, matches contacts against already imported
 Gmail/LinkedIn identities for free, imports matched people directly, stages
 unmatched contacts that pass a deterministic floor as research candidates,
 merges all imported sources, and ends by suggesting missing sources and
-offering `$deep-setup` processing. It calls no providers and builds no index.
+offering `$deep-context` processing. It calls no providers and builds no index.
 
 The canonical executable contract is
 [`import-messages/SKILL.md`](../skills/import-messages/SKILL.md). The smaller
@@ -30,11 +30,11 @@ wacli sync/export utility and stops before identity resolution or indexing.
   a local wacli provider store and QR authorization.
 - **Identity path:** local Gmail/LinkedIn match only. Matched contacts attach
   their message activity to existing people; unmatched contacts that pass a
-  deterministic "worth researching" floor become candidates for `$deep-setup`.
+  deterministic "worth researching" floor become candidates for `$deep-context`.
   No LLM triage, no paid research, no enrichment.
 - **Human control:** one local import confirmation (`--confirm-import`) when
   the run would add new rows. There is no review UI in this flow; spam
-  screening and identity decisions happen later in `$deep-setup`'s judged,
+  screening and identity decisions happen later in `$deep-context`'s judged,
   user-reviewable flow.
 - **Cloud boundary:** none. The canonical flow is entirely local; nothing is
   sent to OpenRouter, OpenAI, Parallel, RapidAPI, or Modal, and index building
@@ -55,13 +55,13 @@ flowchart TD
     G --> H["Match existing local<br/>Gmail + LinkedIn people (free)"]
     H --> P{"Confirm local import<br/>when new rows exist"}
     P -->|Matched contacts| Q["import/messages/people.csv<br/>message activity + interaction counts"]
-    P -->|Unmatched, floor passes| Q1["import/messages/candidates.csv<br/>research pool for $deep-setup"]
+    P -->|Unmatched, floor passes| Q1["import/messages/candidates.csv<br/>research pool for $deep-context"]
     P -->|Floor fails| Q2["Skipped, reason counted<br/>in the import manifest"]
 
     Q --> R["Fan in all imported sources"]
     R --> S["merged/people.csv"]
-    S --> T["Suggest missing sources<br/>offer $deep-setup processing"]
-    Q1 -. "identity research, spam screening,<br/>review, indexing" .-> U["$deep-setup processing layer<br/>(separate skill)"]
+    S --> T["Suggest missing sources<br/>offer $deep-context processing"]
+    Q1 -. "identity research, spam screening,<br/>review, indexing" .-> U["$deep-context processing layer<br/>(separate skill)"]
 
     W["$import-whatsapp"] -. "isolated utility only" .-> D0["Consent: scan WhatsApp QR<br/>isolated wacli provider sync"]
     D0 -.-> X["wacli.contacts.csv<br/>isolated skill ends here"]
@@ -77,7 +77,7 @@ flowchart TD
 and never calls `sync_powerset_candidates`. In the contacts-direct flow all
 processing also stays on-device: no OpenRouter, direct OpenAI, Parallel,
 RapidAPI, or Modal calls happen during import. Those provider boundaries now
-live in the `$deep-setup` processing layer.
+live in the `$deep-context` processing layer.
 
 ## Source extraction
 
@@ -123,7 +123,7 @@ cannot claim that provider store contains no bodies.
    last-interaction dates to the existing person at fan-in.
 3. `suggested` matches are never auto-attached. The contact is floor-tested
    like any unmatched row, and the suggestion (person id, name, LinkedIn URL,
-   confidence) is recorded in the candidate's `evidence` for the `$deep-setup`
+   confidence) is recorded in the candidate's `evidence` for the `$deep-context`
    judge.
 4. Unmatched contacts must pass a deterministic, pre-LLM "worth researching"
    floor before entering `candidates.csv`:
@@ -141,7 +141,7 @@ cannot claim that provider store contains no bodies.
    sources imported yet).
 6. No review stop happens here and no research runs: candidates are a research
    pool, never directly searchable. Spam screening and identity decisions
-   happen in `$deep-setup`'s judged, user-reviewable flow before anything
+   happen in `$deep-context`'s judged, user-reviewable flow before anything
    becomes searchable.
 
 ## Provider and cloud boundaries
@@ -158,7 +158,7 @@ consents plus the import confirmation:
 | Local import | Writes matched people and floor-passing candidates to the fixed import stage. | `--confirm-import` after the importer reports the diff counts. |
 
 Identity research (Parallel.ai), spam screening, LLM judging, review, and the
-index build belong to the `$deep-setup` processing layer and carry their own
+index build belong to the `$deep-context` processing layer and carry their own
 approval gates there.
 
 ## Artifacts and resume
@@ -223,7 +223,7 @@ Use `$import-messages` for the full product flow.
   people with message history.
 - Matching concatenates Gmail and LinkedIn source files directly; duplicated
   people can make a name-only bucket ambiguous.
-- The `$deep-setup` processing layer (identity research, spam screening,
+- The `$deep-context` processing layer (identity research, spam screening,
   review, indexing) lands in a companion PR; until then candidates wait in
   `import/messages/candidates.csv`, and newly matched contacts become
   searchable only after the next index rebuild.
@@ -241,7 +241,7 @@ can opt into each data source independently.
 The 2026-07 contact-sync refocus completed that "import now, index later" seam:
 `$import-messages` and `$import-gmail` now stop at import + candidates +
 fan-in, and identity research, spam screening, review, and index building move
-to the `$deep-setup` processing layer (companion PR). Each source writes the
+to the `$deep-context` processing layer (companion PR). Each source writes the
 shared `.powerpacks/network-import/import/<source>/people.csv` and
 `candidates.csv` contracts.
 

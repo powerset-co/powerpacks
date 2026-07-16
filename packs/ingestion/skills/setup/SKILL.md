@@ -29,7 +29,7 @@ Changelog:
   LinkedIn import summary and distinguishes warm-cache runs from cache-cold
   first runs so agents do not mistake a long, quiet Modal build for a hang.
 - 2026-07-14: New Step 8 tail — check per-source import status, suggest missing
-  sources ($import-gmail / $import-messages), and offer $deep-setup processing
+  sources ($import-gmail / $import-messages), and offer $deep-context processing
   when candidates are staged. $setup keeps its own Modal index (first-run
   search works out of the box); the import skills no longer index.
 -->
@@ -338,7 +338,7 @@ If either import shows staged candidates (`import.candidates > 0`), also ask —
 in plain product words grounded in what the status check found, naming the
 imported sources and never the skill, e.g. *"I see Gmail and iMessage/WhatsApp
 are imported — do you want to enrich your contacts?"* (a yes runs the
-`$deep-setup` flow). If nothing else is imported yet, just make the
+`$deep-context` flow). If nothing else is imported yet, just make the
 suggestions and finish.
 
 ---
