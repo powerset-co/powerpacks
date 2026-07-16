@@ -897,7 +897,10 @@ input::placeholder { color: var(--muted); }
     font-size: 18px;
   }
 
-  body[data-stage="linkedin"] .alternate { margin-top: 10px; }
+  body[data-stage="linkedin"] .alternate {
+    margin-top: 10px;
+    padding-top: 14px;
+  }
 
   body[data-stage="added"] main {
     height: calc(90dvh - var(--topbar-height));

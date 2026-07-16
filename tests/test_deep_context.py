@@ -1502,6 +1502,155 @@ class TestReconcileDeepResearch(unittest.TestCase):
 class TestReviewWeb(unittest.TestCase):
     """The parent-grouped review UI: join verdicts.jsonl + review.csv, and decision writes."""
 
+    def test_browser_observer_polls_immediately_and_every_five_seconds(self):
+        script = web.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn('fetch("/api/status", { cache: "no-store" })', script)
+        self.assertIn("const statusPollMs = 5000;", script)
+        self.assertIn(
+            'document.querySelectorAll("[data-fix-form] input[name=\'new_url\']")',
+            script,
+        )
+        self.assertIn('!input.closest("[hidden]")', script)
+        self.assertIn('document.body.dataset.preview === "true"', script)
+        self.assertIn(
+            "!isStagePreview && state.stage && state.stage !== currentStage",
+            script,
+        )
+        self.assertIn("void pollFileState();", script)
+        self.assertIn("window.setInterval(pollFileState, statusPollMs);", script)
+        self.assertIn('document.addEventListener("visibilitychange"', script)
+        self.assertNotIn(
+            'document.visibilityState !== "visible" || hasIdentityDraft()',
+            script,
+        )
+
+    def test_every_review_stage_loads_the_same_file_state_observer(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            for stage in ("worth", "enrich", "linkedin", "done"):
+                html = web.page_html(
+                    [],
+                    {"stage": [stage]},
+                    base / "review.csv",
+                    parents_dir=base / "parents",
+                    dossier_dir=base / "dossiers",
+                    manifest_path=base / "review" / "manifest.json",
+                    enrichment_manifest_path=base / "research" / "manifest.json",
+                ).decode("utf-8")
+                self.assertIn(f"data-stage='{stage}'", html)
+                self.assertIn("data-preview='false'", html)
+                self.assertIn(
+                    "<script src='/assets/reconcile-review.js' defer></script>",
+                    html,
+                )
+
+    def test_progress_step_preview_keeps_polling_without_forcing_current_stage(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            html = web.page_html(
+                [],
+                {"stage": ["linkedin"], "preview": ["1"]},
+                base / "review.csv",
+                parents_dir=base / "parents",
+                dossier_dir=base / "dossiers",
+                manifest_path=base / "review" / "manifest.json",
+                enrichment_manifest_path=base / "research" / "manifest.json",
+            ).decode("utf-8")
+            self.assertIn("data-stage='linkedin'", html)
+            self.assertIn("data-preview='true'", html)
+            self.assertIn("href='/?stage=worth&amp;preview=1'", html)
+            self.assertIn("href='/?stage=enrich&amp;preview=1'", html)
+            self.assertIn("href='/?stage=linkedin&amp;preview=1'", html)
+
+    def test_every_workflow_wait_state_maps_to_a_polled_browser_stage(self):
+        expected = {
+            "review_people": "worth",
+            "preview_enrichment": "enrich",
+            "await_enrichment_approval": "enrich",
+            "run_approved_enrichment": "enrich",
+            "run_enrichment_from_cache": "enrich",
+            "wait_for_enrichment": "enrich",
+            "retry_enrichment": "enrich",
+            "assemble_synthetic": "enrich",
+            "continue_enrichment": "enrich",
+            "review_linkedin": "linkedin",
+            "finish_linkedin": "linkedin",
+            "realize": "done",
+        }
+        self.assertEqual(
+            {action: web.browser_stage_for_next_action(action) for action in expected},
+            expected,
+        )
+
+    def test_browser_state_token_changes_for_each_observed_file_state_family(self):
+        progress = {
+            "total": 3,
+            "worth_total": 2,
+            "worth_pending": 1,
+            "worth_yes": 1,
+            "worth_no": 0,
+            "lookup_ready": 1,
+            "linkedin_total": 1,
+            "linkedin_pending": 1,
+            "linkedin_done": 0,
+            "rejected": 0,
+        }
+        selection = {
+            "sha256": "selection-a",
+            "total": 2,
+            "yes": 1,
+            "maybe": 1,
+            "no": 0,
+            "review_revision": "revision-a",
+        }
+        enrichment = {
+            "status": "running",
+            "current": True,
+            "approval_current": True,
+            "counts": {"total": 1, "completed": 0, "pending": 1, "failed": 0},
+            "updated_at": "2026-07-16T00:00:00Z",
+        }
+        review_manifest = {
+            "stage": "enrich",
+            "status": "awaiting_user",
+            "completed_stages": ["worth"],
+            "updated_at": "2026-07-16T00:00:00Z",
+        }
+        baseline = web.review_state_token(
+            progress, selection, enrichment, review_manifest)
+
+        changed_progress = {**progress, "worth_pending": 0}
+        changed_selection = {**selection, "sha256": "selection-b"}
+        changed_enrichment = {
+            **enrichment,
+            "counts": {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+        }
+        changed_review = {
+            **review_manifest,
+            "stage": "linkedin",
+            "completed_stages": ["worth", "enrich"],
+        }
+        self.assertNotEqual(
+            baseline,
+            web.review_state_token(
+                changed_progress, selection, enrichment, review_manifest),
+        )
+        self.assertNotEqual(
+            baseline,
+            web.review_state_token(
+                progress, changed_selection, enrichment, review_manifest),
+        )
+        self.assertNotEqual(
+            baseline,
+            web.review_state_token(
+                progress, selection, changed_enrichment, review_manifest),
+        )
+        self.assertNotEqual(
+            baseline,
+            web.review_state_token(
+                progress, selection, enrichment, changed_review),
+        )
+
     def _fixture(self, d: Path) -> tuple[Path, Path]:
         verdicts = d / "verdicts.jsonl"
         review = d / "review.csv"
@@ -1953,6 +2102,14 @@ class TestSyntheticReviewUI(unittest.TestCase):
             path.write_text(self.CSV_HEADER + self._csv_row("auto"), encoding="utf-8")
             cand = web.load_synthetic_parents(path)[0]["candidates"][0]
             self.assertEqual(web.candidate_state(cand), "verified")
+
+    def test_linkedin_correction_is_spaced_below_its_divider(self) -> None:
+        css = (Path(web.__file__).with_name("reconcile_review.css")).read_text(encoding="utf-8")
+        self.assertRegex(
+            css,
+            r'body\[data-stage="linkedin"\] \.alternate\s*\{'
+            r"[^}]*padding-top:\s*14px;",
+        )
 
     def test_apply_synthetic_decision_flips_the_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

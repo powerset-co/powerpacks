@@ -206,24 +206,30 @@ document.querySelectorAll("details.decision-row[data-slug]").forEach((row) => {
 refreshScrollCues();
 
 let reviewStateToken = document.body.dataset.stateToken || "";
+const statusPollMs = 5000;
 
 function hasIdentityDraft() {
-  const input = document.querySelector(".alternate:not([hidden]) input[name='new_url']");
-  return Boolean(input && (document.activeElement === input || input.value.trim()));
+  return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(
+    (input) => !input.closest("[hidden]") && Boolean(input.value.trim()),
+  );
 }
 
 async function pollFileState() {
-  if (document.visibilityState !== "visible" || hasIdentityDraft()) return;
+  if (document.visibilityState !== "visible") return;
   try {
     const response = await fetch("/api/status", { cache: "no-store" });
     if (!response.ok) return;
     const state = await response.json();
     const currentStage = document.body.dataset.stage || "";
-    if (state.stage && state.stage !== currentStage) {
+    const isStagePreview = document.body.dataset.preview === "true";
+    const preserveDraft = hasIdentityDraft();
+    if (!isStagePreview && state.stage && state.stage !== currentStage) {
+      if (preserveDraft) return;
       window.location.replace(`/?stage=${encodeURIComponent(state.stage)}`);
       return;
     }
     if (state.state_token && state.state_token !== reviewStateToken) {
+      if (preserveDraft) return;
       window.location.reload();
     }
   } catch {
@@ -231,7 +237,8 @@ async function pollFileState() {
   }
 }
 
-window.setInterval(pollFileState, 5000);
+void pollFileState();
+window.setInterval(pollFileState, statusPollMs);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") void pollFileState();
 });
