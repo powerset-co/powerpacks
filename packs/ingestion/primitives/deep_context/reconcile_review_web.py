@@ -70,6 +70,7 @@ APPLIED_APPROVED = {"auto", "yes"}
 VALID_TABS = {"all", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided", "rejected"}
 VALID_STAGES = {"worth", "linkedin", "waiting", "done", "added", "rejected"}
 USER_WORTH_VALUES = {"yes", "no"}
+ADDED_PAGE_SIZE = 50
 REVIEW_CSS = Path(__file__).with_name("reconcile_review.css")
 REVIEW_JS = Path(__file__).with_name("reconcile_review.js")
 AVATAR_DIR = REVIEW_DIR / "avatars"
@@ -1230,13 +1231,20 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
             "<div class='dossier-text' aria-busy='true'>Loading…</div></div></section>")
 
 
+def _scroll_region(content: str) -> str:
+    return ("<div class='identity-scroll-shell'>"
+            f"<div class='identity-scroll'>{content}</div>"
+            "<button class='scroll-cue' type='button' data-scroll-cue "
+            "aria-label='Scroll down' hidden>"
+            "<svg viewBox='0 0 24 24' aria-hidden='true' focusable='false'>"
+            "<path d='m7 9 5 5 5-5'></path></svg></button></div>")
+
+
 def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path) -> str:
     candidate = _primary_candidate(parent)
     key = _worth_key(parent)
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
-    return f"""
-    <article class='decision-card identity-card worth-card' data-card>
-      <div class='identity-scroll'>
+    scroll_content = f"""
         <div class='person-top'>
           {_avatar(parent, candidate)}
           <div class='person-copy'>
@@ -1244,8 +1252,10 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
             <h2>{esc(name)}</h2>
           </div>
         </div>
-        {_details(parent, candidate, identity=False)}
-      </div>
+        {_details(parent, candidate, identity=False)}"""
+    return f"""
+    <article class='decision-card identity-card worth-card' data-card>
+      {_scroll_region(scroll_content)}
       <div class='identity-decision'>
         <div class='binary-actions'>
           <button class='button button-outline' data-worth='no' data-pub='{esc(key)}'>No</button>
@@ -1282,9 +1292,7 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
         url = str(candidate.get("url") or "")
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
                 "<span aria-hidden='true'>↗</span></a>") if url else ""
-    return f"""
-    <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
-      <div class='identity-scroll'>
+    scroll_content = f"""
         {f"<div class='identity-eyebrow'>{esc(eyebrow)}</div>" if eyebrow else ""}
         <div class='profile-card'>
           {_avatar(parent, candidate)}
@@ -1297,8 +1305,10 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
         </div>
         {f"<ul class='roles'>{roles}</ul>" if roles else ""}
         {f"<p class='education'>{esc(education)}</p>" if education else ""}
-        {_details(parent, candidate, identity=True)}
-      </div>
+        {_details(parent, candidate, identity=True)}"""
+    return f"""
+    <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
+      {_scroll_region(scroll_content)}
       <div class='identity-decision'>
         <div class='question'>{question}</div>
         <div class='binary-actions'>
@@ -1330,7 +1340,19 @@ def _rejection_reason(parent: dict[str, Any]) -> str:
     machine = parent.get("machine_worth") or {}
     if worth.get("source") == "user":
         return "You said no"
-    reason = str(machine.get("reason") or "Not worth adding")
+    if any(str(candidate.get("action") or "").strip().lower() == "exclude"
+           and str(candidate.get("approved") or "").strip().lower() in APPLIED_APPROVED
+           for candidate in parent.get("candidates") or []):
+        return "Excluded"
+    spam_reason = next((str(candidate.get("llm_reject_reason") or "").strip()
+                        for candidate in parent.get("candidates") or []
+                        if candidate.get("llm_reject") == "spam"), "")
+    if spam_reason:
+        reason = spam_reason
+    else:
+        reason = str(machine.get("reason") or "").strip()
+        if not reason or reason.lower() == "not yet judged":
+            reason = "Not worth adding"
     return reason if len(reason) <= 140 else reason[:137].rsplit(" ", 1)[0] + "…"
 
 
@@ -1350,20 +1372,46 @@ def render_rejected(parents: list[dict[str, Any]]) -> str:
     return "<section class='rejected-list'>" + "".join(rows) + "</section>"
 
 
-def render_added(parents: list[dict[str, Any]]) -> str:
-    added = [parent for parent in parents if is_lookup_ready(parent)]
+def _pagination(page: int, total_pages: int) -> str:
+    if total_pages <= 1:
+        return ""
+    numbers = sorted({1, total_pages, page - 1, page, page + 1}
+                     & set(range(1, total_pages + 1)))
+    items: list[str] = []
+    previous = 0
+    for number in numbers:
+        if previous and number - previous > 1:
+            items.append("<span class='page-ellipsis' aria-hidden='true'>…</span>")
+        if number == page:
+            items.append(f"<span class='page-link active' aria-current='page'>{number}</span>")
+        else:
+            items.append(f"<a class='page-link' href='/?stage=added&amp;page={number}' "
+                         f"aria-label='Added page {number}'>{number}</a>")
+        previous = number
+    return "<nav class='pagination' aria-label='Added pages'>" + "".join(items) + "</nav>"
+
+
+def render_added(parents: list[dict[str, Any]], *, page: int = 1,
+                 page_size: int = ADDED_PAGE_SIZE) -> str:
+    added = sorted((parent for parent in parents if is_lookup_ready(parent)),
+                   key=lambda item: str(item.get("name") or "").lower())
     if not added:
         return "<div class='empty-state'><div class='empty-mark'>0</div><h2>No added people</h2></div>"
+    page_size = max(1, page_size)
+    total_pages = max(1, (len(added) + page_size - 1) // page_size)
+    page = min(max(1, page), total_pages)
+    start = (page - 1) * page_size
     rows = []
-    for parent in sorted(added, key=lambda item: str(item.get("name") or "").lower()):
+    for parent in added[start:start + page_size]:
         candidate = _primary_candidate(parent)
         rows.append(f"""
         <article class='rejected-row' data-card>
           {_avatar(parent, candidate, small=True)}
-          <div><strong>{esc(parent.get('name'))}</strong><span>{esc(_machine_copy(parent)[0])}</span></div>
+          <div><strong>{esc(parent.get('name'))}</strong></div>
           <button class='button button-ghost' data-worth='no' data-pub='{esc(_worth_key(parent))}'>Remove</button>
         </article>""")
-    return "<section class='rejected-list'>" + "".join(rows) + "</section>"
+    return ("<div class='pile-page'><section class='rejected-list'>" + "".join(rows)
+            + "</section>" + _pagination(page, total_pages) + "</div>")
 
 
 def _phase_view(params: dict[str, list[str]], progress: dict[str, int], manifest_path: Path) -> str:
@@ -1460,7 +1508,11 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     elif view == "rejected":
         content = render_rejected(parents)
     elif view == "added":
-        content = render_added(parents)
+        try:
+            added_page = int(str((params.get("page") or ["1"])[0]))
+        except ValueError:
+            added_page = 1
+        content = render_added(parents, page=added_page)
     else:
         content = ("<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
                    f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p></div>")

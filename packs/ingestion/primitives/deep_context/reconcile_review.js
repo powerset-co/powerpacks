@@ -104,6 +104,39 @@ document.querySelectorAll("[data-fix-form]").forEach((form) => {
   });
 });
 
+const scrollRegions = Array.from(document.querySelectorAll(".identity-scroll-shell"));
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let scrollCueFrame = 0;
+
+function refreshScrollCues() {
+  if (scrollCueFrame) return;
+  scrollCueFrame = window.requestAnimationFrame(() => {
+    scrollCueFrame = 0;
+    scrollRegions.forEach((shell) => {
+      const scroller = shell.querySelector(".identity-scroll");
+      const cue = shell.querySelector("[data-scroll-cue]");
+      if (!scroller || !cue) return;
+      const hasMore = scroller.scrollHeight > scroller.clientHeight + 4
+        && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 4;
+      cue.hidden = !hasMore;
+    });
+  });
+}
+
+scrollRegions.forEach((shell) => {
+  const scroller = shell.querySelector(".identity-scroll");
+  const cue = shell.querySelector("[data-scroll-cue]");
+  if (!scroller || !cue) return;
+  scroller.addEventListener("scroll", refreshScrollCues, { passive: true });
+  cue.addEventListener("click", () => {
+    scroller.scrollBy({
+      top: Math.max(160, scroller.clientHeight * 0.7),
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
+  });
+});
+window.addEventListener("resize", refreshScrollCues);
+
 async function loadDossier(details) {
   if (details.dataset.loaded) return;
   const body = details.querySelector(".dossier-text");
@@ -122,12 +155,14 @@ async function loadDossier(details) {
     body.textContent = "Could not load details";
   } finally {
     body.removeAttribute("aria-busy");
+    refreshScrollCues();
   }
 }
 
 document.querySelectorAll(".details[data-slug]").forEach((details) => {
   void loadDossier(details);
 });
+refreshScrollCues();
 
 if (document.body.dataset.stage === "waiting") {
   window.setInterval(() => {

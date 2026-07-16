@@ -1079,6 +1079,8 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn("class='decision-card identity-card worth-card'", html)
         self.assertIn("class='identity-scroll'", html)
         self.assertIn("class='identity-decision'", html)
+        self.assertIn("data-scroll-cue", html)
+        self.assertIn("aria-label='Scroll down'", html)
         self.assertIn("<section class='details' data-slug='ada-lovelace'>", html)
         self.assertIn("<h3 class='details-heading'>Details</h3>", html)
         self.assertNotIn("<summary>Details", html)
@@ -1157,6 +1159,8 @@ class TestStagedReviewUI(unittest.TestCase):
             ).decode("utf-8")
             self.assertIn("Ada Lovelace", added)
             self.assertIn("data-worth='no'", added)
+            self.assertNotIn("Suggested", added)
+            self.assertNotIn("AI is unsure", added)
 
             rejected = web.page_html(
                 [model_yes, model_no], {"stage": ["rejected"]}, base / "review.csv",
@@ -1165,6 +1169,46 @@ class TestStagedReviewUI(unittest.TestCase):
             ).decode("utf-8")
             self.assertIn("Grace Hopper", rejected)
             self.assertIn("data-worth='yes'", rejected)
+
+    def test_added_pile_is_paginated_without_rendering_every_person(self):
+        parents = []
+        for index in range(120):
+            parent = self._candidate_parent("yes", "llm")
+            key = f"candidate:email:person{index:03d}@example.com"
+            parent["slug"] = f"person-{index:03d}"
+            parent["name"] = f"Person {index:03d}"
+            parent["person_ids"] = [key]
+            parent["candidates"][0].update({
+                "pub": key, "full_name": parent["name"], "worth_key": key,
+            })
+            parents.append(parent)
+        html = web.render_added(parents, page=2, page_size=50)
+        self.assertEqual(html.count("data-worth='no'"), 50)
+        self.assertNotIn("Person 049", html)
+        self.assertIn("Person 050", html)
+        self.assertIn("Person 099", html)
+        self.assertNotIn("Person 100", html)
+        self.assertIn("aria-current='page'>2</span>", html)
+        self.assertIn("stage=added&amp;page=1", html)
+        self.assertIn("stage=added&amp;page=3", html)
+
+    def test_rejected_spam_uses_the_classifier_reason_not_default_worth_copy(self):
+        parent = self._candidate_parent("maybe", "default")
+        parent["machine_worth"] = {
+            "decision": "maybe", "source": "default", "reason": "not yet judged",
+        }
+        parent["worth"] = dict(parent["machine_worth"])
+        parent["candidates"][0].update({
+            "llm_reject": "spam",
+            "llm_reject_reason": "Unsolicited recruiter outreach with no engagement.",
+            "worth": parent["worth"],
+            "machine_worth": parent["machine_worth"],
+        })
+        self.assertTrue(web.is_effective_no(parent))
+        self.assertEqual(
+            web._rejection_reason(parent),
+            "Unsolicited recruiter outreach with no engagement.",
+        )
 
     def test_manifest_completion_requires_zero_pending_and_rejects_stale_counts(self):
         with tempfile.TemporaryDirectory() as d:
