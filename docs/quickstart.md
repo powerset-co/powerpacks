@@ -262,13 +262,14 @@ It builds one dossier per contact from message bodies — including the imports'
 research candidates — and the synthesis LLM judges each contact's
 network worth from the actual relationship. The browser asks only about people
 the model is unsure about: **add this person, Yes or No?** Model Yes starts in
-the editable Added pile; model No/spam, user No, and legacy Exclude share the
-editable Rejected pile. Once no maybes remain, Continue records the handoff and
-the current Added pile enters the separately approved Parallel.ai lookup. After
-lookup, a second binary screen asks whether each found LinkedIn is the right
-person (with a secondary field for a known correct URL). No-LinkedIn people get
-reviewable synthetic profiles, then the approved decisions re-merge and rebuild
-the Modal index. See the
+the editable Yes table; model No/spam, user No, and legacy Exclude share the
+editable No table. Once no maybes remain, Continue records the handoff and the
+current effective-Yes selection enters the separately approved Parallel.ai
+lookup. After lookup, a second screen asks whether each found LinkedIn is the
+right person. No reveals a replacement-URL field or Skip; it is not itself a
+decision. No-LinkedIn research stays visible as identity context, but the user
+must add a real LinkedIn URL or Skip it — synthetic records are not directly
+indexed. The approved decisions then re-merge and rebuild the Modal index. See the
 [deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md).
 
 ### Relationship dossiers — `$deep-context`

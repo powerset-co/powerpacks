@@ -216,8 +216,10 @@ keep polling `bin/deep-context review-status`, run only its exact next action, a
 let the UI reflect progress. Direct progress-step navigation is preview only; it
 does not itself advance provider work.
 The browser observes those fixed files and automatically refreshes or moves to
-the current stage. Open it once; do not open additional tabs or repeatedly open
-stage URLs as the workflow advances.
+the current stage. Its shared observer checks `/api/status` immediately, then
+every five seconds on People, Enrich, LinkedIn, and Done, with an immediate check
+when a hidden tab becomes visible again. Open it once; do not open additional
+tabs or repeatedly open stage URLs as the workflow advances.
 
 The main Review tab shows only people the model marked `maybe`, one at a time
 with Yes/No. The Yes and No tabs are paginated, editable tables with one action

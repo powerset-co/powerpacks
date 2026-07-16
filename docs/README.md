@@ -12,7 +12,7 @@ only when you need that level of detail.
 | LinkedIn setup and indexing | [LinkedIn and Modal indexing pipeline](../packs/indexing/docs/linkedin-modal-pipeline.md) | How a LinkedIn `Connections.csv` becomes the local DuckDB queried by `$search local`. |
 | Gmail import | [Gmail import pipeline](../packs/ingestion/docs/gmail-import-pipeline.md) | How bounded msgvault sync, metadata extraction, directory reuse, LinkedIn lookup, hydration, fan-in, and indexing work. |
 | iMessage and WhatsApp import | [Message import pipeline](../packs/ingestion/docs/message-import-pipeline.md) | Source extraction, matching, provider payloads, human review, and the Modal boundary. |
-| Post-import processing and relationship context | [Deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md) | The single workflow for dossiers over people + candidates, duplicate resolution, binary people and LinkedIn decisions, one approved-person lookup, realization, and ad-hoc dossier retrieval. |
+| Post-import processing and relationship context | [Deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md) | The single file-driven workflow for dossiers, duplicate resolution, uncertain-people review, revision-bound enrichment, LinkedIn verify/replace/Skip decisions, realization, and ad-hoc dossier retrieval. |
 | Running deep search | [Deep-mode runbook](../packs/search/skills/search/deep-mode.md) | Exact operator commands, artifacts, approval boundary, and resume rules. |
 | Running setup | [`$setup` skill](../packs/ingestion/skills/setup/SKILL.md) | Exact LinkedIn-only setup checklist. |
 | All skills | [Root skill index](../README.md#skills) | GitHub-native list of supported skill entry points. |
