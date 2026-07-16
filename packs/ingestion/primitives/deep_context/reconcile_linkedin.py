@@ -652,6 +652,22 @@ def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
             "or contradicting evidence, linkedin_plausibly_absent=true, "
             "recommend_deep_research=false, and reason='no LinkedIn attached'."
         )
+    if task.get("name_matched"):
+        # This link was NOT provided by the contact — it's the single first-degree connection whose
+        # NAME matches. A shared name alone is not proof (namesakes exist), so raise the bar: require
+        # a real non-name signal before confirming, otherwise route to review (→ no-link fallback).
+        return (
+            f"{contact}"
+            f"CANDIDATE LINKEDIN PROFILE ({li.get('linkedin_url') or 'n/a'})\n{li_block}\n\n"
+            "NOTE: I did NOT get this profile from the contact. It is a SPECULATIVE match — the one "
+            "first-degree connection in my network whose NAME matches theirs. A shared name is NOT "
+            "enough on its own (different people share names). Confirm ONLY if at least one NON-NAME "
+            "signal corroborates that it is the same human: a shared employer/company, school, "
+            "location, mutual topic, a work-email domain matching the profile's employer, or a "
+            "self-reported URL that matches. If the evidence is only the name (sparse dossier, no "
+            "overlap), return needs_review — do NOT confirm.\n\n"
+            "Is this LinkedIn profile the same human as the contact I know from my messages?"
+        )
     return (
         f"{contact}"
         f"ATTACHED LINKEDIN PROFILE ({li.get('linkedin_url') or 'n/a'})\n{li_block}\n\n"
@@ -683,8 +699,18 @@ async def judge_task(client: Any, task: dict[str, Any], owner_block: str, *, mod
 
 
 def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
-    """Offline/tests fallback (--no-llm): trusts the attached link unless it's missing."""
+    """Offline/tests fallback (--no-llm): trusts the attached link unless it's missing.
+
+    A SPECULATIVE name-match is never trusted offline — it exists only because the names lined
+    up, which is exactly the judgment the LLM is supposed to make. So it routes to review (and the
+    unconfirmed-name-match revert then drops it back to the no-link path)."""
     li = task["linkedin"]
+    if task.get("name_matched"):
+        return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
+                "contradicting_evidence": [], "linkedin_plausibly_absent": False,
+                "recommend_deep_research": False,
+                "reason": "speculative name-match needs the LLM judge (offline stub won't confirm)",
+                "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
     if not li or not li.get("has_profile"):
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": True,
@@ -1311,6 +1337,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             # Recompute the self-reported LinkedIn from facts so the free recovery also runs here.
             url, pub = self_linkedin_from_facts(t.get("person_ids") or [], facts_dir)
             t["dossier"] = {**(t.get("dossier") or {}), "self_linkedin_url": url, "self_linkedin_pub": pub}
+        # Re-run the unconfirmed-name-match revert here too: if the threshold changed (or an old
+        # verdict no longer clears the bar), a speculative match drops back to the no-link path
+        # instead of lingering as a stale LinkedIn review row.
+        overrides = load_override_rows(Path(args.overrides_csv))
+        revert_unconfirmed_name_matches(tasks, args.confirm_threshold, overrides, facts_dir)
         return _finalize(args, tasks, index, usage_total={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
                          use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")), started=started)
 
@@ -1434,16 +1465,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def merge_subset_tasks(verdicts_path: Path, fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Overlay freshly judged tasks onto the existing verdicts file by (parent_slug,
-    candidate_key). Existing rows keep their old verdicts; downstream decide/override
-    passes are idempotent and sticky, so re-running them over the merged set is safe."""
-    existing = load_tasks_from_verdicts(verdicts_path)
-    merged: dict[tuple[str, str], dict[str, Any]] = {
-        ((t.get("parent_slug") or ""), (t.get("candidate_key") or "")): t for t in existing
-    }
-    for t in fresh:
-        merged[((t.get("parent_slug") or ""), (t.get("candidate_key") or ""))] = t
-    return list(merged.values())
+    """Overlay a freshly refreshed SUBSET onto the existing verdicts file. A refreshed parent is
+    REPLACED wholesale — every existing task for it is dropped and only its fresh tasks kept — so a
+    changed candidate_key (e.g. a name-match reverted to no-link, which flips the key from the
+    connection's public_identifier to '') can't leave a stale LinkedIn task behind. Parents absent
+    from the subset keep their old verdicts untouched. Downstream decide/override passes are
+    idempotent and sticky, so re-running over the merged set is safe."""
+    refreshed_parents = {t.get("parent_slug") or "" for t in fresh}
+    existing = [t for t in load_tasks_from_verdicts(verdicts_path)
+                if (t.get("parent_slug") or "") not in refreshed_parents]
+    return existing + fresh
 
 
 def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict[str, Any], *,

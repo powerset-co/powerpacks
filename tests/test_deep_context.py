@@ -2350,6 +2350,63 @@ class TestNameMatchAttach(unittest.TestCase):
             self.assertEqual(row["primary_email"], "deng@brainoft.com")  # message contacts folded on
             self.assertIn("gmail", row["interaction_counts"])
 
+    def test_no_llm_never_auto_confirms_a_name_match(self):
+        # Offline stub trusts a normal attached link, but a SPECULATIVE name-match must not be
+        # auto-confirmed (that would bypass the judgment the LLM is meant to make).
+        speculative = reconcile.deterministic_verdict(
+            {"name_matched": True, "linkedin": {"has_profile": True}})
+        self.assertNotEqual(speculative["verdict"], "confirmed")
+        normal = reconcile.deterministic_verdict({"linkedin": {"has_profile": True}})
+        self.assertEqual(normal["verdict"], "confirmed")
+
+    def test_name_match_prompt_requires_a_non_name_signal(self):
+        task = {"name_matched": True, "name": "Deng Deng", "match_emails": [], "match_phones": [],
+                "dossier": {"relationship": "", "title": "", "employers": [], "school": "",
+                            "location": "", "topics": [], "shared_context": [],
+                            "from_me": [], "from_them": []},
+                "linkedin": {"linkedin_url": "https://www.linkedin.com/in/dengd", "full_name": "Deng D.",
+                             "headline": "", "location": "", "experiences": [], "education": []}}
+        prompt = reconcile.judge_prompt(task, "")
+        self.assertIn("SPECULATIVE", prompt)
+        self.assertIn("NON-NAME", prompt)
+        self.assertIn("needs_review", prompt)
+
+    def test_reapply_reverts_a_no_longer_confirmed_name_match(self):
+        # A verdict that used to clear a lower bar but no longer meets confirm_threshold must fall
+        # back to no-link on reapply, not linger as a stale LinkedIn review row.
+        stale = {"parent_slug": "a", "name": "A", "candidate_key": "aconn",
+                 "person_ids": ["candidate:email:a@x.com"], "no_link": False, "name_matched": True,
+                 "linkedin": {"linkedin_url": "x"}, "verdict": _verdict("confirmed", 0.75)}
+        reverted = reconcile.revert_unconfirmed_name_matches([stale], 0.85, {}, Path("/nonexistent"))
+        self.assertEqual(reverted, 1)
+        self.assertTrue(stale["no_link"])
+        self.assertEqual(stale["candidate_key"], "")
+
+    def test_subset_refresh_replaces_all_tasks_for_a_parent(self):
+        # verdicts.jsonl holds a prior name-matched LinkedIn task for parent "deng"; a subset rerun
+        # reverts it to no-link (candidate_key "" instead of the connection pub). The merge must
+        # drop the stale LinkedIn task, not keep BOTH keyed by their differing candidate_keys.
+        with tempfile.TemporaryDirectory() as d:
+            jsonl = Path(d) / "verdicts.jsonl"
+            reconcile.write_verdicts(jsonl, Path(d) / "verdicts.csv", [
+                {"parent_slug": "deng", "name": "Deng Deng", "candidate_key": "dengdengxcc",
+                 "person_ids": ["msg-deng"], "conflict": False, "no_link": False, "name_matched": True,
+                 "linkedin": {"linkedin_url": "x"}, "match_emails": [], "match_phones": [],
+                 "verdict": _verdict("confirmed", 0.9), "error": ""},
+                {"parent_slug": "other", "name": "Other", "candidate_key": "otherpub",
+                 "person_ids": ["p"], "conflict": False, "no_link": False,
+                 "linkedin": {"linkedin_url": "y"}, "match_emails": [], "match_phones": [],
+                 "verdict": _verdict("confirmed", 0.9), "error": ""}])
+            fresh = [{"parent_slug": "deng", "name": "Deng Deng", "candidate_key": "",
+                      "person_ids": ["msg-deng"], "conflict": False, "no_link": True,
+                      "linkedin": {}, "verdict": _verdict("needs_review", 0.0)}]
+            merged = reconcile.merge_subset_tasks(jsonl, fresh)
+            deng = [t for t in merged if t["parent_slug"] == "deng"]
+            self.assertEqual(len(deng), 1)               # exactly one task for the refreshed parent
+            self.assertTrue(deng[0]["no_link"])          # the fresh no-link one; stale LinkedIn dropped
+            self.assertEqual(len(merged), 2)             # untouched "other" parent still present
+            self.assertTrue(any(t["parent_slug"] == "other" for t in merged))
+
     def test_write_verdicts_persists_name_matched_for_reapply(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
