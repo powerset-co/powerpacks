@@ -2208,5 +2208,217 @@ class TestSpamDropAtMerge(unittest.TestCase):
         self.assertFalse(merge.keep_people_csv_row({"public_identifier": "someone", "approved": "auto"}))
 
 
+class TestNameMatchAttach(unittest.TestCase):
+    """Phase 3: a first-degree connection you also message is name-matched to its LinkedIn and
+    judged like any other link — instead of a paid web lookup that guesses a stranger."""
+
+    def _facts(self, facts_dir, pid, name):
+        (facts_dir / f"{pid}.jsonl").write_text(json.dumps({
+            "chunk_index": 0, "facts": {"canonical_name": name, "aliases": [], "employers": [],
+                "title": "", "school": "", "field_of_study": "", "location": "",
+                "relationship_to_owner": "friend", "topics": [], "notable_events": [],
+                "identifiers": [], "shared_context": [], "confidence": 0.8}, "usage": {}}) + "\n",
+            encoding="utf-8")
+
+    def _conn(self, pid, pub, full_name):
+        # A LinkedIn Connections row: has a link, carries linkedin_csv, no email/phone to join on.
+        return {"id": pid, "public_identifier": pub,
+                "linkedin_url": f"https://www.linkedin.com/in/{pub}", "full_name": full_name,
+                "headline": "Eng", "work_experiences": "[]", "education": "[]",
+                "source_channels": "linkedin_csv"}
+
+    def _msg_person(self, pid, name):
+        # A message-derived person: has the display name, NO linkedin (nothing to key on).
+        return {"id": pid, "public_identifier": "", "linkedin_url": "", "full_name": name,
+                "primary_email": f"{name.split()[0].lower()}@gmail.com",
+                "source_channels": "gmail_msgvault"}
+
+    def test_names_compatible_handles_abbreviation(self):
+        tok = reconcile._name_tokens
+        cmp = reconcile._names_compatible
+        self.assertTrue(cmp(tok("Deng Deng"), tok("Deng D.")))     # LinkedIn abbreviates last name
+        self.assertTrue(cmp(tok("Eugene Wang"), tok("Eugene Wang")))
+        self.assertTrue(cmp(tok("Benjamin Minhao Chen"), tok("Benjamin Chen")))  # ignore middle
+        self.assertFalse(cmp(tok("Deng Deng"), tok("Deng Xianchen")))  # the bad web-lookup guess
+        self.assertFalse(cmp(tok("Deng"), tok("Deng D.")))         # a lone first name never matches
+        self.assertFalse(cmp(tok("John Wang"), tok("Eric Wang")))  # different first name
+
+    def test_unique_connection_match_requires_uniqueness(self):
+        conns = reconcile.connection_name_rows({
+            "c1": self._conn("c1", "dengd1", "Deng D."),
+            "c2": self._conn("c2", "dengd2", "Deng D."),   # a second same-name connection
+            "e1": self._conn("e1", "eugene-wang", "Eugene Wang")})
+        self.assertIsNone(reconcile.unique_connection_match("Deng Deng", conns))   # ambiguous -> None
+        self.assertEqual(
+            reconcile.unique_connection_match("Eugene Wang", conns)["public_identifier"],
+            "eugene-wang")
+
+    def test_build_tasks_attaches_unique_name_match_optimistically(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, raw, cache = base / "facts", base / "raw", base / "cache"
+            facts.mkdir(); raw.mkdir(); cache.mkdir()
+            self._facts(facts, "msg-deng", "Deng Deng")
+            self._facts(facts, "msg-nomatch", "Nadia Zon")
+            index = {"slugs": {"deng-c": {"person_id": "msg-deng"},
+                               "nomatch-c": {"person_id": "msg-nomatch"}},
+                     "parents": {"deng-p": {"name": "Deng Deng", "children": ["deng-c"]},
+                                 "nomatch-p": {"name": "Nadia Zon", "children": ["nomatch-c"]}}}
+            people = {
+                "msg-deng": self._msg_person("msg-deng", "Deng Deng"),
+                "msg-nomatch": self._msg_person("msg-nomatch", "Nadia Zon"),
+                # the first-degree connection, a SEPARATE row with the abbreviated export name
+                "conn-deng": self._conn("conn-deng", "dengdengxcc", "Deng D.")}
+            tasks = {t["parent_slug"]: t for t in reconcile.build_tasks(index, people, facts, raw, cache)}
+            deng = tasks["deng-p"]
+            self.assertTrue(deng["name_matched"])
+            self.assertFalse(deng["no_link"])
+            self.assertFalse(deng["from_connections"])          # optimistic, NOT ground truth
+            self.assertEqual(deng["candidate_key"], "dengdengxcc")
+            self.assertEqual(deng["person_ids"], ["msg-deng"])
+            self.assertTrue(tasks["nomatch-p"]["no_link"])       # no connection matches -> unchanged
+
+    def test_ambiguous_name_match_stays_no_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, raw, cache = base / "facts", base / "raw", base / "cache"
+            facts.mkdir(); raw.mkdir(); cache.mkdir()
+            self._facts(facts, "msg-deng", "Deng Deng")
+            index = {"slugs": {"deng-c": {"person_id": "msg-deng"}},
+                     "parents": {"deng-p": {"name": "Deng Deng", "children": ["deng-c"]}}}
+            people = {"msg-deng": self._msg_person("msg-deng", "Deng Deng"),
+                      "conn-a": self._conn("conn-a", "denga", "Deng D."),
+                      "conn-b": self._conn("conn-b", "dengb", "Deng D.")}   # two same-name connections
+            (task,) = reconcile.build_tasks(index, people, facts, raw, cache)
+            self.assertTrue(task["no_link"])
+            self.assertNotIn("name_matched", task)
+
+    def test_unconfirmed_name_match_reverts_to_no_link(self):
+        confirmed = {"parent_slug": "a", "name": "A", "candidate_key": "aconn",
+                     "person_ids": ["candidate:email:a@x.com"], "no_link": False,
+                     "name_matched": True, "linkedin": {"linkedin_url": "x"},
+                     "verdict": _verdict("confirmed", 0.9)}
+        needs_review = {"parent_slug": "b", "name": "B", "candidate_key": "bconn",
+                        "person_ids": ["candidate:email:b@x.com"], "no_link": False,
+                        "name_matched": True, "linkedin": {"linkedin_url": "y"},
+                        "verdict": _verdict("needs_review", 0.4)}
+        reverted = reconcile.revert_unconfirmed_name_matches(
+            [confirmed, needs_review], 0.7, {}, Path("/nonexistent"))
+        self.assertEqual(reverted, 1)
+        self.assertFalse(confirmed["no_link"])          # confirmed match stays an identity row
+        self.assertTrue(confirmed["name_matched"])
+        self.assertTrue(needs_review["no_link"])         # unconfirmed falls back to worth/lookup
+        self.assertFalse(needs_review["name_matched"])
+        self.assertEqual(needs_review["candidate_key"], "")
+
+    def test_name_match_never_detaches_the_connection(self):
+        # Even a high-confidence wrong_person on a name-matched task must NOT detach: the link
+        # belongs to a real connection (a separate row), so a wrong guess is dropped, not applied.
+        task = {"parent_slug": "a", "name": "A", "person_ids": ["p"], "conflict": False,
+                "no_link": False, "name_matched": True, "verdict": _verdict("wrong_person", 0.99)}
+        reconcile.decide_actions([task], 0.85)
+        self.assertNotEqual(task["action"], "detach")
+
+    def test_confirmed_name_match_folds_onto_connection(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            people = base / "people.csv"
+            cols = ["id", "public_identifier", "linkedin_url", "primary_email", "all_emails",
+                    "primary_phone", "all_phones", "interaction_counts", "source_channels"]
+            with people.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=cols)
+                w.writeheader()
+                w.writerow({"id": "msg-deng", "public_identifier": "",
+                            "primary_email": "deng@brainoft.com", "all_emails": '["deng@brainoft.com"]',
+                            "interaction_counts": '{"gmail": 7}', "source_channels": "gmail_msgvault"})
+            # A confirmed name-match: ONE identity task, no detached sibling, kept pids == all pids.
+            task = {"parent_slug": "deng", "name": "Deng Deng", "candidate_key": "dengdengxcc",
+                    "person_ids": ["msg-deng"], "parent_person_ids": ["msg-deng"], "conflict": False,
+                    "no_link": False, "name_matched": True,
+                    "linkedin": {"linkedin_url": "https://www.linkedin.com/in/dengdengxcc"},
+                    "match_emails": ["deng@brainoft.com"], "match_phones": [],
+                    "verdict": _verdict("confirmed", 0.9)}
+            reconcile.decide_actions([task], 0.85)
+            self.assertEqual(task["action"], "confirm")
+            out = base / "consolidate.csv"
+            stats = reconcile.write_consolidations(out, [task], people)
+            self.assertEqual(stats["consolidated_parents"], 1)   # folds despite no sibling to detach
+            import csv as _csv
+            with out.open() as fh:
+                row = next(_csv.DictReader(fh))
+            self.assertEqual(row["public_identifier"], "dengdengxcc")   # keyed by the connection
+            self.assertEqual(row["primary_email"], "deng@brainoft.com")  # message contacts folded on
+            self.assertIn("gmail", row["interaction_counts"])
+
+    def test_no_llm_never_auto_confirms_a_name_match(self):
+        # Offline stub trusts a normal attached link, but a SPECULATIVE name-match must not be
+        # auto-confirmed (that would bypass the judgment the LLM is meant to make).
+        speculative = reconcile.deterministic_verdict(
+            {"name_matched": True, "linkedin": {"has_profile": True}})
+        self.assertNotEqual(speculative["verdict"], "confirmed")
+        normal = reconcile.deterministic_verdict({"linkedin": {"has_profile": True}})
+        self.assertEqual(normal["verdict"], "confirmed")
+
+    def test_name_match_prompt_requires_a_non_name_signal(self):
+        task = {"name_matched": True, "name": "Deng Deng", "match_emails": [], "match_phones": [],
+                "dossier": {"relationship": "", "title": "", "employers": [], "school": "",
+                            "location": "", "topics": [], "shared_context": [],
+                            "from_me": [], "from_them": []},
+                "linkedin": {"linkedin_url": "https://www.linkedin.com/in/dengd", "full_name": "Deng D.",
+                             "headline": "", "location": "", "experiences": [], "education": []}}
+        prompt = reconcile.judge_prompt(task, "")
+        self.assertIn("SPECULATIVE", prompt)
+        self.assertIn("NON-NAME", prompt)
+        self.assertIn("needs_review", prompt)
+
+    def test_reapply_reverts_a_no_longer_confirmed_name_match(self):
+        # A verdict that used to clear a lower bar but no longer meets confirm_threshold must fall
+        # back to no-link on reapply, not linger as a stale LinkedIn review row.
+        stale = {"parent_slug": "a", "name": "A", "candidate_key": "aconn",
+                 "person_ids": ["candidate:email:a@x.com"], "no_link": False, "name_matched": True,
+                 "linkedin": {"linkedin_url": "x"}, "verdict": _verdict("confirmed", 0.75)}
+        reverted = reconcile.revert_unconfirmed_name_matches([stale], 0.85, {}, Path("/nonexistent"))
+        self.assertEqual(reverted, 1)
+        self.assertTrue(stale["no_link"])
+        self.assertEqual(stale["candidate_key"], "")
+
+    def test_subset_refresh_replaces_all_tasks_for_a_parent(self):
+        # verdicts.jsonl holds a prior name-matched LinkedIn task for parent "deng"; a subset rerun
+        # reverts it to no-link (candidate_key "" instead of the connection pub). The merge must
+        # drop the stale LinkedIn task, not keep BOTH keyed by their differing candidate_keys.
+        with tempfile.TemporaryDirectory() as d:
+            jsonl = Path(d) / "verdicts.jsonl"
+            reconcile.write_verdicts(jsonl, Path(d) / "verdicts.csv", [
+                {"parent_slug": "deng", "name": "Deng Deng", "candidate_key": "dengdengxcc",
+                 "person_ids": ["msg-deng"], "conflict": False, "no_link": False, "name_matched": True,
+                 "linkedin": {"linkedin_url": "x"}, "match_emails": [], "match_phones": [],
+                 "verdict": _verdict("confirmed", 0.9), "error": ""},
+                {"parent_slug": "other", "name": "Other", "candidate_key": "otherpub",
+                 "person_ids": ["p"], "conflict": False, "no_link": False,
+                 "linkedin": {"linkedin_url": "y"}, "match_emails": [], "match_phones": [],
+                 "verdict": _verdict("confirmed", 0.9), "error": ""}])
+            fresh = [{"parent_slug": "deng", "name": "Deng Deng", "candidate_key": "",
+                      "person_ids": ["msg-deng"], "conflict": False, "no_link": True,
+                      "linkedin": {}, "verdict": _verdict("needs_review", 0.0)}]
+            merged = reconcile.merge_subset_tasks(jsonl, fresh)
+            deng = [t for t in merged if t["parent_slug"] == "deng"]
+            self.assertEqual(len(deng), 1)               # exactly one task for the refreshed parent
+            self.assertTrue(deng[0]["no_link"])          # the fresh no-link one; stale LinkedIn dropped
+            self.assertEqual(len(merged), 2)             # untouched "other" parent still present
+            self.assertTrue(any(t["parent_slug"] == "other" for t in merged))
+
+    def test_write_verdicts_persists_name_matched_for_reapply(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            jsonl, csvp = base / "verdicts.jsonl", base / "verdicts.csv"
+            reconcile.write_verdicts(jsonl, csvp, [
+                {"parent_slug": "a", "name": "A", "candidate_key": "aconn", "person_ids": ["p"],
+                 "conflict": False, "no_link": False, "name_matched": True,
+                 "linkedin": {"linkedin_url": "x"}, "match_emails": [], "match_phones": [],
+                 "verdict": _verdict("confirmed", 0.9), "error": ""}])
+            (loaded,) = reconcile.load_tasks_from_verdicts(jsonl)
+            self.assertTrue(loaded["name_matched"])   # survives the round-trip -> reapply stays safe
+
+
 if __name__ == "__main__":
     unittest.main()
