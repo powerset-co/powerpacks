@@ -117,10 +117,13 @@ The browser has a separate, faster observer:
 - People, Enrich, LinkedIn, and Done therefore all observe the same file state.
 - A changed `next_action` navigates the current tab to the corresponding stage.
 - A changed state token reloads the current stage with fresh counts/content.
+- A stage opened from the clickable progress steps stays in preview mode while
+  still reloading from changed file state; it does not get bounced immediately
+  back to the workflow's current stage.
 - Returning to a previously hidden tab triggers an immediate check.
-- An actual unsaved replacement-LinkedIn URL suppresses reload/navigation so
-  the browser does not destroy typed text; opening an empty field does not stop
-  polling.
+- An actual unsaved replacement-LinkedIn URL, including the always-visible
+  synthetic-profile field, suppresses reload/navigation so the browser does not
+  destroy typed text; opening an empty field does not stop polling.
 
 After LinkedIn Finish, the browser shows Done and keeps polling, but there is no
 later browser decision stage. The agent owns retarget hydration, realization,
@@ -295,8 +298,9 @@ This gives repeatability without a ledger:
 - A repeated review cannot silently skip enrichment because an older lookup
   completed.
 - Previously completed research can still reduce the new run's net-new cost.
-- Direct progress-step navigation is preview-only; file state determines the
-  actual current stage.
+- Direct progress-step navigation is preview-only; the preview remains visible
+  and current with file changes, while file state still determines the actual
+  workflow stage.
 - `$deep-context review` reopens the current stage. The full workflow uses
   `review --fresh` to begin a new review revision without erasing sticky human
   decisions.

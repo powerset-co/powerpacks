@@ -1321,9 +1321,12 @@ class TestStagedReviewUI(unittest.TestCase):
                 manifest_path=base / "review" / "manifest.json",
             ).decode("utf-8")
         self.assertIn("<h1 class='topbar-title'>Add People</h1>", html)
-        self.assertIn("class='step active' href='/?stage=worth' aria-current='step'", html)
-        self.assertIn("href='/?stage=enrich'", html)
-        self.assertIn("class='step' href='/?stage=linkedin'", html)
+        self.assertIn(
+            "class='step active' href='/?stage=worth&amp;preview=1' aria-current='step'",
+            html,
+        )
+        self.assertIn("href='/?stage=enrich&amp;preview=1'", html)
+        self.assertIn("class='step' href='/?stage=linkedin&amp;preview=1'", html)
         self.assertNotIn("href='/?stage=done'", html)
         self.assertNotIn("class='title-row'", html)
         self.assertNotIn("Add Ada Lovelace to your network?", html)

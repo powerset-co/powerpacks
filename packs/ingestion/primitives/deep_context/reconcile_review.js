@@ -209,8 +209,9 @@ let reviewStateToken = document.body.dataset.stateToken || "";
 const statusPollMs = 5000;
 
 function hasIdentityDraft() {
-  const input = document.querySelector(".alternate:not([hidden]) input[name='new_url']");
-  return Boolean(input?.value.trim());
+  return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(
+    (input) => !input.closest("[hidden]") && Boolean(input.value.trim()),
+  );
 }
 
 async function pollFileState() {
@@ -220,8 +221,9 @@ async function pollFileState() {
     if (!response.ok) return;
     const state = await response.json();
     const currentStage = document.body.dataset.stage || "";
+    const isStagePreview = document.body.dataset.preview === "true";
     const preserveDraft = hasIdentityDraft();
-    if (state.stage && state.stage !== currentStage) {
+    if (!isStagePreview && state.stage && state.stage !== currentStage) {
       if (preserveDraft) return;
       window.location.replace(`/?stage=${encodeURIComponent(state.stage)}`);
       return;

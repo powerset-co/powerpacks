@@ -1506,6 +1506,16 @@ class TestReviewWeb(unittest.TestCase):
         script = web.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn('fetch("/api/status", { cache: "no-store" })', script)
         self.assertIn("const statusPollMs = 5000;", script)
+        self.assertIn(
+            'document.querySelectorAll("[data-fix-form] input[name=\'new_url\']")',
+            script,
+        )
+        self.assertIn('!input.closest("[hidden]")', script)
+        self.assertIn('document.body.dataset.preview === "true"', script)
+        self.assertIn(
+            "!isStagePreview && state.stage && state.stage !== currentStage",
+            script,
+        )
         self.assertIn("void pollFileState();", script)
         self.assertIn("window.setInterval(pollFileState, statusPollMs);", script)
         self.assertIn('document.addEventListener("visibilitychange"', script)
@@ -1528,10 +1538,29 @@ class TestReviewWeb(unittest.TestCase):
                     enrichment_manifest_path=base / "research" / "manifest.json",
                 ).decode("utf-8")
                 self.assertIn(f"data-stage='{stage}'", html)
+                self.assertIn("data-preview='false'", html)
                 self.assertIn(
                     "<script src='/assets/reconcile-review.js' defer></script>",
                     html,
                 )
+
+    def test_progress_step_preview_keeps_polling_without_forcing_current_stage(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            html = web.page_html(
+                [],
+                {"stage": ["linkedin"], "preview": ["1"]},
+                base / "review.csv",
+                parents_dir=base / "parents",
+                dossier_dir=base / "dossiers",
+                manifest_path=base / "review" / "manifest.json",
+                enrichment_manifest_path=base / "research" / "manifest.json",
+            ).decode("utf-8")
+            self.assertIn("data-stage='linkedin'", html)
+            self.assertIn("data-preview='true'", html)
+            self.assertIn("href='/?stage=worth&amp;preview=1'", html)
+            self.assertIn("href='/?stage=enrich&amp;preview=1'", html)
+            self.assertIn("href='/?stage=linkedin&amp;preview=1'", html)
 
     def test_every_workflow_wait_state_maps_to_a_polled_browser_stage(self):
         expected = {

@@ -1739,13 +1739,14 @@ def _rejection_reason(parent: dict[str, Any]) -> str:
     return reason if len(reason) <= 140 else reason[:137].rsplit(" ", 1)[0] + "…"
 
 
-def _pagination(page: int, total_pages: int, *, decision: str) -> str:
+def _pagination(page: int, total_pages: int, *, decision: str, preview: bool = False) -> str:
     if total_pages <= 1:
         return ""
     numbers = sorted({1, total_pages, page - 2, page - 1, page, page + 1, page + 2}
                      & set(range(1, total_pages + 1)))
     def href(number: int) -> str:
-        return f"/?stage=worth&amp;view={esc(decision)}&amp;page={number}"
+        preview_query = "&amp;preview=1" if preview else ""
+        return f"/?stage=worth&amp;view={esc(decision)}&amp;page={number}{preview_query}"
     items: list[str] = [
         (f"<a class='page-link page-direction' href='{href(page - 1)}' rel='prev' "
          f"aria-label='Previous {esc(decision)} decisions page'>Previous</a>")
@@ -1778,7 +1779,8 @@ def _pagination(page: int, total_pages: int, *, decision: str) -> str:
 
 
 def render_decision_table(parents: list[dict[str, Any]], decision: str, *, page: int = 1,
-                          page_size: int = DECISION_PAGE_SIZE) -> str:
+                          page_size: int = DECISION_PAGE_SIZE,
+                          preview: bool = False) -> str:
     if decision not in {"yes", "no"}:
         raise ValueError(f"unknown decision table: {decision}")
     rows_in_scope = [
@@ -1828,19 +1830,21 @@ def render_decision_table(parents: list[dict[str, Any]], decision: str, *, page:
           </div>
         </details>""")
     return ("<div class='decision-page'><section class='decision-list'>" + "".join(rows)
-            + "</section>" + _pagination(page, total_pages, decision=decision) + "</div>")
+            + "</section>" + _pagination(
+                page, total_pages, decision=decision, preview=preview) + "</div>")
 
 
-def render_decision_tabs(progress: dict[str, int], active: str) -> str:
+def render_decision_tabs(progress: dict[str, int], active: str, *, preview: bool = False) -> str:
     tabs = (("review", "Review", progress["worth_pending"]),
             ("yes", "Yes", progress["worth_yes"]),
             ("no", "No", progress["worth_no"]))
     links = []
     for key, label, count in tabs:
         current = " aria-current='page'" if key == active else ""
+        preview_query = "&amp;preview=1" if preview else ""
         links.append(
             f"<a class='decision-tab{' active' if key == active else ''}' "
-            f"href='/?stage=worth&amp;view={key}'{current}>"
+            f"href='/?stage=worth&amp;view={key}{preview_query}'{current}>"
             f"{label}<span>{count}</span></a>")
     return "<nav class='decision-tabs' aria-label='People decisions'>" + "".join(links) + "</nav>"
 
@@ -1926,6 +1930,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     review_manifest = read_review_manifest(manifest_path)
     state_token = review_state_token(progress, selection, enrichment, review_manifest)
     view = _phase_view(params, progress, manifest_path)
+    preview = str((params.get("preview") or [""])[0]).strip() == "1"
     worth_complete = phase_is_completed("worth", progress, manifest_path) or not progress["worth_total"]
     enrichment_complete = enrichment.get("status") == "completed" and enrichment.get("current")
     enrichment_continued = enrichment_handoff_completed(manifest_path)
@@ -1938,7 +1943,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     if view == "worth":
         decision_view = str((params.get("view") or ["review"])[0]).strip().lower()
         decision_view = decision_view if decision_view in {"review", "yes", "no"} else "review"
-        tabs = render_decision_tabs(progress, decision_view)
+        tabs = render_decision_tabs(progress, decision_view, preview=preview)
         if decision_view == "review":
             queue = [parent for parent in parents if needs_worth_review(parent)]
             if queue:
@@ -1954,7 +1959,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
                 decision_page = int(str((params.get("page") or ["1"])[0]))
             except ValueError:
                 decision_page = 1
-            body = render_decision_table(parents, decision_view, page=decision_page)
+            body = render_decision_table(
+                parents, decision_view, page=decision_page, preview=preview)
         content = f"<div class='worth-stage'>{tabs}<div class='worth-panel'>{body}</div></div>"
     elif view == "enrich":
         content = render_enrichment(enrichment, progress)
@@ -1980,14 +1986,15 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
                    f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p></div>")
 
     stepper = (_step(1, "Review Decisions", people_active, worth_complete, progress["worth_pending"],
-                     "/?stage=worth")
+                     "/?stage=worth&preview=1")
                + "<i class='step-line'></i>"
                + _step(2, "Enrich Contacts", enrich_active, enrichment_complete,
-                       int((enrichment.get("counts") or {}).get("pending") or 0), "/?stage=enrich")
+                       int((enrichment.get("counts") or {}).get("pending") or 0),
+                       "/?stage=enrich&preview=1")
                + "<i class='step-line'></i>"
                + _step(3, "Check LinkedIn", linkedin_active,
                        enrichment_complete and enrichment_continued and linkedin_complete,
-                       progress["linkedin_pending"], "/?stage=linkedin")
+                       progress["linkedin_pending"], "/?stage=linkedin&preview=1")
                )
     title = {"worth": "Add People", "enrich": "Enrich Contacts",
              "linkedin": "Check LinkedIn", "done": "All Set"}.get(view, "Add People")
@@ -1995,7 +2002,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
 <html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <meta name='color-scheme' content='dark'><title>{esc(title)} · Powerpacks</title>
 <link rel='stylesheet' href='/assets/reconcile-review.css'></head>
-<body data-stage='{esc(view)}' data-state-token='{esc(state_token)}' data-enrichment-status='{esc("approved" if enrichment.get("approval_current") else enrichment.get("status"))}'><div class='app-shell'>
+<body data-stage='{esc(view)}' data-preview='{"true" if preview else "false"}' data-state-token='{esc(state_token)}' data-enrichment-status='{esc("approved" if enrichment.get("approval_current") else enrichment.get("status"))}'><div class='app-shell'>
   <header class='topbar'><a class='brand' href='/?stage=worth'>POWERPACKS</a><h1 class='topbar-title'>{esc(title)}</h1><span></span></header>
   <main><nav class='stepper' aria-label='Progress'>{stepper}</nav>
     <section class='stage' aria-live='polite'>{content}</section>

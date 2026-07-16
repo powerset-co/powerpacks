@@ -214,12 +214,16 @@ The UI is the user's control surface for review and approval. It records choices
 in the existing review CSVs and fixed manifests. The agent owns workflow control:
 keep polling `bin/deep-context review-status`, run only its exact next action, and
 let the UI reflect progress. Direct progress-step navigation is preview only; it
-does not itself advance provider work.
+does not itself advance provider work. A clicked preview stage stays visible and
+keeps refreshing from file changes instead of being forced back to the actual
+workflow stage.
 The browser observes those fixed files and automatically refreshes or moves to
 the current stage. Its shared observer checks `/api/status` immediately, then
 every five seconds on People, Enrich, LinkedIn, and Done, with an immediate check
-when a hidden tab becomes visible again. Open it once; do not open additional
-tabs or repeatedly open stage URLs as the workflow advances.
+when a hidden tab becomes visible again. A non-empty replacement URL in either
+the correction panel or synthetic-profile form pauses reload/navigation until
+it is saved; merely focusing an empty field does not. Open the UI once; do not
+open additional tabs or repeatedly open stage URLs as the workflow advances.
 
 The main Review tab shows only people the model marked `maybe`, one at a time
 with Yes/No. The Yes and No tabs are paginated, editable tables with one action
