@@ -1653,7 +1653,6 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
     roles = "".join(f"<li>{esc(role)}</li>" for role in (candidate.get("experiences") or [])[:3])
     education = " · ".join(candidate.get("education") or [])
     if synthetic:
-        question = "Add without LinkedIn?"
         eyebrow = "No LinkedIn found"
         link = "<span class='linkedin-label'>Researched profile</span>"
     else:
@@ -1662,13 +1661,17 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
         url = str(candidate.get("url") or "")
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
                 "<span aria-hidden='true'>↗</span></a>") if url else ""
-    no_button = (
-        f"<button class='button button-outline' data-decide='detach' "
-        f"data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>No</button>"
-        if synthetic else
-        f"<button class='button button-outline' data-open-fix aria-expanded='false' "
-        f"aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>"
-    )
+    fix_form = f"""<form class='linkedin-fix-form' data-fix-form
+          data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
+        <label class='sr-only' for='fix-{esc(candidate.get('pub'))}'>LinkedIn URL</label>
+        <div><input id='fix-{esc(candidate.get('pub'))}' name='new_url' inputmode='url'
+          autocomplete='url' placeholder='linkedin.com/in/…' required>
+        <button class='button {'button-primary' if synthetic else 'button-outline'}'
+          type='submit'>Use this</button></div>
+      </form>
+      <button class='button button-ghost alternate-skip' data-decide='detach'
+              data-toast='Skipped' data-pub='{esc(candidate.get('pub'))}'
+              data-parent='{esc(parent.get('slug'))}'>Skip</button>"""
     profile_facts = (
         (f"<ul class='roles'>{roles}</ul>" if roles else "")
         + (f"<p class='education'>{esc(education)}</p>" if education else "")
@@ -1689,22 +1692,20 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
     <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
-        <div class='question'>{question}</div>
+        {f"""<div class='synthetic-correction'>
+          <div class='question'>Add their LinkedIn</div>
+          {fix_form}
+        </div>""" if synthetic else f"""<div class='question'>{question}</div>
         <div class='binary-actions'>
-          {no_button}
-          <button class='button button-primary' data-decide='keep' data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>Yes</button>
+          <button class='button button-outline' data-open-fix aria-expanded='false'
+                  aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>
+          <button class='button button-primary' data-decide='keep'
+                  data-pub='{esc(candidate.get('pub'))}'
+                  data-parent='{esc(parent.get('slug'))}'>Yes</button>
         </div>
-        {"" if synthetic else f"""<details class='alternate' id='fix-section-{esc(candidate.get('pub'))}'>
-          <summary>Use a different LinkedIn</summary>
-          <form data-fix-form data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
-            <label for='fix-{esc(candidate.get('pub'))}'>LinkedIn URL</label>
-            <div><input id='fix-{esc(candidate.get('pub'))}' name='new_url' inputmode='url' autocomplete='url' placeholder='linkedin.com/in/…' required>
-            <button class='button button-outline' type='submit'>Use this</button></div>
-          </form>
-          <button class='button button-ghost alternate-skip' data-decide='detach'
-                  data-toast='Skipped' data-pub='{esc(candidate.get('pub'))}'
-                  data-parent='{esc(parent.get('slug'))}'>Skip</button>
-        </details>"""}
+        <div class='alternate' id='fix-section-{esc(candidate.get('pub'))}' hidden>
+          {fix_form}
+        </div>"""}
       </div>
     </article>"""
 
@@ -2263,9 +2264,22 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     if parent_slug and parent_slug != actual_slug:
                         raise ValueError("stale or mismatched person card")
                     if pub.strip().lower().startswith("synth-"):
-                        result = apply_synthetic_decision(synthetic_path, pub, decision)
                         worth_key = synthetic_worth_key(synthetic_path, pub)
-                        keepish = result["approved"] == "yes"
+                        if decision == "fix":
+                            if not worth_key:
+                                raise ValueError(f"synthetic worth key not found: {pub}")
+                            result = apply_decision(
+                                review_path, verdicts_path, worth_key, decision, new_url,
+                                confirm_threshold, detach_threshold)
+                            rows = load_override_rows(review_path)
+                            rows[worth_key.lower()]["person_id"] = (
+                                rows[worth_key.lower()].get("person_id") or worth_key)
+                            _write_override_rows(review_path, rows)
+                            apply_synthetic_decision(synthetic_path, pub, "detach")
+                            keepish = True
+                        else:
+                            result = apply_synthetic_decision(synthetic_path, pub, decision)
+                            keepish = result["approved"] == "yes"
                     else:
                         result = apply_decision(
                             review_path, verdicts_path, pub, decision, new_url,

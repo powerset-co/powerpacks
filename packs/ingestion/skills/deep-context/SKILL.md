@@ -310,8 +310,9 @@ For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it. No only opens the correction panel and is not a
 decision. The correction panel accepts a replacement URL or a terminal Skip;
 Skip writes a detach decision, rejects the shown/proposed LinkedIn, and leaves
-the person out of the index for now. For a synthetic result, Yes/No decides
-whether to add the researched no-LinkedIn profile.
+the person out of the index for now. A synthetic result has the same two
+outcomes: paste the LinkedIn URL to create an approved retarget, or Skip it.
+Synthetic rows are never directly approved for indexing.
 
 Keep polling `bin/deep-context review-status` about once per minute. Continue to
 realization only when it emits `next_action == "realize"`. A LinkedIn page opened

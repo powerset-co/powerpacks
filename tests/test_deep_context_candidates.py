@@ -1853,6 +1853,18 @@ class TestLiveEndpoints(unittest.TestCase):
         self.assertEqual((j["action"], j["approved"]), ("verify", "no"))
         self.assertIn("counts", j)
 
+    def test_synthetic_fix_retargets_and_rejects_synthetic_row(self):
+        j = self._post(
+            "/decide", pub="synth-email-abc", decision="fix",
+            new_url="https://www.linkedin.com/in/ross-real")
+        self.assertEqual((j["action"], j["approved"]), ("retarget", "yes"))
+        row = reconcile.load_override_rows(self.review)["pid-9"]
+        self.assertEqual(row["new_public_identifier"], "ross-real")
+        self.assertEqual(row["person_id"], "pid-9")
+        with self.synthetic.open(newline="", encoding="utf-8") as fh:
+            (synthetic_row,) = list(csv.DictReader(fh))
+        self.assertEqual(synthetic_row["approved"], "no")
+
     def test_get_is_read_only_for_decision_csv(self):
         before = self.review.read_bytes()
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/") as response:
