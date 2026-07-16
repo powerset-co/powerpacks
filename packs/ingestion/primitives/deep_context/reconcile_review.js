@@ -63,8 +63,8 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     const sectionId = button.getAttribute("aria-controls");
     const section = sectionId ? document.getElementById(sectionId) : null;
-    if (section instanceof HTMLDetailsElement) {
-      section.open = true;
+    if (section instanceof HTMLElement) {
+      section.hidden = false;
       button.setAttribute("aria-expanded", "true");
       section.querySelector("input[name='new_url']")?.focus({ preventScroll: true });
     }
@@ -208,7 +208,7 @@ refreshScrollCues();
 let reviewStateToken = document.body.dataset.stateToken || "";
 
 function hasIdentityDraft() {
-  const input = document.querySelector("details.alternate[open] input[name='new_url']");
+  const input = document.querySelector(".alternate:not([hidden]) input[name='new_url']");
   return Boolean(input && (document.activeElement === input || input.value.trim()));
 }
 
