@@ -1293,6 +1293,13 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
         url = str(candidate.get("url") or "")
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
                 "<span aria-hidden='true'>↗</span></a>") if url else ""
+    no_button = (
+        f"<button class='button button-outline' data-decide='detach' "
+        f"data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>No</button>"
+        if synthetic else
+        f"<button class='button button-outline' data-open-fix aria-expanded='false' "
+        f"aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>"
+    )
     scroll_content = f"""
         {f"<div class='identity-eyebrow'>{esc(eyebrow)}</div>" if eyebrow else ""}
         <div class='profile-card'>
@@ -1313,10 +1320,10 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
       <div class='identity-decision'>
         <div class='question'>{question}</div>
         <div class='binary-actions'>
-          <button class='button button-outline' data-decide='detach' data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>No</button>
+          {no_button}
           <button class='button button-primary' data-decide='keep' data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>Yes</button>
         </div>
-        {"" if synthetic else f"""<details class='alternate'>
+        {"" if synthetic else f"""<details class='alternate' id='fix-section-{esc(candidate.get('pub'))}'>
           <summary>Use a different LinkedIn</summary>
           <form data-fix-form data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
             <label for='fix-{esc(candidate.get('pub'))}'>LinkedIn URL</label>

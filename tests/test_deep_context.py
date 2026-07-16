@@ -1375,7 +1375,9 @@ class TestReviewWeb(unittest.TestCase):
             html = web.render_linkedin_card(sam, pending[0], d, d)
             self.assertIn("Is this the right LinkedIn?", html)
             self.assertIn("data-decide='keep'", html)
-            self.assertIn("data-decide='detach'", html)
+            self.assertIn("data-open-fix", html)
+            self.assertNotIn("data-decide='detach'", html)
+            self.assertIn("Use a different LinkedIn", html)
             self.assertNotIn("Exclude", html)
             self.assertNotIn("Maybe", html)
 

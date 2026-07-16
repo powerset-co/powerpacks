@@ -53,6 +53,18 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (button.hasAttribute("data-open-fix")) {
+    event.preventDefault();
+    const sectionId = button.getAttribute("aria-controls");
+    const section = sectionId ? document.getElementById(sectionId) : null;
+    if (section instanceof HTMLDetailsElement) {
+      section.open = true;
+      button.setAttribute("aria-expanded", "true");
+      section.querySelector("input[name='new_url']")?.focus({ preventScroll: true });
+    }
+    return;
+  }
+
   if (button.dataset.decide) {
     event.preventDefault();
     lock(button);
