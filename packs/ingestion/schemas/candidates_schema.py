@@ -2,7 +2,7 @@
 
 A candidate is a contact worth researching that does NOT yet have a resolved
 identity (no LinkedIn attachment). Import stages write candidates next to
-their people.csv (`import/<source>/candidates.csv`); the deep-setup processing
+their people.csv (`import/<source>/candidates.csv`); the deep-context processing
 layer consumes them to build cross-channel context and run one reverse lookup
 per person. people.csv keeps meaning "resolved identity" — candidates never
 enter it directly.

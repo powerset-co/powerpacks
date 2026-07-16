@@ -20,6 +20,7 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     GMAIL_CHANNEL,
     IMESSAGE_CHANNEL,
+    INDEX_JSON,
     WHATSAPP_CHANNEL,
     Person,
     _collect_emails,
@@ -141,6 +142,30 @@ def candidate_carry(row: dict[str, str]) -> dict[str, Any]:
         "last_interaction": row.get("last_interaction", ""),
         "source_channels": ",".join(candidate_channels(row)),
     }
+
+
+def candidates_resolved_by_existing(index_json: Path = INDEX_JSON) -> set[str]:
+    """Candidate person ids already folded into a canonical parent that also has
+    a real people.csv child.
+
+    Duplicate resolution has already identified these contacts, so they must not
+    reappear as standalone people-review or paid-lookup subjects. Reconcile carries
+    their contact fields onto the kept LinkedIn through ``consolidate-people.csv``.
+    """
+    try:
+        index = json.loads(index_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    slugs = index.get("slugs") or {}
+    resolved: set[str] = set()
+    for parent in (index.get("parents") or {}).values():
+        person_ids = [str((slugs.get(slug) or {}).get("person_id") or "")
+                      for slug in parent.get("children") or []]
+        person_ids = [person_id for person_id in person_ids if person_id]
+        if any(not is_candidate_id(person_id) for person_id in person_ids):
+            resolved.update(person_id.lower() for person_id in person_ids
+                            if is_candidate_id(person_id))
+    return resolved
 
 
 # --- Network-worth (yes | maybe | no) ----------------------------------------

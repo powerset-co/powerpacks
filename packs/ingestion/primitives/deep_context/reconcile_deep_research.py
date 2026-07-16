@@ -39,6 +39,7 @@ from packs.ingestion.primitives.deep_context.candidates import (
     candidate_carry,
     candidate_key_of,
     candidate_row,
+    candidates_resolved_by_existing,
     effective_network_worth,
     is_candidate_id,
     load_candidates,
@@ -62,14 +63,29 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 )
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
-from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import PROCESSOR_PRICING_USD
+from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import (
+    PROCESSOR_PRICING_USD,
+    filter_already_done,
+)
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
 DR_OUT_DIR = RECONCILE_DIR / "deep-research"
 QUEUE_CSV = DR_OUT_DIR / "research_queue.csv"
-QUEUE_FIELDS = ["handle", "display_name", "bio", "known_info", "primary_email",
-                "phone_e164", "area_code", "source_channel", "retarget_hint"]
+QUEUE_FIELDS = [
+    "handle",
+    "source_parent_slug",
+    "source_person_ids",
+    "source_candidate_public_identifier",
+    "display_name",
+    "bio",
+    "known_info",
+    "primary_email",
+    "phone_e164",
+    "area_code",
+    "source_channel",
+    "retarget_hint",
+]
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -151,7 +167,8 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
 def candidate_subset(facts_dir: Path,
                      overrides: dict[str, dict[str, str]] | None = None,
                      *,
-                     worth_skipped: list[str] | None = None) -> list[dict[str, Any]]:
+                     worth_skipped: list[str] | None = None,
+                     resolved_candidates: set[str] | None = None) -> list[dict[str, Any]]:
     """Dossier-bearing import candidates as research subjects (opt-in via
     --include-candidates). Candidates have no resolved LinkedIn by definition;
     eligibility means their facts file exists — the facts ARE the dossier context
@@ -159,19 +176,25 @@ def candidate_subset(facts_dir: Path,
     build_queue / propose_retargets consume them unchanged; the review.csv key for
     a candidate is its person_id (candidate:<key>).
 
-    A candidate whose effective network_worth is `no` (the user's review.csv mark,
-    else the synthesis LLM's judgment) is excluded — not worth paid research;
-    excluded ids are appended to ``worth_skipped`` when provided."""
+    A candidate is eligible when it is in the Added pile: either the model said
+    yes and the user did not override it, or the user explicitly said yes. Model
+    maybe/no candidates remain in the review or Rejected piles unless the user
+    moves them. Every candidate that is not currently Added is appended to
+    ``worth_skipped`` when provided."""
     overrides = overrides or {}
+    resolved_candidates = (candidates_resolved_by_existing()
+                           if resolved_candidates is None else resolved_candidates)
     decided = {pub for pub, r in overrides.items()
                if (r.get("action") or "").strip().lower() in {"retarget", "exclude"}
                or (r.get("approved") or "").strip().lower() in USER_APPROVED}
     out: list[dict[str, Any]] = []
     for person in load_candidates():
         pid = person.person_id
-        if pid.lower() in decided or not (facts_dir / f"{pid}.jsonl").exists():
+        if (pid.lower() in decided or pid.lower() in resolved_candidates
+                or not (facts_dir / f"{pid}.jsonl").exists()):
             continue
-        if effective_network_worth(pid, overrides, facts_dir)["decision"] == "no":
+        worth = effective_network_worth(pid, overrides, facts_dir)
+        if worth["decision"] != "yes":
             if worth_skipped is not None:
                 worth_skipped.append(pid)
             continue
@@ -238,6 +261,9 @@ def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
                     f"({(r.get('verdict') or {}).get('reason', '')}). Find the correct person.")
         queue.append({
             "handle": r.get("parent_slug", ""),
+            "source_parent_slug": r.get("parent_slug", ""),
+            "source_person_ids": json.dumps(pids, ensure_ascii=False),
+            "source_candidate_public_identifier": r.get("candidate_key", ""),
             "display_name": r.get("name", ""),
             "bio": _dossier_bio(pids, facts_dir, raw_dir),
             "known_info": hint,
@@ -322,14 +348,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                   if getattr(args, "include_candidates", False) else [])
     subset += candidates
     people = load_people_rows(Path(args.people_csv))
+    queue = build_queue(subset, people, Path(args.facts_dir), Path(args.raw_dir))
+    pending_queue, reused_completed = filter_already_done(queue, DR_OUT_DIR)
+    duplicate_handles = max(0, len(queue) - len(pending_queue) - reused_completed)
     cost_per = PROCESSOR_PRICING_USD.get(args.processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])
-    est_usd = round(len(subset) * cost_per, 2)
+    est_usd = round(len(pending_queue) * cost_per, 2)
 
     base = {
         "source": "reconcile_deep_research",
         "eligible": len(subset),
         "eligible_candidates": len(candidates),
-        "candidates_skipped_worth_no": len(worth_skipped),
+        "candidates_skipped_not_added": len(worth_skipped),
+        "would_submit": len(pending_queue),
+        "reused_completed": reused_completed,
+        "duplicate_handles": duplicate_handles,
         "processor": args.processor,
         "cost_per_person_usd": cost_per,
         "estimated_usd": est_usd,
@@ -341,7 +373,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return {**base, "status": "noop", "reason": "no eligible model-recommended detaches to research"}
 
     DR_OUT_DIR.mkdir(parents=True, exist_ok=True)
-    queue = build_queue(subset, people, Path(args.facts_dir), Path(args.raw_dir))
     with QUEUE_CSV.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=QUEUE_FIELDS)
         w.writeheader()
@@ -351,11 +382,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return {**base, "status": "dry_run", "queue_csv": str(QUEUE_CSV),
                 "elapsed_ms": int((time.monotonic() - started) * 1000)}
 
+    if not pending_queue:
+        proposals = propose_retargets_from_output(DR_OUT_DIR, subset, Path(args.overrides_csv))
+        return {**base, "status": "reused", "queue_csv": str(QUEUE_CSV),
+                "output_dir": str(DR_OUT_DIR),
+                "retargets_proposed": proposals.get("proposed", 0),
+                "reason": "all eligible people already have completed Parallel research",
+                "elapsed_ms": int((time.monotonic() - started) * 1000)}
+
     # Every paid run needs current-run approval, and the estimate must stay below
     # the ceiling the user approved.
     if not args.approve or est_usd > args.budget:
         return {**base, "status": "needs_approval", "queue_csv": str(QUEUE_CSV),
-                "message": f"deep research for {len(subset)} people is ~${est_usd:.2f}; "
+                "message": f"deep research for {len(pending_queue)} net-new people is ~${est_usd:.2f} "
+                           f"({reused_completed} completed reused, {duplicate_handles} duplicates skipped); "
                            f"get explicit approval, then re-run with --approve and "
                            f"an approved --budget at or above the estimate (current ${args.budget:.2f})",
                 "elapsed_ms": int((time.monotonic() - started) * 1000)}
@@ -364,7 +404,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # STREAM its output live to our stderr (the primitive prints `[deep_research_contacts]
     # poll status ...` every poll) so the run isn't a silent black box — Parallel.ai jobs can
     # take minutes. Keep our own stdout clean for the final JSON manifest.
-    print(f"[deep-research] researching {len(subset)} people via Parallel.ai ({args.processor}); "
+    print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({args.processor}); "
           "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
     cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_research_contacts.deep_research_contacts",
            "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]

@@ -9,7 +9,7 @@ two stage outputs, with no LLM, no research queue, and no enrichment call:
 - `import/messages/candidates.csv` — unmatched contacts passing a
   deterministic "worth researching" floor (real phone, plausibly-real saved
   name, message-count minimum). Identity resolution happens later in the
-  deep-setup processing layer with cross-channel context.
+  deep-context processing layer with cross-channel context.
 """
 
 from __future__ import annotations
@@ -443,7 +443,7 @@ def selected_contacts_people(
             continue
         if match_status == "suggested":
             # Never auto-attach a suggestion (that was the review gate);
-            # the deep-setup cluster judge decides. Recorded in evidence.
+            # the deep-context cluster judge decides. Recorded in evidence.
             skip("suggested_not_attached")
         reason = contact_floor_reason(
             row,

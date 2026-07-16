@@ -713,6 +713,42 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertTrue(all(t["conflict"] for t in by_parent["bob-p"]))
             self.assertTrue(by_parent["carol-p"][0]["no_link"])
 
+    def test_candidate_child_uses_existing_link_without_a_second_lookup(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, raw, cache = base / "facts", base / "raw", base / "cache"
+            facts.mkdir(); raw.mkdir(); cache.mkdir()
+            self._facts(facts, "person-cass", "Cass")
+            self._facts(facts, "candidate:email:cass@x.com", "Cass")
+            index = {
+                "slugs": {
+                    "cass-existing": {"person_id": "person-cass"},
+                    "cass-candidate": {"person_id": "candidate:email:cass@x.com"},
+                },
+                "parents": {
+                    "cass-parent": {
+                        "name": "Cass",
+                        "children": ["cass-existing", "cass-candidate"],
+                    },
+                },
+            }
+            people = {
+                "person-cass": {
+                    "id": "person-cass",
+                    "public_identifier": "cass",
+                    "linkedin_url": "https://www.linkedin.com/in/cass",
+                    "headline": "Engineer",
+                    "work_experiences": "[]",
+                    "education": "[]",
+                },
+            }
+            (task,) = reconcile.build_tasks(index, people, facts, raw, cache)
+            self.assertEqual(task["person_ids"], ["person-cass"])
+            self.assertEqual(
+                task["parent_person_ids"],
+                ["person-cass", "candidate:email:cass@x.com"],
+            )
+
     def test_linkedin_connections_are_ground_truth(self):
         """A contact imported from your LinkedIn Connections (linkedin_csv) is auto-confirmed."""
         with tempfile.TemporaryDirectory() as d:
@@ -1122,6 +1158,44 @@ class TestReconcileDeepResearch(unittest.TestCase):
             self.assertEqual(manifest["status"], "needs_approval")
             self.assertLess(manifest["estimated_usd"], 25)
 
+    def test_dry_run_prices_only_net_new_handles(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            vj = base / "verdicts.jsonl"
+            recs = [
+                {"parent_slug": "pending", "candidate_key": "wrong-a", "name": "Pending A",
+                 "person_ids": ["x1"], "linkedin": {"linkedin_url": "u1"},
+                 "verdict": _verdict("wrong_person", 0.95, dr=True, reason="wrong")},
+                {"parent_slug": "pending", "candidate_key": "wrong-b", "name": "Pending B",
+                 "person_ids": ["x2"], "linkedin": {"linkedin_url": "u2"},
+                 "verdict": _verdict("wrong_person", 0.95, dr=True, reason="wrong")},
+                {"parent_slug": "complete", "candidate_key": "wrong-c", "name": "Complete",
+                 "person_ids": ["x3"], "linkedin": {"linkedin_url": "u3"},
+                 "verdict": _verdict("wrong_person", 0.95, dr=True, reason="wrong")},
+            ]
+            vj.write_text("\n".join(json.dumps(row) for row in recs) + "\n", encoding="utf-8")
+            old_out, old_queue = dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV
+            dresearch.DR_OUT_DIR = base / "research"
+            dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
+            completed = dresearch.DR_OUT_DIR / "complete" / "01_research_parallel.json"
+            completed.parent.mkdir(parents=True)
+            completed.write_text("{}\n", encoding="utf-8")
+            try:
+                manifest = dresearch.run(_ns(
+                    verdicts_jsonl=vj, people_csv=base / "missing.csv",
+                    overrides_csv=base / "overrides.csv", facts_dir=base / "facts",
+                    raw_dir=base / "raw", processor="core2x", confirm_threshold=0.85,
+                    budget=0.0, approve=False, dry_run=True,
+                    include_plausibly_absent=False, include_candidates=False,
+                ))
+            finally:
+                dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV = old_out, old_queue
+            self.assertEqual(manifest["eligible"], 3)
+            self.assertEqual(manifest["would_submit"], 1)
+            self.assertEqual(manifest["reused_completed"], 1)
+            self.assertEqual(manifest["duplicate_handles"], 1)
+            self.assertEqual(manifest["estimated_usd"], 0.05)
+
     def test_cost_gate_runs_only_when_approved_under_budget(self):
         from unittest import mock
 
@@ -1289,28 +1363,23 @@ class TestReviewWeb(unittest.TestCase):
         review.write_text("", encoding="utf-8")  # all pending
         return verdicts, review
 
-    def test_render_merged_floats_parent_and_collapses_wrong(self):
+    def test_staged_identity_queue_floats_best_candidate_and_has_binary_actions(self):
         with tempfile.TemporaryDirectory() as dd:
             d = Path(dd)
             verdicts, review = self._merged_fixture(d)
             parents, _ = web.build_parents(verdicts, review)
             sam = next(p for p in parents if p["name"] == "Sam Jones")
             self.assertEqual(len(sam["candidates"]), 3)
-            html = web.render_parent(0, sam, expanded=True)
-            # one row-top "exclude whole person", no per-candidate exclude on a merged row
-            self.assertIn("exclude-top", html)
-            self.assertNotIn("Exclude person", html)
-            # the confirmed keeper floats first and is labeled "parent"
-            self.assertIn("parentbadge", html)
-            self.assertLess(html.index("samreal"), html.index("samwrong"))
-            self.assertLess(html.index("samreal"), html.index("sammaybe"))
-            # the high-confidence wrong namesake is tucked behind the expander; the
-            # still-uncertain one stays visible above it
-            self.assertIn("wrongones", html)
-            self.assertLess(html.index("wrongones"), html.index("samwrong"))
-            self.assertLess(html.index("sammaybe"), html.index("wrongones"))
-            # dossier label clarifies it's the whole person's messages
-            self.assertIn("all messages for this person", html)
+            pending = web.pending_linkedin_candidates(sam)
+            self.assertEqual([cand["pub"] for cand in pending], ["samreal", "sammaybe", "samwrong"])
+            html = web.render_linkedin_card(sam, pending[0], d, d)
+            self.assertIn("Is this the right LinkedIn?", html)
+            self.assertIn("data-decide='keep'", html)
+            self.assertIn("data-open-fix", html)
+            self.assertNotIn("data-decide='detach'", html)
+            self.assertIn("Use a different LinkedIn", html)
+            self.assertNotIn("Exclude", html)
+            self.assertNotIn("Maybe", html)
 
 
 class TestSelfReportedRetarget(unittest.TestCase):
@@ -1613,6 +1682,9 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertEqual(web.candidate_state(cand), "review")  # pending -> Needs review pile
             self.assertEqual(cand["experiences"], ["CTO @ StealthCo (present)"])
             self.assertIn("research gaps: education dates", cand["reason"])
+            html = web.render_linkedin_card(parents[0], cand, Path(tmpdir), Path(tmpdir))
+            self.assertIn("Add without LinkedIn?", html)
+            self.assertNotIn("Add Ross Nordeen without LinkedIn?", html)
             # approved=auto surfaces as verified
             path.write_text(self.CSV_HEADER + self._csv_row("auto"), encoding="utf-8")
             cand = web.load_synthetic_parents(path)[0]["candidates"][0]

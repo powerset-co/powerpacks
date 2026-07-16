@@ -69,7 +69,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertNotIn("discover_contacts_pipeline/gmail.py discover", messages)
 
         # Contact-sync boundary: the import skills never index and never run
-        # the retired in-skill research/review flow — $deep-setup owns both.
+        # the retired in-skill research/review flow — $deep-context owns both.
         for skill_name, text in (("gmail", gmail), ("messages", messages)):
             with self.subTest(skill=skill_name):
                 self.assertNotIn("linkedin_modal_pipeline.py index-people", text)

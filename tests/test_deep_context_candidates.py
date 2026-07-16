@@ -1,4 +1,4 @@
-"""Candidates-support layer for the deep-context pipeline ($deep-setup).
+"""Candidates-support layer for the deep-context pipeline ($deep-context).
 
 Covers: loading import candidates as Person rows (mapping/dedup/channel
 translation), the opt-in collect union (default off = unchanged selection),
@@ -16,6 +16,7 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -120,6 +121,25 @@ class TestLoadCandidates(unittest.TestCase):
         self.assertEqual(carry["primary_phone"], "+14155551234")
         self.assertEqual(carry["source_channels"], "imessage,whatsapp")
         self.assertEqual(json.loads(carry["interaction_counts"]), {"imessage": 5, "whatsapp": 2})
+
+    def test_candidate_merged_with_existing_person_is_already_resolved(self):
+        with tempfile.TemporaryDirectory() as d:
+            index = Path(d) / "index.json"
+            index.write_text(json.dumps({
+                "slugs": {
+                    "cass-candidate": {"person_id": "candidate:email:cass@x.com"},
+                    "cass-existing": {"person_id": "person-cass"},
+                    "tex-candidate": {"person_id": "candidate:phone:+14155551234"},
+                },
+                "parents": {
+                    "cass": {"children": ["cass-candidate", "cass-existing"]},
+                    "tex": {"children": ["tex-candidate"]},
+                },
+            }), encoding="utf-8")
+            self.assertEqual(
+                candidates.candidates_resolved_by_existing(index),
+                {"candidate:email:cass@x.com"},
+            )
 
     def test_person_id_helpers(self):
         pid = candidates.candidate_person_id("email:a@b.com")
@@ -234,7 +254,8 @@ class TestReconcileDeepResearchCandidates(unittest.TestCase):
                 json.dumps({"facts": {"canonical_name": "Cass Doe"}}) + "\n", encoding="utf-8")
             pools = _pools(base, [GMAIL_ROW], [PHONE_ROW])
             with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
-                subset = dresearch.candidate_subset(facts)
+                subset = dresearch.candidate_subset(
+                    facts, {"candidate:email:cass@x.com": {"network_worth": "yes"}})
                 self.assertEqual([r["person_ids"] for r in subset],
                                  [["candidate:email:cass@x.com"]])            # no facts -> not eligible
                 self.assertEqual(subset[0]["candidate_key"], "candidate:email:cass@x.com")
@@ -254,6 +275,12 @@ class TestReconcileDeepResearchCandidates(unittest.TestCase):
                                       "relationship_to_owner": "college friend"}}) + "\n",
                 encoding="utf-8")
             pools = _pools(base, [GMAIL_ROW], [])
+            reconcile._write_override_rows(base / "ov.csv", {
+                "candidate:email:cass@x.com": {
+                    "public_identifier": "candidate:email:cass@x.com",
+                    "network_worth": "yes",
+                },
+            })
             args = dict(verdicts_jsonl=base / "verdicts.jsonl", overrides_csv=base / "ov.csv",
                         people_csv=base / "people.csv", facts_dir=facts, raw_dir=base / "raw",
                         processor="core2x", confirm_threshold=0.85, budget=0.0,
@@ -274,6 +301,11 @@ class TestReconcileDeepResearchCandidates(unittest.TestCase):
             with Path(on["queue_csv"]).open(newline="", encoding="utf-8") as fh:
                 (row,) = list(csv.DictReader(fh))
             self.assertEqual(row["primary_email"], "cass@x.com")              # contact from candidates.csv
+            self.assertTrue(row["source_parent_slug"])
+            self.assertEqual(json.loads(row["source_person_ids"]),
+                             ["candidate:email:cass@x.com"])
+            self.assertEqual(row["source_candidate_public_identifier"],
+                             "candidate:email:cass@x.com")
             self.assertIn("college friend", row["bio"])                       # dossier text as context
             self.assertIn("unresolved import candidate", row["known_info"])
 
@@ -297,15 +329,31 @@ class TestMintingFromCandidateResearch(unittest.TestCase):
             common.write_json(research / "cass-doe-parentab" / "01_research_parallel.json",
                               self._research_profile())
             queue = base / "research_queue.csv"
-            queue.write_text("handle,display_name,primary_email,phone_e164,source_channel\n"
-                             "cass-doe-parentab,Cass Doe,cass@x.com,,email\n", encoding="utf-8")
+            with queue.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=dresearch.QUEUE_FIELDS)
+                writer.writeheader()
+                writer.writerow({
+                    "handle": "cass-doe-parentab",
+                    "source_parent_slug": "cass-doe-parentab",
+                    "source_person_ids": json.dumps(["candidate:email:cass@x.com"]),
+                    "source_candidate_public_identifier": "candidate:email:cass@x.com",
+                    "display_name": "Cass Doe",
+                    "primary_email": "cass@x.com",
+                    "source_channel": "email",
+                })
             people = base / "people.csv"
             people.write_text("id,primary_email,primary_phone\n", encoding="utf-8")
+            parents_dir = base / "parents"
+            parents_dir.mkdir()
+            (parents_dir / "cass-doe-parentab.md").write_text(
+                "# Cass Doe (canonical)\n", encoding="utf-8")
             out = base / "synthetic-people.csv"
             with mock.patch.object(candidates, "CANDIDATE_CSVS", pools), \
                  contextlib.redirect_stdout(io.StringIO()):
                 asp.main(["--research-dir", str(research), "--queue-csv", str(queue),
-                          "--people-csv", str(people), "--out", str(out)])
+                          "--people-csv", str(people),
+                          "--verdicts-jsonl", str(base / "verdicts.jsonl"),
+                          "--out", str(out)])
             with out.open(newline="", encoding="utf-8") as fh:
                 (row,) = list(csv.DictReader(fh))
             self.assertEqual(row["id"], "candidate:email:cass@x.com")
@@ -314,13 +362,61 @@ class TestMintingFromCandidateResearch(unittest.TestCase):
             self.assertEqual(json.loads(row["all_emails"]), ["cass@x.com", "cd@y.com"])
             self.assertEqual(json.loads(row["interaction_counts"]), {"gmail": 12})
             self.assertEqual(row["source_channels"], "gmail_msgvault")        # the candidate's channels
+            self.assertEqual(row["source_parent_slug"], "cass-doe-parentab")
+            self.assertEqual(json.loads(row["source_person_ids"]),
+                             ["candidate:email:cass@x.com"])
             self.assertEqual(row["approved"], "auto")
             # ...and the review UI surfaces it through the existing synthetic path.
-            parent, = web.load_synthetic_parents(out)
+            parent, = web.load_synthetic_parents(out, parents_dir)
             self.assertEqual(parent["person_ids"], ["candidate:email:cass@x.com"])
+            self.assertEqual(parent["dossier_slug"], "cass-doe-parentab")
             self.assertTrue(parent["candidates"][0]["synthetic"])
             self.assertEqual(web.apply_synthetic_decision(
                 out, row["public_identifier"], "keep")["approved"], "yes")
+
+    def test_assemble_backfills_provenance_without_rewriting_user_gate(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            handle = "cass-doe-parentab"
+            research = base / "research"
+            common.write_json(research / handle / "01_research_parallel.json",
+                              self._research_profile())
+            queue = base / "research_queue.csv"
+            with queue.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=dresearch.QUEUE_FIELDS)
+                writer.writeheader()
+                writer.writerow({
+                    "handle": handle,
+                    "source_parent_slug": handle,
+                    "source_person_ids": json.dumps(["pid-cass"]),
+                    "source_candidate_public_identifier": "wrong-cass-link",
+                    "display_name": "Cass Doe",
+                })
+            out = base / "synthetic-people.csv"
+            pub = f"synth-x-{handle}"
+            asp.write_rows(out, {pub: {
+                "id": pub,
+                "public_identifier": pub,
+                "full_name": "Cass Doe",
+                "enrichment_provider": "synthetic",
+                "approved": "yes",
+            }})
+            people = base / "people.csv"
+            people.write_text("id,primary_email,primary_phone\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                asp.main([
+                    "--research-dir", str(research),
+                    "--queue-csv", str(queue),
+                    "--people-csv", str(people),
+                    "--verdicts-jsonl", str(base / "verdicts.jsonl"),
+                    "--out", str(out),
+                ])
+            with out.open(newline="", encoding="utf-8") as fh:
+                (row,) = list(csv.DictReader(fh))
+        self.assertEqual(row["approved"], "yes")
+        self.assertEqual(row["source_parent_slug"], handle)
+        self.assertEqual(json.loads(row["source_person_ids"]), ["pid-cass"])
+        self.assertEqual(row["source_candidate_public_identifier"], "wrong-cass-link")
 
     def test_apply_retargets_sources_contact_from_candidate_row(self):
         with tempfile.TemporaryDirectory() as d:
@@ -441,29 +537,79 @@ class TestNetworkWorth(unittest.TestCase):
 
 
 class TestCandidateSubsetWorthGate(unittest.TestCase):
-    def test_effective_no_is_excluded_and_reported(self):
+    def test_added_pile_is_eligible_and_user_override_wins(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             facts = base / "facts"
             facts.mkdir()
             (facts / "candidate:email:cass@x.com.jsonl").write_text(
-                _facts_record("maybe", "thin signal") + "\n", encoding="utf-8")
+                _facts_record("yes", "real relationship") + "\n", encoding="utf-8")
             (facts / "candidate:phone:+14155551234.jsonl").write_text(
                 _facts_record("no", "food delivery updates") + "\n", encoding="utf-8")
             pools = _pools(base, [GMAIL_ROW], [PHONE_ROW])
             with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
                 skipped: list[str] = []
                 subset = dresearch.candidate_subset(facts, {}, worth_skipped=skipped)
-                self.assertEqual([r["candidate_key"] for r in subset],
-                                 ["candidate:email:cass@x.com"])                         # maybe stays in
-                self.assertEqual(skipped, ["candidate:phone:+14155551234"])              # no is gated out
-                # a user "yes" mark overrides the LLM's no -> back in the paid queue
+                self.assertEqual([row["candidate_key"] for row in subset],
+                                 ["candidate:email:cass@x.com"])
+                self.assertEqual(skipped, ["candidate:phone:+14155551234"])
+                # User No removes a model Yes; user Yes rescues a model No.
                 skipped = []
                 subset = dresearch.candidate_subset(
-                    facts, {"candidate:phone:+14155551234": {"network_worth": "yes"}},
+                    facts, {
+                        "candidate:email:cass@x.com": {"network_worth": "no"},
+                        "candidate:phone:+14155551234": {"network_worth": "yes"},
+                    },
                     worth_skipped=skipped)
-                self.assertEqual(len(subset), 2)
-                self.assertEqual(skipped, [])
+                self.assertEqual([row["candidate_key"] for row in subset],
+                                 ["candidate:phone:+14155551234"])
+                self.assertEqual(skipped, ["candidate:email:cass@x.com"])
+
+    def test_candidate_already_merged_with_existing_person_skips_lookup(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            pid = "candidate:email:cass@x.com"
+            (facts / f"{pid}.jsonl").write_text(
+                _facts_record("yes", "real relationship") + "\n", encoding="utf-8")
+            pools = _pools(base, [GMAIL_ROW], [])
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
+                self.assertEqual(
+                    dresearch.candidate_subset(
+                        facts, {}, resolved_candidates={pid}, worth_skipped=[]),
+                    [],
+                )
+
+
+class TestCandidateParentConsolidation(unittest.TestCase):
+    def test_merged_candidate_contacts_fold_onto_existing_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            people = base / "people.csv"
+            people.write_text(
+                "id,public_identifier,linkedin_url,primary_email,all_emails,primary_phone,all_phones,interaction_counts,source_channels\n"
+                'person-cass,cass,https://www.linkedin.com/in/cass,cass@work.com,"[""cass@work.com""]",,,,linkedin_csv\n',
+                encoding="utf-8",
+            )
+            pools = _pools(base, [GMAIL_ROW], [])
+            tasks = [{
+                "parent_slug": "cass-parent",
+                "candidate_key": "cass",
+                "person_ids": ["person-cass"],
+                "parent_person_ids": ["person-cass", "candidate:email:cass@x.com"],
+                "action": "confirm",
+                "linkedin": {"linkedin_url": "https://www.linkedin.com/in/cass"},
+            }]
+            out = base / "consolidate.csv"
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
+                stats = reconcile.write_consolidations(out, tasks, people)
+            self.assertEqual(stats["consolidated_parents"], 1)
+            with out.open(newline="", encoding="utf-8") as fh:
+                row = next(csv.DictReader(fh))
+            self.assertIn("cass@work.com", row["all_emails"])
+            self.assertIn("cass@x.com", row["all_emails"])
+            self.assertIn("gmail_msgvault", row["source_channels"])
 
 
 class TestAssembleWorthGate(unittest.TestCase):
@@ -574,6 +720,13 @@ class TestReviewWebCandidateRows(unittest.TestCase):
     def test_candidate_rows_shape_worth_grouping_and_filters(self):
         with tempfile.TemporaryDirectory() as d:
             facts, pools = self._fixture(Path(d))
+            (facts / "candidate:email:cass@x.com.jsonl").write_text(json.dumps({
+                "facts": {
+                    "canonical_name": "Cassandra Doe",
+                    "network_worth": {"decision": "yes", "reason": "strong founder"},
+                    "identifiers": ["cass@x.com", "alias@example.com", "not an email"],
+                }
+            }) + "\n", encoding="utf-8")
             with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
                 parents = web.load_candidate_parents(facts, {}, set())
             web.annotate_worth(parents, {}, facts)
@@ -585,6 +738,8 @@ class TestReviewWebCandidateRows(unittest.TestCase):
             cand = cass["candidates"][0]
             self.assertTrue(cand["import_candidate"])
             self.assertEqual(cand["pub"], "candidate:email:cass@x.com")    # review.csv key = person_id
+            self.assertEqual(cand["match_emails"],
+                             ["cass@x.com", "cd@y.com", "alias@example.com"])
             self.assertEqual(web.candidate_state(cand), "review")          # pending -> Needs review pile
             self.assertEqual((cass["worth"]["decision"], cass["worth"]["source"]), ("yes", "llm"))
             # effective-no groups with Rejected (like spam), not the review pile
@@ -598,13 +753,13 @@ class TestReviewWebCandidateRows(unittest.TestCase):
             self.assertTrue(web.parent_matches_source(cass, "all"))
             self.assertTrue(web.parent_matches_worth(cass, "yes"))
             self.assertFalse(web.parent_matches_worth(cass, "no"))
-            # the card renders the badge, the worth buttons, and the LLM's reasoning
+            # The user decision is binary; model yes/maybe/no is display-only advice.
             html = web.render_candidate(0, 1, cand)
-            self.assertIn("candidate — no LinkedIn", html)
-            self.assertIn("Worth adding?", html)
-            self.assertIn("worth-yes on", html)                            # effective value highlighted
-            self.assertIn("LLM: yes — strong founder", html)
-            self.assertNotIn("Keep this LinkedIn", html)                   # nothing attached to keep
+            self.assertIn("data-model-worth='yes'", html)
+            self.assertIn("data-worth='yes'", html)
+            self.assertIn("data-worth='no'", html)
+            self.assertNotIn("data-worth='maybe'", html)
+            self.assertNotIn("Exclude", html)
 
     def test_candidate_rows_dedupe_against_shown_person_ids(self):
         with tempfile.TemporaryDirectory() as d:
@@ -730,9 +885,9 @@ class TestUnifiedRejected(unittest.TestCase):
             self.assertTrue(web.parent_in_tab(p, "rejected"))
             self.assertFalse(web.parent_in_tab(p, "review"))
             html = web.render_candidate(0, 1, cand)
-            self.assertIn("Worth adding?", html)                 # worth buttons on a plain verdict row
-            self.assertIn("worth-no on", html)
-            self.assertIn("LLM: no — pure vendor thread", html)  # machine decision + reason alongside
+            self.assertIn("data-model-worth='no'", html)
+            self.assertIn("data-worth='yes'", html)              # binary rescue remains available
+            self.assertNotIn("data-worth='maybe'", html)
             # a user Yes rescues: round-trips through the /worth writer + live rejected state
             web.apply_worth_decision(review, "bob-1", "yes")
             rows = reconcile.load_override_rows(review)
@@ -789,7 +944,9 @@ class TestUnifiedRejected(unittest.TestCase):
             self.assertEqual((p["worth"]["decision"], p["worth"]["source"]), ("no", "llm"))
             self.assertTrue(web.parent_in_tab(p, "rejected"))
             self.assertFalse(web.parent_in_tab(p, "review"))
-            self.assertIn("Worth adding?", web.render_candidate(0, 1, p["candidates"][0]))
+            rendered = web.render_candidate(0, 1, p["candidates"][0])
+            self.assertIn("data-worth='yes'", rendered)
+            self.assertIn("data-worth='no'", rendered)
 
 
 class TestExcludeIsUnifiedNo(unittest.TestCase):
@@ -808,7 +965,7 @@ class TestExcludeIsUnifiedNo(unittest.TestCase):
             self.assertEqual((p["worth"]["decision"], p["worth"]["source"]), ("no", "user"))
             self.assertTrue(web.is_effective_no(p))
             self.assertTrue(web.parent_in_tab(p, "rejected"))
-            self.assertIn("worth-no on", web.render_candidate(0, 1, p["candidates"][0]))
+            self.assertIn("data-model-worth='no'", web.render_candidate(0, 1, p["candidates"][0]))
             # worth-Yes rescues AND clears the exclude so both stores agree
             web.apply_worth_decision(review, "bob-1", "yes")
             row = reconcile.load_override_rows(review)["bob-1"]
@@ -869,6 +1026,361 @@ class TestSyntheticWorthGateSync(unittest.TestCase):
             self.assertTrue(web.is_effective_no(parents[0]))       # gate no == unified Rejected
             self.assertTrue(web.parent_in_tab(parents[0], "rejected"))
 
+    def test_legacy_handle_only_synthetic_recovers_existing_parent_dossier(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            path = base / "synthetic-people.csv"
+            path.write_text(
+                self.CSV_HEADER
+                + "pid-9,synth-x-ross-nordeen-parent12,Ross Nordeen,synthetic,\n",
+                encoding="utf-8",
+            )
+            parents_dir = base / "parents"
+            parents_dir.mkdir()
+            (parents_dir / "ross-nordeen-parent12.md").write_text(
+                "# Ross Nordeen (canonical)\n", encoding="utf-8")
+            (parent,) = web.load_synthetic_parents(path, parents_dir)
+        self.assertEqual(parent["dossier_slug"], "ross-nordeen-parent12")
+
+
+class TestStagedReviewUI(unittest.TestCase):
+    def _candidate_parent(self, decision: str = "maybe", source: str = "llm") -> dict:
+        worth = {"decision": decision, "source": source, "reason": "useful relationship"}
+        candidate = {
+            "pub": "candidate:email:ada@example.com", "full_name": "Ada Lovelace",
+            "import_candidate": True, "synthetic": False, "approved": "", "action": "",
+            "confidence": 0.0, "verdict": "no_linkedin_candidate", "worth": worth,
+            "machine_worth": worth, "worth_key": "candidate:email:ada@example.com",
+            "match_emails": ["ada@example.com"], "match_phones": [],
+            "supporting": [], "contradicting": [], "reason": "",
+        }
+        return {
+            "slug": "ada-lovelace", "name": "Ada Lovelace",
+            "person_ids": ["candidate:email:ada@example.com"], "sources": ["gmail"],
+            "candidates": [candidate], "worth": worth, "machine_worth": worth,
+            "connection": False,
+        }
+
+    def test_worth_page_is_one_binary_card_without_legacy_controls(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            html = web.page_html(
+                [self._candidate_parent()], {}, base / "review.csv",
+                parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                manifest_path=base / "review" / "manifest.json",
+            ).decode("utf-8")
+        self.assertIn("<h1 class='topbar-title'>Add people</h1>", html)
+        self.assertIn("class='step active' href='/?stage=worth' aria-current='step'", html)
+        self.assertIn("class='step' href='/?stage=linkedin'", html)
+        self.assertNotIn("href='/?stage=done'", html)
+        self.assertNotIn("class='title-row'", html)
+        self.assertNotIn("Add Ada Lovelace to your network?", html)
+        self.assertEqual(html.count("data-worth="), 2)
+        self.assertIn("class='decision-card identity-card worth-card'", html)
+        self.assertIn("class='identity-scroll'", html)
+        self.assertIn("class='identity-decision'", html)
+        self.assertIn("data-scroll-cue", html)
+        self.assertIn("aria-label='Scroll down'", html)
+        self.assertIn("<section class='details' data-slug='ada-lovelace'>", html)
+        self.assertIn("<h3 class='details-heading'>Details</h3>", html)
+        self.assertIn("<h4 class='dossier-heading'>Context</h4>", html)
+        self.assertNotIn("<summary>Details", html)
+        self.assertNotIn("AI is unsure", html)
+        self.assertNotIn("data-worth='maybe'", html)
+        self.assertNotIn("Exclude", html)
+        self.assertNotIn("Keep this LinkedIn", html)
+        self.assertNotIn("self-heal", html)
+        self.assertNotIn(str(base / "review.csv"), html)
+
+    def test_details_markdown_is_rendered_and_raw_html_is_escaped(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "ada-lovelace.md").write_text(
+                "---\nname: Ada\n---\n# Ada\n\n## Summary\n\n**Friend** from school.\n\n"
+                "- Builds engines\n- Writes notes\n\n<script>alert('no')</script>\n",
+                encoding="utf-8",
+            )
+            rendered = web.render_dossier_markdown(
+                base / "parents", dossiers, "ada-lovelace")
+        self.assertIn("<h3>Ada</h3>", rendered)
+        self.assertIn("<h4>Summary</h4>", rendered)
+        self.assertIn("<strong>Friend</strong>", rendered)
+        self.assertIn("<ul>", rendered)
+        self.assertNotIn("<script>", rendered)
+        self.assertIn("&lt;script&gt;", rendered)
+
+    def test_expanded_markdown_omits_truncated_relationship_preview(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            full = "Friend in a long-running social and travel group with a complete relationship description."
+            (dossiers / "ada-lovelace.md").write_text(
+                "# Ada\n\n## Summary\n\nFriend in a long-running social and travel group…\n\n"
+                "**Network worth:** maybe — Personal relationship.\n\n"
+                f"## Relationship & cadence\n\n{full}\n",
+                encoding="utf-8",
+            )
+            rendered = web.render_dossier_markdown(
+                base / "parents", dossiers, "ada-lovelace")
+        self.assertNotIn("travel group…", rendered)
+        self.assertIn(full, rendered)
+        self.assertIn("Network worth", rendered)
+
+    def test_only_model_maybe_is_queued_and_piles_are_editable(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            model_yes = self._candidate_parent("yes", "llm")
+            model_no = self._candidate_parent("no", "llm")
+            model_no["slug"] = "grace-hopper"
+            model_no["name"] = "Grace Hopper"
+            model_no["person_ids"] = ["candidate:email:grace@example.com"]
+            model_no["candidates"][0].update({
+                "pub": "candidate:email:grace@example.com",
+                "full_name": "Grace Hopper",
+                "worth_key": "candidate:email:grace@example.com",
+            })
+            html = web.page_html(
+                [model_yes, model_no], {}, base / "review.csv",
+                parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                manifest_path=base / "review" / "manifest.json",
+            ).decode("utf-8")
+            self.assertNotIn("Add Ada Lovelace to your network?", html)
+            self.assertIn("People sorted", html)
+            self.assertIn("data-complete='worth'", html)
+            self.assertIn("<span class='pile-label'>Added</span><span class='pile-count'>1</span>", html)
+            self.assertIn("<span class='pile-label'>Rejected</span><span class='pile-count'>1</span>", html)
+
+            added = web.page_html(
+                [model_yes, model_no], {"stage": ["added"]}, base / "review.csv",
+                parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                manifest_path=base / "review" / "manifest.json",
+            ).decode("utf-8")
+            self.assertIn("Ada Lovelace", added)
+            self.assertIn("data-worth='no'", added)
+            self.assertNotIn("Suggested", added)
+            self.assertNotIn("AI is unsure", added)
+
+            rejected = web.page_html(
+                [model_yes, model_no], {"stage": ["rejected"]}, base / "review.csv",
+                parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                manifest_path=base / "review" / "manifest.json",
+            ).decode("utf-8")
+            self.assertIn("Grace Hopper", rejected)
+            self.assertIn("data-worth='yes'", rejected)
+
+    def test_added_pile_is_paginated_without_rendering_every_person(self):
+        parents = []
+        for index in range(120):
+            parent = self._candidate_parent("yes", "llm")
+            key = f"candidate:email:person{index:03d}@example.com"
+            parent["slug"] = f"person-{index:03d}"
+            parent["name"] = f"Person {index:03d}"
+            parent["person_ids"] = [key]
+            parent["candidates"][0].update({
+                "pub": key, "full_name": parent["name"], "worth_key": key,
+            })
+            parents.append(parent)
+        html = web.render_added(parents, page=2, page_size=50)
+        self.assertEqual(html.count("data-worth='no'"), 50)
+        self.assertNotIn("Person 049", html)
+        self.assertIn("Person 050", html)
+        self.assertIn("Person 099", html)
+        self.assertNotIn("Person 100", html)
+        self.assertIn("aria-current='page'>2</span>", html)
+        self.assertIn("stage=added&amp;page=1", html)
+        self.assertIn("stage=added&amp;page=3", html)
+
+    def test_rejected_spam_uses_the_classifier_reason_not_default_worth_copy(self):
+        parent = self._candidate_parent("maybe", "default")
+        parent["machine_worth"] = {
+            "decision": "maybe", "source": "default", "reason": "not yet judged",
+        }
+        parent["worth"] = dict(parent["machine_worth"])
+        parent["candidates"][0].update({
+            "llm_reject": "spam",
+            "llm_reject_reason": "Unsolicited recruiter outreach with no engagement.",
+            "worth": parent["worth"],
+            "machine_worth": parent["machine_worth"],
+        })
+        self.assertTrue(web.is_effective_no(parent))
+        self.assertEqual(
+            web._rejection_reason(parent),
+            "Unsolicited recruiter outreach with no engagement.",
+        )
+
+    def test_manifest_completion_requires_zero_pending_and_rejects_stale_counts(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            path = base / "review" / "manifest.json"
+            pending = web.review_progress([self._candidate_parent()])
+            with self.assertRaisesRegex(ValueError, "1 decisions"):
+                web.write_review_manifest("worth", "completed", pending, path=path,
+                                          review_path=base / "review.csv",
+                                          synthetic_path=base / "synthetic.csv")
+            accepted_parent = self._candidate_parent("yes", "user")
+            accepted_parent["candidates"][0]["worth"] = accepted_parent["worth"]
+            accepted = web.review_progress([accepted_parent])
+            manifest = web.write_review_manifest(
+                "worth", "completed", accepted, path=path,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv")
+            self.assertEqual((manifest["stage"], manifest["status"]), ("worth", "completed"))
+            self.assertEqual(manifest["counts"]["pending"], 0)
+            self.assertTrue(web.phase_is_completed("worth", accepted, path))
+            self.assertFalse(web.phase_is_completed("worth", pending, path))
+
+    def test_manifest_launch_is_fresh_and_custom_filename_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            path = base / "review" / "manifest.json"
+            progress = web.review_progress([self._candidate_parent()])
+            first = web.write_review_manifest(
+                "worth", "awaiting_user", progress, path=path,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
+                launched=True)
+            second = web.write_review_manifest(
+                "worth", "awaiting_user", progress, path=path,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
+                launched=True)
+            self.assertGreater(second["launched_at_unix_ns"], first["launched_at_unix_ns"])
+            with self.assertRaisesRegex(ValueError, "must end in manifest.json"):
+                web.write_review_manifest(
+                    "worth", "awaiting_user", progress,
+                    path=base / "review" / "custom-state.json",
+                    review_path=base / "review.csv", synthetic_path=base / "synthetic.csv")
+
+    def test_linkedin_cannot_complete_before_people_stage(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            progress = web.review_progress([self._candidate_parent()])
+            with self.assertRaisesRegex(ValueError, "People decisions"):
+                web.write_review_manifest(
+                    "linkedin", "completed", progress,
+                    path=base / "review" / "manifest.json",
+                    review_path=base / "review.csv", synthetic_path=base / "synthetic.csv")
+
+    def test_explicit_linkedin_tab_can_show_existing_pending_matches(self):
+        with tempfile.TemporaryDirectory() as d:
+            progress = {
+                "total": 3,
+                "worth_total": 2,
+                "worth_pending": 1,
+                "worth_yes": 0,
+                "worth_no": 1,
+                "lookup_ready": 0,
+                "linkedin_total": 1,
+                "linkedin_pending": 1,
+                "linkedin_done": 0,
+                "rejected": 1,
+            }
+            view = web._phase_view(
+                {"stage": ["linkedin"]}, progress,
+                Path(d) / "review" / "manifest.json")
+        self.assertEqual(view, "linkedin")
+
+    def test_manifest_preserves_people_completion_during_linkedin_stage(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            path = base / "review" / "manifest.json"
+            accepted = self._candidate_parent("yes", "user")
+            accepted["candidates"][0]["worth"] = accepted["worth"]
+            web.write_review_manifest("worth", "completed", web.review_progress([accepted]),
+                                      path=path, review_path=base / "review.csv",
+                                      synthetic_path=base / "synthetic.csv")
+
+            rejected = self._candidate_parent("no", "user")
+            rejected["candidates"][0]["worth"] = rejected["worth"]
+            synth_worth = {"decision": "yes", "source": "user", "reason": ""}
+            synthetic = {
+                "slug": "synth", "name": "Ada Lovelace",
+                "person_ids": ["candidate:email:ada@example.com"], "sources": ["gmail"],
+                "worth": synth_worth, "machine_worth": synth_worth, "connection": False,
+                "candidates": [{
+                    "pub": "synth-ada", "full_name": "Ada Lovelace", "synthetic": True,
+                    "import_candidate": False, "approved": "auto", "action": "verify",
+                    "confidence": 0.8, "verdict": "synthetic", "match_emails": [],
+                    "match_phones": [], "supporting": [], "contradicting": [], "reason": "",
+                }],
+            }
+            transitioned = web.review_progress([rejected, synthetic])
+            manifest = web.write_review_manifest(
+                "linkedin", "awaiting_user", transitioned, path=path,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
+                launched=True)
+            self.assertEqual(manifest["completed_stages"], ["worth"])
+            self.assertTrue(web.phase_is_completed("worth", transitioned, path))
+            self.assertEqual(web._phase_view({}, transitioned, path), "linkedin")
+
+    def test_candidate_retarget_moves_to_linkedin_and_yes_preserves_replacement(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            pid = "candidate:email:cass@x.com"
+            (facts / f"{pid}.jsonl").write_text(
+                json.dumps({"facts": {"canonical_name": "Cass Doe"}}) + "\n",
+                encoding="utf-8")
+            pools = _pools(base, [GMAIL_ROW], [])
+            review = base / "review.csv"
+            reconcile._write_override_rows(review, {pid: {
+                "public_identifier": pid,
+                "network_worth": "yes",
+                "action": "retarget",
+                "approved": "",
+                "new_linkedin_url": "https://www.linkedin.com/in/cass-real",
+                "new_public_identifier": "cass-real",
+                "reason": "deep research found the profile",
+            }})
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
+                parents = web.load_candidate_parents(
+                    facts, reconcile.load_override_rows(review), set())
+            web.annotate_worth(parents, reconcile.load_override_rows(review), facts)
+            self.assertFalse(web.is_import_candidate_parent(parents[0]))
+            self.assertFalse(web.is_lookup_ready(parents[0]))
+            pending = web.pending_linkedin_candidates(parents[0])
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["url"], "https://www.linkedin.com/in/cass-real")
+            web.apply_decision(review, base / "verdicts.jsonl", pid, "keep", "", 0.7, 0.85)
+            row = reconcile.load_override_rows(review)[pid]
+            self.assertEqual((row["action"], row["approved"]), ("retarget", "yes"))
+            self.assertEqual(row["new_public_identifier"], "cass-real")
+
+    def test_avatar_endpoint_helper_caches_live_bytes_and_reuses_them(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            profiles, avatars = base / "profiles", base / "avatars"
+            profiles.mkdir()
+            (profiles / "ada.json").write_text(json.dumps({
+                "normalized_profile": {"profile_pic_url": "https://media.licdn.com/ada.jpg"},
+                "raw_response": {},
+            }), encoding="utf-8")
+            body = b"\xff\xd8\xff" + b"avatar"
+            with mock.patch.object(web.urllib.request, "urlopen", return_value=io.BytesIO(body)) as fetch:
+                self.assertEqual(web.load_avatar("ada", profile_cache_dir=profiles,
+                                                 avatar_dir=avatars), (body, "image/jpeg"))
+                fetch.assert_called_once()
+            with mock.patch.object(web.urllib.request, "urlopen",
+                                   side_effect=AssertionError("must use local bytes")):
+                self.assertEqual(web.load_avatar("ada", profile_cache_dir=profiles,
+                                                 avatar_dir=avatars), (body, "image/jpeg"))
+
+    def test_avatar_profile_key_cannot_escape_cache_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            profiles, avatars = base / "profiles", base / "avatars"
+            profiles.mkdir()
+            (base / "outside.json").write_text(json.dumps({
+                "normalized_profile": {
+                    "profile_pic_url": "https://media.licdn.com/outside.jpg",
+                },
+            }), encoding="utf-8")
+            with mock.patch.object(web.urllib.request, "urlopen") as fetch:
+                self.assertIsNone(web.load_avatar("../outside", profile_cache_dir=profiles,
+                                                  avatar_dir=avatars))
+                fetch.assert_not_called()
+
 
 class TestLiveEndpoints(unittest.TestCase):
     """Acceptance: every decision endpoint persists to CSV AND returns everything the
@@ -920,10 +1432,10 @@ class TestLiveEndpoints(unittest.TestCase):
             return json.loads(resp.read())
 
     def test_worth_no_and_rescue_round_trip_with_live_counts(self):
-        # machine no (llm_worth) -> rejected; the response carries global counts
-        j = self._post("/worth", pub="bob-1", worth="")
+        # A user No joins the same rejected pile; the UI endpoint is intentionally binary.
+        j = self._post("/worth", pub="bob-1", worth="no")
         self.assertTrue(j["rejected"])
-        self.assertEqual((j["effective"], j["source"]), ("no", "llm"))
+        self.assertEqual((j["effective"], j["source"]), ("no", "user"))
         self.assertLessEqual(self.COUNT_KEYS, set(j["counts"]))
         self.assertEqual((j["counts"]["rejected"], j["counts"]["review"]), (1, 0))
         # worth-Yes rescues in the same click: rejected flips, counts move tabs
@@ -959,6 +1471,31 @@ class TestLiveEndpoints(unittest.TestCase):
         j = self._post("/decide", pub="synth-email-abc", decision="detach")
         self.assertEqual((j["action"], j["approved"]), ("verify", "no"))
         self.assertIn("counts", j)
+
+    def test_get_is_read_only_for_decision_csv(self):
+        before = self.review.read_bytes()
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/") as response:
+            self.assertEqual(response.status, 200)
+            html = response.read().decode("utf-8")
+        self.assertEqual(self.review.read_bytes(), before)
+        self.assertIn("POWERPACKS", html)
+
+    def test_identity_post_rejects_mismatched_parent_slug(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._post("/decide", pub="bob-1", decision="keep", parent_slug="someone-else")
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_ui_endpoint_rejects_maybe_and_finish_waits_for_binary_answer(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._post("/worth", pub="bob-1", worth="maybe")
+        self.assertEqual(ctx.exception.code, 400)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._post("/complete", stage="linkedin")
+        self.assertEqual(ctx.exception.code, 409)  # synthetic auto is advice, not human completion
+        self._post("/decide", pub="synth-email-abc", decision="keep")
+        complete = self._post("/complete", stage="linkedin")
+        self.assertEqual(complete["manifest"]["status"], "completed")
+        self.assertEqual(complete["manifest"]["counts"]["pending"], 0)
 
 
 class TestReadinessCandidateCounts(unittest.TestCase):

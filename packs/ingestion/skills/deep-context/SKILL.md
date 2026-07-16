@@ -1,687 +1,317 @@
 ---
 name: deep-context
-description: Build the richest per-person markdown dossier from local message bodies (Gmail + iMessage/WhatsApp DMs, with optional explicitly approved small iMessage groups) and retrieve it by name/phone/email; surface likely same-person merge candidates; verify each person's attached LinkedIn is really them (self-heal). Use for $deep-context, "build deep context", "context/dossier on a person", "who is this phone or name in my messages", "find duplicate people to merge", "check the LinkedIn we attached is the right person".
+description: The single post-import people-processing workflow and per-person dossier surface. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", a dossier or identity lookup by name/phone/email, duplicate-person review, LinkedIn self-heal, or the staged people/LinkedIn UI. Builds dossiers for imported people and unresolved Gmail/iMessage/WhatsApp candidates, merges duplicates, asks the user only about uncertain additions, runs one budget-gated lookup for the editable Added pile plus eligible wrong-link recovery, verifies found LinkedIns, then realizes the approved network and index.
 ---
-
-<!--
-Created: 2026-06-21
-Changelog:
-- 2026-07-16b: Rejected == worth-no (one concept, shared with $deep-setup).
-  Machine-owned llm_worth/llm_worth_reason columns mirror the synthesis judgment
-  into review.csv (spam folds in as an LLM no); worth buttons on every row; the
-  fan-in merge drops effective-no people (user Yes/Keep rescues, user No wins).
-- 2026-07-16: Network-worth triage (shared with $deep-setup). Synthesis judges each
-  profiled contact's network_worth (yes/maybe/no + reason) from message context;
-  overrides/review.csv gained a USER-owned sticky `network_worth` column (machine
-  never writes it); the review UI shows worth badges, Yes/Maybe/No marking, and
-  worth + source (gmail/imessage/whatsapp) filters. Effective "no" excludes a
-  candidate from reconcile-deep-research and synthetic minting.
-- 2026-07-13: Added the product architecture guide; corrected the opt-in iMessage
-  group-body privacy contract and merge threshold docs; disabled the unsafe chained
-  `run` shortcut so core model stages are previewed and approved separately; made
-  Parallel escalation explicitly opt-in and documented unmetered provider gates.
-- 2026-07-09b: Synthetic review in the UI + research opt-in. reconcile-deep-research gained
-  --include-plausibly-absent (researches the judge's "plausibly has no LinkedIn" people — the
-  primary synthetic candidates; still excluded from retarget research by default). The review UI
-  now surfaces synthetic-people.csv rows: pending -> Needs review with a "🧬 synthetic — no
-  LinkedIn" badge (researched profile shown in place of a LinkedIn link), Keep -> approved=yes
-  (merges), Detach -> approved=no, ↺ -> pending. Decisions write only the synthetic CSV's
-  approved column.
-- 2026-07-09: Synthetic profiles (packs/ingestion/docs/synthetic-profiles-plan.md, built).
-  `bin/deep-context assemble-synthetic` turns existing deep-research artifacts into
-  people-schema rows for people with NO real LinkedIn (synth-… identifiers,
-  enrichment_provider=synthetic, research metadata attached). Gated behind `approved`:
-  completeness >= 0.6 auto-approves, the rest wait in overrides/synthetic-people.csv.
-  The fan-in merge auto-ingests approved rows (keep-filter admits synthetic rows only
-  with approved auto/yes; real rows still require LinkedIn + rapidapi). Research runs
-  on Parallel.ai via the existing reconcile-deep-research flow — one research pass per
-  person, branching retarget (LinkedIn found) vs synthetic (none found).
-- 2026-07-06: Spam screen + LLM re-review. reconcile now also judges whether a contact is
-  spammy cold outreach the user never engaged with (spam_contact/spam_confidence/spam_reason in
-  the verdict schema) and writes machine-owned llm_reject/llm_reject_confidence/llm_reject_reason
-  columns into overrides/review.csv (backwards compatible; ALWAYS refreshed, even on user-decided
-  rows — action/approved stay user-owned). The fan-in merge drops spam-flagged people (conf >=
-  0.85) UNLESS the user made a keep-ish decision (approved=yes, action != detach). The review UI
-  gained a "Rejected" tab showing flagged people (spam-flagged leave the Needs-review pile; a Keep
-  there protects them). `$deep-context re-review` / "re-review my contacts" / "refresh the LLM
-  decisions" runs `bin/deep-context re-review` — a fresh LLM re-judge refreshing all NON-user
-  decisions + the spam screen; user yes/no rows keep their action. SPEND-GATED like reconcile:
-  always run `re-review --dry-run` first and confirm the estimate with the user. Also: merged
-  (multi-LinkedIn) people now auto-resolve in the review UI (parent auto-verifies when the judge
-  is confident, the rest auto-detach as approved=auto — one overturn click instead of N confirms),
-  and a retarget ("fix") now reads as "verified" in the UI.
-- 2026-06-29: Added a review-only fast path. `$deep-context review` (or "open/show the review
-  UI", "let me click through") now just runs `bin/deep-context review` — read-only over the
-  existing reconcile artifacts, opens the browser, no checklist, no spend — instead of walking
-  the full pipeline checklist. Same for other single read-only subcommands the user names
-  (lookup/check/validate). The mandatory full checklist stays for an actual build/run/--force.
-- 2026-06-26: Never rely on memory for ANY approval — always ask/confirm with the user, every
-  run. Added a top-level gate rule: a harness memory/auto-recall layer (Codex ~/.codex/memories,
-  Claude Code session memory, prior transcripts, a cached "previously accepted" answer) may
-  suggest a default but NEVER substitutes for the user's confirmation this run; do not mark a
-  gate "satisfied by a previous answer." Non-negotiable for --include-groups (reads others'
-  group bodies) and any paid step. Fixes a Codex run that skipped the group/cap ask by treating
-  a remembered "include groups, cap 1600" as pre-approved.
-- 2026-06-25: A `--force` rerun keeps the FULL checklist — pass `--force` to the two incremental
-  steps and finish every step. "How to run" now says: still create + walk the entire checklist;
-  add `--force` only to `collect` and `synthesize`; run to completion, pausing ONLY at the gate
-  items (owner-LinkedIn answer [skip the ask if owner.json exists], group/cap, the dry-run cost
-  OKs, review-wait). Names the failure mode: running one step (e.g. `collect --force`) and
-  halting — collect is step ~4 of ~20, mark it done and continue. Fixes Jake's rerun where the
-  agent ran a lone `collect --force` and dropped the step-1 LinkedIn ask.
-- 2026-06-24: Owner-alias EXCLUSION (the downstream half of is_owner detection). build_parents now
-  skips any person flagged is_owner (you on another email — e.g. arthur.chen@spot2.mx) so you stop
-  appearing as your own contact, and folds those alias emails into owner.json (so your addresses
-  aggregate + future runs know them directly). `reconcile --reapply` drops verdicts for parents that
-  no longer exist, so the excluded owner falls out of the review table/UI for FREE (no re-judge).
-- 2026-07-13: User-touched detaches are excluded from automatic deep research. The
-  current one-row override cannot preserve a sticky detach and a pending retarget
-  proposal simultaneously, so excluding them prevents paid research whose proposal
-  would be discarded. Model-recommended detaches remain eligible.
-- 2026-06-24: Pass thread-level participants + detect owner aliases. collect now captures each
-  email thread's full from/to/cc roster (Name <email>) from msgvault (was dropped — we only kept
-  subject/body/direction); synthesis gets it plus an owner-identity declaration + heuristic and a
-  new is_owner output. So a 'contact' that is really YOU on another address (e.g. arthur.chen@spot2.mx,
-  with your gmail CC'd and the same name) is flagged is_owner=true. Validated: 3 real aliases → true,
-  a genuine namesake (Arthur Lam, whose threads also include your gmail) → false. Richer co-participant
-  context also improves every dossier. (Downstream: exclude is_owner from parents/network + fold the
-  alias into owner.json — follow-up.)
-- 2026-06-24: Free recovery from a self-reported LinkedIn. When a contact SHARED their own
-  LinkedIn in their messages (synthesis captures it in facts `identifiers`), reconcile now feeds
-  it to the judge AND auto-proposes a retarget to it when the attached link differs — no Parallel
-  deep-research needed (e.g. ankita-goyal recovered from a wrong namesake). Name-compatibility
-  guard: auto only when the URL's slug matches the contact's name, else pending (a shared URL can
-  be a third party they mentioned). Runs free on `reconcile --reapply` too.
-- 2026-06-24: Don't truncate LLM output. Raised synthesis max_output_tokens 4000->8000 (a ceiling,
-  billed only if used) and warn on a truncated (incomplete) completion. The dossier one-line
-  Summary now trims at a word boundary with an ellipsis (full text still in Relationship & cadence).
-- 2026-06-24: Review UI dossier shows the rich CHILD dossier(s), not the thin parent stub.
-- 2026-06-24: No needs_review limbo in parent clustering. build_parents now folds EVERY
-  clustered member into the parent as a child (defaulted in, carrying its merge confidence)
-  instead of splitting low-confidence members into a needs_review bucket that nothing surfaced
-  — those members appeared in no parent's children, so reconcile never judged them and they
-  vanished (e.g. a 3rd 'Chrissy Hu' that turned out to be a different person). A human rejects
-  the rare wrong one in the review UI.
-- 2026-06-24: Feed the judge the FULL LinkedIn work history (was truncated to 6). A PAST
-  employer is often the identity anchor — e.g. Clara Ma's profile leads with founder roles but
-  lists 'Venture Hacker @ AngelList' at position 9, matching her help@alist.co contact; the cap
-  hid it and manufactured a false miss. No cap now, in the judge prompt and the review UI.
-- 2026-06-24: LinkedIn Connections are GROUND TRUTH. A contact imported from your LinkedIn
-  Connections (source_channels contains linkedin_csv) is auto-confirmed at 1.0 WITHOUT the LLM
-  — you're connected, so it's them. Skips ~26% of judge calls and fixes the few connections the
-  judge hesitated on. `reconcile --reapply` overlays it for free.
-- 2026-06-24: Keep-biased self-heal. The judge now DEFAULTS TO CONFIRMING — name + any one
-  corroborating signal (employer/school/location/era/social context) and no hard contradiction
-  → confirmed; absence of work talk for personal contacts no longer deflates confidence (was
-  manufacturing false negatives). Asymmetric thresholds: confirmed auto-VERIFIES at 0.70 (the
-  user fixes the rare mismatch), wrong_person auto-DETACHES only at 0.85 (dropping a real person
-  is costly). `--detach-threshold` added; `reconcile --reapply` re-decides for free. Review UI
-  shows direction-aware judgments (a high-% wrong_person reads as a strong MISMATCH, not a strong
-  match) and groups multi-LinkedIn ("conflict") people as labelled Option 1/2 under one banner.
-- 2026-06-24: Review UI (`bin/deep-context review` → reconcile_review_web, local web, free).
-  review.csv is keyed only on the candidate LinkedIn, so it's un-reviewable alone; the UI JOINS
-  it with reconcile/verdicts.jsonl (parent, profile, judge reasoning) + parents/*.md to show one
-  expandable row per PERSON — the LinkedIn(s) matched, picked link, verified/detached/pending
-  state, supporting/contradicting evidence. Keep / Detach / Fix-LinkedIn autosave into review.csv
-  (the merge's durable table); Fix writes a retarget row applied by apply-retargets. Filters
-  (needs-review/verified/detached/conflicts/fixed/my-decisions), search, riskiest-first sort.
-  This is now the review surface (replaces "open summary.md"; summary.md kept as a text fallback).
-- 2026-06-21: Initial skill — two-phase flow (deep per-person dossiers → LLM-judge
-  merge into parents). Incremental confidence-gated synthesis, per-channel message pools,
-  owner.json shared-context inference, high-reasoning holistic merge judge,
-  parent/child layer (confirmed core + needs-review), validate_dossiers, group NAMES
-  as context, opt-in --include-groups for group bodies, gated check→ask→collect→
-  dry-run→confirm→run task flow (mirrors $setup).
-- 2026-06-22: Phase 3 — reconcile each parent against its attached LinkedIn profile
-  (self-heal). High-reasoning judge (confirmed / wrong_person / needs_review) over the
-  message-derived dossier vs the LinkedIn lookup; high-confidence verdicts auto-apply to
-  people.csv (confirmed→verified, wrong_person→detach with backup), low-confidence →
-  review queue; never forces a LinkedIn (linkedin_plausibly_absent). Deep-research
-  escalation (Parallel.ai) on wrong_person detaches, with an estimate and explicit
-  current-run approval bounded by the approved budget.
-- 2026-06-22: Conflict auto-resolution — a parent with multiple attached links where
-  exactly one is high-confidence confirmed and the rest high-confidence wrong_person is
-  resolved automatically (keep the confirmed, detach the wrong); ambiguous conflicts still
-  defer to review. All auto-actions logged to reconcile/applied.csv; `reconcile --reapply`
-  re-decides/applies from existing verdicts with no OpenAI spend.
-- 2026-06-23: Inverted the self-heal to be durable — reconcile no longer mutates people.csv.
-  It writes a durable override table (network-import/overrides/review.csv) that
-  the fan-in merge (merge_network_sources) re-applies every run: detach clears the wrong link
-  (LinkedIn-only people.csv then drops that person), verify annotates linkedin_verified.
-  Survives re-merges + Modal index rebuilds.
-- 2026-06-23: Retargeting + approval-aware decisions table. The override gains an `approved`
-  column (auto = high-confidence applies; yes/no = user decision, sticky across re-runs) and a
-  `retarget` action. Deep research proposes a correct LinkedIn (pending); `apply-retargets`
-  enriches it (cache-first RapidAPI) into overrides/retarget-people.csv, which the merge
-  auto-ingests so the person re-appears with the correct profile (old wrong link dropped).
-- 2026-06-23: Contact consolidation — when a parent keeps one link and detaches siblings,
-  reconcile folds every child's emails/phones/per-channel interaction_counts onto the kept
-  LinkedIn via overrides/consolidate-people.csv (contact-only, auto-ingested + unioned by the
-  merge). The surviving person keeps the correct profile AND all sibling contacts; per-channel
-  counts stay per-channel. Trusts Phase 2's grouping (fix over-merges upstream).
-- 2026-06-23: One summary (reconcile/summary.md) instead of three CSVs; hard-stop "WAIT for the
-  user to finish reviewing" step before apply-retargets. Merge self-heal inputs resolve relative
-  to the output-dir's overrides/ sibling (cwd-independent).
-- 2026-06-23: One editable file. Every judged row (incl. low-confidence/needs_review/ambiguous)
-  now lands in overrides/review.csv — high-confidence as approved=auto, the rest as
-  pending with a suggested action. Retired the separate review-queue.csv; the user reads
-  summary.md and edits the single decisions table (approved column, sticky).
-- 2026-06-23: Owner profile is now the FIRST step — `bin/deep-context owner --linkedin-url <you>`
-  builds owner.json from the RapidAPI cache (never WebFetch). Added Phase 4 `[Realize]`
-  (`bin/deep-context realize` = fan-in merge applying review.csv/consolidate/retarget, then the
-  $setup Modal index-people rebuild). Scrubbed real names from test fixtures/skill examples.
--->
 
 # deep-context
 
-Use this for `$deep-context`, "build a dossier on the people I message", "what
-context do we have on <name/phone>", or "find people I should merge".
+This is the one processing skill after `$setup`, `$import-gmail`, or
+`$import-messages`. The former `$deep-setup` surface is retired; its candidate
+resolution, synthetic-profile, realization, and validation behavior lives here.
 
-It builds one **markdown dossier per person** from the actual bodies of your
-Gmail threads and iMessage/WhatsApp **DMs**, then lets you **look a person up by
-name and/or phone (or email)** and flags **likely same-person merge candidates**.
+The durable flow is:
 
-For a product-level walkthrough, privacy map, approval gates, and architecture
-diagram, see [`deep-context-pipeline.md`](../../docs/deep-context-pipeline.md).
-
-Heavy reasoning runs on OpenAI (parallel, medium reasoning); the local box only
-streams SQLite row-by-row and writes files, so it stays well under 1 GB RAM on a
-weak CPU.
-
-## Reads message bodies (by design)
-
-Deep inspection of message bodies is the whole point of this skill — it reads
-Gmail threads and iMessage/WhatsApp DM bodies to build the dossier. This is a
-scoped exception to the repo's otherwise metadata-only contract; it applies ONLY
-to `$deep-context`.
-
-- iMessage / WhatsApp: **DM bodies by default**. Group **names** are collected as
-  metadata. Only after the user explicitly approves `--include-groups` in the
-  current run may the collector read bodies from small iMessage groups; WhatsApp
-  group bodies are never read.
-- Raw sampled message text lands in `.powerpacks/deep-context/raw/` — **ephemeral,
-  gitignored**. Duplicate judging, parent construction, and LinkedIn reconciliation
-  still read these bundles; purge only after all three and any debugging are finished.
-- Dossiers store **synthesized facts, not verbatim message bodies**.
-- Synthesis sends sampled text to **OpenAI** for fact extraction. The duplicate and
-  LinkedIn judges also send short verbatim samples from those raw bundles alongside
-  structured evidence.
-- iMessage needs macOS **Full Disk Access** for the process that runs it. The
-  Claude Code Bash tool runs under a helper that does NOT inherit your terminal's
-  FDA, so run the collection command in your own terminal (for example,
-  `bin/deep-context collect`).
-
-## Prerequisites
-
-- A merged network: `.powerpacks/network-import/merged/people.csv` (run `$setup`
-  / `$discover-contacts` first).
-- msgvault synced (`$import-gmail`); macOS **Full Disk Access** for iMessage
-  (`chat.db`); WhatsApp via `$import-whatsapp` if you want that channel.
-- `OPENAI_API_KEY` in `.env`; `.venv/` ready (`bin/setup-python`).
-
-## How to run this skill
-
-**Review-only fast path (no checklist, no spend).** If the user only wants to
-**open / look at the review UI** — `$deep-context review`, "open the review
-page", "show me the review UI", "pop the UI back up", "let me click through" —
-do NOT create the full checklist and do NOT run any pipeline or paid step. Just
-run `bin/deep-context review` (it serves the existing `reconcile/verdicts.jsonl`
-⨝ `overrides/review.csv` ⨝ `parents/*.md`, opens the browser, and makes no
-provider calls), tell the user it's open and that keep/detach/fix/exclude clicks
-autosave to `overrides/review.csv`, and stop there. The review UI does NOT
-require re-running anything — it shows whatever the last run produced. Only if
-the reconcile artifacts don't exist yet (Phase 3 never ran) should you say so
-and offer the full run below. Same goes for any other single read-only
-subcommand the user names explicitly (`lookup`, `check`, `validate`): run just
-that one, skip the checklist. The full checklist below is for an actual
-  build or `--force` rerun of the pipeline.
-
-**FIRST, before running anything: create a literal, visible checklist with all
-the steps below and step through it, marking each complete as you go.** Mandatory.
-Use your harness's plan/task tool:
-
-- **Claude Code:** `TaskCreate` one task per item below, then `TaskUpdate`
-  each to `in_progress` then `completed`.
-- **Codex:** `update_plan` with the steps, updating status as you go.
-- **Any other harness:** its equivalent todo/plan mechanism.
-
-**Never rely on memory for ANY approval — always ask and confirm with the user, every run.**
-This skill's gates are interactive: the owner-LinkedIn ask, the group-chat / message-cap
-choices, and every cost confirmation (synthesis, cluster, reconcile, deep-research). A harness
-memory / auto-recall layer (Codex `~/.codex/memories`, Claude Code session memory, prior
-transcripts, a cached "previously accepted" answer) MAY suggest a default — but it is **never**
-a substitute for the user's confirmation *this* run. Surface the suggested default and wait for
-an explicit OK; do not mark a gate "satisfied by a previous answer." This is non-negotiable for
-`--include-groups` (it reads other people's group-chat bodies) and for any paid step — never
-silently apply a remembered "yes." `--force` does not change this: it re-processes everyone, it
-does not pre-approve anything.
-
-**A `--force` rerun keeps the FULL checklist — you just pass `--force` to the two
-incremental steps and run every step to completion.** When the user says "rerun",
-"run again", or "`$deep-context --force`":
-
-- **Still create and walk the ENTIRE checklist below, in order.** `--force` does NOT
-  change the steps or let you skip any — it changes only *incrementality*
-  (re-process EVERYONE instead of skipping people who already have a bundle/facts).
-- **Carry `--force` through the synthesis preview and the two incremental steps:**
-  - `[Context] Gather each person's messages` → `bin/deep-context collect --force`
-  - `[Context] Estimate the cost` → `bin/deep-context dry --force`
-  - `[Context] Build a profile for each person` → `bin/deep-context synthesize --force`
-
-  Every other step is run exactly as written (compose, cluster, parents, validate,
-  reconcile, review, realize). Do not use `bin/deep-context run`: the chained paid
-  shortcut is intentionally disabled because it cannot pause for all three cost
-  previews and approvals.
-- **Run the whole checklist to COMPLETION. The only places you stop for the user are
-  the explicit gate items:** the owner-LinkedIn answer (skip the *ask* if `owner.json`
-  already exists — just confirm its values), owner/retarget RapidAPI cache-miss
-  approval, the group-chat/cap answers, each measured cost confirmation (`dry` →
-  synthesize; `cluster --dry-run`; `reconcile --dry-run`; model-owned Parallel
-  recovery and optional synthetic research), each review wait, and Modal
-  upload/provider approval.
-  Do not pause outside those explicit gates.
-
-**The one failure mode to avoid:** running a single step (e.g. `collect --force`) and
-halting. Collect is step ~4 of ~20 — finishing it is not finishing the skill. Mark it
-done and continue straight to the next task.
-
-Seed the checklist with these exact item titles. Each is tagged by phase —
-`[Context]` builds a profile of each person from your messages, `[Merge]` combines
-duplicates of the same person, `[Self-heal]` checks & fixes each person's LinkedIn,
-`[Realize]` applies it all and rebuilds the search index:
-
-```
-[Context]   Ask for YOUR LinkedIn and build your own profile (so we can spot what you share with each person)
-[Context]   See which message sources are connected (Gmail, iMessage, WhatsApp)
-[Context]   Ask whether to include group chats, and how far back to read per person
-[Context]   Gather each person's messages
-[Context]   Estimate the cost before anything is spent
-[Context]   Confirm the cost with you before spending
-[Context]   Build a profile for each person from their messages
-[Context]   Compose dossiers and the lookup index locally
-[Context]   Double-check the profiles came out complete
-[Merge]     Find people who look like duplicates of each other
-[Merge]     Combine each set of duplicates into one person
-[Self-heal] Preview the LinkedIn check (free, nothing spent yet)
-[Self-heal] Confirm cost, then check each person's attached LinkedIn is really them
-[Self-heal] Record the fixes (remove wrong LinkedIns, keep the right ones)
-[Self-heal] Add the unsure ones to your review list
-[Self-heal] Look up the correct person for any wrong LinkedIn we removed
-[Self-heal] Open the review page to see each person, the LinkedIn we picked, and why
-[Self-heal] Wait for you to finish reviewing (keep / detach / fix each link) before continuing
-[Self-heal] Re-attach the correct LinkedIns you approved
-[Realize]   Apply your decisions to the network (fan-in merge — uses your review.csv)
-[Realize]   Rebuild the search index on Modal so the fixes show up in search (~5–30 min)
+```text
+messages -> dossiers -> review uncertain people -> lookup Added -> LinkedIn Yes/No -> people.csv -> index
 ```
 
-Do not drop steps; mark inapplicable ones complete as a no-op. For synthesis,
-duplicate judging, LinkedIn reconciliation, and Parallel research, **show the
-measured estimate and get an explicit OK**. Owner/retarget RapidAPI cache misses and
-Modal indexing lack equivalent measured previews; disclose their payload and obtain
-explicit current-run approval before those provider calls.
+All paths are fixed and overwritten in place. Do not add run ids, ledgers, or a
+second status stream.
 
-### Phase 1 — Build ONE deep dossier per person
+## Route the request first
 
-Each person gets a single child dossier from separate recent-message pools for
-**Gmail bodies + iMessage DMs + WhatsApp DMs**, plus iMessage **group-chat names**
-(metadata) as relationship context. `--deep-cap` (default 1600) applies to each
-source pool independently; a 1.8M-character safety cap bounds the combined bundle.
+Use the narrow path when the user names one:
 
-- **[Context] Ask for YOUR LinkedIn and build your own profile** — FIRST, ask the user for their
-  own LinkedIn URL. If `owner.json` is absent or `--force` is requested, disclose
-  that a cache miss calls RapidAPI with that LinkedIn URL and get explicit approval;
-  then run `bin/deep-context owner --linkedin-url <their-url> --email <their-email>`.
-  This writes `.powerpacks/deep-context/owner.json` (their schools/jobs/locations with year ranges)
-  from the **RapidAPI cache** (a cache hit is free; NEVER WebFetch linkedin.com — it hallucinates).
-  Confirm the schools/employers it found look right. This owner profile is injected into synthesis
-  and the LinkedIn judge so they infer **shared context** (same school/employer/era) with each
-  contact — skipping it loses that whole signal. If `owner.json` already exists, it reports the
-  current values; `--force` to rebuild. (owner.json is gitignored — it's local only, never committed.)
-- **[Context] See which message sources are connected** — `bin/deep-context check`. Per-source readiness +
-  `ready`. If iMessage is `unreadable_full_disk_access`, run in a terminal with
-  Full Disk Access (not the Claude Code Bash tool).
-- **[Context] Ask whether to include group chats, and how far back to read — get answers before collecting:**
-  1. **Group opt-in** — by default we read **DM bodies only** + group *names*.
-     Offer `--include-groups` to also read **iMessage group-chat bodies** from
-     small shared groups (`--max-group-size`, default 25). Tell them this **costs
-     more** (more messages → more synthesis tokens) and pulls in other group
-     members' messages.
-  2. **Depth** — offer named tiers, not a bare number: **shallow** (~400
-     recent messages per channel per person — fastest, cheapest), **medium**
-     (~1,600 — the default), **deep** (~6,400 — most context, costs more at
-     synthesis). The choice sets `--deep-cap`, which applies **per source
-     pool** (Gmail, iMessage DMs, WhatsApp DMs, and opted-in iMessage groups
-     each contribute up to the cap before the combined character cap). A
-     custom number is fine if the user gives one; recommend medium.
-- **[Context] Gather each person's messages** (free, local) — `bin/deep-context collect` with the chosen flags
-  (e.g. `--include-groups --deep-cap 1600`). `people_capped` is reliable for Gmail
-  and iMessage DMs but can under-report capped WhatsApp/group pools.
-- **[Context] Estimate the cost before anything is spent** — `bin/deep-context dry`
-  with the exact synthesis scope you intend to execute (`--force`, `--person`,
-  `--max-batches`, and other synthesis flags must be identical in both commands).
-  It reads, but never rewrites, the just-collected pools → "based on your settings, this is the cost"
-  (floor/ceiling + wall). The estimate reflects groups/cap because it reads the
-  actual collected bundles.
-- **[Context] Confirm the cost with you before spending** — present the estimate; get an explicit go. No spend
-  before this.
-- **[Context] Build a profile for each person from their messages** — run the
-  exact `bin/deep-context synthesize ...` command printed by `dry`, after approval;
-  this writes incremental confidence-gated fact checkpoints.
-- **[Context] Compose dossiers and the lookup index locally** — run
-  `bin/deep-context compose`; this deterministically renders the facts into
-  dossiers plus `index.json`/`index.md` with no provider calls.
-- **[Context] Double-check the profiles came out complete** — `bin/deep-context validate` → `validation.md`
-  (completeness score + flags). Act on `capped_underconfident` by raising `--deep-cap`.
+- `$deep-context lookup ...`, "who is <name/phone/email>?" -> run only
+  `bin/deep-context lookup ...` (free, read-only).
+- `$deep-context check` -> run only `bin/deep-context check` (free, read-only).
+- `$deep-context validate` -> run only `bin/deep-context validate`.
+- `$deep-context review`, "open the people/LinkedIn page" -> run only
+  `bin/deep-context review`; it auto-opens the current stage.
+- `$deep-context re-review` -> preview with `bin/deep-context re-review --dry-run`,
+  show the OpenAI estimate, get fresh approval, then run the exact paid command.
+- A bare `$deep-context`, "process/resolve/enrich my contacts", "build deep
+  context", or a full rerun -> use the complete staged workflow below.
 
-### Phase 2 — Merge people via the LLM judge
+Do not make a user who asked for a single read-only action walk the full build.
 
-- **[Merge] Find people who look like duplicates** — first `bin/deep-context cluster --dry-run`
-  for the count + cost (free): only genuinely ambiguous same/similar-name pairs are judged, so
-  this is a **small, bounded spend** (typically tens of pairs, well under $1) — don't improvise
-  an estimate or run an offline pass. Then `bin/deep-context cluster`: a high-reasoning judge
-  decides same-person holistically. A `same_person` edge at or above `--confidence`
-  (default 0.70) joins the pair. Writes `merge-candidates.csv` +
-  `merge-verdicts.csv` (audit).
-- **[Merge] Combine each set of duplicates into one person** — `bin/deep-context parents`.
-  Before running it, inspect the judge audit for suspect accepted edges; rerun
-  `cluster` with a stricter `--confidence` if needed.
-  Connected confirmed edges become a cluster, including transitive members. Every
-  member in that cluster is folded into one canonical parent and carries its best
-  edge confidence into review; parent construction does not apply a second 0.85
-  threshold. The later self-heal UI cannot split a bad duplicate component.
+## Privacy and approvals
 
-### Phase 3 — Verify each person's attached LinkedIn (self-heal)
+This skill intentionally reads Gmail and iMessage/WhatsApp DM bodies to build
+per-person dossiers. Raw samples stay gitignored under
+`.powerpacks/deep-context/raw/`; dossiers contain synthesized facts, not verbatim
+messages.
 
-Many ordinary imported people in `people.csv` have a `linkedin_url` stapled on
-during ingestion, often resolved on thin same-name evidence. Phase 3 throws a **high-reasoning judge** at
-each `(parent dossier ↔ attached LinkedIn)` pair: same human or not? It uses corroboration
-(employer / school / location / role / behavior) and especially **contradictions** — never
-the name alone (a big-company CEO profile stapled to your plumber of the same name is the
-case this catches).
+- iMessage group bodies are read only after explicit approval in this run and
+  only for small groups via `--include-groups`.
+- WhatsApp group bodies are never read.
+- iMessage collection needs Full Disk Access and may need to run in the user's
+  own terminal.
+- Never treat memory, an earlier transcript, or an earlier approval as consent
+  for group bodies, OpenAI, Parallel, RapidAPI cache misses, or Modal upload.
+- `bin/deep-context run` is intentionally disabled. Paid stages must be previewed
+  and approved separately.
 
-- **[Self-heal] Preview the LinkedIn check (free, nothing spent yet)** — `bin/deep-context reconcile --dry-run`. Prints
-  task count, link conflicts, and a cost floor/ceiling. No spend, no writes.
-- **[Self-heal] Confirm cost, then check each person's LinkedIn is really them** — present the estimate, get an explicit go, then
-  `bin/deep-context reconcile`. gpt-5.2, high reasoning, one call per attached profile.
-  Writes `reconcile/verdicts.csv` (+ `.jsonl` audit) and injects a `## LinkedIn identity`
-  section into each parent (verdict + supporting/contradicting evidence).
-- **[Self-heal] Record the fixes (remove wrong LinkedIns, keep the right ones)** — `reconcile` does NOT mutate
-  `people.csv`. It writes a **durable override table**,
-  `.powerpacks/network-import/overrides/review.csv`, that the **fan-in merge
-  re-applies every run** (so the heal survives re-merges). High-confidence verdicts become
-  entries: `confirmed ≥ threshold` → `action=verify` (merge annotates `linkedin_verified`
-  on the kept row); `wrong_person ≥ threshold` → `action=detach` (merge clears the wrong
-  link → since `people.csv` is LinkedIn-only, that person drops out). **Conflict
-  auto-resolution:** when one parent has several attached links and exactly one is
-  high-confidence `confirmed` while the rest are high-confidence `wrong_person`, the
-  confirmed becomes `verify` and the rest `detach`. Entries are keyed by `public_identifier`
-  (idempotent upsert) and carry an **`approved` column**: high-confidence rows are written
-  `approved=auto` (applied at merge); a user may set `yes`/`no` on any row. **A user-touched
-  row (`approved` ∈ {yes,no}) is sticky** — re-runs never overwrite it, so the table is the
-  durable, incrementally-curated record of decisions; the merge applies only `approved` ∈
-  {auto,yes}. Everything decided is previewed in **`reconcile/applied.csv`**
-  (parent, person, kept/detached, via=normal|conflict_resolved, confidence, reason) for
-  review. Report: "✅ N verify, 🔧 M detach (incl. R conflict-resolved), ❓ K need feedback".
-  `--confirm-threshold` defaults to 0.85. `reconcile --reapply` regenerates the override
-  from existing verdicts with no OpenAI spend. **Realize the heal** by re-running the
-  fan-in merge + index rebuild (Modal rebuilds the whole index) — the merge auto-reads the
-  override file.
-  **Contact consolidation:** when a parent has a kept link + detached siblings, reconcile also
-  writes `overrides/consolidate-people.csv` — contact-only rows that fold EVERY child's
-  emails/phones/per-channel `interaction_counts` onto the kept LinkedIn (trusting Phase 2's
-  grouping). The merge auto-ingests it and unions onto the surviving row (the real row supplies
-  the profile), so the kept person keeps the correct profile AND all the siblings' contacts,
-  while the wrong-link rows drop. Per-channel counts stay per-channel (never summed).
-- **[Self-heal] Add the unsure ones to your review list** — every judged row, including the
-  low-confidence / `needs_review` / ambiguous-conflict ones, lives in the SAME decisions table
-  `overrides/review.csv` as `approved=` **pending** (with a suggested `action`). The
-  user acts by setting `approved=yes`/`no` there (sticky) — there is no separate review-queue
-  file. Some people legitimately have **no LinkedIn** (flagged `linkedin_plausibly_absent`) —
-  they get no row and are left as-is; never force a match.
-- **[Self-heal] Look up the correct person for any wrong LinkedIn we removed** — find the *correct*
-  identity for detaches via `bin/deep-context reconcile-deep-research`. Eligible =
-  high-confidence `wrong_person` detaches the judge flagged for research, excluding
-  user-touched decisions, existing retargets, and parents that already kept a link. Run
-  `reconcile-deep-research --dry-run`, show the
-  Parallel.ai estimate, and get explicit approval for every paid run. Then pass
-  `--approve --budget <displayed-approved-estimate>` every time. The budget
-  defaults to zero so a changed queue cannot spend against an unstated ceiling.
-  Needs `PARALLEL_API_KEY`. Skipped: links flagged `linkedin_plausibly_absent`, or that already have a
-  `retarget`. When research finds a **correct LinkedIn**, it adds a `retarget` row (pending) for the
-  user to approve. It is idempotent across unresolved model-owned rows.
-  Optional synthetic path: only when the user explicitly wants research for people
-  likely to have no LinkedIn, use `--include-plausibly-absent` on both the dry and
-  approved research commands, then run `bin/deep-context assemble-synthetic`.
-  Completeness `>= 0.6` is written as `approved=auto` and will merge unless the
-  user rejects it during the hard-stop review; lower-completeness rows are pending.
-  Open the review UI for both groups before fan-in.
-- **[Self-heal] Open the review page to see each person, the LinkedIn we picked, and why** —
-  `bin/deep-context review` (opens a local web UI in the browser; free). This is the review
-  surface — it JOINS `reconcile/verdicts.jsonl` (parent, profile, the judge's reasoning) with
-  `overrides/review.csv` (decisions), so the user sees **one row per person**, expandable to the
-  LinkedIn(s) we matched, the verified/detached/pending state, the supporting/contradicting
-  evidence, and the message dossier. Quick filters (needs-review / verified / detached /
-  conflicts / fixed / my decisions), search, and a riskiest-first sort surface the low-confidence
-  ones. Every **Keep / Detach / Fix LinkedIn** click autosaves straight into `overrides/review.csv`
-  (the same durable table the merge re-applies) — no CSV editing by hand. (`reconcile/summary.md`
-  + `applied.csv` still exist as a text fallback, but the UI is the review surface now.)
-- **[Self-heal] Wait for you to finish reviewing before continuing** — this is a **hard stop**. Tell the
-  user the review page is open and say *"keep / detach / fix the links you want, then let me know
-  when you're done and I'll continue."* Do **not** proceed to apply-retargets until they reply.
-  Decisions are saved as they click (sticky `approved` rows in `overrides/review.csv`). Opening
-  the page is not the same as the user having reviewed it — never auto-advance past this step.
-- **[Self-heal] Re-attach the correct LinkedIns you approved** — `bin/deep-context apply-retargets`. For each decisions
-  row with `action=retarget` and `approved` ∈ {auto,yes}, it enriches the correct LinkedIn
-  (cache-first; RapidAPI on a miss) and writes an enriched
-  re-attach row to `.powerpacks/network-import/overrides/retarget-people.csv`, carrying the
-  contact's emails/phones/interaction. The fan-in merge **auto-ingests** that file (old wrong
-  link detached → dropped; correct enriched row kept). Realize on the next merge + index rebuild.
-  Before invoking it, disclose that approved LinkedIn URLs are sent to RapidAPI on
-  cache misses and get explicit approval; the primitive has no measured preview.
+## Repo root
 
-**ALWAYS end the run with a summary of what changed and why.** After Phase 3, present a short
-report to the user, every time (do NOT list the verified/unchanged links — only what changed):
-- **Detached:** M wrong links removed — list them with the one-line reason (e.g. "<name>:
-  the attached LinkedIn is a big-company exec, but your contact is a local tradesperson of the
-  same name").
-- **Retargeted:** R people re-attached to a correct LinkedIn — for each, the new URL **and the
-  reason** (why the new profile is the right person, e.g. "matched the wedding-photography
-  business + SoCal location from your messages").
-- **Needs your input:** K pending rows in the decisions table (`overrides/review.csv`) — low-confidence verdicts + `retarget` proposals to approve.
-The interactive version of this is **`bin/deep-context review`** (the UI — present that to the
-user). `reconcile/summary.md` carries the same content as text if you need to quote it inline.
-Keep it scannable; the user runs this repeatedly to fix things, so make "what changed and why"
-obvious each time.
+Run from the canonical Powerpacks repo: `$POWERPACKS_REPO_ROOT`, otherwise
+`~/powerpacks`, otherwise `~/workspace/powerpacks`. Use `uv run --project .`.
 
-### Phase 4 — Realize the fixes (rebuild people.csv + the Modal search index)
+## Full workflow
 
-The self-heal writes decisions to `overrides/review.csv` (+ consolidate/retarget files) but does
-NOT change `people.csv` directly — the fixes land only when you re-run the **fan-in merge** (which
-auto-applies those files) and **rebuild the index**. This reuses `$setup`'s exact steps. Run it
-AFTER the user is done reviewing/approving.
+Create a visible plan with these exact phases and keep it current:
 
-- **[Realize] Apply your decisions (fan-in merge)** — `bin/deep-context realize` (or directly:
-  `uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in --people-csv .powerpacks/network-import/merged/people.csv`).
-  This goes through `merge_network_sources`, which auto-reads `overrides/review.csv` (applies the
-  `auto`/`yes` detach/verify rows), `consolidate-people.csv`, and `retarget-people.csv` — so wrong
-  links drop, contacts consolidate, and approved retargets re-attach, all in the rebuilt
-  `merged/people.csv`. Free + local.
-- **[Realize] Rebuild the search index on Modal** — `uv run --project . python
-  packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv`.
-  First disclose that the entire merged CSV is uploaded to a workspace-shared
-  Modal volume under operator-prefixed paths (shared caches; all-zero fallback when
-  `POWERPACKS_OPERATOR_ID` is absent) and obtain explicit approval.
-  Server-side on Modal (needs Powerset runtime keys; spend-bearing). **Expect 5–30+ min, mostly
-  quiet** — run it in the background, keep the step `in_progress` until it exits 0, and reassure
-  the user while it runs (don't panic at the silence). This is the same indexer `$setup` uses.
+```text
+[Scope] Check sources, people, and unresolved candidates
+[Context] Confirm the owner profile
+[Context] Confirm group-body access and dossier depth
+[Context] Collect messages for people and candidates
+[Context] Preview and approve dossier synthesis
+[Context] Build and validate dossiers
+[Merge] Preview and approve duplicate resolution
+[Merge] Build canonical people
+[People] Open the Yes/No people stage and wait for completion
+[Identify] Preview and approve attached-LinkedIn checks
+[Identify] Preview and approve one lookup for Added candidates and eligible wrong links
+[Identify] Assemble researched profiles without LinkedIn
+[LinkedIn] Open the Yes/No LinkedIn stage and wait for completion
+[Identify] Apply approved replacement LinkedIns
+[Realize] Fan-in approved decisions to people.csv
+[Realize] Approve and rebuild the Modal index
+[Realize] Validate the index
+```
 
-Paid phases must be run as separate preview/approval/execute steps. The
-`bin/deep-context run` shortcut is intentionally disabled because one chained
-command cannot collect all required approvals. Full surface:
-`owner|check|dry|run|collect|synthesize|compose|cluster|parents|reconcile|re-review|
-reconcile-deep-research|assemble-synthetic|apply-retargets|realize|validate|lookup|probe|purge-raw`.
+Mark a no-op complete; do not silently drop it. A `--force` rerun keeps every
+gate and only adds `--force` to incremental collection/synthesis commands.
 
-### Step 1 — collect (local, free, reads bodies)
+### 1. Scope and owner
+
+Run:
 
 ```bash
-uv run --project . python \
-  packs/ingestion/primitives/deep_context/collect_person_context.py
+bin/deep-context check
+uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/status.py status
 ```
 
-Streams each person's Gmail + iMessage-DM + WhatsApp-DM messages into one ephemeral
-bundle per person (≥1 message). Each source pool can contribute up to `--deep-cap`
-(1600), then the combined bundle is character-capped. `messages_available` is a true
-count for Gmail and iMessage DMs but only a post-cap count for WhatsApp and opted-in
-groups, so `people_capped` can under-report those two sources. Test with
-`--limit 5` or `--person <id>`. Idempotent: re-runs skip existing bundles (`--force`).
+Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per
+source. Stop on unreadable iMessage Full Disk Access.
 
-### Step 0 — owner context (now the FIRST step, free on a cache hit)
-
-`bin/deep-context owner --linkedin-url <you> --email <you>` builds
-`.powerpacks/deep-context/owner.json` (YOUR bio timeline) from the RapidAPI cache — name,
-emails, education + work with year ranges. Synthesis injects it as a reasoning anchor so the
-model infers **shared context** — same school/employer/place/era — from message content,
-rendered as a "Shared context with you" dossier section. It's `{name, emails, education:
-[{school,start,end}], work:[{company,title,start,end}], locations, notes}`.
-
-Overlaps are only asserted when message content supports them (not date-matching
-alone). Run `synthesize --no-owner` to skip it. (owner.json is gitignored — local only.)
-You can also get exact LinkedIn dates via
-`packs/search/primitives/fetch_person_profile/fetch_person_profile.py --linkedin-url <you>`
-(checks local cache first; RapidAPI only on a cache miss).
-
-### Step 2 — synthesize (paid OpenAI; confirm cost)
+Inspect `.powerpacks/deep-context/owner.json`. If it exists, show and confirm its
+non-secret identity fields. If it does not, ask for the user's LinkedIn URL and
+email. Disclose that a profile-cache miss calls RapidAPI and get approval before:
 
 ```bash
-# dry-run shows estimated_cost_usd, then drop --dry-run to spend
-uv run --project . python \
-  packs/ingestion/primitives/deep_context/synthesize_person_context.py --dry-run
+bin/deep-context owner --linkedin-url <url> --email <email>
 ```
 
-Fans out parallel Responses calls (gpt-5.2, medium reasoning). Per person it
-**groks incrementally** — refining one running profile batch-by-batch (newest
-first) and stopping at `--target-confidence` (0.85), `--saturation-rounds` (2)
-stale batches, exhaustion, or `--max-batches` (20). Checkpointed per person
-(`facts/<id>.jsonl`) — resumes after interruption. `--dry-run` prints the cost
-floor/ceiling. Tune with `--reasoning-effort high`, `--deep-cap` (collection),
-`--concurrency`, `--no-owner`.
+### 2. Message scope
 
-### Step 3 — compose (local, free)
+Ask both questions in this run:
+
+1. Group bodies: DM-only (default) or small iMessage groups
+   (`--include-groups`). Explain that group mode reads other participants'
+   messages and costs more. Never include WhatsApp group bodies.
+2. Depth per person/channel:
+   - shallow: `--deep-cap 400`
+   - medium: `--deep-cap 1600` (default/recommended)
+   - deep: `--deep-cap 6400`
+
+For full processing, candidates are always included:
 
 ```bash
-uv run --project . python \
-  packs/ingestion/primitives/deep_context/compose_dossier.py
+bin/deep-context collect --include-candidates --deep-cap <cap> [--include-groups] [--force]
 ```
 
-Deterministically merges each person's facts into `dossiers/<slug>.md` and writes
-the lookup `index.json` + `index.md`. To enrich the `## Summary` prose, optionally
-spawn a Claude **sub-agent** per dossier afterward (keeps compose itself free/fast).
+Collection is local/free. Preserve the exact approved flags through synthesis.
 
-### Step 4 — merge candidates (LLM judge; small spend)
+### 3. Dossiers
+
+Run the free estimate:
 
 ```bash
-uv run --project . python \
-  packs/ingestion/primitives/deep_context/cluster_merge_candidates.py
+bin/deep-context dry
 ```
 
-Blocking (shared phone/email/email-local-part/name) + a name-similarity gate only
-pick which pairs are worth judging — the DECISION is always a **high-reasoning LLM
-judge** that weighs ALL evidence holistically (identity, role in your life,
-content/behavior, and tone where available). Writes `merge-candidates.csv` (+ a
-full `merge-verdicts.csv` audit log incl. rejections) and injects a "Possible same
-person" section with the judge's reason. ~$0.004/pair (only ambiguous pairs are
-judged). `--no-llm` is an offline/test fallback only. `cluster` does not itself
-mutate `people.csv`, but `parents` automatically folds accepted edges into
-transitive components after the required audit.
+Show its contact count and cost floor/ceiling. Get explicit approval, then run
+the exact `bin/deep-context synthesize ...` command printed by `dry`. Do not
+invent a different scope. Synthesis also produces the model's display-only
+`network_worth` recommendation and reason.
 
-### Final cleanup — purge raw bodies
-
-Do this only after composition, duplicate judging, parent construction, LinkedIn
-reconciliation, and any debugging are complete. Those later stages use raw bundles
-for identity/contact fields and short verbatim judge samples.
+Then run:
 
 ```bash
-rm -rf .powerpacks/deep-context/raw
+bin/deep-context compose
+bin/deep-context validate
 ```
 
-### Lookup (the user-facing query)
+### 4. Duplicate people
+
+Preview first:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/deep_context/lookup_person.py \
-  --name "Jane Doe"
-uv run --project . python packs/ingestion/primitives/deep_context/lookup_person.py \
-  --phone "+1 415 555 1234"
+bin/deep-context cluster --dry-run
 ```
 
-Pure local index read (no DB, no network). `--email` and `--json` also supported;
-name falls back to an all-tokens fuzzy match.
+Show the estimate and get explicit approval before `bin/deep-context cluster`.
+Then inspect its audit output and run:
 
-## Outputs
-
-```
-.powerpacks/deep-context/
-├── raw/<person_id>.json        ephemeral sampled bodies (gitignored; purge)
-├── facts/<person_id>.jsonl     structured facts per chunk (checkpoint)
-├── dossiers/<slug>.md          one dossier per person
-├── index.json / index.md       name/phone/email -> slug lookup + catalog
-├── merge-candidates.csv / .md   likely same-person clusters
-├── parents/<slug>.md            canonical person (one per real person)
-└── reconcile/                   Phase 3 LinkedIn self-heal
-    ├── verdicts.jsonl / .csv     ⭐ the review UI's display source (parent + profile + reasoning)
-    ├── summary.md                text fallback of what changed + what needs review
-    ├── applied.csv               preview of what the override will do (kept/detached) — drill-down
-    └── deep-research/            Parallel.ai re-research of wrong_person detaches
-#   review it interactively:  bin/deep-context review  (joins verdicts.jsonl ⨝ review.csv)
-
-# durable self-heal decisions (fan-in MERGE inputs, re-applied every merge):
-.powerpacks/network-import/overrides/review.csv   detach|verify|retarget + approved
-.powerpacks/network-import/overrides/retarget-people.csv      enriched re-attach rows
-.powerpacks/network-import/overrides/consolidate-people.csv   children's contacts folded onto kept link
+```bash
+bin/deep-context parents
 ```
 
-## Performance & scale (measured)
+Candidate dossiers participate, so candidate-to-existing-person merges happen
+with message context before any paid identity lookup. A candidate merged into an
+existing person does not reappear in the People queue or paid lookup; reconcile
+folds its email/phone/channel metadata onto the kept LinkedIn instead.
 
-Benchmarked on ~300 contacts (4.6 GB msgvault + 165k-message chat.db), Apple silicon:
+### 5. People decision gate
 
-| Stage | Speed | Peak RAM | Cost |
-|---|---|---|---|
-| collect | ~250 contacts/s (~1,800 msgs/s) | **74 MB** | free |
-| synthesize | ~10 chunks/s (high concurrency) | **187 MB** | ~$0.005/contact |
-| compose | <1 s | <100 MB | free |
-| cluster | depends on judged pairs | <100 MB | OpenAI; preview with `cluster --dry-run` |
+Launch the first binary stage in a background terminal:
 
-**Measured Phase 1 dossier build (~300 contacts): ≈30 s, ≈$1.40.** This excludes
-LinkedIn reconciliation, optional recovery, retarget hydration, and Modal indexing.
-Phase 1 synthesis scales approximately linearly:
-~1k → ≈$5 / ~2 min · ~3k → ≈$14 / ~4 min · ~10k → ≈$48 / ~14 min. Memory stays
-**flat (~200 MB)** regardless of contact count — it's bounded by `--concurrency`,
-not corpus size (every source query is per-person `LIMIT`-bounded; one person's
-window in memory at a time). `synthesize --dry-run` prints `estimated_cost_usd`
-and `estimated_wall_seconds` before any spend.
+```bash
+bin/deep-context review --stage worth
+```
 
-**Incremental deepening:** collection pools up to `--deep-cap` (default 1600)
-recent messages per source and applies a combined character cap. The availability
-count is exact for Gmail and iMessage DMs but post-cap for WhatsApp and group bodies,
-so `people_capped` can under-report those sources. Synthesis then **groks
-incrementally**: it refines ONE running profile
-batch-by-batch (newest first) and stops when the profile reaches
-`--target-confidence` (0.85), OR `--saturation-rounds` (2) batches add nothing
-new, OR it runs out of pooled messages, OR it hits `--max-batches` (20). Each
-dossier reports what happened: _"grokked 1600 of 101558 messages over 4 batches
-(stopped: exhausted)."_ Most contacts finish in one batch; only deep
-relationships spend more.
+The main queue shows only people the model marked `maybe`, one at a time with
+Yes/No. Model Yes starts in the editable Added pile. Model No/spam, user No,
+and legacy Exclude share the editable Rejected pile. The user can inspect either
+pile and move people between them. When no maybes remain, the UI reveals one
+Continue button; completing it records the handoff in the manifest. Everyone
+currently in Added is eligible for the separately approved paid lookup.
 
-**Richness (message-derived only):** relationship 99%, employer ~73%, title ~29%,
-location ~28%, school ~5%, ~4 topics, ~2.5 timeline events (iMessage people
-average ~4.4 events). Career fields (title/school) are low because message bodies
-rarely state them — they live in `people.csv` (LinkedIn) and are intentionally
-NOT fused here, so the dossier reflects pure message inspection.
+Hard stop. Poll this fixed file:
 
-## Notes
+```text
+.powerpacks/deep-context/review/manifest.json
+```
 
-- Single fixed output dir, overwrite-in-place; manifest + outputs only (no ledgers,
-  no run ids).
-- People with **0 messages produce no dossier** — cost scales with real interaction.
-- **Incremental re-runs:** collect skips people whose bundle exists; synthesize skips
-  people whose facts exist. Only *new* people are processed. To pull *new messages*
-  for an existing person, re-run with `--force`.
+Continue only when all are true:
+
+- `stage == "worth"`
+- `status == "completed"`
+- `counts.pending == 0`
+- the manifest was rewritten after this stage was launched
+
+Do not infer completion from the browser opening, from model decisions, from
+`review.csv`, or only from the user saying "done". If the file is absent, stale,
+malformed, or for the wrong stage, keep waiting and report the exact condition.
+
+### 6. Identity preparation and one lookup
+
+First preview the attached-LinkedIn judge:
+
+```bash
+bin/deep-context reconcile --dry-run
+```
+
+Show the OpenAI estimate, get fresh approval, then run
+`bin/deep-context reconcile`.
+
+Next preview the single Parallel pass. Candidate eligibility is the current
+Added pile (model Yes unless the user removed it, plus anyone the user added).
+The command also covers eligible wrong-link recoveries and plausibly-absent
+LinkedIns:
+
+```bash
+bin/deep-context reconcile-deep-research --dry-run --include-candidates --include-plausibly-absent
+```
+
+Show gross eligible, completed-result reuse, duplicate handles skipped, net-new
+submissions, price/person, total estimate, and the proposed budget. The approval
+amount is based on net-new submissions only.
+After explicit approval, always pass the approved cap:
+
+```bash
+bin/deep-context reconcile-deep-research --include-candidates --include-plausibly-absent \
+  --approve --budget <approved-estimate>
+```
+
+Budget defaults to zero; never omit it on an approved run. Then build local
+fallback profiles for researched Yes people with no real LinkedIn:
+
+```bash
+bin/deep-context assemble-synthetic
+```
+
+### 7. LinkedIn decision gate
+
+Launch the second binary stage:
+
+```bash
+bin/deep-context review --stage linkedin
+```
+
+The first review server stays alive. This command activates and reuses it when
+port 8765 already belongs to the deep-context reviewer, so do not kill the first
+background process or start a second ad-hoc server. The waiting page also advances
+automatically when lookup artifacts appear.
+
+For a found/existing LinkedIn the question is simply whether it is the right
+person. Yes verifies it; No detaches only that link, never rejects the person.
+"Use a different LinkedIn" is secondary. For a synthetic result, Yes/No decides
+whether to add the researched no-LinkedIn profile.
+
+Hard stop and poll the same manifest. Continue only when:
+
+- `stage == "linkedin"`
+- `status == "completed"`
+- `counts.pending == 0`
+- it was rewritten after the LinkedIn stage launched
+
+### 8. Apply and realize
+
+Before applying replacement URLs, disclose that cache misses call RapidAPI and
+get explicit approval. Then:
+
+```bash
+bin/deep-context apply-retargets
+bin/deep-context realize
+```
+
+`realize` is local/free and rebuilds
+`.powerpacks/network-import/merged/people.csv` from the durable Yes/No,
+verify/detach/retarget, consolidation, and synthetic decisions.
+
+For the Modal index, disclose that the merged CSV uploads to the configured
+workspace and provider processing may take 5-30+ quiet minutes. Get explicit
+approval, then run and keep polling the same live process:
+
+```bash
+uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
+  --people-csv .powerpacks/network-import/merged/people.csv
+```
+
+Finally:
+
+```bash
+uv run --project . python packs/indexing/primitives/validate_search_index/validate_search_index.py
+```
+
+Pass only on `status: ok`.
+
+## Completion report
+
+Report terse counts: people/candidates dossiered, duplicate merges, explicit
+worth Yes/No, lookup results, LinkedIns verified/detached/retargeted, synthetic
+profiles accepted, final merged people count, and index validation. Mention any
+still-unresolved Yes people explicitly.
+
+## Durable artifacts
+
+```text
+.powerpacks/deep-context/raw/                    ephemeral sampled bodies + manifest
+.powerpacks/deep-context/facts/                  extracted facts + manifest
+.powerpacks/deep-context/dossiers/               dossiers + index
+.powerpacks/deep-context/parents/                canonical people + manifest
+.powerpacks/deep-context/reconcile/              verdicts + reconcile manifest
+.powerpacks/deep-context/review/manifest.json     current human stage completion
+.powerpacks/deep-context/review/avatars/          locally cached live profile images
+.powerpacks/network-import/overrides/review.csv   durable worth/link decisions
+.powerpacks/network-import/overrides/retarget-people.csv
+.powerpacks/network-import/overrides/synthetic-people.csv
+.powerpacks/network-import/merged/people.csv
+```
+
+The product/algorithm detail remains in
+`packs/ingestion/docs/deep-context-pipeline.md`; read it only when diagnosing a
+failed primitive or changing implementation behavior.

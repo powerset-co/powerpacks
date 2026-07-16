@@ -3,7 +3,7 @@
 
 Default mode is free and local: apply the shared identity directory to the
 discovered Gmail queues, materialize `import/gmail/people.csv`, and write the
-still-unresolved contacts to `import/gmail/candidates.csv` for the deep-setup
+still-unresolved contacts to `import/gmail/candidates.csv` for the deep-context
 processing layer (which owns Parallel.ai resolution + RapidAPI enrichment).
 `--resolve-legacy` restores the old in-import Parallel + RapidAPI behavior.
 """
@@ -243,7 +243,7 @@ def queue_row_to_candidate(row: dict[str, str], *, cached_negative: bool) -> dic
 
 def write_gmail_candidates(artifacts: dict[str, Any], import_dir: Path) -> dict[str, Any]:
     """Union the post-directory unresolved (+ cached-negative, flagged) queues
-    into import/gmail/candidates.csv for the deep-setup processing layer."""
+    into import/gmail/candidates.csv for the deep-context processing layer."""
     candidates_csv = import_dir / "candidates.csv"
     by_key: dict[str, dict[str, str]] = {}
     skipped = {"no_email": 0, "duplicate_email": 0}
@@ -307,7 +307,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "gmail_account_emails": emails,
             # Directory-only default: the Parallel stage self-skips when
             # resolve_gmail_linkedin is falsy, and enrich_resolved=False keeps
-            # apply-resolutions free of RapidAPI hydration. deep-setup owns both.
+            # apply-resolutions free of RapidAPI hydration. deep-context owns both.
             "resolve_gmail_linkedin": resolve_legacy,
             "enrich_resolved": resolve_legacy,
             "approve_parallel_spend": bool(args.approve_parallel_spend),
@@ -411,7 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--operator-id", default="local")
     parser.add_argument(
         "--resolve-legacy", action="store_true",
-        help="Legacy in-import identity resolution: Parallel.ai + RapidAPI enrichment (deep-setup owns this now)",
+        help="Legacy in-import identity resolution: Parallel.ai + RapidAPI enrichment (deep-context owns this now)",
     )
     parser.add_argument("--approve-parallel-spend", action="store_true")
     parser.add_argument("--force", action="store_true", help="Re-run even if the import manifest is current (no no-op skip)")

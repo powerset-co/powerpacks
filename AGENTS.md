@@ -306,7 +306,7 @@ Routes:
   `packs/indexing/skills/build-local-search-index/SKILL.md`
 - `$setup`, one-time LinkedIn-only setup: import LinkedIn Connections.csv +
   fan-in merge + Modal index + validate + a final step that suggests missing
-  sources and offers `$deep-setup` processing (for Gmail use `$import-gmail`;
+  sources and offers `$deep-context` processing (for Gmail use `$import-gmail`;
   for iMessage/WhatsApp use `$import-messages`) →
   `packs/ingestion/skills/setup/SKILL.md`
 - `$sales-nav-search`, Sales Navigator leads, LinkedIn lead searches →
@@ -323,7 +323,7 @@ Routes:
   sync only (discover → match vs LinkedIn/Gmail → import matched people + a
   research-candidates pool → fan-in merge → suggest/process tail); no LLM,
   research, review, or index build in-skill — processing/identity
-  resolution/indexing is `$deep-setup`; local
+  resolution/indexing is `$deep-context`; local
   only, never uploads to Powerset →
   `packs/ingestion/skills/import-messages/SKILL.md`
 - `$import-whatsapp`, isolated WhatsApp metadata sync/export through wacli; no
@@ -337,22 +337,17 @@ Routes:
 - `$import-gmail`, Gmail, email, contact sync only: msgvault setup + sync +
   free directory-only import (matched people + a research-candidates pool) +
   fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index
-  build in-skill — processing/identity resolution/indexing is `$deep-setup` →
+  build in-skill — processing/identity resolution/indexing is `$deep-context` →
   `packs/ingestion/skills/import-gmail/SKILL.md`
-- `$deep-setup`, enrich my contacts/network, process my contacts, resolve my
-  imported contacts, the yes after an import's "do you want to enrich your
-  contacts?" ask — the
-  post-import processing layer (dossiers over people + the imports' research
-  candidates → duplicate merge → LinkedIn self-heal → ONE dossier-informed
-  Parallel reverse lookup → synthetic profiles → review → fan-in + Modal index
-  + validate); spend-gated throughout, hard-stop human review →
-  `packs/ingestion/skills/deep-setup/SKILL.md`
 - `$enrich-email-markers`, gmail LLM enrichment, mine email bodies for LinkedIn
   markers, preview the context/markers we'd send to an LLM →
   `packs/ingestion/skills/enrich-email-markers/SKILL.md`
-- `$deep-context`, build deep context, per-person dossier from message bodies
-  (Gmail + iMessage/WhatsApp DMs), "context/dossier on a person", "who is
-  <phone/name> in my messages", find same-person/merge candidates →
+- `$deep-context`, process/resolve/enrich imported contacts, build deep context,
+  per-person dossier from message bodies (Gmail + iMessage/WhatsApp DMs),
+  "context/dossier on a person", "who is <phone/name> in my messages", find
+  same-person/merge candidates, staged worth/LinkedIn review, candidate lookup,
+  synthetic profiles, fan-in + Modal index + validate. This is the single
+  post-import processing surface; `$deep-setup` is retired →
   `packs/ingestion/skills/deep-context/SKILL.md`
 - `$logbook`, raw verbatim message archive from a people CSV, "build a logbook",
   "archive/dump everything I've said with these people", "every email/text/whatsapp

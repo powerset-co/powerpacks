@@ -40,7 +40,7 @@ usage: bin/deep-context <command> [args]
   parents      build canonical parent dossiers (free)
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
-  review       open the self-heal review UI (local, free)
+  review       open the staged people / LinkedIn decision UI (local, free)
   assemble-synthetic  build synthetic people-rows from deep-research output for
                people with NO real LinkedIn (free, local; approved rows merge)
   re-review    LLM re-review: refresh all non-user decisions + spam screen (spends
@@ -131,8 +131,8 @@ case "$cmd" in
   assemble-synthetic)
     # Free, local: build synthetic people-rows from EXISTING deep-research artifacts
     # for people with no real LinkedIn (see packs/ingestion/docs/synthetic-profiles-plan.md).
-    # High-completeness rows are approved=auto and flow into the next fan-in merge;
-    # the rest wait pending in overrides/synthetic-people.csv.
+    # A legacy approved=auto value is only machine advice in the staged flow; every
+    # candidate-origin row still waits for explicit Yes/No in the LinkedIn UI.
     "${PY[@]}" "$PKG.assemble_synthetic_profile" "$@"
     ;;
   re-review)
@@ -143,10 +143,8 @@ case "$cmd" in
     "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
     ;;
   review)
-    # Phase 3 review UI (local, free): a parent-grouped web view of the self-heal —
-    # each row is a person; expand to see the LinkedIn(s) we matched, the reasoning, and
-    # who got verified/detached. Keep / detach / fix each link; autosaves straight into
-    # overrides/review.csv (the same table the fan-in merge re-applies). Opens your browser.
+    # Local/free staged UI. Human choices are binary; the fixed review manifest tells
+    # the agent when worth or LinkedIn review is explicitly complete.
     "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
     ;;
   reconcile-deep-research)

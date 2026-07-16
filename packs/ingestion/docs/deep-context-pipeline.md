@@ -8,11 +8,9 @@ This guide explains the product and trust boundaries. The executable contract is
 the [`deep-context` skill](../skills/deep-context/SKILL.md); the primitives remain
 the authority for schemas and CLI behavior.
 
-The same primitives power [`$deep-setup`](deep-setup-pipeline.md), the
-orchestrated post-import processing flow that also covers the imports'
-research candidates, the network-worth triage, and the index rebuild.
-`$deep-context` remains the ad-hoc surface: dossier lookups, re-reviews, and
-the review UI over existing artifacts.
+The same skill owns both the orchestrated post-import flow (including unresolved
+research candidates, worth triage, identity resolution, and index rebuild) and
+the narrow ad-hoc dossier lookup/re-review commands.
 
 ## At a glance
 
@@ -24,8 +22,8 @@ the review UI over existing artifacts.
   LinkedIn profiles. Optional Parallel research looks for a replacement identity.
 - **Human control:** core OpenAI and Parallel stages have measured previews and
   current-run approval. RapidAPI cache misses and Modal require explicit disclosure
-  and approval but do not yet have equivalent measured child gates. Browser review
-  is a hard stop before decisions are realized.
+  and approval but do not yet have equivalent measured child gates. Binary people
+  and LinkedIn browser stages are separate hard stops before decisions are realized.
 - **Privacy exception:** this skill intentionally reads message bodies. Direct
   messages are the default; small iMessage group bodies require explicit opt-in.
 
@@ -33,59 +31,35 @@ the review UI over existing artifacts.
 
 ```mermaid
 flowchart TD
-    A["$deep-context request"] --> B{"Requested path"}
-    B -->|lookup, check, validate| C["Free local command<br/>use existing artifacts"]
-    B -->|review| D["Open local review UI<br/>actions update review.csv"]
-    B -->|full build| E{"Owner profile cached?"}
-    E -->|Yes| E2["Build owner context<br/>from local cache"]
-    E -->|No| E0["Approve RapidAPI<br/>owner lookup"]
-    E0 --> E1["Hydrate owner profile<br/>through RapidAPI"]
-    E1 --> E2
-
-    E2 --> F["Check Gmail, iMessage,<br/>WhatsApp, and keys"]
-    F --> G{"Approve collection scope"}
-    G -->|default| H["Collect Gmail + DM bodies<br/>and iMessage group names"]
-    G -->|explicit group opt-in| I["Also collect bodies from<br/>small iMessage groups"]
-    H --> J["Ephemeral raw bundles"]
-    I --> J
-
-    J --> K["Preview and approve<br/>OpenAI synthesis"]
-    K --> L["Adaptive fact extraction<br/>one checkpoint per person"]
-    L --> M["Compose Markdown dossiers<br/>and lookup index locally"]
-    M --> N["Validate completeness"]
-
-    N --> O["Preview and approve<br/>duplicate judging"]
-    O --> P["OpenAI judges plausible pairs<br/>with facts + message samples"]
-    P --> P0["Inspect accepted-edge audit<br/>before creating parents"]
-    P0 --> Q["Build canonical parent dossiers<br/>from connected components"]
-
-    Q --> R["Preview and approve<br/>LinkedIn reconciliation"]
-    R --> S["OpenAI compares facts + message samples<br/>with attached LinkedIn"]
-    S --> T["Write durable proposed actions<br/>review.csv"]
-    T --> U{"Optional identity recovery"}
-    U -->|approved| V["Parallel public-web research"]
-    U -->|skip| D
-    V --> W["Propose a retarget or explicitly<br/>requested synthetic profile"]
-    W --> D
-
-    D --> X{"User finishes review"}
-    X --> X1{"Approved retarget needs<br/>RapidAPI cache miss?"}
-    X1 -->|Yes| X2["Approve RapidAPI<br/>retarget hydration"]
-    X2 --> X3["Hydrate approved retarget"]
-    X3 --> Y["Fan in reviewed overrides locally"]
-    X1 -->|No| Y
-    Y --> Z0["Approve Modal upload<br/>and provider processing"]
-    Z0 --> Z["Upload merged people.csv<br/>to workspace-shared Modal volume"]
-    Z --> AA["Build and download<br/>local-search.duckdb"]
+    A["$deep-context full processing"] --> B["Check sources, people, candidates"]
+    B --> C{"Approve message scope"}
+    C --> D["Collect people + candidate messages"]
+    D --> E{"Preview + approve OpenAI synthesis"}
+    E --> F["Compose dossiers and worth advice"]
+    F --> G{"Preview + approve duplicate judging"}
+    G --> H["Build canonical people"]
+    H --> I["People UI: Add to network? Yes / No"]
+    I --> J{"Worth manifest completed"}
+    J --> K{"Preview + approve LinkedIn checks"}
+    K --> L["Judge attached LinkedIns"]
+    L --> M{"Preview + approve Parallel lookup"}
+    M --> N["Lookup explicit user-Yes candidates only"]
+    N --> O["Assemble no-LinkedIn researched profiles"]
+    O --> P["LinkedIn UI: right person? Yes / No"]
+    P --> Q{"LinkedIn manifest completed"}
+    Q --> R{"Approve RapidAPI cache misses"}
+    R --> S["Apply retargets + fan-in people.csv"]
+    S --> T{"Approve Modal upload/build"}
+    T --> U["Build and validate index"]
 
     classDef gate fill:#fff4d6,stroke:#a66b00,color:#3d2a00,stroke-width:2px;
     classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
-    class E,E0,G,K,O,R,U,X,X1,X2,Z0 gate;
-    class C,D,E2,F,H,I,J,M,N,P0,Q,T,Y local;
-    class E1,L,P,S,V,X3,Z cloud;
-    class AA output;
+    class C,E,G,J,K,M,Q,R,T gate;
+    class B,D,F,H,I,L,O,P,S local;
+    class N cloud;
+    class U output;
 ```
 
 Approval nodes are wait points on the normal path, not separate failure states.
@@ -106,10 +80,11 @@ commands from `SKILL.md` instead.
 | Collection | Streams one person at a time from msgvault, Messages, and wacli. `--deep-cap` applies independently to Gmail, iMessage DM, WhatsApp DM, and optional group pools; a character safety cap bounds the combined bundle. | Local, read-only source access. | `raw/<person_id>.json` |
 | Synthesis | Sends bounded message samples plus owner context to OpenAI. It deepens until confidence, saturation, exhaustion, or the batch limit. | OpenAI. | `facts/<person_id>.jsonl` |
 | Composition | Deterministically renders facts into dossiers and indexes names, phones, and emails. | Local. | `dossiers/*.md`, `index.json`, `index.md` |
-| Duplicate merge | Generates plausible pairs locally, then asks OpenAI using structured facts and short verbatim message samples. Accepted edges at `--confidence` (default `0.70`) form transitive clusters; inspect the edge audit before parent construction because the later UI cannot split them. | Local plus OpenAI. | `merge-candidates.csv`, `merge-verdicts.csv`, `parents/*.md` |
-| LinkedIn self-heal | Compares facts and short verbatim message samples with each attached profile, then proposes verify, detach, retarget, exclude, or review actions. It does not edit `people.csv`. | Local plus OpenAI. | `reconcile/*`, `overrides/review.csv` |
-| Identity recovery | Researches explicitly approved, model-recommended unresolved identities. The default finds retargets. Researching plausibly absent LinkedIns and assembling synthetic profiles requires explicit `--include-plausibly-absent` opt-in. User-touched rows are excluded because the current override schema cannot hold a sticky decision and a pending retarget simultaneously. | Parallel.ai, then local cache/RapidAPI for approved retargets. | `reconcile/deep-research/*`, override CSVs |
-| Review | Joins dossiers, verdicts, profiles, and durable decisions. Keep, detach, fix, exclude, reset, and synthetic decisions autosave. | Local browser. | Updated override CSVs |
+| Duplicate merge | Generates plausible pairs locally, then asks OpenAI using structured facts and short verbatim message samples. Accepted edges at `--confidence` (default `0.70`) form transitive clusters; inspect the edge audit before parent construction because the later UI cannot split them. A candidate merged with an existing person skips standalone review/research and contributes its contact metadata to that person. | Local plus OpenAI. | `merge-candidates.csv`, `merge-verdicts.csv`, `parents/*.md` |
+| People decision | Shows only unresolved imports the model is unsure about, one at a time with Yes/No. Model Yes starts in Added; model No/spam starts in Rejected; both piles stay visible and editable. | Local browser. | `overrides/review.csv`, `review/manifest.json` |
+| LinkedIn self-heal | Compares facts and short verbatim message samples with attached profiles after the people gate. It does not edit `people.csv`. | Local plus OpenAI. | `reconcile/*`, `overrides/review.csv` |
+| Identity recovery | After a separate spend preview and approval, researches unresolved candidates currently in Added, plus eligible wrong-link recoveries. Model Yes starts Added but a user No always removes it; a user Yes can rescue model Maybe/No. The preview separates gross eligibility from completed-result reuse and duplicate handles, and prices only net-new Parallel submissions. | Parallel.ai, then local cache/RapidAPI for approved retargets. | `reconcile/deep-research/*`, override CSVs |
+| LinkedIn decision | Asks only whether the proposed LinkedIn is right (Yes/No), or whether to add a researched no-LinkedIn profile. A secondary field accepts a known correct URL. | Local browser. | Updated override CSVs, `review/manifest.json` |
 | Realization | Fan-in reapplies approved overrides and consolidates contact fields. A separate Modal build creates the downloadable local search index in a workspace-shared volume with operator-prefixed paths and shared caches. | Local, then Modal. | Merged `people.csv`, local DuckDB |
 
 ## What leaves the machine
@@ -137,21 +112,19 @@ table is `.powerpacks/network-import/overrides/review.csv`.
 - `approved=auto` is a high-confidence machine decision applied by fan-in.
 - `approved=yes` or `approved=no` is a sticky human decision.
 - Blank approval is pending.
-- `network_worth` (yes|maybe|no) is a sticky USER-owned mark that overrules the
-  machine; `llm_worth`/`llm_worth_reason` are machine-owned mirrors of the
-  synthesis LLM's judgment (the spam screen folds in as an LLM `no`). The
-  review UI renders Yes/Maybe/No buttons on every row (with the machine's
-  decision + reason as secondary text), moves effective-`no` rows to the
-  Rejected tab, and offers worth and source (gmail/imessage/whatsapp) filter
-  chips. Effective `no` is ONE concept: it excludes a candidate from paid deep
-  research and synthetic minting, and drops an already-imported person from
-  the merged network at the next fan-in (user Yes/Keep rescues; user No wins).
+- `network_worth` keeps legacy yes|maybe|no compatibility, but the human UI writes
+  only sticky Yes/No. `llm_worth`/`llm_worth_reason` seed the piles: model Yes is
+  Added, model Maybe is the only main review queue, and model No/spam is Rejected.
+  User No and legacy Exclude join Rejected; user Yes joins Added. The current
+  Added pile is the candidate set shown at the separate paid-lookup approval gate.
 - A retarget is not materialized until it is approved and `apply-retargets` has
   hydrated the replacement profile.
-- Synthetic profiles at completeness `>= 0.6` are `approved=auto` and will merge
-  unless rejected during review; lower-completeness synthetic rows are pending.
-- Review page loading is free of provider calls, but the page is not read-only:
-  decisions save locally and some merged-record resolution is applied by the UI.
+- Synthetic profiles at completeness `>= 0.6` may carry the legacy
+  `approved=auto` machine recommendation, but the staged workflow still treats
+  every candidate-origin synthetic row as pending until the user answers Yes/No.
+- Review page loading is free of provider calls and does not mutate decision CSVs.
+  Explicit button clicks save locally; fresh signed profile images are cached as
+  bytes while live, with initials shown for expired legacy URLs.
 
 The user must explicitly finish review before retarget application, fan-in, or
 index rebuild continues, including review of auto-approved synthetic rows.
@@ -169,6 +142,8 @@ index rebuild continues, including review of auto-approved synthetic rows.
 |-- merge-candidates.csv
 |-- merge-verdicts.csv
 |-- parents/<slug>.md
+|-- review/manifest.json
+|-- review/avatars/
 `-- reconcile/
     |-- verdicts.jsonl
     |-- verdicts.csv

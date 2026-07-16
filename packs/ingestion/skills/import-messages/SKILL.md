@@ -1,6 +1,6 @@
 ---
 name: import-messages
-description: Add iMessage/WhatsApp contacts to your local network. Use for $import-messages. Sets up access (Full Disk Access + WhatsApp QR), syncs message contacts down, matches them against already-imported LinkedIn/Gmail people (free), and imports matched people plus a research-candidates pool. No LLM calls, no paid research, no index build — identity resolution and indexing happen later in $deep-setup. Never uploads to a Powerset set.
+description: Add iMessage/WhatsApp contacts to your local network. Use for $import-messages. Sets up access (Full Disk Access + WhatsApp QR), syncs message contacts down, matches them against already-imported LinkedIn/Gmail people (free), and imports matched people plus a research-candidates pool. No LLM calls, no paid research, no index build — identity resolution and indexing happen later in $deep-context. Never uploads to a Powerset set.
 ---
 
 <!--
@@ -8,7 +8,7 @@ Created: 2026-06-20
 Changelog:
 - 2026-07-14: Refocused on contact sync only. Dropped the in-skill LLM triage,
   Parallel deep-research, LLM-scored review UI, and the Modal index/validate
-  steps — identity research + index building move to the centralized $deep-setup
+  steps — identity research + index building move to the centralized $deep-context
   processing layer. Import is now contacts-direct: matched contacts land in
   people.csv, floor-passing unmatched contacts land in candidates.csv. Ends by
   suggesting missing sources and offering to process contacts.
@@ -25,7 +25,7 @@ Changelog:
 set up access, sync message contacts down, match them against your
 already-imported LinkedIn/Gmail people (free), then import — matched contacts
 attach their message activity to people you already have; unmatched contacts
-worth researching go to a **candidates pool** for the `$deep-setup` processing
+worth researching go to a **candidates pool** for the `$deep-context` processing
 layer, which builds cross-channel context and resolves identities once. This
 skill itself makes **no LLM calls, no paid research, and no index build**.
 
@@ -66,7 +66,7 @@ and rely on the primitives.
   `cp`/`test`/`wc`/`cat` is fine; no glue scripts.
 - **No LLM, no paid providers, no index.** This skill never calls OpenRouter,
   OpenAI, Parallel.ai, RapidAPI, or Modal. Identity research for unresolved
-  contacts and the index rebuild belong to `$deep-setup`. Never call
+  contacts and the index rebuild belong to `$deep-context`. Never call
   `sync_powerset_candidates`; nothing here uploads to a Powerset set.
 - **Metadata only.** Powerpacks never selects or sends message bodies; wacli
   owns its local provider store. Only contact metadata (phone, name, channels,
@@ -184,7 +184,7 @@ Materialize the matched contacts into this source's canonical
 `.powerpacks/network-import/import/messages/people.csv` (attaching message
 `interaction_counts` to people you already have) and the unmatched contacts that
 pass the deterministic "worth researching" floor into
-`.powerpacks/network-import/import/messages/candidates.csv` for `$deep-setup`.
+`.powerpacks/network-import/import/messages/candidates.csv` for `$deep-context`.
 The floor is pre-LLM and free: a plausibly-real saved contact name, a real
 10–15 digit phone, and at least one DM message; group-only low-signal contacts
 are excluded by default. `suggested` matches are never auto-attached — they go
@@ -201,7 +201,7 @@ from the diff (matched people + new candidates), get their OK, then re-run with
 manifest — first run with no other sources).
 
 No review stop happens here: candidates are a research pool, not searchable
-people. Spam screening and identity decisions happen in `$deep-setup`'s judged,
+people. Spam screening and identity decisions happen in `$deep-context`'s judged,
 user-reviewable flow before anything becomes searchable.
 
 ### Step 5 — Merge all sources
@@ -227,7 +227,7 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contac
 ```
 
 - `gmail.import.imported: false` → suggest **`$import-gmail`** (email contacts
-  sharpen matching and give `$deep-setup` cross-channel context).
+  sharpen matching and give `$deep-context` cross-channel context).
 - `linkedin.import.imported: false` → suggest **`$setup`** (LinkedIn is the
   identity backbone).
 - Report candidate counts (`import.candidates` per source) so the user knows how
@@ -239,9 +239,9 @@ found — name the imported sources, never the skill**. Pattern:
 > "I see Gmail and LinkedIn are imported alongside iMessage/WhatsApp — do you
 > want to enrich your contacts?"
 
-(Adapt the source list to what's actually imported; `$deep-setup` is the
+(Adapt the source list to what's actually imported; `$deep-context` is the
 internal route — do not say its name or describe its machinery in the ask.)
-If yes → run the `$deep-setup` flow. If no → say their new contacts become
+If yes → run the `$deep-context` flow. If no → say their new contacts become
 searchable after the next enrichment run; nothing is lost, the candidates
 stay staged.
 

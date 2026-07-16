@@ -57,7 +57,13 @@ from packs.indexing.lib.openai_responses import (
     usage_tokens,
 )
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
-from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
+from packs.ingestion.primitives.deep_context.candidates import (
+    candidate_carry,
+    candidate_key_of,
+    candidate_row,
+    is_candidate_id,
+    llm_network_worth,
+)
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
@@ -382,6 +388,7 @@ def build_tasks(index: dict[str, Any], people: dict[str, dict[str, str]],
         if not by_key:  # no LinkedIn attached to any child
             tasks.append({"parent_slug": pslug, "name": pinfo.get("name", pslug),
                           "candidate_key": "", "person_ids": child_pids, "conflict": False,
+                          "parent_person_ids": child_pids,
                           "no_link": True, "dossier": dossier, "linkedin": {}})
             continue
         for key, pids in by_key.items():
@@ -390,6 +397,7 @@ def build_tasks(index: dict[str, Any], people: dict[str, dict[str, str]],
             tasks.append({
                 "parent_slug": pslug, "name": pinfo.get("name", pslug),
                 "candidate_key": key, "person_ids": pids, "conflict": conflict,
+                "parent_person_ids": child_pids,
                 "no_link": False, "dossier": dossier, "linkedin": linkedin_view(row, cache_dir),
                 "match_emails": emails, "match_phones": phones,
                 # Ground truth: this LinkedIn came from your own Connections export — you're
@@ -833,9 +841,10 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
 def write_consolidations(path: Path, tasks: list[dict[str, Any]], people_csv: Path) -> dict[str, Any]:
     """Fold a parent's children onto its KEPT LinkedIn (trust Phase 2's grouping).
 
-    For each parent with a kept (`confirm`) link AND ≥1 detached sibling, emit ONE contact-only
-    people row keyed by the kept `public_identifier` carrying the UNION of every child's emails /
-    phones / per-channel interaction_counts / source_channels. The fan-in merge auto-ingests it;
+    For each parent with a kept (`confirm`) link and either a detached sibling or
+    an unresolved candidate child, emit ONE contact-only people row keyed by the
+    kept `public_identifier` carrying the UNION of every child's emails / phones /
+    per-channel interaction_counts / source_channels. The fan-in merge auto-ingests it;
     because it shares the kept LinkedIn key it unions onto the real row (which supplies the
     profile), so the surviving person keeps the correct profile AND all the contacts of its
     siblings — while the sibling rows still detach/drop. Per-channel counts are preserved
@@ -849,20 +858,28 @@ def write_consolidations(path: Path, tasks: list[dict[str, Any]], people_csv: Pa
     for group in by_parent.values():
         kept = next((t for t in group if t.get("action") == "confirm"), None)
         detached = [t for t in group if t.get("action") == "detach"]
-        if not kept or not detached:
+        all_pids = list(dict.fromkeys(
+            pid
+            for task in group
+            for pid in (task.get("parent_person_ids") or task.get("person_ids") or [])
+        ))
+        kept_pids = set(kept.get("person_ids") or []) if kept else set()
+        extra_contacts = any(pid not in kept_pids for pid in all_pids)
+        if not kept or (not detached and not extra_contacts):
             continue
         pub = (kept.get("candidate_key") or "").strip().lower()
         if not pub:
             continue
-        pids: list[str] = []
-        for t in group:
-            pids.extend(t.get("person_ids") or [])
         emails: list[str] = []
         phones: list[str] = []
         ic_values: list[str] = []
         channels: set[str] = set()
-        for pid in dict.fromkeys(pids):
+        for pid in all_pids:
             r = people.get(pid)
+            if not r and is_candidate_id(pid):
+                raw_candidate = candidate_row(candidate_key_of(pid))
+                if raw_candidate:
+                    r = candidate_carry(raw_candidate)
             if not r:
                 continue
             for e in [r.get("primary_email", ""), *parse_list(r.get("all_emails"))]:

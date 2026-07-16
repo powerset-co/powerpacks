@@ -4,7 +4,7 @@ Changelog:
   Removed the OpenRouter prerequisite and the llm_review_contacts
   troubleshooting row, replaced research_queue.csv/research_review.csv with
   import/messages/candidates.csv in the artifact tree, and noted that identity
-  research and index builds now happen in $deep-setup.
+  research and index builds now happen in $deep-context.
 -->
 
 # Powerpacks Quickstart
@@ -96,7 +96,7 @@ You'll also need WhatsApp on your phone to scan the QR code that pops up
 during the auth step.
 
 No LLM key is needed: message import makes no OpenRouter or other provider
-calls (identity research happens later, in `$deep-setup`).
+calls (identity research happens later, in `$deep-context`).
 
 ---
 
@@ -228,7 +228,7 @@ The workflow's message-content boundary is strict:
 - Import makes no provider calls at all — no OpenRouter, no Parallel, no
   RapidAPI, no Modal. Matched contacts import directly; unmatched contacts
   that pass a deterministic floor land in `import/messages/candidates.csv`, a
-  research pool for `$deep-setup` (identity research, review, and the index
+  research pool for `$deep-context` (identity research, review, and the index
   rebuild happen there).
 - Nothing is uploaded to a Powerset set.
 
@@ -241,34 +241,35 @@ for the complete diagram, floor rules, and approval gates.
 bounded multi-account discovery, reuses the local identity directory, and
 merges sources — free and local, with no LinkedIn lookups at import time and
 no index rebuild. Unresolved contacts land in `import/gmail/candidates.csv`
-for `$deep-setup`, which resolves identities and rebuilds the index. msgvault
+for `$deep-context`, which resolves identities and rebuilds the index. msgvault
 keeps a local full-message archive for that window and may store attachments;
 Powerpacks selects only contact/interaction metadata and does not send Gmail
 bodies or subjects to identity providers. See the
 [Gmail import pipeline](../packs/ingestion/docs/gmail-import-pipeline.md).
 
-### Process your contacts — `$deep-setup`
+### Process your contacts — `$deep-context`
 
 After any import finishes it asks — naming the sources it sees — *"do you want
 to enrich your contacts?"*; a yes runs
-`$deep-setup`, the centralized processing layer (it never runs silently; every
+`$deep-context`, the centralized processing layer (it never runs silently; every
 paid stage previews its cost and the review step is a hard stop):
 
 ```text
-$deep-setup                   # or: "process my contacts"
+$deep-context                   # or: "process my contacts"
 ```
 
 It builds one dossier per contact from message bodies — including the imports'
 research candidates — and the synthesis LLM judges each contact's
-**network worth (yes / maybe / no)** from the actual relationship. You review
-in the browser UI: mark Yes/Maybe/No per person (your mark overrules the LLM
-and sticks), filter by worth and by source (gmail / imessage / whatsapp), and
-keep/detach/fix LinkedIn attachments. Contacts marked **No** cost nothing —
-they're excluded from the paid reverse lookup. Then one Parallel.ai reverse
-lookup resolves the survivors, no-LinkedIn people get synthetic profiles, and
-the finale re-merges and rebuilds the Modal index so everything becomes
-searchable. See the
-[deep-setup pipeline](../packs/ingestion/docs/deep-setup-pipeline.md).
+network worth from the actual relationship. The browser asks only about people
+the model is unsure about: **add this person, Yes or No?** Model Yes starts in
+the editable Added pile; model No/spam, user No, and legacy Exclude share the
+editable Rejected pile. Once no maybes remain, Continue records the handoff and
+the current Added pile enters the separately approved Parallel.ai lookup. After
+lookup, a second binary screen asks whether each found LinkedIn is the right
+person (with a secondary field for a known correct URL). No-LinkedIn people get
+reviewable synthetic profiles, then the approved decisions re-merge and rebuild
+the Modal index. See the
+[deep-context pipeline](../packs/ingestion/docs/deep-context-pipeline.md).
 
 ### Relationship dossiers — `$deep-context`
 
