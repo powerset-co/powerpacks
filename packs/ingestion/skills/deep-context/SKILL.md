@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: The single post-import people-processing workflow and per-person dossier surface. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", a dossier or identity lookup by name/phone/email, duplicate-person review, LinkedIn self-heal, or the staged people/LinkedIn UI. Builds dossiers for imported people and unresolved Gmail/iMessage/WhatsApp candidates, merges duplicates, asks the user only about uncertain additions, runs one budget-gated lookup for the editable Added pile plus eligible wrong-link recovery, verifies found LinkedIns, then realizes the approved network and index.
+description: The single post-import people-processing workflow and per-person dossier surface. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", a dossier or identity lookup by name/phone/email, duplicate-person review, LinkedIn self-heal, or the staged people/LinkedIn UI. Builds dossiers for imported people and unresolved Gmail/iMessage/WhatsApp candidates, merges duplicates, asks the user only about uncertain additions, runs one budget-gated lookup for the editable Yes decisions plus eligible wrong-link recovery, verifies found LinkedIns, then realizes the approved network and index.
 ---
 
 # deep-context
@@ -30,6 +30,8 @@ Use the narrow path when the user names one:
   `bin/deep-context review`; it auto-opens the current stage.
 - `$deep-context re-review` -> preview with `bin/deep-context re-review --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
+  This refreshes only dossier-backed machine Maybe/unjudged import candidates.
+  Machine Yes/No is reused, and every human Yes/No remains authoritative.
 - A bare `$deep-context`, "process/resolve/enrich my contacts", "build deep
   context", or a full rerun -> use the complete staged workflow below.
 
@@ -134,8 +136,9 @@ bin/deep-context dry
 
 Show its contact count and cost floor/ceiling. Get explicit approval, then run
 the exact `bin/deep-context synthesize ...` command printed by `dry`. Do not
-invent a different scope. Synthesis also produces the model's display-only
-`network_worth` recommendation and reason.
+invent a different scope. Synthesis also produces an initial `network_worth`
+recommendation and reason. Reconcile refreshes only machine Maybe/unjudged
+recommendations before People review; machine Yes/No is stable.
 
 Then run:
 
@@ -166,49 +169,87 @@ folds its email/phone/channel metadata onto the kept LinkedIn instead.
 
 ### 5. People decision gate
 
-Launch the first binary stage in a background terminal:
-
-```bash
-bin/deep-context review --stage worth
-```
-
-The main queue shows only people the model marked `maybe`, one at a time with
-Yes/No. Model Yes starts in the editable Added pile. Model No/spam, user No,
-and legacy Exclude share the editable Rejected pile. The user can inspect either
-pile and move people between them. When no maybes remain, the UI reveals one
-Continue button; completing it records the handoff in the manifest. Everyone
-currently in Added is eligible for the separately approved paid lookup.
-
-Hard stop. Poll this fixed file:
-
-```text
-.powerpacks/deep-context/review/manifest.json
-```
-
-Continue only when all are true:
-
-- `stage == "worth"`
-- `status == "completed"`
-- `counts.pending == 0`
-- the manifest was rewritten after this stage was launched
-
-Do not infer completion from the browser opening, from model decisions, from
-`review.csv`, or only from the user saying "done". If the file is absent, stale,
-malformed, or for the wrong stage, keep waiting and report the exact condition.
-
-### 6. Identity preparation and one lookup
-
-First preview the attached-LinkedIn judge:
+Before the UI, preview the attached-LinkedIn judge:
 
 ```bash
 bin/deep-context reconcile --dry-run
 ```
 
 Show the OpenAI estimate, get fresh approval, then run
-`bin/deep-context reconcile`.
+`bin/deep-context reconcile`. This happens before People review so the UI can
+incorporate the current spam and attached-identity judgments without another
+hidden stage later. The dry run reports attached-profile identity tasks and
+worth-only no-LinkedIn import-candidate tasks separately. Reconcile judges both
+in the same approved pass.
 
-Next preview the single Parallel pass. Candidate eligibility is the current
-Added pile (model Yes unless the user removed it, plus anyone the user added).
+Worth is deliberately decisive:
+
+- Yes for a genuine human relationship, including family/relatives, friends, classmates,
+  professors/teachers/mentors, alumni/school contacts, colleagues, and other
+  real personal or professional correspondence.
+- No for automated/broadcast mail, marketing, cold sales/recruiting/agency
+  outreach without meaningful engagement, spam, and purely transactional
+  service/vendor exchanges.
+- Maybe only when the evidence is genuinely balanced about whether a real
+  relationship exists. Missing professional prestige, job details, or seniority
+  is not a reason for Maybe.
+
+On every repeated full `$deep-context`, this reconcile pass refreshes only the
+machine-owned Maybe/unjudged tail even when existing dossier facts are reused.
+Machine Yes/No is not re-judged. A human-owned `network_worth` Yes/No in
+`review.csv` always wins and is never overwritten.
+The narrower `bin/deep-context re-review` command applies the same rule and
+automatically rebuilds the free parent layer first when a newer `compose` pass
+has replaced the shared lookup index.
+
+Launch the local UI once in a background terminal:
+
+```bash
+bin/deep-context review --fresh
+```
+
+The UI is the user's control surface for review and approval. It records choices
+in the existing review CSVs and fixed manifests. The agent owns workflow control:
+keep polling `bin/deep-context review-status`, run only its exact next action, and
+let the UI reflect progress. Direct progress-step navigation is preview only; it
+does not itself advance provider work.
+
+The main Review tab shows only people the model marked `maybe`, one at a time
+with Yes/No. The Yes and No tabs are paginated, editable tables with one action
+per row: No from the Yes table and Yes from the No table.
+Model Yes starts in Yes; model No/spam, user No, and legacy Exclude share No.
+When the final maybe is answered, the server writes People completion
+automatically. Continue only changes the visible page to Enrich Contacts.
+
+From the agent session, poll the read-only deterministic primitive:
+
+```bash
+bin/deep-context review-status
+```
+
+Run it once per minute while its action is a human wait or provider wait. It
+reads CSVs/manifests and emits one `next_action`; it does not mutate files, open
+a browser, shell out, or call a network. Follow only that exact action. In
+particular, do not infer readiness from chat text or browser state.
+
+The fixed files are:
+
+```text
+.powerpacks/deep-context/review/manifest.json
+.powerpacks/deep-context/reconcile/deep-research/manifest.json
+```
+
+Each newly started review server writes a fresh `people_revision` into the one
+review manifest. Enrichment is current only when its manifest matches that
+revision and the full current effective-worth fingerprint (Yes, Maybe, and No).
+This prevents stale lookup success from skipping a repeated review while still
+allowing per-person research artifacts to be reused.
+
+### 6. Identity preparation and one lookup
+
+When `review-status.next_action == "preview_enrichment"`, preview the single
+Parallel pass. Candidate eligibility is the current Yes table (model Yes unless
+the user removed it, plus anyone the user added).
 The command also covers eligible wrong-link recoveries and plausibly-absent
 LinkedIns:
 
@@ -218,8 +259,16 @@ bin/deep-context reconcile-deep-research --dry-run --include-candidates --includ
 
 Show gross eligible, completed-result reuse, duplicate handles skipped, net-new
 submissions, price/person, total estimate, and the proposed budget. The approval
-amount is based on net-new submissions only.
-After explicit approval, always pass the approved cap:
+amount is based on net-new submissions only. The Enrich Contacts page renders an
+`Approve $X.XX` button for that exact current estimate. Clicking it writes the
+approval into the existing enrichment `manifest.json`, bound to the current
+People revision, full Yes/Maybe/No fingerprint, net-new count, and budget. It
+does not start a provider call.
+
+Keep polling `bin/deep-context review-status`. While it emits
+`next_action == "await_enrichment_approval"`, wait for the UI button. When it
+emits `next_action == "run_approved_enrichment"`, run the exact command it
+prints, which always includes the approved cap:
 
 ```bash
 bin/deep-context reconcile-deep-research --include-candidates --include-plausibly-absent \
@@ -233,30 +282,28 @@ fallback profiles for researched Yes people with no real LinkedIn:
 bin/deep-context assemble-synthetic
 ```
 
+The lookup wrapper and its provider child continuously overwrite the fixed
+enrichment manifest with `needs_approval`, `running`, `research_complete`,
+`failed`, or `completed` plus total/completed/pending/failed counts. The UI reads
+that file and may add only its inert approval block. The assembler marks it
+`completed`. The current queue CSV is
+always overwritten, including header-only no-work runs, and assembly scans only
+handles in that current queue so stale No results cannot reappear.
+
 ### 7. LinkedIn decision gate
 
-Launch the second binary stage:
-
-```bash
-bin/deep-context review --stage linkedin
-```
-
-The first review server stays alive. This command activates and reuses it when
-port 8765 already belongs to the deep-context reviewer, so do not kill the first
-background process or start a second ad-hoc server. The waiting page also advances
-automatically when lookup artifacts appear.
+When enrichment is complete, Enrich Contacts shows a checkmark and Continue.
+That click writes only the enrichment handoff into the review manifest and opens
+Check LinkedIn; it does not start work. The first review server stays alive.
 
 For a found/existing LinkedIn the question is simply whether it is the right
 person. Yes verifies it; No detaches only that link, never rejects the person.
 "Use a different LinkedIn" is secondary. For a synthetic result, Yes/No decides
 whether to add the researched no-LinkedIn profile.
 
-Hard stop and poll the same manifest. Continue only when:
-
-- `stage == "linkedin"`
-- `status == "completed"`
-- `counts.pending == 0`
-- it was rewritten after the LinkedIn stage launched
+Keep polling `bin/deep-context review-status` about once per minute. Continue to
+realization only when it emits `next_action == "realize"`. A LinkedIn page opened
+directly before current enrichment completes remains a read-only waiting view.
 
 ### 8. Apply and realize
 
@@ -304,6 +351,8 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/dossiers/               dossiers + index
 .powerpacks/deep-context/parents/                canonical people + manifest
 .powerpacks/deep-context/reconcile/              verdicts + reconcile manifest
+.powerpacks/deep-context/reconcile/deep-research/research_queue.csv
+.powerpacks/deep-context/reconcile/deep-research/manifest.json  fixed enrichment progress
 .powerpacks/deep-context/review/manifest.json     current human stage completion
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
 .powerpacks/network-import/overrides/review.csv   durable worth/link decisions

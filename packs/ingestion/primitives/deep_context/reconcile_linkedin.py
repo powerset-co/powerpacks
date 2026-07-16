@@ -175,7 +175,22 @@ SYSTEM_PROMPT = (
     "never engaged, replied 'not interested', or asked them to stop. Set spam_contact=true with "
     "spam_confidence and a one-line spam_reason. A real relationship — a colleague, friend, "
     "warm intro, anyone I initiated with or had a genuine back-and-forth with — is NEVER spam, "
-    "no matter how pitchy a single message reads. When in doubt, spam_contact=false."
+    "no matter how pitchy a single message reads. When in doubt, spam_contact=false.\n\n"
+    "NETWORK WORTH (required for every contact, including contacts with no LinkedIn): "
+    "classify the relationship as yes, maybe, or no. This is primarily a human-vs-noise "
+    "filter, not a prestige contest.\n"
+    "- yes: a real person I genuinely know or correspond with — family/relatives, friends, classmates, "
+    "professors/teachers/mentors, alumni or school contacts, colleagues, collaborators, "
+    "warm introductions, founders, investors, operators, researchers, or another meaningful "
+    "two-way personal/professional relationship. Personal, old, academic, social, or sparse "
+    "professional context is still yes when the human relationship is real.\n"
+    "- no: automated/broadcast mail, newsletters, receipts/notifications, mass marketing, "
+    "cold sales/recruiting/SEO/agency outreach I did not meaningfully engage with, spam, or "
+    "a purely transactional support/vendor/service exchange with no durable relationship.\n"
+    "- maybe: only when evidence is genuinely balanced or incomplete about whether a real "
+    "relationship exists. Maybe is exceptional. Never use it merely because job/seniority/"
+    "professional value is unknown or because the relationship is personal, old, academic, "
+    "or social. Choose yes or no whenever the evidence supports either conclusion."
 )
 
 RECONCILE_SCHEMA: dict[str, Any] = {
@@ -192,10 +207,19 @@ RECONCILE_SCHEMA: dict[str, Any] = {
         "spam_contact": {"type": "boolean", "description": "Unsolicited cold-outreach contact I never engaged with."},
         "spam_confidence": {"type": "number"},
         "spam_reason": {"type": "string", "description": "One line; empty when spam_contact=false."},
+        "network_worth": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "decision": {"type": "string", "enum": ["yes", "maybe", "no"]},
+                "reason": {"type": "string"},
+            },
+            "required": ["decision", "reason"],
+        },
     },
     "required": ["verdict", "confidence", "supporting_evidence", "contradicting_evidence",
                  "linkedin_plausibly_absent", "recommend_deep_research", "reason",
-                 "spam_contact", "spam_confidence", "spam_reason"],
+                 "spam_contact", "spam_confidence", "spam_reason", "network_worth"],
 }
 
 
@@ -424,6 +448,10 @@ def connection_verdict() -> dict[str, Any]:
         "contradicting_evidence": [], "linkedin_plausibly_absent": False, "recommend_deep_research": False,
         "reason": "Ground truth: you're connected to this person on LinkedIn (linkedin_csv import).",
         "spam_contact": False, "spam_confidence": 0.0, "spam_reason": "",
+        "network_worth": {
+            "decision": "yes",
+            "reason": "Existing first-degree LinkedIn connection.",
+        },
     }
 
 
@@ -536,10 +564,22 @@ def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
         _bullets(li.get("education") or [], "(none listed)"),
     ])
     owner = f"\n{owner_block}\n" if owner_block else ""
-    return (
+    contact = (
         f"{owner}"
         f"CONTACT (from my messages) — {task['name']}\n{dossier_block}\n"
         f"  messages me→them:\n{me}\n  messages them→me:\n{them}\n\n"
+    )
+    if task.get("no_link"):
+        return (
+            f"{contact}"
+            "NO LINKEDIN PROFILE IS ATTACHED.\n"
+            "Judge network_worth and spam from the relationship evidence above. For the "
+            "identity-only fields, return verdict=needs_review, confidence=0, no supporting "
+            "or contradicting evidence, linkedin_plausibly_absent=true, "
+            "recommend_deep_research=false, and reason='no LinkedIn attached'."
+        )
+    return (
+        f"{contact}"
         f"ATTACHED LINKEDIN PROFILE ({li.get('linkedin_url') or 'n/a'})\n{li_block}\n\n"
         f"Is this LinkedIn profile the same human as the contact I know from my messages?"
     )
@@ -671,10 +711,9 @@ OVERRIDE_COLUMNS = ["public_identifier", "action", "approved", "new_linkedin_url
                     # stay user-owned.
                     "llm_reject", "llm_reject_confidence", "llm_reject_reason",
                     # Machine-owned network-worth judgment (like the llm_reject trio: ALWAYS
-                    # refreshed, never a decision). A confident spam screen is folded in as one
-                    # way the LLM says `no`; otherwise it mirrors the synthesis LLM's facts
-                    # judgment so the fan-in merge and the review UI agree even when facts
-                    # aren't on disk.
+                    # refreshed, never a decision). Reconcile freshly judges dossier-backed
+                    # contacts; a confident spam screen is folded in as one way to say `no`.
+                    # Older synthesis facts remain a backwards-compatible fallback.
                     "llm_worth", "llm_worth_reason",
                     # USER-owned network-worth mark (yes|maybe|no; blank = defer to the
                     # synthesis LLM's network_worth in facts). Sticky like approved —
@@ -725,12 +764,21 @@ SPAM_WORTH_CONFIDENCE = 0.85
 
 
 def _llm_worth_fields(v: dict[str, Any], person_ids: list[str], facts_dir: Path) -> dict[str, str]:
-    """The machine-owned network-worth columns — refreshed everywhere _llm_reject_fields
-    is (they never carry a decision either). A confident spam screen is just one way the
-    LLM says no (the llm_reject trio keeps the spam detail); otherwise the synthesis
-    LLM's facts judgment is mirrored here so merge/UI agree without the facts dir."""
+    """Machine-owned worth fields for rows explicitly selected for re-review.
+
+    A confident spam screen is one way the LLM says no; otherwise use reconcile's
+    fresh worth judgment, falling back to the older synthesis fact for
+    reapply/offline compatibility.
+    """
     if v.get("spam_contact") and float(v.get("spam_confidence") or 0) >= SPAM_WORTH_CONFIDENCE:
         return {"llm_worth": "no", "llm_worth_reason": v.get("spam_reason", "")}
+    fresh = v.get("network_worth") or {}
+    fresh_decision = str(fresh.get("decision") or "").strip().lower()
+    if fresh_decision in ("yes", "maybe", "no"):
+        return {
+            "llm_worth": fresh_decision,
+            "llm_worth_reason": str(fresh.get("reason") or ""),
+        }
     worth = llm_network_worth(person_ids[0], facts_dir) if person_ids else {"decision": "", "reason": ""}
     return {"llm_worth": worth["decision"],
             "llm_worth_reason": worth["reason"] if worth["decision"] else ""}
@@ -746,11 +794,43 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = F
     ->verify). The merge applies only approved ∈ {auto,yes}; pending rows wait for the user to set
     `yes` (or flip the action). Idempotent + INCREMENTAL: keyed by public_identifier, a row the
     USER has touched (approved ∈ {yes,no}) is NEVER overwritten — sticky across re-runs. people.csv
-    is NOT touched. no-LinkedIn people have no row (nothing to act on)."""
+    is NOT touched. Candidate-origin people without LinkedIn get the same machine-owned
+    worth/spam columns while their user-owned Yes/No remains sticky."""
     existing = load_override_rows(path)
-    detach = verify = pending = preserved = 0
+    detach = verify = pending = preserved = worth_refreshed = 0
     for t in tasks:
         if t.get("no_link"):
+            target_person_ids = t.get("worth_person_ids")
+            if target_person_ids is None:
+                # Backwards-compatible direct-call behavior for already-judged
+                # tasks. Pipeline-built tasks always carry an explicit target list.
+                target_person_ids = (
+                    t.get("person_ids") or []
+                    if (t.get("verdict") or {}).get("network_worth")
+                    else []
+                )
+            machine = {
+                **_llm_reject_fields(t.get("verdict") or {}),
+                **_llm_worth_fields(t.get("verdict") or {},
+                                    t.get("person_ids") or [], facts_dir),
+            }
+            for person_id in target_person_ids:
+                if not is_candidate_id(person_id):
+                    continue
+                pub = str(person_id).strip().lower()
+                prior = existing.get(pub, {})
+                row = {column: prior.get(column, "") for column in OVERRIDE_COLUMNS}
+                row.update(machine)
+                row.update({
+                    "public_identifier": pub,
+                    "person_id": person_id,
+                    "source": prior.get("source") or "deep-context-reconcile",
+                    "updated_at": now_iso(),
+                })
+                existing[pub] = row
+                worth_refreshed += 1
+                if str(prior.get("network_worth") or "").strip().lower() in ("yes", "no"):
+                    preserved += 1
             continue
         pub = (t.get("candidate_key") or "").strip().lower()
         if not pub:
@@ -794,6 +874,7 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = F
 
     _write_override_rows(path, existing)
     return {"path": str(path), "detached": detach, "verified": verify, "pending": pending,
+            "worth_refreshed": worth_refreshed,
             "preserved_user_rows": preserved, "total_rows": len(existing)}
 
 
@@ -801,6 +882,58 @@ def count_pending(path: Path) -> int:
     """Rows awaiting the user's decision (pending or rejected-but-revisitable)."""
     return sum(1 for r in load_override_rows(path).values()
                if (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no"))
+
+
+def has_human_worth_decision(task: dict[str, Any],
+                             overrides: dict[str, dict[str, str]]) -> bool:
+    """Whether every import-candidate child has a terminal human worth choice.
+
+    A merged parent is one LLM task, but review rows remain candidate-keyed. One
+    decided duplicate must not suppress a fresh machine judgment for an untouched
+    sibling; the task is skippable only when every candidate child is decided.
+    """
+    candidate_ids = [
+        person_id for person_id in (task.get("person_ids") or [])
+        if is_candidate_id(person_id)
+    ]
+    if not candidate_ids:
+        return False
+    for person_id in candidate_ids:
+        row = overrides.get(str(person_id).strip().lower()) or {}
+        if str(row.get("network_worth") or "").strip().lower() in ("yes", "no"):
+            continue
+        if (str(row.get("action") or "").strip().lower() == "exclude"
+                and str(row.get("approved") or "").strip().lower() == "yes"):
+            continue
+        return False
+    return True
+
+
+def machine_worth_decision(person_id: str,
+                           overrides: dict[str, dict[str, str]],
+                           facts_dir: Path) -> str:
+    """Latest machine-only worth, ignoring the human-owned decision column."""
+    row = overrides.get(str(person_id).strip().lower()) or {}
+    fresh = str(row.get("llm_worth") or "").strip().lower()
+    if fresh in ("yes", "maybe", "no"):
+        return fresh
+    return str(llm_network_worth(person_id, facts_dir).get("decision") or "").strip().lower()
+
+
+def worth_person_ids_for_review(task: dict[str, Any],
+                                overrides: dict[str, dict[str, str]],
+                                facts_dir: Path) -> list[str]:
+    """Candidate children whose machine worth is Maybe/unjudged and not human-decided."""
+    person_ids: list[str] = []
+    for person_id in task.get("person_ids") or []:
+        if not is_candidate_id(person_id):
+            continue
+        one = {**task, "person_ids": [person_id]}
+        if has_human_worth_decision(one, overrides):
+            continue
+        if machine_worth_decision(person_id, overrides, facts_dir) not in ("yes", "no"):
+            person_ids.append(person_id)
+    return person_ids
 
 
 def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1076,7 +1209,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                          use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")), started=started)
 
     people = load_people_rows(Path(args.people_csv))
-    tasks = build_tasks(index, people, Path(args.facts_dir), Path(args.raw_dir), Path(args.profile_cache_dir))
+    facts_dir = Path(args.facts_dir)
+    tasks = build_tasks(index, people, facts_dir, Path(args.raw_dir), Path(args.profile_cache_dir))
+    overrides = load_override_rows(Path(args.overrides_csv))
     # Subset targeting (--slug/--limit): cheap spot re-reviews (e.g. testing the spam screen)
     # without re-judging everyone. Results MERGE into verdicts.jsonl (see _finalize).
     if getattr(args, "slug", None):
@@ -1088,8 +1223,36 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     connections = [t for t in tasks if t.get("from_connections") and not t.get("no_link")]
     for t in connections:
         t["verdict"], t["error"] = connection_verdict(), ""
-    judgeable = [t for t in tasks if not t.get("no_link") and t["linkedin"].get("has_profile")
-                 and not t.get("from_connections")]
+    for task in tasks:
+        if task.get("no_link"):
+            task["worth_person_ids"] = worth_person_ids_for_review(
+                task, overrides, facts_dir)
+    identity_judgeable = [
+        t for t in tasks
+        if not t.get("no_link") and t["linkedin"].get("has_profile")
+        and not t.get("from_connections")
+    ]
+    worth_only_judgeable = [
+        t for t in tasks
+        if t.get("no_link")
+        and (t.get("dossier") or {}).get("has_messages")
+        and bool(t.get("worth_person_ids"))
+    ]
+    worth_only_human_preserved = sum(
+        1 for t in tasks
+        if t.get("no_link")
+        and any(is_candidate_id(person_id) for person_id in t.get("person_ids") or [])
+        and has_human_worth_decision(t, overrides)
+    )
+    worth_only_machine_stable = sum(
+        1 for t in tasks
+        if t.get("no_link")
+        and (t.get("dossier") or {}).get("has_messages")
+        and any(is_candidate_id(person_id) for person_id in t.get("person_ids") or [])
+        and not has_human_worth_decision(t, overrides)
+        and not t.get("worth_person_ids")
+    )
+    judgeable = identity_judgeable + worth_only_judgeable
 
     if args.dry_run:
         # ~ cost bracket: judgeable tasks * (rich-context floor/ceiling) — no spend.
@@ -1098,6 +1261,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "source": "reconcile_linkedin", "status": "dry_run",
             "parents": len(index.get("parents", {})), "tasks": len(tasks),
             "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
+            "identity_judgeable": len(identity_judgeable),
+            "worth_only_judgeable": len(worth_only_judgeable),
+            "worth_only_human_preserved": worth_only_human_preserved,
+            "worth_only_machine_stable": worth_only_machine_stable,
             "ground_truth_connections": len(connections),
             "conflicts": sum(1 for t in tasks if t.get("conflict")),
             "estimated_cost_usd_low": round(len(judgeable) * per_lo, 2),
@@ -1174,7 +1341,11 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
     """Shared tail: decide -> verdicts/review/applied outputs -> parent injection -> manifest."""
     out_dir = Path(args.verdicts_jsonl).parent
     out_dir.mkdir(parents=True, exist_ok=True)
-    write_verdicts(Path(args.verdicts_jsonl), Path(args.verdicts_csv), tasks)
+    # Worth-only Gmail tasks persist their machine result in review.csv. They are
+    # not LinkedIn candidates and must not appear in the LinkedIn verdict/display
+    # artifact, where they would duplicate candidate/synthetic review rows.
+    identity_tasks = [task for task in tasks if not task.get("no_link")]
+    write_verdicts(Path(args.verdicts_jsonl), Path(args.verdicts_csv), identity_tasks)
 
     decide_actions(tasks, args.confirm_threshold, getattr(args, "detach_threshold", DEFAULT_DETACH))   # one authoritative decision pass
     parents_dir = Path(args.parents_dir)

@@ -43,19 +43,25 @@ from packs.ingestion.primitives.deep_context.candidates import (
     effective_network_worth,
     is_candidate_id,
     load_candidates,
+    worth_selection_snapshot,
 )
 from packs.ingestion.primitives.deep_context.common import (
+    DEEP_RESEARCH_DIR,
     DEFAULT_PEOPLE_CSV,
+    ENRICH_MANIFEST,
     FACTS_DIR,
     LINKEDIN_OVERRIDES_CSV,
     RAW_DIR,
-    RECONCILE_DIR,
+    REVIEW_MANIFEST,
     VERDICTS_JSONL,
     emit,
+    load_owner,
     now_iso,
+    owner_background_block,
     parse_list,
     slugify,
 )
+from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     USER_APPROVED,
     load_override_rows,
@@ -70,7 +76,7 @@ from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts im
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
-DR_OUT_DIR = RECONCILE_DIR / "deep-research"
+DR_OUT_DIR = DEEP_RESEARCH_DIR
 QUEUE_CSV = DR_OUT_DIR / "research_queue.csv"
 QUEUE_FIELDS = [
     "handle",
@@ -224,6 +230,9 @@ def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
             )
     merged = compose.merge_facts(records) if records else {}
     parts = []
+    aliases = [str(value).strip() for value in (merged.get("aliases") or []) if str(value).strip()]
+    if aliases:
+        parts.append(f"Also known as: {', '.join(aliases[:8])}")
     if merged.get("relationship_to_owner"):
         parts.append(f"My relationship: {merged['relationship_to_owner']}")
     emps = [e.get("name", "") for e in (merged.get("employers") or []) if e.get("name")]
@@ -235,12 +244,25 @@ def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
         parts.append(f"Location: {merged['location']}")
     if merged.get("topics"):
         parts.append(f"We discuss: {', '.join(merged['topics'][:8])}")
+    identifiers = [str(value).strip() for value in (merged.get("identifiers") or [])
+                   if str(value).strip()]
+    if identifiers:
+        parts.append(f"Identifiers from our messages: {', '.join(identifiers[:12])}")
+    shared = [
+        f"{value.get('overlap', 'other')}: {value.get('detail', '')}".strip(": ")
+        for value in (merged.get("shared_context") or [])
+        if isinstance(value, dict) and value.get("detail")
+    ]
+    if shared:
+        parts.append(f"Shared context with me: {'; '.join(shared[:8])}")
     return ". ".join(parts)
 
 
 def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
                 facts_dir: Path, raw_dir: Path) -> list[dict[str, str]]:
     queue: list[dict[str, str]] = []
+    owner = load_owner()
+    owner_context = owner_background_block(owner) if owner else ""
     for r in subset:
         pids = r.get("person_ids") or []
         row = next((people[p] for p in pids if p in people), {})
@@ -259,6 +281,14 @@ def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
         else:
             hint = (f"The previously attached LinkedIn {rejected} was judged WRONG "
                     f"({(r.get('verdict') or {}).get('reason', '')}). Find the correct person.")
+        known_info = hint
+        if owner_context:
+            known_info += (
+                "\n\nUse the mailbox owner's background only as an identity/network-context "
+                "prior. Prefer candidates whose geography, school, employers, era, or social "
+                "context plausibly intersect it; do not require an overlap.\n"
+                f"{owner_context}"
+            )
         queue.append({
             "handle": r.get("parent_slug", ""),
             "source_parent_slug": r.get("parent_slug", ""),
@@ -266,7 +296,7 @@ def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
             "source_candidate_public_identifier": r.get("candidate_key", ""),
             "display_name": r.get("name", ""),
             "bio": _dossier_bio(pids, facts_dir, raw_dir),
-            "known_info": hint,
+            "known_info": known_info,
             "primary_email": email,
             "phone_e164": phone,
             "area_code": "",
@@ -302,7 +332,7 @@ def _find_reason(profile: dict[str, Any]) -> str:
     for key in ("research_notes", "reasoning", "rationale", "summary", "headline"):
         val = _dig(profile, key)
         if val:
-            return f"deep research: {val}"[:300]
+            return f"deep research: {val}"
     return "deep research found a correct LinkedIn"
 
 
@@ -328,10 +358,48 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     return upsert_retargets(overrides_csv, proposals)
 
 
+def write_enrichment_manifest(payload: dict[str, Any], path: Path = ENRICH_MANIFEST) -> dict[str, Any]:
+    """Write the one fixed observer contract for the Enrich Contacts UI.
+
+    Provider task-group/run identifiers deliberately stay in the provider's
+    existing private artifacts; this manifest exposes only stage status, counts,
+    estimate, and stable input/output paths.
+    """
+    if path.name != "manifest.json":
+        raise ValueError("enrichment manifest path must end in manifest.json")
+    return write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
+
+
+def _manifest_counts(*, total: int, completed: int = 0, failed: int = 0) -> dict[str, int]:
+    completed = min(max(0, completed), max(0, total))
+    failed = min(max(0, failed), max(0, total - completed))
+    return {
+        "total": max(0, total),
+        "completed": completed,
+        "pending": max(0, total - completed - failed),
+        "failed": failed,
+    }
+
+
+def _people_review_revision(path: Path = REVIEW_MANIFEST) -> str:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(manifest, dict):
+        return ""
+    completed = set(manifest.get("completed_stages") or [])
+    if "worth" not in completed:
+        return ""
+    return str(manifest.get("people_revision") or "")
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
+    manifest_text = str(getattr(args, "manifest", "") or "").strip()
+    manifest_path = Path(manifest_text) if manifest_text else None
     if not math.isfinite(args.budget) or args.budget < 0:
-        return {
+        result = {
             "source": "reconcile_deep_research",
             "status": "invalid_budget",
             "budget_usd": args.budget,
@@ -339,12 +407,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "elapsed_ms": int((time.monotonic() - started) * 1000),
             "updated_at": now_iso(),
         }
+        if manifest_path:
+            write_enrichment_manifest({
+                "stage": "enrich", "status": "failed",
+                "counts": _manifest_counts(total=0, failed=0),
+                "error": result["message"],
+            }, manifest_path)
+        return result
     verdicts = _read_jsonl(Path(args.verdicts_jsonl))
     overrides = load_override_rows(Path(args.overrides_csv))
+    resolved_candidates = candidates_resolved_by_existing()
+    selection = worth_selection_snapshot(
+        overrides, Path(args.facts_dir), resolved_candidates=resolved_candidates)
+    selection["review_revision"] = _people_review_revision()
     subset = eligible_subset(verdicts, args.confirm_threshold, overrides,
                              include_plausibly_absent=getattr(args, "include_plausibly_absent", False))
     worth_skipped: list[str] = []
-    candidates = (candidate_subset(Path(args.facts_dir), overrides, worth_skipped=worth_skipped)
+    candidates = (candidate_subset(
+        Path(args.facts_dir), overrides, worth_skipped=worth_skipped,
+        resolved_candidates=resolved_candidates)
                   if getattr(args, "include_candidates", False) else [])
     subset += candidates
     people = load_people_rows(Path(args.people_csv))
@@ -366,11 +447,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "cost_per_person_usd": cost_per,
         "estimated_usd": est_usd,
         "budget_usd": args.budget,
+        "selection": selection,
         "updated_at": now_iso(),
     }
-
-    if not subset:
-        return {**base, "status": "noop", "reason": "no eligible model-recommended detaches to research"}
 
     DR_OUT_DIR.mkdir(parents=True, exist_ok=True)
     with QUEUE_CSV.open("w", newline="", encoding="utf-8") as fh:
@@ -378,27 +457,75 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         w.writeheader()
         w.writerows(queue)
 
+    def persist(result: dict[str, Any], status: str, *, completed: int = 0,
+                failed: int = 0) -> dict[str, Any]:
+        if manifest_path:
+            write_enrichment_manifest({
+                "stage": "enrich",
+                "status": status,
+                "counts": _manifest_counts(
+                    total=len(queue), completed=completed, failed=failed),
+                "selection": selection,
+                "eligible": len(subset),
+                "eligible_candidates": len(candidates),
+                "candidates_skipped_not_added": len(worth_skipped),
+                "would_submit": len(pending_queue),
+                "reused_completed": reused_completed,
+                "duplicate_handles": duplicate_handles,
+                "processor": args.processor,
+                "cost_per_person_usd": cost_per,
+                "estimated_usd": est_usd,
+                "budget_usd": args.budget,
+                "input": {
+                    "review_csv": str(args.overrides_csv),
+                    "facts_dir": str(args.facts_dir),
+                    "queue_csv": str(QUEUE_CSV),
+                },
+                "outputs": {
+                    "research_dir": str(DR_OUT_DIR),
+                    "review_csv": str(args.overrides_csv),
+                },
+                "privacy": {
+                    "message_bodies_read": False,
+                    "paid_provider_called": status in {"running", "research_complete", "failed"},
+                },
+                "result_status": result.get("status", ""),
+            }, manifest_path)
+        return result
+
+    if not subset:
+        return persist(
+            {**base, "status": "noop", "queue_csv": str(QUEUE_CSV),
+             "reason": "no effective-Yes contacts need enrichment"},
+            "research_complete")
+
     if args.dry_run:
-        return {**base, "status": "dry_run", "queue_csv": str(QUEUE_CSV),
-                "elapsed_ms": int((time.monotonic() - started) * 1000)}
+        return persist(
+            {**base, "status": "dry_run", "queue_csv": str(QUEUE_CSV),
+             "elapsed_ms": int((time.monotonic() - started) * 1000)},
+            "needs_approval", completed=reused_completed)
 
     if not pending_queue:
         proposals = propose_retargets_from_output(DR_OUT_DIR, subset, Path(args.overrides_csv))
-        return {**base, "status": "reused", "queue_csv": str(QUEUE_CSV),
-                "output_dir": str(DR_OUT_DIR),
-                "retargets_proposed": proposals.get("proposed", 0),
-                "reason": "all eligible people already have completed Parallel research",
-                "elapsed_ms": int((time.monotonic() - started) * 1000)}
+        return persist(
+            {**base, "status": "reused", "queue_csv": str(QUEUE_CSV),
+             "output_dir": str(DR_OUT_DIR),
+             "retargets_proposed": proposals.get("proposed", 0),
+             "reason": "all eligible people already have completed Parallel research",
+             "elapsed_ms": int((time.monotonic() - started) * 1000)},
+            "research_complete", completed=len(queue))
 
     # Every paid run needs current-run approval, and the estimate must stay below
     # the ceiling the user approved.
     if not args.approve or est_usd > args.budget:
-        return {**base, "status": "needs_approval", "queue_csv": str(QUEUE_CSV),
-                "message": f"deep research for {len(pending_queue)} net-new people is ~${est_usd:.2f} "
-                           f"({reused_completed} completed reused, {duplicate_handles} duplicates skipped); "
-                           f"get explicit approval, then re-run with --approve and "
-                           f"an approved --budget at or above the estimate (current ${args.budget:.2f})",
-                "elapsed_ms": int((time.monotonic() - started) * 1000)}
+        return persist(
+            {**base, "status": "needs_approval", "queue_csv": str(QUEUE_CSV),
+             "message": f"deep research for {len(pending_queue)} net-new people is ~${est_usd:.2f} "
+                        f"({reused_completed} completed reused, {duplicate_handles} duplicates skipped); "
+                        f"get explicit approval, then re-run with --approve and "
+                        f"an approved --budget at or above the estimate (current ${args.budget:.2f})",
+             "elapsed_ms": int((time.monotonic() - started) * 1000)},
+            "needs_approval", completed=reused_completed)
 
     # Delegate the spend to the existing Parallel.ai primitive (reuse, don't rebuild).
     # STREAM its output live to our stderr (the primitive prints `[deep_research_contacts]
@@ -406,21 +533,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # take minutes. Keep our own stdout clean for the final JSON manifest.
     print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({args.processor}); "
           "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
+    persist({**base, "status": "running"}, "running", completed=reused_completed)
     cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_research_contacts.deep_research_contacts",
            "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]
+    if manifest_path:
+        cmd.extend(["--manifest", str(manifest_path)])
     proc = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, text=True)
     print(f"[deep-research] research process exited ({proc.returncode}).", file=sys.stderr, flush=True)
     # Propose retargets (pending) for any correct LinkedIn the research found.
     proposals = {"proposed": 0}
     if proc.returncode == 0:
         proposals = propose_retargets_from_output(DR_OUT_DIR, subset, Path(args.overrides_csv))
-    return {
+    result = {
         **base, "status": "ran" if proc.returncode == 0 else "failed",
         "queue_csv": str(QUEUE_CSV), "output_dir": str(DR_OUT_DIR),
         "retargets_proposed": proposals.get("proposed", 0),
         "returncode": proc.returncode, "progress": "streamed live to stderr",
         "elapsed_ms": int((time.monotonic() - started) * 1000),
     }
+    return persist(
+        result,
+        "research_complete" if proc.returncode == 0 else "failed",
+        completed=len(queue) if proc.returncode == 0 else reused_completed,
+        failed=0 if proc.returncode == 0 else len(pending_queue))
 
 
 def _finite_non_negative_float(value: str) -> float:
@@ -437,6 +572,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     p.add_argument("--facts-dir", default=str(FACTS_DIR))
     p.add_argument("--raw-dir", default=str(RAW_DIR))
+    p.add_argument("--manifest", default=str(ENRICH_MANIFEST),
+                   help="Fixed Enrich Contacts progress manifest")
     p.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=sorted(PROCESSOR_PRICING_USD))
     p.add_argument("--confirm-threshold", type=float, default=0.85)
     p.add_argument("--budget", type=_finite_non_negative_float, default=DEFAULT_BUDGET,

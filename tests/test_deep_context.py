@@ -1079,6 +1079,258 @@ class TestApplyRetargets(unittest.TestCase):
 
 
 class TestReconcileDeepResearch(unittest.TestCase):
+    def test_queue_sends_dossier_identifiers_and_owner_context(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            (facts / "pid-ben.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": "Benjamin Chen",
+                "aliases": ["Ben Chen"],
+                "relationship_to_owner": "old friend",
+                "employers": [],
+                "school": "",
+                "location": "Louisiana",
+                "topics": ["music"],
+                "identifiers": ["bencchen89@gmail.com"],
+                "shared_context": [{
+                    "overlap": "location",
+                    "detail": "Bay Area social circle",
+                    "evidence": "messages",
+                }],
+            }}) + "\n", encoding="utf-8")
+            subset = [{
+                "parent_slug": "benjamin-chen",
+                "name": "Benjamin Chen",
+                "person_ids": ["pid-ben"],
+                "candidate_key": "wrong-ben",
+                "linkedin": {"linkedin_url": "https://www.linkedin.com/in/wrong-ben"},
+                "verdict": {"reason": "career timeline contradiction"},
+            }]
+            people = {"pid-ben": {
+                "primary_email": "",
+                "all_emails": "",
+                "primary_phone": "",
+                "all_phones": "",
+            }}
+            owner = {
+                "name": "Arthur Chen",
+                "education": [{"school": "UCLA", "start": 2007, "end": 2010}],
+                "work": [],
+                "locations": ["Palo Alto, California, United States"],
+            }
+            from unittest import mock
+            with mock.patch.object(dresearch, "load_owner", return_value=owner):
+                (row,) = dresearch.build_queue(subset, people, facts, base / "raw")
+            self.assertIn("Also known as: Ben Chen", row["bio"])
+            self.assertIn("bencchen89@gmail.com", row["bio"])
+            self.assertIn("Bay Area social circle", row["bio"])
+            self.assertIn("MAILBOX OWNER BACKGROUND (me): Arthur Chen", row["known_info"])
+            self.assertIn("Palo Alto", row["known_info"])
+
+    def test_no_work_overwrites_queue_and_fixed_manifest(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            verdicts = base / "verdicts.jsonl"
+            verdicts.write_text("", encoding="utf-8")
+            manifest_path = base / "research" / "manifest.json"
+            old_out, old_queue = dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV
+            dresearch.DR_OUT_DIR = base / "research"
+            dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
+            try:
+                result = dresearch.run(_ns(
+                    verdicts_jsonl=verdicts, people_csv=base / "people.csv",
+                    overrides_csv=base / "review.csv", facts_dir=base / "facts",
+                    raw_dir=base / "raw", processor="core2x", confirm_threshold=0.85,
+                    budget=0.0, approve=False, dry_run=True,
+                    include_plausibly_absent=False, include_candidates=False,
+                    manifest=manifest_path,
+                ))
+            finally:
+                dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV = old_out, old_queue
+            self.assertEqual(result["status"], "noop")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual((manifest["stage"], manifest["status"]),
+                             ("enrich", "research_complete"))
+            self.assertEqual(manifest["counts"],
+                             {"total": 0, "completed": 0, "pending": 0, "failed": 0})
+            self.assertEqual((base / "research" / "research_queue.csv").read_text().splitlines()[0],
+                             ",".join(dresearch.QUEUE_FIELDS))
+
+    def test_dry_run_counts_no_link_import_candidate_for_worth_refresh(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, raw, cache = base / "facts", base / "raw", base / "cache"
+            facts.mkdir()
+            raw.mkdir()
+            cache.mkdir()
+            pid = "candidate:email:professor@example.com"
+            sibling_pid = "candidate:email:professor.alias@example.com"
+            for person_id in (pid, sibling_pid):
+                (facts / f"{person_id}.jsonl").write_text(json.dumps({"facts": {
+                    "canonical_name": "Professor Example",
+                    "relationship_to_owner": "former professor",
+                    "network_worth": {"decision": "maybe", "reason": "profession unknown"},
+                }}) + "\n", encoding="utf-8")
+                common.write_json(raw / f"{person_id}.json", {
+                    "person_id": person_id,
+                    "messages": [{
+                        "at": "2020-01-01T00:00:00Z",
+                        "direction": "from_them",
+                        "text": "Happy to advise you on the course project.",
+                    }],
+                })
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": {
+                    "professor-child": {"person_id": pid},
+                    "professor-alias-child": {"person_id": sibling_pid},
+                },
+                "parents": {
+                    "professor-parent": {
+                        "name": "Professor Example",
+                        "children": ["professor-child", "professor-alias-child"],
+                    },
+                },
+            }), encoding="utf-8")
+            result = reconcile.run(_ns(
+                index_json=index_json,
+                people_csv=base / "people.csv",
+                profile_cache_dir=cache,
+                facts_dir=facts,
+                raw_dir=raw,
+                parents_dir=base / "parents",
+                verdicts_jsonl=base / "reconcile" / "verdicts.jsonl",
+                verdicts_csv=base / "reconcile" / "verdicts.csv",
+                overrides_csv=base / "review.csv",
+                consolidate_people_csv=base / "consolidate.csv",
+                confirm_threshold=0.7,
+                detach_threshold=0.85,
+                model="m",
+                reasoning_effort="high",
+                concurrency=1,
+                timeout=10,
+                max_retries=0,
+                dry_run=True,
+                no_overrides=False,
+                no_llm=False,
+            ))
+            self.assertEqual(result["identity_judgeable"], 0)
+            self.assertEqual(result["worth_only_judgeable"], 1)
+            self.assertEqual(result["worth_only_machine_stable"], 0)
+            self.assertEqual(result["judgeable"], 1)
+
+            reconcile._write_override_rows(base / "review.csv", {
+                pid: {
+                    **{key: "" for key in reconcile.OVERRIDE_COLUMNS},
+                    "public_identifier": pid,
+                    "person_id": pid,
+                    "llm_worth": "yes",
+                },
+                sibling_pid: {
+                    **{key: "" for key in reconcile.OVERRIDE_COLUMNS},
+                    "public_identifier": sibling_pid,
+                    "person_id": sibling_pid,
+                    "llm_worth": "no",
+                },
+            })
+            stable = reconcile.run(_ns(
+                index_json=index_json,
+                people_csv=base / "people.csv",
+                profile_cache_dir=cache,
+                facts_dir=facts,
+                raw_dir=raw,
+                parents_dir=base / "parents",
+                verdicts_jsonl=base / "reconcile" / "verdicts.jsonl",
+                verdicts_csv=base / "reconcile" / "verdicts.csv",
+                overrides_csv=base / "review.csv",
+                consolidate_people_csv=base / "consolidate.csv",
+                confirm_threshold=0.7,
+                detach_threshold=0.85,
+                model="m",
+                reasoning_effort="high",
+                concurrency=1,
+                timeout=10,
+                max_retries=0,
+                dry_run=True,
+                no_overrides=False,
+                no_llm=False,
+            ))
+            self.assertEqual(stable["worth_only_judgeable"], 0)
+            self.assertEqual(stable["worth_only_machine_stable"], 1)
+
+            reconcile._write_override_rows(base / "review.csv", {pid: {
+                **{key: "" for key in reconcile.OVERRIDE_COLUMNS},
+                "public_identifier": pid,
+                "person_id": pid,
+                "network_worth": "yes",
+            }})
+            mixed = reconcile.run(_ns(
+                index_json=index_json,
+                people_csv=base / "people.csv",
+                profile_cache_dir=cache,
+                facts_dir=facts,
+                raw_dir=raw,
+                parents_dir=base / "parents",
+                verdicts_jsonl=base / "reconcile" / "verdicts.jsonl",
+                verdicts_csv=base / "reconcile" / "verdicts.csv",
+                overrides_csv=base / "review.csv",
+                consolidate_people_csv=base / "consolidate.csv",
+                confirm_threshold=0.7,
+                detach_threshold=0.85,
+                model="m",
+                reasoning_effort="high",
+                concurrency=1,
+                timeout=10,
+                max_retries=0,
+                dry_run=True,
+                no_overrides=False,
+                no_llm=False,
+            ))
+            self.assertEqual(mixed["worth_only_judgeable"], 1)
+            self.assertEqual(mixed["worth_only_human_preserved"], 0)
+            self.assertEqual(mixed["worth_only_machine_stable"], 0)
+
+            reconcile._write_override_rows(base / "review.csv", {
+                pid: {
+                    **{key: "" for key in reconcile.OVERRIDE_COLUMNS},
+                    "public_identifier": pid,
+                    "person_id": pid,
+                    "network_worth": "yes",
+                },
+                sibling_pid: {
+                    **{key: "" for key in reconcile.OVERRIDE_COLUMNS},
+                    "public_identifier": sibling_pid,
+                    "person_id": sibling_pid,
+                    "network_worth": "yes",
+                },
+            })
+            preserved = reconcile.run(_ns(
+                index_json=index_json,
+                people_csv=base / "people.csv",
+                profile_cache_dir=cache,
+                facts_dir=facts,
+                raw_dir=raw,
+                parents_dir=base / "parents",
+                verdicts_jsonl=base / "reconcile" / "verdicts.jsonl",
+                verdicts_csv=base / "reconcile" / "verdicts.csv",
+                overrides_csv=base / "review.csv",
+                consolidate_people_csv=base / "consolidate.csv",
+                confirm_threshold=0.7,
+                detach_threshold=0.85,
+                model="m",
+                reasoning_effort="high",
+                concurrency=1,
+                timeout=10,
+                max_retries=0,
+                dry_run=True,
+                no_overrides=False,
+                no_llm=False,
+            ))
+            self.assertEqual(preserved["worth_only_judgeable"], 0)
+            self.assertEqual(preserved["worth_only_human_preserved"], 1)
+            self.assertEqual(preserved["worth_only_machine_stable"], 0)
+
     """Phase 3 escalation: subset selection + explicit cost gate (no spend)."""
 
     def test_eligible_subset_filters(self):
@@ -1235,15 +1487,16 @@ class TestReconcileDeepResearch(unittest.TestCase):
             dresearch.build_parser().parse_args(["--budget", "nan"])
 
     def test_retarget_reads_canonical_parallel_linkedin_shape(self):
+        notes = "Matched employer and location " + ("with supporting evidence " * 20)
         profile = {
             "social": {"linkedin_url": "https://www.linkedin.com/in/right-person"},
-            "metadata": {"research_notes": "Matched employer and location"},
+            "metadata": {"research_notes": notes},
         }
         self.assertEqual(
             dresearch._find_linkedin(profile),
             "https://www.linkedin.com/in/right-person",
         )
-        self.assertIn("Matched employer", dresearch._find_reason(profile))
+        self.assertEqual(dresearch._find_reason(profile), f"deep research: {notes}")
 
 
 class TestReviewWeb(unittest.TestCase):

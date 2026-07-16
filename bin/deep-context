@@ -41,10 +41,11 @@ usage: bin/deep-context <command> [args]
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
   review       open the staged people / LinkedIn decision UI (local, free)
+  review-status  read manifests/CSVs and print the exact next workflow action
   assemble-synthetic  build synthetic people-rows from deep-research output for
                people with NO real LinkedIn (free, local; approved rows merge)
-  re-review    LLM re-review: refresh all non-user decisions + spam screen (spends
-               OpenAI; try `re-review --dry-run` first; user yes/no rows are sticky)
+  re-review    LLM re-review: refresh machine Maybe/unjudged worth rows (spends
+               OpenAI; try `re-review --dry-run` first; machine + human yes/no are stable)
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
   apply-retargets           enrich approved retargets -> retarget-people.csv
   realize      fan-in merge applying your decisions (free, local)
@@ -137,15 +138,23 @@ case "$cmd" in
     ;;
   re-review)
     # LLM re-review (spends OpenAI; try `re-review --dry-run` first for a free estimate):
-    # fresh re-judge of everyone, refreshing every decision the user has NOT made themselves
-    # (pending + approved=auto rows) plus the spam screen. The machine-owned llm_reject*
-    # columns always update; user rows (approved yes/no) keep action/approved untouched.
+    # re-judge only machine Maybe/unjudged Gmail candidates. Machine Yes/No is stable,
+    # while human Yes/No remains authoritative and untouched.
+    # compose intentionally rewrites the child lookup index, so a direct re-review may
+    # need to restore the free canonical-parent layer before reconcile can find work.
+    if ! uv run --project . python -c \
+      'import json, pathlib, sys; p=pathlib.Path(".powerpacks/deep-context/index.json"); sys.exit(0 if p.exists() and json.loads(p.read_text()).get("parents") else 1)'; then
+      "${PY[@]}" "$PKG.build_parents"
+    fi
     "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
     ;;
   review)
-    # Local/free staged UI. Human choices are binary; the fixed review manifest tells
-    # the agent when worth or LinkedIn review is explicitly complete.
+    # Local/free dumb UI: it edits review files and observes fixed manifests only.
     "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
+    ;;
+  review-status)
+    # Read-only deterministic poll target. No browser, provider, subprocess, or write.
+    "${PY[@]}" "$PKG.reconcile_review_web" status "$@"
     ;;
   reconcile-deep-research)
     # Find the right identity for high-confidence wrong_person detaches. Every

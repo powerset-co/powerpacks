@@ -37,6 +37,8 @@ PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to ch
 
 # Phase 3 — reconcile parents against their attached LinkedIn profile ("self-heal").
 RECONCILE_DIR = ROOT / "reconcile"
+DEEP_RESEARCH_DIR = RECONCILE_DIR / "deep-research"
+ENRICH_MANIFEST = DEEP_RESEARCH_DIR / "manifest.json"
 VERDICTS_JSONL = RECONCILE_DIR / "verdicts.jsonl"   # full per-candidate judge record
 VERDICTS_CSV = RECONCILE_DIR / "verdicts.csv"       # flat review table
 SUMMARY_MD = RECONCILE_DIR / "summary.md"           # the ONE report to read (what changed + review)

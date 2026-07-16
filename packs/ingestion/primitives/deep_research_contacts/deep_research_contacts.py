@@ -44,9 +44,11 @@ from typing import Any
 
 try:
     from packs.shared.csv_io import CsvIO
+    from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
 except ModuleNotFoundError:  # pragma: no cover - direct script fallback
     sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from packs.shared.csv_io import CsvIO
+    from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
 
 
 def load_dotenv(path: Path) -> None:
@@ -140,14 +142,14 @@ When a phone number is provided:
   - If the hint conflicts with other signals, explain the conflict in research_notes and name_evidence
   - Do not ignore the hint unless it is impossible to reconcile with any plausible public profile
 - Consider alternate spellings and transliterations of the person's name
-- If several candidates are plausible, prefer the strongest professionally relevant candidate
-  in startup, investor, operator, technical, academic, or other high-agency career paths
-  rather than a random consumer match, provided the candidate is directionally consistent with the available signals
-- You may return a best candidate even when the match is not fully proven, but in that case:
-  - keep name_confidence appropriately low
-  - explain clearly in research_notes and name_evidence why the match is uncertain
-  - avoid fabricating a direct phone-number linkage that you do not have
-- Only return null when there is no plausible high-signal candidate worth surfacing
+- If several candidates are plausible, optimize only for identity correctness. Professional
+  prestige, seniority, academic status, or an impressive career is never evidence that one
+  namesake is more likely to be the user's contact.
+- Prefer direct identifiers and relationship-context consistency: exact email/handle,
+  geography, school, employer, era, mutual/social context, and the mailbox owner's background.
+- Return a LinkedIn only when the selected candidate is more likely than the alternatives and
+  has no hard contradiction. Prefer null to a professionally impressive but weak circumstantial
+  match. Explain unresolved alternatives and uncertainty in research_notes.
 
 ### 2. WORK EXPERIENCE
 Find ALL positions — titles, companies, approximate dates:
@@ -182,8 +184,8 @@ IMPORTANT OUTPUT RULES:
 - For work_experience: output ONLY the company name, not descriptions in the company field.
 - For work_experience descriptions: when public evidence exists, include a concise description of the
   person's role, responsibilities, practice area, or focus. Keep it factual and source-grounded.
-- For linkedin_url: it is acceptable to return the strongest candidate's LinkedIn even when confidence is limited,
-  but only if research_notes makes the ambiguity explicit.
+- For linkedin_url: return null when identity evidence is too weak or multiple candidates remain
+  similarly plausible. Never force a single candidate merely because the schema has one URL field.
 - Do NOT include reasoning or uncertainty in data fields — put that in research_notes instead."""
 
 
@@ -649,6 +651,42 @@ def _persisted_state_path(output_dir: Path) -> Path:
     return output_dir / "_taskgroup.json"
 
 
+def _write_progress_manifest(args: argparse.Namespace, status: str,
+                             counts: dict[str, int], **extra: Any) -> None:
+    text = str(getattr(args, "manifest", "") or "").strip()
+    if not text:
+        return
+    path = Path(text)
+    if path.name != "manifest.json":
+        raise SystemExit("--manifest must end in manifest.json")
+    try:
+        existing = read_json(path) if path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        existing = {}
+    payload = {**existing, **extra, "stage": "enrich", "status": status, "counts": counts}
+    payload.pop("updated_at", None)
+    payload.pop("created_at", None)
+    write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
+
+
+def _normalized_progress_counts(total: int, reused: int,
+                                provider_counts: dict[str, Any]) -> dict[str, int]:
+    normalized = {str(key).lower(): int(value or 0)
+                  for key, value in provider_counts.items()}
+    completed = reused + sum(normalized.get(key, 0)
+                             for key in ("completed", "succeeded", "success"))
+    failed = sum(normalized.get(key, 0)
+                 for key in ("failed", "error", "errored", "cancelled", "canceled"))
+    completed = min(total, completed)
+    failed = min(max(0, total - completed), failed)
+    return {
+        "total": total,
+        "completed": completed,
+        "pending": max(0, total - completed - failed),
+        "failed": failed,
+    }
+
+
 def cmd_estimate(args: argparse.Namespace) -> int:
     processor = _validate_processor(args.processor)
     rows = load_queue(Path(args.input))
@@ -712,6 +750,10 @@ def cmd_submit(args: argparse.Namespace) -> int:
         todo = todo[: args.limit]
 
     if not todo:
+        _write_progress_manifest(
+            args, "research_complete",
+            {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
+            provider_status={})
         emit({
             "primitive": "deep_research_contacts",
             "command": "submit",
@@ -759,6 +801,11 @@ def cmd_submit(args: argparse.Namespace) -> int:
         "rows": todo,  # keep for poll-time CSV row lookup
     }
     write_json(_persisted_state_path(output_dir), state)
+    _write_progress_manifest(
+        args, "running",
+        {"total": len(rows), "completed": skipped_done,
+         "pending": len(todo), "failed": 0},
+        provider_status={"submitted": len(todo)})
 
     cost_per = PROCESSOR_PRICING_USD[processor]
     emit({
@@ -775,7 +822,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
     return 0
 
 
-def _wait_for_group(client: ParallelClient, group_id: str, *, poll_interval: int, max_wait: int) -> dict[str, Any]:
+def _wait_for_group(client: ParallelClient, group_id: str, *, poll_interval: int,
+                    max_wait: int, on_progress=None) -> dict[str, Any]:
     deadline = time.time() + max_wait
     last: dict[str, Any] = {}
     while time.time() < deadline:
@@ -785,6 +833,8 @@ def _wait_for_group(client: ParallelClient, group_id: str, *, poll_interval: int
         counts = status.get("task_run_status_counts") or {}
         if counts:
             print(f"[deep_research_contacts] poll status {counts}", file=sys.stderr, flush=True)
+            if on_progress:
+                on_progress(counts)
         if status.get("is_active") is False:
             return payload
         time.sleep(poll_interval)
@@ -811,6 +861,8 @@ def cmd_poll(args: argparse.Namespace) -> int:
     rows_by_handle = {row.get("handle"): row for row in rows if row.get("handle")}
     processor = state.get("processor") or DEFAULT_PROCESSOR
     research_method = f"parallel-{processor}"
+    skipped_done = int(state.get("skipped_already_done") or 0)
+    total = skipped_done + len(run_ids)
 
     client = ParallelClient(api_key, args.base_url, args.beta_header)
 
@@ -819,6 +871,10 @@ def cmd_poll(args: argparse.Namespace) -> int:
         client, group_id,
         poll_interval=args.poll_interval,
         max_wait=args.max_wait,
+        on_progress=lambda counts: _write_progress_manifest(
+            args, "running",
+            _normalized_progress_counts(total, skipped_done, counts),
+            provider_status=counts),
     )
     print(f"[deep_research_contacts] group complete, fetching {len(run_ids)} run results", file=sys.stderr)
 
@@ -895,11 +951,30 @@ def cmd_poll(args: argparse.Namespace) -> int:
         "errors": errors,
     }
     write_json(output_dir / "_manifest.json", summary)
+    _write_progress_manifest(
+        args,
+        "research_complete" if not errors else "completed_with_errors",
+        {"total": total, "completed": skipped_done + len(results_by_handle),
+         "pending": 0, "failed": len(errors)},
+        provider_status=(final_group or {}).get("status") or {})
     emit(summary)
     return 0 if not errors else 2
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    rows = load_queue(Path(args.input))
+    todo, skipped_done = filter_already_done(rows, Path(args.output_dir))
+    if args.limit is not None:
+        todo = todo[: args.limit]
+    if not todo:
+        _write_progress_manifest(
+            args, "research_complete",
+            {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
+            provider_status={})
+        emit({"primitive": "deep_research_contacts", "command": "run",
+              "status": "no_work", "queue_rows": len(rows),
+              "skipped_already_done": skipped_done})
+        return 0
     rc = cmd_submit(args)
     if rc != 0:
         return rc
@@ -916,6 +991,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--beta-header", default=DEFAULT_BETA_HEADER)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), type=Path)
+    parser.add_argument("--manifest", help="Optional fixed stage manifest for UI progress")
 
 
 def add_submit_args(parser: argparse.ArgumentParser) -> None:

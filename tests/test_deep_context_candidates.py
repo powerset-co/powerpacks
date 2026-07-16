@@ -473,6 +473,13 @@ class TestNetworkWorth(unittest.TestCase):
         self.assertEqual(prop["properties"]["decision"]["enum"], ["yes", "maybe", "no"])
         self.assertEqual(prop["required"], ["decision", "reason"])
         self.assertIn("network_worth", synth.SYSTEM_PROMPT)
+        self.assertIn("family/relatives", synth.SYSTEM_PROMPT)
+        self.assertIn("professors/teachers/mentors", synth.SYSTEM_PROMPT)
+        self.assertIn("Maybe is exceptional", synth.SYSTEM_PROMPT)
+        self.assertIn("network_worth", reconcile.RECONCILE_SCHEMA["required"])
+        self.assertIn("family/relatives", reconcile.SYSTEM_PROMPT)
+        self.assertIn("professors/teachers/mentors", reconcile.SYSTEM_PROMPT)
+        self.assertIn("Maybe is exceptional", reconcile.SYSTEM_PROMPT)
         self.assertEqual(candidates.NETWORK_WORTH_VALUES, ("yes", "maybe", "no"))
         self.assertIn("network_worth", reconcile.OVERRIDE_COLUMNS)
 
@@ -509,11 +516,11 @@ class TestNetworkWorth(unittest.TestCase):
                 "janedoe", {"janedoe": {"llm_worth": "no", "llm_worth_reason": "cold outreach"}}, facts)
             self.assertEqual((got["decision"], got["source"], got["reason"]),
                              ("no", "llm", "cold outreach"))
-            # facts on disk win over the mirrored row value
+            # fresh reconcile judgment wins over the older synthesis fact
             (facts / "janedoe.jsonl").write_text(_facts_record("yes", "founder") + "\n", encoding="utf-8")
             got = candidates.effective_network_worth(
                 "janedoe", {"janedoe": {"llm_worth": "no", "llm_worth_reason": "stale"}}, facts)
-            self.assertEqual((got["decision"], got["source"], got["reason"]), ("yes", "llm", "founder"))
+            self.assertEqual((got["decision"], got["source"], got["reason"]), ("no", "llm", "stale"))
             # the user's mark still beats every machine signal
             got = candidates.effective_network_worth(
                 "janedoe", {"janedoe": {"network_worth": "no", "llm_worth": "yes"}}, facts)
@@ -530,6 +537,14 @@ class TestNetworkWorth(unittest.TestCase):
             got = candidates.effective_network_worth(
                 "janedoe", {"janedoe": {"action": "exclude", "approved": ""}}, facts)
             self.assertEqual((got["decision"], got["source"]), ("maybe", "default"))
+            # approved=auto is machine state, not a human decision; fresh
+            # re-review output can still replace it.
+            got = candidates.effective_network_worth(
+                "janedoe", {"janedoe": {
+                    "action": "exclude", "approved": "auto",
+                    "llm_worth": "yes", "llm_worth_reason": "real relationship",
+                }}, facts)
+            self.assertEqual((got["decision"], got["source"]), ("yes", "llm"))
             # an explicit user mark wins over a stale exclude
             got = candidates.effective_network_worth(
                 "janedoe", {"janedoe": {"action": "exclude", "approved": "yes", "network_worth": "yes"}}, facts)
@@ -656,6 +671,44 @@ class TestAssembleWorthGate(unittest.TestCase):
             with (base / "synthetic-people.csv").open(newline="", encoding="utf-8") as fh:
                 (row,) = list(csv.DictReader(fh))
             self.assertEqual(row["id"], "candidate:email:cass@x.com")
+
+    def test_current_empty_queue_prunes_machine_rows_but_preserves_user_gates(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            research = base / "research"
+            research.mkdir()
+            queue = base / "research_queue.csv"
+            queue.write_text("handle,display_name\n", encoding="utf-8")
+            out = base / "synthetic-people.csv"
+            asp.write_rows(out, {
+                "synth-x-old-auto": {
+                    "id": "candidate:email:auto@x.com",
+                    "public_identifier": "synth-x-old-auto",
+                    "full_name": "Old Auto", "enrichment_provider": "synthetic",
+                    "source_parent_slug": "old-auto", "approved": "auto",
+                },
+                "synth-x-user-kept": {
+                    "id": "candidate:email:kept@x.com",
+                    "public_identifier": "synth-x-user-kept",
+                    "full_name": "User Kept", "enrichment_provider": "synthetic",
+                    "source_parent_slug": "user-kept", "approved": "yes",
+                },
+            })
+            people = base / "people.csv"
+            people.write_text("id,primary_email,primary_phone\n", encoding="utf-8")
+            review = base / "review.csv"
+            with mock.patch.object(asp, "LINKEDIN_OVERRIDES_CSV", review), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                asp.main([
+                    "--research-dir", str(research), "--queue-csv", str(queue),
+                    "--people-csv", str(people),
+                    "--verdicts-jsonl", str(base / "verdicts.jsonl"),
+                    "--out", str(out),
+                ])
+            result = json.loads(output.getvalue())
+            rows = asp.load_rows(out)
+            self.assertEqual(set(rows), {"synth-x-user-kept"})
+            self.assertEqual(result["pruned_stale_machine_rows"], 1)
 
 
 class TestWorthCarryForward(unittest.TestCase):
@@ -848,6 +901,71 @@ class TestLlmWorthColumns(unittest.TestCase):
             self.assertEqual(row["network_worth"], "yes")                          # user mark untouched
             self.assertEqual((row["llm_worth"], row["llm_worth_reason"]), ("no", "vendor"))
 
+    def test_no_link_candidates_get_fresh_machine_worth_and_keep_human_decisions(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            review = base / "review.csv"
+            human_pid = "candidate:email:human@example.com"
+            untouched_pid = "candidate:email:untouched@example.com"
+            stable_pid = "candidate:email:stable@example.com"
+            reconcile._write_override_rows(review, {
+                human_pid: {
+                    **{k: "" for k in reconcile.OVERRIDE_COLUMNS},
+                    "public_identifier": human_pid,
+                    "person_id": human_pid,
+                    "network_worth": "yes",
+                    "llm_worth": "maybe",
+                },
+                stable_pid: {
+                    **{k: "" for k in reconcile.OVERRIDE_COLUMNS},
+                    "public_identifier": stable_pid,
+                    "person_id": stable_pid,
+                    "llm_worth": "yes",
+                    "llm_worth_reason": "already decisive",
+                },
+            })
+            task = {
+                "no_link": True,
+                "person_ids": [human_pid, untouched_pid, stable_pid],
+                "worth_person_ids": [untouched_pid],
+                "verdict": {
+                    "spam_contact": False,
+                    "spam_confidence": 0.0,
+                    "spam_reason": "",
+                    "network_worth": {
+                        "decision": "no",
+                        "reason": "automated marketing sender",
+                    },
+                },
+            }
+            stats = reconcile.write_overrides(review, [task], facts)
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual(stats["worth_refreshed"], 1)
+            self.assertEqual(rows[human_pid]["network_worth"], "yes")
+            self.assertEqual(rows[human_pid]["llm_worth"], "maybe")
+            self.assertEqual(rows[untouched_pid]["network_worth"], "")
+            self.assertEqual(
+                (rows[untouched_pid]["llm_worth"], rows[untouched_pid]["llm_worth_reason"]),
+                ("no", "automated marketing sender"),
+            )
+            self.assertEqual(
+                (rows[stable_pid]["llm_worth"], rows[stable_pid]["llm_worth_reason"]),
+                ("yes", "already decisive"),
+            )
+
+            task["verdict"]["network_worth"] = {
+                "decision": "yes",
+                "reason": "real professor relationship",
+            }
+            reconcile.write_overrides(review, [task], facts)
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual(rows[human_pid]["network_worth"], "yes")
+            self.assertEqual(rows[human_pid]["llm_worth"], "maybe")
+            self.assertEqual(rows[untouched_pid]["llm_worth"], "yes")
+            self.assertEqual(rows[stable_pid]["llm_worth"], "yes")
+
 
 def _verdict_jsonl(path: Path, rows: list[dict]) -> Path:
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
@@ -948,6 +1066,43 @@ class TestUnifiedRejected(unittest.TestCase):
             self.assertIn("data-worth='yes'", rendered)
             self.assertIn("data-worth='no'", rendered)
 
+    def test_no_link_import_candidate_remains_in_maybe_review_queue(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            pid = "candidate:email:sharon@example.com"
+            (facts / f"{pid}.jsonl").write_text(
+                _facts_record("maybe", "unclear one-off introduction") + "\n",
+                encoding="utf-8",
+            )
+            review = base / "review.csv"
+            reconcile._write_override_rows(review, {pid: {
+                **{key: "" for key in reconcile.OVERRIDE_COLUMNS},
+                "public_identifier": pid,
+                "person_id": pid,
+                "llm_worth": "maybe",
+                "llm_worth_reason": "unclear one-off introduction",
+            }})
+            verdicts = _verdict_jsonl(base / "verdicts.jsonl", [{
+                "parent_slug": "sharon-parent", "name": "Sharon",
+                "candidate_key": "", "person_ids": [pid],
+                "conflict": False, "no_link": True, "linkedin": {},
+                "verdict": {
+                    "verdict": "needs_review", "confidence": 0.0,
+                    "reason": "no LinkedIn attached",
+                },
+                "error": "",
+            }])
+            parents, overrides = web.build_parents(verdicts, review)
+            web.annotate_worth(parents, overrides, facts)
+            (parent,) = parents
+            candidate = parent["candidates"][0]
+            self.assertEqual(candidate["pub"], pid)
+            self.assertTrue(candidate["import_candidate"])
+            self.assertTrue(web.is_worth_subject(parent))
+            self.assertTrue(web.needs_worth_review(parent))
+
 
 class TestExcludeIsUnifiedNo(unittest.TestCase):
     def test_excluded_row_lands_in_rejected_and_worth_yes_rescues(self):
@@ -1042,6 +1197,42 @@ class TestSyntheticWorthGateSync(unittest.TestCase):
             (parent,) = web.load_synthetic_parents(path, parents_dir)
         self.assertEqual(parent["dossier_slug"], "ross-nordeen-parent12")
 
+    def test_candidate_synthetic_recovers_composed_child_dossier(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            path = base / "synthetic-people.csv"
+            person_id = "candidate:email:annmay.yang@example.com"
+            columns = [
+                "id", "public_identifier", "full_name", "enrichment_provider",
+                "approved", "source_parent_slug", "source_person_ids",
+                "source_candidate_public_identifier",
+            ]
+            with path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=columns)
+                writer.writeheader()
+                writer.writerow({
+                    "id": person_id,
+                    "public_identifier": "synth-email-annmay",
+                    "full_name": "Annmay Yang",
+                    "enrichment_provider": "synthetic",
+                    "approved": "",
+                    "source_parent_slug": "annmay-yang-parenta6",
+                    "source_person_ids": json.dumps([person_id]),
+                    "source_candidate_public_identifier": person_id,
+                })
+            parents_dir = base / "parents"
+            dossier_dir = base / "dossiers"
+            facts_dir = base / "facts"
+            parents_dir.mkdir()
+            dossier_dir.mkdir()
+            facts_dir.mkdir()
+            child_slug = web.slugify("Annmay Yang", person_id)
+            (dossier_dir / f"{child_slug}.md").write_text(
+                "# Annmay Yang\n", encoding="utf-8")
+            (parent,) = web.load_synthetic_parents(
+                path, parents_dir, dossier_dir, facts_dir)
+        self.assertEqual(parent["dossier_slug"], child_slug)
+
 
 class TestStagedReviewUI(unittest.TestCase):
     def _candidate_parent(self, decision: str = "maybe", source: str = "llm") -> dict:
@@ -1061,6 +1252,52 @@ class TestStagedReviewUI(unittest.TestCase):
             "connection": False,
         }
 
+    def test_proposed_linkedin_uses_current_research_profile_without_provider_call(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            research = base / "research"
+            handle = "ada-lovelace-parent01"
+            research.mkdir()
+            with (research / "research_queue.csv").open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=dresearch.QUEUE_FIELDS)
+                writer.writeheader()
+                writer.writerow({
+                    "handle": handle,
+                    "source_parent_slug": handle,
+                    "source_person_ids": json.dumps(["candidate:email:ada@example.com"]),
+                    "source_candidate_public_identifier": "candidate:email:ada@example.com",
+                })
+            notes = "Matched employer, school, and location with complete supporting evidence."
+            common.write_json(research / handle / "01_research_parallel.json", {
+                "person": {"full_name": "Ada Byron Lovelace"},
+                "headline": {"text": "Analytical Engine Pioneer"},
+                "location": {"raw": "London, United Kingdom"},
+                "positions": [{
+                    "title": "Founder", "company_name": "Analytical Engines",
+                    "start_date": "1842", "is_current": True,
+                }],
+                "education": [{"degree": "Mathematics", "school_name": "Home study"}],
+                "social": {"linkedin_url": "https://www.linkedin.com/in/ada-lovelace"},
+                "metadata": {"research_notes": notes},
+            })
+            parent = self._candidate_parent("yes", "user")
+            parent["candidates"][0].update({
+                "profile_pub": "ada-lovelace",
+                "url": "https://www.linkedin.com/in/ada-lovelace",
+                "new_url": "https://www.linkedin.com/in/ada-lovelace",
+                "action": "retarget",
+                "approved": "",
+            })
+            web.hydrate_proposed_profiles(
+                [parent], profile_cache_dir=base / "empty-cache", research_dir=research)
+            candidate = parent["candidates"][0]
+        self.assertEqual(candidate["full_name"], "Ada Byron Lovelace")
+        self.assertEqual(candidate["headline"], "Analytical Engine Pioneer")
+        self.assertEqual(candidate["location"], "London, United Kingdom")
+        self.assertEqual(candidate["experiences"], ["Founder @ Analytical Engines (1842 / present)"])
+        self.assertEqual(candidate["education"], ["Mathematics — Home study"])
+        self.assertEqual(candidate["reason"], f"deep research: {notes}")
+
     def test_worth_page_is_one_binary_card_without_legacy_controls(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -1069,8 +1306,9 @@ class TestStagedReviewUI(unittest.TestCase):
                 parents_dir=base / "parents", dossier_dir=base / "dossiers",
                 manifest_path=base / "review" / "manifest.json",
             ).decode("utf-8")
-        self.assertIn("<h1 class='topbar-title'>Add people</h1>", html)
+        self.assertIn("<h1 class='topbar-title'>Add People</h1>", html)
         self.assertIn("class='step active' href='/?stage=worth' aria-current='step'", html)
+        self.assertIn("href='/?stage=enrich'", html)
         self.assertIn("class='step' href='/?stage=linkedin'", html)
         self.assertNotIn("href='/?stage=done'", html)
         self.assertNotIn("class='title-row'", html)
@@ -1129,7 +1367,7 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn(full, rendered)
         self.assertIn("Network worth", rendered)
 
-    def test_only_model_maybe_is_queued_and_piles_are_editable(self):
+    def test_only_model_maybe_is_queued_and_decision_tables_are_editable(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             model_yes = self._candidate_parent("yes", "llm")
@@ -1148,30 +1386,34 @@ class TestStagedReviewUI(unittest.TestCase):
                 manifest_path=base / "review" / "manifest.json",
             ).decode("utf-8")
             self.assertNotIn("Add Ada Lovelace to your network?", html)
-            self.assertIn("People sorted", html)
+            self.assertIn("Review<span>0</span>", html)
+            self.assertIn("Yes<span>1</span>", html)
+            self.assertIn("No<span>1</span>", html)
             self.assertIn("data-complete='worth'", html)
-            self.assertIn("<span class='pile-label'>Added</span><span class='pile-count'>1</span>", html)
-            self.assertIn("<span class='pile-label'>Rejected</span><span class='pile-count'>1</span>", html)
 
             added = web.page_html(
-                [model_yes, model_no], {"stage": ["added"]}, base / "review.csv",
+                [model_yes, model_no], {"stage": ["worth"], "view": ["yes"]}, base / "review.csv",
                 parents_dir=base / "parents", dossier_dir=base / "dossiers",
                 manifest_path=base / "review" / "manifest.json",
             ).decode("utf-8")
             self.assertIn("Ada Lovelace", added)
             self.assertIn("data-worth='no'", added)
+            self.assertIn(">No</button>", added)
+            self.assertNotIn("Restore", added)
             self.assertNotIn("Suggested", added)
             self.assertNotIn("AI is unsure", added)
 
             rejected = web.page_html(
-                [model_yes, model_no], {"stage": ["rejected"]}, base / "review.csv",
+                [model_yes, model_no], {"stage": ["worth"], "view": ["no"]}, base / "review.csv",
                 parents_dir=base / "parents", dossier_dir=base / "dossiers",
                 manifest_path=base / "review" / "manifest.json",
             ).decode("utf-8")
             self.assertIn("Grace Hopper", rejected)
             self.assertIn("data-worth='yes'", rejected)
+            self.assertIn(">Yes</button>", rejected)
+            self.assertNotIn("Restore", rejected)
 
-    def test_added_pile_is_paginated_without_rendering_every_person(self):
+    def test_yes_table_is_paginated_without_rendering_every_person(self):
         parents = []
         for index in range(120):
             parent = self._candidate_parent("yes", "llm")
@@ -1183,15 +1425,18 @@ class TestStagedReviewUI(unittest.TestCase):
                 "pub": key, "full_name": parent["name"], "worth_key": key,
             })
             parents.append(parent)
-        html = web.render_added(parents, page=2, page_size=50)
-        self.assertEqual(html.count("data-worth='no'"), 50)
-        self.assertNotIn("Person 049", html)
-        self.assertIn("Person 050", html)
+        html = web.render_decision_table(parents, "yes", page=10)
+        self.assertEqual(html.count("data-worth='no'"), web.DECISION_PAGE_SIZE)
+        self.assertNotIn("Person 089", html)
+        self.assertIn("Person 090", html)
         self.assertIn("Person 099", html)
         self.assertNotIn("Person 100", html)
-        self.assertIn("aria-current='page'>2</span>", html)
-        self.assertIn("stage=added&amp;page=1", html)
-        self.assertIn("stage=added&amp;page=3", html)
+        self.assertIn("aria-current='page'>10</span>", html)
+        self.assertIn(">Previous</a>", html)
+        self.assertIn(">Next</a>", html)
+        self.assertIn("stage=worth&amp;view=yes&amp;page=8", html)
+        self.assertIn("stage=worth&amp;view=yes&amp;page=12", html)
+        self.assertNotIn("Restore", html)
 
     def test_rejected_spam_uses_the_classifier_reason_not_default_worth_copy(self):
         parent = self._candidate_parent("maybe", "default")
@@ -1245,11 +1490,120 @@ class TestStagedReviewUI(unittest.TestCase):
                 review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
                 launched=True)
             self.assertGreater(second["launched_at_unix_ns"], first["launched_at_unix_ns"])
+            self.assertNotEqual(second["people_revision"], first["people_revision"])
             with self.assertRaisesRegex(ValueError, "must end in manifest.json"):
                 web.write_review_manifest(
                     "worth", "awaiting_user", progress,
                     path=base / "review" / "custom-state.json",
                     review_path=base / "review.csv", synthetic_path=base / "synthetic.csv")
+
+    def test_new_people_review_makes_old_enrichment_stale_even_when_decisions_match(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review_manifest = base / "review" / "manifest.json"
+            enrichment_manifest = base / "research" / "manifest.json"
+            parent = self._candidate_parent("yes", "user")
+            parent["candidates"][0]["worth"] = parent["worth"]
+            progress = web.review_progress([parent])
+            web.write_review_manifest(
+                "worth", "awaiting_user", progress, path=review_manifest,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
+                launched=True)
+            web.write_review_manifest(
+                "worth", "completed", progress, path=review_manifest,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv")
+            first_selection = web.worth_selection_from_parents(
+                [parent], manifest_path=review_manifest)
+            enrichment_manifest.parent.mkdir(parents=True)
+            enrichment_manifest.write_text(json.dumps({
+                "stage": "enrich", "status": "completed", "selection": first_selection,
+                "counts": {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+            }), encoding="utf-8")
+            self.assertTrue(web.read_enrichment_manifest(
+                enrichment_manifest, selection=first_selection)["current"])
+
+            web.write_review_manifest(
+                "worth", "awaiting_user", progress, path=review_manifest,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
+                launched=True)
+            web.write_review_manifest(
+                "worth", "completed", progress, path=review_manifest,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv")
+            repeated_selection = web.worth_selection_from_parents(
+                [parent], manifest_path=review_manifest)
+            stale = web.read_enrichment_manifest(
+                enrichment_manifest, selection=repeated_selection)
+            self.assertEqual(stale["status"], "stale")
+            self.assertNotEqual(first_selection["review_revision"],
+                                repeated_selection["review_revision"])
+
+    def test_enrichment_approval_is_bound_to_current_revision_and_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review_manifest = base / "review" / "manifest.json"
+            enrichment_manifest = base / "research" / "manifest.json"
+            parent = self._candidate_parent("yes", "user")
+            parent["candidates"][0]["worth"] = parent["worth"]
+            progress = web.review_progress([parent])
+            web.write_review_manifest(
+                "worth", "awaiting_user", progress, path=review_manifest,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
+                launched=True)
+            web.write_review_manifest(
+                "worth", "completed", progress, path=review_manifest,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv")
+            selection = web.worth_selection_from_parents(
+                [parent], manifest_path=review_manifest)
+            enrichment_manifest.parent.mkdir(parents=True)
+            enrichment_manifest.write_text(json.dumps({
+                "stage": "enrich", "status": "needs_approval", "selection": selection,
+                "would_submit": 3, "reused_completed": 1, "estimated_usd": 0.15,
+                "counts": {"total": 4, "completed": 1, "pending": 3, "failed": 0},
+            }), encoding="utf-8")
+
+            pending = web.read_enrichment_manifest(
+                enrichment_manifest, selection=selection)
+            self.assertFalse(pending["approval_current"])
+            self.assertIn("data-approve-enrichment", web.render_enrichment(pending, progress))
+            self.assertIn("Approve $0.15", web.render_enrichment(pending, progress))
+            with mock.patch.object(web, "_all_review_parents", return_value=[parent]):
+                waiting = web.workflow_status(
+                    review_path=base / "review.csv", verdicts_path=base / "verdicts.jsonl",
+                    synthetic_path=base / "synthetic.csv", facts_dir=base / "facts",
+                    people_csv=base / "people.csv", manifest_path=review_manifest,
+                    enrichment_manifest_path=enrichment_manifest)
+            self.assertEqual(waiting["next_action"], "await_enrichment_approval")
+
+            approved = web.approve_enrichment_manifest(
+                enrichment_manifest, selection=selection)
+            self.assertTrue(approved["approval_current"])
+            self.assertEqual(approved["approval"]["approved_budget_usd"], 0.15)
+            self.assertNotIn("data-approve-enrichment",
+                             web.render_enrichment(approved, progress))
+            self.assertIn("<h2>Approved</h2>", web.render_enrichment(approved, progress))
+
+            with mock.patch.object(web, "_all_review_parents", return_value=[parent]):
+                status = web.workflow_status(
+                    review_path=base / "review.csv", verdicts_path=base / "verdicts.jsonl",
+                    synthetic_path=base / "synthetic.csv", facts_dir=base / "facts",
+                    people_csv=base / "people.csv", manifest_path=review_manifest,
+                    enrichment_manifest_path=enrichment_manifest)
+            self.assertEqual(status["next_action"], "run_approved_enrichment")
+            self.assertEqual(
+                status["command"],
+                "bin/deep-context reconcile-deep-research --include-candidates "
+                "--include-plausibly-absent --approve --budget 0.15")
+
+            web.write_review_manifest(
+                "worth", "awaiting_user", progress, path=review_manifest,
+                review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
+                launched=True)
+            repeated_selection = web.worth_selection_from_parents(
+                [parent], manifest_path=review_manifest)
+            stale = web.read_enrichment_manifest(
+                enrichment_manifest, selection=repeated_selection)
+            self.assertEqual(stale["status"], "stale")
+            self.assertFalse(stale["approval_current"])
 
     def test_linkedin_cannot_complete_before_people_stage(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1289,6 +1643,11 @@ class TestStagedReviewUI(unittest.TestCase):
             web.write_review_manifest("worth", "completed", web.review_progress([accepted]),
                                       path=path, review_path=base / "review.csv",
                                       synthetic_path=base / "synthetic.csv")
+            web.write_enrichment_handoff(
+                {"status": "completed", "current": True,
+                 "counts": {"total": 1, "completed": 1, "pending": 0, "failed": 0}},
+                path=path, review_path=base / "review.csv",
+                synthetic_path=base / "synthetic.csv")
 
             rejected = self._candidate_parent("no", "user")
             rejected["candidates"][0]["worth"] = rejected["worth"]
@@ -1309,9 +1668,9 @@ class TestStagedReviewUI(unittest.TestCase):
                 "linkedin", "awaiting_user", transitioned, path=path,
                 review_path=base / "review.csv", synthetic_path=base / "synthetic.csv",
                 launched=True)
-            self.assertEqual(manifest["completed_stages"], ["worth"])
+            self.assertEqual(manifest["completed_stages"], ["worth", "enrich"])
             self.assertTrue(web.phase_is_completed("worth", transitioned, path))
-            self.assertEqual(web._phase_view({}, transitioned, path), "linkedin")
+            self.assertEqual(web._phase_view({}, transitioned, path), "worth")
 
     def test_candidate_retarget_moves_to_linkedin_and_yes_preserves_replacement(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1338,7 +1697,7 @@ class TestStagedReviewUI(unittest.TestCase):
                     facts, reconcile.load_override_rows(review), set())
             web.annotate_worth(parents, reconcile.load_override_rows(review), facts)
             self.assertFalse(web.is_import_candidate_parent(parents[0]))
-            self.assertFalse(web.is_lookup_ready(parents[0]))
+            self.assertTrue(web.is_lookup_ready(parents[0]))
             pending = web.pending_linkedin_candidates(parents[0])
             self.assertEqual(len(pending), 1)
             self.assertEqual(pending[0]["url"], "https://www.linkedin.com/in/cass-real")
@@ -1403,6 +1762,9 @@ class TestLiveEndpoints(unittest.TestCase):
                     "llm_worth": "no", "llm_worth_reason": "vendor"})
         reconcile._write_override_rows(self.review, {"bob-1": row})
         self.synthetic = base / "synthetic-people.csv"
+        self.manifest = base / "review" / "manifest.json"
+        self.enrichment = base / "deep-research" / "manifest.json"
+        self.people = base / "people.csv"
         self.synthetic.write_text(
             "id,public_identifier,full_name,enrichment_provider,approved\n"
             "pid-9,synth-email-abc,Ross Nordeen,synthetic,auto\n", encoding="utf-8")
@@ -1412,7 +1774,9 @@ class TestLiveEndpoints(unittest.TestCase):
         handler = web.make_handler(self.review, self.verdicts, base / "parents",
                                    base / "dossiers", 0.7, 0.85,
                                    synthetic_path=self.synthetic, facts_dir=self.facts,
-                                   people_csv=base / "people.csv")
+                                   people_csv=self.people,
+                                   manifest_path=self.manifest,
+                                   enrichment_manifest_path=self.enrichment)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.port = self.server.server_address[1]
@@ -1446,6 +1810,9 @@ class TestLiveEndpoints(unittest.TestCase):
         self.assertEqual((j["counts"]["rejected"], j["counts"]["review"]), (0, 1))
         self.assertEqual(reconcile.load_override_rows(self.review)["bob-1"]["network_worth"],
                          "yes")                                     # ...and the CSV persisted
+        j = self._post("/worth", pub="bob-1", worth="restore")
+        self.assertEqual((j["effective"], j["source"]), ("no", "llm"))
+        self.assertEqual(reconcile.load_override_rows(self.review)["bob-1"]["network_worth"], "")
 
     def test_exclude_then_keep_report_live_state_both_ways(self):
         j = self._post("/decide", pub="bob-1", decision="exclude")
@@ -1485,17 +1852,65 @@ class TestLiveEndpoints(unittest.TestCase):
             self._post("/decide", pub="bob-1", decision="keep", parent_slug="someone-else")
         self.assertEqual(ctx.exception.code, 400)
 
-    def test_ui_endpoint_rejects_maybe_and_finish_waits_for_binary_answer(self):
+    def test_ui_endpoint_rejects_maybe_and_enforces_file_handoffs(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self._post("/worth", pub="bob-1", worth="maybe")
         self.assertEqual(ctx.exception.code, 400)
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self._post("/complete", stage="linkedin")
-        self.assertEqual(ctx.exception.code, 409)  # synthetic auto is advice, not human completion
+        self.assertEqual(ctx.exception.code, 409)
+        self._post("/worth", pub="bob-1", worth="yes")
+        review_manifest = web.read_review_manifest(self.manifest)
+        selection = web.worth_selection_from_parents([], manifest_path=self.manifest)
+        self.enrichment.parent.mkdir(parents=True, exist_ok=True)
+        self.enrichment.write_text(json.dumps({
+            "stage": "enrich", "status": "completed", "selection": selection,
+            "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0},
+        }), encoding="utf-8")
+        self.assertTrue(review_manifest["people_revision"])
+        self._post("/complete", stage="enrich")
+        self._post("/decide", pub="bob-1", decision="keep")
         self._post("/decide", pub="synth-email-abc", decision="keep")
         complete = self._post("/complete", stage="linkedin")
         self.assertEqual(complete["manifest"]["status"], "completed")
         self.assertEqual(complete["manifest"]["counts"]["pending"], 0)
+
+    def test_enrichment_approval_endpoint_persists_inert_current_approval(self):
+        self._post("/worth", pub="bob-1", worth="yes")
+        parents = web._all_review_parents(
+            self.verdicts, self.review, self.synthetic, self.facts, self.people)
+        selection = web.worth_selection_from_parents(parents, manifest_path=self.manifest)
+        self.enrichment.parent.mkdir(parents=True, exist_ok=True)
+        self.enrichment.write_text(json.dumps({
+            "stage": "enrich", "status": "needs_approval", "selection": selection,
+            "would_submit": 2, "reused_completed": 1, "estimated_usd": 0.10,
+            "counts": {"total": 3, "completed": 1, "pending": 2, "failed": 0},
+        }), encoding="utf-8")
+
+        result = self._post("/approve-enrichment")
+        self.assertTrue(result["enrichment"]["approval_current"])
+        saved = json.loads(self.enrichment.read_text(encoding="utf-8"))
+        self.assertEqual(saved["status"], "needs_approval")
+        self.assertEqual(saved["approval"]["approved_budget_usd"], 0.10)
+        self.assertNotIn("current", saved)
+
+        # The endpoint is idempotent for the same current preview.
+        repeated = self._post("/approve-enrichment")
+        self.assertTrue(repeated["enrichment"]["approval_current"])
+
+        # A newly started People revision makes the old approval unusable.
+        current_parents = web._all_review_parents(
+            self.verdicts, self.review, self.synthetic, self.facts, self.people)
+        progress = web.review_progress(current_parents)
+        web.write_review_manifest(
+            "worth", "awaiting_user", progress, path=self.manifest,
+            review_path=self.review, synthetic_path=self.synthetic, launched=True)
+        web.write_review_manifest(
+            "worth", "completed", progress, path=self.manifest,
+            review_path=self.review, synthetic_path=self.synthetic)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._post("/approve-enrichment")
+        self.assertEqual(ctx.exception.code, 409)
 
 
 class TestReadinessCandidateCounts(unittest.TestCase):

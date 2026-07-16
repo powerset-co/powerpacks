@@ -1758,12 +1758,31 @@ def render_decision_table(parents: list[dict[str, Any]], decision: str, *, page:
         flip_label = "No" if decision == "yes" else "Yes"
         reason = (_rejection_reason(parent) if decision == "no" else
                   str((parent.get("machine_worth") or {}).get("reason") or "Worth adding"))
+        contacts = [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])]
+        badges = _source_badges(parent)
+        dossier_slug = parent.get("dossier_slug") or parent.get("slug")
+        why_label = "Why no" if decision == "no" else "Why yes"
+        fact_rows = []
+        if contacts:
+            fact_rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
+        fact_rows.append(f"<div><dt>{why_label}</dt><dd>{esc(reason)}</dd></div>")
         rows.append(f"""
-        <article class='decision-row' data-card>
-          {_avatar(parent, candidate, small=True)}
-          <div><strong>{esc(parent.get('name'))}</strong><span>{esc(reason)}</span></div>
-          <div class='decision-row-actions'><button class='button button-ghost' data-worth='{flip}' data-pub='{esc(_worth_key(parent))}' aria-label='Mark {esc(parent.get('name'))} {flip_label}'>{flip_label}</button></div>
-        </article>""")
+        <details class='decision-row' data-card data-slug='{esc(dossier_slug)}'>
+          <summary class='decision-row-summary'>
+            {_avatar(parent, candidate, small=True)}
+            <div class='decision-row-main'><strong>{esc(parent.get('name'))}</strong><span>{esc(reason)}</span></div>
+            <div class='decision-row-actions'>
+              <button class='button button-ghost' data-worth='{flip}' data-pub='{esc(_worth_key(parent))}' aria-label='Mark {esc(parent.get('name'))} {flip_label}'>{flip_label}</button>
+              <span class='decision-row-caret' aria-hidden='true'></span>
+            </div>
+          </summary>
+          <div class='decision-row-detail'>
+            {f"<div class='row-badges'>{badges}</div>" if badges else ""}
+            <dl class='row-facts'>{''.join(fact_rows)}</dl>
+            <h4 class='dossier-heading'>Who they are</h4>
+            <div class='dossier-text' aria-busy='true'>Loading…</div>
+          </div>
+        </details>""")
     return ("<div class='decision-page'><section class='decision-list'>" + "".join(rows)
             + "</section>" + _pagination(page, total_pages, decision=decision) + "</div>")
 
