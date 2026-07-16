@@ -2074,6 +2074,14 @@ class TestSyntheticReviewUI(unittest.TestCase):
             cand = web.load_synthetic_parents(path)[0]["candidates"][0]
             self.assertEqual(web.candidate_state(cand), "verified")
 
+    def test_linkedin_correction_is_spaced_below_its_divider(self) -> None:
+        css = (Path(web.__file__).with_name("reconcile_review.css")).read_text(encoding="utf-8")
+        self.assertRegex(
+            css,
+            r'body\[data-stage="linkedin"\] \.alternate\s*\{'
+            r"[^}]*padding-top:\s*14px;",
+        )
+
     def test_apply_synthetic_decision_flips_the_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "synthetic-people.csv"
