@@ -105,7 +105,7 @@ document.querySelectorAll("[data-fix-form]").forEach((form) => {
 });
 
 async function loadDossier(details) {
-  if (!details.open || details.dataset.loaded) return;
+  if (details.dataset.loaded) return;
   const body = details.querySelector(".dossier-text");
   if (!body) return;
   details.dataset.loaded = "true";
@@ -125,8 +125,7 @@ async function loadDossier(details) {
   }
 }
 
-document.querySelectorAll("details[data-slug]").forEach((details) => {
-  details.addEventListener("toggle", () => { void loadDossier(details); });
+document.querySelectorAll(".details[data-slug]").forEach((details) => {
   void loadDossier(details);
 });
 

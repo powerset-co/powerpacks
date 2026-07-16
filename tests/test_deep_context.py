@@ -1373,7 +1373,7 @@ class TestReviewWeb(unittest.TestCase):
             pending = web.pending_linkedin_candidates(sam)
             self.assertEqual([cand["pub"] for cand in pending], ["samreal", "sammaybe", "samwrong"])
             html = web.render_linkedin_card(sam, pending[0], d, d)
-            self.assertIn("Is this the right LinkedIn for Sam Jones?", html)
+            self.assertIn("Is this the right LinkedIn?", html)
             self.assertIn("data-decide='keep'", html)
             self.assertIn("data-decide='detach'", html)
             self.assertNotIn("Exclude", html)
@@ -1680,6 +1680,9 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertEqual(web.candidate_state(cand), "review")  # pending -> Needs review pile
             self.assertEqual(cand["experiences"], ["CTO @ StealthCo (present)"])
             self.assertIn("research gaps: education dates", cand["reason"])
+            html = web.render_linkedin_card(parents[0], cand, Path(tmpdir), Path(tmpdir))
+            self.assertIn("Add without LinkedIn?", html)
+            self.assertNotIn("Add Ross Nordeen without LinkedIn?", html)
             # approved=auto surfaces as verified
             path.write_text(self.CSV_HEADER + self._csv_row("auto"), encoding="utf-8")
             cand = web.load_synthetic_parents(path)[0]["candidates"][0]

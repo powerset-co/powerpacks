@@ -1224,10 +1224,10 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
         rows.append(f"<div><dt>Evidence</dt><dd>{esc(' · '.join(evidence[:5]))}</dd></div>")
     extra = f"<dl>{''.join(rows)}</dl>" if rows else ""
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
-    return (f"<details class='details' data-slug='{esc(dossier_slug)}' open>"
-            f"<summary>Details<span aria-hidden='true'>+</span></summary>"
+    return (f"<section class='details' data-slug='{esc(dossier_slug)}'>"
+            f"<h3 class='details-heading'>Details</h3>"
             f"<div class='details-body'>{extra}"
-            "<div class='dossier-text' aria-busy='true'>Loading…</div></div></details>")
+            "<div class='dossier-text' aria-busy='true'>Loading…</div></div></section>")
 
 
 def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path) -> str:
@@ -1273,11 +1273,11 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
     roles = "".join(f"<li>{esc(role)}</li>" for role in (candidate.get("experiences") or [])[:3])
     education = " · ".join(candidate.get("education") or [])
     if synthetic:
-        question = f"Add {esc(name)} without LinkedIn?"
+        question = "Add without LinkedIn?"
         eyebrow = "No LinkedIn found"
         link = "<span class='linkedin-label'>Researched profile</span>"
     else:
-        question = f"Is this the right LinkedIn for {esc(name)}?"
+        question = "Is this the right LinkedIn?"
         eyebrow = ""
         url = str(candidate.get("url") or "")
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
