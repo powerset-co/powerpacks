@@ -64,23 +64,23 @@ Run from the canonical Powerpacks repo: `$POWERPACKS_REPO_ROOT`, otherwise
 Create a visible plan with these exact phases and keep it current:
 
 ```text
-[Scope] Check sources, people, and unresolved candidates
-[Context] Confirm the owner profile
-[Context] Confirm group-body access and dossier depth
-[Context] Collect messages for people and candidates
-[Context] Preview and approve dossier synthesis
-[Context] Build and validate dossiers
-[Merge] Preview and approve duplicate resolution
-[Merge] Build canonical people
-[People] Open the Yes/No people stage and wait for completion
-[Identify] Preview and approve attached-LinkedIn checks
-[Identify] Preview and approve one lookup for Added candidates and eligible wrong links
-[Identify] Assemble researched profiles without LinkedIn
-[LinkedIn] Open the Yes/No LinkedIn stage and wait for completion
-[Identify] Apply approved replacement LinkedIns
-[Realize] Fan-in approved decisions to people.csv
-[Realize] Approve and rebuild the Modal index
-[Realize] Validate the index
+[Check] Check sources, people, and unresolved candidates
+[Learn] Confirm your LinkedIn profile
+[Learn] Confirm iMessage group access
+[Learn] Collect messages and emails for people
+[Learn] Approve deep context synthesis cost
+[Learn] Build and validate deep context results
+[Combine] Resolve people with multiple emails and/or phone numbers
+[Combine] Build one record per person
+[People] Review people worth adding to network
+[Match] Confirm imported LinkedIn matches the person
+[Match] Preview and approve one lookup for Added candidates and eligible wrong links
+[Match] Assemble researched profiles without LinkedIn
+[LinkedIn] Review LinkedIn profiles we found for network
+[Match] Apply approved replacement LinkedIns
+[Build] Build merged people list
+[Build] Rebuild the search index
+[Build] Validate the index
 ```
 
 Mark a no-op complete; do not silently drop it. A `--force` rerun keeps every
@@ -98,9 +98,10 @@ uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/st
 Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per
 source. Stop on unreadable iMessage Full Disk Access.
 
-Inspect `.powerpacks/deep-context/owner.json`. If it exists, show and confirm its
-non-secret identity fields. If it does not, ask for the user's LinkedIn URL and
-email. Disclose that a profile-cache miss calls RapidAPI and get approval before:
+Inspect `.powerpacks/deep-context/owner.json`. If it exists, confirm it by showing
+just the LinkedIn profile — `Your LinkedIn Profile: <name> <linkedin_url>` — not the
+raw fields. If it does not exist, ask for the user's LinkedIn URL and email.
+Disclose that a profile-cache miss calls RapidAPI and get approval before:
 
 ```bash
 bin/deep-context owner --linkedin-url <url> --email <email>
@@ -108,20 +109,19 @@ bin/deep-context owner --linkedin-url <url> --email <email>
 
 ### 2. Message scope
 
-Ask both questions in this run:
+Ask one question, phrased exactly: "Include iMessage groups? WhatsApp groups are
+always skipped." Default is DM-only; `--include-groups` also reads other
+participants' messages in small iMessage groups. WhatsApp group bodies are never
+read.
 
-1. Group bodies: DM-only (default) or small iMessage groups
-   (`--include-groups`). Explain that group mode reads other participants'
-   messages and costs more. Never include WhatsApp group bodies.
-2. Depth per person/channel:
-   - shallow: `--deep-cap 400`
-   - medium: `--deep-cap 1600` (default/recommended)
-   - deep: `--deep-cap 6400`
+Always use the default depth (`--deep-cap 1600`). Do not ask the user about depth
+or surface the message cap; only change it if the user explicitly requests a
+shallower or deeper pass.
 
 For full processing, candidates are always included:
 
 ```bash
-bin/deep-context collect --include-candidates --deep-cap <cap> [--include-groups] [--force]
+bin/deep-context collect --include-candidates --deep-cap 1600 [--include-groups] [--force]
 ```
 
 Collection is local/free. Preserve the exact approved flags through synthesis.
@@ -155,7 +155,9 @@ Preview first:
 bin/deep-context cluster --dry-run
 ```
 
-Show the estimate and get explicit approval before `bin/deep-context cluster`.
+Resolve automatically: no approval needed when the dry-run cost estimate is
+≤ $100. Only if it exceeds $100, ask the user before running
+`bin/deep-context cluster`. Keep this cost gate out of the user-facing task copy.
 Then inspect its audit output and run:
 
 ```bash
@@ -213,6 +215,9 @@ in the existing review CSVs and fixed manifests. The agent owns workflow control
 keep polling `bin/deep-context review-status`, run only its exact next action, and
 let the UI reflect progress. Direct progress-step navigation is preview only; it
 does not itself advance provider work.
+The browser observes those fixed files and automatically refreshes or moves to
+the current stage. Open it once; do not open additional tabs or repeatedly open
+stage URLs as the workflow advances.
 
 The main Review tab shows only people the model marked `maybe`, one at a time
 with Yes/No. The Yes and No tabs are paginated, editable tables with one action
@@ -290,6 +295,11 @@ that file and may add only its inert approval block. The assembler marks it
 always overwritten, including header-only no-work runs, and assembly scans only
 handles in that current queue so stale No results cannot reappear.
 
+When you report lookup progress to the user, phrase it as "Parallel tasked with
+N net-new lookups" and use the manifest's running/completed counts. Do not call
+the approved budget a "cap" or restate the dollar amount in status updates — the
+approval already happened, so the number is noise.
+
 ### 7. LinkedIn decision gate
 
 When enrichment is complete, Enrich Contacts shows a checkmark and Continue.
@@ -297,8 +307,10 @@ That click writes only the enrichment handoff into the review manifest and opens
 Check LinkedIn; it does not start work. The first review server stays alive.
 
 For a found/existing LinkedIn the question is simply whether it is the right
-person. Yes verifies it; No detaches only that link, never rejects the person.
-"Use a different LinkedIn" is secondary. For a synthetic result, Yes/No decides
+person. Yes verifies it. No only opens the correction panel and is not a
+decision. The correction panel accepts a replacement URL or a terminal Skip;
+Skip writes a detach decision, rejects the shown/proposed LinkedIn, and leaves
+the person out of the index for now. For a synthetic result, Yes/No decides
 whether to add the researched no-LinkedIn profile.
 
 Keep polling `bin/deep-context review-status` about once per minute. Continue to

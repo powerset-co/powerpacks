@@ -952,7 +952,8 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
             preserved += 1
             continue
         prior = existing.get(old_pub, {})
-        existing[old_pub] = {
+        row = {column: prior.get(column, "") for column in OVERRIDE_COLUMNS}
+        row.update({
             "public_identifier": old_pub, "action": "retarget",
             "approved": (p.get("approved") or "").strip().lower(),
             "new_linkedin_url": new_url,
@@ -963,9 +964,11 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
             "confidence": f"{float(p.get('confidence') or 0):.3f}",
             "reason": p.get("reason", ""), "person_id": p.get("person_id", prior.get("person_id", "")),
             "source": p.get("source", "deep-research"), "updated_at": now_iso(),
-            # user-owned; survives machine rebuilds even on non-user-approved rows
-            "network_worth": prior.get("network_worth", ""),
-        }
+        })
+        # Retarget research changes only identity fields. Preserve both the
+        # human-owned network_worth mark and the latest machine-owned worth/spam
+        # columns so a found LinkedIn cannot silently change the People decision.
+        existing[old_pub] = row
         proposed += 1
     _write_override_rows(path, existing)
     return {"path": str(path), "proposed": proposed, "preserved_user_rows": preserved, "total_rows": len(existing)}

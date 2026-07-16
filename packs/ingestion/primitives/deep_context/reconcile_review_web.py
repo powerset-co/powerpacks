@@ -1113,6 +1113,46 @@ def review_progress(parents: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def review_state_token(progress: dict[str, int], selection: dict[str, Any],
+                       enrichment: dict[str, Any],
+                       review_manifest: dict[str, Any]) -> str:
+    """Ephemeral browser refresh token derived only from the fixed file state."""
+    payload = {
+        "progress": progress,
+        "selection": selection,
+        "enrichment": {
+            "status": enrichment.get("status"),
+            "current": enrichment.get("current"),
+            "approval_current": enrichment.get("approval_current"),
+            "counts": enrichment.get("counts") or {},
+            "updated_at": enrichment.get("updated_at"),
+        },
+        "review": {
+            "stage": review_manifest.get("stage"),
+            "status": review_manifest.get("status"),
+            "completed_stages": review_manifest.get("completed_stages") or [],
+            "updated_at": review_manifest.get("updated_at"),
+        },
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def browser_stage_for_next_action(next_action: str) -> str:
+    if next_action == "review_people":
+        return "worth"
+    if next_action in {
+            "preview_enrichment", "await_enrichment_approval",
+            "run_approved_enrichment", "run_enrichment_from_cache",
+            "wait_for_enrichment", "retry_enrichment", "assemble_synthetic",
+            "continue_enrichment"}:
+        return "enrich"
+    if next_action in {"review_linkedin", "finish_linkedin"}:
+        return "linkedin"
+    return "done"
+
+
 def worth_selection_from_parents(
     parents: list[dict[str, Any]], *, manifest_path: Path = REVIEW_MANIFEST,
 ) -> dict[str, Any]:
@@ -1661,6 +1701,9 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
             <div><input id='fix-{esc(candidate.get('pub'))}' name='new_url' inputmode='url' autocomplete='url' placeholder='linkedin.com/in/…' required>
             <button class='button button-outline' type='submit'>Use this</button></div>
           </form>
+          <button class='button button-ghost alternate-skip' data-decide='detach'
+                  data-toast='Skipped' data-pub='{esc(candidate.get('pub'))}'
+                  data-parent='{esc(parent.get('slug'))}'>Skip</button>
         </details>"""}
       </div>
     </article>"""
@@ -1879,6 +1922,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     progress = review_progress(parents)
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
     enrichment = read_enrichment_manifest(enrichment_manifest_path, selection=selection)
+    review_manifest = read_review_manifest(manifest_path)
+    state_token = review_state_token(progress, selection, enrichment, review_manifest)
     view = _phase_view(params, progress, manifest_path)
     worth_complete = phase_is_completed("worth", progress, manifest_path) or not progress["worth_total"]
     enrichment_complete = enrichment.get("status") == "completed" and enrichment.get("current")
@@ -1949,7 +1994,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
 <html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <meta name='color-scheme' content='dark'><title>{esc(title)} · Powerpacks</title>
 <link rel='stylesheet' href='/assets/reconcile-review.css'></head>
-<body data-stage='{esc(view)}' data-enrichment-status='{esc("approved" if enrichment.get("approval_current") else enrichment.get("status"))}'><div class='app-shell'>
+<body data-stage='{esc(view)}' data-state-token='{esc(state_token)}' data-enrichment-status='{esc("approved" if enrichment.get("approval_current") else enrichment.get("status"))}'><div class='app-shell'>
   <header class='topbar'><a class='brand' href='/?stage=worth'>POWERPACKS</a><h1 class='topbar-title'>{esc(title)}</h1><span></span></header>
   <main><nav class='stepper' aria-label='Progress'>{stepper}</nav>
     <section class='stage' aria-live='polite'>{content}</section>
@@ -2025,8 +2070,23 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_bytes(b"ok", "text/plain")
                 return
             if parsed.path == "/api/status":
-                self.send_json({"primitive": "reconcile_review_web", "ok": True,
-                                "manifest": str(manifest_path)})
+                status = workflow_status(
+                    review_path=review_path, verdicts_path=verdicts_path,
+                    synthetic_path=synthetic_path, facts_dir=facts_dir,
+                    people_csv=people_csv, manifest_path=manifest_path,
+                    enrichment_manifest_path=enrichment_manifest_path,
+                    parents_dir=parents_dir, dossier_dir=dossier_dir,
+                    profile_cache_dir=profile_cache_dir)
+                self.send_json({
+                    "primitive": "reconcile_review_web",
+                    "ok": True,
+                    "manifest": str(manifest_path),
+                    "stage": browser_stage_for_next_action(status["next_action"]),
+                    "next_action": status["next_action"],
+                    "state_token": review_state_token(
+                        status["progress"], status["selection"],
+                        status["enrichment"], status["review_manifest"]),
+                })
                 return
             if parsed.path == "/api/enrichment":
                 with mutation_lock:
@@ -2340,10 +2400,14 @@ def workflow_status(
     people_csv: Path = DEFAULT_PEOPLE_CSV,
     manifest_path: Path = REVIEW_MANIFEST,
     enrichment_manifest_path: Path = ENRICH_MANIFEST,
+    parents_dir: Path = PARENTS_DIR,
+    dossier_dir: Path = DOSSIER_DIR,
+    profile_cache_dir: Path = PROFILE_CACHE_DIR,
 ) -> dict[str, Any]:
     """Read-only next-action contract for the agent's one-minute poll loop."""
     parents = _all_review_parents(
-        verdicts_path, review_path, synthetic_path, facts_dir, people_csv)
+        verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
+        parents_dir, dossier_dir, profile_cache_dir)
     progress = review_progress(parents)
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
     enrichment = read_enrichment_manifest(
