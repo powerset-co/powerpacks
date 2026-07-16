@@ -639,6 +639,55 @@ class TestEndToEnd(unittest.TestCase):
             self.assertTrue(any(s.endswith(pman_slug := list(idx2["parents"])[0]) or s == pman_slug
                                 for s in idx2["by_phone"]["4155551234"]))
 
+    def test_merge_cache_reuses_unchanged_pairs(self):
+        # A rerun must NOT re-judge pairs whose inputs are unchanged: it reuses the prior
+        # merge-verdicts.csv, so the incremental cost is ~0 until the network actually changes.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw, facts, dossiers = base / "raw", base / "facts", base / "dossiers"
+            raw.mkdir(); facts.mkdir()
+            index_json, index_md = base / "index.json", base / "index.md"
+            merge_csv, merge_md = base / "merge.csv", base / "merge.md"
+            verdicts_csv = merge_csv.with_name("merge-verdicts.csv")
+
+            self._write_person(raw, facts, "p1", "Jonathan Smith", "+14155551234", "jon@acme.test")
+            self._write_person(raw, facts, "p2", "Jon Smith", "+14155551234", "jon.smith@example.com")
+            self._write_person(raw, facts, "p3", "Maria Garcia", "+13105550000", "maria@example.net")
+            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                            index_json=index_json, index_md=index_md, person=""))
+
+            def cluster_run(**over):
+                kw = dict(dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
+                          out_csv=merge_csv, out_md=merge_md, confidence=0.7, no_llm=True, model="m",
+                          reasoning_effort="medium", concurrency=1, timeout=10, max_retries=0)
+                kw.update(over)
+                return cluster.run(_ns(**kw))
+
+            # 1) First run: nothing cached -> judges everything and writes the cache.
+            m1 = cluster_run()
+            total = m1["pairs_total"]
+            self.assertGreaterEqual(total, 1)
+            self.assertEqual(m1["pairs_reused"], 0)
+            self.assertEqual(m1["pairs_judged"], total)
+            self.assertTrue(verdicts_csv.exists())
+
+            # 2) Dry-run now sees the cache -> nothing left to judge, zero estimated spend.
+            dry = cluster_run(dry_run=True)
+            self.assertEqual(dry["candidate_pairs_to_judge"], 0)
+            self.assertEqual(dry["cached_reused"], total)
+            self.assertEqual(dry["estimated_cost_usd_high"], 0)
+
+            # 3) Second real run reuses every verdict and yields the same clusters.
+            m2 = cluster_run()
+            self.assertEqual(m2["pairs_judged"], 0)
+            self.assertEqual(m2["pairs_reused"], total)
+            self.assertEqual(m2["clusters"], m1["clusters"])
+
+            # 4) --refresh bypasses the cache -> everything is judged again.
+            refreshed = cluster_run(dry_run=True, refresh=True)
+            self.assertEqual(refreshed["candidate_pairs_to_judge"], total)
+            self.assertEqual(refreshed["cached_reused"], 0)
+
 
 def _verdict(verdict, conf, **kw):
     return {"verdict": verdict, "confidence": conf, "supporting_evidence": kw.get("sup", []),
@@ -2485,6 +2534,47 @@ class TestMergeIdentifierEmails(unittest.TestCase):
             (person,) = cluster.load_people(index, dossiers, raw, facts)
             self.assertIn("kai.alt@home.example", person["extra_emails"])   # a genuine second address is kept
             self.assertNotIn("me@owner.example", person["extra_emails"])    # the owner's is dropped as noise
+
+
+class TestMergeCache(unittest.TestCase):
+    """The same-person merge reuses prior verdicts (merge-verdicts.csv) so reruns only judge
+    NEW/changed pairs. The pair signature is the correctness crux: stable across runs, order-
+    independent, and it changes exactly when a pair's judge inputs change."""
+
+    def _p(self, slug, name, emails=(), extra=(), profile=None):
+        return {"slug": slug, "name": name, "name_key": cluster.normalize_name(name),
+                "emails": list(emails), "extra_emails": list(extra), "phone_digits": [],
+                "profile": profile or {"relationship": "", "title": "", "employers": [], "school": "",
+                                       "location": "", "topics": []}}
+
+    def test_pair_sig_is_stable_and_order_independent(self):
+        a = self._p("a", "Ann Lee", ["ann@example.com"])
+        b = self._p("b", "Ann Li", ["ann@example.net"])
+        self.assertEqual(cluster.pair_sig(a, b), cluster.pair_sig(a, b))       # stable
+        self.assertEqual(cluster.pair_sig(a, b), cluster.pair_sig(b, a))       # order-independent
+
+    def test_pair_sig_changes_when_identity_changes(self):
+        a = self._p("a", "Ann Lee", ["ann@example.com"])
+        b = self._p("b", "Ann Li", ["ann@example.net"])
+        base = cluster.pair_sig(a, b)
+        b_new_email = self._p("b", "Ann Li", ["ann@example.net", "ann2@example.org"])
+        self.assertNotEqual(cluster.pair_sig(a, b_new_email), base)           # new email -> re-judge
+        b_new_job = self._p("b", "Ann Li", ["ann@example.net"],
+                            profile={"relationship": "", "title": "", "employers": ["NewCo"],
+                                     "school": "", "location": "", "topics": []})
+        self.assertNotEqual(cluster.pair_sig(a, b_new_job), base)             # new employer -> re-judge
+
+    def test_split_reuses_matching_sig_and_rejudges_the_rest(self):
+        a = self._p("a", "Ann Lee", ["ann@example.com"])
+        b = self._p("b", "Ann Li", ["ann@example.com"])   # shared email -> a real pair
+        c = self._p("c", "Bob Fox", ["bob@example.org"])
+        people = [a, b, c]
+        cache = {frozenset({"a", "b"}): (cluster.pair_sig(a, b),
+                                         {"same_person": True, "confidence": 0.9,
+                                          "tone_consistent": True, "reason": "cached"})}
+        reused, to_judge = cluster.split_cached_pairs([(0, 1), (0, 2)], people, cache)
+        self.assertEqual({(r[0], r[1]) for r in reused}, {(0, 1)})   # cached pair reused
+        self.assertEqual({(t[0], t[1]) for t in to_judge}, {(0, 2)})  # uncached pair judged
 
 
 if __name__ == "__main__":

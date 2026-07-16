@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -399,6 +400,70 @@ def deterministic_verdict(pa: dict[str, Any], pb: dict[str, Any]) -> dict[str, A
             "reason": "shared contact" if shared else f"name similarity {nsim:.2f}"}
 
 
+def _person_sig(p: dict[str, Any]) -> str:
+    """Fingerprint of the judge-relevant IDENTITY fields for one person (deterministic; message
+    tone samples are excluded so a rerun over unchanged facts produces the same value)."""
+    prof = p.get("profile") or {}
+    return "\x1f".join([
+        p.get("name_key", ""),
+        "|".join(sorted(set(p.get("emails") or []) | set(p.get("extra_emails") or []))),
+        "|".join(sorted(p.get("phone_digits") or [])),
+        prof.get("relationship", ""), prof.get("title", ""),
+        "|".join(sorted(prof.get("employers") or [])),
+        prof.get("school", ""), prof.get("location", ""),
+        "|".join(sorted(prof.get("topics") or [])),
+    ])
+
+
+# Bumps automatically when the judge's system prompt changes, so a prompt edit re-judges everyone.
+_JUDGE_VERSION = hashlib.sha1(JUDGE_SYSTEM.encode("utf-8")).hexdigest()[:8]
+
+
+def pair_sig(pa: dict[str, Any], pb: dict[str, Any]) -> str:
+    """Order-independent fingerprint of a pair's judge inputs + the prompt version. Same value on
+    the next run -> reuse the cached verdict; a changed identity (new email, employer, name) or an
+    updated JUDGE_SYSTEM changes it -> re-judge the pair."""
+    a, b = sorted([_person_sig(pa), _person_sig(pb)])
+    return hashlib.sha1(f"{_JUDGE_VERSION}\x1e{a}\x1e{b}".encode("utf-8")).hexdigest()[:16]
+
+
+def load_cached_verdicts(path: Path) -> dict[frozenset, tuple[str, dict[str, Any]]]:
+    """Prior merge-verdicts.csv, keyed by the {slug_a, slug_b} pair -> (sig, verdict). Rows from an
+    older file that predates the slug/sig columns are skipped (they simply re-judge once)."""
+    cache: dict[frozenset, tuple[str, dict[str, Any]]] = {}
+    if not path.exists():
+        return cache
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            sa, sb, sig = row.get("slug_a") or "", row.get("slug_b") or "", row.get("sig") or ""
+            if not sa or not sb or not sig:
+                continue
+            cache[frozenset({sa, sb})] = (sig, {
+                "same_person": (row.get("same_person") or "").strip().lower() == "true",
+                "confidence": float(row.get("confidence") or 0),
+                "tone_consistent": (row.get("tone_consistent") or "").strip().lower() == "true",
+                "reason": row.get("reason", ""),
+            })
+    return cache
+
+
+def split_cached_pairs(pairs: list[tuple[int, int]], people: list[dict[str, Any]],
+                       cache: dict[frozenset, tuple[str, dict[str, Any]]],
+                       ) -> tuple[list[tuple[int, int, str, dict[str, Any]]], list[tuple[int, int, str]]]:
+    """Partition candidate pairs into (reused, to_judge): a pair whose {slugs} are cached with a
+    MATCHING sig reuses that verdict (no LLM call); everything else is judged fresh."""
+    reused: list[tuple[int, int, str, dict[str, Any]]] = []
+    to_judge: list[tuple[int, int, str]] = []
+    for a, b in pairs:
+        sig = pair_sig(people[a], people[b])
+        hit = cache.get(frozenset({people[a]["slug"], people[b]["slug"]}))
+        if hit and hit[0] == sig:
+            reused.append((a, b, sig, hit[1]))
+        else:
+            to_judge.append((a, b, sig))
+    return reused, to_judge
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     dossier_dir = Path(args.dossier_dir)
@@ -406,23 +471,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     people = load_people(index, dossier_dir, Path(args.raw_dir), Path(args.facts_dir))
     pairs = sorted(generate_pairs(people))
 
+    # Incremental cache: reuse verdicts from the prior merge-verdicts.csv for unchanged pairs, so a
+    # rerun only spends on NEW or changed pairs. --refresh ignores the cache and re-judges all.
+    cache_path = Path(args.out_csv).with_name("merge-verdicts.csv")
+    cache = {} if getattr(args, "refresh", False) else load_cached_verdicts(cache_path)
+    reused, to_judge = split_cached_pairs(pairs, people, cache)
+
     if getattr(args, "dry_run", False):
-        # Blocking is free; only the ambiguous pairs below would be judged (small spend).
+        # Blocking + cache lookup are free; only the NEW pairs below would be judged (small spend).
         per_lo, per_hi = 0.004, 0.02
         return {
             "source": "cluster_merge_candidates", "status": "dry_run",
-            "people": len(people), "candidate_pairs_to_judge": len(pairs),
-            "estimated_cost_usd_low": round(len(pairs) * per_lo, 2),
-            "estimated_cost_usd_high": round(len(pairs) * per_hi, 2),
+            "people": len(people), "candidate_pairs": len(pairs),
+            "cached_reused": len(reused), "candidate_pairs_to_judge": len(to_judge),
+            "estimated_cost_usd_low": round(len(to_judge) * per_lo, 2),
+            "estimated_cost_usd_high": round(len(to_judge) * per_hi, 2),
             "model": args.model, "reasoning_effort": args.reasoning_effort,
             "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
         }
 
-    verdicts: list[dict[str, Any]] = []
+    verdicts: list[dict[str, Any]] = [{"a": a, "b": b, "sig": sig, **v} for a, b, sig, v in reused]
     usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     use_llm = not getattr(args, "no_llm", False)
 
-    if use_llm and pairs:
+    if use_llm and to_judge:
         load_env()
         # Wall-time is bound by per-call high-reasoning latency, not local CPU — parallelize hard.
         concurrency = args.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
@@ -440,19 +512,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 return i, await judge_pair(client, people[a], people[b], model=args.model,
                                            effort=effort, semaphore=semaphore, max_retries=args.max_retries)
             try:
-                await drain_pool([one(i, a, b) for i, (a, b) in enumerate(pairs)], on_result)
+                await drain_pool([one(i, a, b) for i, (a, b, _sig) in enumerate(to_judge)], on_result)
             finally:
                 await client.close()
-            for i, (a, b) in enumerate(pairs):
+            for i, (a, b, sig) in enumerate(to_judge):
                 res = results.get(i, {"verdict": {}, "usage": {}})
                 for k in usage_total:
                     usage_total[k] += res.get("usage", {}).get(k, 0)
-                verdicts.append({"a": a, "b": b, **(res["verdict"] or {})})
+                verdicts.append({"a": a, "b": b, "sig": sig, **(res["verdict"] or {})})
 
         asyncio.run(driver())
     else:
-        for a, b in pairs:
-            verdicts.append({"a": a, "b": b, **deterministic_verdict(people[a], people[b])})
+        for a, b, sig in to_judge:
+            verdicts.append({"a": a, "b": b, "sig": sig, **deterministic_verdict(people[a], people[b])})
 
     edges: list[tuple[int, int]] = []
     confirmed: list[dict[str, Any]] = []
@@ -490,7 +562,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "status": "completed",
         "judge": "llm" if use_llm else "deterministic",
         "people": len(people),
-        "pairs_judged": len(pairs),
+        "pairs_total": len(pairs),
+        "pairs_judged": len(to_judge),   # actually sent to the judge this run (rest reused from cache)
+        "pairs_reused": len(reused),
         "candidate_pairs": len(confirmed),
         "clusters": len(clusters),
         "confidence_threshold": args.confidence,
@@ -514,15 +588,19 @@ def _write_pairs_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _write_verdicts_csv(path: Path, people: list[dict[str, Any]], verdicts: list[dict[str, Any]]) -> None:
+    # slug_a/slug_b/sig make this file double as the incremental cache (see load_cached_verdicts).
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["name_a", "name_b", "same_person", "confidence", "tone_consistent", "reason"])
+        w = csv.DictWriter(fh, fieldnames=["slug_a", "slug_b", "name_a", "name_b", "same_person",
+                                           "confidence", "tone_consistent", "reason", "sig"])
         w.writeheader()
         for v in sorted(verdicts, key=lambda v: float(v.get("confidence") or 0), reverse=True):
             w.writerow({
+                "slug_a": people[v["a"]]["slug"], "slug_b": people[v["b"]]["slug"],
                 "name_a": people[v["a"]]["name"], "name_b": people[v["b"]]["name"],
                 "same_person": v.get("same_person"), "confidence": v.get("confidence"),
                 "tone_consistent": v.get("tone_consistent"), "reason": v.get("reason", ""),
+                "sig": v.get("sig", ""),
             })
 
 
@@ -556,6 +634,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-retries", type=int, default=6)
     p.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
     p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
+    p.add_argument("--refresh", action="store_true",
+                   help="Ignore the cached merge-verdicts.csv and re-judge every pair from scratch")
     return p
 
 
