@@ -2576,6 +2576,88 @@ class TestMergeCache(unittest.TestCase):
         self.assertEqual({(r[0], r[1]) for r in reused}, {(0, 1)})   # cached pair reused
         self.assertEqual({(t[0], t[1]) for t in to_judge}, {(0, 2)})  # uncached pair judged
 
+    def _write_legacy_csv(self, path: Path, rows: list[dict]) -> None:
+        # A pre-sig merge-verdicts.csv: name-only, no slug_a/slug_b/sig columns.
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=["name_a", "name_b", "same_person",
+                                               "confidence", "tone_consistent", "reason"])
+            w.writeheader()
+            w.writerows(rows)
+
+    def test_legacy_verdicts_adopted_by_name(self):
+        # An old file that predates the sig columns is reused by matching names back to the people.
+        a = self._p("a", "Ann Lee", ["ann@example.com"])
+        b = self._p("b", "Bob Fox", ["bob@example.org"])
+        people = [a, b]
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "merge-verdicts.csv"
+            self._write_legacy_csv(path, [{"name_a": "Ann Lee", "name_b": "Bob Fox",
+                                           "same_person": "True", "confidence": "0.88",
+                                           "tone_consistent": "True", "reason": "paid earlier"}])
+            legacy = cluster.load_legacy_verdicts(path, people)
+        self.assertIn(frozenset({"a", "b"}), legacy)
+        self.assertEqual(legacy[frozenset({"a", "b"})]["reason"], "paid earlier")
+        self.assertTrue(legacy[frozenset({"a", "b"})]["same_person"])
+
+    def test_legacy_ambiguous_name_is_not_adopted(self):
+        # Two current people share a name -> can't safely map the old row; that pair re-judges.
+        a = self._p("a", "Ann Lee", ["ann@example.com"])
+        dup = self._p("a2", "Ann Lee", ["ann2@example.net"])
+        b = self._p("b", "Bob Fox", ["bob@example.org"])
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "merge-verdicts.csv"
+            self._write_legacy_csv(path, [{"name_a": "Ann Lee", "name_b": "Bob Fox",
+                                           "same_person": "True", "confidence": "0.9",
+                                           "tone_consistent": "True", "reason": "x"}])
+            legacy = cluster.load_legacy_verdicts(path, [a, dup, b])
+        self.assertEqual(legacy, {})   # ambiguous "Ann Lee" -> row skipped
+
+    def test_sigged_rows_are_ignored_by_legacy_loader(self):
+        # A row that already has slug/sig belongs to the precise cache, not the legacy adopter.
+        a = self._p("a", "Ann Lee", ["ann@example.com"])
+        b = self._p("b", "Bob Fox", ["bob@example.org"])
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "merge-verdicts.csv"
+            with path.open("w", newline="", encoding="utf-8") as fh:
+                w = csv.DictWriter(fh, fieldnames=["slug_a", "slug_b", "name_a", "name_b",
+                                                   "same_person", "confidence", "tone_consistent",
+                                                   "reason", "sig"])
+                w.writeheader()
+                w.writerow({"slug_a": "a", "slug_b": "b", "name_a": "Ann Lee", "name_b": "Bob Fox",
+                            "same_person": "True", "confidence": "0.9", "tone_consistent": "True",
+                            "reason": "x", "sig": cluster.pair_sig(a, b)})
+            legacy = cluster.load_legacy_verdicts(path, [a, b])
+        self.assertEqual(legacy, {})   # sig-keyed row is not adopted as legacy
+
+    def test_split_adopts_legacy_and_stamps_current_sig(self):
+        # A legacy-adopted pair is reused (no judge) and carries the CURRENT sig so it upgrades in place.
+        a = self._p("a", "Ann Lee", ["ann@example.com"])
+        b = self._p("b", "Ann Li", ["ann@example.com"])
+        c = self._p("c", "Bob Fox", ["bob@example.org"])
+        people = [a, b, c]
+        legacy = {frozenset({"a", "b"}): {"same_person": True, "confidence": 0.88,
+                                          "tone_consistent": True, "reason": "adopted"}}
+        reused, to_judge = cluster.split_cached_pairs([(0, 1), (0, 2)], people, {}, legacy)
+        self.assertEqual({(r[0], r[1]) for r in reused}, {(0, 1)})
+        adopted = next(r for r in reused if (r[0], r[1]) == (0, 1))
+        self.assertEqual(adopted[2], cluster.pair_sig(a, b))   # stamped with current sig
+        self.assertEqual(adopted[3]["reason"], "adopted")
+        self.assertEqual({(t[0], t[1]) for t in to_judge}, {(0, 2)})  # unknown pair still judged
+
+    def test_sig_cache_wins_over_legacy(self):
+        # When a pair is in BOTH the sig cache (matching) and legacy, the precise verdict wins.
+        a = self._p("a", "Ann Lee", ["ann@example.com"])
+        b = self._p("b", "Ann Li", ["ann@example.com"])
+        people = [a, b]
+        cache = {frozenset({"a", "b"}): (cluster.pair_sig(a, b),
+                                         {"same_person": True, "confidence": 0.95,
+                                          "tone_consistent": True, "reason": "precise"})}
+        legacy = {frozenset({"a", "b"}): {"same_person": False, "confidence": 0.1,
+                                          "tone_consistent": False, "reason": "stale-legacy"}}
+        reused, to_judge = cluster.split_cached_pairs([(0, 1)], people, cache, legacy)
+        self.assertEqual(reused[0][3]["reason"], "precise")
+        self.assertEqual(to_judge, [])
+
 
 if __name__ == "__main__":
     unittest.main()

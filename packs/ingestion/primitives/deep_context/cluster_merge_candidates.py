@@ -447,18 +447,57 @@ def load_cached_verdicts(path: Path) -> dict[frozenset, tuple[str, dict[str, Any
     return cache
 
 
+def load_legacy_verdicts(path: Path, people: list[dict[str, Any]]) -> dict[frozenset, dict[str, Any]]:
+    """Adopt verdicts from a PRE-sig merge-verdicts.csv (name-only rows, written before this file
+    gained the slug/sig columns) by matching each row's name_a/name_b back to the current people.
+    A verdict is reused only when BOTH names resolve to exactly one current person (ambiguous or
+    unknown names re-judge). This lets a network that was resolved before the cache existed reuse
+    its already-paid verdicts on the first run instead of re-judging the whole set."""
+    legacy: dict[frozenset, dict[str, Any]] = {}
+    if not path.exists():
+        return legacy
+    by_name: dict[str, list[str]] = {}
+    for p in people:
+        by_name.setdefault(p["name_key"], []).append(p["slug"])
+
+    def resolve(name: str) -> str | None:
+        slugs = by_name.get(normalize_name(name or ""))
+        return slugs[0] if slugs and len(slugs) == 1 else None
+
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if (row.get("slug_a") or "") and (row.get("sig") or ""):
+                continue  # already a sig-keyed row; the precise cache owns it, don't second-guess here
+            sa, sb = resolve(row.get("name_a", "")), resolve(row.get("name_b", ""))
+            if not sa or not sb or sa == sb:
+                continue
+            legacy[frozenset({sa, sb})] = {
+                "same_person": (row.get("same_person") or "").strip().lower() == "true",
+                "confidence": float(row.get("confidence") or 0),
+                "tone_consistent": (row.get("tone_consistent") or "").strip().lower() == "true",
+                "reason": row.get("reason", ""),
+            }
+    return legacy
+
+
 def split_cached_pairs(pairs: list[tuple[int, int]], people: list[dict[str, Any]],
                        cache: dict[frozenset, tuple[str, dict[str, Any]]],
+                       legacy: dict[frozenset, dict[str, Any]] | None = None,
                        ) -> tuple[list[tuple[int, int, str, dict[str, Any]]], list[tuple[int, int, str]]]:
     """Partition candidate pairs into (reused, to_judge): a pair whose {slugs} are cached with a
-    MATCHING sig reuses that verdict (no LLM call); everything else is judged fresh."""
+    MATCHING sig reuses that verdict; failing that, a name-adopted legacy verdict is reused (and
+    stamped with the current sig so it upgrades in place); everything else is judged fresh."""
+    legacy = legacy or {}
     reused: list[tuple[int, int, str, dict[str, Any]]] = []
     to_judge: list[tuple[int, int, str]] = []
     for a, b in pairs:
         sig = pair_sig(people[a], people[b])
-        hit = cache.get(frozenset({people[a]["slug"], people[b]["slug"]}))
+        key = frozenset({people[a]["slug"], people[b]["slug"]})
+        hit = cache.get(key)
         if hit and hit[0] == sig:
             reused.append((a, b, sig, hit[1]))
+        elif key in legacy:
+            reused.append((a, b, sig, legacy[key]))
         else:
             to_judge.append((a, b, sig))
     return reused, to_judge
@@ -474,8 +513,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # Incremental cache: reuse verdicts from the prior merge-verdicts.csv for unchanged pairs, so a
     # rerun only spends on NEW or changed pairs. --refresh ignores the cache and re-judges all.
     cache_path = Path(args.out_csv).with_name("merge-verdicts.csv")
-    cache = {} if getattr(args, "refresh", False) else load_cached_verdicts(cache_path)
-    reused, to_judge = split_cached_pairs(pairs, people, cache)
+    refresh = getattr(args, "refresh", False)
+    cache = {} if refresh else load_cached_verdicts(cache_path)
+    legacy = {} if refresh else load_legacy_verdicts(cache_path, people)
+    reused, to_judge = split_cached_pairs(pairs, people, cache, legacy)
+    adopted = len({frozenset({people[a]["slug"], people[b]["slug"]}) for a, b, _s, _v in reused} & set(legacy))
 
     if getattr(args, "dry_run", False):
         # Blocking + cache lookup are free; only the NEW pairs below would be judged (small spend).
@@ -483,7 +525,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return {
             "source": "cluster_merge_candidates", "status": "dry_run",
             "people": len(people), "candidate_pairs": len(pairs),
-            "cached_reused": len(reused), "candidate_pairs_to_judge": len(to_judge),
+            "cached_reused": len(reused), "legacy_adopted": adopted,
+            "candidate_pairs_to_judge": len(to_judge),
             "estimated_cost_usd_low": round(len(to_judge) * per_lo, 2),
             "estimated_cost_usd_high": round(len(to_judge) * per_hi, 2),
             "model": args.model, "reasoning_effort": args.reasoning_effort,
@@ -565,6 +608,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "pairs_total": len(pairs),
         "pairs_judged": len(to_judge),   # actually sent to the judge this run (rest reused from cache)
         "pairs_reused": len(reused),
+        "pairs_legacy_adopted": adopted,  # reused from a pre-sig file by name match (upgraded in place)
         "candidate_pairs": len(confirmed),
         "clusters": len(clusters),
         "confidence_threshold": args.confidence,
