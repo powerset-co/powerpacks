@@ -2229,53 +2229,54 @@ class TestNameMatchAttach(unittest.TestCase):
 
     def _msg_person(self, pid, name):
         # A message-derived person: has the display name, NO linkedin (nothing to key on).
+        # Fictional data only (RFC-2606 example domain) — no real contacts in tests.
         return {"id": pid, "public_identifier": "", "linkedin_url": "", "full_name": name,
-                "primary_email": f"{name.split()[0].lower()}@gmail.com",
+                "primary_email": f"{name.split()[0].lower()}@example.com",
                 "source_channels": "gmail_msgvault"}
 
     def test_names_compatible_handles_abbreviation(self):
         tok = reconcile._name_tokens
         cmp = reconcile._names_compatible
-        self.assertTrue(cmp(tok("Deng Deng"), tok("Deng D.")))     # LinkedIn abbreviates last name
-        self.assertTrue(cmp(tok("Eugene Wang"), tok("Eugene Wang")))
-        self.assertTrue(cmp(tok("Benjamin Minhao Chen"), tok("Benjamin Chen")))  # ignore middle
-        self.assertFalse(cmp(tok("Deng Deng"), tok("Deng Xianchen")))  # the bad web-lookup guess
-        self.assertFalse(cmp(tok("Deng"), tok("Deng D.")))         # a lone first name never matches
-        self.assertFalse(cmp(tok("John Wang"), tok("Eric Wang")))  # different first name
+        self.assertTrue(cmp(tok("Robin Ellis"), tok("Robin E.")))    # LinkedIn abbreviates last name
+        self.assertTrue(cmp(tok("Casey Nguyen"), tok("Casey Nguyen")))
+        self.assertTrue(cmp(tok("Taylor Morgan Reed"), tok("Taylor Reed")))  # ignore middle
+        self.assertFalse(cmp(tok("Robin Ellis"), tok("Robin Zhao")))  # the bad web-lookup guess
+        self.assertFalse(cmp(tok("Robin"), tok("Robin E.")))         # a lone first name never matches
+        self.assertFalse(cmp(tok("Sam Rivera"), tok("Alex Rivera")))  # different first name
 
     def test_unique_connection_match_requires_uniqueness(self):
         conns = reconcile.connection_name_rows({
-            "c1": self._conn("c1", "dengd1", "Deng D."),
-            "c2": self._conn("c2", "dengd2", "Deng D."),   # a second same-name connection
-            "e1": self._conn("e1", "eugene-wang", "Eugene Wang")})
-        self.assertIsNone(reconcile.unique_connection_match("Deng Deng", conns))   # ambiguous -> None
+            "c1": self._conn("c1", "robine1", "Robin E."),
+            "c2": self._conn("c2", "robine2", "Robin E."),   # a second same-name connection
+            "e1": self._conn("e1", "casey-nguyen", "Casey Nguyen")})
+        self.assertIsNone(reconcile.unique_connection_match("Robin Ellis", conns))   # ambiguous -> None
         self.assertEqual(
-            reconcile.unique_connection_match("Eugene Wang", conns)["public_identifier"],
-            "eugene-wang")
+            reconcile.unique_connection_match("Casey Nguyen", conns)["public_identifier"],
+            "casey-nguyen")
 
     def test_build_tasks_attaches_unique_name_match_optimistically(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             facts, raw, cache = base / "facts", base / "raw", base / "cache"
             facts.mkdir(); raw.mkdir(); cache.mkdir()
-            self._facts(facts, "msg-deng", "Deng Deng")
-            self._facts(facts, "msg-nomatch", "Nadia Zon")
-            index = {"slugs": {"deng-c": {"person_id": "msg-deng"},
+            self._facts(facts, "msg-robin", "Robin Ellis")
+            self._facts(facts, "msg-nomatch", "Pat Quinn")
+            index = {"slugs": {"robin-c": {"person_id": "msg-robin"},
                                "nomatch-c": {"person_id": "msg-nomatch"}},
-                     "parents": {"deng-p": {"name": "Deng Deng", "children": ["deng-c"]},
-                                 "nomatch-p": {"name": "Nadia Zon", "children": ["nomatch-c"]}}}
+                     "parents": {"robin-p": {"name": "Robin Ellis", "children": ["robin-c"]},
+                                 "nomatch-p": {"name": "Pat Quinn", "children": ["nomatch-c"]}}}
             people = {
-                "msg-deng": self._msg_person("msg-deng", "Deng Deng"),
-                "msg-nomatch": self._msg_person("msg-nomatch", "Nadia Zon"),
+                "msg-robin": self._msg_person("msg-robin", "Robin Ellis"),
+                "msg-nomatch": self._msg_person("msg-nomatch", "Pat Quinn"),
                 # the first-degree connection, a SEPARATE row with the abbreviated export name
-                "conn-deng": self._conn("conn-deng", "dengdengxcc", "Deng D.")}
+                "conn-robin": self._conn("conn-robin", "robinelliszz", "Robin E.")}
             tasks = {t["parent_slug"]: t for t in reconcile.build_tasks(index, people, facts, raw, cache)}
-            deng = tasks["deng-p"]
-            self.assertTrue(deng["name_matched"])
-            self.assertFalse(deng["no_link"])
-            self.assertFalse(deng["from_connections"])          # optimistic, NOT ground truth
-            self.assertEqual(deng["candidate_key"], "dengdengxcc")
-            self.assertEqual(deng["person_ids"], ["msg-deng"])
+            robin = tasks["robin-p"]
+            self.assertTrue(robin["name_matched"])
+            self.assertFalse(robin["no_link"])
+            self.assertFalse(robin["from_connections"])         # optimistic, NOT ground truth
+            self.assertEqual(robin["candidate_key"], "robinelliszz")
+            self.assertEqual(robin["person_ids"], ["msg-robin"])
             self.assertTrue(tasks["nomatch-p"]["no_link"])       # no connection matches -> unchanged
 
     def test_ambiguous_name_match_stays_no_link(self):
@@ -2283,12 +2284,12 @@ class TestNameMatchAttach(unittest.TestCase):
             base = Path(d)
             facts, raw, cache = base / "facts", base / "raw", base / "cache"
             facts.mkdir(); raw.mkdir(); cache.mkdir()
-            self._facts(facts, "msg-deng", "Deng Deng")
-            index = {"slugs": {"deng-c": {"person_id": "msg-deng"}},
-                     "parents": {"deng-p": {"name": "Deng Deng", "children": ["deng-c"]}}}
-            people = {"msg-deng": self._msg_person("msg-deng", "Deng Deng"),
-                      "conn-a": self._conn("conn-a", "denga", "Deng D."),
-                      "conn-b": self._conn("conn-b", "dengb", "Deng D.")}   # two same-name connections
+            self._facts(facts, "msg-robin", "Robin Ellis")
+            index = {"slugs": {"robin-c": {"person_id": "msg-robin"}},
+                     "parents": {"robin-p": {"name": "Robin Ellis", "children": ["robin-c"]}}}
+            people = {"msg-robin": self._msg_person("msg-robin", "Robin Ellis"),
+                      "conn-a": self._conn("conn-a", "robina", "Robin E."),
+                      "conn-b": self._conn("conn-b", "robinb", "Robin E.")}   # two same-name connections
             (task,) = reconcile.build_tasks(index, people, facts, raw, cache)
             self.assertTrue(task["no_link"])
             self.assertNotIn("name_matched", task)
@@ -2328,15 +2329,15 @@ class TestNameMatchAttach(unittest.TestCase):
             with people.open("w", newline="") as fh:
                 w = __import__("csv").DictWriter(fh, fieldnames=cols)
                 w.writeheader()
-                w.writerow({"id": "msg-deng", "public_identifier": "",
-                            "primary_email": "deng@brainoft.com", "all_emails": '["deng@brainoft.com"]',
+                w.writerow({"id": "msg-robin", "public_identifier": "",
+                            "primary_email": "robin@acme.test", "all_emails": '["robin@acme.test"]',
                             "interaction_counts": '{"gmail": 7}', "source_channels": "gmail_msgvault"})
             # A confirmed name-match: ONE identity task, no detached sibling, kept pids == all pids.
-            task = {"parent_slug": "deng", "name": "Deng Deng", "candidate_key": "dengdengxcc",
-                    "person_ids": ["msg-deng"], "parent_person_ids": ["msg-deng"], "conflict": False,
+            task = {"parent_slug": "robin", "name": "Robin Ellis", "candidate_key": "robinelliszz",
+                    "person_ids": ["msg-robin"], "parent_person_ids": ["msg-robin"], "conflict": False,
                     "no_link": False, "name_matched": True,
-                    "linkedin": {"linkedin_url": "https://www.linkedin.com/in/dengdengxcc"},
-                    "match_emails": ["deng@brainoft.com"], "match_phones": [],
+                    "linkedin": {"linkedin_url": "https://www.linkedin.com/in/robinelliszz"},
+                    "match_emails": ["robin@acme.test"], "match_phones": [],
                     "verdict": _verdict("confirmed", 0.9)}
             reconcile.decide_actions([task], 0.85)
             self.assertEqual(task["action"], "confirm")
@@ -2346,8 +2347,8 @@ class TestNameMatchAttach(unittest.TestCase):
             import csv as _csv
             with out.open() as fh:
                 row = next(_csv.DictReader(fh))
-            self.assertEqual(row["public_identifier"], "dengdengxcc")   # keyed by the connection
-            self.assertEqual(row["primary_email"], "deng@brainoft.com")  # message contacts folded on
+            self.assertEqual(row["public_identifier"], "robinelliszz")  # keyed by the connection
+            self.assertEqual(row["primary_email"], "robin@acme.test")      # message contacts folded on
             self.assertIn("gmail", row["interaction_counts"])
 
     def test_no_llm_never_auto_confirms_a_name_match(self):
@@ -2360,11 +2361,11 @@ class TestNameMatchAttach(unittest.TestCase):
         self.assertEqual(normal["verdict"], "confirmed")
 
     def test_name_match_prompt_requires_a_non_name_signal(self):
-        task = {"name_matched": True, "name": "Deng Deng", "match_emails": [], "match_phones": [],
+        task = {"name_matched": True, "name": "Robin Ellis", "match_emails": [], "match_phones": [],
                 "dossier": {"relationship": "", "title": "", "employers": [], "school": "",
                             "location": "", "topics": [], "shared_context": [],
                             "from_me": [], "from_them": []},
-                "linkedin": {"linkedin_url": "https://www.linkedin.com/in/dengd", "full_name": "Deng D.",
+                "linkedin": {"linkedin_url": "https://www.linkedin.com/in/robine", "full_name": "Robin E.",
                              "headline": "", "location": "", "experiences": [], "education": []}}
         prompt = reconcile.judge_prompt(task, "")
         self.assertIn("SPECULATIVE", prompt)
@@ -2383,27 +2384,27 @@ class TestNameMatchAttach(unittest.TestCase):
         self.assertEqual(stale["candidate_key"], "")
 
     def test_subset_refresh_replaces_all_tasks_for_a_parent(self):
-        # verdicts.jsonl holds a prior name-matched LinkedIn task for parent "deng"; a subset rerun
+        # verdicts.jsonl holds a prior name-matched LinkedIn task for parent "robin"; a subset rerun
         # reverts it to no-link (candidate_key "" instead of the connection pub). The merge must
         # drop the stale LinkedIn task, not keep BOTH keyed by their differing candidate_keys.
         with tempfile.TemporaryDirectory() as d:
             jsonl = Path(d) / "verdicts.jsonl"
             reconcile.write_verdicts(jsonl, Path(d) / "verdicts.csv", [
-                {"parent_slug": "deng", "name": "Deng Deng", "candidate_key": "dengdengxcc",
-                 "person_ids": ["msg-deng"], "conflict": False, "no_link": False, "name_matched": True,
+                {"parent_slug": "robin", "name": "Robin Ellis", "candidate_key": "robinelliszz",
+                 "person_ids": ["msg-robin"], "conflict": False, "no_link": False, "name_matched": True,
                  "linkedin": {"linkedin_url": "x"}, "match_emails": [], "match_phones": [],
                  "verdict": _verdict("confirmed", 0.9), "error": ""},
                 {"parent_slug": "other", "name": "Other", "candidate_key": "otherpub",
                  "person_ids": ["p"], "conflict": False, "no_link": False,
                  "linkedin": {"linkedin_url": "y"}, "match_emails": [], "match_phones": [],
                  "verdict": _verdict("confirmed", 0.9), "error": ""}])
-            fresh = [{"parent_slug": "deng", "name": "Deng Deng", "candidate_key": "",
-                      "person_ids": ["msg-deng"], "conflict": False, "no_link": True,
+            fresh = [{"parent_slug": "robin", "name": "Robin Ellis", "candidate_key": "",
+                      "person_ids": ["msg-robin"], "conflict": False, "no_link": True,
                       "linkedin": {}, "verdict": _verdict("needs_review", 0.0)}]
             merged = reconcile.merge_subset_tasks(jsonl, fresh)
-            deng = [t for t in merged if t["parent_slug"] == "deng"]
-            self.assertEqual(len(deng), 1)               # exactly one task for the refreshed parent
-            self.assertTrue(deng[0]["no_link"])          # the fresh no-link one; stale LinkedIn dropped
+            robin = [t for t in merged if t["parent_slug"] == "robin"]
+            self.assertEqual(len(robin), 1)              # exactly one task for the refreshed parent
+            self.assertTrue(robin[0]["no_link"])         # the fresh no-link one; stale LinkedIn dropped
             self.assertEqual(len(merged), 2)             # untouched "other" parent still present
             self.assertTrue(any(t["parent_slug"] == "other" for t in merged))
 
@@ -2418,6 +2419,72 @@ class TestNameMatchAttach(unittest.TestCase):
                  "verdict": _verdict("confirmed", 0.9), "error": ""}])
             (loaded,) = reconcile.load_tasks_from_verdicts(jsonl)
             self.assertTrue(loaded["name_matched"])   # survives the round-trip -> reapply stays safe
+
+
+class TestMergeIdentifierEmails(unittest.TestCase):
+    """Same-person recall: an email a contact used only in the MESSAGES (facts.identifiers) widens
+    the candidate net, so a record whose registered address matches it gets proposed to the judge —
+    but first-name local-parts and the owner's address never leak in as false links."""
+
+    def _p(self, name, emails=(), extra=(), phones=()):
+        return {"name": name, "name_key": cluster.normalize_name(name), "emails": list(emails),
+                "extra_emails": list(extra), "phone_digits": list(phones)}
+
+    def test_identifier_emails_keeps_only_full_emails(self):
+        got = cluster.identifier_emails([
+            "jordan.chen@example.net", "https://linkedin.com/in/x",
+            "https://meet.google.com/abc", "Jordan", "+1 (415) 555-1212", "JORDAN.C@Work.EXAMPLE"])
+        self.assertEqual(got, {"jordan.chen@example.net", "jordan.c@work.example"})
+
+    def test_message_email_pairs_with_its_registered_owner(self):
+        # Yale's message-email IS Chen's registered address -> proposed, despite different
+        # surnames. An unrelated third record is not dragged in.
+        people = [
+            self._p("Morgan Yale", emails=["morgan.yale@example.com"], extra=["jordan.chen@example.net"]),
+            self._p("Jordan Chen", emails=["jordan.chen@example.net"]),
+            self._p("Unrelated Person", emails=["someone@example.org"]),
+        ]
+        pairs = cluster.generate_pairs(people)
+        self.assertIn((0, 1), pairs)
+        self.assertNotIn((0, 2), pairs)
+        self.assertNotIn((1, 2), pairs)
+
+    def test_shared_first_name_localpart_never_pairs(self):
+        # Two different people whose only overlap is a first-name local-part (robin@…) — via
+        # message emails on different domains — must NOT pair: local-parts come from registered
+        # emails only, and the full addresses differ.
+        people = [
+            self._p("Robin Kwan", emails=["robin.kwan@example.com"], extra=["robin@shared.example"]),
+            self._p("Robin Feld", emails=["robin.feld@example.org"], extra=["robin@other.example"]),
+        ]
+        self.assertEqual(cluster.generate_pairs(people), set())
+
+    def test_shared_message_email_is_proposed_for_the_judge(self):
+        # Two records that both only SAW team@shared.example in messages (identifier x identifier)
+        # ARE proposed — the code widens recall; the LLM judge decides alias vs group-CC third party.
+        people = [self._p("Alice Smith", emails=["a@example.com"], extra=["team@shared.example"]),
+                  self._p("Bob Jones", emails=["c@example.org"], extra=["team@shared.example"])]
+        self.assertIn((0, 1), cluster.generate_pairs(people))
+
+    def test_owner_email_is_excluded_from_message_identifiers(self):
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as d:
+            base = Path(d)
+            (base / "owner.json").write_text(json.dumps({"emails": ["me@owner.example"]}), encoding="utf-8")
+            dossiers = base / "dossiers"; raw = base / "raw"; facts = base / "facts"
+            for p in (dossiers, raw, facts):
+                p.mkdir()
+            pid = "candidate:email:kai@work.example"
+            (dossiers / "kai-c.md").write_text(
+                '---\nname: "Kai"\nemails: ["kai@work.example"]\nphones: []\n---\n<!-- x -->\n', encoding="utf-8")
+            (raw / f"{pid}.json").write_text(json.dumps({"messages": []}), encoding="utf-8")
+            (facts / f"{pid}.jsonl").write_text(json.dumps({"chunk_index": 0, "facts": {
+                "canonical_name": "Kai", "identifiers": ["me@owner.example", "kai.alt@home.example"]}, "usage": {}}) + "\n",
+                encoding="utf-8")
+            index = {"slugs": {"kai-c": {"person_id": pid}}, "by_phone": {}}
+            (person,) = cluster.load_people(index, dossiers, raw, facts)
+            self.assertIn("kai.alt@home.example", person["extra_emails"])   # a genuine second address is kept
+            self.assertNotIn("me@owner.example", person["extra_emails"])    # the owner's is dropped as noise
 
 
 if __name__ == "__main__":
