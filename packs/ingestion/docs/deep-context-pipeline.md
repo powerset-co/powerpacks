@@ -83,7 +83,7 @@ commands from `SKILL.md` instead.
 | Duplicate merge | Generates plausible pairs locally, then asks OpenAI using structured facts and short verbatim message samples. Accepted edges at `--confidence` (default `0.70`) form transitive clusters; inspect the edge audit before parent construction because the later UI cannot split them. A candidate merged with an existing person skips standalone review/research and contributes its contact metadata to that person. | Local plus OpenAI. | `merge-candidates.csv`, `merge-verdicts.csv`, `parents/*.md` |
 | People decision | Shows only unresolved imports the model is unsure about, one at a time with Yes/No. Model Yes starts in Added; model No/spam starts in Rejected; both piles stay visible and editable. | Local browser. | `overrides/review.csv`, `review/manifest.json` |
 | LinkedIn self-heal | Compares facts and short verbatim message samples with attached profiles after the people gate. It does not edit `people.csv`. | Local plus OpenAI. | `reconcile/*`, `overrides/review.csv` |
-| Identity recovery | After a separate spend preview and approval, researches unresolved candidates currently in Added, plus eligible wrong-link recoveries. Model Yes starts Added but a user No always removes it; a user Yes can rescue model Maybe/No. The preview separates gross eligibility from completed-result reuse and duplicate handles, and prices only net-new Parallel submissions. | Parallel.ai, then local cache/RapidAPI for approved retargets. | `reconcile/deep-research/*`, override CSVs |
+| Identity recovery | After a separate spend preview, Enrich Contacts shows the exact approval amount. The UI records that approval; the agent polls `review-status` and runs the bound command. Research covers unresolved candidates currently in Added plus eligible wrong-link recoveries. Model Yes starts Added but a user No always removes it; a user Yes can rescue model Maybe/No. The preview separates gross eligibility from completed-result reuse and duplicate handles, and prices only net-new Parallel submissions. | Parallel.ai, then local cache/RapidAPI for approved retargets. | `reconcile/deep-research/*`, override CSVs |
 | LinkedIn decision | Asks only whether the proposed LinkedIn is right (Yes/No), or whether to add a researched no-LinkedIn profile. A secondary field accepts a known correct URL. | Local browser. | Updated override CSVs, `review/manifest.json` |
 | Realization | Fan-in reapplies approved overrides and consolidates contact fields. A separate Modal build creates the downloadable local search index in a workspace-shared volume with operator-prefixed paths and shared caches. | Local, then Modal. | Merged `people.csv`, local DuckDB |
 
@@ -125,6 +125,10 @@ table is `.powerpacks/network-import/overrides/review.csv`.
 - Review page loading is free of provider calls and does not mutate decision CSVs.
   Explicit button clicks save locally; fresh signed profile images are cached as
   bytes while live, with initials shown for expired legacy URLs.
+- Enrich Contacts is also the approval surface for the measured Parallel budget.
+  Its approval is stored in the fixed deep-research manifest and bound to the
+  current review revision and decision fingerprint. The agent owns execution:
+  it polls `review-status` and runs only the exact approved next command.
 
 The user must explicitly finish review before retarget application, fan-in, or
 index rebuild continues, including review of auto-approved synthetic rows.

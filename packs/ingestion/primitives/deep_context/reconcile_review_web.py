@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Local, binary review UI for the staged deep-context workflow.
+"""Local, file-backed review UI for the staged deep-context workflow.
 
-The presentation has two deliberately separate questions: whether an unresolved
-message contact belongs in the network, then whether a found LinkedIn is the right
-person. Human choices remain the existing durable ``review.csv`` / synthetic gates;
-one fixed ``review/manifest.json`` tells the agent when each stage is complete.
-No provider call or paid work happens in this server.
+The browser reviews uncertain People decisions, observes Enrich Contacts progress,
+then confirms new identities. Human choices remain the existing durable
+``review.csv`` / synthetic gates; two fixed manifests tell the agent when to advance.
+No provider call, subprocess, or paid work happens in this server.
 """
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ import csv
 import hashlib
 import html
 import json
+import math
 import re
 import sys
 import threading
@@ -36,8 +36,10 @@ from packs.ingestion.primitives.deep_context.candidates import (
     load_candidates,
 )
 from packs.ingestion.primitives.deep_context.common import (
+    DEEP_RESEARCH_DIR,
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
+    ENRICH_MANIFEST,
     FACTS_DIR,
     GMAIL_CHANNEL,
     IMESSAGE_CHANNEL,
@@ -62,15 +64,16 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     USER_APPROVED,
     _VERDICT_TO_ACTION,
     _write_override_rows,
+    linkedin_view,
     load_override_rows,
 )
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 APPLIED_APPROVED = {"auto", "yes"}
 VALID_TABS = {"all", "review", "verified", "detached", "conflict", "fixed", "excluded", "decided", "rejected"}
-VALID_STAGES = {"worth", "linkedin", "waiting", "done", "added", "rejected"}
+VALID_STAGES = {"worth", "enrich", "linkedin", "done"}
 USER_WORTH_VALUES = {"yes", "no"}
-ADDED_PAGE_SIZE = 50
+DECISION_PAGE_SIZE = 10
 REVIEW_CSS = Path(__file__).with_name("reconcile_review.css")
 REVIEW_JS = Path(__file__).with_name("reconcile_review.js")
 AVATAR_DIR = REVIEW_DIR / "avatars"
@@ -350,7 +353,8 @@ def _synthetic_source_ids(value: str) -> list[str]:
     return list(dict.fromkeys(str(item).strip() for item in parsed if str(item).strip()))
 
 
-def _synthetic_dossier_slug(row: dict[str, str], pub: str, parents_dir: Path) -> str:
+def _synthetic_dossier_slug(row: dict[str, str], pub: str, parents_dir: Path,
+                            dossier_dir: Path, facts_dir: Path) -> str:
     source = str(row.get("source_parent_slug") or "").strip()
     if source and Path(source).name == source and (parents_dir / f"{source}.md").is_file():
         return source
@@ -360,10 +364,25 @@ def _synthetic_dossier_slug(row: dict[str, str], pub: str, parents_dir: Path) ->
     legacy = pub[len(prefix):] if pub.startswith(prefix) else ""
     if legacy and Path(legacy).name == legacy and (parents_dir / f"{legacy}.md").is_file():
         return legacy
+    # Import candidates do not have a canonical parent stub. Their composed
+    # child dossier is named from canonical_name + person_id, exactly as in
+    # ``load_candidate_parents``. Recover that stable child so a researched
+    # synthetic profile keeps the message context it was built from.
+    source_ids = _synthetic_source_ids(row.get("source_person_ids") or "")
+    source_candidate = str(row.get("source_candidate_public_identifier") or "").strip()
+    if source_candidate and source_candidate not in source_ids:
+        source_ids.append(source_candidate)
+    for person_id in source_ids:
+        name = _facts_canonical_name(facts_dir, person_id) or str(row.get("full_name") or pub)
+        child_slug = slugify(name, person_id)
+        if (dossier_dir / f"{child_slug}.md").is_file():
+            return child_slug
     return ""
 
 
-def load_synthetic_parents(path: Path, parents_dir: Path = PARENTS_DIR) -> list[dict[str, Any]]:
+def load_synthetic_parents(path: Path, parents_dir: Path = PARENTS_DIR,
+                           dossier_dir: Path = DOSSIER_DIR,
+                           facts_dir: Path = FACTS_DIR) -> list[dict[str, Any]]:
     """Deep-researched people with NO real LinkedIn (assemble_synthetic_profile output),
     surfaced as review rows: pending -> Needs review, auto/yes -> verified, no -> rejected.
     One candidate per person, flagged synthetic (there is no LinkedIn to link to)."""
@@ -388,7 +407,8 @@ def load_synthetic_parents(path: Path, parents_dir: Path = PARENTS_DIR) -> list[
             name = row.get("full_name") or pub
             gaps = ", ".join(meta.get("gaps") or [])
             source_ids = _synthetic_source_ids(row.get("source_person_ids") or "")
-            dossier_slug = _synthetic_dossier_slug(row, pub, parents_dir)
+            dossier_slug = _synthetic_dossier_slug(
+                row, pub, parents_dir, dossier_dir, facts_dir)
             parents.append({
                 "slug": f"synthetic-{pub}",
                 "dossier_slug": dossier_slug,
@@ -547,10 +567,134 @@ def load_candidate_parents(facts_dir: Path, overrides: dict[str, dict[str, str]]
     return parents
 
 
+def _research_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("text") or "").strip()
+    return str(value or "").strip()
+
+
+def _research_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
+    person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
+    location = profile.get("location") if isinstance(profile.get("location"), dict) else {}
+    positions = profile.get("positions") if isinstance(profile.get("positions"), list) else []
+    education_rows = profile.get("education") if isinstance(profile.get("education"), list) else []
+    social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
+    education: list[str] = []
+    for row in education_rows:
+        if not isinstance(row, dict):
+            continue
+        school = str(row.get("school_name") or row.get("school") or "").strip()
+        degree = ", ".join(
+            str(row.get(key) or "").strip() for key in ("degree", "field_of_study")
+            if str(row.get(key) or "").strip())
+        label = f"{degree} — {school}" if degree and school else degree or school
+        if label:
+            education.append(label)
+    raw_location = str(location.get("raw") or "").strip()
+    if not raw_location:
+        raw_location = ", ".join(
+            str(location.get(key) or "").strip() for key in ("city", "state", "country")
+            if str(location.get(key) or "").strip())
+    reason = ""
+    metadata = profile.get("metadata") if isinstance(profile.get("metadata"), dict) else {}
+    for value in (
+        metadata.get("research_notes"),
+        profile.get("research_notes"),
+        profile.get("reasoning"),
+        profile.get("rationale"),
+        profile.get("summary"),
+        profile.get("headline"),
+    ):
+        text = _research_text(value)
+        if text:
+            reason = f"deep research: {text}"
+            break
+    return {
+        "public_identifier": extract_public_identifier(str(social.get("linkedin_url") or "")).lower(),
+        "linkedin_url": str(social.get("linkedin_url") or "").strip(),
+        "full_name": str(person.get("full_name") or "").strip(),
+        "headline": _research_text(profile.get("headline")),
+        "profile_pic_url": "",
+        "experiences": _fmt_experiences(json.dumps(positions, ensure_ascii=False)),
+        "education": education,
+        "location": raw_location,
+        "reason": reason,
+        "has_profile": bool(person or positions or education or raw_location),
+    }
+
+
+def _current_research_profiles(research_dir: Path = DEEP_RESEARCH_DIR) -> dict[str, dict[str, Any]]:
+    """Current fixed-queue identity research keyed by every stable source handle."""
+    queue_path = research_dir / "research_queue.csv"
+    if not queue_path.exists():
+        return {}
+    by_key: dict[str, dict[str, Any]] = {}
+    with queue_path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            handle = str(row.get("handle") or "").strip()
+            result_path = research_dir / handle / "01_research_parallel.json"
+            if not handle or not result_path.is_file():
+                continue
+            try:
+                raw = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(raw, dict):
+                continue
+            view = _research_profile_view(raw)
+            keys = [
+                handle,
+                str(row.get("source_parent_slug") or "").strip(),
+                str(row.get("source_candidate_public_identifier") or "").strip(),
+                *_synthetic_source_ids(row.get("source_person_ids") or ""),
+            ]
+            for key in keys:
+                if key:
+                    by_key[key.lower()] = view
+    return by_key
+
+
+def hydrate_proposed_profiles(parents: list[dict[str, Any]], *,
+                              profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                              research_dir: Path = DEEP_RESEARCH_DIR) -> None:
+    """Show profile facts already on disk for proposed replacement LinkedIns.
+
+    Prefer the existing RapidAPI cache when this LinkedIn is already known, then
+    fall back to the just-completed Parallel result. This is read-only and never
+    calls either provider from the review UI.
+    """
+    research = _current_research_profiles(research_dir)
+    for parent in parents:
+        parent_keys = [str(parent.get("slug") or ""), *(parent.get("person_ids") or [])]
+        for candidate in parent.get("candidates") or []:
+            if str(candidate.get("action") or "").strip().lower() != "retarget":
+                continue
+            url = str(candidate.get("url") or candidate.get("new_url") or "").strip()
+            pub = (str(candidate.get("profile_pub") or "").strip().lower()
+                   or extract_public_identifier(url).lower())
+            if not url or not pub:
+                continue
+            research_view = next(
+                (research[key.lower()] for key in [str(candidate.get("pub") or ""), *parent_keys]
+                 if key and key.lower() in research),
+                {},
+            )
+            cached_view = linkedin_view(
+                {"public_identifier": pub, "linkedin_url": url}, profile_cache_dir)
+            profile = cached_view if cached_view.get("has_profile") else research_view
+            for field in ("full_name", "headline", "profile_pic_url", "experiences",
+                          "education", "location"):
+                if profile.get(field):
+                    candidate[field] = profile[field]
+            if research_view.get("reason"):
+                candidate["reason"] = research_view["reason"]
+            candidate["has_profile"] = bool(candidate.get("has_profile") or profile.get("has_profile"))
+
+
 def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
                    facts_dir: Path, connections: set[str] | None = None) -> None:
     """Attach the effective network-worth (user review.csv mark / approved exclude >
-    synthesis LLM > review.csv llm_worth > default 'maybe') to EVERY row — verdict,
+    fresh review.csv llm_worth > synthesis LLM fallback > default 'maybe') to EVERY row — verdict,
     candidate, and synthetic alike — plus the machine's own view (for the secondary
     text and the unified Rejected grouping). The mark's review.csv key is the primary
     candidate's LinkedIn pub for verdict rows, else the row's person_id."""
@@ -683,9 +827,15 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
             if pid not in p["person_ids"]:
                 p["person_ids"].append(pid)
         pub = (r.get("candidate_key") or "").strip().lower()
+        candidate_person_ids = [
+            str(pid or "").strip() for pid in (r.get("person_ids") or [])
+            if is_candidate_id(str(pid or ""))
+        ]
+        import_candidate = bool(r.get("no_link") and candidate_person_ids)
+        worth_pub = candidate_person_ids[0].lower() if import_candidate else pub
         v = r.get("verdict") or {}
         li = r.get("linkedin") or {}
-        dec = overrides.get(pub, {})
+        dec = overrides.get(worth_pub, {})
         action = str(dec.get("action") or "").strip().lower()
         approved = str(dec.get("approved") or "").strip().lower()
         new_url = str(dec.get("new_linkedin_url") or "").strip()
@@ -693,7 +843,7 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
                    or extract_public_identifier(new_url).lower())
         proposed_retarget = action == "retarget" and bool(new_url and new_pub)
         p["candidates"].append({
-            "pub": pub,
+            "pub": worth_pub,
             "profile_pub": new_pub if proposed_retarget else pub,
             "url": new_url if proposed_retarget else li.get("linkedin_url", ""),
             # Never show the old/wrong profile's biography as if it described a
@@ -716,6 +866,8 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
             "match_emails": r.get("match_emails") or [],
             "match_phones": r.get("match_phones") or [],
             "conflict": bool(r.get("conflict")),
+            "import_candidate": import_candidate,
+            "candidate_origin": import_candidate,
             # current decision (from review.csv)
             "action": action,
             "approved": approved,
@@ -823,12 +975,19 @@ def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
 
 def extend_and_annotate(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
                         synthetic_path: Path, facts_dir: Path,
-                        connections: set[str] | None = None) -> list[dict[str, Any]]:
+                        connections: set[str] | None = None, *,
+                        parents_dir: Path = PARENTS_DIR,
+                        dossier_dir: Path = DOSSIER_DIR,
+                        profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                        research_dir: Path = DEEP_RESEARCH_DIR) -> list[dict[str, Any]]:
     """Add the synthetic + pre-research candidate rows to the verdict parents and
     annotate everyone's worth — the full row set page_html/summarize operate on."""
-    parents.extend(load_synthetic_parents(synthetic_path))
+    parents.extend(load_synthetic_parents(
+        synthetic_path, parents_dir, dossier_dir, facts_dir))
     shown = {pid.lower() for p in parents for pid in p["person_ids"]}
     parents.extend(load_candidate_parents(facts_dir, overrides, shown))
+    hydrate_proposed_profiles(
+        parents, profile_cache_dir=profile_cache_dir, research_dir=research_dir)
     annotate_worth(parents, overrides, facts_dir, connections)
     return parents
 
@@ -854,6 +1013,21 @@ def is_candidate_origin(parent: dict[str, Any]) -> bool:
     return any(is_candidate_id(str(person_id or "")) for person_id in parent.get("person_ids") or [])
 
 
+def is_worth_subject(parent: dict[str, Any]) -> bool:
+    """A standalone imported contact whose add/no decision stays reviewable.
+
+    Retarget and synthetic results remain in this scope because their durable
+    worth key is still the candidate id. A candidate folded into an existing
+    real parent does not: that person's network membership already exists.
+    """
+    person_ids = [str(value or "") for value in parent.get("person_ids") or []]
+    return is_import_candidate_parent(parent) or (
+        bool(person_ids)
+        and all(is_candidate_id(person_id) for person_id in person_ids)
+        and is_candidate_id(_worth_key(parent))
+    )
+
+
 def explicit_worth(parent: dict[str, Any]) -> str:
     """The user's terminal binary worth decision, ignoring model/default advice."""
     worth = parent.get("worth") or {}
@@ -869,7 +1043,8 @@ def needs_worth_review(parent: dict[str, Any]) -> bool:
     binary queue until the user places it in one of those piles.
     """
     machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
-    return (is_import_candidate_parent(parent)
+    return (is_worth_subject(parent)
+            and is_import_candidate_parent(parent)
             and not is_effective_no(parent)
             and machine == "maybe"
             and explicit_worth(parent) not in USER_WORTH_VALUES)
@@ -878,7 +1053,7 @@ def needs_worth_review(parent: dict[str, Any]) -> bool:
 def is_lookup_ready(parent: dict[str, Any]) -> bool:
     machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
     user = explicit_worth(parent)
-    return (is_import_candidate_parent(parent)
+    return (is_worth_subject(parent)
             and not is_effective_no(parent)
             and (user == "yes" or (not user and machine == "yes")))
 
@@ -886,9 +1061,10 @@ def is_lookup_ready(parent: dict[str, Any]) -> bool:
 def pending_linkedin_candidates(parent: dict[str, Any]) -> list[dict[str, Any]]:
     """Candidates that still need the second human Yes/No.
 
-    Existing high-confidence links may remain machine-approved. New identities
-    originating from import candidates must be explicitly checked even when the
-    model wrote ``approved=auto``. Synthetic profiles use the same human gate.
+    Existing high-confidence links may remain machine-approved. Every new
+    identity originating from an import candidate must be explicitly checked;
+    ``approved=auto`` on a synthetic row is profile completeness, not confidence
+    that this is the right human, so it is still a pending identity decision.
     """
     if is_import_candidate_parent(parent) or is_effective_no(parent):
         return []
@@ -918,7 +1094,7 @@ def identity_in_scope(parent: dict[str, Any]) -> bool:
 
 
 def review_progress(parents: list[dict[str, Any]]) -> dict[str, int]:
-    worth_scope = [parent for parent in parents if is_import_candidate_parent(parent)]
+    worth_scope = [parent for parent in parents if is_worth_subject(parent)]
     worth_pending = [parent for parent in worth_scope if needs_worth_review(parent)]
     lookup_ready = [parent for parent in worth_scope if is_lookup_ready(parent)]
     identity_scope = [parent for parent in parents if identity_in_scope(parent)]
@@ -935,6 +1111,115 @@ def review_progress(parents: list[dict[str, Any]]) -> dict[str, int]:
         "linkedin_done": len(identity_scope) - len(identity_pending),
         "rejected": sum(1 for parent in parents if is_effective_no(parent)),
     }
+
+
+def worth_selection_from_parents(
+    parents: list[dict[str, Any]], *, manifest_path: Path = REVIEW_MANIFEST,
+) -> dict[str, Any]:
+    decisions = [
+        {"person_id": _worth_key(parent),
+         "decision": str((parent.get("worth") or {}).get("decision") or "maybe")}
+        for parent in parents if is_worth_subject(parent) and _worth_key(parent)
+    ]
+    decisions.sort(key=lambda row: row["person_id"])
+    encoded = json.dumps(decisions, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    review_manifest = read_review_manifest(manifest_path)
+    return {
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "total": len(decisions),
+        "yes": sum(row["decision"] == "yes" for row in decisions),
+        "maybe": sum(row["decision"] == "maybe" for row in decisions),
+        "no": sum(row["decision"] == "no" for row in decisions),
+        "review_revision": str(review_manifest.get("people_revision") or ""),
+    }
+
+
+def read_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
+                             selection: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"stage": "enrich", "status": "not_started",
+                "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0},
+                "current": False, "approval_current": False}
+    if not isinstance(value, dict):
+        return {"stage": "enrich", "status": "not_started", "counts": {},
+                "current": False, "approval_current": False}
+    recorded_selection = value.get("selection") if isinstance(value.get("selection"), dict) else {}
+    current = bool(
+        selection
+        and recorded_selection.get("sha256") == selection.get("sha256")
+        and recorded_selection.get("review_revision") == selection.get("review_revision")
+        and bool(selection.get("review_revision"))
+    )
+    approval = value.get("approval") if isinstance(value.get("approval"), dict) else {}
+    try:
+        estimated = round(float(value.get("estimated_usd") or 0), 2)
+        approved_estimate = round(float(approval.get("estimated_usd") or -1), 2)
+        approved_budget = round(float(approval.get("approved_budget_usd") or -1), 2)
+        approved_count = int(approval.get("would_submit") or -1)
+        manifest_count = int(value.get("would_submit") or 0)
+    except (TypeError, ValueError, OverflowError):
+        estimated = approved_estimate = approved_budget = -1
+        approved_count = manifest_count = -1
+    approval_current = bool(
+        current
+        and value.get("status") == "needs_approval"
+        and approval.get("status") == "approved"
+        and approval.get("selection_sha256") == recorded_selection.get("sha256")
+        and approval.get("review_revision") == recorded_selection.get("review_revision")
+        and approved_count == manifest_count
+        and math.isfinite(estimated)
+        and math.isfinite(approved_estimate)
+        and math.isfinite(approved_budget)
+        and approved_estimate == estimated
+        and approved_budget >= estimated
+    )
+    result = {**value, "current": current, "approval_current": approval_current}
+    if not current:
+        result["status"] = "stale"
+    return result
+
+
+def approve_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
+                                selection: dict[str, Any]) -> dict[str, Any]:
+    """Persist the UI's exact spend approval in the fixed enrichment manifest.
+
+    The approval is inert: the web server never starts a subprocess or provider.
+    ``workflow_status`` validates this revision-bound record and exposes the one
+    approved command for the agent to run.
+    """
+    enrichment = read_enrichment_manifest(path, selection=selection)
+    if not enrichment.get("current"):
+        raise ValueError("Enrichment preview is stale; refresh the preview before approving")
+    if enrichment.get("status") != "needs_approval":
+        raise ValueError("Enrichment is not waiting for approval")
+    if enrichment.get("approval_current"):
+        return enrichment
+    try:
+        would_submit = int(enrichment.get("would_submit") or 0)
+        estimate = round(float(enrichment.get("estimated_usd") or 0), 2)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Enrichment estimate is invalid") from exc
+    if would_submit <= 0:
+        raise ValueError("No paid enrichment approval is required")
+    if not math.isfinite(estimate) or estimate <= 0:
+        raise ValueError("Enrichment estimate must be a positive finite amount")
+    recorded_selection = enrichment.get("selection") or {}
+    payload = {key: value for key, value in enrichment.items()
+               if key not in {"current", "approval_current"}}
+    payload["approval"] = {
+        "status": "approved",
+        "approved_at": now_iso(),
+        "approved_budget_usd": estimate,
+        "estimated_usd": estimate,
+        "would_submit": would_submit,
+        "selection_sha256": str(recorded_selection.get("sha256") or ""),
+        "review_revision": str(recorded_selection.get("review_revision") or ""),
+    }
+    payload["updated_at"] = now_iso()
+    write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
+    return read_enrichment_manifest(path, selection=selection)
 
 
 def phase_counts(progress: dict[str, int], stage: str) -> dict[str, int]:
@@ -970,34 +1255,43 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
                           review_path: Path = LINKEDIN_OVERRIDES_CSV,
                           synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
                           launched: bool = False) -> dict[str, Any]:
-    if stage not in {"worth", "linkedin"}:
+    if stage not in {"worth", "enrich", "linkedin"}:
         raise ValueError(f"unknown review stage: {stage}")
     if status not in {"awaiting_user", "completed"}:
         raise ValueError(f"unknown review status: {status}")
     if path.name != "manifest.json":
         raise ValueError("review manifest path must end in manifest.json")
+    if stage == "enrich":
+        raise ValueError("Enrich completion must be written from the enrichment manifest")
     counts = phase_counts(progress, stage)
     if status == "completed" and counts["pending"]:
         raise ValueError(f"{counts['pending']} decisions still need an answer")
     existing = read_review_manifest(path)
     completed = {str(value) for value in existing.get("completed_stages") or []
-                 if value in {"worth", "linkedin"}}
+                 if value in {"worth", "enrich", "linkedin"}}
     if (existing.get("status") == "completed"
-            and existing.get("stage") in {"worth", "linkedin"}):
+            and existing.get("stage") in {"worth", "enrich", "linkedin"}):
         completed.add(str(existing["stage"]))
     if status == "awaiting_user":
         completed.discard(stage)
         if stage == "worth":
+            completed.discard("enrich")
             completed.discard("linkedin")
     else:
-        if stage == "linkedin" and progress["worth_total"] and "worth" not in completed:
-            raise ValueError("People decisions must be completed before LinkedIn")
+        if stage == "linkedin" and ("worth" not in completed or "enrich" not in completed):
+            raise ValueError("People decisions and enrichment must be completed before LinkedIn")
         completed.add(stage)
+    people_revision = str(existing.get("people_revision") or "")
+    if stage == "worth" and launched:
+        people_revision = str(time.time_ns())
+    if not people_revision:
+        people_revision = str(time.time_ns())
     payload: dict[str, Any] = {
         "stage": stage,
         "status": status,
         "counts": counts,
-        "completed_stages": sorted(completed, key=("worth", "linkedin").index),
+        "completed_stages": sorted(completed, key=("worth", "enrich", "linkedin").index),
+        "people_revision": people_revision,
         "review_csv": str(review_path),
         "synthetic_people_csv": str(synthetic_path),
         "privacy": {"message_bodies_read": False, "network_called": True,
@@ -1014,6 +1308,40 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
     if status == "completed":
         payload["completed_at"] = now_iso()
     return write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
+
+
+def write_enrichment_handoff(
+    enrichment: dict[str, Any], *, path: Path = REVIEW_MANIFEST,
+    review_path: Path = LINKEDIN_OVERRIDES_CSV,
+    synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
+) -> dict[str, Any]:
+    """Record only the user's Continue handoff after current enrichment finished."""
+    if enrichment.get("status") != "completed" or not enrichment.get("current"):
+        raise ValueError("Enrichment is not complete for the current People decisions")
+    existing = read_review_manifest(path)
+    completed = {str(value) for value in existing.get("completed_stages") or []
+                 if value in {"worth", "enrich", "linkedin"}}
+    if "worth" not in completed:
+        raise ValueError("People decisions must be completed before enrichment")
+    completed.add("enrich")
+    completed.discard("linkedin")
+    payload = {
+        "stage": "enrich",
+        "status": "completed",
+        "counts": enrichment.get("counts") or {},
+        "completed_stages": sorted(completed, key=("worth", "enrich", "linkedin").index),
+        "people_revision": str(existing.get("people_revision") or ""),
+        "review_csv": str(review_path),
+        "synthetic_people_csv": str(synthetic_path),
+        "completed_at": now_iso(),
+        "privacy": {"message_bodies_read": False, "network_called": False,
+                    "paid_provider_called": False},
+    }
+    return write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
+
+
+def enrichment_handoff_completed(path: Path = REVIEW_MANIFEST) -> bool:
+    return "enrich" in set(read_review_manifest(path).get("completed_stages") or [])
 
 
 def phase_is_completed(stage: str, progress: dict[str, int], path: Path = REVIEW_MANIFEST) -> bool:
@@ -1212,7 +1540,8 @@ def _machine_copy(parent: dict[str, Any]) -> tuple[str, str]:
     return label, str(machine.get("reason") or "")
 
 
-def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: bool) -> str:
+def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: bool,
+             profile_facts: str = "") -> str:
     contacts = [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])]
     evidence = [*(candidate.get("supporting") or []), *(candidate.get("contradicting") or [])]
     reason = str(candidate.get("reason") or "")
@@ -1227,7 +1556,7 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
     return (f"<section class='details' data-slug='{esc(dossier_slug)}'>"
             f"<h3 class='details-heading'>Details</h3>"
-            f"<div class='details-body'>{extra}"
+            f"<div class='details-body'>{profile_facts}{extra}"
             "<h4 class='dossier-heading'>Context</h4>"
             "<div class='dossier-text' aria-busy='true'>Loading…</div></div></section>")
 
@@ -1300,20 +1629,22 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
         f"<button class='button button-outline' data-open-fix aria-expanded='false' "
         f"aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>"
     )
+    profile_facts = (
+        (f"<ul class='roles'>{roles}</ul>" if roles else "")
+        + (f"<p class='education'>{esc(education)}</p>" if education else "")
+    )
     scroll_content = f"""
         {f"<div class='identity-eyebrow'>{esc(eyebrow)}</div>" if eyebrow else ""}
         <div class='profile-card'>
           {_avatar(parent, candidate)}
           <div class='profile-copy'>
             <h2>{esc(profile_name)}</h2>
+            {link}
             {f"<p>{esc(candidate.get('headline'))}</p>" if candidate.get('headline') else ""}
             {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
-            {link}
           </div>
         </div>
-        {f"<ul class='roles'>{roles}</ul>" if roles else ""}
-        {f"<p class='education'>{esc(education)}</p>" if education else ""}
-        {_details(parent, candidate, identity=True)}"""
+        {_details(parent, candidate, identity=True, profile_facts=profile_facts)}"""
     return f"""
     <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
       {_scroll_region(scroll_content)}
@@ -1364,99 +1695,168 @@ def _rejection_reason(parent: dict[str, Any]) -> str:
     return reason if len(reason) <= 140 else reason[:137].rsplit(" ", 1)[0] + "…"
 
 
-def render_rejected(parents: list[dict[str, Any]]) -> str:
-    rejected = [parent for parent in parents if is_effective_no(parent)]
-    if not rejected:
-        return "<div class='empty-state'><div class='empty-mark'>0</div><h2>No rejected people</h2></div>"
-    rows = []
-    for parent in sorted(rejected, key=lambda item: str(item.get("name") or "").lower()):
-        candidate = _primary_candidate(parent)
-        rows.append(f"""
-        <article class='rejected-row' data-card>
-          {_avatar(parent, candidate, small=True)}
-          <div><strong>{esc(parent.get('name'))}</strong><span>{esc(_rejection_reason(parent))}</span></div>
-          <button class='button button-ghost' data-worth='yes' data-pub='{esc(_worth_key(parent))}'>Restore</button>
-        </article>""")
-    return "<section class='rejected-list'>" + "".join(rows) + "</section>"
-
-
-def _pagination(page: int, total_pages: int) -> str:
+def _pagination(page: int, total_pages: int, *, decision: str) -> str:
     if total_pages <= 1:
         return ""
-    numbers = sorted({1, total_pages, page - 1, page, page + 1}
+    numbers = sorted({1, total_pages, page - 2, page - 1, page, page + 1, page + 2}
                      & set(range(1, total_pages + 1)))
-    items: list[str] = []
+    def href(number: int) -> str:
+        return f"/?stage=worth&amp;view={esc(decision)}&amp;page={number}"
+    items: list[str] = [
+        (f"<a class='page-link page-direction' href='{href(page - 1)}' rel='prev' "
+         f"aria-label='Previous {esc(decision)} decisions page'>Previous</a>")
+        if page > 1 else
+        "<span class='page-link page-direction disabled' aria-disabled='true'>Previous</span>"
+    ]
     previous = 0
     for number in numbers:
         if previous and number - previous > 1:
             items.append("<span class='page-ellipsis' aria-hidden='true'>…</span>")
+        classes = ["page-link"]
+        if number in {1, total_pages}:
+            classes.append("page-boundary")
+        if abs(number - page) == 2:
+            classes.append("page-far")
         if number == page:
-            items.append(f"<span class='page-link active' aria-current='page'>{number}</span>")
+            classes.append("active")
+            items.append(f"<span class='{' '.join(classes)}' aria-current='page'>{number}</span>")
         else:
-            items.append(f"<a class='page-link' href='/?stage=added&amp;page={number}' "
-                         f"aria-label='Added page {number}'>{number}</a>")
+            items.append(f"<a class='{' '.join(classes)}' href='{href(number)}' "
+                         f"aria-label='{esc(decision.title())} decisions page {number}'>{number}</a>")
         previous = number
-    return "<nav class='pagination' aria-label='Added pages'>" + "".join(items) + "</nav>"
+    items.append(
+        (f"<a class='page-link page-direction' href='{href(page + 1)}' rel='next' "
+         f"aria-label='Next {esc(decision)} decisions page'>Next</a>")
+        if page < total_pages else
+        "<span class='page-link page-direction disabled' aria-disabled='true'>Next</span>"
+    )
+    return f"<nav class='pagination' aria-label='{esc(decision.title())} decision pages'>" + "".join(items) + "</nav>"
 
 
-def render_added(parents: list[dict[str, Any]], *, page: int = 1,
-                 page_size: int = ADDED_PAGE_SIZE) -> str:
-    added = sorted((parent for parent in parents if is_lookup_ready(parent)),
-                   key=lambda item: str(item.get("name") or "").lower())
-    if not added:
-        return "<div class='empty-state'><div class='empty-mark'>0</div><h2>No added people</h2></div>"
+def render_decision_table(parents: list[dict[str, Any]], decision: str, *, page: int = 1,
+                          page_size: int = DECISION_PAGE_SIZE) -> str:
+    if decision not in {"yes", "no"}:
+        raise ValueError(f"unknown decision table: {decision}")
+    rows_in_scope = [
+        parent for parent in parents
+        if is_worth_subject(parent)
+        and ((decision == "yes" and is_lookup_ready(parent))
+             or (decision == "no" and is_effective_no(parent)))
+    ]
+    rows_in_scope.sort(key=lambda item: str(item.get("name") or "").lower())
+    if not rows_in_scope:
+        return ("<div class='empty-state decision-empty'><div class='empty-mark'>0</div>"
+                f"<h2>No {esc(decision)} decisions</h2></div>")
     page_size = max(1, page_size)
-    total_pages = max(1, (len(added) + page_size - 1) // page_size)
+    total_pages = max(1, (len(rows_in_scope) + page_size - 1) // page_size)
     page = min(max(1, page), total_pages)
     start = (page - 1) * page_size
     rows = []
-    for parent in added[start:start + page_size]:
+    for parent in rows_in_scope[start:start + page_size]:
         candidate = _primary_candidate(parent)
+        flip = "no" if decision == "yes" else "yes"
+        flip_label = "No" if decision == "yes" else "Yes"
+        reason = (_rejection_reason(parent) if decision == "no" else
+                  str((parent.get("machine_worth") or {}).get("reason") or "Worth adding"))
+        contacts = [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])]
+        badges = _source_badges(parent)
+        dossier_slug = parent.get("dossier_slug") or parent.get("slug")
+        why_label = "Why no" if decision == "no" else "Why yes"
+        fact_rows = []
+        if contacts:
+            fact_rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
+        fact_rows.append(f"<div><dt>{why_label}</dt><dd>{esc(reason)}</dd></div>")
         rows.append(f"""
-        <article class='rejected-row' data-card>
-          {_avatar(parent, candidate, small=True)}
-          <div><strong>{esc(parent.get('name'))}</strong></div>
-          <button class='button button-ghost' data-worth='no' data-pub='{esc(_worth_key(parent))}'>Remove</button>
-        </article>""")
-    return ("<div class='pile-page'><section class='rejected-list'>" + "".join(rows)
-            + "</section>" + _pagination(page, total_pages) + "</div>")
+        <details class='decision-row' data-card data-slug='{esc(dossier_slug)}'>
+          <summary class='decision-row-summary'>
+            {_avatar(parent, candidate, small=True)}
+            <div class='decision-row-main'><strong>{esc(parent.get('name'))}</strong><span>{esc(reason)}</span></div>
+            <div class='decision-row-actions'>
+              <button class='button button-ghost' data-worth='{flip}' data-pub='{esc(_worth_key(parent))}' aria-label='Mark {esc(parent.get('name'))} {flip_label}'>{flip_label}</button>
+              <span class='decision-row-caret' aria-hidden='true'></span>
+            </div>
+          </summary>
+          <div class='decision-row-detail'>
+            {f"<div class='row-badges'>{badges}</div>" if badges else ""}
+            <dl class='row-facts'>{''.join(fact_rows)}</dl>
+            <h4 class='dossier-heading'>Who they are</h4>
+            <div class='dossier-text' aria-busy='true'>Loading…</div>
+          </div>
+        </details>""")
+    return ("<div class='decision-page'><section class='decision-list'>" + "".join(rows)
+            + "</section>" + _pagination(page, total_pages, decision=decision) + "</div>")
+
+
+def render_decision_tabs(progress: dict[str, int], active: str) -> str:
+    tabs = (("review", "Review", progress["worth_pending"]),
+            ("yes", "Yes", progress["worth_yes"]),
+            ("no", "No", progress["worth_no"]))
+    links = []
+    for key, label, count in tabs:
+        current = " aria-current='page'" if key == active else ""
+        links.append(
+            f"<a class='decision-tab{' active' if key == active else ''}' "
+            f"href='/?stage=worth&amp;view={key}'{current}>"
+            f"{label}<span>{count}</span></a>")
+    return "<nav class='decision-tabs' aria-label='People decisions'>" + "".join(links) + "</nav>"
 
 
 def _phase_view(params: dict[str, list[str]], progress: dict[str, int], manifest_path: Path) -> str:
     requested = str((params.get("stage") or [""])[0]).strip().lower()
-    legacy_tab = str((params.get("tab") or [""])[0]).strip().lower()
-    if requested == "rejected" or legacy_tab == "rejected":
-        return "rejected"
-    if requested == "added":
-        return "added"
-    worth_complete = (not progress["worth_total"]
-                      or phase_is_completed("worth", progress, manifest_path))
-    linkedin_complete = phase_is_completed("linkedin", progress, manifest_path)
-    # The stepper is navigation as well as progress: completed stages remain
-    # inspectable without reopening either decision gate.
-    if requested == "worth":
-        return "worth"
-    if requested == "linkedin" and (progress["linkedin_total"] or linkedin_complete):
-        return "linkedin"
-    # An explicit second-tab request is a safe preview/review surface. It does
-    # not complete People or start lookups; it only exposes LinkedIn decisions
-    # that already exist while the worth queue remains open in another tab.
-    if requested == "linkedin" and progress["linkedin_pending"]:
-        return "linkedin"
-    if (requested == "linkedin" and worth_complete
-            and not progress["worth_pending"] and not progress["lookup_ready"]):
-        return "linkedin"
+    return requested if requested in {"worth", "enrich", "linkedin", "done"} else "worth"
+
+
+def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> str:
+    status = str(enrichment.get("status") or "not_started")
+    counts = enrichment.get("counts") if isinstance(enrichment.get("counts"), dict) else {}
+    total = max(0, int(counts.get("total") or progress["lookup_ready"] or 0))
+    completed = min(total, max(0, int(counts.get("completed") or 0)))
+    failed = max(0, int(counts.get("failed") or 0))
+    percent = round((completed / total) * 100) if total else 0
+    progress_bar = f"""
+      <div class='enrich-progress' role='progressbar' aria-label='Contact enrichment progress'
+           aria-valuemin='0' aria-valuemax='{total}' aria-valuenow='{completed}'>
+        <div class='enrich-progress-fill' style='width:{percent}%'></div>
+      </div>"""
     if progress["worth_pending"]:
-        return "worth"
-    if progress["worth_total"] and not worth_complete:
-        return "worth"
-    if progress["lookup_ready"]:
-        return "waiting" if phase_is_completed("worth", progress, manifest_path) else "worth"
-    if progress["linkedin_pending"]:
-        return "linkedin"
-    if progress["linkedin_total"] and not linkedin_complete:
-        return "linkedin"
-    return "done"
+        return ("<div class='empty-state enrich-state'><div class='empty-mark'>1</div>"
+                "<h2>Review in progress</h2>"
+                f"<p>{progress['worth_pending']} decisions left · {progress['lookup_ready']} currently yes</p>"
+                f"{progress_bar}</div>")
+    if status in {"not_started", "stale"}:
+        return ("<div class='empty-state enrich-state'><div class='empty-mark'>2</div>"
+                "<h2>Preparing enrichment</h2>"
+                f"<p>{progress['lookup_ready']} approved contact{'s' if progress['lookup_ready'] != 1 else ''}</p>"
+                f"{progress_bar}</div>")
+    if status == "needs_approval":
+        estimate = float(enrichment.get("estimated_usd") or 0)
+        new_count = max(0, int(enrichment.get("would_submit") or 0))
+        reused = max(0, int(enrichment.get("reused_completed") or 0))
+        if enrichment.get("approval_current"):
+            return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
+                    "<h2>Approved</h2>"
+                    f"<p>${estimate:.2f} approved · waiting to start</p>{progress_bar}</div>")
+        details = f"{new_count} new · {reused} reused · up to ${estimate:.2f}"
+        return ("<div class='empty-state enrich-state'><div class='empty-mark'>2</div>"
+                "<h2>Ready to enrich</h2>"
+                f"<p>{details}</p>{progress_bar}"
+                f"<button class='button button-primary' data-approve-enrichment>Approve ${estimate:.2f}</button></div>")
+    if status in {"running", "submitted"}:
+        return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
+                "<h2>Enriching contacts</h2>"
+                f"<p>{completed} of {total} complete</p>{progress_bar}</div>")
+    if status == "research_complete":
+        return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
+                "<h2>Building profiles</h2>"
+                f"<p>{completed} of {total} researched</p>{progress_bar}</div>")
+    if status in {"failed", "completed_with_errors"}:
+        return ("<div class='empty-state enrich-state'><div class='empty-mark'>!</div>"
+                "<h2>Enrichment paused</h2>"
+                f"<p>{failed} failed · {completed} complete</p>{progress_bar}</div>")
+    return ("<div class='empty-state enrich-state'><div class='empty-mark'>✓</div>"
+            "<h2>Contacts enriched</h2>"
+            f"<p>{completed} profiles ready</p>{progress_bar}"
+            "<button class='button button-primary' data-complete='enrich'>Continue</button></div>")
 
 
 def _step(number: int, label: str, active: bool, complete: bool, count: int = 0,
@@ -1474,83 +1874,84 @@ def _step(number: int, label: str, active: bool, complete: bool, count: int = 0,
 def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
               review_path: Path, *, parents_dir: Path = PARENTS_DIR,
               dossier_dir: Path = DOSSIER_DIR,
-              manifest_path: Path = REVIEW_MANIFEST) -> bytes:
+              manifest_path: Path = REVIEW_MANIFEST,
+              enrichment_manifest_path: Path = ENRICH_MANIFEST) -> bytes:
     progress = review_progress(parents)
+    selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
+    enrichment = read_enrichment_manifest(enrichment_manifest_path, selection=selection)
     view = _phase_view(params, progress, manifest_path)
     worth_complete = phase_is_completed("worth", progress, manifest_path) or not progress["worth_total"]
+    enrichment_complete = enrichment.get("status") == "completed" and enrichment.get("current")
+    enrichment_continued = enrichment_handoff_completed(manifest_path)
     linkedin_complete = (phase_is_completed("linkedin", progress, manifest_path)
                          or (view == "done" and not progress["linkedin_total"]))
     people_active = view == "worth"
-    linkedin_active = view in {"waiting", "linkedin"}
-    done_active = view == "done"
+    enrich_active = view == "enrich"
+    linkedin_active = view in {"linkedin", "done"}
 
     if view == "worth":
-        queue = [parent for parent in parents if needs_worth_review(parent)]
-        if queue:
-            queue.sort(key=lambda parent: (str((parent.get("machine_worth") or {}).get("decision")) != "maybe",
-                                            str(parent.get("name") or "").lower()))
-            content = render_worth_card(queue[0], parents_dir, dossier_dir)
+        decision_view = str((params.get("view") or ["review"])[0]).strip().lower()
+        decision_view = decision_view if decision_view in {"review", "yes", "no"} else "review"
+        tabs = render_decision_tabs(progress, decision_view)
+        if decision_view == "review":
+            queue = [parent for parent in parents if needs_worth_review(parent)]
+            if queue:
+                queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
+                body = render_worth_card(queue[0], parents_dir, dossier_dir)
+            else:
+                body = ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
+                        "<h2>Decisions ready</h2>"
+                        f"<p>{progress['lookup_ready']} people will be enriched</p>"
+                        "<button class='button button-primary' data-complete='worth'>Continue</button></div>")
         else:
-            continue_button = ("" if worth_complete else
-                               "<button class='button button-primary' data-complete='worth'>Continue</button>")
-            content = ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
-                       "<h2>People sorted</h2>"
-                       f"<p>{progress['lookup_ready']} ready for LinkedIn lookup</p>"
-                       f"{continue_button}</div>")
+            try:
+                decision_page = int(str((params.get("page") or ["1"])[0]))
+            except ValueError:
+                decision_page = 1
+            body = render_decision_table(parents, decision_view, page=decision_page)
+        content = f"<div class='worth-stage'>{tabs}<div class='worth-panel'>{body}</div></div>"
+    elif view == "enrich":
+        content = render_enrichment(enrichment, progress)
     elif view == "linkedin":
-        queue = [parent for parent in parents if pending_linkedin_candidates(parent)]
-        if queue:
-            queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
-            content = render_linkedin_card(queue[0], pending_linkedin_candidates(queue[0])[0], parents_dir, dossier_dir)
+        if not enrichment_complete:
+            content = ("<div class='empty-state enrich-state'><div class='empty-mark'>2</div>"
+                       "<h2>Enrichment not finished</h2><p>Results will appear here when ready</p></div>")
         else:
-            finish_button = ("" if linkedin_complete else
-                             "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
-            content = ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
-                       "<h2>LinkedIn profiles checked</h2>"
-                       f"<p>{progress['linkedin_done']} decisions saved</p>"
-                       f"{finish_button}</div>")
-    elif view == "waiting":
-        content = ("<div class='empty-state waiting'><div class='empty-mark' aria-hidden='true'>✓</div>"
-                   "<h2>Ready for lookup</h2>"
-                   f"<p>{progress['lookup_ready']} approved person{'s' if progress['lookup_ready'] != 1 else ''}</p></div>")
-    elif view == "rejected":
-        content = render_rejected(parents)
-    elif view == "added":
-        try:
-            added_page = int(str((params.get("page") or ["1"])[0]))
-        except ValueError:
-            added_page = 1
-        content = render_added(parents, page=added_page)
+            queue = [parent for parent in parents if pending_linkedin_candidates(parent)]
+            if queue:
+                queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
+                content = render_linkedin_card(
+                    queue[0], pending_linkedin_candidates(queue[0])[0], parents_dir, dossier_dir)
+            else:
+                finish_button = ("" if linkedin_complete else
+                                 "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
+                content = ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
+                           "<h2>LinkedIn profiles checked</h2>"
+                           f"<p>{progress['linkedin_done']} decisions saved</p>"
+                           f"{finish_button}</div>")
     else:
         content = ("<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
                    f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p></div>")
 
-    stepper = (_step(1, "People", people_active, worth_complete, progress["worth_pending"],
+    stepper = (_step(1, "Review Decisions", people_active, worth_complete, progress["worth_pending"],
                      "/?stage=worth")
                + "<i class='step-line'></i>"
-               + _step(2, "LinkedIn", linkedin_active, worth_complete and linkedin_complete,
-                       progress["linkedin_pending"], "/?stage=linkedin")
+               + _step(2, "Enrich Contacts", enrich_active, enrichment_complete,
+                       int((enrichment.get("counts") or {}).get("pending") or 0), "/?stage=enrich")
                + "<i class='step-line'></i>"
-               + _step(3, "Done", done_active, view == "done"))
-    title = {"worth": "Add people", "linkedin": "Check LinkedIn",
-             "waiting": "Find LinkedIn", "done": "All set",
-             "added": "Added",
-             "rejected": "Rejected"}.get(view, "Add people")
-    leading_nav = ("<a class='back-link' href='/'>Back</a>"
-                   if view in {"added", "rejected"}
-                   else "<a class='brand' href='/'>POWERPACKS</a>")
+               + _step(3, "Check LinkedIn", linkedin_active,
+                       enrichment_complete and enrichment_continued and linkedin_complete,
+                       progress["linkedin_pending"], "/?stage=linkedin")
+               )
+    title = {"worth": "Add People", "enrich": "Enrich Contacts",
+             "linkedin": "Check LinkedIn", "done": "All Set"}.get(view, "Add People")
     return f"""<!doctype html>
 <html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <meta name='color-scheme' content='dark'><title>{esc(title)} · Powerpacks</title>
 <link rel='stylesheet' href='/assets/reconcile-review.css'></head>
-<body data-stage='{esc(view)}'><div class='app-shell'>
-  <header class='topbar'>{leading_nav}<h1 class='topbar-title'>{esc(title)}</h1>
-    <nav class='pile-links' aria-label='People decisions'>
-      <a class='rejected-link pile-link-added{' active' if view == 'added' else ''}' href='/?stage=added'{" aria-current='page'" if view == "added" else ""}><span class='pile-label'>Added</span><span class='pile-count'>{progress['worth_yes']}</span></a>
-      <a class='rejected-link pile-link-rejected{' active' if view == 'rejected' else ''}' href='/?stage=rejected'{" aria-current='page'" if view == "rejected" else ""}><span class='pile-label'>Rejected</span><span class='pile-count'>{progress['rejected']}</span></a>
-    </nav>
-  </header>
-  <main>{f"<nav class='stepper' aria-label='Progress'>{stepper}</nav>" if view not in {"added", "rejected"} else ""}
+<body data-stage='{esc(view)}' data-enrichment-status='{esc("approved" if enrichment.get("approval_current") else enrichment.get("status"))}'><div class='app-shell'>
+  <header class='topbar'><a class='brand' href='/?stage=worth'>POWERPACKS</a><h1 class='topbar-title'>{esc(title)}</h1><span></span></header>
+  <main><nav class='stepper' aria-label='Progress'>{stepper}</nav>
     <section class='stage' aria-live='polite'>{content}</section>
   </main>
   <div class='toast' role='status' aria-live='polite'></div>
@@ -1559,10 +1960,14 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
 # --- server -----------------------------------------------------------------
 
 def _all_review_parents(verdicts_path: Path, review_path: Path, synthetic_path: Path,
-                        facts_dir: Path, people_csv: Path) -> list[dict[str, Any]]:
+                        facts_dir: Path, people_csv: Path,
+                        parents_dir: Path = PARENTS_DIR,
+                        dossier_dir: Path = DOSSIER_DIR,
+                        profile_cache_dir: Path = PROFILE_CACHE_DIR) -> list[dict[str, Any]]:
     parents, overrides = build_parents(verdicts_path, review_path)
     extend_and_annotate(parents, overrides, synthetic_path, facts_dir,
-                        load_connection_keys(people_csv))
+                        load_connection_keys(people_csv), parents_dir=parents_dir,
+                        dossier_dir=dossier_dir, profile_cache_dir=profile_cache_dir)
     annotate_sources(parents, load_people_sources(people_csv))
     return parents
 
@@ -1581,6 +1986,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                  synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
                  facts_dir: Path = FACTS_DIR, people_csv: Path = DEFAULT_PEOPLE_CSV,
                  manifest_path: Path | None = None,
+                 enrichment_manifest_path: Path = ENRICH_MANIFEST,
                  profile_cache_dir: Path = PROFILE_CACHE_DIR,
                  avatar_dir: Path | None = None):
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
@@ -1588,7 +1994,9 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
     mutation_lock = threading.Lock()
 
     def parents_now() -> list[dict[str, Any]]:
-        return _all_review_parents(verdicts_path, review_path, synthetic_path, facts_dir, people_csv)
+        return _all_review_parents(
+            verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
+            parents_dir, dossier_dir, profile_cache_dir)
 
     def invalidate_manifest(stage: str, progress: dict[str, int], *, launched: bool = False) -> None:
         write_review_manifest(stage, "awaiting_user", progress, path=manifest_path,
@@ -1619,6 +2027,14 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             if parsed.path == "/api/status":
                 self.send_json({"primitive": "reconcile_review_web", "ok": True,
                                 "manifest": str(manifest_path)})
+                return
+            if parsed.path == "/api/enrichment":
+                with mutation_lock:
+                    parents = parents_now()
+                selection = worth_selection_from_parents(
+                    parents, manifest_path=manifest_path)
+                self.send_json(read_enrichment_manifest(
+                    enrichment_manifest_path, selection=selection))
                 return
             if parsed.path == "/assets/reconcile-review.css":
                 if not REVIEW_CSS.exists():
@@ -1658,11 +2074,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             with mutation_lock:
                 parents = parents_now()
             self.send_bytes(page_html(parents, params, review_path, parents_dir=parents_dir,
-                                      dossier_dir=dossier_dir, manifest_path=manifest_path))
+                                      dossier_dir=dossier_dir, manifest_path=manifest_path,
+                                      enrichment_manifest_path=enrichment_manifest_path))
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path not in {"/decide", "/worth", "/complete", "/activate"}:
+            if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
@@ -1674,30 +2091,39 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
             pub = (form.get("pub") or [""])[0]
 
-            if parsed.path == "/activate":
-                stage = (form.get("stage") or [""])[0].strip().lower()
+            if parsed.path == "/approve-enrichment":
                 try:
                     with mutation_lock:
-                        progress = review_progress(parents_now())
-                        if (stage == "linkedin" and progress["worth_total"]
-                                and not phase_is_completed("worth", progress, manifest_path)):
-                            raise ValueError("People decisions must be completed before LinkedIn")
-                        invalidate_manifest(stage, progress, launched=True)
+                        current_parents = parents_now()
+                        selection = worth_selection_from_parents(
+                            current_parents, manifest_path=manifest_path)
+                        enrichment = approve_enrichment_manifest(
+                            enrichment_manifest_path, selection=selection)
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=409)
                     return
-                self.send_json({"ok": True, "stage": stage, "progress": progress})
+                self.send_json({"ok": True, "enrichment": enrichment})
                 return
 
             if parsed.path == "/complete":
                 stage = (form.get("stage") or [""])[0].strip().lower()
                 try:
                     with mutation_lock:
-                        progress = review_progress(parents_now())
-                        manifest = write_review_manifest(
-                            stage, "completed", progress, path=manifest_path,
-                            review_path=review_path, synthetic_path=synthetic_path)
+                        current_parents = parents_now()
+                        progress = review_progress(current_parents)
+                        if stage == "enrich":
+                            selection = worth_selection_from_parents(
+                                current_parents, manifest_path=manifest_path)
+                            enrichment = read_enrichment_manifest(
+                                enrichment_manifest_path, selection=selection)
+                            manifest = write_enrichment_handoff(
+                                enrichment, path=manifest_path,
+                                review_path=review_path, synthetic_path=synthetic_path)
+                        else:
+                            manifest = write_review_manifest(
+                                stage, "completed", progress, path=manifest_path,
+                                review_path=review_path, synthetic_path=synthetic_path)
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=409)
@@ -1707,13 +2133,14 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
             if parsed.path == "/worth":
                 worth_val = (form.get("worth") or [""])[0].strip().lower()
-                if worth_val not in USER_WORTH_VALUES:
-                    self.send_bytes(b"worth must be yes or no", "text/plain", status=400)
+                if worth_val not in {*USER_WORTH_VALUES, "restore"}:
+                    self.send_bytes(b"worth must be yes, no, or restore", "text/plain", status=400)
                     return
+                stored_worth = "" if worth_val == "restore" else worth_val
                 try:
                     with mutation_lock:
-                        result = apply_worth_decision(review_path, pub, worth_val)
-                        gate = sync_synthetic_gate(synthetic_path, pub, worth_val)
+                        result = apply_worth_decision(review_path, pub, stored_worth)
+                        gate = sync_synthetic_gate(synthetic_path, pub, stored_worth)
                         rows_now = load_override_rows(review_path)
                         conns = load_connection_keys(people_csv)
                         state = effective_no_for_key(
@@ -1727,7 +2154,16 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         }
                         current_parents = parents_now()
                         progress = review_progress(current_parents)
-                        invalidate_manifest("worth", progress)
+                        if progress["worth_pending"] == 0:
+                            review_manifest = write_review_manifest(
+                                "worth", "completed", progress, path=manifest_path,
+                                review_path=review_path, synthetic_path=synthetic_path)
+                            next_stage = "enrich"
+                        else:
+                            review_manifest = write_review_manifest(
+                                "worth", "awaiting_user", progress, path=manifest_path,
+                                review_path=review_path, synthetic_path=synthetic_path)
+                            next_stage = "worth"
                         counts = summarize(current_parents)
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
@@ -1743,6 +2179,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     "rejected": state["rejected"],
                     "counts": counts,
                     "progress": progress,
+                    "review_manifest": review_manifest,
+                    "next_stage": next_stage,
                 })
                 return
 
@@ -1825,54 +2263,52 @@ def cmd_serve(args: argparse.Namespace) -> None:
     parents = _all_review_parents(verdicts_path, review_path, synthetic_path,
                                   Path(args.facts_dir), Path(args.people_csv))
     progress = review_progress(parents)
-    query = f"?stage={urllib.parse.quote(args.stage)}" if args.stage else ""
+    requested_stage = args.stage or "worth"
+    query = f"?stage={urllib.parse.quote(requested_stage)}"
     requested_url = f"http://{args.host}:{args.port}/{query}"
 
-    # One browser/server spans both human gates. A second `review --stage ...`
-    # command activates the existing local server instead of colliding on 8765.
-    if args.stage:
-        status_payload: dict[str, Any] = {}
-        try:
-            with urllib.request.urlopen(
-                    f"http://{args.host}:{args.port}/api/status", timeout=1) as response:
-                status_payload = json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, urllib.error.HTTPError,
-                json.JSONDecodeError, TimeoutError):
-            status_payload = {}
-        if status_payload.get("primitive") == "reconcile_review_web":
-            request = urllib.request.Request(
-                f"http://{args.host}:{args.port}/activate",
-                data=urllib.parse.urlencode({"stage": args.stage}).encode("utf-8"),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                method="POST",
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=5) as response:
-                    activated = json.loads(response.read().decode("utf-8"))
-            except urllib.error.HTTPError as exc:
-                detail = exc.read().decode("utf-8", errors="replace").strip()
-                raise SystemExit(
-                    f"Existing review server rejected {args.stage} activation: "
-                    f"{detail or exc.reason}"
-                ) from exc
-            except (OSError, urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-                raise SystemExit(
-                    f"Existing review server could not activate {args.stage}: {exc}"
-                ) from exc
-            print(json.dumps({"primitive": "reconcile_review_web", "status": "reused",
-                              "url": requested_url, "manifest": str(manifest_path),
-                              "stage": args.stage, "activation": activated}, indent=2))
-            if args.open:
-                webbrowser.open(requested_url)
-            return
-
-    if args.stage:
-        if (args.stage == "linkedin" and progress["worth_total"]
-                and not phase_is_completed("worth", progress, manifest_path)):
-            raise SystemExit("People decisions must be completed before LinkedIn")
-        write_review_manifest(args.stage, "awaiting_user", progress, path=manifest_path,
+    def begin_people_review() -> None:
+        write_review_manifest("worth", "awaiting_user", progress, path=manifest_path,
                               review_path=review_path, synthetic_path=synthetic_path,
                               launched=True)
+        if progress["worth_pending"] == 0:
+            write_review_manifest("worth", "completed", progress, path=manifest_path,
+                                  review_path=review_path, synthetic_path=synthetic_path)
+
+    # Reopening a live UI is read-only. Starting a new server begins one fresh
+    # People-review revision; later stages are merely direct views into files.
+    status_payload: dict[str, Any] = {}
+    try:
+        with urllib.request.urlopen(
+                f"http://{args.host}:{args.port}/api/status", timeout=1) as response:
+            status_payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError,
+            json.JSONDecodeError, TimeoutError):
+        status_payload = {}
+    if status_payload.get("primitive") == "reconcile_review_web":
+        live_manifest = str(status_payload.get("manifest") or "").strip()
+        try:
+            wrong_server = bool(
+                live_manifest
+                and Path(live_manifest).resolve() != manifest_path.resolve())
+        except (OSError, RuntimeError):
+            wrong_server = live_manifest != str(manifest_path)
+        if wrong_server:
+            raise SystemExit(
+                f"Port {args.port} belongs to a review server for {live_manifest}; "
+                f"this review uses {manifest_path}"
+            )
+        if args.fresh and requested_stage == "worth":
+            begin_people_review()
+        print(json.dumps({"primitive": "reconcile_review_web", "status": "reused",
+                          "url": requested_url, "manifest": str(manifest_path),
+                          "stage": requested_stage}, indent=2))
+        if args.open:
+            webbrowser.open(requested_url)
+        return
+
+    if requested_stage == "worth":
+        begin_people_review()
     server = ThreadingHTTPServer((args.host, args.port),
                                  make_handler(review_path, verdicts_path, parents_dir, Path(args.dossier_dir),
                                               args.confirm_threshold, args.detach_threshold,
@@ -1880,6 +2316,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
                                               facts_dir=Path(args.facts_dir),
                                               people_csv=Path(args.people_csv),
                                               manifest_path=manifest_path,
+                                              enrichment_manifest_path=Path(args.enrichment_manifest),
                                               profile_cache_dir=Path(args.profile_cache_dir),
                                               avatar_dir=Path(args.avatar_dir)))
     host, port = server.server_address
@@ -1895,6 +2332,103 @@ def cmd_serve(args: argparse.Namespace) -> None:
         print("\nshutting down", file=sys.stderr)
 
 
+def workflow_status(
+    *, review_path: Path = LINKEDIN_OVERRIDES_CSV,
+    verdicts_path: Path = VERDICTS_JSONL,
+    synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
+    facts_dir: Path = FACTS_DIR,
+    people_csv: Path = DEFAULT_PEOPLE_CSV,
+    manifest_path: Path = REVIEW_MANIFEST,
+    enrichment_manifest_path: Path = ENRICH_MANIFEST,
+) -> dict[str, Any]:
+    """Read-only next-action contract for the agent's one-minute poll loop."""
+    parents = _all_review_parents(
+        verdicts_path, review_path, synthetic_path, facts_dir, people_csv)
+    progress = review_progress(parents)
+    selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
+    enrichment = read_enrichment_manifest(
+        enrichment_manifest_path, selection=selection)
+    worth_complete = phase_is_completed("worth", progress, manifest_path)
+    enrich_continued = enrichment_handoff_completed(manifest_path)
+    linkedin_complete = phase_is_completed("linkedin", progress, manifest_path)
+    enrich_status = str(enrichment.get("status") or "not_started")
+    approval_current = bool(enrichment.get("approval_current"))
+    approved_budget = (float((enrichment.get("approval") or {}).get("approved_budget_usd") or 0)
+                       if approval_current else 0.0)
+
+    if progress["worth_pending"] or not worth_complete:
+        next_action = "review_people"
+    elif enrich_status in {"not_started", "stale"}:
+        next_action = "preview_enrichment"
+    elif enrich_status == "needs_approval" and int(enrichment.get("would_submit") or 0) == 0:
+        next_action = "run_enrichment_from_cache"
+    elif enrich_status == "needs_approval" and approval_current:
+        next_action = "run_approved_enrichment"
+    elif enrich_status == "needs_approval":
+        next_action = "await_enrichment_approval"
+    elif enrich_status in {"running", "submitted"}:
+        next_action = "wait_for_enrichment"
+    elif enrich_status in {"failed", "completed_with_errors"}:
+        next_action = "retry_enrichment"
+    elif enrich_status == "research_complete":
+        next_action = "assemble_synthetic"
+    elif enrich_status != "completed":
+        next_action = "wait_for_enrichment"
+    elif not enrich_continued:
+        next_action = "continue_enrichment"
+    elif progress["linkedin_pending"]:
+        next_action = "review_linkedin"
+    elif not linkedin_complete:
+        next_action = "finish_linkedin"
+    else:
+        next_action = "realize"
+
+    commands = {
+        "review_people": "bin/deep-context review",
+        "preview_enrichment": (
+            "bin/deep-context reconcile-deep-research --dry-run "
+            "--include-candidates --include-plausibly-absent"
+        ),
+        "await_enrichment_approval": "wait for the user to click Approve in Enrich Contacts",
+        "run_approved_enrichment": (
+            "bin/deep-context reconcile-deep-research "
+            "--include-candidates --include-plausibly-absent --approve "
+            f"--budget {approved_budget:.2f}"
+        ),
+        "run_enrichment_from_cache": (
+            "bin/deep-context reconcile-deep-research "
+            "--include-candidates --include-plausibly-absent"
+        ),
+        "wait_for_enrichment": "bin/deep-context review-status",
+        "retry_enrichment": "inspect the fixed enrichment manifest error",
+        "assemble_synthetic": "bin/deep-context assemble-synthetic",
+        "continue_enrichment": "wait for the user to click Continue in Enrich Contacts",
+        "review_linkedin": "wait for LinkedIn Yes/No decisions in the review UI",
+        "finish_linkedin": "wait for the user to click Finish in Check LinkedIn",
+        "realize": "bin/deep-context realize",
+    }
+    return {
+        "primitive": "deep_context_review_status",
+        "status": "ok",
+        "next_action": next_action,
+        "command": commands[next_action],
+        "poll_after_seconds": 60,
+        "progress": progress,
+        "selection": selection,
+        "review_manifest": read_review_manifest(manifest_path),
+        "enrichment": enrichment,
+    }
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    print(json.dumps(workflow_status(
+        review_path=Path(args.review), verdicts_path=Path(args.verdicts),
+        synthetic_path=Path(args.synthetic_people), facts_dir=Path(args.facts_dir),
+        people_csv=Path(args.people_csv), manifest_path=Path(args.manifest),
+        enrichment_manifest_path=Path(args.enrichment_manifest),
+    ), indent=2))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Serve the staged deep-context people review UI.")
     sub = parser.add_subparsers(dest="command")
@@ -1907,15 +2441,27 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     serve.add_argument("--synthetic-people", default=str(SYNTHETIC_PEOPLE_CSV))
     serve.add_argument("--manifest", default=str(REVIEW_MANIFEST))
+    serve.add_argument("--enrichment-manifest", default=str(ENRICH_MANIFEST))
     serve.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
     serve.add_argument("--avatar-dir", default=str(AVATAR_DIR))
     serve.add_argument("--confirm-threshold", type=float, default=DEFAULT_CONFIRM)
     serve.add_argument("--detach-threshold", type=float, default=DEFAULT_DETACH)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--stage", choices=("worth", "linkedin"))
+    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done"))
+    serve.add_argument("--fresh", action="store_true",
+                       help="Begin a new People-review revision even when reusing a live server")
     serve.add_argument("--open", action="store_true")
     serve.set_defaults(func=cmd_serve)
+    status = sub.add_parser("status", help="Read files and print the exact next workflow action")
+    status.add_argument("--review", default=str(LINKEDIN_OVERRIDES_CSV))
+    status.add_argument("--verdicts", default=str(VERDICTS_JSONL))
+    status.add_argument("--facts-dir", default=str(FACTS_DIR))
+    status.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
+    status.add_argument("--synthetic-people", default=str(SYNTHETIC_PEOPLE_CSV))
+    status.add_argument("--manifest", default=str(REVIEW_MANIFEST))
+    status.add_argument("--enrichment-manifest", default=str(ENRICH_MANIFEST))
+    status.set_defaults(func=cmd_status)
     return parser
 
 

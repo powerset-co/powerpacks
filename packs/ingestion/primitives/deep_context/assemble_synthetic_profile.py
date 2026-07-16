@@ -34,10 +34,12 @@ from packs.ingestion.primitives.deep_context.candidates import (
     is_candidate_id,
 )
 from packs.ingestion.primitives.deep_context.common import (
+    ENRICH_MANIFEST,
     LINKEDIN_OVERRIDES_CSV,
     VERDICTS_JSONL,
     now_iso,
 )
+from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import DR_OUT_DIR, QUEUE_CSV
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED, load_override_rows
 from packs.ingestion.schemas.candidates_schema import candidate_key_for
@@ -235,12 +237,14 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     ap.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS,
                     help="Research completeness at/above this auto-approves the row (default %(default)s)")
+    ap.add_argument("--manifest", help="Fixed Enrich Contacts manifest (defaults on the canonical research path)")
     args = ap.parse_args(argv)
 
     started = time.monotonic()
     research_dir = Path(args.research_dir)
     queue: dict[str, dict[str, str]] = {}
     qpath = Path(args.queue_csv)
+    queue_is_current = qpath.exists()
     if qpath.exists():
         with qpath.open(newline="", encoding="utf-8") as fh:
             for row in csv.DictReader(fh):
@@ -252,8 +256,25 @@ def main(argv: list[str] | None = None) -> None:
     verdict_provenance = load_verdict_provenance(Path(args.verdicts_jsonl))
     overrides = load_override_rows(LINKEDIN_OVERRIDES_CSV)
 
+    # The output is fixed and overwrite-in-place. Rebuild machine-owned rows
+    # only from this queue; otherwise an old model-Yes synthetic could survive
+    # after the current People decision moved to No. Explicit user gates remain
+    # sticky and are never pruned here.
+    pruned_stale = 0
+    if queue_is_current:
+        for pub, row in list(existing.items()):
+            approved = str(row.get("approved") or "").strip().lower()
+            handle = str(row.get("source_parent_slug") or "").strip()
+            if not handle and pub.startswith("synth-x-"):
+                handle = pub.removeprefix("synth-x-")
+            if handle and approved not in USER_APPROVED:
+                existing.pop(pub, None)
+                pruned_stale += 1
+
     built = auto = pending = preserved = with_linkedin = unusable = worth_no = 0
     for pdir in sorted(research_dir.iterdir()) if research_dir.exists() else []:
+        if queue_is_current and pdir.name not in queue:
+            continue
         rj = pdir / "01_research_parallel.json"
         if not rj.is_file():
             continue
@@ -327,14 +348,46 @@ def main(argv: list[str] | None = None) -> None:
         pending += row["approved"] == ""
 
     write_rows(Path(args.out), existing)
-    print(json.dumps({
+    result = {
         "primitive": "assemble_synthetic_profile", "status": "completed",
         "built": built, "auto_approved": auto, "pending_review": pending,
         "preserved_user_rows": preserved, "skipped_with_linkedin": with_linkedin,
         "skipped_unusable": unusable, "skipped_worth_no": worth_no,
+        "pruned_stale_machine_rows": pruned_stale,
         "total_rows": len(existing),
         "out": str(args.out), "elapsed_ms": int((time.monotonic() - started) * 1000),
-    }, indent=2))
+    }
+    manifest_text = str(args.manifest or "").strip()
+    if not manifest_text:
+        try:
+            if research_dir.resolve() == DR_OUT_DIR.resolve():
+                manifest_text = str(ENRICH_MANIFEST)
+        except (OSError, RuntimeError):
+            pass
+    if manifest_text:
+        manifest_path = Path(manifest_text)
+        if manifest_path.name != "manifest.json":
+            raise SystemExit("--manifest must end in manifest.json")
+        try:
+            current = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            current = {}
+        payload = {
+            **current,
+            "stage": "enrich",
+            "status": "completed",
+            "assembly": result,
+            "outputs": {
+                **(current.get("outputs") or {}),
+                "synthetic_people_csv": str(args.out),
+            },
+        }
+        payload.pop("updated_at", None)
+        payload.pop("created_at", None)
+        write_manifest(
+            manifest_path.parent.name, payload,
+            import_dir=manifest_path.parent.parent)
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

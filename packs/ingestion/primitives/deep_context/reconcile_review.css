@@ -457,8 +457,6 @@ h1 {
 
 .profile-card {
   align-items: flex-start;
-  padding-bottom: 22px;
-  border-bottom: 1px solid var(--border);
 }
 
 .profile-copy { flex: 1; }
@@ -525,6 +523,152 @@ input::placeholder { color: var(--muted); }
 .empty-state p { margin: 8px 0 0; color: var(--muted); }
 .phase-finish .button { min-width: 180px; margin-top: 28px; }
 
+.worth-stage {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+}
+
+.worth-panel { min-height: 0; }
+
+.decision-tabs {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.decision-tab {
+  min-height: 36px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.decision-tab:hover { color: var(--foreground); }
+.decision-tab.active { background: var(--secondary); color: var(--foreground); }
+.decision-tab span { color: var(--muted); font-size: 11px; }
+
+.decision-page {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.decision-list {
+  min-height: 0;
+  display: block;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.decision-row { border-bottom: 1px solid var(--border); }
+.decision-row:last-child { border-bottom: 0; }
+.decision-row-summary {
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 16px;
+  padding: 8px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+.decision-row-summary::-webkit-details-marker { display: none; }
+.decision-row-summary:hover { background: var(--secondary); }
+.decision-row .avatar-small { width: 40px; height: 40px; flex-basis: 40px; }
+.decision-row-main { min-width: 0; }
+.decision-row-main strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.decision-row-main span {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.decision-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.decision-row-actions .button { width: 64px; min-height: 44px; padding: 0 12px; }
+.decision-row-caret {
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform .15s ease;
+}
+.decision-row[open] .decision-row-caret { transform: translateY(2px) rotate(225deg); }
+.decision-row-detail { padding: 2px 16px 18px 72px; }
+.row-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.row-facts { margin: 0 0 14px; }
+.row-facts > div { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 5px 0; }
+.row-facts dt { color: var(--muted); font-size: 12px; font-weight: 700; }
+.row-facts dd { margin: 0; color: var(--foreground); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.decision-row-detail .dossier-heading { margin: 0 0 6px; }
+.decision-row-detail .dossier-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--foreground);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.decision-empty { height: 100%; min-height: 0; }
+
+.enrich-state { height: 100%; min-height: 380px; }
+.enrich-progress {
+  width: min(100%, 360px);
+  height: 8px;
+  margin-top: 28px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--secondary);
+}
+.enrich-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 240ms ease;
+}
+.enrich-state .button { min-width: 180px; margin-top: 28px; }
+.progress-spinner {
+  width: 52px;
+  height: 52px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+  .progress-spinner { animation: none; border-color: var(--border); border-top-color: var(--primary); }
+}
+
 .rejected-list {
   overflow: hidden;
   border: 1px solid var(--border);
@@ -571,6 +715,42 @@ input::placeholder { color: var(--muted); }
 .page-link { border: 1px solid var(--border); }
 .page-link:hover { border-color: var(--input); color: var(--foreground); }
 .page-link.active { border-color: var(--primary); background: var(--primary); color: white; }
+.page-direction { width: auto; min-width: 84px; padding: 0 12px; }
+.page-link.disabled { cursor: default; opacity: .35; }
+
+@media (max-width: 620px) {
+  .decision-row {
+    grid-template-columns: 36px minmax(0, 1fr) 52px;
+    column-gap: 12px;
+    padding-inline: 12px;
+  }
+
+  .decision-row .avatar-small {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  .decision-row-actions .button { width: 52px; padding-inline: 8px; }
+
+  .page-boundary:not(.active),
+  .page-far:not(.active),
+  .page-ellipsis { display: none; }
+
+  .page-direction {
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+  }
+
+  .page-direction::after { font-size: 20px; line-height: 1; }
+  .page-direction[rel='prev']::after,
+  .page-direction:first-child::after { content: '‹'; }
+  .page-direction[rel='next']::after,
+  .page-direction:last-child::after { content: '›'; }
+}
 
 .toast {
   position: fixed;
@@ -597,6 +777,7 @@ input::placeholder { color: var(--muted); }
 
 @media (min-width: 621px) and (min-height: 600px) {
   body[data-stage="worth"] main,
+  body[data-stage="enrich"] main,
   body[data-stage="linkedin"] main,
   body[data-stage="waiting"] main,
   body[data-stage="done"] main {
@@ -609,14 +790,16 @@ input::placeholder { color: var(--muted); }
   }
 
   body[data-stage="worth"] .stepper,
+  body[data-stage="enrich"] .stepper,
   body[data-stage="linkedin"] .stepper,
   body[data-stage="waiting"] .stepper,
   body[data-stage="done"] .stepper {
     gap: 10px;
-    margin: 0 0 20px;
+    margin: 0 0 28px;
   }
 
   body[data-stage="worth"] .step > span,
+  body[data-stage="enrich"] .step > span,
   body[data-stage="linkedin"] .step > span,
   body[data-stage="waiting"] .step > span,
   body[data-stage="done"] .step > span {
@@ -625,6 +808,7 @@ input::placeholder { color: var(--muted); }
   }
 
   body[data-stage="worth"] .stage,
+  body[data-stage="enrich"] .stage,
   body[data-stage="linkedin"] .stage,
   body[data-stage="waiting"] .stage,
   body[data-stage="done"] .stage,
@@ -638,9 +822,14 @@ input::placeholder { color: var(--muted); }
   }
 
   body[data-stage="waiting"] .empty-state,
+  body[data-stage="enrich"] .empty-state,
   body[data-stage="done"] .empty-state,
   body[data-stage="worth"] .phase-finish,
   body[data-stage="linkedin"] .phase-finish { height: 100%; min-height: 0; }
+
+  body[data-stage="worth"] .worth-stage,
+  body[data-stage="worth"] .worth-panel,
+  body[data-stage="worth"] .decision-page { height: 100%; }
 
   body[data-stage="worth"] .identity-card,
   body[data-stage="linkedin"] .identity-card {
@@ -651,8 +840,8 @@ input::placeholder { color: var(--muted); }
     grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  body[data-stage="worth"] .avatar,
-  body[data-stage="linkedin"] .avatar {
+  body[data-stage="worth"] .avatar:not(.avatar-small),
+  body[data-stage="linkedin"] .avatar:not(.avatar-small) {
     width: 58px;
     height: 58px;
     flex-basis: 58px;
@@ -675,7 +864,6 @@ input::placeholder { color: var(--muted); }
   }
 
   body[data-stage="linkedin"] .identity-eyebrow { margin-bottom: 12px; }
-  body[data-stage="linkedin"] .profile-card { padding-bottom: 16px; }
   body[data-stage="worth"] .details,
   body[data-stage="linkedin"] .details { margin-top: 14px; }
   body[data-stage="worth"] .dossier-text,

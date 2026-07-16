@@ -36,6 +36,12 @@ function leaveAndReload(message) {
   window.setTimeout(() => window.location.reload(), 170);
 }
 
+function leaveAndNavigate(message, url) {
+  announce(message);
+  stage?.classList.add("leaving");
+  window.setTimeout(() => { window.location.href = url; }, 170);
+}
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -82,12 +88,30 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (button.hasAttribute("data-approve-enrichment")) {
+    event.preventDefault();
+    lock(button);
+    try {
+      await post("/approve-enrichment", {});
+      leaveAndReload("Approved");
+    } catch (error) {
+      unlock(button);
+      announce(error.message, true);
+    }
+    return;
+  }
+
   if (button.dataset.complete) {
     event.preventDefault();
     lock(button);
     try {
       await post("/complete", { stage: button.dataset.complete });
-      leaveAndReload(button.dataset.complete === "worth" ? "People complete" : "All set");
+      const next = {
+        worth: ["People complete", "/?stage=enrich"],
+        enrich: ["Enrichment complete", "/?stage=linkedin"],
+        linkedin: ["All set", "/?stage=done"],
+      }[button.dataset.complete] || ["Saved", window.location.href];
+      leaveAndNavigate(next[0], next[1]);
     } catch (error) {
       unlock(button);
       announce(error.message, true);
@@ -174,10 +198,17 @@ async function loadDossier(details) {
 document.querySelectorAll(".details[data-slug]").forEach((details) => {
   void loadDossier(details);
 });
+
+// Expandable decision-table rows lazy-load their dossier the first time they open.
+document.querySelectorAll("details.decision-row[data-slug]").forEach((row) => {
+  row.addEventListener("toggle", () => { if (row.open) void loadDossier(row); });
+});
 refreshScrollCues();
 
-if (document.body.dataset.stage === "waiting") {
+if (document.body.dataset.stage === "enrich"
+    && ["not_started", "stale", "approved", "running", "submitted", "research_complete"]
+      .includes(document.body.dataset.enrichmentStatus || "")) {
   window.setInterval(() => {
     if (document.visibilityState === "visible") window.location.reload();
-  }, 3000);
+  }, 5000);
 }
