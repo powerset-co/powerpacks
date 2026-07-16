@@ -1372,10 +1372,12 @@ def _phase_view(params: dict[str, list[str]], progress: dict[str, int], manifest
     worth_complete = (not progress["worth_total"]
                       or phase_is_completed("worth", progress, manifest_path))
     linkedin_complete = phase_is_completed("linkedin", progress, manifest_path)
-    if requested == "worth" and progress["worth_total"] and not worth_complete:
+    # The stepper is navigation as well as progress: completed stages remain
+    # inspectable without reopening either decision gate.
+    if requested == "worth":
         return "worth"
-    if requested == "linkedin" and linkedin_complete:
-        return "done"
+    if requested == "linkedin" and (progress["linkedin_total"] or linkedin_complete):
+        return "linkedin"
     # An explicit second-tab request is a safe preview/review surface. It does
     # not complete People or start lookups; it only exposes LinkedIn decisions
     # that already exist while the worth queue remains open in another tab.
@@ -1397,12 +1399,16 @@ def _phase_view(params: dict[str, list[str]], progress: dict[str, int], manifest
     return "done"
 
 
-def _step(number: int, label: str, active: bool, complete: bool, count: int = 0) -> str:
+def _step(number: int, label: str, active: bool, complete: bool, count: int = 0,
+          href: str = "") -> str:
     state = " active" if active else (" complete" if complete else "")
     marker = "✓" if complete else str(number)
     count_html = f"<small>{count} left</small>" if count and not complete else ""
     current = " aria-current='step'" if active else ""
-    return f"<div class='step{state}'{current}><span>{marker}</span><div>{esc(label)}{count_html}</div></div>"
+    content = f"<span>{marker}</span><div>{esc(label)}{count_html}</div>"
+    if href:
+        return f"<a class='step{state}' href='{esc(href)}'{current}>{content}</a>"
+    return f"<div class='step{state}'{current}>{content}</div>"
 
 
 def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
@@ -1425,20 +1431,24 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
                                             str(parent.get("name") or "").lower()))
             content = render_worth_card(queue[0], parents_dir, dossier_dir)
         else:
+            continue_button = ("" if worth_complete else
+                               "<button class='button button-primary' data-complete='worth'>Continue</button>")
             content = ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
                        "<h2>People sorted</h2>"
                        f"<p>{progress['lookup_ready']} ready for LinkedIn lookup</p>"
-                       "<button class='button button-primary' data-complete='worth'>Continue</button></div>")
+                       f"{continue_button}</div>")
     elif view == "linkedin":
         queue = [parent for parent in parents if pending_linkedin_candidates(parent)]
         if queue:
             queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
             content = render_linkedin_card(queue[0], pending_linkedin_candidates(queue[0])[0], parents_dir, dossier_dir)
         else:
+            finish_button = ("" if linkedin_complete else
+                             "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
             content = ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
                        "<h2>LinkedIn profiles checked</h2>"
                        f"<p>{progress['linkedin_done']} decisions saved</p>"
-                       "<button class='button button-primary' data-complete='linkedin'>Finish</button></div>")
+                       f"{finish_button}</div>")
     elif view == "waiting":
         content = ("<div class='empty-state waiting'><div class='empty-mark' aria-hidden='true'>✓</div>"
                    "<h2>Ready for lookup</h2>"
@@ -1451,10 +1461,11 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         content = ("<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
                    f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p></div>")
 
-    stepper = (_step(1, "People", people_active, worth_complete, progress["worth_pending"])
+    stepper = (_step(1, "People", people_active, worth_complete, progress["worth_pending"],
+                     "/?stage=worth")
                + "<i class='step-line'></i>"
                + _step(2, "LinkedIn", linkedin_active, worth_complete and linkedin_complete,
-                       progress["linkedin_pending"])
+                       progress["linkedin_pending"], "/?stage=linkedin")
                + "<i class='step-line'></i>"
                + _step(3, "Done", done_active, view == "done"))
     title = {"worth": "Add people", "linkedin": "Check LinkedIn",

@@ -146,13 +146,18 @@ h1 {
 }
 
 .step {
+  min-height: 44px;
   display: flex;
   align-items: center;
   gap: 10px;
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+  text-decoration: none;
 }
+
+.step[href] { cursor: pointer; }
+.step[href]:hover { color: var(--foreground); }
 
 .step > span {
   width: 30px;
@@ -538,7 +543,7 @@ input::placeholder { color: var(--muted); }
   body[data-stage="waiting"] .stepper,
   body[data-stage="done"] .stepper {
     gap: 10px;
-    margin: 0 0 12px;
+    margin: 0 0 20px;
   }
 
   body[data-stage="worth"] .step > span,
@@ -606,16 +611,19 @@ input::placeholder { color: var(--muted); }
 
   body[data-stage="worth"] .details-body {
     min-height: 0;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
     overflow: hidden;
   }
 
   body[data-stage="worth"] .dossier-text {
-    flex: 1 1 auto;
+    grid-row: 2;
+    height: 100%;
     max-height: none;
     margin-bottom: 12px;
     padding: 13px 14px;
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
   }
 
   body[data-stage="worth"] .binary-actions {

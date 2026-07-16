@@ -1070,6 +1070,9 @@ class TestStagedReviewUI(unittest.TestCase):
                 manifest_path=base / "review" / "manifest.json",
             ).decode("utf-8")
         self.assertIn("<h1 class='topbar-title'>Add people</h1>", html)
+        self.assertIn("class='step active' href='/?stage=worth' aria-current='step'", html)
+        self.assertIn("class='step' href='/?stage=linkedin'", html)
+        self.assertNotIn("href='/?stage=done'", html)
         self.assertNotIn("class='title-row'", html)
         self.assertNotIn("Add Ada Lovelace to your network?", html)
         self.assertEqual(html.count("data-worth="), 2)
