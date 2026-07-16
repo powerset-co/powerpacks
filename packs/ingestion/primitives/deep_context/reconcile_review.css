@@ -558,10 +558,10 @@ input::placeholder { color: var(--muted); }
   body[data-stage="linkedin"] .stage,
   body[data-stage="waiting"] .stage,
   body[data-stage="done"] .stage,
-  body[data-stage="worth"] .worth-card,
+  body[data-stage="worth"] .identity-card,
   body[data-stage="linkedin"] .identity-card,
-  body[data-stage="worth"] .details[open],
-  body[data-stage="worth"] .dossier-text {
+  body[data-stage="worth"] .identity-scroll,
+  body[data-stage="linkedin"] .identity-scroll {
     min-height: 0;
   }
 
@@ -570,21 +570,13 @@ input::placeholder { color: var(--muted); }
   body[data-stage="worth"] .phase-finish,
   body[data-stage="linkedin"] .phase-finish { height: 100%; min-height: 0; }
 
-  body[data-stage="worth"] .worth-card,
+  body[data-stage="worth"] .identity-card,
   body[data-stage="linkedin"] .identity-card {
     height: 100%;
     padding: 18px 22px;
     overflow: hidden;
-  }
-
-  body[data-stage="worth"] .worth-card {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
-  }
-
-  body[data-stage="worth"] .worth-card:has(.details:not([open])) {
-    grid-template-rows: auto auto auto;
-    align-content: center;
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
   body[data-stage="worth"] .avatar,
@@ -598,47 +590,7 @@ input::placeholder { color: var(--muted); }
   body[data-stage="worth"] .person-top { gap: 14px; }
   body[data-stage="worth"] .person-copy h2 { margin-top: 5px; font-size: 25px; }
 
-  body[data-stage="worth"] .details[open] {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    margin-top: 12px;
-    overflow: hidden;
-  }
-
-  body[data-stage="worth"] .details summary { min-height: 38px; }
-  body[data-stage="worth"] .details dl { margin-bottom: 8px; }
-  body[data-stage="worth"] .details dl > div { padding: 4px 0 8px; }
-
-  body[data-stage="worth"] .details-body {
-    min-height: 0;
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    overflow: hidden;
-  }
-
-  body[data-stage="worth"] .dossier-text {
-    grid-row: 2;
-    height: 100%;
-    max-height: none;
-    margin-bottom: 12px;
-    padding: 13px 14px;
-    overflow-y: scroll;
-    scrollbar-gutter: stable;
-  }
-
-  body[data-stage="worth"] .binary-actions {
-    position: relative;
-    z-index: 1;
-    flex: 0 0 auto;
-    margin: 0;
-    background: var(--card);
-  }
-
-  body[data-stage="linkedin"] .identity-card {
-    display: grid;
-    grid-template-rows: minmax(0, 1fr) auto;
-  }
-
+  body[data-stage="worth"] .identity-scroll,
   body[data-stage="linkedin"] .identity-scroll {
     min-height: 0;
     overflow-x: hidden;
@@ -651,13 +603,16 @@ input::placeholder { color: var(--muted); }
 
   body[data-stage="linkedin"] .identity-eyebrow { margin-bottom: 12px; }
   body[data-stage="linkedin"] .profile-card { padding-bottom: 16px; }
+  body[data-stage="worth"] .details,
   body[data-stage="linkedin"] .details { margin-top: 14px; }
+  body[data-stage="worth"] .dossier-text,
   body[data-stage="linkedin"] .dossier-text {
     max-height: none;
     overflow: visible;
     margin-bottom: 0;
   }
 
+  body[data-stage="worth"] .identity-decision,
   body[data-stage="linkedin"] .identity-decision {
     padding-top: 12px;
     border-top: 1px solid var(--border);

@@ -1235,18 +1235,22 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
     key = _worth_key(parent)
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
     return f"""
-    <article class='decision-card worth-card' data-card>
-      <div class='person-top'>
-        {_avatar(parent, candidate)}
-        <div class='person-copy'>
-          <div class='eyebrow-row'>{_source_badges(parent)}</div>
-          <h2>{esc(name)}</h2>
+    <article class='decision-card identity-card worth-card' data-card>
+      <div class='identity-scroll'>
+        <div class='person-top'>
+          {_avatar(parent, candidate)}
+          <div class='person-copy'>
+            <div class='eyebrow-row'>{_source_badges(parent)}</div>
+            <h2>{esc(name)}</h2>
+          </div>
         </div>
+        {_details(parent, candidate, identity=False)}
       </div>
-      {_details(parent, candidate, identity=False)}
-      <div class='binary-actions'>
-        <button class='button button-outline' data-worth='no' data-pub='{esc(key)}'>No</button>
-        <button class='button button-primary' data-worth='yes' data-pub='{esc(key)}'>Yes</button>
+      <div class='identity-decision'>
+        <div class='binary-actions'>
+          <button class='button button-outline' data-worth='no' data-pub='{esc(key)}'>No</button>
+          <button class='button button-primary' data-worth='yes' data-pub='{esc(key)}'>Yes</button>
+        </div>
       </div>
     </article>"""
 
