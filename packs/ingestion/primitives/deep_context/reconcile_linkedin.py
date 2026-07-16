@@ -392,6 +392,7 @@ def build_tasks(index: dict[str, Any], people: dict[str, dict[str, str]],
     """One judge task per (parent, distinct attached LinkedIn). Parents whose children
     carry different LinkedIn profiles produce multiple tasks flagged as a conflict."""
     slugs_info = index.get("slugs", {})
+    connections = connection_name_rows(people)  # name-match pool: your imported LinkedIn connections
     tasks: list[dict[str, Any]] = []
     for pslug, pinfo in index.get("parents", {}).items():
         child_slugs = [s for s in (pinfo.get("children") or []) if s in slugs_info]
@@ -410,6 +411,21 @@ def build_tasks(index: dict[str, Any], people: dict[str, dict[str, str]],
         dossier = dossier_view(child_pids, facts_dir, raw_dir)
         conflict = len(by_key) > 1
         if not by_key:  # no LinkedIn attached to any child
+            match = unique_connection_match(pinfo.get("name", pslug), connections)
+            if match:  # optimistic name-attach — the judge confirms it like any other link
+                emails, phones = _contact_keys(child_pids, people)
+                tasks.append({
+                    "parent_slug": pslug, "name": pinfo.get("name", pslug),
+                    "candidate_key": linkedin_key(match), "person_ids": child_pids,
+                    "conflict": False, "parent_person_ids": child_pids,
+                    "no_link": False, "name_matched": True, "dossier": dossier,
+                    "linkedin": linkedin_view(match, cache_dir),
+                    "match_emails": emails, "match_phones": phones,
+                    # Optimistic, NOT ground truth: this link came from a name match to your
+                    # Connections, not from the contact's own rows — so the LLM must confirm it.
+                    "from_connections": False,
+                })
+                continue
             tasks.append({"parent_slug": pslug, "name": pinfo.get("name", pslug),
                           "candidate_key": "", "person_ids": child_pids, "conflict": False,
                           "parent_person_ids": child_pids,
@@ -437,6 +453,64 @@ CONNECTION_CHANNEL = "linkedin_csv"  # source_channels marker for a row imported
 def _from_connections(pids: list[str], people: dict[str, dict[str, str]]) -> bool:
     """True if any of the candidate's rows came from your LinkedIn Connections import."""
     return any(CONNECTION_CHANNEL in (people.get(pid, {}).get("source_channels") or "") for pid in pids)
+
+
+# --- optimistic name-match to your LinkedIn connections ----------------------
+# A first-degree connection you also email/text lands as TWO unlinked rows: the enriched
+# Connections row (has a LinkedIn, no messages) and the message-derived row (has messages, no
+# LinkedIn — because a Connections export carries no email/phone to join on). Left alone, the
+# message person gets a paid web lookup that mis-guesses a stranger. Instead, when an unlinked
+# contact's NAME uniquely matches one of your connections, attach that LinkedIn OPTIMISTICALLY
+# and let the SAME judge confirm it — no new judging logic, just an earlier attach.
+
+def _name_tokens(name: str) -> list[str]:
+    """Lowercased alphabetic name tokens ('Deng D.' -> ['deng', 'd'])."""
+    return [t for t in re.sub(r"[^\w\s]", " ", (name or "").lower()).split() if t]
+
+
+def _names_compatible(a: list[str], b: list[str]) -> bool:
+    """Optimistic name match tolerant of LinkedIn's last-name abbreviation ('Deng Deng' vs the
+    exported 'Deng D.'): the first token must match, and the last tokens are equal OR one is a
+    single-letter initial of the other. Requires >=2 tokens on BOTH sides so a lone first name
+    never matches. Middle names are ignored (compare first + last)."""
+    if len(a) < 2 or len(b) < 2 or a[0] != b[0]:
+        return False
+    la, lb = a[-1], b[-1]
+    if la == lb:
+        return True
+    return (len(la) == 1 and lb.startswith(la)) or (len(lb) == 1 and la.startswith(lb))
+
+
+def connection_name_rows(people: dict[str, dict[str, str]],
+                         ) -> list[tuple[str, dict[str, str], list[str]]]:
+    """(public_identifier, row, name_tokens) for each LinkedIn Connections row that carries a
+    usable link — the pool an unlinked contact is name-matched against. Falls back to
+    first_name+last_name when full_name is blank."""
+    out: list[tuple[str, dict[str, str], list[str]]] = []
+    for row in people.values():
+        if CONNECTION_CHANNEL not in (row.get("source_channels") or ""):
+            continue
+        pub = linkedin_key(row)
+        if not pub:
+            continue
+        name = row.get("full_name") or f"{row.get('first_name', '')} {row.get('last_name', '')}"
+        tokens = _name_tokens(name)
+        if len(tokens) >= 2:
+            out.append((pub, row, tokens))
+    return out
+
+
+def unique_connection_match(name: str,
+                            connections: list[tuple[str, dict[str, str], list[str]]],
+                            ) -> dict[str, str] | None:
+    """The SINGLE Connections row whose name matches `name`, or None if zero match or the match
+    is ambiguous (>1 distinct connection). Ambiguity is deliberately NOT auto-attached — it is
+    left for the normal review/lookup path rather than guessing which namesake is right."""
+    tokens = _name_tokens(name)
+    if len(tokens) < 2:
+        return None
+    hits = {pub: row for pub, row, ctoks in connections if _names_compatible(tokens, ctoks)}
+    return next(iter(hits.values())) if len(hits) == 1 else None
 
 
 def connection_verdict() -> dict[str, Any]:
@@ -696,8 +770,34 @@ def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
         for t in judged:
             if hi(t, "confirmed"):
                 t["action"], t["via"] = "confirm", "normal"
-            elif hi(t, "wrong_person"):
+            elif hi(t, "wrong_person") and not t.get("name_matched"):
+                # NEVER detach on a failed name-match: the LinkedIn belongs to a REAL connection
+                # (a separate row), so a wrong guess must drop the optimistic attach, not strip
+                # the connection's link. Unconfirmed name-matches are reverted to no-link upstream;
+                # this guard is defense-in-depth for the --reapply path.
                 t["action"], t["via"] = "detach", "normal"
+
+
+def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_threshold: float,
+                                    overrides: dict[str, dict[str, str]], facts_dir: Path) -> int:
+    """An optimistic name-match the judge did NOT confirm reverts to a plain no-link parent: worth
+    review + the deep-research lookup then proceed exactly as if we never guessed a LinkedIn, and
+    a real connection is never touched by a wrong guess. Confirmed matches stay put and fold onto
+    the connection at merge. Runs once, after judging and before the decide/override/consolidate
+    tail — so only confirmed matches are ever persisted as identity rows."""
+    reverted = 0
+    for t in tasks:
+        if not t.get("name_matched"):
+            continue
+        v = t.get("verdict") or {}
+        confirmed = v.get("verdict") == "confirmed" and float(v.get("confidence") or 0) >= confirm_threshold
+        if confirmed:
+            continue
+        t.update({"no_link": True, "name_matched": False, "candidate_key": "",
+                  "linkedin": {}, "conflict": False, "from_connections": False})
+        t["worth_person_ids"] = worth_person_ids_for_review(t, overrides, facts_dir)
+        reverted += 1
+    return reverted
 
 
 # --- durable override (consumed by the fan-in merge) ------------------------
@@ -1001,7 +1101,10 @@ def write_consolidations(path: Path, tasks: list[dict[str, Any]], people_csv: Pa
         ))
         kept_pids = set(kept.get("person_ids") or []) if kept else set()
         extra_contacts = any(pid not in kept_pids for pid in all_pids)
-        if not kept or (not detached and not extra_contacts):
+        # A name-matched keep ALWAYS folds: the kept LinkedIn is a separate Connections row that
+        # lacks the message person's contacts/interactions, so the fold is what carries them onto
+        # it (a normal keep skips when the children already sit on that link).
+        if not kept or (not detached and not extra_contacts and not kept.get("name_matched")):
             continue
         pub = (kept.get("candidate_key") or "").strip().lower()
         if not pub:
@@ -1160,7 +1263,7 @@ def write_verdicts(jsonl_path: Path, csv_path: Path, results: list[dict[str, Any
     with jsonl_path.open("w", encoding="utf-8") as fh:
         for r in results:
             fh.write(json.dumps({k: r[k] for k in ("parent_slug", "name", "candidate_key",
-                     "person_ids", "conflict", "no_link", "linkedin", "match_emails",
+                     "person_ids", "conflict", "no_link", "name_matched", "linkedin", "match_emails",
                      "match_phones", "verdict", "error")
                      if k in r}, ensure_ascii=False) + "\n")
     fields = ["parent_slug", "name", "linkedin_url", "verdict", "confidence", "conflict",
@@ -1316,6 +1419,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if "verdict" not in task:
             task["verdict"] = deterministic_verdict(task)
             task["error"] = ""
+
+    # Optimistic name-matches the judge didn't confirm fall back to the plain no-link path
+    # (worth review + lookup) — so only confirmed matches are ever persisted / auto-applied.
+    revert_unconfirmed_name_matches(tasks, args.confirm_threshold, overrides, facts_dir)
 
     # A subset run must not clobber the full verdicts file: overlay the fresh rows onto the
     # existing verdicts so the review UI keeps seeing everyone.
