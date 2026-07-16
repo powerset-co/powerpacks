@@ -1174,6 +1174,18 @@ def worth_selection_from_parents(
     }
 
 
+def current_worth_selection(*, manifest_path: Path = REVIEW_MANIFEST) -> dict[str, Any]:
+    """The one authoritative People-worth selection digest, built from the live review
+    parents. Both the review status and the enrichment manifest must stamp THIS value so
+    their sha256 can never drift: a candidate promoted to a verified LinkedIn parent (e.g.
+    via a retarget/verify) leaves the worth pool here for both sides at once, instead of
+    the enrichment side re-deriving the set from candidate files and disagreeing by one."""
+    parents = _all_review_parents(
+        VERDICTS_JSONL, LINKEDIN_OVERRIDES_CSV, SYNTHETIC_PEOPLE_CSV, FACTS_DIR,
+        DEFAULT_PEOPLE_CSV, PARENTS_DIR, DOSSIER_DIR, PROFILE_CACHE_DIR)
+    return worth_selection_from_parents(parents, manifest_path=manifest_path)
+
+
 def read_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
                              selection: dict[str, Any] | None = None) -> dict[str, Any]:
     try:

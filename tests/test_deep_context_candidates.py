@@ -1758,6 +1758,45 @@ class TestStagedReviewUI(unittest.TestCase):
                 fetch.assert_not_called()
 
 
+class TestWorthSelectionSingleSource(unittest.TestCase):
+    """The People-review status and the enrichment manifest must stamp the SAME worth-
+    selection digest. A candidate promoted to a verified LinkedIn parent (retargeted, so its
+    worth_key is a LinkedIn id, not a candidate id) leaves the worth pool; if the two sides
+    computed the population differently it would be counted by one and not the other, the
+    sha256 would never match, and the flow would loop on 'preview enrichment' forever."""
+
+    def test_enrichment_reuses_the_review_selection_function(self):
+        # Single source of truth: enrichment does NOT re-derive its own worth selection.
+        self.assertIs(dresearch.current_worth_selection, web.current_worth_selection)
+
+    def _plain_candidate_parent(self) -> dict:
+        pid = "candidate:email:plain@example.com"
+        return {"person_ids": [pid], "worth": {"decision": "yes"},
+                "candidates": [{"import_candidate": True, "worth_key": pid}]}
+
+    def _promoted_candidate_parent(self) -> dict:
+        # Retargeted onto LinkedIn 'promo-li' and verified: still keyed on the candidate id,
+        # but its worth_key is now the LinkedIn id and it is no longer an import_candidate.
+        return {"person_ids": ["candidate:email:promo@example.com"], "worth": {"decision": "maybe"},
+                "candidates": [{"import_candidate": False, "worth_key": "promo-li"}]}
+
+    def test_promoted_candidate_leaves_the_worth_pool(self):
+        plain, promoted = self._plain_candidate_parent(), self._promoted_candidate_parent()
+        self.assertTrue(web.is_worth_subject(plain))
+        self.assertFalse(web.is_worth_subject(promoted))   # promotion removes it from worth review
+
+    def test_worth_selection_excludes_the_promoted_candidate(self):
+        with tempfile.TemporaryDirectory() as d:
+            manifest = Path(d) / "review" / "manifest.json"   # absent -> empty review_revision
+            plain, promoted = self._plain_candidate_parent(), self._promoted_candidate_parent()
+            sel = web.worth_selection_from_parents([plain, promoted], manifest_path=manifest)
+            self.assertEqual(sel["total"], 1)                 # only the plain candidate counts
+            self.assertEqual(sel["yes"], 1)
+            # dropping the promoted parent entirely yields the identical digest
+            only_plain = web.worth_selection_from_parents([plain], manifest_path=manifest)
+            self.assertEqual(sel["sha256"], only_plain["sha256"])
+
+
 class TestLiveEndpoints(unittest.TestCase):
     """Acceptance: every decision endpoint persists to CSV AND returns everything the
     client needs to live-update the page in the same click — the row's decision state

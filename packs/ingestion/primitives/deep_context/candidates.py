@@ -12,7 +12,6 @@ the candidate's contact identity onto the people row they produce.
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Iterator
@@ -236,37 +235,3 @@ def effective_network_worth(
     if llm["decision"]:
         return {**llm, "source": "llm"}
     return {"decision": DEFAULT_NETWORK_WORTH, "reason": "not yet judged", "source": "default"}
-
-
-def worth_selection_snapshot(
-    override_rows: dict[str, dict[str, str]] | None = None,
-    facts_dir: Path = FACTS_DIR,
-    *,
-    resolved_candidates: set[str] | None = None,
-) -> dict[str, Any]:
-    """Stable effective-worth vector for standalone import candidates.
-
-    Enrichment uses the digest to prove that its fixed manifest still describes
-    the current People decisions. Retargeting or synthetic assembly does not
-    change this vector, while any Yes/No/Restore decision does. Candidates that
-    duplicate an existing real person stay out of the review and lookup scope.
-    """
-    override_rows = override_rows or {}
-    resolved = (candidates_resolved_by_existing()
-                if resolved_candidates is None else resolved_candidates)
-    decisions: list[dict[str, str]] = []
-    for person in load_candidates():
-        person_id = person.person_id
-        if person_id.lower() in resolved or not (facts_dir / f"{person_id}.jsonl").exists():
-            continue
-        worth = effective_network_worth(person_id, override_rows, facts_dir)
-        decisions.append({"person_id": person_id, "decision": worth["decision"]})
-    decisions.sort(key=lambda row: row["person_id"])
-    encoded = json.dumps(decisions, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return {
-        "sha256": hashlib.sha256(encoded).hexdigest(),
-        "total": len(decisions),
-        "yes": sum(row["decision"] == "yes" for row in decisions),
-        "maybe": sum(row["decision"] == "maybe" for row in decisions),
-        "no": sum(row["decision"] == "no" for row in decisions),
-    }

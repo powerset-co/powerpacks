@@ -43,7 +43,6 @@ from packs.ingestion.primitives.deep_context.candidates import (
     effective_network_worth,
     is_candidate_id,
     load_candidates,
-    worth_selection_snapshot,
 )
 from packs.ingestion.primitives.deep_context.common import (
     DEEP_RESEARCH_DIR,
@@ -52,7 +51,6 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     LINKEDIN_OVERRIDES_CSV,
     RAW_DIR,
-    REVIEW_MANIFEST,
     VERDICTS_JSONL,
     emit,
     load_owner,
@@ -67,6 +65,9 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     load_override_rows,
     upsert_retargets,
 )
+# The enrichment manifest must stamp the SAME worth-selection digest the review UI computes,
+# so the two never drift and stall the flow. Single source of truth lives in review_web.
+from packs.ingestion.primitives.deep_context.reconcile_review_web import current_worth_selection
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
 from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import (
@@ -381,19 +382,6 @@ def _manifest_counts(*, total: int, completed: int = 0, failed: int = 0) -> dict
     }
 
 
-def _people_review_revision(path: Path = REVIEW_MANIFEST) -> str:
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ""
-    if not isinstance(manifest, dict):
-        return ""
-    completed = set(manifest.get("completed_stages") or [])
-    if "worth" not in completed:
-        return ""
-    return str(manifest.get("people_revision") or "")
-
-
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     manifest_text = str(getattr(args, "manifest", "") or "").strip()
@@ -417,9 +405,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     verdicts = _read_jsonl(Path(args.verdicts_jsonl))
     overrides = load_override_rows(Path(args.overrides_csv))
     resolved_candidates = candidates_resolved_by_existing()
-    selection = worth_selection_snapshot(
-        overrides, Path(args.facts_dir), resolved_candidates=resolved_candidates)
-    selection["review_revision"] = _people_review_revision()
+    # Same authoritative digest the review UI stamps — a candidate promoted to a verified
+    # LinkedIn parent leaves the worth pool for BOTH sides here, so they can't disagree by one.
+    selection = current_worth_selection()
     subset = eligible_subset(verdicts, args.confirm_threshold, overrides,
                              include_plausibly_absent=getattr(args, "include_plausibly_absent", False))
     worth_skipped: list[str] = []
