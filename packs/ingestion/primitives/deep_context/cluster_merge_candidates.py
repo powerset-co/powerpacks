@@ -76,7 +76,12 @@ JUDGE_SYSTEM = (
     "professional. Behavior that fits the same relationship is strong evidence.\n"
     "- TONE/REGISTER, only WHEN available: consistent register supports same person; a clear "
     "formal-vs-intimate mismatch can indicate different people. If one record has NO messages "
-    "from me, you simply cannot use tone — treat its absence as neutral, never as evidence.\n\n"
+    "from me, you simply cannot use tone — treat its absence as neutral, never as evidence.\n"
+    "- SHARED EMAIL SEEN IN MESSAGES: an address marked '[also seen in messages]' was found in "
+    "the conversation, not on the contact's own record. It is strong same-person evidence ONLY if "
+    "it is plausibly THIS person's own alias — e.g. a near-1:1 thread where they wrote from it, or "
+    "it matches their name. If it looks like a co-participant in a GROUP thread (several different "
+    "people/addresses), do NOT treat merely sharing it as proof they are the same person.\n\n"
     "A shared or similar NAME ALONE is not enough — but a similar name PLUS aligned "
     "role/identity/behavior is strong. Set same_person=true only when the COMBINED evidence "
     "supports it; otherwise false."
@@ -198,11 +203,15 @@ def _profile(facts_path: Path) -> dict[str, Any]:
         "school": str(fa.get("school") or ""),
         "location": str(fa.get("location") or ""),
         "topics": list(fa.get("topics") or [])[:8],
+        # Emails/phones/URLs the synthesis pulled out of the CONVERSATION — a person may reveal a
+        # second address here that never made it onto their contact record (see identifier_contacts).
+        "identifiers": [str(i) for i in (fa.get("identifiers") or [])],
     }
 
 
 def load_people(index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_dir: Path) -> list[dict[str, Any]]:
     by_phone = index.get("by_phone", {})
+    owner_emails = _owner_emails(dossier_dir.parent)
     people: list[dict[str, Any]] = []
     for slug, info in index.get("slugs", {}).items():
         path = dossier_dir / f"{slug}.md"
@@ -212,14 +221,23 @@ def load_people(index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_d
         pid = info.get("person_id", "")
         bundle = _read_json(raw_dir / f"{pid}.json")
         msgs = bundle.get("messages") or []
+        profile = _profile(facts_dir / f"{pid}.jsonl")
+        emails = [e.lower() for e in (meta.get("emails") or [])]
+        # Emails the synthesis found in the MESSAGES (facts.identifiers), minus this person's own
+        # registered ones and the owner's (who is in every thread, so is pure noise). These only
+        # WIDEN the candidate net as a full address (never local-parts — a shared first name isn't
+        # identity). Whether a shared message-email actually means SAME PERSON (their own alias) vs
+        # a co-CC'd third party in a group thread is the LLM judge's call, not the gate's.
+        extra_emails = sorted(identifier_emails(profile.get("identifiers") or []) - set(emails) - owner_emails)
         people.append({
             "slug": slug,
             "person_id": pid,
             "name": meta.get("name") or info.get("name") or "",
             "name_key": normalize_name(meta.get("name") or info.get("name") or ""),
-            "emails": [e.lower() for e in (meta.get("emails") or [])],
+            "emails": emails,
+            "extra_emails": extra_emails,
             "phone_digits": [d for d, slugs in by_phone.items() if slug in slugs],
-            "profile": _profile(facts_dir / f"{pid}.jsonl"),
+            "profile": profile,
             "from_me": _sample(msgs, "from_me"),
             "from_them": _sample(msgs, "from_them"),
         })
@@ -228,6 +246,25 @@ def load_people(index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_d
 
 def email_localparts(emails: list[str]) -> set[str]:
     return {e.split("@", 1)[0] for e in emails if "@" in e}
+
+
+def _looks_like_email(value: str) -> bool:
+    return "@" in value and "." in value.rsplit("@", 1)[-1]
+
+
+def identifier_emails(identifiers: list[str]) -> set[str]:
+    """Email addresses the synthesis pulled out of the CONVERSATION (facts.identifiers). URLs,
+    phones, and handles are dropped — only full emails, and only for FULL-address matching (never
+    local-parts), so a linking address a contact used in messages can still pair them with a record
+    that has it registered. Phones are deliberately NOT mined here: a number in a signature is more
+    often a third party's than an alias, and the email path already covers the real cases."""
+    return {s.lower() for s in (str(i).strip() for i in identifiers or []) if _looks_like_email(s)}
+
+
+def _owner_emails(base: Path) -> set[str]:
+    """The mailbox owner's own addresses — excluded from identifier matching because the owner
+    appears in nearly every thread, so their address is noise, not a same-person signal."""
+    return {e.strip().lower() for e in (_read_json(base / "owner.json").get("emails") or []) if e.strip()}
 
 
 # --- blocking + recall gate -------------------------------------------------
@@ -241,7 +278,9 @@ def generate_pairs(people: list[dict[str, Any]]) -> set[tuple[int, int]]:
     or Jaro-Winkler name >= GATE_NAME_SIM. Keeps LLM calls to ambiguous pairs."""
     buckets: dict[str, list[int]] = {}
     for idx, p in enumerate(people):
-        keys = {f"email:{e}" for e in p["emails"]}
+        # Full-address keys include message-discovered `extra_emails`; local-part keys do NOT
+        # (a shared first-name local-part is not evidence two people are the same).
+        keys = {f"email:{e}" for e in set(p["emails"]) | set(p.get("extra_emails") or [])}
         keys |= {f"local:{lp}" for lp in email_localparts(p["emails"])}
         keys |= {f"phone:{d}" for d in p["phone_digits"]}
         keys |= {f"tok:{t}" for t in name_tokens(p["name_key"])}
@@ -257,7 +296,9 @@ def generate_pairs(people: list[dict[str, Any]]) -> set[tuple[int, int]]:
     gated: set[tuple[int, int]] = set()
     for a, b in cand:
         pa, pb = people[a], people[b]
-        if (set(pa["emails"]) & set(pb["emails"])
+        full_a = set(pa["emails"]) | set(pa.get("extra_emails") or [])
+        full_b = set(pb["emails"]) | set(pb.get("extra_emails") or [])
+        if (full_a & full_b
                 or email_localparts(pa["emails"]) & email_localparts(pb["emails"])
                 or set(pa["phone_digits"]) & set(pb["phone_digits"])
                 or jaro_winkler(pa["name_key"], pb["name_key"]) >= GATE_NAME_SIM):
@@ -284,7 +325,11 @@ def _render_side(label: str, p: dict[str, Any]) -> str:
     me = "\n".join(f"  me→them: {t}" for t in p["from_me"]) or "  (no messages from me — tone unavailable)"
     them = "\n".join(f"  them→me: {t}" for t in p["from_them"]) or "  (no messages from them)"
     emails = ", ".join(p["emails"]) or "none"
-    return (f"CONTACT {label} — {p['name']}  [emails: {emails}]\n"
+    # Addresses seen only in the conversation (identifiers) — surface them so the judge can weigh a
+    # shared one, but label them so a shared address isn't mistaken for the person's own contact.
+    extra = ", ".join(p.get("extra_emails") or [])
+    extra_line = f"  [also seen in messages: {extra}]\n" if extra else ""
+    return (f"CONTACT {label} — {p['name']}  [emails: {emails}]\n{extra_line}"
             f"{facts_block}\nMessages:\n{me}\n{them}")
 
 
@@ -344,7 +389,9 @@ def inject_section(path: Path, body: str) -> None:
 
 def deterministic_verdict(pa: dict[str, Any], pb: dict[str, Any]) -> dict[str, Any]:
     """Offline/tests fallback (--no-llm): shared contact or near-exact name."""
-    shared = bool(set(pa["emails"]) & set(pb["emails"])) or bool(set(pa["phone_digits"]) & set(pb["phone_digits"]))
+    full_a = set(pa["emails"]) | set(pa.get("extra_emails") or [])
+    full_b = set(pb["emails"]) | set(pb.get("extra_emails") or [])
+    shared = bool(full_a & full_b) or bool(set(pa["phone_digits"]) & set(pb["phone_digits"]))
     nsim = jaro_winkler(pa["name_key"], pb["name_key"])
     same = shared or nsim >= 0.97
     return {"same_person": same, "confidence": 0.95 if shared else round(nsim, 2),

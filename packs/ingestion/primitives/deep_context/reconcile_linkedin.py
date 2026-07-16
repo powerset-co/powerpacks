@@ -464,15 +464,15 @@ def _from_connections(pids: list[str], people: dict[str, dict[str, str]]) -> boo
 # and let the SAME judge confirm it — no new judging logic, just an earlier attach.
 
 def _name_tokens(name: str) -> list[str]:
-    """Lowercased alphabetic name tokens ('Deng D.' -> ['deng', 'd'])."""
+    """Lowercased alphabetic name tokens ('Robin E.' -> ['robin', 'e'])."""
     return [t for t in re.sub(r"[^\w\s]", " ", (name or "").lower()).split() if t]
 
 
 def _names_compatible(a: list[str], b: list[str]) -> bool:
-    """Optimistic name match tolerant of LinkedIn's last-name abbreviation ('Deng Deng' vs the
-    exported 'Deng D.'): the first token must match, and the last tokens are equal OR one is a
-    single-letter initial of the other. Requires >=2 tokens on BOTH sides so a lone first name
-    never matches. Middle names are ignored (compare first + last)."""
+    """Optimistic name match tolerant of LinkedIn's last-name abbreviation (a Gmail display name
+    like 'Robin Ellis' vs the exported 'Robin E.'): the first token must match, and the last
+    tokens are equal OR one is a single-letter initial of the other. Requires >=2 tokens on BOTH
+    sides so a lone first name never matches. Middle names are ignored (compare first + last)."""
     if len(a) < 2 or len(b) < 2 or a[0] != b[0]:
         return False
     la, lb = a[-1], b[-1]
