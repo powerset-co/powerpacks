@@ -481,6 +481,15 @@ h1 {
 .alternate form { padding: 4px 0 2px; }
 .alternate label { display: block; margin-bottom: 8px; color: var(--foreground); font-size: 12px; font-weight: 700; }
 .alternate form div { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.alternate-skip {
+  display: flex;
+  width: auto;
+  min-height: 36px;
+  margin: 6px 0 0 auto;
+  padding: 0 8px;
+  border: 0;
+  font-size: 12px;
+}
 
 input {
   min-width: 0;

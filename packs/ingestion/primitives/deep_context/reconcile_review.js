@@ -80,7 +80,7 @@ document.addEventListener("click", async (event) => {
         decision: button.dataset.decide,
         parent_slug: button.dataset.parent || "",
       });
-      leaveAndReload("Saved");
+      leaveAndReload(button.dataset.toast || "Saved");
     } catch (error) {
       unlock(button);
       announce(error.message, true);
@@ -205,10 +205,33 @@ document.querySelectorAll("details.decision-row[data-slug]").forEach((row) => {
 });
 refreshScrollCues();
 
-if (document.body.dataset.stage === "enrich"
-    && ["not_started", "stale", "approved", "running", "submitted", "research_complete"]
-      .includes(document.body.dataset.enrichmentStatus || "")) {
-  window.setInterval(() => {
-    if (document.visibilityState === "visible") window.location.reload();
-  }, 5000);
+let reviewStateToken = document.body.dataset.stateToken || "";
+
+function hasIdentityDraft() {
+  const input = document.querySelector("details.alternate[open] input[name='new_url']");
+  return Boolean(input && (document.activeElement === input || input.value.trim()));
 }
+
+async function pollFileState() {
+  if (document.visibilityState !== "visible" || hasIdentityDraft()) return;
+  try {
+    const response = await fetch("/api/status", { cache: "no-store" });
+    if (!response.ok) return;
+    const state = await response.json();
+    const currentStage = document.body.dataset.stage || "";
+    if (state.stage && state.stage !== currentStage) {
+      window.location.replace(`/?stage=${encodeURIComponent(state.stage)}`);
+      return;
+    }
+    if (state.state_token && state.state_token !== reviewStateToken) {
+      window.location.reload();
+    }
+  } catch {
+    // The local observer may be restarting; the next poll will retry.
+  }
+}
+
+window.setInterval(pollFileState, 5000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void pollFileState();
+});

@@ -728,12 +728,26 @@ class TestWorthCarryForward(unittest.TestCase):
             self.assertEqual(row["source"], "deep-context-reconcile")  # the machine rebuilt the row…
             self.assertEqual(row["approved"], "")                       # …it is NOT user-approved…
             self.assertEqual(row["network_worth"], "yes")               # …but the mark carried forward
+            rows = reconcile.load_override_rows(review)
+            rows["janedoe"].update({
+                "llm_worth": "yes",
+                "llm_worth_reason": "genuine relationship",
+                "llm_reject": "spam",
+                "llm_reject_confidence": "0.875",
+                "llm_reject_reason": "machine signal",
+            })
+            reconcile._write_override_rows(review, rows)
             reconcile.upsert_retargets(review, [{
                 "old_public_identifier": "janedoe",
                 "new_linkedin_url": "https://www.linkedin.com/in/jane-real"}])
             row = reconcile.load_override_rows(review)["janedoe"]
             self.assertEqual(row["action"], "retarget")
             self.assertEqual(row["network_worth"], "yes")               # retarget upsert too
+            self.assertEqual(row["llm_worth"], "yes")
+            self.assertEqual(row["llm_worth_reason"], "genuine relationship")
+            self.assertEqual(row["llm_reject"], "spam")
+            self.assertEqual(row["llm_reject_confidence"], "0.875")
+            self.assertEqual(row["llm_reject_reason"], "machine signal")
 
 
 class TestReviewWebWorth(unittest.TestCase):
