@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.build_parents import parent_id_for
 from packs.ingestion.primitives.deep_context.candidates import (
@@ -61,13 +62,24 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
+    DEFAULT_CONFIRM,
+    RESEARCH_CONFIDENCE_FLOOR,
     USER_APPROVED,
+    dossier_view,
+    judge_research_proposal,
     load_override_rows,
+    research_proposal_task,
+    research_reject_fields,
     upsert_retargets,
 )
 # The enrichment manifest must stamp the SAME worth-selection digest the review UI computes,
-# so the two never drift and stall the flow. Single source of truth lives in review_web.
-from packs.ingestion.primitives.deep_context.reconcile_review_web import current_worth_selection
+# so the two never drift and stall the flow. Single source of truth lives in review_web. The
+# research-profile view is reused so the judge sees the SAME (name/headline/experience/education)
+# shape the review UI renders — no second profile parser to drift.
+from packs.ingestion.primitives.deep_context.reconcile_review_web import (
+    _research_profile_view,
+    current_worth_selection,
+)
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
 from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import (
@@ -122,6 +134,17 @@ def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
+def _is_rejected_retarget(row: dict[str, str]) -> bool:
+    """A retarget the judge rejected (llm_reject=yes) that the user has NOT approved. Such a row is
+    a dead guess, not a decision — it must not permanently mark the person as "decided", so the
+    next (cheap, already-completed) research pass can re-propose. A user decision stays terminal."""
+    if (row.get("action") or "").strip().lower() != "retarget":
+        return False
+    if (row.get("approved") or "").strip().lower() in USER_APPROVED:
+        return False
+    return (row.get("llm_reject") or "").strip().lower() == "yes"
+
+
 def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
                     overrides: dict[str, dict[str, str]] | None = None,
                     include_plausibly_absent: bool = False) -> list[dict[str, Any]]:
@@ -129,12 +152,14 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
 
     Eligible means a high-confidence `wrong_person` detach the judge flagged
     `recommend_deep_research`, whose parent did not already keep a confirmed link.
-    User-touched rows, excluded links, and existing retargets are skipped.
-    `linkedin_plausibly_absent` people are skipped by default (no profile exists is a valid
-    answer) and included only with include_plausibly_absent=True — the synthetic path."""
+    User-touched rows, excluded links, and existing (non-rejected) retargets are skipped.
+    A judge-rejected, un-approved retarget does NOT count as decided (re-research is cheap once
+    completed). `linkedin_plausibly_absent` people are skipped by default (no profile exists is a
+    valid answer) and included only with include_plausibly_absent=True — the synthetic path."""
     overrides = overrides or {}
     has_retarget = {pub for pub, r in overrides.items()
-                    if (r.get("action") or "").strip().lower() == "retarget"}
+                    if (r.get("action") or "").strip().lower() == "retarget"
+                    and not _is_rejected_retarget(r)}
     excluded = {pub for pub, r in overrides.items()
                 if (r.get("action") or "").strip().lower() == "exclude"}
     user_decided = {pub for pub, r in overrides.items()
@@ -192,7 +217,8 @@ def candidate_subset(facts_dir: Path,
     resolved_candidates = (candidates_resolved_by_existing()
                            if resolved_candidates is None else resolved_candidates)
     decided = {pub for pub, r in overrides.items()
-               if (r.get("action") or "").strip().lower() in {"retarget", "exclude"}
+               if ((r.get("action") or "").strip().lower() in {"retarget", "exclude"}
+                   and not _is_rejected_retarget(r))
                or (r.get("approved") or "").strip().lower() in USER_APPROVED}
     out: list[dict[str, Any]] = []
     for person in load_candidates():
@@ -337,10 +363,92 @@ def _find_reason(profile: dict[str, Any]) -> str:
     return "deep research found a correct LinkedIn"
 
 
+def _find_confidence(profile: dict[str, Any]) -> float | None:
+    """The research output's OWN identity/name confidence for the proposed profile.
+
+    In the canonical Parallel shape this is `person.confidence` (a name/identity confidence in
+    [0,1]); older/alternate shapes may put it top-level or under name_confidence. We deliberately
+    do NOT read summary/completeness confidences — those are about the write-up, not identity.
+    Returns the parsed float, or None when nothing usable is present (caller maps None -> 0.0)."""
+    if not isinstance(profile, dict):
+        return None
+    person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
+    candidates = [
+        person.get("confidence"),
+        person.get("name_confidence"),
+        profile.get("name_confidence"),
+        profile.get("identity_confidence"),
+        (profile.get("social") or {}).get("name_confidence") if isinstance(profile.get("social"), dict) else None,
+    ]
+    for value in candidates:
+        if value is None or value == "":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+# Phrases a research write-up uses when it admits it could NOT verify the contact's identifier —
+# the exact "could not directly verify the Gmail address" case. Matched case-insensitively.
+_UNVERIFIED_MARKERS = (
+    "could not directly verify",
+    "could not verify",
+    "unable to verify",
+    "not verified",
+    "unverified",
+    "no confirming match",
+    "not_found",
+    "not found",
+    "best contextual match",
+    "best-guess",
+    "best guess",
+    "inferred",
+    "no direct confirmation",
+    "cannot confirm",
+    "could not confirm",
+)
+
+
+def _research_unverified(profile: dict[str, Any]) -> bool:
+    """True when the research output itself admits it could not verify the contact's identifier.
+
+    Reads the free-text notes/status the model writes (person.notes, metadata.research_notes,
+    social.linkedin_status) for explicit non-verification language. Deterministic; used by the
+    --no-llm fallback and to bias the judge's context."""
+    if not isinstance(profile, dict):
+        return False
+    person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
+    metadata = profile.get("metadata") if isinstance(profile.get("metadata"), dict) else {}
+    social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
+    texts = [
+        str(person.get("notes") or ""),
+        str(metadata.get("research_notes") or ""),
+        str(social.get("linkedin_status") or ""),
+        _find_reason(profile),
+    ]
+    blob = " ".join(texts).lower()
+    return any(marker in blob for marker in _UNVERIFIED_MARKERS)
+
+
 def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
-                                  overrides_csv: Path) -> dict[str, Any]:
-    """After deep research, propose a `retarget` (pending) for each detached person whose
-    research found a correct LinkedIn — into the same decisions table (sticky upsert)."""
+                                  overrides_csv: Path, *,
+                                  facts_dir: Path | None = None, raw_dir: Path | None = None,
+                                  use_llm: bool = False, owner_block: str = "",
+                                  model: str = "", effort: str = "high",
+                                  confirm_threshold: float = DEFAULT_CONFIRM,
+                                  timeout: int = 120, max_retries: int = 6) -> dict[str, Any]:
+    """After deep research, propose a `retarget` (pending) for each detached person whose research
+    found a correct LinkedIn — into the same decisions table (sticky upsert).
+
+    The proposal carries the research output's OWN identity confidence (never a hardcoded 0.0), and
+    is JUDGED before it lands: the same email-evidence identity judge that vets attached links vets
+    this (dossier × proposed-profile) pair. A judge rejection marks the row llm_reject=yes + reason
+    (rendered by the UI) instead of silently sticking a wrong guess. --no-llm uses the deterministic
+    fallback: an unverified / sub-threshold guess is rejected, never auto-approved."""
+    facts_dir = facts_dir if facts_dir is not None else FACTS_DIR
+    raw_dir = raw_dir if raw_dir is not None else RAW_DIR
     proposals = []
     for r in subset:
         handle = r.get("parent_slug", "")
@@ -349,12 +457,30 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
         old_pub = (r.get("candidate_key") or extract_public_identifier((r.get("linkedin") or {}).get("linkedin_url", ""))).lower()
         if not new_url or not old_pub:
             continue
+        carried = _find_confidence(profile)
+        confidence = carried if carried is not None else 0.0
+        unverified = _research_unverified(profile)
+        # Judge the (dossier evidence × proposed profile) pair through the SAME machinery as an
+        # attached link, flavored as a speculative research proposal (non-name corroboration
+        # required). Reject outcomes stamp the UI-rendered llm_reject* columns; never auto-approve.
+        person_ids = r.get("person_ids") or []
+        dossier = dossier_view(person_ids, facts_dir, raw_dir)
+        li_view = _research_profile_view(profile)
+        task = research_proposal_task(
+            dossier, li_view, name=r.get("name", ""),
+            match_emails=r.get("match_emails") or [], match_phones=r.get("match_phones") or [],
+            confidence=confidence, unverified=unverified)
+        verdict = judge_research_proposal(
+            task, use_llm=use_llm, owner_block=owner_block, model=model or "",
+            effort=effort, timeout=timeout, max_retries=max_retries)
+        reject = research_reject_fields(verdict, confirm_threshold)
         proposals.append({
             "old_public_identifier": old_pub, "new_linkedin_url": new_url,
             "linkedin_url": (r.get("linkedin") or {}).get("linkedin_url", ""),
             "match_emails": r.get("match_emails") or [], "match_phones": r.get("match_phones") or [],
-            "person_id": (r.get("person_ids") or [""])[0], "confidence": 0.0,
+            "person_id": (person_ids or [""])[0], "confidence": confidence,
             "reason": _find_reason(profile), "source": "deep-research",
+            **reject,
         })
     return upsert_retargets(overrides_csv, proposals)
 
@@ -481,6 +607,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             }, manifest_path)
         return result
 
+    # Judge each proposed retarget with the SAME identity judge attached links use, inside this
+    # already-approved enrichment pass. --no-llm uses the deterministic fallback (never
+    # auto-approves; rejects unverified / sub-threshold guesses). Owner background is a network
+    # prior for the judge, same as reconcile_linkedin.
+    use_llm = not getattr(args, "no_llm", False)
+    owner_block = owner_background_block(load_owner()) if load_owner() else ""
+
+    def propose() -> dict[str, Any]:
+        return propose_retargets_from_output(
+            DR_OUT_DIR, subset, Path(args.overrides_csv),
+            facts_dir=Path(args.facts_dir), raw_dir=Path(args.raw_dir),
+            use_llm=use_llm, owner_block=owner_block,
+            model=getattr(args, "model", "") or "",
+            effort=getattr(args, "reasoning_effort", "high") or "high",
+            confirm_threshold=args.confirm_threshold)
+
     if not subset:
         return persist(
             {**base, "status": "noop", "queue_csv": str(QUEUE_CSV),
@@ -494,7 +636,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "needs_approval", completed=reused_completed)
 
     if not pending_queue:
-        proposals = propose_retargets_from_output(DR_OUT_DIR, subset, Path(args.overrides_csv))
+        proposals = propose()
         return persist(
             {**base, "status": "reused", "queue_csv": str(QUEUE_CSV),
              "output_dir": str(DR_OUT_DIR),
@@ -531,7 +673,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # Propose retargets (pending) for any correct LinkedIn the research found.
     proposals = {"proposed": 0}
     if proc.returncode == 0:
-        proposals = propose_retargets_from_output(DR_OUT_DIR, subset, Path(args.overrides_csv))
+        proposals = propose()
     result = {
         **base, "status": "ran" if proc.returncode == 0 else "failed",
         "queue_csv": str(QUEUE_CSV), "output_dir": str(DR_OUT_DIR),
@@ -572,6 +714,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Also research people the judge flagged linkedin_plausibly_absent — the synthetic-profile candidates (synthetic-profiles-plan §5)")
     p.add_argument("--include-candidates", action="store_true",
                    help="Also research dossier-bearing import candidates (import/*/candidates.csv) — contacts with no resolved LinkedIn at all")
+    # The proposed-retarget identity judge (reused from reconcile_linkedin) runs inside this same
+    # approved pass. --no-llm falls back to the deterministic verdict (rejects unverified guesses).
+    p.add_argument("--no-llm", action="store_true",
+                   help="Judge proposed retargets deterministically (offline/tests) instead of the LLM")
+    p.add_argument("--model", default=DEFAULT_MODEL, help="Model for the proposed-retarget identity judge")
+    p.add_argument("--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"],
+                   help="Reasoning effort for the proposed-retarget identity judge")
     return p
 
 

@@ -1337,8 +1337,10 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn("data-scroll-cue", html)
         self.assertIn("aria-label='Scroll down'", html)
         self.assertIn("<section class='details' data-slug='ada-lovelace'>", html)
-        self.assertIn("<h3 class='details-heading'>Details</h3>", html)
-        self.assertIn("<h4 class='dossier-heading'>Context</h4>", html)
+        # no "Details"/"Context" section labels — the facts + preview stand alone
+        self.assertNotIn("details-heading", html)
+        self.assertNotIn(">Context</h4>", html)
+        self.assertIn("class='dossier-text'", html)
         self.assertNotIn("<summary>Details", html)
         self.assertNotIn("AI is unsure", html)
         self.assertNotIn("data-worth='maybe'", html)
@@ -1347,42 +1349,237 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertNotIn("self-heal", html)
         self.assertNotIn(str(base / "review.csv"), html)
 
-    def test_details_markdown_is_rendered_and_raw_html_is_escaped(self):
+    # A full fictional child dossier mirroring compose_dossier's heading layout;
+    # every persona/domain here is fictional (example.com / example.net) only.
+    _FULL_DOSSIER = (
+        "---\nname: Ada Lovelace\nslug: ada-lovelace\n---\n\n# Ada Lovelace\n\n"
+        "<!-- parent-link --> _Part of [[ada-lovelace-parentaa]] **Ada Lovelace** (proposed merge)_\n\n"
+        "## Summary\n\nAda Lovelace (example.net)\n\n"
+        "**Network worth:** no — automated relay, not an individual relationship.\n\n"
+        "## Relationship & cadence\n\n"
+        "Longtime colleague at **Example Co**; we coordinated on hiring.\n\n"
+        "_grokked 9 of 9 messages over 1 batch(es) across gmail_msgvault; last on 2019-01-28 (stopped: exhausted)._\n\n"
+        "## Who they are\n\n- **Employer (unknown):** Example Co\n\n"
+        "## Topics\n\n- Hiring\n- ML infra\n\n"
+        "## Timeline\n\n"
+        "- **2018-06-07** — Discussed the **offer** <script>alert('x')</script> with Ada.\n"
+        "- **2019-01-28** — Sent a note about the transition.\n\n"
+        "## Identifiers\n\n- ada@example.net\n- ADA@EXAMPLE.NET\n- +1-415-555-0142\n- https://example.net/ada\n\n"
+        "## Possible same person\n\n_None detected._\n"
+    )
+
+    def test_preview_shows_only_relationship_summary_and_timeline(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             dossiers = base / "dossiers"
             dossiers.mkdir()
-            (dossiers / "ada-lovelace.md").write_text(
-                "---\nname: Ada\n---\n# Ada\n\n## Summary\n\n**Friend** from school.\n\n"
-                "- Builds engines\n- Writes notes\n\n<script>alert('no')</script>\n",
-                encoding="utf-8",
-            )
-            rendered = web.render_dossier_markdown(
-                base / "parents", dossiers, "ada-lovelace")
-        self.assertIn("<h3>Ada</h3>", rendered)
+            (dossiers / "ada-lovelace.md").write_text(self._FULL_DOSSIER, encoding="utf-8")
+            rendered = web.render_dossier_markdown(base / "parents", dossiers, "ada-lovelace")
+        # exactly two extracted sections, in order
         self.assertIn("<h4>Summary</h4>", rendered)
-        self.assertIn("<strong>Friend</strong>", rendered)
-        self.assertIn("<ul>", rendered)
+        self.assertIn("<h4>Timeline</h4>", rendered)
+        self.assertLess(rendered.index("<h4>Summary</h4>"), rendered.index("<h4>Timeline</h4>"))
+        # Summary body is the Relationship & cadence prose, cleaned of markdown
+        self.assertIn("Longtime colleague at Example Co; we coordinated on hiring.", rendered)
+        self.assertNotIn("[[", rendered)
+        # Timeline keeps its per-date bullets
+        self.assertIn("<li>2018-06-07 — Discussed the offer", rendered)
+        self.assertIn("<li>2019-01-28 — Sent a note about the transition.</li>", rendered)
+        # dropped: name block, dossier Summary, Network worth, grokked line,
+        # Topics, Identifiers-as-a-section, Possible same person, parent-link
+        self.assertNotIn("Ada Lovelace (example.net)", rendered)
+        self.assertNotIn("Network worth", rendered)
+        self.assertNotIn("grokked", rendered)
+        self.assertNotIn("Topics", rendered)
+        self.assertNotIn("Identifiers", rendered)
+        self.assertNotIn("ada@example.net", rendered)
+        self.assertNotIn("Possible same person", rendered)
+        self.assertNotIn("parent-link", rendered)
+        # message-derived text is HTML-escaped, never executable
         self.assertNotIn("<script>", rendered)
         self.assertIn("&lt;script&gt;", rendered)
 
-    def test_expanded_markdown_omits_truncated_relationship_preview(self):
+    def test_preview_degrades_gracefully_when_sections_missing(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             dossiers = base / "dossiers"
             dossiers.mkdir()
-            full = "Friend in a long-running social and travel group with a complete relationship description."
-            (dossiers / "ada-lovelace.md").write_text(
-                "# Ada\n\n## Summary\n\nFriend in a long-running social and travel group…\n\n"
-                "**Network worth:** maybe — Personal relationship.\n\n"
-                f"## Relationship & cadence\n\n{full}\n",
-                encoding="utf-8",
-            )
-            rendered = web.render_dossier_markdown(
-                base / "parents", dossiers, "ada-lovelace")
-        self.assertNotIn("travel group…", rendered)
-        self.assertIn(full, rendered)
-        self.assertIn("Network worth", rendered)
+            # No "Relationship & cadence": no Summary, but Timeline still renders.
+            (dossiers / "no-rel.md").write_text(
+                "# Grace Hopper\n\n## Summary\n\nx\n\n"
+                "## Timeline\n\n- **2020-01-01** — First note.\n",
+                encoding="utf-8")
+            no_rel = web.render_dossier_markdown(base / "parents", dossiers, "no-rel")
+            # No dossier file at all: empty preview, never an exception.
+            missing = web.render_dossier_markdown(base / "parents", dossiers, "nope")
+            # Only Relationship & cadence: Summary renders, Timeline omitted.
+            (dossiers / "rel-only.md").write_text(
+                "# Alan Turing\n\n## Relationship & cadence\n\nOld friend from the lab.\n",
+                encoding="utf-8")
+            rel_only = web.render_dossier_markdown(base / "parents", dossiers, "rel-only")
+        self.assertNotIn("<h4>Summary</h4>", no_rel)
+        self.assertIn("<h4>Timeline</h4>", no_rel)
+        self.assertEqual(missing, "")
+        self.assertIn("<h4>Summary</h4>", rel_only)
+        self.assertIn("Old friend from the lab.", rel_only)
+        self.assertNotIn("<h4>Timeline</h4>", rel_only)
+
+    def test_worth_card_bubbles_dossier_identifiers_into_contact(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "ada-lovelace.md").write_text(self._FULL_DOSSIER, encoding="utf-8")
+            parent = self._candidate_parent()
+            # A contact already shown on the card (case differs from the dossier's).
+            parent["candidates"][0]["match_emails"] = ["Ada@Example.net"]
+            html = web.render_worth_card(parent, base / "parents", dossiers)
+        contact = html.split("<dt>Contact</dt><dd>")[1].split("</dd>")[0]
+        # already-shown email is kept once (case-insensitive dedup, no dupe)
+        self.assertIn("Ada@Example.net", contact)
+        self.assertNotIn("ada@example.net", contact)
+        self.assertNotIn("ADA@EXAMPLE.NET", contact)
+        # new dossier identifiers bubble up
+        self.assertIn("+1-415-555-0142", contact)
+        self.assertIn("https://example.net/ada", contact)
+
+    def test_decision_table_bubbles_dossier_identifiers_into_contact(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "ada-lovelace.md").write_text(self._FULL_DOSSIER, encoding="utf-8")
+            parent = self._candidate_parent("yes", "user")
+            html = web.render_decision_table(
+                [parent], "yes", parents_dir=base / "parents", dossier_dir=dossiers)
+        self.assertIn("+1-415-555-0142", html)
+        self.assertIn("https://example.net/ada", html)
+        # without the dossier dirs, the table still renders (graceful, no bubble-up)
+        plain = web.render_decision_table([parent], "yes")
+        self.assertNotIn("https://example.net/ada", plain)
+
+    def _linkedin_parent(self) -> dict:
+        candidate = {
+            "pub": "ada-lovelace", "profile_pub": "ada-lovelace",
+            "url": "https://www.linkedin.com/in/ada-lovelace",
+            "full_name": "Ada Lovelace", "headline": "Engineer",
+            "profile_pic_url": "", "experiences": [], "education": [],
+            "location": "", "has_profile": True,
+            "verdict": "needs_review", "confidence": 0.5,
+            "supporting": [], "contradicting": [], "reason": "name matches messages",
+            "match_emails": ["Ada@Example.net"], "match_phones": [],
+            "conflict": False, "synthetic": False,
+            "action": "", "approved": "", "new_url": "",
+        }
+        return {"slug": "ada-lovelace", "name": "Ada Lovelace",
+                "person_ids": ["pid-1"], "sources": ["gmail"],
+                "candidates": [candidate]}
+
+    def test_linkedin_card_bubbles_dossier_identifiers_into_contact(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "ada-lovelace.md").write_text(self._FULL_DOSSIER, encoding="utf-8")
+            parent = self._linkedin_parent()
+            html = web.render_linkedin_card(
+                parent, parent["candidates"][0], base / "parents", dossiers)
+        contact = html.split("<dt>Contact</dt><dd>")[1].split("</dd>")[0]
+        # already-shown email kept once (case-insensitive dedup); new identifiers bubble up
+        self.assertIn("Ada@Example.net", contact)
+        self.assertNotIn("ada@example.net", contact)
+        self.assertNotIn("ADA@EXAMPLE.NET", contact)
+        self.assertIn("+1-415-555-0142", contact)
+        self.assertIn("https://example.net/ada", contact)
+        # LinkedIn-specific parts of the card are unchanged (and no section labels)
+        self.assertIn(">View LinkedIn", html)
+        self.assertIn("<dt>Match signal</dt><dd>name matches messages</dd>", html)
+        self.assertIn("data-decide='keep'", html)
+        self.assertNotIn("details-heading", html)
+        self.assertNotIn(">Context</h4>", html)
+        self.assertIn("class='dossier-text'", html)
+        self.assertIn("data-slug='ada-lovelace'", html)
+
+    def test_linkedin_card_without_dossier_keeps_contact_and_never_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = self._linkedin_parent()
+            html = web.render_linkedin_card(
+                parent, parent["candidates"][0], base / "parents", base / "dossiers")
+        contact = html.split("<dt>Contact</dt><dd>")[1].split("</dd>")[0]
+        self.assertEqual(contact, "Ada@Example.net")
+        self.assertNotIn("https://example.net/ada", html)
+
+    def test_worth_review_body_serves_next_card_then_complete_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            pending = self._candidate_parent()  # model maybe -> queued
+            card = web.worth_review_body([pending], web.review_progress([pending]),
+                                         base / "parents", base / "dossiers")
+            done = web.worth_review_body([], web.review_progress([]),
+                                         base / "parents", base / "dossiers")
+        self.assertIn("worth-card", card)
+        self.assertIn("Ada Lovelace", card)
+        self.assertIn("Decisions ready", done)
+        self.assertIn("data-complete='worth'", done)
+
+    def test_linkedin_review_body_serves_card_and_terminal_states(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = self._linkedin_parent()
+            progress = web.review_progress([parent])
+            card = web.linkedin_review_body(
+                [parent], progress, enrichment_complete=True, linkedin_complete=False,
+                parents_dir=base / "parents", dossier_dir=base / "dossiers")
+            finished = web.linkedin_review_body(
+                [], web.review_progress([]), enrichment_complete=True, linkedin_complete=False,
+                parents_dir=base / "parents", dossier_dir=base / "dossiers")
+            completed = web.linkedin_review_body(
+                [], web.review_progress([]), enrichment_complete=True, linkedin_complete=True,
+                parents_dir=base / "parents", dossier_dir=base / "dossiers")
+        self.assertIn("Is this the right LinkedIn?", card)
+        self.assertIn("data-decide='keep'", card)
+        self.assertNotIn("enrichment-note", card)  # complete -> no passive note
+        self.assertIn("LinkedIn profiles checked", finished)
+        self.assertIn("data-complete='linkedin'", finished)
+        self.assertNotIn("data-complete='linkedin'", completed)
+
+    def test_linkedin_review_is_not_blocked_by_incomplete_enrichment(self):
+        # The old hard gate ("Enrichment not finished" wall) is gone: cards render
+        # for every enrichment status, with only a passive status note added.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = self._linkedin_parent()
+            progress = web.review_progress([parent])
+            bodies = {
+                status: web.linkedin_review_body(
+                    [parent], progress, enrichment_complete=False, linkedin_complete=False,
+                    parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                    enrichment={"status": status})
+                for status in ("not_started", "running", "failed")
+            }
+        for status, body in bodies.items():
+            self.assertNotIn("Enrichment not finished", body)
+            self.assertIn("Is this the right LinkedIn?", body)   # the card renders
+            self.assertIn("data-decide='keep'", body)            # ...and is clickable
+            self.assertIn("class='enrichment-note'", body)
+        self.assertIn("Enrichment is still running", bodies["running"])
+        self.assertIn("Enrichment failed", bodies["failed"])
+        # esc() HTML-escapes the apostrophe in "hasn't"
+        self.assertIn("finished — more people may appear here", bodies["not_started"])
+
+    def test_linkedin_completion_requires_worth_but_not_enrichment(self):
+        with tempfile.TemporaryDirectory() as d:
+            manifest = Path(d) / "review" / "manifest.json"
+            progress = web.review_progress([])  # nothing pending anywhere
+            # without worth completed, linkedin completion still refuses
+            with self.assertRaises(ValueError):
+                web.write_review_manifest("linkedin", "completed", progress, path=manifest)
+            # worth completed (enrich NOT) is now enough to finish linkedin
+            web.write_review_manifest("worth", "completed", progress, path=manifest)
+            done = web.write_review_manifest("linkedin", "completed", progress, path=manifest)
+        self.assertIn("linkedin", done["completed_stages"])
+        self.assertNotIn("enrich", done["completed_stages"])
 
     def test_only_model_maybe_is_queued_and_decision_tables_are_editable(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1430,9 +1627,9 @@ class TestStagedReviewUI(unittest.TestCase):
             self.assertIn(">Yes</button>", rejected)
             self.assertNotIn("Restore", rejected)
 
-    def test_yes_table_is_paginated_without_rendering_every_person(self):
+    def _many_candidate_parents(self, count: int = 120) -> list[dict]:
         parents = []
-        for index in range(120):
+        for index in range(count):
             parent = self._candidate_parent("yes", "llm")
             key = f"candidate:email:person{index:03d}@example.com"
             parent["slug"] = f"person-{index:03d}"
@@ -1442,18 +1639,52 @@ class TestStagedReviewUI(unittest.TestCase):
                 "pub": key, "full_name": parent["name"], "worth_key": key,
             })
             parents.append(parent)
-        html = web.render_decision_table(parents, "yes", page=10)
-        self.assertEqual(html.count("data-worth='no'"), web.DECISION_PAGE_SIZE)
-        self.assertNotIn("Person 089", html)
-        self.assertIn("Person 090", html)
-        self.assertIn("Person 099", html)
-        self.assertNotIn("Person 100", html)
-        self.assertIn("aria-current='page'>10</span>", html)
-        self.assertIn(">Previous</a>", html)
-        self.assertIn(">Next</a>", html)
-        self.assertIn("stage=worth&amp;view=yes&amp;page=8", html)
-        self.assertIn("stage=worth&amp;view=yes&amp;page=12", html)
-        self.assertNotIn("Restore", html)
+        return parents
+
+    def test_yes_table_renders_first_chunk_for_infinite_scroll(self):
+        parents = self._many_candidate_parents(120)
+        html = web.render_decision_table(parents, "yes")
+        chunk = web.DECISION_CHUNK_SIZE
+        self.assertEqual(html.count("data-worth='no'"), chunk)
+        self.assertIn("data-decision-list", html)
+        self.assertIn("data-view='yes'", html)
+        self.assertIn("data-total='120'", html)
+        self.assertIn(f"data-chunk='{chunk}'", html)
+        self.assertIn("Person 000", html)
+        self.assertIn(f"Person {chunk - 1:03d}", html)
+        self.assertNotIn(f"Person {chunk:03d}", html)
+        # pagination is gone: the rest streams through /api/decision-rows
+        self.assertNotIn("pagination", html)
+        self.assertNotIn("page=", html)
+        self.assertNotIn(">Previous<", html)
+        self.assertNotIn(">Next<", html)
+
+    def test_decision_row_chevron_leads_the_summary(self):
+        # The expand affordance renders at the LEFT edge of the row: the chevron
+        # is the summary's first element, ahead of the avatar and name, while the
+        # decision button stays in the actions cell on the far right.
+        row = web.decision_rows_payload(self._many_candidate_parents(1), "yes")["rows"][0]
+        summary = row.split("</summary>")[0]
+        self.assertLess(summary.index("decision-row-caret"), summary.index("avatar"))
+        self.assertLess(summary.index("decision-row-caret"),
+                        summary.index("decision-row-main"))
+        self.assertLess(summary.index("decision-row-main"),
+                        summary.index("decision-row-actions"))
+        self.assertNotIn("decision-row-caret",
+                         summary.split("decision-row-actions")[1])
+
+    def test_decision_rows_payload_slices_with_stable_total(self):
+        parents = self._many_candidate_parents(120)
+        payload = web.decision_rows_payload(parents, "yes", offset=40, limit=40)
+        self.assertEqual((payload["view"], payload["total"], payload["offset"]),
+                         ("yes", 120, 40))
+        self.assertEqual(len(payload["rows"]), 40)
+        self.assertIn("Person 040", payload["rows"][0])
+        self.assertIn("Person 079", payload["rows"][-1])
+        tail = web.decision_rows_payload(parents, "yes", offset=110, limit=40)
+        self.assertEqual(len(tail["rows"]), 10)          # clamped at the end of scope
+        beyond = web.decision_rows_payload(parents, "yes", offset=500, limit=40)
+        self.assertEqual((beyond["total"], beyond["rows"]), (120, []))
 
     def test_rejected_spam_uses_the_classifier_reason_not_default_worth_copy(self):
         parent = self._candidate_parent("maybe", "default")
@@ -1914,6 +2145,39 @@ class TestLiveEndpoints(unittest.TestCase):
             html = response.read().decode("utf-8")
         self.assertEqual(self.review.read_bytes(), before)
         self.assertIn("POWERPACKS", html)
+
+    def test_decision_rows_endpoint_serves_json_chunks(self):
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/api/decision-rows?view=no&offset=0&limit=5") as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("application/json", resp.headers.get("Content-Type", ""))
+            payload = json.loads(resp.read())
+        # authoritative shape: full-scope total + the requested window
+        self.assertEqual(payload["view"], "no")
+        self.assertEqual(payload["offset"], 0)
+        self.assertLessEqual(len(payload["rows"]), 5)
+        self.assertGreaterEqual(payload["total"], len(payload["rows"]))
+        for row in payload["rows"]:
+            self.assertIn("decision-row", row)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/api/decision-rows?view=bogus")
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_card_endpoints_serve_stage_content_for_reloadless_swaps(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/worth-card") as resp:
+            self.assertEqual(resp.status, 200)
+            worth_html = resp.read().decode("utf-8")
+        # fixture has no model-maybe import candidates: the queue reads complete
+        self.assertIn("data-complete='worth'", worth_html)
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/linkedin-card") as resp:
+            self.assertEqual(resp.status, 200)
+            linkedin_html = resp.read().decode("utf-8")
+        # enrichment hasn't run, yet the reviewable synthetic card still renders,
+        # with only a passive status note (the stage is never hard-blocked)
+        self.assertIn("class='enrichment-note'", linkedin_html)
+        self.assertIn("identity-card", linkedin_html)
+        self.assertNotIn("Enrichment not finished", linkedin_html)
 
     def test_identity_post_rejects_mismatched_parent_slug(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
