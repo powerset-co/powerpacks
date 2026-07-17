@@ -1749,15 +1749,14 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
     contacts = _merge_contacts(
         [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
         identifiers or [])
-    evidence = [*(candidate.get("supporting") or []), *(candidate.get("contradicting") or [])]
     reason = _display_reason(str(candidate.get("reason") or ""))
     # The prefetch stage's LLM-written profile summary, lifted onto the candidate
     # from the local cache at render time (display-only; the server never calls
     # an LLM). It is PREFERRED for the Summary row over the stored judge reason.
     simple_summary = str(candidate.get("simple_summary") or "").strip()
     # Section order: Contact -> Summary (simple_summary || the judge/verify reason)
-    # -> Evidence, then the lazily loaded dossier rows (Relationship -> Timeline),
-    # then the profile facts (Work / Education) when profile data exists.
+    # -> the lazily loaded dossier rows (Relationship -> Timeline) -> the profile
+    # facts (Work / Education) when profile data exists. (No Evidence section.)
     rows: list[str] = []
     if contacts:
         rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
@@ -1770,8 +1769,6 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
             # no kept link AND nothing displayable -> researched-and-failed
             rows.append(f"<div><dt>Summary</dt><dd>{esc(NO_PROFILE_SUMMARY)}</dd></div>")
         # kept link with no displayable reason: omit the row entirely
-    if evidence:
-        rows.append(f"<div><dt>Evidence</dt><dd>{esc(' · '.join(evidence[:5]))}</dd></div>")
     extra = f"<dl>{''.join(rows)}</dl>" if rows else ""
     profile_dl = (f"<dl>{''.join(profile_rows)}</dl>" if profile_rows else "")
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
@@ -1892,22 +1889,32 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
     synthetic = bool(candidate.get("synthetic"))
     cache_miss = _hydrate_card_profile(candidate, profile_cache_dir)
     profile_name = str(candidate.get("full_name") or name)
+    # The header shows the name, avatar, and — for a REAL profile — the genuine
+    # LinkedIn headline + View-LinkedIn link. For a researched/synthetic row the
+    # "headline" is an LLM relationship blurb ("Also known as… My relationship…"),
+    # which is redundant with the Summary/Relationship/Timeline sections below, so
+    # it (and the "Researched profile" / "No LinkedIn found" labels) are dropped.
+    # Both a real and a synthetic row present the SAME decision UI ("Is this the
+    # right profile?" + [No] [Use this profile] + a hidden fix form behind No). A
+    # synthetic row simply has no genuine LinkedIn header (no View-LinkedIn link, no
+    # headline); the SEMANTIC difference lives only in the /decide endpoint, which
+    # routes a keep on a ``synth-`` pub through the synthetic approve gate.
+    question = "Is this the right profile?"
+    eyebrow = ""
     if synthetic:
-        eyebrow = "No LinkedIn found"
-        link = "<span class='linkedin-label'>Researched profile</span>"
+        link = ""
+        header_headline = ""
     else:
-        question = "Is this the right profile?"
-        eyebrow = ""
         url = str(candidate.get("url") or "")
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
                 "<span aria-hidden='true'>↗</span></a>") if url else ""
+        header_headline = str(candidate.get("headline") or "")
     fix_form = f"""<form class='linkedin-fix-form' data-fix-form
           data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
         <label class='sr-only' for='fix-{esc(candidate.get('pub'))}'>LinkedIn URL</label>
         <div><input id='fix-{esc(candidate.get('pub'))}' name='new_url' inputmode='url'
           autocomplete='url' placeholder='linkedin.com/in/…' required>
-        <button class='button {'button-primary' if synthetic else 'button-outline'}'
-          type='submit'>Use this</button></div>
+        <button class='button button-outline' type='submit'>Use this</button></div>
       </form>
       <button class='button button-ghost alternate-skip' data-decide='detach'
               data-toast='Skipped' data-pub='{esc(candidate.get('pub'))}'
@@ -1925,7 +1932,7 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
           <div class='profile-copy'>
             <h2>{esc(profile_name)}</h2>
             {link}
-            {f"<p>{esc(candidate.get('headline'))}</p>" if candidate.get('headline') else ""}
+            {f"<p>{esc(header_headline)}</p>" if header_headline else ""}
             {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
           </div>
         </div>
@@ -1935,13 +1942,7 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
     <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
-        {f"""<div class='synthetic-correction'>
-          <button class='button button-primary use-profile' data-decide='keep'
-                  data-toast='Profile approved' data-pub='{esc(candidate.get('pub'))}'
-                  data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
-          <div class='question'>Add their LinkedIn</div>
-          {fix_form}
-        </div>""" if synthetic else f"""<div class='question'>{question}</div>
+        <div class='question'>{question}</div>
         <div class='binary-actions'>
           <button class='button button-outline' data-open-fix aria-expanded='false'
                   aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>
@@ -1951,7 +1952,7 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
         </div>
         <div class='alternate' id='fix-section-{esc(candidate.get('pub'))}' hidden>
           {fix_form}
-        </div>"""}
+        </div>
       </div>
     </article>"""
 
