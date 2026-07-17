@@ -30,11 +30,13 @@ from packs.ingestion.primitives.deep_context.candidates import (
     candidate_carry,
     candidate_person_id,
     candidate_row,
+    current_parent_by_person_id,
     effective_network_worth,
     is_candidate_id,
 )
 from packs.ingestion.primitives.deep_context.common import (
     ENRICH_MANIFEST,
+    INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     VERDICTS_JSONL,
     now_iso,
@@ -71,6 +73,27 @@ def synth_public_identifier(email: str, phone: str, handle: str) -> str:
     if phone:
         return f"synth-phone-{hashlib.sha1(phone.strip().encode()).hexdigest()[:12]}"
     return f"synth-x-{handle.strip().lower()}"
+
+
+def _inherit_decision(existing: dict[str, dict[str, str]], pubs: set[str]) -> str:
+    """The strongest human decision across a set of colliding synthetic pubs.
+
+    When merged children's stale synthetic rows collapse onto one current parent,
+    the survivor must not silently drop a decision any of them carried. Precedence:
+    an explicit user gate (`yes`/`no`) wins over a machine gate (`auto`/blank);
+    among competing user gates `no` (exclude) wins over `yes` (keep) — the safer,
+    more-conservative call — so a person the user excluded stays excluded. Returns
+    '' when no colliding row carries a user gate.
+    """
+    decisions = {
+        (existing.get(pub, {}).get("approved") or "").strip().lower()
+        for pub in pubs
+    }
+    if "no" in decisions:
+        return "no"
+    if "yes" in decisions:
+        return "yes"
+    return ""
 
 
 def profile_is_usable(profile: dict[str, Any]) -> bool:
@@ -147,6 +170,98 @@ def build_synthetic_row(profile: dict[str, Any], contact: dict[str, str],
     if not row.get("primary_phone") and contact.get("phone_e164"):
         row["primary_phone"] = contact["phone_e164"]
     return row
+
+
+def _completeness(profile: dict[str, Any]) -> float:
+    return float((profile.get("metadata") or {}).get("estimated_completeness") or 0.0)
+
+
+def _position_key(pos: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(pos.get("company_name") or "").strip().lower(),
+        str(pos.get("title") or "").strip().lower(),
+        str(pos.get("start_date") or "").strip().lower(),
+    )
+
+
+def _education_key(edu: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(edu.get("school_name") or edu.get("school") or "").strip().lower(),
+        str(edu.get("degree") or "").strip().lower(),
+    )
+
+
+def merge_research_profiles(profiles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Deterministically union >1 research JSON for the SAME merged parent into one.
+
+    Each merged child was researched separately, so a collapsed parent can carry two
+    research outputs. We union positions and education (order-stable, deduped), keep
+    the best headline/summary/location (from the most complete profile that has one),
+    take the max completeness, and union gaps/identity — no LLM. Called only when a
+    parent owns more than one child research dir; a single profile passes through.
+    """
+    usable = [p for p in profiles if isinstance(p, dict)]
+    if len(usable) <= 1:
+        return usable[0] if usable else {}
+    # Most complete first — its scalars (headline/summary/name/location) win ties.
+    ordered = sorted(usable, key=_completeness, reverse=True)
+
+    def first_text(getter) -> str:
+        for prof in ordered:
+            value = getter(prof)
+            if value:
+                return value
+        return ""
+
+    def first_location() -> dict[str, Any]:
+        for prof in ordered:
+            loc = prof.get("location") or {}
+            if loc.get("city") or loc.get("country"):
+                return loc
+        return ordered[0].get("location") or {}
+
+    positions: list[dict[str, Any]] = []
+    seen_pos: set[tuple[str, str, str]] = set()
+    education: list[dict[str, Any]] = []
+    seen_edu: set[tuple[str, str]] = set()
+    for prof in ordered:
+        for pos in prof.get("positions") or []:
+            if not isinstance(pos, dict) or not (pos.get("company_name") or pos.get("title")):
+                continue
+            key = _position_key(pos)
+            if key not in seen_pos:
+                seen_pos.add(key)
+                positions.append(pos)
+        for edu in prof.get("education") or []:
+            if not isinstance(edu, dict):
+                continue
+            key = _education_key(edu)
+            if key != ("", "") and key not in seen_edu:
+                seen_edu.add(key)
+                education.append(edu)
+
+    gaps: list[str] = []
+    for prof in ordered:
+        for gap in (prof.get("metadata") or {}).get("gaps") or []:
+            text = str(gap or "").strip()
+            if text and text not in gaps:
+                gaps.append(text)
+
+    best = ordered[0]
+    person = dict(best.get("person") or {})
+    metadata = dict(best.get("metadata") or {})
+    metadata["estimated_completeness"] = max(_completeness(p) for p in ordered)
+    metadata["gaps"] = gaps
+    return {
+        **best,
+        "person": person,
+        "headline": {"text": first_text(lambda p: (p.get("headline") or {}).get("text"))},
+        "summary": {"text": first_text(lambda p: (p.get("summary") or {}).get("text"))},
+        "location": first_location(),
+        "positions": positions,
+        "education": education,
+        "metadata": metadata,
+    }
 
 
 def load_rows(path: Path) -> dict[str, dict[str, str]]:
@@ -235,6 +350,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     ap.add_argument("--verdicts-jsonl", default=str(VERDICTS_JSONL))
     ap.add_argument("--out", default=str(DEFAULT_OUT))
+    ap.add_argument("--index-json", default=str(INDEX_JSON),
+                    help="Deep-context index.json (child->current-parent membership) for re-keying merged parents")
     ap.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS,
                     help="Research completeness at/above this auto-approves the row (default %(default)s)")
     ap.add_argument("--manifest", help="Fixed Enrich Contacts manifest (defaults on the canonical research path)")
@@ -271,7 +388,18 @@ def main(argv: list[str] | None = None) -> None:
                 existing.pop(pub, None)
                 pruned_stale += 1
 
+    # Child -> current-parent membership. A later cluster_merge can fold two former
+    # parents into one; the per-person research dirs keyed on the OLD parent slugs are
+    # re-keyed here so their outputs GROUP on the current parent instead of minting a
+    # stale row each. No re-fetch — the existing research JSON is reused as-is.
+    parent_map = current_parent_by_person_id(Path(args.index_json))
+
+    # Phase 1: collect every usable no-LinkedIn research output, resolving each to the
+    # current parent that owns its person_ids. Entries sharing a current parent collapse
+    # into one synthetic row in phase 2.
     built = auto = pending = preserved = with_linkedin = unusable = worth_no = 0
+    collapsed = 0
+    groups: dict[str, dict[str, Any]] = {}
     for pdir in sorted(research_dir.iterdir()) if research_dir.exists() else []:
         if queue_is_current and pdir.name not in queue:
             continue
@@ -293,13 +421,59 @@ def main(argv: list[str] | None = None) -> None:
             for key, value in source.items():
                 if value:
                     contact[key] = value
-        source_parent_slug = contact.get("source_parent_slug") or pdir.name
+        stale_slug = contact.get("source_parent_slug") or pdir.name
         source_person_ids = _json_list(contact.get("source_person_ids") or "")
+        # The CURRENT parent that owns any of these person_ids (via index membership).
+        # Falls back to the stale slug when the parent is still live/unindexed.
+        current_slug = ""
+        for pid in source_person_ids:
+            current_slug = parent_map.get(pid.strip().lower(), "")
+            if current_slug:
+                break
+        current_slug = current_slug or stale_slug
+        group_key = current_slug or pdir.name
+        entry = groups.setdefault(group_key, {
+            "current_slug": current_slug,
+            "profiles": [],
+            "contacts": [],
+            "person_ids": [],
+            "candidate_pubs": [],
+            "handles": [],
+        })
+        entry["profiles"].append(profile)
+        entry["contacts"].append(contact)
+        entry["handles"].append(pdir.name)
+        for pid in source_person_ids:
+            if pid not in entry["person_ids"]:
+                entry["person_ids"].append(pid)
+        cand_pub = contact.get("source_candidate_public_identifier") or ""
+        if cand_pub and cand_pub not in entry["candidate_pubs"]:
+            entry["candidate_pubs"].append(cand_pub)
+
+    # Phase 2: one synthetic per current parent (union the research; retain both
+    # candidate identities so the human can still pick), preserving any prior decision.
+    for group_key in sorted(groups):
+        entry = groups[group_key]
+        profiles = entry["profiles"]
+        if len(profiles) > 1:
+            collapsed += 1
+        profile = merge_research_profiles(profiles)
+        # The strongest contact anchor wins the primary identity/pub; the rest ride
+        # along in provenance so both LinkedIn options stay visible in review.
+        primary = entry["contacts"][0]
+        for c in entry["contacts"]:
+            if c.get("primary_email") or c.get("phone_e164"):
+                primary = c
+                break
+        contact = dict(primary)
+        contact["handle"] = entry["current_slug"] or entry["handles"][0]
+        source_person_ids = entry["person_ids"]
         provenance = {
-            "source_parent_slug": source_parent_slug,
+            "source_parent_slug": entry["current_slug"] or entry["handles"][0],
             "source_person_ids": json.dumps(source_person_ids, ensure_ascii=False),
             "source_candidate_public_identifier": (
-                contact.get("source_candidate_public_identifier") or ""
+                contact.get("source_candidate_public_identifier")
+                or (entry["candidate_pubs"][0] if entry["candidate_pubs"] else "")
             ),
         }
         email = (contact.get("primary_email") or "").strip().lower()
@@ -327,25 +501,49 @@ def main(argv: list[str] | None = None) -> None:
         # Before provenance was persisted, handle-only subjects minted a
         # ``synth-x-<parent>`` key. Keep that stable identity when backfilling so
         # review decisions and any prior fan-in references do not fork.
-        legacy_pub = f"synth-x-{pdir.name}".lower()
-        if legacy_pub in existing:
-            row["public_identifier"] = legacy_pub
-            row["id"] = existing[legacy_pub].get("id") or row["id"]
-            row["entity_urn"] = existing[legacy_pub].get("entity_urn") or f"synthetic:{row['id']}"
+        for handle in entry["handles"]:
+            legacy_pub = f"synth-x-{handle}".lower()
+            if legacy_pub in existing:
+                row["public_identifier"] = legacy_pub
+                row["id"] = existing[legacy_pub].get("id") or row["id"]
+                row["entity_urn"] = existing[legacy_pub].get("entity_urn") or f"synthetic:{row['id']}"
+                break
         pub = row["public_identifier"].lower()
+        # When two stale rows collapse onto one current parent, the survivor inherits
+        # the strongest human decision across every colliding row (its own pub + the
+        # pubs the merged children would have minted — see _inherit_decision). An
+        # explicit user gate (yes/no) beats a machine gate (auto/blank), and among user
+        # gates `no` (exclude) beats `yes` (keep). A human decision is never silently
+        # dropped on collapse, even when the survivor's own gate was the weaker one.
+        colliding_pubs = {pub}
+        for c in entry["contacts"]:
+            colliding_pubs.add(synth_public_identifier(
+                c.get("primary_email", ""), c.get("phone_e164", ""), c.get("handle", "")).lower())
+        inherited = _inherit_decision(existing, colliding_pubs)
         previous = existing.get(pub) or {}
         if (previous.get("approved") or "").strip().lower() in USER_APPROVED:
             # The user's gate is sticky, but missing lineage is safe to repair.
             for field in SYNTHETIC_PROVENANCE_COLUMNS:
                 if not previous.get(field) and row.get(field):
                     previous[field] = row[field]
+            # A collapsing sibling may carry a STRONGER decision than the survivor's own
+            # (inherited already folds in previous's gate, so it never weakens it).
+            if inherited:
+                previous["approved"] = inherited
             existing[pub] = previous
             preserved += 1
-            continue
-        existing[pub] = row
-        built += 1
-        auto += row["approved"] == "auto"
-        pending += row["approved"] == ""
+        else:
+            if inherited:
+                row["approved"] = inherited
+            existing[pub] = row
+            built += 1
+            auto += row["approved"] == "auto"
+            pending += row["approved"] == ""
+        # Drop the sibling rows the merged children would have minted so a collapse
+        # leaves exactly one synthetic per current parent.
+        for other in colliding_pubs:
+            if other != pub:
+                existing.pop(other, None)
 
     write_rows(Path(args.out), existing)
     result = {
@@ -354,6 +552,7 @@ def main(argv: list[str] | None = None) -> None:
         "preserved_user_rows": preserved, "skipped_with_linkedin": with_linkedin,
         "skipped_unusable": unusable, "skipped_worth_no": worth_no,
         "pruned_stale_machine_rows": pruned_stale,
+        "collapsed_merged_parents": collapsed,
         "total_rows": len(existing),
         "out": str(args.out), "elapsed_ms": int((time.monotonic() - started) * 1000),
     }
