@@ -1036,15 +1036,26 @@ def explicit_worth(parent: dict[str, Any]) -> str:
 
 
 def needs_worth_review(parent: dict[str, Any]) -> bool:
-    """Only model-uncertain unresolved imports need the first human decision.
+    """Only model-uncertain standalone imports need the first human decision.
 
     Model Yes starts in Added, model No/spam starts in Rejected, and both piles
     remain editable. A model Maybe is the only item highlighted in the main
     binary queue until the user places it in one of those piles.
+
+    Scope is ``is_worth_subject`` — an import-candidate parent OR a candidate
+    whose durable worth key is still its candidate id — NOT the narrower
+    ``is_import_candidate_parent``. A machine-Maybe candidate whose attached
+    LinkedIn was auto-verified at the link level (``approved=auto``) flips
+    ``is_import_candidate_parent`` off, but its worth key stays the candidate id,
+    so it remains a standalone contact whose add/no decision is unmade — it must
+    stay in this queue instead of silently entering the network un-reviewed. A
+    synthetic-profile row is already past the worth decision (it went through
+    research/minting) and is handled in the LinkedIn/mint stage, so it is
+    excluded here even though it is a worth subject.
     """
     machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
     return (is_worth_subject(parent)
-            and is_import_candidate_parent(parent)
+            and not any(cand.get("synthetic") for cand in parent.get("candidates") or [])
             and not is_effective_no(parent)
             and machine == "maybe"
             and explicit_worth(parent) not in USER_WORTH_VALUES)

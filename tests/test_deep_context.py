@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.deep_context import (
     build_parents as parents,
@@ -1385,6 +1386,155 @@ class TestReconcileDeepResearch(unittest.TestCase):
             self.assertEqual(preserved["worth_only_judgeable"], 0)
             self.assertEqual(preserved["worth_only_human_preserved"], 1)
             self.assertEqual(preserved["worth_only_machine_stable"], 0)
+
+    # --- Part 2: evidence-based worth re-judge for the verified-LinkedIn limbo class -----------
+
+    # A limbo person: candidate id, machine worth Maybe, LinkedIn kept/verified at the link level
+    # (approved=auto), with a hydrated profile in the cache. Tuple: (pid, cache_pub, headline,
+    # title, company, location, user_mark).
+    _LIMBO = [
+        ("candidate:email:promote@example.com", "promote-li", "Staff Engineer at RealCo",
+         "Staff Engineer", "RealCo", "San Francisco", ""),
+        ("candidate:email:reject@example.net", "reject-li", "SDR at VendorCo",
+         "SDR", "VendorCo", "New York", ""),
+        ("candidate:email:stay@example.com", "stay-li", "Student",
+         "Student", "State University", "Los Angeles", ""),
+        # A user-marked row must never be re-judged, even though its LinkedIn is verified.
+        ("candidate:email:usermark@example.net", "user-li", "Anything",
+         "Role", "Company", "Austin", "yes"),
+    ]
+    # The mocked judge's decisive worth per candidate id.
+    _JUDGE = {
+        "candidate:email:promote@example.com": ("yes", "verified staff engineer — real relationship"),
+        "candidate:email:reject@example.net": ("no", "vendor SDR account, purely transactional"),
+        "candidate:email:stay@example.com": ("maybe", "still ambiguous even with the profile"),
+        "candidate:email:usermark@example.net": ("no", "should never be written — user owns this"),
+    }
+
+    def _build_limbo(self, base: Path) -> tuple[Path, dict]:
+        facts, raw, cache = base / "facts", base / "raw", base / "cache"
+        for directory in (facts, raw, cache):
+            directory.mkdir()
+        slugs: dict[str, dict] = {}
+        parents_index: dict[str, dict] = {}
+        overrides: dict[str, dict] = {}
+        for pid, pub, headline, title, company, location, user_mark in self._LIMBO:
+            handle = pid.split(":")[-1].split("@")[0]
+            (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": handle.title(),
+                "relationship_to_owner": "former colleague",
+                "network_worth": {"decision": "maybe",
+                                  "reason": "real person but no professional context"},
+            }}) + "\n", encoding="utf-8")
+            common.write_json(raw / f"{pid}.json", {"person_id": pid, "messages": [{
+                "at": "2020-01-01T00:00:00Z", "direction": "from_them",
+                "text": f"Good to connect, this is {handle}.",
+            }]})
+            (cache / f"{pub}.json").write_text(json.dumps({
+                "public_identifier": pub, "linkedin_url": f"https://www.linkedin.com/in/{pub}",
+                "normalized_profile": {"success": True, "full_name": handle.title(),
+                                       "headline": headline, "location_str": location,
+                                       "experiences": [{"title": title, "company_name": company}],
+                                       "education": []},
+                "raw_response": {"placeholder": True},
+            }), encoding="utf-8")
+            child = f"{handle}-child"
+            slugs[child] = {"person_id": pid}
+            parents_index[f"{handle}-parent"] = {"name": handle.title(), "children": [child]}
+            row = {**{col: "" for col in reconcile.OVERRIDE_COLUMNS},
+                   "public_identifier": pid, "person_id": pid,
+                   "action": "verify", "approved": "auto",
+                   "linkedin_url": f"https://www.linkedin.com/in/{pub}",
+                   "llm_worth": "maybe",
+                   "llm_worth_reason": "real person but no professional context"}
+            if user_mark:
+                row["network_worth"] = user_mark
+            overrides[pid] = row
+        index_json = base / "index.json"
+        index_json.write_text(json.dumps({"slugs": slugs, "parents": parents_index}),
+                              encoding="utf-8")
+        review = base / "review.csv"
+        reconcile._write_override_rows(review, overrides)
+        args = {
+            "index_json": index_json, "people_csv": base / "people.csv",
+            "profile_cache_dir": cache, "facts_dir": facts, "raw_dir": raw,
+            "parents_dir": base / "parents",
+            "verdicts_jsonl": base / "reconcile" / "verdicts.jsonl",
+            "verdicts_csv": base / "reconcile" / "verdicts.csv",
+            "overrides_csv": review, "consolidate_people_csv": base / "consolidate.csv",
+            "confirm_threshold": 0.7, "detach_threshold": 0.85, "model": "m",
+            "reasoning_effort": "high", "concurrency": 1, "timeout": 10, "max_retries": 0,
+            "no_overrides": False,
+        }
+        return review, args
+
+    def test_limbo_dry_run_reports_reprofile_count_and_cost(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, args = self._build_limbo(Path(d))
+            dry = reconcile.run(_ns(**args, dry_run=True, no_llm=False))
+            # 3 limbo maybes carry a verified profile; the user-marked row is human-decided so it
+            # is neither re-judged nor counted (spend is gated to the machine-Maybe limbo class).
+            self.assertEqual(dry["limbo_worth_reprofile"], 3)
+            self.assertEqual(dry["worth_only_judgeable"], 3)
+            self.assertGreater(dry["estimated_cost_usd_high"], 0)
+            self.assertEqual(dry["identity_judgeable"], 0)
+
+    def _fake_judge_task(self):
+        async def judge(client, task, owner_block, *, model, effort, semaphore, max_retries):
+            pid = (task.get("worth_person_ids") or task.get("person_ids") or [""])[0]
+            # The re-judge MUST receive the verified professional context, not the bare
+            # "no LinkedIn attached" prompt — assert the evidence block reached the model.
+            prompt = reconcile.judge_prompt(task, owner_block)
+            assert "ALREADY VERIFIED" in prompt, f"no verified block for {pid}"
+            decision, reason = self._JUDGE.get(pid, ("maybe", "unknown"))
+            return {"verdict": {
+                "verdict": "needs_review", "confidence": 0.0,
+                "supporting_evidence": [], "contradicting_evidence": [],
+                "linkedin_plausibly_absent": False, "recommend_deep_research": False,
+                "reason": "linkedin already verified",
+                "spam_contact": False, "spam_confidence": 0.0, "spam_reason": "",
+                "network_worth": {"decision": decision, "reason": reason},
+            }, "usage": {"input_tokens": 5, "output_tokens": 5, "reasoning_tokens": 0}, "error": ""}
+        return judge
+
+    def test_limbo_reprofile_repiles_decisively_and_never_touches_user_marks(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, args = self._build_limbo(Path(d))
+
+            class _Client:
+                async def close(self):
+                    return None
+
+            with mock.patch.object(reconcile, "judge_task", self._fake_judge_task()), \
+                    mock.patch.object(reconcile, "make_async_client", lambda **kw: _Client()), \
+                    mock.patch.object(reconcile, "load_env", lambda: None):
+                manifest = reconcile.run(_ns(**args, dry_run=False, no_llm=False))
+            self.assertEqual(manifest["judge"], "llm")
+            rows = reconcile.load_override_rows(review)
+            # Decisive outcomes re-pile: machine yes -> Yes, machine no -> No, with the new reason.
+            self.assertEqual((rows["candidate:email:promote@example.com"]["llm_worth"],
+                              rows["candidate:email:promote@example.com"]["llm_worth_reason"]),
+                             ("yes", "verified staff engineer — real relationship"))
+            self.assertEqual((rows["candidate:email:reject@example.net"]["llm_worth"],
+                              rows["candidate:email:reject@example.net"]["llm_worth_reason"]),
+                             ("no", "vendor SDR account, purely transactional"))
+            # Still-maybe stays pending.
+            self.assertEqual(rows["candidate:email:stay@example.com"]["llm_worth"], "maybe")
+            # The user-marked row is never re-judged: its worth mark and (stale) llm_worth stand.
+            self.assertEqual(rows["candidate:email:usermark@example.net"]["network_worth"], "yes")
+            self.assertEqual(rows["candidate:email:usermark@example.net"]["llm_worth"], "maybe")
+            # Every link-level decision is preserved throughout (this pass judges worth only).
+            for pid, *_ in self._LIMBO:
+                self.assertEqual((rows[pid]["action"], rows[pid]["approved"]), ("verify", "auto"))
+
+    def test_limbo_no_llm_leaves_them_maybe(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, args = self._build_limbo(Path(d))
+            # Deterministic path never auto-promotes without a judge.
+            reconcile.run(_ns(**args, dry_run=False, no_llm=True))
+            rows = reconcile.load_override_rows(review)
+            for pid, *_ in self._LIMBO:
+                self.assertEqual(rows[pid]["llm_worth"], "maybe", pid)
 
     """Phase 3 escalation: subset selection + explicit cost gate (no spend)."""
 
