@@ -138,9 +138,13 @@ Run the free estimate:
 bin/deep-context dry
 ```
 
-Show its contact count and cost floor/ceiling. Get explicit approval, then run
-the exact `bin/deep-context synthesize ...` command printed by `dry`. Do not
-invent a different scope. Synthesis also produces an initial `network_worth`
+Auto-approve and run the exact `bin/deep-context synthesize ...` command printed
+by `dry` without asking when the estimated cost **ceiling is under $25** (the
+common case) — just run it, keep this cost gate out of the user-facing task copy.
+Only when the ceiling is **$25 or more** do you pause: show the contact count and
+cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
+Approve?` and wait for a yes before running. Either way, run the exact command
+printed by `dry` — do not invent a different scope. Synthesis also produces an initial `network_worth`
 recommendation and reason, then always mirrors that machine verdict into
 `review.csv.llm_worth` / `llm_worth_reason` unless that person already has a
 human Yes/No. Normal repeated synthesis rejudges only missing/Maybe machine
