@@ -30,6 +30,7 @@ from packs.ingestion.primitives.deep_context import (
     collect_person_context as collect,
     common,
     compose_dossier as compose,
+    prefetch_profiles as prefetch,
     reconcile_deep_research as dresearch,
     reconcile_linkedin as reconcile,
     reconcile_review_web as web,
@@ -1499,10 +1500,11 @@ class TestStagedReviewUI(unittest.TestCase):
             dossiers.mkdir()
             (dossiers / "ada-lovelace.md").write_text(self._FULL_DOSSIER, encoding="utf-8")
             rendered = web.render_dossier_markdown(base / "parents", dossiers, "ada-lovelace")
-        # exactly two extracted sections, in order
-        self.assertIn("<h4>Summary</h4>", rendered)
-        self.assertIn("<h4>Timeline</h4>", rendered)
-        self.assertLess(rendered.index("<h4>Summary</h4>"), rendered.index("<h4>Timeline</h4>"))
+        # exactly two extracted sections, in order, as dt/dd rows (same style
+        # as the card's Contact / Match signal sections — no inset box)
+        self.assertIn("<dt>Summary</dt>", rendered)
+        self.assertIn("<dt>Timeline</dt>", rendered)
+        self.assertLess(rendered.index("<dt>Summary</dt>"), rendered.index("<dt>Timeline</dt>"))
         # Summary body is the Relationship & cadence prose, cleaned of markdown
         self.assertIn("Longtime colleague at Example Co; we coordinated on hiring.", rendered)
         self.assertNotIn("[[", rendered)
@@ -1541,12 +1543,12 @@ class TestStagedReviewUI(unittest.TestCase):
                 "# Alan Turing\n\n## Relationship & cadence\n\nOld friend from the lab.\n",
                 encoding="utf-8")
             rel_only = web.render_dossier_markdown(base / "parents", dossiers, "rel-only")
-        self.assertNotIn("<h4>Summary</h4>", no_rel)
-        self.assertIn("<h4>Timeline</h4>", no_rel)
+        self.assertNotIn("<dt>Summary</dt>", no_rel)
+        self.assertIn("<dt>Timeline</dt>", no_rel)
         self.assertEqual(missing, "")
-        self.assertIn("<h4>Summary</h4>", rel_only)
+        self.assertIn("<dt>Summary</dt>", rel_only)
         self.assertIn("Old friend from the lab.", rel_only)
-        self.assertNotIn("<h4>Timeline</h4>", rel_only)
+        self.assertNotIn("<dt>Timeline</dt>", rel_only)
 
     def test_worth_card_bubbles_dossier_identifiers_into_contact(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1661,7 +1663,7 @@ class TestStagedReviewUI(unittest.TestCase):
             completed = web.linkedin_review_body(
                 [], web.review_progress([]), enrichment_complete=True, linkedin_complete=True,
                 parents_dir=base / "parents", dossier_dir=base / "dossiers")
-        self.assertIn("Is this the right LinkedIn?", card)
+        self.assertIn("Is this the right profile?", card)
         self.assertIn("data-decide='keep'", card)
         self.assertNotIn("enrichment-note", card)  # complete -> no passive note
         self.assertIn("LinkedIn profiles checked", finished)
@@ -1684,7 +1686,7 @@ class TestStagedReviewUI(unittest.TestCase):
             }
         for status, body in bodies.items():
             self.assertNotIn("Enrichment not finished", body)
-            self.assertIn("Is this the right LinkedIn?", body)   # the card renders
+            self.assertIn("Is this the right profile?", body)   # the card renders
             self.assertIn("data-decide='keep'", body)            # ...and is clickable
             self.assertIn("class='enrichment-note'", body)
         self.assertIn("Enrichment is still running", bodies["running"])
@@ -1908,6 +1910,9 @@ class TestStagedReviewUI(unittest.TestCase):
             self.assertEqual(stale["status"], "stale")
             self.assertNotEqual(first_selection["review_revision"],
                                 repeated_selection["review_revision"])
+            stale_html = web.render_enrichment(stale, progress)
+            self.assertIn("Asking agent to continue", stale_html)
+            self.assertIn("is-indeterminate", stale_html)
 
     def test_enrichment_approval_is_bound_to_current_revision_and_budget(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1946,13 +1951,29 @@ class TestStagedReviewUI(unittest.TestCase):
                     enrichment_manifest_path=enrichment_manifest)
             self.assertEqual(waiting["next_action"], "await_enrichment_approval")
 
+            zero_work = {
+                **pending,
+                "would_submit": 0,
+                "reused_completed": 4,
+                "estimated_usd": 0.0,
+            }
+            zero_html = web.render_enrichment(zero_work, progress)
+            self.assertNotIn("data-approve-enrichment", zero_html)
+            self.assertIn("Asking agent to continue", zero_html)
+            self.assertIn("no approval needed", zero_html)
+            self.assertIn("is-indeterminate", zero_html)
+
             approved = web.approve_enrichment_manifest(
                 enrichment_manifest, selection=selection)
             self.assertTrue(approved["approval_current"])
             self.assertEqual(approved["approval"]["approved_budget_usd"], 0.15)
             self.assertNotIn("data-approve-enrichment",
                              web.render_enrichment(approved, progress))
-            self.assertIn("<h2>Approved</h2>", web.render_enrichment(approved, progress))
+            self.assertIn(
+                "<h2>Asking agent to continue</h2>",
+                web.render_enrichment(approved, progress),
+            )
+            self.assertIn("is-indeterminate", web.render_enrichment(approved, progress))
 
             with mock.patch.object(web, "_all_review_parents", return_value=[parent]):
                 status = web.workflow_status(
@@ -2182,12 +2203,18 @@ class TestLiveEndpoints(unittest.TestCase):
         # keep live_counts off any real candidate pools in the repo checkout
         self._pools = mock.patch.object(candidates, "CANDIDATE_CSVS", [])
         self._pools.start()
+        self.agent_notifications = 0
+
+        def notify_agent():
+            self.agent_notifications += 1
+
         handler = web.make_handler(self.review, self.verdicts, base / "parents",
                                    base / "dossiers", 0.7, 0.85,
                                    synthetic_path=self.synthetic, facts_dir=self.facts,
                                    people_csv=self.people,
                                    manifest_path=self.manifest,
-                                   enrichment_manifest_path=self.enrichment)
+                                   enrichment_manifest_path=self.enrichment,
+                                   agent_notifier=notify_agent)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.port = self.server.server_address[1]
@@ -2224,6 +2251,13 @@ class TestLiveEndpoints(unittest.TestCase):
         j = self._post("/worth", pub="bob-1", worth="restore")
         self.assertEqual((j["effective"], j["source"]), ("no", "llm"))
         self.assertEqual(reconcile.load_override_rows(self.review)["bob-1"]["network_worth"], "")
+        self.assertEqual(self.agent_notifications, 3)
+
+    def test_rejected_ui_mutation_does_not_notify_agent(self):
+        before = self.agent_notifications
+        with self.assertRaises(urllib.error.HTTPError):
+            self._post("/worth", pub="bob-1", worth="maybe")
+        self.assertEqual(self.agent_notifications, before)
 
     def test_exclude_then_keep_report_live_state_both_ways(self):
         j = self._post("/decide", pub="bob-1", decision="exclude")
@@ -2354,6 +2388,15 @@ class TestLiveEndpoints(unittest.TestCase):
         repeated = self._post("/approve-enrichment")
         self.assertTrue(repeated["enrichment"]["approval_current"])
 
+        # A browser can retain the button for up to one observer interval after
+        # the bridge has already advanced the manifest. That stale click is an
+        # idempotent success, not a conflict.
+        saved["status"] = "completed"
+        saved["counts"] = {"total": 3, "completed": 3, "pending": 0, "failed": 0}
+        self.enrichment.write_text(json.dumps(saved), encoding="utf-8")
+        already_done = self._post("/approve-enrichment")
+        self.assertEqual(already_done["enrichment"]["status"], "completed")
+
         # A newly started People revision makes the old approval unusable.
         current_parents = web._all_review_parents(
             self.verdicts, self.review, self.synthetic, self.facts, self.people)
@@ -2417,6 +2460,216 @@ class TestLinkedInConnectionGuard(unittest.TestCase):
             )
             keys = web.load_connection_keys(people)
         self.assertEqual(keys, {"pid-li", "connfriend"})
+
+
+
+
+class TestCardProfileAndReasonDisplay(unittest.TestCase):
+    """Cache-only profile hydration, Work/Education fact rows, and the
+    display-only match-signal cleanup (fictional personas only)."""
+
+    def _card_parent(self, headline: str = "") -> dict:
+        candidate = {
+            "pub": "ada-lovelace", "profile_pub": "ada-lovelace",
+            "url": "https://www.linkedin.com/in/ada-lovelace",
+            "full_name": "Ada Lovelace", "headline": headline,
+            "profile_pic_url": "", "experiences": [], "education": [],
+            "location": "", "has_profile": True,
+            "verdict": "needs_review", "confidence": 0.5,
+            "supporting": [], "contradicting": [], "reason": "name matches messages",
+            "match_emails": ["ada@example.net"], "match_phones": [],
+            "conflict": False, "synthetic": False,
+            "action": "", "approved": "", "new_url": "",
+        }
+        return {"slug": "ada-lovelace", "name": "Ada Lovelace",
+                "person_ids": ["pid-1"], "sources": ["gmail"],
+                "candidates": [candidate]}
+
+    def _write_cached_profile(self, cache_dir: Path) -> None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "ada-lovelace.json").write_text(json.dumps({
+            "public_identifier": "ada-lovelace",
+            "linkedin_url": "https://www.linkedin.com/in/ada-lovelace",
+            "raw_response": {"firstName": "Ada"},
+            "normalized_profile": {
+                "success": True, "full_name": "Ada Lovelace",
+                "headline": "Analytical Engines Lead", "profile_pic_url": "",
+                "location_str": "London",
+                "experiences": [{"title": f"Role {i}", "company_name": "Example Engines"}
+                                for i in range(5)],
+                "education": [{"school": "Home Study", "degree": "Mathematics"}],
+            },
+        }), encoding="utf-8")
+
+    def test_card_hydrates_profile_from_cache_without_any_fetch(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            cache = base / "cache"
+            self._write_cached_profile(cache)
+            parent = self._card_parent()
+            html = web.render_linkedin_card(
+                parent, parent["candidates"][0], base / "parents", base / "dossiers",
+                cache)
+        self.assertIn("Analytical Engines Lead", html)
+        self.assertIn("<dt>Work</dt>", html)
+        self.assertIn("Role 0 @ Example Engines", html)
+        self.assertIn("<dt>Education</dt>", html)
+        self.assertNotIn("No cached profile data", html)
+
+    def test_card_cache_miss_shows_passive_prefetch_note(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = self._card_parent()
+            html = web.render_linkedin_card(
+                parent, parent["candidates"][0], base / "parents", base / "dossiers",
+                base / "empty-cache")
+            progress = web.review_progress([parent])
+            body = web.linkedin_review_body(
+                [self._card_parent()], progress, enrichment_complete=True,
+                linkedin_complete=False, parents_dir=base / "parents",
+                dossier_dir=base / "dossiers", profile_cache_dir=base / "empty-cache")
+        self.assertIn("No cached profile data", html)
+        self.assertIn("run profile prefetch", html)
+        # ...and the stage surfaces the aggregate miss count passively
+        self.assertIn("1 person here has no cached profile", body)
+
+    def test_profile_fact_rows_pin_three_with_show_more_toggle(self):
+        rows = web.profile_fact_rows({
+            "experiences": [f"Role {i} @ ExampleCo" for i in range(5)],
+            "education": ["Mathematics — Home Study"],
+        })
+        work, education = rows
+        self.assertEqual(work.count("<li>"), 3)                    # pinned
+        self.assertEqual(work.count("<li hidden data-more-item>"), 2)
+        self.assertIn("+ show 2 more", work)
+        self.assertIn("data-show-more", work)
+        self.assertNotIn("data-show-more", education)              # short list, no toggle
+
+    def test_display_reason_trims_deep_research_tail_only_when_summary_exists(self):
+        self.assertEqual(
+            web._display_reason("Longtime teammate at ExampleCo; deep research: matched "
+                                "employer, school and location with process notes"),
+            "Longtime teammate at ExampleCo")
+        blob = "deep research: matched employer and school"
+        self.assertEqual(web._display_reason(blob), blob)          # only signal -> keep
+        self.assertEqual(web._display_reason("plain reason"), "plain reason")
+
+    def test_debug_carousel_renders_only_with_flag_and_indexes_the_queue(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            first = self._card_parent(headline="Engineer")
+            second = self._card_parent(headline="Engineer")
+            second["slug"] = second["name"] = "Grace Hopper"
+            second["candidates"][0].update({"pub": "grace-hopper",
+                                            "profile_pub": "grace-hopper",
+                                            "full_name": "Grace Hopper"})
+            progress = web.review_progress([first, second])
+            common_kwargs = dict(enrichment_complete=True, linkedin_complete=False,
+                                 parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                                 profile_cache_dir=base / "cache")
+            plain = web.linkedin_review_body([first, second], progress, **common_kwargs)
+            debug0 = web.linkedin_review_body([first, second], progress,
+                                              debug=True, **common_kwargs)
+            debug1 = web.linkedin_review_body([first, second], progress,
+                                              debug=True, index=1, **common_kwargs)
+        self.assertNotIn("data-carousel", plain)                   # debug-only
+        self.assertIn("data-carousel='prev'", debug0)
+        self.assertIn("data-carousel='next'", debug0)
+        self.assertIn("data-queue-total='2'", debug0)
+        self.assertIn("data-queue-index='0'", debug0)
+        self.assertIn("Ada Lovelace", debug0)
+        self.assertIn("data-queue-index='1'", debug1)
+        self.assertIn("Grace Hopper", debug1)
+
+
+class TestPrefetchProfiles(unittest.TestCase):
+    """Offline profile prefetch stage: miss detection, spend-free dry run,
+    mocked fetch writing the shared cache, and idempotent reruns."""
+
+    VERDICT = {"parent_slug": "ada-lovelace", "name": "Ada Lovelace",
+               "candidate_key": "ada-lovelace", "person_ids": ["pid-ada"],
+               "conflict": False, "no_link": False,
+               "linkedin": {"linkedin_url": "https://www.linkedin.com/in/ada-lovelace",
+                            "has_profile": True},
+               "verdict": {"verdict": "needs_review", "confidence": 0.4,
+                           "reason": "thin"}, "error": ""}
+
+    def _args(self, base: Path, **overrides) -> _ns:
+        values = dict(
+            verdicts=str(base / "verdicts.jsonl"), review=str(base / "review.csv"),
+            synthetic_people=str(base / "synthetic-people.csv"),
+            facts_dir=str(base / "facts"), people_csv=str(base / "people.csv"),
+            parents_dir=str(base / "parents"), dossier_dir=str(base / "dossiers"),
+            profile_cache_dir=str(base / "cache"), fetch=False, limit=0)
+        values.update(overrides)
+        return _ns(**values)
+
+    def _fixture(self, base: Path) -> None:
+        (base / "facts").mkdir()
+        _verdict_jsonl(base / "verdicts.jsonl", [self.VERDICT])
+        reconcile._write_override_rows(base / "review.csv", {})
+
+    @staticmethod
+    def _fake_fetch(pub, url, key, cache_dir=None, **_):
+        path = prefetch.profile_cache_path(cache_dir, pub)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "public_identifier": pub, "linkedin_url": url,
+            "raw_response": {"firstName": "Ada"},
+            "normalized_profile": {"success": True, "public_identifier": pub},
+        }), encoding="utf-8")
+        return {"status_code": 200, "data": {"firstName": "Ada"}, "error": "",
+                "from_cache": False, "normalized_profile": {"success": True}}
+
+    def test_dry_run_reports_misses_and_never_fetches(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            fetcher = mock.MagicMock()
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_profile", fetcher):
+                manifest = prefetch.run(self._args(base))
+        self.assertEqual(manifest["status"], "dry_run")
+        self.assertEqual(manifest["queue_links"], 1)
+        self.assertEqual(manifest["cache_misses"], 1)
+        self.assertEqual(manifest["estimated_rapidapi_calls"], 1)
+        self.assertEqual(manifest["missing_public_identifiers"], ["ada-lovelace"])
+        fetcher.assert_not_called()
+        self.assertFalse(manifest["privacy"]["paid_provider_called"])
+
+    def test_fetch_writes_cache_and_second_run_has_zero_misses(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_key", lambda: "test-key"), \
+                    mock.patch.object(prefetch, "rapidapi_profile", self._fake_fetch):
+                first = prefetch.run(self._args(base, fetch=True))
+                second = prefetch.run(self._args(base))  # idempotent recheck
+            cache_written = (base / "cache" / "ada-lovelace.json").exists()
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(first["counts"], {"fetched": 1, "from_cache": 0,
+                                           "failed": 0, "attempted": 1})
+        self.assertEqual(first["remaining_misses"], 0)
+        self.assertTrue(cache_written)
+        self.assertEqual(second["status"], "dry_run")
+        self.assertEqual(second["cache_misses"], 0)
+
+    def test_fetch_without_key_is_blocked_and_spends_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            fetcher = mock.MagicMock()
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_key", lambda: ""), \
+                    mock.patch.object(prefetch, "rapidapi_profile", fetcher):
+                manifest = prefetch.run(self._args(base, fetch=True))
+        self.assertEqual(manifest["status"], "blocked_no_key")
+        fetcher.assert_not_called()
+        self.assertFalse(manifest["privacy"]["paid_provider_called"])
 
 
 if __name__ == "__main__":
