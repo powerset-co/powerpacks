@@ -1584,9 +1584,18 @@ def timeline_entries(parents_dir: Path, dossier_dir: Path, slug: str) -> list[st
     return entries
 
 
+# Video-call / scheduling links sometimes land in dossier Identifiers, but they
+# are not contact info; keep emails, phones, and social handles (GitHub etc.).
+_MEETING_URL_RE = re.compile(
+    r"(?i)\b(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com|teams\.live\.com|"
+    r"webex\.com|calendly\.com|cal\.com|whereby\.com|gotomeeting\.com)\b")
+
+
 def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str) -> list[str]:
     """Bare identifier values (emails/phones/etc.) from the dossier's "Identifiers"
-    section, so the card can bubble them up into its Contact line."""
+    section, so the card can bubble them up into its Contact line. Display-side
+    only (dossier files are never rewritten); meeting/scheduling URLs are
+    dropped because they are not contact info."""
     markdown = render_dossier(parents_dir, dossier_dir, slug)
     body = _dossier_section(markdown, "Identifiers")
     values: list[str] = []
@@ -1596,9 +1605,10 @@ def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str) -> list
         if not bullet:
             continue
         value = _clean_text(bullet.group(1))
-        if value and value.lower() not in seen:
-            values.append(value)
-            seen.add(value.lower())
+        if not value or value.lower() in seen or _MEETING_URL_RE.search(value):
+            continue
+        values.append(value)
+        seen.add(value.lower())
     return values
 
 
@@ -1688,8 +1698,10 @@ def _merge_contacts(contacts: list[str], identifiers: list[str]) -> list[str]:
     return merged
 
 
-# Shown as the card's Summary when no verified identity summary exists (a
-# research-blob-only or empty reason means exactly that).
+# Shown as the card's Summary ONLY when the card has no kept/attached LinkedIn
+# and no displayable reason (the researched-and-failed case). Cards WITH a kept
+# link and no displayable reason omit the Summary row instead — "Couldn't find
+# profile" would be nonsense when we did find them.
 NO_PROFILE_SUMMARY = "Couldn't find profile"
 
 
@@ -1697,12 +1709,11 @@ def _display_reason(reason: str) -> str:
     """Card display only (stored CSV reasons are never rewritten): the
     "deep research: <process notes>" text is NEVER shown. A real summary before
     a "; deep research:" tail is kept; a reason that is only the research blob
-    (or empty) falls back to "Couldn't find profile" — research-blob-only means
-    no verified identity summary exists."""
+    (or empty) yields '' — the caller decides between omitting the row and the
+    no-profile fallback based on whether the card has a kept link."""
     marker = reason.lower().find("deep research:")
     cleaned = reason if marker == -1 else reason[:marker]
-    cleaned = cleaned.strip().rstrip(";,·—–-").strip()
-    return cleaned or NO_PROFILE_SUMMARY
+    return cleaned.strip().rstrip(";,·—–-").strip()
 
 
 # Top entries pinned in Work/Education fact lists; the rest sit behind a toggle.
@@ -1747,7 +1758,12 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
     if contacts:
         rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
     if identity:
-        rows.append(f"<div><dt>Summary</dt><dd>{esc(reason)}</dd></div>")
+        if reason:
+            rows.append(f"<div><dt>Summary</dt><dd>{esc(reason)}</dd></div>")
+        elif not str(candidate.get("url") or "").strip():
+            # no kept link AND nothing displayable -> researched-and-failed
+            rows.append(f"<div><dt>Summary</dt><dd>{esc(NO_PROFILE_SUMMARY)}</dd></div>")
+        # kept link with no displayable reason: omit the row entirely
     if evidence:
         rows.append(f"<div><dt>Evidence</dt><dd>{esc(' · '.join(evidence[:5]))}</dd></div>")
     extra = f"<dl>{''.join(rows)}</dl>" if rows else ""

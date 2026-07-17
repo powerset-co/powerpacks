@@ -2667,11 +2667,54 @@ class TestCardProfileAndReasonDisplay(unittest.TestCase):
             web._display_reason("Longtime teammate at ExampleCo; deep research: matched "
                                 "employer, school and location with process notes"),
             "Longtime teammate at ExampleCo")
-        # a research-blob-only reason means no verified identity summary exists
-        self.assertEqual(web._display_reason("deep research: matched employer and school"),
-                         "Couldn't find profile")
-        self.assertEqual(web._display_reason(""), "Couldn't find profile")
+        # research-blob-only and empty reasons leave nothing displayable; the
+        # card decides between omitting the row and the no-profile fallback
+        self.assertEqual(web._display_reason("deep research: matched employer and school"), "")
+        self.assertEqual(web._display_reason(""), "")
         self.assertEqual(web._display_reason("plain reason"), "plain reason")
+
+    def test_summary_fallback_is_link_aware(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            # kept LinkedIn + research-blob-only reason: omit the Summary row —
+            # "Couldn't find profile" would be nonsense when we did find them
+            linked = self._card_parent()
+            linked["candidates"][0]["reason"] = "deep research: only process notes"
+            with_link = web.render_linkedin_card(
+                linked, linked["candidates"][0], base / "parents", base / "dossiers",
+                base / "cache")
+            # no kept link and nothing displayable: the fallback appears
+            unlinked = self._card_parent()
+            unlinked["candidates"][0].update({"url": "", "reason": ""})
+            without_link = web.render_linkedin_card(
+                unlinked, unlinked["candidates"][0], base / "parents", base / "dossiers",
+                base / "cache")
+            # a real judge reason renders as-is either way
+            reasoned = self._card_parent()
+            with_reason = web.render_linkedin_card(
+                reasoned, reasoned["candidates"][0], base / "parents", base / "dossiers",
+                base / "cache")
+        self.assertNotIn("<dt>Summary</dt>", with_link)
+        self.assertNotIn("Couldn&#x27;t find profile", with_link)
+        self.assertIn("<dt>Summary</dt><dd>Couldn&#x27;t find profile</dd>", without_link)
+        self.assertIn("<dt>Summary</dt><dd>name matches messages</dd>", with_reason)
+
+    def test_meeting_links_are_filtered_from_contact_identifiers(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "kai-example.md").write_text(
+                "# Kai Example\n\n## Identifiers\n\n"
+                "- kai@example.com\n"
+                "- https://github.com/kai-example\n"
+                "- Google Meet: https://meet.google.com/abc-defg-hij\n"
+                "- https://us02web.zoom.us/j/12345\n"
+                "- https://calendly.com/kai-example/30min\n"
+                "- +1-415-555-0142\n", encoding="utf-8")
+            values = web.dossier_identifiers(base / "parents", dossiers, "kai-example")
+        self.assertEqual(values, ["kai@example.com", "https://github.com/kai-example",
+                                  "+1-415-555-0142"])
 
     def test_debug_carousel_renders_only_with_flag_and_indexes_the_queue(self):
         with tempfile.TemporaryDirectory() as d:
