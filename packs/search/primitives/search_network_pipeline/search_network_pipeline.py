@@ -61,7 +61,8 @@ COMPANY_RESOLVE_FILTER_KEYS = {
 PREVIEW_FILTER_KEYS = [
     "company_names", "company_ids", "company_semantic_queries", "education_names", "education_ids",
     "metro_areas", "cities", "states", "countries", "macro_regions", "seniority_bands",
-    "years_experience_min", "years_experience_max", "position_after_date", "position_before_date",
+    "years_experience_min", "years_experience_max", "age_min", "age_max",
+    "position_after_date", "position_before_date",
     "is_current_role", "is_current_company", "tech_skills",
     "sector_types", "entity_types", "technology_types", "customer_types", "customer_type",
     "company_cities", "company_states", "company_countries", "company_metro_areas", "company_macro_regions",
@@ -211,6 +212,7 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues:
         "company_names","company_ids","company_semantic_queries","investor_names",
         "education_names","education_ids","metro_areas","cities","states","countries",
         "macro_regions","seniority_bands","years_experience_min","years_experience_max",
+        "age_min","age_max",
         "position_after_date","position_before_date","is_current_role","is_current_company",
         "tech_skills","x_followers_min","li_followers_min","operator_interaction_min",
     ]:
@@ -605,6 +607,18 @@ def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any
     except Exception as exc:
         return {"status": "error", "error": str(exc)[:200]}
 
+def age_filter_notes(filters: dict[str, Any]) -> list[str]:
+    """Surface the exact predicate an age constraint runs as. Ages are filtered
+    on LLM-inferred birth years, and the year boundary is conservative: someone
+    born late in the boundary year may sit one year outside the requested age."""
+    notes = []
+    year = datetime.now().year
+    for key, cmp in [("age_min", "<="), ("age_max", ">=")]:
+        if filters.get(key) is not None:
+            boundary = year - int(filters[key])
+            notes.append(f"{key} {filters[key]} filters on LLM-inferred birth year: inferred_birth_year {cmp} {boundary} (approximate)")
+    return notes
+
 def compact_preview_local(payload: dict[str, Any], payload_json: Path, db_path: Path, removed_scope_keys: list[str]) -> dict[str, Any]:
     filters = payload_filters(payload)
     visible_filters = {}
@@ -613,7 +627,7 @@ def compact_preview_local(payload: dict[str, Any], payload_json: Path, db_path: 
         if is_present(value):
             visible_filters[key] = value
     role = {key: filters.get(key) for key in ["semantic_query", "bm25_queries", "role_ids", "role_tracks"] if is_present(filters.get(key))}
-    runtime_notes = payload_quality_issues_local(payload)
+    runtime_notes = payload_quality_issues_local(payload) + age_filter_notes(filters)
     pool = local_pool_estimate(payload, db_path)
     matched = pool.get("matched_people")
     total = pool.get("total_people")

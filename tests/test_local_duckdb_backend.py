@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1260,6 +1261,16 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertNotIn("vector", position)
         self.assertNotIn("word_tokens", position)
 
+    def test_local_hydration_exposes_inferred_birth_year_and_age(self) -> None:
+        rows = hydrate_people.fetch_local_person_rows(["person-founder"], db_path=self.db_path, workers=1, batch_size=1)
+        profile = hydrate_people.normalize_hydrated_context(rows[0])
+        self.assertEqual(profile["inferred_birth_year"], 1988)
+        self.assertEqual(profile["inferred_age"], date.today().year - 1988)
+        view = hydrate_people.llm_profile_view(profile)
+        self.assertEqual(view["inferred_birth_year"], 1988)
+        self.assertEqual(view["inferred_age"], profile["inferred_age"])
+        self.assertEqual(view["years_of_experience"], profile["years_of_experience"])
+
     def test_local_store_lazy_import_and_clear_namespace_errors(self) -> None:
         import local_duckdb_store
 
@@ -1699,12 +1710,24 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             records = tmp / "records"
+            people_csv = tmp / "people.csv"
+            people_csv.write_text(
+                "id,linkedin_url,full_name,headline,city,state,country,work_experiences,education,source_channels\n"
+                "person-young,https://www.linkedin.com/in/person-young,Young Person,Founder,San Francisco,CA,US,\"[{\"\"title\"\": \"\"Founder\"\", \"\"company\"\": \"\"YoungCo\"\"}]\",[],linkedin_csv\n"
+                "person-old,https://www.linkedin.com/in/person-old,Old Person,Founder,San Francisco,CA,US,\"[{\"\"title\"\": \"\"Founder\"\", \"\"company\"\": \"\"OldCo\"\"}]\",[],linkedin_csv\n",
+                encoding="utf-8",
+            )
+            # In production the position records and the person-profile rows are
+            # flattened from the same people.csv, so they share stable person ids.
+            flattened = {p["full_name"]: str(p["id"]) for p in build_local_duckdb_shim.flatten_people(people_csv)}
+            young_id = flattened["Young Person"]
+            old_id = flattened["Old Person"]
             write_records(records / "people.records.parquet", [
                 {
                     "id": "role-young",
                     "position_id": "role-young",
-                    "person_id": "person-young",
-                    "base_id": "person-young",
+                    "person_id": young_id,
+                    "base_id": young_id,
                     "vector": [0.0, 1.0],
                     "position_title": "Founder",
                     "company_name": "YoungCo",
@@ -1716,8 +1739,8 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
                 {
                     "id": "role-old",
                     "position_id": "role-old",
-                    "person_id": "person-old",
-                    "base_id": "person-old",
+                    "person_id": old_id,
+                    "base_id": old_id,
                     "vector": [0.0, 1.0],
                     "position_title": "Founder",
                     "company_name": "OldCo",
@@ -1731,13 +1754,6 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             write_records(records / "education.records.parquet", [])
             write_records(records / "schools.records.parquet", [])
             write_records(records / "companies.records.parquet", [])
-            people_csv = tmp / "people.csv"
-            people_csv.write_text(
-                "id,linkedin_url,full_name,headline,city,state,country,work_experiences,education,source_channels\n"
-                "person-young,https://www.linkedin.com/in/person-young,Young Person,Founder,San Francisco,CA,US,\"[{\"\"title\"\": \"\"Founder\"\", \"\"company\"\": \"\"YoungCo\"\"}]\",[],linkedin_csv\n"
-                "person-old,https://www.linkedin.com/in/person-old,Old Person,Founder,San Francisco,CA,US,\"[{\"\"title\"\": \"\"Founder\"\", \"\"company\"\": \"\"OldCo\"\"}]\",[],linkedin_csv\n",
-                encoding="utf-8",
-            )
             payload = run_shim_json(
                 "--records-dir", str(records),
                 "--person-profiles-csv", str(people_csv),
@@ -1749,7 +1765,14 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             import duckdb
             with duckdb.connect(payload["duckdb"], read_only=True) as conn:
                 columns = {row[1] for row in conn.execute("pragma table_info('local_people_positions')").fetchall()}
+                profile_years = dict(conn.execute(
+                    "select person_id, inferred_birth_year from local_person_profiles"
+                ).fetchall())
             self.assertIn("inferred_birth_year", columns)
+            # The person-profile projection must expose the same birth year the
+            # filter runs on (backfilled from role rows by the shim), otherwise
+            # an enforced age filter audits as NULL/unsupported.
+            self.assertEqual(profile_years, {young_id: 1998, old_id: 1975})
 
             previous_db = local_backend.explicit_local_backend_path()
             local_backend.configure_local_backend(payload["duckdb"])
@@ -1768,5 +1791,5 @@ class LocalPersonProfilePrefilterTest(unittest.TestCase):
             finally:
                 local_backend.configure_local_backend(previous_db)
                 local_backend._local_store_for_path.cache_clear()
-            self.assertEqual([row["base_id"] for row in rows], ["person-young"])
+            self.assertEqual([row["base_id"] for row in rows], [young_id])
             self.assertEqual(rows[0]["inferred_birth_year"], 1998)
