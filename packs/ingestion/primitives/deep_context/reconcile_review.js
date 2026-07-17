@@ -147,6 +147,10 @@ async function decideWorthCard(button, card) {
     await adoptServerState();
     applyProgress(response.progress);
     announce(worth === "yes" ? "Added" : "Rejected");
+    if (Number(response.progress?.worth_pending) === 0) {
+      leaveAndNavigate("People complete", "/?stage=enrich");
+      return;
+    }
     const panel = card.closest(".worth-panel");
     const nextHtml = await fetchText("/api/worth-card");
     if (!panel || nextHtml === null) {
@@ -191,9 +195,50 @@ async function decideLinkedinCard(card, values, message) {
   }
 }
 
+// Debug-only carousel (?debug=1): browse the queue without deciding. Prev/Next
+// refetch the card endpoints with an explicit index; nothing is ever written.
+async function carouselNav(button) {
+  const shell = button.closest("[data-queue-total]");
+  if (!shell) return;
+  const total = Math.max(1, parseInt(shell.dataset.queueTotal || "1", 10));
+  const current = parseInt(shell.dataset.queueIndex || "0", 10) || 0;
+  const index = (current + (button.dataset.carousel === "next" ? 1 : total - 1)) % total;
+  const path = document.body.dataset.stage === "worth" ? "/api/worth-card" : "/api/linkedin-card";
+  const nextHtml = await fetchText(`${path}?debug=1&index=${index}`);
+  if (nextHtml === null) {
+    announce("Could not load card", true);
+    return;
+  }
+  const template = document.createElement("template");
+  template.innerHTML = nextHtml;
+  const next = template.content.firstElementChild;
+  shell.replaceWith(...template.content.childNodes);
+  if (next) wireDynamicContent(next);
+}
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("button");
   if (!button || button.disabled) return;
+
+  if (button.dataset.carousel) {
+    event.preventDefault();
+    void carouselNav(button);
+    return;
+  }
+
+  if (button.hasAttribute("data-show-more")) {
+    // "+ show N more" toggle on Work/Education fact lists.
+    event.preventDefault();
+    const holder = button.closest("dd") || button.parentElement;
+    const expanded = button.dataset.expanded === "true";
+    holder?.querySelectorAll("[data-more-item]").forEach((item) => { item.hidden = expanded; });
+    button.dataset.expanded = expanded ? "false" : "true";
+    button.textContent = expanded
+      ? (button.dataset.moreLabel || "+ show more")
+      : (button.dataset.lessLabel || "show fewer");
+    refreshScrollCues();
+    return;
+  }
 
   if (button.dataset.worth) {
     event.preventDefault();
@@ -582,7 +627,7 @@ const decisionList = document.querySelector("[data-decision-list]");
 if (decisionList) setupInfiniteDecisionList(decisionList);
 
 let reviewStateToken = document.body.dataset.stateToken || "";
-const statusPollMs = 5000;
+const statusPollMs = 1000;
 
 function hasIdentityDraft() {
   return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(

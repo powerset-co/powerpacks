@@ -56,14 +56,17 @@ flowchart TD
     H --> I["Judge worth + attached LinkedIn identity"]
     I --> J["People UI: review only Maybe; edit Yes / No"]
     J --> K{"People review complete"}
-    K --> L["Preview one enrichment pass"]
-    L --> M{"Approve exact net-new Parallel estimate in UI"}
-    M --> N["Agent runs approved lookup; completed work is reused"]
+    K --> K1["Local bridge resumes the originating Codex thread"]
+    K1 --> L["Preview one enrichment pass"]
+    L --> M{"Approve exact net-new Parallel estimate in UI, unless zero"}
+    M --> M1["Local bridge resumes the same thread"]
+    M1 --> N["Agent runs approved lookup; completed work is reused"]
     N --> O["Assemble no-LinkedIn research cards"]
     O --> P{"User clicks Continue"}
     P --> Q["LinkedIn UI: verify, replace, or Skip"]
     Q --> R{"LinkedIn review complete"}
-    R --> S{"Approve RapidAPI cache misses for retargets"}
+    R --> R1["Local bridge resumes the same thread, then stops"]
+    R1 --> S{"Approve RapidAPI cache misses for retargets"}
     S --> T["Apply retargets + rebuild merged people.csv"]
     T --> U{"Approve Modal upload/build"}
     U --> V["Build and validate search index"]
@@ -73,7 +76,7 @@ flowchart TD
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
     class C,E,H,K,M,P,R,S,U gate;
-    class A,B,D,F,G,I,J,L,O,Q,T local;
+    class A,B,D,F,G,I,J,K1,L,M1,O,Q,R1,T local;
     class N cloud;
     class V output;
 ```
@@ -90,15 +93,16 @@ surface, not an orchestration service.
 
 | Component | Responsibilities | Must not do |
 | --- | --- | --- |
-| Browser UI | Read current CSVs/manifests, save human decisions, mark review handoffs, and write the exact revision-bound enrichment approval. | Spawn Codex, run shell commands, call identity/research providers, start paid work, or rebuild the index. |
-| Agent session | Poll `bin/deep-context review-status`, show required estimates/disclosures, and run only its exact next primitive after approval. | Infer completion from chat text, reuse an old approval, or invent a parallel state machine. |
+| Browser UI | Read current CSVs/manifests, save human decisions, mark review handoffs, write the exact revision-bound enrichment approval, and let the local server emit an inert state-changed notification. | Send prompts or commands to Codex, call identity/research providers, start paid work, or rebuild the index. |
+| Same-thread bridge | Listen on one fixed local Unix socket, reread `review-status`, and resume the Codex thread that launched review only for actionable state changes. | Accept browser text as instructions, create another workflow state store, cross approval gates, or run overlapping turns. |
+| Agent session | Start/replace the bridge before review, run `bin/deep-context review-status` first on every wake, show required estimates/disclosures, and run only its exact next primitive after approval. | Infer completion from chat text, reuse an old approval, or invent a parallel state machine. |
 | Primitives | Write stage outputs and one manifest into fixed directories, overwrite current queues, reuse completed per-person work, and enforce budgets/fingerprints. | Create run-scoped directories, ledgers, or hidden browser jobs. |
 
 The review server may fetch and cache an existing signed LinkedIn CDN avatar
 image for presentation. That fetch does not perform identity resolution or
 advance the workflow.
 
-The deterministic agent polling command is:
+The deterministic agent wake/poll command is:
 
 ```bash
 bin/deep-context review-status
@@ -107,13 +111,24 @@ bin/deep-context review-status
 It is read-only and returns one `next_action`, such as `review_people`,
 `preview_enrichment`, `await_enrichment_approval`,
 `run_approved_enrichment`, `assemble_synthetic`, `review_linkedin`, or
-`realize`. While waiting for a human or provider, the skill tells the agent to
-poll it about once per minute.
+`realize`. In Codex, `bin/deep-context review --fresh` starts a same-thread
+bridge when `CODEX_THREAD_ID` is available. Successful UI mutations notify that
+bridge, which filters on `review-status` and resumes the same thread only when
+agent work is ready. Other harnesses, or a failed bridge startup, retain the
+one-minute polling fallback.
+
+The bridge is runtime plumbing, not workflow state. It uses the fixed socket
+`.powerpacks/deep-context/review/agent-bridge.sock`, records no ledger or run id,
+and stops after the `retry_enrichment` or `realize` wake. Before every wake it
+waits for the foreground Codex rollout's persisted `task_complete`, then starts
+a short-lived App Server client that reloads the latest version of the same
+thread. This keeps the visible plan and approval context in one conversation
+without letting browser-controlled text enter the prompt.
 
 The browser has a separate, faster observer:
 
 - Every rendered page includes the same JavaScript observer.
-- It calls `/api/status` immediately on load and then every five seconds.
+- It calls `/api/status` immediately on load and then every second.
 - People, Enrich, LinkedIn, and Done therefore all observe the same file state.
 - A changed `next_action` navigates the current tab to the corresponding stage.
 - A changed state token reloads the current stage with fresh counts/content.
@@ -140,8 +155,8 @@ button and cannot be blocked by the Done page.
 | Composition | Deterministically renders facts into Markdown dossiers and name/email/phone lookup indexes. | `dossiers/*.md`, `index.json`, `index.md` |
 | Duplicate resolution | Generates plausible same-person pairs, judges them with OpenAI, and builds transitive canonical parents. A candidate merged into an existing person contributes its contact metadata and skips standalone review/research. | Merge audit CSVs and `parents/*.md` |
 | Reconcile | Before the browser opens, jointly refreshes machine-owned Maybe/unjudged worth decisions and judges attached LinkedIn identity. Human worth decisions and machine Yes/No are preserved. | `reconcile/verdicts.jsonl`, `overrides/review.csv` |
-| People review | Shows only model Maybe contacts in the main binary queue. The paginated Yes and No tables remain editable. Finishing the last Maybe completes the People gate; Continue moves the UI to Enrich Contacts. | Updated `review.csv` and `review/manifest.json` |
-| Enrichment preview and approval | Builds one queue from the current effective-Yes selection plus eligible wrong-link recovery. It reports gross eligible people, completed-result reuse, duplicate handles, net-new submissions, and the exact estimate. The UI approval writes only an inert approval record. | `research_queue.csv` and enrichment `manifest.json` |
+| People review | Shows only model Maybe contacts in the main binary queue. The paginated Yes and No tables remain editable. Finishing the last Maybe completes the People gate and moves directly to an animated agent-handoff state on Enrich Contacts. | Updated `review.csv` and `review/manifest.json` |
+| Enrichment preview and approval | Builds one queue from the current effective-Yes selection plus eligible wrong-link recovery. It reports gross eligible people, completed-result reuse, duplicate handles, net-new submissions, and the exact estimate. A positive estimate requires the UI's inert approval record; zero net-new work automatically continues from cache without an approval button. | `research_queue.csv` and enrichment `manifest.json` |
 | Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
 | Realization | Approved replacement URLs are hydrated cache-first, then fan-in reapplies worth, identity, retarget, and consolidation decisions to the fixed merged people CSV. | `.powerpacks/network-import/merged/people.csv` |
@@ -166,6 +181,11 @@ bin/deep-context reconcile --dry-run
 bin/deep-context reconcile
 bin/deep-context review --fresh
 ```
+
+When Codex supplies `CODEX_THREAD_ID`, the final command also starts/replaces
+the same-thread bridge. `bin/deep-context review-agent stop` is the manual
+cleanup command; normal completion stops it automatically at the transition
+from LinkedIn review to realization.
 
 After the browser opens, the agent follows `review-status`. The enrichment path
 uses:
@@ -203,7 +223,7 @@ Approval rules:
 | OpenAI synthesis | Show `bin/deep-context dry` estimate and get approval. |
 | Duplicate judging | Always preview. Run automatically when the estimate is at most $100; ask if it exceeds $100. |
 | Reconcile | Show `reconcile --dry-run` estimate and get fresh approval. |
-| Parallel enrichment | The Enrich Contacts page approves the exact current net-new estimate. The agent must use the approved `--budget`. |
+| Parallel enrichment | The Enrich Contacts page approves the exact current positive net-new estimate. The agent must use the approved `--budget`. Zero net-new work needs no spend approval and advances from cache. |
 | Retarget hydration cache misses | Disclose the RapidAPI calls and get approval. |
 | Modal indexing | Disclose the merged-CSV upload and expected quiet runtime, then get approval. |
 
@@ -289,7 +309,7 @@ The browser state token includes:
 - enrichment status, freshness, approval freshness, counts, and update time;
 - review stage, status, completed stages, and update time.
 
-Any change to those families is visible on the next five-second browser poll.
+Any change to those families is visible on the next one-second browser poll.
 
 This gives repeatability without a ledger:
 
@@ -391,6 +411,7 @@ Not every request needs the full workflow:
 | Canonical parents | [`build_parents.py`](../primitives/deep_context/build_parents.py) |
 | Worth and attached-LinkedIn judge | [`reconcile_linkedin.py`](../primitives/deep_context/reconcile_linkedin.py) |
 | Review UI and deterministic status | [`reconcile_review_web.py`](../primitives/deep_context/reconcile_review_web.py) |
+| Same-thread Codex wake bridge | [`review_agent_bridge.py`](../primitives/deep_context/review_agent_bridge.py) |
 | Parallel enrichment | [`reconcile_deep_research.py`](../primitives/deep_context/reconcile_deep_research.py) |
 | No-LinkedIn research cards | [`assemble_synthetic_profile.py`](../primitives/deep_context/assemble_synthetic_profile.py) |
 | Retarget hydration | [`apply_retargets.py`](../primitives/deep_context/apply_retargets.py) |

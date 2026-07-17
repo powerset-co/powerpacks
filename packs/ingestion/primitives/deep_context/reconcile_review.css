@@ -359,54 +359,55 @@ h1 {
   line-height: 1.4;
 }
 
-.dossier-text {
-  max-height: 320px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  touch-action: pan-y;
-  -webkit-overflow-scrolling: touch;
-  margin: 0 0 16px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--background);
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.dossier-text > :first-child { margin-top: 0; }
-.dossier-text > :last-child { margin-bottom: 0; }
-.dossier-text h3,
-.dossier-text h4,
-.dossier-text h5,
-.dossier-text h6 {
-  margin: 20px 0 8px;
-  color: var(--foreground);
-  font-size: 14px;
-  line-height: 1.35;
-}
-.dossier-text h3 { font-size: 17px; }
-.dossier-text p { margin: 8px 0; }
-.dossier-text ul,
-.dossier-text ol { margin: 8px 0; padding-left: 22px; }
-.dossier-text li + li { margin-top: 4px; }
+/* The dossier preview (Summary / Timeline) renders as dt/dd rows in the SAME
+   section style as Contact / Match signal — no inset box. The dl grid comes
+   from .details dl / .row-facts; these rules only tidy the dd content. */
+.dossier-text { margin: 0; }
+.dossier-text p { margin: 0 0 6px; }
+.dossier-text p:last-child { margin-bottom: 0; }
 .dossier-text strong { color: var(--foreground); }
-.dossier-text a { color: var(--primary); text-underline-offset: 3px; }
-.dossier-text code {
-  padding: 2px 5px;
-  border-radius: 4px;
-  background: var(--secondary);
+
+/* Work / Education / Timeline bullet lists inside dd cells. */
+.fact-list { margin: 0; padding-left: 18px; }
+.fact-list li + li { margin-top: 4px; }
+.show-more {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.show-more:hover { text-decoration: underline; }
+
+/* Cache-only profile state: passive pointer at the offline prefetch stage. */
+.profile-note { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
+
+/* Debug-only queue carousel (?debug=1): arrows flanking the card. */
+.linkedin-stage,
+.carousel-shell { position: relative; }
+.carousel-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 6;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--card);
   color: var(--foreground);
-  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
 }
-.dossier-text blockquote {
-  margin: 12px 0;
-  padding-left: 12px;
-  border-left: 2px solid var(--primary);
-}
-.dossier-text hr { margin: 20px 0; border: 0; border-top: 1px solid var(--border); }
+.carousel-nav:hover { background: var(--secondary); }
+.carousel-prev { left: 10px; }
+.carousel-next { right: 10px; }
 
 .identity-eyebrow { margin-bottom: 18px; }
 
@@ -462,9 +463,11 @@ h1 {
 .roles { margin: 20px 0 0; padding-left: 20px; color: var(--foreground); font-size: 13px; line-height: 1.7; }
 .education { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
 
+.alternate { padding-top: 14px; }
 .linkedin-fix-form { padding: 4px 0 2px; }
 .linkedin-fix-form label { display: block; margin-bottom: 8px; color: var(--foreground); font-size: 12px; font-weight: 700; }
 .linkedin-fix-form > div { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.synthetic-correction .use-profile { margin-bottom: 16px; }
 .synthetic-correction .question { margin-bottom: 12px; }
 .sr-only {
   position: absolute;
@@ -479,6 +482,8 @@ h1 {
 }
 .alternate-skip {
   display: flex;
+  align-items: center;
+  justify-content: center;
   width: auto;
   min-height: 36px;
   margin: 6px 0 0 auto;
@@ -676,6 +681,10 @@ input::placeholder { color: var(--muted); }
   background: var(--primary);
   transition: width 240ms ease;
 }
+.enrich-progress.is-indeterminate .enrich-progress-fill {
+  width: 34%;
+  animation: agent-handoff 900ms ease-in-out infinite;
+}
 .enrich-state .button { min-width: 180px; margin-top: 28px; }
 .progress-spinner {
   width: 52px;
@@ -686,10 +695,19 @@ input::placeholder { color: var(--muted); }
   animation: spin 800ms linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes agent-handoff {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(305%); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
   .progress-spinner { animation: none; border-color: var(--border); border-top-color: var(--primary); }
+  .enrich-progress.is-indeterminate .enrich-progress-fill {
+    width: 100%;
+    animation: none;
+    opacity: 0.65;
+  }
 }
 
 .rejected-list {
@@ -876,11 +894,15 @@ details.decision-row.leaving {
   body[data-stage="linkedin"] .identity-eyebrow { margin-bottom: 12px; }
   body[data-stage="worth"] .details,
   body[data-stage="linkedin"] .details { margin-top: 14px; }
-  body[data-stage="worth"] .dossier-text,
-  body[data-stage="linkedin"] .dossier-text {
-    max-height: none;
-    overflow: visible;
-    margin-bottom: 0;
+  body[data-stage="worth"] .carousel-shell {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  body[data-stage="worth"] .carousel-shell > :last-child {
+    flex: 1;
+    min-height: 0;
   }
 
   body[data-stage="worth"] .identity-decision,
