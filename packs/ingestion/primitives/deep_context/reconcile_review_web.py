@@ -1940,9 +1940,31 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
     return True  # attached link, nothing cached -> surface the prefetch note
 
 
-def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
+def render_linkedin_card(parent: dict[str, Any],
+                         candidates: dict[str, Any] | list[dict[str, Any]],
                          parents_dir: Path, dossier_dir: Path,
                          profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+    """One review card for a parent's pending LinkedIn candidate(s).
+
+    A single candidate (the overwhelming common case — every normal person) renders
+    EXACTLY as before via ``_render_single_linkedin_card``. A merged parent with more
+    than one pending candidate — e.g. two synthetic profiles for the same person after
+    a later cluster_merge — renders ONE card ("show the parent, not the children"): the
+    person once, then the candidate profiles as a selectable option list. Picking one
+    resolves the whole parent (the /decide endpoint keeps the pick and withdraws the
+    siblings)."""
+    cand_list = [candidates] if isinstance(candidates, dict) else list(candidates)
+    if len(cand_list) <= 1:
+        candidate = cand_list[0] if cand_list else {}
+        return _render_single_linkedin_card(
+            parent, candidate, parents_dir, dossier_dir, profile_cache_dir)
+    return _render_multi_linkedin_card(
+        parent, cand_list, parents_dir, dossier_dir, profile_cache_dir)
+
+
+def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
+                                 parents_dir: Path, dossier_dir: Path,
+                                 profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
     name = str(parent.get("name") or candidate.get("full_name") or "this person")
     synthetic = bool(candidate.get("synthetic"))
     cache_miss = _hydrate_card_profile(candidate, profile_cache_dir)
@@ -2009,6 +2031,103 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
                   data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
         </div>
         <div class='alternate' id='fix-section-{esc(candidate.get('pub'))}' hidden>
+          {fix_form}
+        </div>
+      </div>
+    </article>"""
+
+
+def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
+                     profile_cache_dir: Path) -> str:
+    """One selectable profile option inside a multi-candidate parent card.
+
+    Shows the candidate's own profile summary/headline/View-LinkedIn (a synthetic row
+    has no real LinkedIn header) and its own "Use this profile" action keyed on that
+    option's pub. Picking it resolves the whole parent."""
+    _hydrate_card_profile(candidate, profile_cache_dir)
+    pub = str(candidate.get("pub") or "")
+    synthetic = bool(candidate.get("synthetic"))
+    option_name = str(candidate.get("full_name") or parent.get("name") or "")
+    if synthetic:
+        link = ""
+        headline = ""
+    else:
+        url = str(candidate.get("url") or "")
+        link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
+                "<span aria-hidden='true'>↗</span></a>") if url else ""
+        headline = str(candidate.get("headline") or "")
+    summary = (str(candidate.get("simple_summary") or "").strip()
+               or _display_reason(str(candidate.get("reason") or "")))
+    location = str(candidate.get("location") or "")
+    profile_rows = profile_fact_rows(candidate)
+    rows: list[str] = []
+    if summary:
+        rows.append(f"<div><dt>Summary</dt><dd>{esc(summary)}</dd></div>")
+    body = f"<dl>{''.join(rows + profile_rows)}</dl>" if (rows or profile_rows) else ""
+    return f"""
+      <li class='linkedin-option' data-linkedin-option>
+        <div class='profile-card'>
+          {_avatar(parent, candidate, small=True)}
+          <div class='profile-copy'>
+            <h3>{esc(option_name)}</h3>
+            {link}
+            {f"<p>{esc(headline)}</p>" if headline else ""}
+            {f"<span>{esc(location)}</span>" if location else ""}
+          </div>
+        </div>
+        {body}
+        <button class='button button-primary' data-decide='keep'
+                data-pub='{esc(pub)}' data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
+      </li>"""
+
+
+def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[str, Any]],
+                                parents_dir: Path, dossier_dir: Path,
+                                profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+    """ONE card for a merged parent offering N candidate profiles as options.
+
+    The person is shown ONCE (name/avatar/merged Summary/Relationship/Timeline), then the
+    candidate profiles as a selectable option list. A shared "None of these" opens the
+    add-LinkedIn fix form and "Skip" detaches; either is keyed on the parent's primary
+    candidate so the existing single-pub /decide semantics still apply. Picking any one
+    option resolves the whole parent (siblings are withdrawn server-side)."""
+    name = str(parent.get("name") or "this person")
+    primary = candidates[0]
+    identifiers = dossier_identifiers(
+        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
+    options = "".join(
+        _linkedin_option(parent, cand, profile_cache_dir) for cand in candidates)
+    # The person header + merged context appears once; the per-option profiles follow.
+    scroll_content = f"""
+        <div class='profile-card'>
+          {_avatar(parent, primary)}
+          <div class='profile-copy'><h2>{esc(name)}</h2></div>
+        </div>
+        {_details(parent, primary, identity=True, identifiers=identifiers)}
+        <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
+        <ul class='linkedin-options'>{options}</ul>"""
+    # "None of these" / Skip act on the parent via its primary candidate's pub, reusing
+    # the existing fix-form + detach paths unchanged.
+    fix_form = f"""<form class='linkedin-fix-form' data-fix-form
+          data-pub='{esc(primary.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
+        <label class='sr-only' for='fix-{esc(primary.get('pub'))}'>LinkedIn URL</label>
+        <div><input id='fix-{esc(primary.get('pub'))}' name='new_url' inputmode='url'
+          autocomplete='url' placeholder='linkedin.com/in/…' required>
+        <button class='button button-outline' type='submit'>Use this</button></div>
+      </form>
+      <button class='button button-ghost alternate-skip' data-decide='detach'
+              data-toast='Skipped' data-pub='{esc(primary.get('pub'))}'
+              data-parent='{esc(parent.get('slug'))}'>Skip</button>"""
+    return f"""
+    <article class='decision-card identity-card identity-card-multi' data-card
+             data-parent='{esc(parent.get('slug'))}' data-multi-option>
+      {_scroll_region(scroll_content)}
+      <div class='identity-decision'>
+        <div class='binary-actions'>
+          <button class='button button-outline' data-open-fix aria-expanded='false'
+                  aria-controls='fix-section-{esc(primary.get('pub'))}'>None of these</button>
+        </div>
+        <div class='alternate' id='fix-section-{esc(primary.get('pub'))}' hidden>
           {fix_form}
         </div>
       </div>
@@ -2278,12 +2397,19 @@ def _enrichment_note(enrichment: dict[str, Any] | None) -> str:
 
 def linkedin_review_queue(
     parents: list[dict[str, Any]],
-) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Stable flattened queue of every pending LinkedIn candidate."""
-    queue: list[tuple[dict[str, Any], dict[str, Any]]] = []
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    """Stable queue of ONE entry per parent that still needs an identity decision,
+    carrying ALL of that parent's pending candidates.
+
+    A merged parent with N pending candidates (e.g. two synthetic profiles for the
+    same person) is ONE card offering N options — the queue and the header/tab counts
+    are per-parent, never per-candidate ("show the parent, not the children")."""
+    queue: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     ordered = sorted(parents, key=lambda parent: str(parent.get("name") or "").lower())
     for parent in ordered:
-        queue.extend((parent, candidate) for candidate in pending_linkedin_candidates(parent))
+        pending = pending_linkedin_candidates(parent)
+        if pending:
+            queue.append((parent, pending))
     return queue
 
 
@@ -2313,13 +2439,16 @@ def linkedin_cards_payload(
     limit = max(1, min(limit, 50))
     window = queue[offset:offset + limit]
     cards = []
-    for parent, candidate in window:
-        pub = str(candidate.get("pub") or "").strip().lower()
+    for parent, pending in window:
         parent_slug = str(parent.get("slug") or "")
+        # The buffer-card wraps ONE parent; it is keyed on data-parent (a parent may carry
+        # several options each with its own pub). data-pub keeps the primary pub for the
+        # single-candidate case so nothing about normal cards changes.
+        pub = str((pending[0] if pending else {}).get("pub") or "").strip().lower()
         cards.append(
             "<div class='linkedin-buffer-card' data-linkedin-buffer-card "
             f"data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
-            f"{render_linkedin_card(parent, candidate, parents_dir, dossier_dir, profile_cache_dir)}</div>"
+            f"{render_linkedin_card(parent, pending, parents_dir, dossier_dir, profile_cache_dir)}</div>"
         )
     return {
         "offset": offset,
@@ -2334,14 +2463,15 @@ def linkedin_cards_payload(
 
 
 def _profile_miss_count(
-    queue: list[tuple[dict[str, Any], dict[str, Any]]],
+    queue: list[tuple[dict[str, Any], list[dict[str, Any]]]],
     profile_cache_dir: Path,
 ) -> int:
     """How many queue cards have an attached link but no cached profile at all
-    (the population the offline prefetch stage would fetch)."""
+    (the population the offline prefetch stage would fetch). A card counts once even
+    if several of its options miss the cache."""
     return sum(
-        1 for _, candidate in queue
-        if _hydrate_card_profile(candidate, profile_cache_dir)
+        1 for _, pending in queue
+        if any(_hydrate_card_profile(candidate, profile_cache_dir) for candidate in pending)
     )
 
 
@@ -2362,9 +2492,9 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
 
     if debug and queue:
         index %= len(queue)
-        parent, candidate = queue[index]
+        parent, pending = queue[index]
         body = render_linkedin_card(
-            parent, candidate, parents_dir, dossier_dir, profile_cache_dir)
+            parent, pending, parents_dir, dossier_dir, profile_cache_dir)
         return (
             f"<div class='linkedin-stage' data-queue-index='{index}' "
             f"data-queue-total='{len(queue)}'>{note}{_carousel_nav()}{body}</div>"
@@ -2934,22 +3064,38 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         target_candidate["approved"] = result["approved"]
                         target_candidate["new_url"] = result.get("new_url", "")
 
-                    # One affirmative answer resolves a multi-match person: other
-                    # still-pending LinkedIns are link-level No decisions, never person rejects.
+                    # One affirmative answer resolves a multi-match person: every OTHER
+                    # still-pending option on this parent is withdrawn as a link-level No
+                    # decision (never a person reject), so picking one option resolves the
+                    # whole parent and it does not reappear. A synthetic sibling's gate lives
+                    # in synthetic-people.csv, so it is withdrawn through its approve gate; a
+                    # real-LinkedIn sibling is detached in review.csv exactly as before.
                     resolved_pubs = [pub_lower]
                     if decision in {"keep", "fix"}:
                         for sibling in target_parent.get("candidates") or []:
                             sibling_pub = str(sibling.get("pub") or "").strip().lower()
-                            if (sibling_pub and sibling_pub != pub_lower
-                                    and not sibling.get("synthetic")
-                                    and candidate_state(sibling) == "review"):
+                            if not sibling_pub or sibling_pub == pub_lower:
+                                continue
+                            sibling_approved = str(sibling.get("approved") or "").strip().lower()
+                            if sibling.get("synthetic"):
+                                # A synthetic option is pending unless the user already gated it
+                                # (auto == still pending, matching pending_linkedin_candidates).
+                                if sibling_approved in {"yes", "no"}:
+                                    continue
+                                apply_synthetic_decision(synthetic_path, sibling_pub, "detach")
+                                sibling["action"] = "verify"
+                                sibling["approved"] = "no"
+                                sibling["new_url"] = ""
+                            else:
+                                if candidate_state(sibling) != "review":
+                                    continue
                                 apply_decision(
                                     review_path, verdicts_path, sibling_pub, "detach", "",
                                     confirm_threshold, detach_threshold)
                                 sibling["action"] = "detach"
                                 sibling["approved"] = "yes"
                                 sibling["new_url"] = ""
-                                resolved_pubs.append(sibling_pub)
+                            resolved_pubs.append(sibling_pub)
 
                     accept_local_write()
                     current_parents = cached_parents

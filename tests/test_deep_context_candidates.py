@@ -2881,6 +2881,171 @@ class TestLiveEndpoints(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 409)
 
 
+class TestMultiOptionLinkedinCard(unittest.TestCase):
+    """A merged parent with N pending candidates renders ONE card offering N options
+    ("show the parent, not the children"); a single-candidate parent is unchanged."""
+
+    def _synth_parent(self, name: str, options: list[dict]) -> dict:
+        return {"slug": f"synthetic-{options[0]['pub']}", "name": name,
+                "dossier_slug": "", "person_ids": [o["pub"] for o in options],
+                "sources": ["gmail"], "candidates": options}
+
+    def _synth_option(self, pub: str, name: str, *, headline: str = "",
+                      reason: str = "researched profile") -> dict:
+        return {"pub": pub, "url": "", "full_name": name, "headline": headline,
+                "profile_pic_url": "", "experiences": [], "education": [],
+                "location": "", "has_profile": True, "verdict": "synthetic",
+                "confidence": 0.6, "supporting": [], "contradicting": [],
+                "reason": reason, "plausibly_absent": False, "recommend_dr": False,
+                "match_emails": [], "match_phones": [], "conflict": False,
+                "synthetic": True, "action": "verify", "approved": "",
+                "new_url": "", "llm_reject": "", "llm_reject_confidence": "",
+                "llm_reject_reason": ""}
+
+    def test_queue_is_one_entry_per_parent_carrying_all_pending(self):
+        one = self._synth_parent("Solo Person", [self._synth_option("synth-solo", "Solo Person")])
+        merged = self._synth_parent("Lukas Kroc", [
+            self._synth_option("synth-aaa", "Lukas Kroc"),
+            self._synth_option("synth-bbb", "Lukas Kroc")])
+        queue = web.linkedin_review_queue([one, merged])
+        self.assertEqual(len(queue), 2)                              # 2 cards, not 3
+        by_name = {p["name"]: pending for p, pending in queue}
+        self.assertEqual(len(by_name["Solo Person"]), 1)
+        self.assertEqual(len(by_name["Lukas Kroc"]), 2)             # Lukas: 1 entry, 2 options
+
+    def test_single_candidate_card_is_byte_identical(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = self._synth_parent("Solo Person",
+                                        [self._synth_option("synth-solo", "Solo Person")])
+            candidate = parent["candidates"][0]
+            # Passing a bare dict (legacy) and a one-element list must produce the
+            # SAME bytes as the extracted single-card renderer.
+            direct = web._render_single_linkedin_card(parent, dict(candidate), base, base)
+            as_dict = web.render_linkedin_card(parent, dict(candidate), base, base)
+            as_list = web.render_linkedin_card(parent, [dict(candidate)], base, base)
+        self.assertEqual(as_dict, direct)
+        self.assertEqual(as_list, direct)
+        self.assertNotIn("linkedin-options", as_dict)               # no multi markup leaks in
+
+    def test_multi_candidate_card_shows_one_person_two_options(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = self._synth_parent("Lukas Kroc", [
+                self._synth_option("synth-aaa", "Lukas Kroc", reason="Prague consultant"),
+                self._synth_option("synth-bbb", "Lukas Kroc", reason="Palo Alto engineer")])
+            html = web.render_linkedin_card(parent, parent["candidates"], base, base)
+        self.assertIn("identity-card-multi", html)
+        self.assertIn("linkedin-options", html)
+        # Both options are offered, each with its own "Use this profile" keyed on its pub.
+        self.assertEqual(html.count("data-decide='keep'"), 2)
+        self.assertIn("data-pub='synth-aaa'", html)
+        self.assertIn("data-pub='synth-bbb'", html)
+        # The person's H1 name is shown once (options use H3).
+        self.assertEqual(html.count("<h2>Lukas Kroc</h2>"), 1)
+        # A shared "None of these" opens the fix form + Skip detaches.
+        self.assertIn("None of these", html)
+        self.assertIn("data-decide='detach'", html)
+
+
+class TestMultiOptionDecideResolvesParent(unittest.TestCase):
+    """Live /decide over a merged all-synthetic parent (Lukas): picking one option
+    approves it and withdraws the sibling so the parent is fully resolved in one action."""
+
+    PID_A = "candidate:email:lukas.kroc@example.com"
+    PID_B = "candidate:email:lukas@brainoft.example.com"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        base = Path(self._tmp.name)
+        self.verdicts = base / "verdicts.jsonl"
+        self.verdicts.write_text("", encoding="utf-8")     # no LinkedIn verdicts; all synthetic
+        self.review = base / "review.csv"
+        reconcile._write_override_rows(self.review, {})
+        self.facts = base / "facts"
+        self.facts.mkdir()
+        self.people = base / "people.csv"
+        self.people.write_text("id,public_identifier\n", encoding="utf-8")
+        self.manifest = base / "review" / "manifest.json"
+        self.enrichment = base / "deep-research" / "manifest.json"
+        # Two synthetic rows for the SAME person, both pending (approved=auto == pending).
+        self.synthetic = base / "synthetic-people.csv"
+        columns = ["id", "public_identifier", "full_name", "enrichment_provider",
+                   "approved", "source_parent_slug", "source_person_ids",
+                   "source_candidate_public_identifier"]
+        with self.synthetic.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=columns)
+            writer.writeheader()
+            writer.writerow({"id": self.PID_A, "public_identifier": "synth-aaa",
+                             "full_name": "Lukas Kroc", "enrichment_provider": "synthetic",
+                             "approved": "auto", "source_parent_slug": "lukas-kroc-parent34",
+                             "source_person_ids": json.dumps([self.PID_A]),
+                             "source_candidate_public_identifier": self.PID_A})
+            writer.writerow({"id": self.PID_B, "public_identifier": "synth-bbb",
+                             "full_name": "Lukas Kroc", "enrichment_provider": "synthetic",
+                             "approved": "auto", "source_parent_slug": "lukas-kroc-parent58",
+                             "source_person_ids": json.dumps([self.PID_B]),
+                             "source_candidate_public_identifier": self.PID_B})
+        # index.json folds BOTH children under one current parent (post cluster_merge).
+        common.write_json(base / "index.json", {
+            "parents": {"lukas-kroc-parent06": {"children": ["c-a", "c-b"],
+                                                "name": "Lukas Kroc", "needs_review": []}},
+            "slugs": {"c-a": {"name": "Lukas Kroc", "person_id": self.PID_A},
+                      "c-b": {"name": "Lukas Kroc", "person_id": self.PID_B}}})
+        self._pools = mock.patch.object(candidates, "CANDIDATE_CSVS", [])
+        self._pools.start()
+        handler = web.make_handler(self.review, self.verdicts, base / "parents",
+                                   base / "dossiers", 0.7, 0.85,
+                                   synthetic_path=self.synthetic, facts_dir=self.facts,
+                                   people_csv=self.people, manifest_path=self.manifest,
+                                   enrichment_manifest_path=self.enrichment)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.port = self.server.server_address[1]
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self._pools.stop()
+        self._tmp.cleanup()
+
+    def _post(self, path: str, **form) -> dict:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}",
+            data=urllib.parse.urlencode(form).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read())
+
+    def _parents(self) -> list[dict]:
+        return web._all_review_parents(
+            self.verdicts, self.review, self.synthetic, self.facts, self.people,
+            Path(self._tmp.name) / "parents", Path(self._tmp.name) / "dossiers",
+            Path(self._tmp.name) / "cache", index_json=Path(self._tmp.name) / "index.json")
+
+    def test_queue_counts_the_parent_once_not_each_candidate(self):
+        (parent,) = self._parents()                                # collapsed to one parent
+        self.assertEqual(len(web.pending_linkedin_candidates(parent)), 2)
+        queue = web.linkedin_review_queue(self._parents())
+        self.assertEqual(len(queue), 1)                            # ONE linkedin card for Lukas
+        progress = web.review_progress(self._parents())
+        self.assertEqual(progress["linkedin_pending"], 1)         # counts parents, not candidates
+
+    def test_pick_one_option_resolves_parent_and_withdraws_sibling(self):
+        result = self._post("/decide", pub="synth-aaa", decision="keep",
+                            parent_slug="synthetic-synth-aaa")
+        # The picked synthetic is approved; the sibling is withdrawn in one action.
+        self.assertIn("synth-aaa", result["resolved_pubs"])
+        self.assertIn("synth-bbb", result["resolved_pubs"])
+        with self.synthetic.open(newline="", encoding="utf-8") as fh:
+            rows = {r["public_identifier"]: r["approved"] for r in csv.DictReader(fh)}
+        self.assertEqual(rows["synth-aaa"], "yes")                 # kept
+        self.assertEqual(rows["synth-bbb"], "no")                  # sibling withdrawn
+        # The parent no longer needs an identity decision -> it does not reappear.
+        self.assertEqual(result["progress"]["linkedin_pending"], 0)
+        self.assertEqual(web.linkedin_review_queue(self._parents()), [])
+
+
 class TestReadinessCandidateCounts(unittest.TestCase):
     def test_counts_per_source_and_with_dossiers(self):
         with tempfile.TemporaryDirectory() as d:

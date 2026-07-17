@@ -463,6 +463,19 @@ h1 {
 .roles { margin: 20px 0 0; padding-left: 20px; color: var(--foreground); font-size: 13px; line-height: 1.7; }
 .education { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
 
+/* Multi-candidate parent card: one person, several selectable profile options. */
+.linkedin-options-intro { margin: 18px 0 10px; color: var(--muted); font-size: 13px; font-weight: 700; }
+.linkedin-options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.linkedin-option {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--background);
+}
+.linkedin-option .profile-copy h3 { margin: 0; font-size: 17px; }
+.linkedin-option dl { margin: 10px 0 0; }
+.linkedin-option .button-primary { margin-top: 12px; width: 100%; }
+
 .alternate { padding-top: 14px; }
 .linkedin-fix-form { padding: 4px 0 2px; }
 .linkedin-fix-form label { display: block; margin-bottom: 8px; color: var(--foreground); font-size: 12px; font-weight: 700; }
