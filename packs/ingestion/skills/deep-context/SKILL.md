@@ -79,6 +79,7 @@ Create a visible plan with these exact phases and keep it current:
 [Match] Confirm imported LinkedIn matches the person
 [Match] Preview and approve one lookup for Added candidates and eligible wrong links
 [Match] Assemble researched profiles without LinkedIn
+[LinkedIn] Preview and approve profile prefetch
 [LinkedIn] Review LinkedIn profiles we found for network
 [LinkedIn] Disconnect the review bridge
 [Match] Apply approved replacement LinkedIns
@@ -342,6 +343,28 @@ fallback profiles for researched Yes people with no real LinkedIn:
 ```bash
 bin/deep-context assemble-synthetic
 ```
+
+Before telling the user to click Continue into LinkedIn review, complete the
+explicit profile-prefetch task. Start with its free preview:
+
+```bash
+bin/deep-context profile-prefetch
+```
+
+Report queue links, uncached profiles, cached profiles missing summaries,
+estimated RapidAPI calls, and the OpenAI summary cost range. If both miss counts
+are zero, mark the task complete as a no-op. Otherwise disclose that `--fetch`
+calls RapidAPI for uncached LinkedIns and OpenAI for missing two-sentence profile
+summaries, get fresh approval, then run:
+
+```bash
+bin/deep-context profile-prefetch --fetch
+```
+
+Report fetched/cached/failed and summarized/failed counts. Complete this task
+before LinkedIn review even when the preceding action was a same-thread bridge
+wake for `assemble_synthetic`; do not fall through to the Continue wait first.
+The review UI remains cache-only and never calls either provider itself.
 
 The lookup wrapper and its provider child continuously overwrite the fixed
 enrichment manifest with `needs_approval`, `running`, `research_complete`,

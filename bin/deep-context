@@ -45,6 +45,8 @@ usage: bin/deep-context <command> [args]
   review-status  read manifests/CSVs and print the exact next workflow action
   assemble-synthetic  build synthetic people-rows from deep-research output for
                people with NO real LinkedIn (free, local; approved rows merge)
+  profile-prefetch  preview/fetch cached profiles for LinkedIn review
+               (default dry run; --fetch spends RapidAPI + OpenAI)
   rejudge      re-run synthesis worth for every message-backed dossier, ignoring
                cached machine/human decisions (spends OpenAI; try --dry-run first).
                Human network_worth cells remain untouched; LinkedIn is never evidence.
@@ -137,6 +139,11 @@ case "$cmd" in
     # A legacy approved=auto value is only machine advice in the staged flow; every
     # candidate-origin row still waits for explicit Yes/No in the LinkedIn UI.
     "${PY[@]}" "$PKG.assemble_synthetic_profile" "$@"
+    ;;
+  profile-prefetch)
+    # Cache-only LinkedIn review is prepared by this explicit task. Default is a
+    # free preview; --fetch crosses the RapidAPI + OpenAI approval boundary.
+    "${PY[@]}" "$PKG.prefetch_profiles" "$@"
     ;;
   rejudge|re-review)
     # The old re-review alias is kept for scripts, but now uses the sole worth judge:

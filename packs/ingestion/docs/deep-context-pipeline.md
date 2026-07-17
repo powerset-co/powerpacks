@@ -162,6 +162,7 @@ button and cannot be blocked by the Done page.
 | People review | Shows only model Maybe contacts in the main binary queue. The paginated Yes and No tables remain editable. Finishing the last Maybe completes the People gate and moves directly to an animated agent-handoff state on Enrich Contacts. | Updated `review.csv` and `review/manifest.json` |
 | Enrichment preview and approval | Builds one queue from the current effective-Yes selection plus eligible wrong-link recovery. It reports gross eligible people, completed-result reuse, duplicate handles, net-new submissions, and the exact estimate. A positive estimate requires the UI's inert approval record; zero net-new work automatically continues from cache without an approval button. | `research_queue.csv` and enrichment `manifest.json` |
 | Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
+| Profile prefetch | Before LinkedIn review, the agent runs `bin/deep-context profile-prefetch`, reports uncached profiles and missing summaries, gets fresh RapidAPI/OpenAI approval when work remains, then runs `--fetch`. The UI stays cache-only. | Shared profile cache and `profile-prefetch/manifest.json` |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
 | Realization | Approved replacement URLs are hydrated cache-first, then fan-in reapplies worth, identity, retarget, and consolidation decisions to the fixed merged people CSV. | `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
@@ -424,5 +425,6 @@ Not every request needs the full workflow:
 | Same-thread Codex wake bridge | [`review_agent_bridge.py`](../primitives/deep_context/review_agent_bridge.py) |
 | Parallel enrichment | [`reconcile_deep_research.py`](../primitives/deep_context/reconcile_deep_research.py) |
 | No-LinkedIn research cards | [`assemble_synthetic_profile.py`](../primitives/deep_context/assemble_synthetic_profile.py) |
+| LinkedIn review profile prefetch | [`prefetch_profiles.py`](../primitives/deep_context/prefetch_profiles.py) |
 | Retarget hydration | [`apply_retargets.py`](../primitives/deep_context/apply_retargets.py) |
 | Fan-in realization | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |
