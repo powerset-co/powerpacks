@@ -342,16 +342,9 @@ h1 {
   border-top: 1px solid var(--border);
 }
 
-.details-heading {
-  margin: 0;
-  min-height: 46px;
-  display: flex;
-  align-items: center;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.4;
-}
+/* The card's contact facts + dossier preview render without section labels;
+   this keeps the spacing the old "Details" heading used to provide. */
+.details-body { padding-top: 14px; }
 
 .details dl { margin: 0 0 16px; }
 .details dl > div { display: grid; grid-template-columns: 110px 1fr; gap: 16px; padding: 8px 0; }
@@ -599,7 +592,8 @@ input::placeholder { color: var(--muted); }
   grid-template-columns: 40px minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 16px;
-  padding: 8px 16px;
+  position: relative; /* anchors the left-edge chevron */
+  padding: 8px 16px 8px 44px;
   cursor: pointer;
   list-style: none;
 }
@@ -625,16 +619,21 @@ input::placeholder { color: var(--muted); }
 }
 .decision-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .decision-row-actions .button { width: 64px; min-height: 44px; padding: 0 12px; }
+/* Left-edge chevron: the expand/collapse affordance. Points right when
+   collapsed, down when expanded. */
 .decision-row-caret {
+  position: absolute;
+  left: 18px;
+  top: 50%;
   width: 8px;
   height: 8px;
   border-right: 2px solid var(--muted);
   border-bottom: 2px solid var(--muted);
-  transform: translateY(-2px) rotate(45deg);
+  transform: translateY(-50%) rotate(-45deg);
   transition: transform .15s ease;
 }
-.decision-row[open] .decision-row-caret { transform: translateY(2px) rotate(225deg); }
-.decision-row-detail { padding: 2px 16px 18px 72px; }
+.decision-row[open] .decision-row-caret { transform: translateY(-50%) rotate(45deg); }
+.decision-row-detail { padding: 2px 16px 18px 100px; }
 .row-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .row-facts { margin: 0 0 14px; }
 .row-facts > div { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 5px 0; }
@@ -651,6 +650,18 @@ input::placeholder { color: var(--muted); }
 .decision-empty { height: 100%; min-height: 0; }
 
 .enrich-state { height: 100%; min-height: 380px; }
+
+/* Passive LinkedIn-stage status line while enrichment is incomplete — purely
+   informational, never blocks or overlays the review cards. */
+.enrichment-note {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
 .enrich-progress {
   width: min(100%, 360px);
   height: 8px;
@@ -703,32 +714,12 @@ input::placeholder { color: var(--muted); }
 .rejected-row > div > span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .more { padding: 12px 16px; color: var(--muted); font-size: 12px; }
 
-.pagination {
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-
-.page-link,
-.page-ellipsis {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.page-link { border: 1px solid var(--border); }
-.page-link:hover { border-color: var(--input); color: var(--foreground); }
-.page-link.active { border-color: var(--primary); background: var(--primary); color: white; }
-.page-direction { width: auto; min-width: 84px; padding: 0 12px; }
-.page-link.disabled { cursor: default; opacity: .35; }
+/* Infinite-scroll decision list: parked off-screen chunks are replaced by
+   exact-height spacers, so the browser's own scroll anchoring must not also
+   compensate for the DOM swaps. */
+[data-decision-list] { overflow-anchor: none; }
+.virtual-spacer { display: block; height: 0; border: 0; padding: 0; margin: 0; }
+.decision-loading { padding: 12px 16px; color: var(--muted); font-size: 12px; text-align: center; }
 
 @media (max-width: 620px) {
   .decision-row {
@@ -744,24 +735,6 @@ input::placeholder { color: var(--muted); }
   }
 
   .decision-row-actions .button { width: 52px; padding-inline: 8px; }
-
-  .page-boundary:not(.active),
-  .page-far:not(.active),
-  .page-ellipsis { display: none; }
-
-  .page-direction {
-    width: 44px;
-    min-width: 44px;
-    padding: 0;
-    overflow: hidden;
-    font-size: 0;
-  }
-
-  .page-direction::after { font-size: 20px; line-height: 1; }
-  .page-direction[rel='prev']::after,
-  .page-direction:first-child::after { content: '‹'; }
-  .page-direction[rel='next']::after,
-  .page-direction:last-child::after { content: '›'; }
 }
 
 .toast {
@@ -786,6 +759,16 @@ input::placeholder { color: var(--muted); }
 .toast.show { transform: translate(-50%, 0); opacity: 1; }
 .toast.error { background: var(--error); color: #1a1614; }
 .stage.leaving { transform: translateY(-5px); opacity: 0; transition: opacity 160ms ease, transform 160ms ease; }
+
+/* Optimistic decisions: the card/row animates out immediately while the POST
+   runs in the background; on failure the class is removed and it animates back. */
+.decision-card.leaving,
+details.decision-row.leaving {
+  opacity: 0;
+  transform: translateY(-5px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
 
 @media (min-width: 621px) and (min-height: 600px) {
   body[data-stage="worth"] main,

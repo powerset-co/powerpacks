@@ -696,6 +696,12 @@ def _verdict(verdict, conf, **kw):
             "recommend_deep_research": kw.get("dr", False), "reason": kw.get("reason", "")}
 
 
+def _rows_by_pub(path: Path) -> dict[str, dict[str, str]]:
+    """Read an override/review CSV into a {public_identifier: row} map (closing the file)."""
+    with path.open(newline="", encoding="utf-8") as fh:
+        return {r["public_identifier"]: r for r in csv.DictReader(fh)}
+
+
 class TestReconcileLinkedIn(unittest.TestCase):
     """Phase 3: verify each parent's attached LinkedIn (pairing, apply, queue, inject)."""
 
@@ -1546,6 +1552,310 @@ class TestReconcileDeepResearch(unittest.TestCase):
             "https://www.linkedin.com/in/right-person",
         )
         self.assertEqual(dresearch._find_reason(profile), f"deep research: {notes}")
+
+
+class TestJudgedResearchProposals(unittest.TestCase):
+    """A deep-research retarget carries its OWN confidence and is JUDGED before it lands, so a
+    guess the research could not verify doesn't stick silently. Mirrors Eugene Wang: a Gmail-only
+    contact whose paid research guessed a namesake LinkedIn at low confidence, admitting it could
+    not verify the address. All fictional (example.com) — no live LLM/network."""
+
+    def _research_json(self, out_dir: Path, handle: str, profile: dict) -> None:
+        (out_dir / handle).mkdir(parents=True, exist_ok=True)
+        (out_dir / handle / "01_research_parallel.json").write_text(
+            json.dumps(profile), encoding="utf-8")
+
+    def _facts(self, facts_dir: Path, pid: str, name: str, **over) -> None:
+        facts_dir.mkdir(parents=True, exist_ok=True)
+        facts = {"canonical_name": name, "aliases": [], "employers": [], "title": "",
+                 "school": "", "field_of_study": "", "location": "", "relationship_to_owner": "friend",
+                 "topics": [], "notable_events": [], "identifiers": [], "shared_context": [],
+                 "confidence": 0.8}
+        facts.update(over)
+        (facts_dir / f"{pid}.jsonl").write_text(
+            json.dumps({"chunk_index": 0, "facts": facts, "usage": {}}) + "\n", encoding="utf-8")
+
+    # --- 1) confidence is carried from the research output, not hardcoded 0.0 -------------
+    def test_find_confidence_reads_person_confidence(self):
+        self.assertEqual(dresearch._find_confidence({"person": {"confidence": 0.35}}), 0.35)
+        self.assertEqual(dresearch._find_confidence({"name_confidence": 0.9}), 0.9)
+        self.assertIsNone(dresearch._find_confidence({"person": {}}))        # nothing usable
+        self.assertIsNone(dresearch._find_confidence({"summary": {"confidence": 0.7}}))  # not identity
+
+    def test_proposal_carries_research_confidence(self):
+        # A confidently-verified proposal keeps its real confidence in the retarget row (not 0.0).
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw = base / "research", base / "facts", base / "raw"
+            ov = base / "review.csv"
+            self._facts(facts, "candidate:email:vera@example.com", "Vera Stone",
+                        employers=[{"name": "Globex", "role": "Eng", "status": "current"}])
+            self._research_json(out, "vera-stone-p", {
+                "person": {"full_name": "Vera Stone", "confidence": 0.92,
+                           "notes": "Confirmed via LinkedIn and matching Globex employer."},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/verastone", "linkedin_status": "found"},
+                "metadata": {"research_notes": "Employer Globex matches the dossier."}})
+            subset = [{"parent_slug": "vera-stone-p", "name": "Vera Stone",
+                       "person_ids": ["candidate:email:vera@example.com"], "candidate_key": "candidate:email:vera@example.com",
+                       "linkedin": {}, "match_emails": ["vera@example.com"], "match_phones": []}]
+            dresearch.propose_retargets_from_output(
+                out, subset, ov, facts_dir=facts, raw_dir=raw, use_llm=False)
+            rows = _rows_by_pub(ov)
+            row = rows["candidate:email:vera@example.com"]
+            self.assertEqual(row["action"], "retarget")
+            self.assertEqual(float(row["confidence"]), 0.92)          # carried, NOT 0.0
+            self.assertEqual(row["new_public_identifier"], "verastone")
+
+    def test_missing_confidence_defaults_zero(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            self._facts(facts, "candidate:email:nc@example.com", "No Conf")
+            self._research_json(out, "no-conf-p", {
+                "person": {"full_name": "No Conf"},                    # no confidence field
+                "social": {"linkedin_url": "https://www.linkedin.com/in/noconf", "linkedin_status": "found"}})
+            subset = [{"parent_slug": "no-conf-p", "name": "No Conf",
+                       "person_ids": ["candidate:email:nc@example.com"], "candidate_key": "candidate:email:nc@example.com",
+                       "linkedin": {}, "match_emails": [], "match_phones": []}]
+            dresearch.propose_retargets_from_output(out, subset, ov, facts_dir=facts, raw_dir=raw, use_llm=False)
+            rows = _rows_by_pub(ov)
+            self.assertEqual(float(rows["candidate:email:nc@example.com"]["confidence"]), 0.0)
+
+    # --- 2) sub-threshold / unverifiable proposal is deterministically rejected (--no-llm) --
+    def test_eugene_case_unverifiable_low_confidence_is_rejected_not_deleted(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            pid = "candidate:email:eugene6605@example.com"
+            self._facts(facts, pid, "Eugene Wang")
+            # Mirrors the real Eugene output: confidence 0.35, "could not directly verify" the email.
+            self._research_json(out, "eugene-wang-p", {
+                "person": {"full_name": "Eugene Wang", "confidence": 0.35,
+                           "notes": "Best contextual match found; could not directly verify the Gmail address."},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/eugenejwang", "linkedin_status": "found"},
+                "metadata": {"research_notes": "Selected best contextual match; identity not confirmed."}})
+            subset = [{"parent_slug": "eugene-wang-p", "name": "Eugene Wang",
+                       "person_ids": [pid], "candidate_key": pid,
+                       "linkedin": {}, "match_emails": ["eugene6605@example.com"], "match_phones": []}]
+            res = dresearch.propose_retargets_from_output(
+                out, subset, ov, facts_dir=facts, raw_dir=raw, use_llm=False)
+            self.assertEqual(res["proposed"], 1)                       # row exists (NOT deleted)
+            rows = _rows_by_pub(ov)
+            row = rows[pid]
+            self.assertEqual(row["action"], "retarget")
+            self.assertEqual(float(row["confidence"]), 0.35)          # carried, not hardcoded 0.0
+            self.assertEqual(row["llm_reject"], "yes")                # judged/rejected, visible
+            self.assertTrue(row["llm_reject_reason"])                 # the human sees WHY
+            self.assertEqual(row["approved"], "")                     # never auto-approved
+
+    def test_sub_threshold_confidence_alone_is_rejected_offline(self):
+        # Even without an "unverified" phrase, carried confidence < 0.5 is rejected by --no-llm.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            pid = "candidate:email:low@example.com"
+            self._facts(facts, pid, "Lo Conf")
+            self._research_json(out, "lo-conf-p", {
+                "person": {"full_name": "Lo Conf", "confidence": 0.4, "notes": "Plausible profile."},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/loconf", "linkedin_status": "found"}})
+            subset = [{"parent_slug": "lo-conf-p", "name": "Lo Conf", "person_ids": [pid],
+                       "candidate_key": pid, "linkedin": {}, "match_emails": [], "match_phones": []}]
+            dresearch.propose_retargets_from_output(out, subset, ov, facts_dir=facts, raw_dir=raw, use_llm=False)
+            rows = _rows_by_pub(ov)
+            self.assertEqual(rows[pid]["llm_reject"], "yes")
+
+    # --- 3) LLM-judge rejection populates llm_reject columns and does not delete the row ----
+    def test_llm_judge_rejection_marks_row_without_deleting(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            pid = "candidate:email:judged@example.com"
+            self._facts(facts, pid, "Judged Person")
+            self._research_json(out, "judged-p", {
+                "person": {"full_name": "Judged Person", "confidence": 0.8, "notes": "Looks plausible."},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/judged", "linkedin_status": "found"}})
+            subset = [{"parent_slug": "judged-p", "name": "Judged Person", "person_ids": [pid],
+                       "candidate_key": pid, "linkedin": {}, "match_emails": [], "match_phones": []}]
+            # LLM judge says wrong_person -> row is marked llm_reject=yes, not removed.
+            rejecting = _verdict("wrong_person", 0.9, reason="no non-name corroboration")
+            with mock.patch.object(dresearch, "judge_research_proposal", return_value=rejecting) as jm:
+                dresearch.propose_retargets_from_output(
+                    out, subset, ov, facts_dir=facts, raw_dir=raw, use_llm=True)
+            jm.assert_called_once()
+            rows = _rows_by_pub(ov)
+            row = rows[pid]
+            self.assertEqual(row["action"], "retarget")               # row still present
+            self.assertEqual(row["llm_reject"], "yes")
+            self.assertIn("corroboration", row["llm_reject_reason"])
+            self.assertEqual(row["approved"], "")
+
+    def test_llm_judge_confirmation_leaves_reject_columns_clear(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            pid = "candidate:email:good@example.com"
+            self._facts(facts, pid, "Good Match")
+            self._research_json(out, "good-p", {
+                "person": {"full_name": "Good Match", "confidence": 0.95, "notes": "Employer matches."},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/goodmatch", "linkedin_status": "found"}})
+            subset = [{"parent_slug": "good-p", "name": "Good Match", "person_ids": [pid],
+                       "candidate_key": pid, "linkedin": {}, "match_emails": [], "match_phones": []}]
+            confirming = _verdict("confirmed", 0.9, reason="employer + location match")
+            with mock.patch.object(dresearch, "judge_research_proposal", return_value=confirming):
+                dresearch.propose_retargets_from_output(
+                    out, subset, ov, facts_dir=facts, raw_dir=raw, use_llm=True,
+                    confirm_threshold=0.7)
+            rows = _rows_by_pub(ov)
+            row = rows[pid]
+            self.assertEqual(row["llm_reject"], "")                    # confident confirm -> not rejected
+            self.assertEqual(row["approved"], "")                     # still pending user approval (never auto)
+
+    # --- research-proposal deterministic verdict semantics -------------------------------
+    def test_research_proposal_deterministic_never_auto_confirms(self):
+        # A verified-looking, high-confidence guess still is NOT auto-confirmed offline -> needs_review.
+        task = reconcile.research_proposal_task(
+            {"relationship": "", "title": "", "employers": [], "school": "", "location": "",
+             "topics": [], "shared_context": [], "from_me": [], "from_them": []},
+            {"linkedin_url": "https://www.linkedin.com/in/x", "has_profile": True},
+            name="X", confidence=0.9, unverified=False)
+        v = reconcile.deterministic_verdict(task)
+        self.assertEqual(v["verdict"], "needs_review")                # not confirmed
+        self.assertNotEqual(v["verdict"], "confirmed")
+
+    def test_research_proposal_prompt_requires_non_name_signal(self):
+        task = reconcile.research_proposal_task(
+            {"relationship": "", "title": "", "employers": [], "school": "", "location": "",
+             "topics": [], "shared_context": [], "from_me": [], "from_them": []},
+            {"linkedin_url": "https://www.linkedin.com/in/eugenejwang", "full_name": "Eugene Wang",
+             "headline": "", "location": "", "experiences": [], "education": []},
+            name="Eugene Wang", confidence=0.35, unverified=True)
+        prompt = reconcile.judge_prompt(task, "")
+        self.assertIn("SPECULATIVE", prompt)
+        self.assertIn("NON-NAME", prompt)
+        self.assertIn("wrong_person", prompt)
+
+    # --- 5) a judge-rejected retarget does not permanently count as decided ---------------
+    def test_rejected_retarget_is_not_decided_and_can_be_reresearched(self):
+        verdicts = [{"parent_slug": "z", "candidate_key": "candidate:email:z@example.com",
+                     "verdict": _verdict("wrong_person", 0.95, dr=True)}]
+        # A pending retarget the judge rejected does NOT block re-research (row is a dead guess).
+        rejected = {"candidate:email:z@example.com": {
+            "action": "retarget", "approved": "", "llm_reject": "yes",
+            "llm_reject_reason": "unverified"}}
+        self.assertEqual(len(dresearch.eligible_subset(verdicts, 0.85, rejected)), 1)
+        # A NON-rejected pending retarget still counts as decided (skipped).
+        pending_ok = {"candidate:email:z@example.com": {"action": "retarget", "approved": ""}}
+        self.assertEqual(dresearch.eligible_subset(verdicts, 0.85, pending_ok), [])
+        # A user-approved rejected row is terminal — stays decided.
+        user_kept = {"candidate:email:z@example.com": {
+            "action": "retarget", "approved": "yes", "llm_reject": "yes"}}
+        self.assertEqual(dresearch.eligible_subset(verdicts, 0.85, user_kept), [])
+
+
+class TestUnsilencedNameMatch(unittest.TestCase):
+    """An unconfirmed unique first-degree name match is SURFACED as a visible needs_review row
+    naming the connection — not silently reverted to an invisible no_link. All fictional data."""
+
+    def _facts(self, facts_dir: Path, pid: str, name: str) -> None:
+        facts_dir.mkdir(parents=True, exist_ok=True)
+        (facts_dir / f"{pid}.jsonl").write_text(json.dumps({
+            "chunk_index": 0, "facts": {"canonical_name": name, "aliases": [], "employers": [],
+                "title": "", "school": "", "field_of_study": "", "location": "",
+                "relationship_to_owner": "friend", "topics": [], "notable_events": [],
+                "identifiers": [], "shared_context": [], "confidence": 0.8}, "usage": {}}) + "\n",
+            encoding="utf-8")
+
+    def test_revert_stashes_review_payload(self):
+        # The revert still flips to no-link (worth/lookup unchanged) but records the surfaced match.
+        needs_review = {"parent_slug": "b", "name": "Eugene Wang", "candidate_key": "eugenewang",
+                        "person_ids": ["msg-eugene"], "no_link": False, "name_matched": True,
+                        "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
+                        "match_emails": ["eugene6605@example.com"], "match_phones": [],
+                        "verdict": _verdict("needs_review", 0.4)}
+        reconcile.revert_unconfirmed_name_matches([needs_review], 0.7, {}, Path("/nonexistent"))
+        self.assertTrue(needs_review["no_link"])                      # still reverts (invariant kept)
+        self.assertEqual(needs_review["candidate_key"], "")
+        rv = needs_review["name_match_review"]
+        self.assertEqual(rv["connection_name"], "Eugene Wang")
+        self.assertEqual(rv["connection_pub"], "eugenewang")
+
+    def test_upsert_writes_visible_review_row_naming_the_connection(self):
+        with tempfile.TemporaryDirectory() as d:
+            ov = Path(d) / "review.csv"
+            task = {"parent_slug": "b", "name": "Eugene Wang", "candidate_key": "eugenewang",
+                    "person_ids": ["msg-eugene"], "no_link": False, "name_matched": True,
+                    "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
+                    "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
+            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            stats = reconcile.upsert_name_match_reviews(ov, [task])
+            self.assertEqual(stats["name_match_reviews"], 1)
+            rows = _rows_by_pub(ov)
+            row = rows["eugenewang"]
+            self.assertEqual(row["action"], "review")
+            self.assertEqual(row["approved"], "")                     # pending, visible in the queue
+            self.assertIn("Eugene Wang", row["reason"])               # names the connection
+            self.assertIn("no non-name corroboration", row["reason"])
+
+    def test_user_decided_name_match_review_is_sticky(self):
+        with tempfile.TemporaryDirectory() as d:
+            ov = Path(d) / "review.csv"
+            # Seed a user decision on the connection's row.
+            with ov.open("w", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=reconcile.OVERRIDE_COLUMNS)
+                w.writeheader()
+                w.writerow({"public_identifier": "eugenewang", "action": "review", "approved": "no",
+                            "reason": "user says not them"})
+            task = {"parent_slug": "b", "name": "Eugene Wang", "candidate_key": "eugenewang",
+                    "person_ids": ["msg-eugene"], "no_link": False, "name_matched": True,
+                    "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
+                    "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
+            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            stats = reconcile.upsert_name_match_reviews(ov, [task])
+            self.assertEqual(stats["preserved_user_rows"], 1)
+            with ov.open(newline="", encoding="utf-8") as _fh:
+                row = next(csv.DictReader(_fh))
+            self.assertEqual(row["approved"], "no")                   # not overwritten
+            self.assertEqual(row["reason"], "user says not them")
+
+    def test_confirmed_name_match_is_not_surfaced_for_review(self):
+        confirmed = {"parent_slug": "a", "name": "Confirmed Person", "candidate_key": "confirmedp",
+                     "person_ids": ["msg-c"], "no_link": False, "name_matched": True,
+                     "linkedin": {"linkedin_url": "https://www.linkedin.com/in/confirmedp"},
+                     "match_emails": [], "match_phones": [], "verdict": _verdict("confirmed", 0.9)}
+        reconcile.revert_unconfirmed_name_matches([confirmed], 0.7, {}, Path("/nonexistent"))
+        self.assertNotIn("name_match_review", confirmed)              # confirmed stays an identity row
+        with tempfile.TemporaryDirectory() as d:
+            ov = Path(d) / "review.csv"
+            stats = reconcile.upsert_name_match_reviews(ov, [confirmed])
+            self.assertEqual(stats["name_match_reviews"], 0)
+
+    # --- 4) both-options competing case ---------------------------------------------------
+    def test_competing_research_and_name_match_cross_reference(self):
+        with tempfile.TemporaryDirectory() as d:
+            ov = Path(d) / "review.csv"
+            pid = "candidate:email:eugene6605@example.com"
+            # A pending research retarget already exists for the SAME parent person.
+            reconcile.upsert_retargets(ov, [{
+                "old_public_identifier": pid, "person_id": pid,
+                "new_linkedin_url": "https://www.linkedin.com/in/eugenejwang",
+                "reason": "deep research best-guess", "source": "deep-research"}])
+            # And an unconfirmed unique name match to the owner's first-degree connection.
+            task = {"parent_slug": "eugene", "name": "Eugene Wang", "candidate_key": "eugenewang",
+                    "person_ids": [pid], "no_link": False, "name_matched": True,
+                    "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
+                    "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
+            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            reconcile.upsert_name_match_reviews(ov, [task])
+            rows = _rows_by_pub(ov)
+            name_row = rows["eugenewang"]
+            research_row = rows[pid]
+            # The name-match row mentions the competing research proposal...
+            self.assertIn("eugenejwang", name_row["reason"])
+            # ...and the research row mentions the competing name match.
+            self.assertIn("name match", research_row["reason"].lower())
+            self.assertIn("Eugene Wang", research_row["reason"])
 
 
 class TestReviewWeb(unittest.TestCase):

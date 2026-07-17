@@ -652,6 +652,23 @@ def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
             "or contradicting evidence, linkedin_plausibly_absent=true, "
             "recommend_deep_research=false, and reason='no LinkedIn attached'."
         )
+    if task.get("research_proposal"):
+        # This profile is a GUESS from a paid external deep-research pass, not a link the contact
+        # ever gave me. Deep research routinely returns a best-effort namesake it could not actually
+        # verify against my contact's identifier, so hold it to the SAME speculative bar as a
+        # name-match: confirm only on a real NON-NAME corroborating signal, otherwise wrong_person.
+        return (
+            f"{contact}"
+            f"PROPOSED LINKEDIN PROFILE FROM DEEP RESEARCH ({li.get('linkedin_url') or 'n/a'})\n{li_block}\n\n"
+            "NOTE: I did NOT get this profile from the contact — an external web-research pass GUESSED "
+            "it. It is SPECULATIVE. A shared NAME is NOT enough on its own (different people share "
+            "names, and the research often admits it could not verify the contact's email/phone). "
+            "Confirm ONLY if at least one NON-NAME signal corroborates that it is the same human: a "
+            "shared employer/company, school, location, mutual topic, or a work-email domain matching "
+            "the profile's employer. If the evidence is only the name (sparse dossier, no overlap, or "
+            "the research could not verify the identifier), return wrong_person — do NOT confirm.\n\n"
+            "Is this proposed LinkedIn profile the same human as the contact I know from my messages?"
+        )
     if task.get("name_matched"):
         # This link was NOT provided by the contact — it's the single first-degree connection whose
         # NAME matches. A shared name alone is not proof (namesakes exist), so raise the bar: require
@@ -705,6 +722,24 @@ def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
     up, which is exactly the judgment the LLM is supposed to make. So it routes to review (and the
     unconfirmed-name-match revert then drops it back to the no-link path)."""
     li = task["linkedin"]
+    if task.get("research_proposal"):
+        # A deep-research GUESS is never auto-approved offline. If the research admits it could not
+        # verify the identifier, or the carried identity confidence is weak (< 0.5), reject it so the
+        # human sees WHY; otherwise route to review for the human to confirm — never auto-confirm.
+        carried = float(task.get("research_confidence") or 0)
+        if task.get("research_unverified") or carried < 0.5:
+            reason = ("deep-research guess is unverified"
+                      + (" (research could not verify the contact's identifier)"
+                         if task.get("research_unverified") else f" (carried confidence {carried:.2f} < 0.50)"))
+            return {"verdict": "wrong_person", "confidence": 0.0, "supporting_evidence": [],
+                    "contradicting_evidence": [reason], "linkedin_plausibly_absent": False,
+                    "recommend_deep_research": False, "reason": reason,
+                    "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
+        return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
+                "contradicting_evidence": [], "linkedin_plausibly_absent": False,
+                "recommend_deep_research": False,
+                "reason": "speculative deep-research proposal needs the LLM judge (offline stub won't confirm)",
+                "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
     if task.get("name_matched"):
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": False,
@@ -720,6 +755,65 @@ def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
             "contradicting_evidence": [], "linkedin_plausibly_absent": False,
             "recommend_deep_research": False, "reason": "offline stub: trusts attached link",
             "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
+
+
+# Below this carried identity confidence a deep-research guess is treated as unverified by the
+# deterministic (--no-llm) fallback: never auto-approved, always rejected with a visible reason.
+RESEARCH_CONFIDENCE_FLOOR = 0.5
+
+
+def research_proposal_task(dossier: dict[str, Any], profile: dict[str, Any], *, name: str,
+                           match_emails: list[str] | None = None, match_phones: list[str] | None = None,
+                           confidence: float = 0.0, unverified: bool = False) -> dict[str, Any]:
+    """Shape a (dossier-evidence × deep-research-proposed-profile) pair as a judge task.
+
+    Reuses the SAME dossier/linkedin task contract the attached-link judge consumes, flavored
+    `research_proposal` so judge_prompt/deterministic_verdict apply the speculative,
+    non-name-corroboration rules (mirroring name_matched) instead of trusting the guess."""
+    return {
+        "research_proposal": True, "no_link": False, "name": name,
+        "dossier": dossier, "linkedin": profile,
+        "match_emails": match_emails or [], "match_phones": match_phones or [],
+        "research_confidence": confidence, "research_unverified": unverified,
+    }
+
+
+def judge_research_proposal(task: dict[str, Any], *, use_llm: bool, owner_block: str = "",
+                            model: str = DEFAULT_MODEL, effort: str = "high",
+                            timeout: int = 120, max_retries: int = 6) -> dict[str, Any]:
+    """Judge one deep-research proposal task through the SAME machinery as attached links.
+
+    Returns the reconcile verdict dict. Offline/--no-llm uses deterministic_verdict (never
+    auto-confirms; rejects an unverified/low-confidence guess). Callers map the verdict onto the
+    llm_reject* columns via research_reject_fields()."""
+    if not use_llm:
+        return deterministic_verdict(task)
+
+    async def driver() -> dict[str, Any]:
+        client = make_async_client(timeout=timeout)
+        try:
+            res = await judge_task(client, task, owner_block, model=model, effort=effort,
+                                   semaphore=asyncio.Semaphore(1), max_retries=max_retries)
+        finally:
+            await client.close()
+        return res.get("verdict") or {}
+
+    load_env()
+    return asyncio.run(driver())
+
+
+def research_reject_fields(verdict: dict[str, Any], confirm_threshold: float) -> dict[str, str]:
+    """Map a research-proposal verdict onto the UI-rendered llm_reject* columns.
+
+    A judge rejection (wrong_person, or anything not a confident confirm) marks the row
+    `llm_reject=yes` + reason so the human still sees WHY — the row is never deleted. A confident
+    `confirmed` leaves the columns clear (the retarget stands for the human to approve)."""
+    v = str(verdict.get("verdict") or "").strip().lower()
+    conf = float(verdict.get("confidence") or 0)
+    if v == "confirmed" and conf >= confirm_threshold:
+        return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": ""}
+    reason = verdict.get("reason") or "deep-research proposal not corroborated by the dossier"
+    return {"llm_reject": "yes", "llm_reject_confidence": f"{conf:.3f}", "llm_reject_reason": reason}
 
 
 # --- parent markdown injection ----------------------------------------------
@@ -806,11 +900,17 @@ def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
 
 def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_threshold: float,
                                     overrides: dict[str, dict[str, str]], facts_dir: Path) -> int:
-    """An optimistic name-match the judge did NOT confirm reverts to a plain no-link parent: worth
-    review + the deep-research lookup then proceed exactly as if we never guessed a LinkedIn, and
-    a real connection is never touched by a wrong guess. Confirmed matches stay put and fold onto
-    the connection at merge. Runs once, after judging and before the decide/override/consolidate
-    tail — so only confirmed matches are ever persisted as identity rows."""
+    """An optimistic name-match the judge did NOT confirm reverts to a plain no-link parent so the
+    worth review + deep-research lookup proceed exactly as if we never guessed a LinkedIn, and a
+    real connection is never touched by a wrong guess. Confirmed matches stay put and fold onto the
+    connection at merge. Runs once, after judging and before the decide/override/consolidate tail —
+    so only confirmed matches are ever persisted as identity rows.
+
+    UN-SILENCED: because a unique first-degree name match is decent odds ("if I only know one
+    <Name>, I probably know them"), we do NOT let it vanish. We stash a `name_match_review` payload
+    on the task (the connection's name, pub, url) so upsert_name_match_reviews() surfaces a visible
+    needs_review row explaining that the judge found no non-name corroboration — the human confirms
+    or rejects it. The task itself still reverts to no-link (worth/lookup unchanged)."""
     reverted = 0
     for t in tasks:
         if not t.get("name_matched"):
@@ -819,11 +919,103 @@ def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_thresho
         confirmed = v.get("verdict") == "confirmed" and float(v.get("confidence") or 0) >= confirm_threshold
         if confirmed:
             continue
+        # Capture the surfaced-match context BEFORE we strip the identity fields.
+        t["name_match_review"] = {
+            "connection_name": t.get("name", ""),
+            "connection_pub": (t.get("candidate_key") or "").strip().lower(),
+            "connection_url": (t.get("linkedin") or {}).get("linkedin_url", ""),
+            "person_ids": list(t.get("person_ids") or []),
+            "match_emails": list(t.get("match_emails") or []),
+            "match_phones": list(t.get("match_phones") or []),
+            "confidence": float(v.get("confidence") or 0),
+        }
         t.update({"no_link": True, "name_matched": False, "candidate_key": "",
                   "linkedin": {}, "conflict": False, "from_connections": False})
         t["worth_person_ids"] = worth_person_ids_for_review(t, overrides, facts_dir)
         reverted += 1
     return reverted
+
+
+def _name_match_review_reason(review: dict[str, Any], competing_url: str = "") -> str:
+    """Explicit, human-readable reason for a surfaced-but-unconfirmed unique name match."""
+    name = review.get("connection_name") or "your connection"
+    reason = (f"unique first-degree name match to your connection {name} — judge found no "
+              "non-name corroboration; confirm or reject")
+    if competing_url:
+        reason += f" (competes with a deep-research proposal: {competing_url})"
+    return reason
+
+
+def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]],
+                              facts_dir: Path = FACTS_DIR) -> dict[str, Any]:
+    """Persist a VISIBLE needs_review row for each unconfirmed unique name match (see
+    revert_unconfirmed_name_matches). Keyed on the connection's public_identifier like every other
+    review row, action=review, approved= pending, with a reason naming the connection so the human
+    sees the option in the existing queue. Sticky: a user-decided row (approved∈{yes,no}) is never
+    overwritten. When the same parent ALSO carries a pending deep-research retarget, the reason
+    mentions that competing proposal so both options sit side by side."""
+    reviews = [t["name_match_review"] for t in tasks if t.get("name_match_review")]
+    if not reviews:
+        return {"path": str(path), "name_match_reviews": 0, "preserved_user_rows": 0}
+    existing = load_override_rows(path)
+    # Map a parent's person_ids to any pending research retarget URL, so competing options cross-link.
+    competing_by_pid: dict[str, str] = {}
+    for pub, row in existing.items():
+        if (row.get("action") or "").strip().lower() != "retarget":
+            continue
+        if (row.get("approved") or "").strip().lower() in USER_APPROVED:
+            continue
+        pid = str(row.get("person_id") or "").strip().lower()
+        url = str(row.get("new_linkedin_url") or "").strip()
+        if pid and url:
+            competing_by_pid[pid] = url
+    written = preserved = 0
+    for review in reviews:
+        pub = (review.get("connection_pub") or "").strip().lower()
+        if not pub:
+            continue
+        if (existing.get(pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
+            preserved += 1
+            continue
+        competing_url = ""
+        for pid in review.get("person_ids") or []:
+            competing_url = competing_by_pid.get(str(pid).strip().lower()) or competing_url
+        prior = existing.get(pub, {})
+        row = {column: prior.get(column, "") for column in OVERRIDE_COLUMNS}
+        row.update({
+            "public_identifier": pub, "action": "review", "approved": "",
+            "new_linkedin_url": review.get("connection_url", ""),
+            "new_public_identifier": pub,
+            "linkedin_url": review.get("connection_url", ""),
+            "match_emails": "|".join(review.get("match_emails") or []),
+            "match_phones": "|".join(review.get("match_phones") or []),
+            "confidence": f"{float(review.get('confidence') or 0):.3f}",
+            "reason": _name_match_review_reason(review, competing_url),
+            "person_id": (review.get("person_ids") or [""])[0],
+            "source": "deep-context-name-match", "updated_at": now_iso(),
+        })
+        existing[pub] = row
+        written += 1
+    # Cross-link the other direction: a pending research retarget competing with a surfaced name
+    # match mentions it too, so the human sees both options from either row.
+    name_match_by_pid: dict[str, dict[str, Any]] = {}
+    for review in reviews:
+        for pid in review.get("person_ids") or []:
+            name_match_by_pid[str(pid).strip().lower()] = review
+    for pub, row in existing.items():
+        if (row.get("action") or "").strip().lower() != "retarget":
+            continue
+        if (row.get("approved") or "").strip().lower() in USER_APPROVED:
+            continue
+        review = name_match_by_pid.get(str(row.get("person_id") or "").strip().lower())
+        if not review:
+            continue
+        note = (f" (competes with a unique first-degree name match to your connection "
+                f"{review.get('connection_name') or 'a connection'})")
+        if note.strip() not in (row.get("reason") or ""):
+            row["reason"] = (row.get("reason") or "") + note
+    _write_override_rows(path, existing)
+    return {"path": str(path), "name_match_reviews": written, "preserved_user_rows": preserved}
 
 
 # --- durable override (consumed by the fan-in merge) ------------------------
@@ -1091,6 +1283,15 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
             "reason": p.get("reason", ""), "person_id": p.get("person_id", prior.get("person_id", "")),
             "source": p.get("source", "deep-research"), "updated_at": now_iso(),
         })
+        # A judged proposal carries the machine-owned llm_reject* verdict so a rejected guess
+        # renders in the UI as "rejected + why" instead of silently vanishing. Only overwrite
+        # these columns when the proposal actually judged (keys present); otherwise keep prior.
+        if "llm_reject" in p:
+            row.update({
+                "llm_reject": p.get("llm_reject", ""),
+                "llm_reject_confidence": p.get("llm_reject_confidence", ""),
+                "llm_reject_reason": p.get("llm_reject_reason", ""),
+            })
         # Retarget research changes only identity fields. Preserve both the
         # human-owned network_worth mark and the latest machine-owned worth/spam
         # columns so a found LinkedIn cannot silently change the People decision.
@@ -1497,11 +1698,15 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
     override_stats = {"path": str(args.overrides_csv), "detached": 0, "verified": 0, "pending": 0, "total_rows": 0}
     consolidation = {"consolidated_parents": 0}
     self_retargets = {"proposed": 0}
+    name_match_reviews = {"name_match_reviews": 0}
     if not args.no_overrides:
         override_stats = write_overrides(Path(args.overrides_csv), tasks, Path(args.facts_dir))
         # Free recovery: retarget to a LinkedIn the contact shared themselves (overrides any
         # detach/verify on the wrong attached link). Sticky — won't clobber a user decision.
         self_retargets = upsert_retargets(Path(args.overrides_csv), self_reported_retargets(tasks))
+        # Surface (don't vanish) each unique first-degree name match the judge couldn't corroborate:
+        # a visible needs_review row naming the connection so the human confirms or rejects it.
+        name_match_reviews = upsert_name_match_reviews(Path(args.overrides_csv), tasks, Path(args.facts_dir))
         # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
         consolidation = write_consolidations(Path(args.consolidate_people_csv), tasks, Path(args.people_csv))
     write_applied(out_dir / "applied.csv", decided_report(tasks))
@@ -1526,6 +1731,7 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
         "parents": len(index.get("parents", {})), "tasks": len(tasks), "judged": judged,
         "ground_truth_connections": sum(1 for t in tasks if t.get("from_connections") and not t.get("no_link")),
         "self_reported_retargets": self_retargets.get("proposed", 0),
+        "name_match_reviews": name_match_reviews.get("name_match_reviews", 0),
         "verdicts": counts, "conflicts": len(conflict_tasks),
         "conflicts_auto_resolved": sum(1 for t in conflict_tasks if t.get("via") == "conflict_resolved"),
         "conflicts_to_review": sum(1 for t in conflict_tasks if t.get("action") == "review"),
