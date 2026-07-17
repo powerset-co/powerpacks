@@ -1803,7 +1803,8 @@ def profile_fact_rows(candidate: dict[str, Any]) -> list[str]:
 def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: bool,
              profile_rows: list[str] | None = None,
              identifiers: list[str] | None = None,
-             profile_placeholder: str = "") -> str:
+             profile_placeholder: str = "",
+             sparse_context: bool = False) -> str:
     contacts = _merge_contacts(
         [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
         identifiers or [])
@@ -1828,12 +1829,17 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
             rows.append(f"<div><dt>Summary</dt><dd>{esc(NO_PROFILE_SUMMARY)}</dd></div>")
         # kept link with no displayable reason: omit the row entirely
     extra = f"<dl>{''.join(rows)}</dl>" if rows else ""
+    context_notice = (
+        "<p class='context-notice'><strong>Not enough information.</strong> "
+        "Need your review.</p>"
+        if sparse_context else ""
+    )
     profile_dl = (f"<dl>{''.join(profile_rows)}</dl>" if profile_rows else "")
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
     # No "Details"/"Context" section labels; the dossier preview renders as more
     # dt/dd rows in the SAME dl style (no inset box), lazily via /api/dossier.
     return (f"<section class='details' data-slug='{esc(dossier_slug)}'>"
-            f"<div class='details-body'>{profile_placeholder}{extra}"
+            f"<div class='details-body'>{profile_placeholder}{extra}{context_notice}"
             "<dl class='dossier-text' aria-busy='true'></dl>"
             f"{profile_dl}</div></section>")
 
@@ -1858,6 +1864,11 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
     slug = parent.get("dossier_slug") or parent.get("slug")
     identifiers = dossier_identifiers(parents_dir, dossier_dir, slug)
+    sparse_context = (
+        not candidate.get("simple_summary")
+        and not relationship_summary(parents_dir, dossier_dir, slug)
+        and not timeline_entries(parents_dir, dossier_dir, slug)
+    )
     scroll_content = f"""
         <div class='person-top'>
           {_avatar(parent, candidate)}
@@ -1866,7 +1877,13 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
             <h2>{esc(name)}</h2>
           </div>
         </div>
-        {_details(parent, candidate, identity=False, identifiers=identifiers)}"""
+        {_details(
+            parent,
+            candidate,
+            identity=False,
+            identifiers=identifiers,
+            sparse_context=sparse_context,
+        )}"""
     return f"""
     <article class='decision-card identity-card worth-card' data-card>
       {_scroll_region(scroll_content)}
@@ -2193,6 +2210,13 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
     identifiers = (dossier_identifiers(parents_dir, dossier_dir, dossier_slug)
                    if parents_dir is not None and dossier_dir is not None else [])
+    sparse_context = (
+        parents_dir is not None
+        and dossier_dir is not None
+        and not candidate.get("simple_summary")
+        and not relationship_summary(parents_dir, dossier_dir, dossier_slug)
+        and not timeline_entries(parents_dir, dossier_dir, dossier_slug)
+    )
     contacts = _merge_contacts(
         [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
         identifiers)
@@ -2202,6 +2226,15 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
     if contacts:
         fact_rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
     fact_rows.append(f"<div><dt>{why_label}</dt><dd>{esc(reason)}</dd></div>")
+    dossier_preview = (
+        "<p class='context-notice'><strong>Not enough information.</strong> "
+        "Need your review.</p>"
+        if sparse_context
+        else (
+            "<h4 class='dossier-heading'>Who they are</h4>"
+            "<dl class='row-facts dossier-text' aria-busy='true'></dl>"
+        )
+    )
     # Left-edge chevron = the expand/collapse affordance; the decision button
     # stays on the far right of the summary row.
     return f"""
@@ -2217,8 +2250,7 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
           <div class='decision-row-detail'>
             {f"<div class='row-badges'>{badges}</div>" if badges else ""}
             <dl class='row-facts'>{''.join(fact_rows)}</dl>
-            <h4 class='dossier-heading'>Who they are</h4>
-            <dl class='row-facts dossier-text' aria-busy='true'></dl>
+            {dossier_preview}
           </div>
         </details>"""
 

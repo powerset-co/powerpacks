@@ -367,6 +367,18 @@ h1 {
 .dossier-text p:last-child { margin-bottom: 0; }
 .dossier-text strong { color: var(--foreground); }
 
+.context-notice {
+  margin: 2px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--secondary);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.context-notice strong { color: var(--foreground); }
+
 /* Work / Education / Timeline bullet lists inside dd cells. */
 .fact-list { margin: 0; padding-left: 18px; }
 .fact-list li + li { margin-top: 4px; }

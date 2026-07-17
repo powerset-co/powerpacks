@@ -1824,6 +1824,11 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn("data-scroll-cue", html)
         self.assertIn("aria-label='Scroll down'", html)
         self.assertIn("<section class='details' data-slug='ada-lovelace'>", html)
+        self.assertIn(
+            "<p class='context-notice'><strong>Not enough information.</strong> "
+            "Need your review.</p>",
+            html,
+        )
         # no "Details"/"Context" section labels — the facts + preview stand alone
         self.assertNotIn("details-heading", html)
         self.assertNotIn(">Context</h4>", html)
@@ -1931,6 +1936,7 @@ class TestStagedReviewUI(unittest.TestCase):
         # new dossier identifiers bubble up
         self.assertIn("+1-415-555-0142", contact)
         self.assertIn("https://example.net/ada", contact)
+        self.assertNotIn("Not enough information.", html)
 
     def test_decision_table_bubbles_dossier_identifiers_into_contact(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1943,9 +1949,23 @@ class TestStagedReviewUI(unittest.TestCase):
                 [parent], "yes", parents_dir=base / "parents", dossier_dir=dossiers)
         self.assertIn("+1-415-555-0142", html)
         self.assertIn("https://example.net/ada", html)
+        self.assertNotIn("Not enough information.", html)
         # without the dossier dirs, the table still renders (graceful, no bubble-up)
         plain = web.render_decision_table([parent], "yes")
         self.assertNotIn("https://example.net/ada", plain)
+
+    def test_decision_table_explains_sparse_dossier(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = self._candidate_parent("yes", "user")
+            html = web.render_decision_table(
+                [parent], "yes", parents_dir=base / "parents", dossier_dir=base / "dossiers")
+        self.assertIn(
+            "<p class='context-notice'><strong>Not enough information.</strong> "
+            "Need your review.</p>",
+            html,
+        )
+        self.assertNotIn("Who they are", html)
 
     def _linkedin_parent(self) -> dict:
         candidate = {
