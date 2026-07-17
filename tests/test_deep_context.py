@@ -2401,8 +2401,13 @@ class TestReviewWeb(unittest.TestCase):
             self.assertIn("class='alternate'", html)
             self.assertIn("hidden>", html)
             self.assertNotIn("Use a different LinkedIn", html)
+            # Skip is folded INTO the question line as an inline secondary link, not a
+            # standalone button; its detach behavior is unchanged.
+            self.assertIn("Is this the right profile? Or <button", html)
+            self.assertIn("class='skip-link' data-decide='detach'", html)
+            self.assertIn(">Skip</button>?", html)
+            self.assertNotIn("alternate-skip", html)      # the old standalone Skip is gone
             self.assertIn("data-decide='detach'", html)
-            self.assertIn(">Skip</button>", html)
             self.assertNotIn("Exclude", html)
             self.assertNotIn("Maybe", html)
 
@@ -2720,7 +2725,10 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertNotIn("<label for='fix-synth-email-abc'>LinkedIn URL</label>", html)
             self.assertNotIn("Use a different LinkedIn", html)
             self.assertIn(">Use this</button>", html)
-            self.assertIn(">Skip</button>", html)
+            # Skip is the inline secondary link folded into the question line.
+            self.assertIn("class='skip-link' data-decide='detach'", html)
+            self.assertIn(">Skip</button>?", html)
+            self.assertNotIn("alternate-skip", html)
             # The hidden fix form sits behind the No button (same as a real card).
             self.assertIn("data-open-fix", html)
             self.assertIn("class='alternate' id='fix-section-synth-email-abc' hidden", html)

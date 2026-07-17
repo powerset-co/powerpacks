@@ -491,17 +491,28 @@ h1 {
   white-space: nowrap;
   border: 0;
 }
-.alternate-skip {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: auto;
-  min-height: 36px;
-  margin: 6px 0 0 auto;
-  padding: 0 8px;
+/* Inline "Skip" folded into the card's question line: a subtle secondary link,
+   not a button — but an obvious click target (hit area, hover/focus, keyboard). */
+.skip-link {
+  display: inline;
+  padding: 2px 4px;
   border: 0;
-  font-size: 12px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
 }
+.skip-link:hover { color: var(--foreground); }
+.skip-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  color: var(--foreground);
+}
+.skip-link:disabled { cursor: wait; opacity: .5; }
 
 input {
   min-width: 0;
