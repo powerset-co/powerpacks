@@ -127,18 +127,22 @@ without letting browser-controlled text enter the prompt.
 
 The browser has a separate, faster observer:
 
-- Every rendered page includes the same JavaScript observer.
-- It calls `/api/status` immediately on load and then every second.
-- People, Enrich, LinkedIn, and Done therefore all observe the same file state.
+- Enrich and Done call `/api/status` immediately on load and then once per
+  second because an external agent/provider can change their manifests. A
+  LinkedIn preview opened before enrichment completes does the same until those
+  external results arrive.
+- People and a current, fully enriched LinkedIn stage do not poll. Their local
+  saves return the authoritative state token directly.
+- LinkedIn starts with ten cards buffered from the server's in-memory review
+  snapshot, advances synchronously on click, and refills to ten when five remain.
 - A changed `next_action` navigates the current tab to the corresponding stage.
 - A changed state token reloads the current stage with fresh counts/content.
 - A stage opened from the clickable progress steps stays in preview mode while
   still reloading from changed file state; it does not get bounced immediately
   back to the workflow's current stage.
 - Returning to a previously hidden tab triggers an immediate check.
-- An actual unsaved replacement-LinkedIn URL, including the always-visible
-  synthetic-profile field, suppresses reload/navigation so the browser does not
-  destroy typed text; opening an empty field does not stop polling.
+- An actual unsaved replacement-LinkedIn URL on a polled preview suppresses
+  reload/navigation so the browser does not destroy typed text.
 
 After LinkedIn Finish, the browser shows Done and keeps polling, but there is no
 later browser decision stage. The agent owns retarget hydration, realization,
@@ -309,7 +313,10 @@ The browser state token includes:
 - enrichment status, freshness, approval freshness, counts, and update time;
 - review stage, status, completed stages, and update time.
 
-Any change to those families is visible on the next one-second browser poll.
+External handoff changes are visible on the next one-second Enrich/Done poll,
+or from an early LinkedIn preview while enrichment is still changing its queue.
+Local People/LinkedIn changes are visible immediately from their mutation
+response without a follow-up poll.
 
 This gives repeatability without a ledger:
 

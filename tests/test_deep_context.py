@@ -2011,10 +2011,77 @@ class TestUnsilencedNameMatch(unittest.TestCase):
 class TestReviewWeb(unittest.TestCase):
     """The parent-grouped review UI: join verdicts.jsonl + review.csv, and decision writes."""
 
-    def test_browser_observer_polls_immediately_and_every_second(self):
+    def test_serve_initial_snapshot_uses_every_custom_artifact_path(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            paths = {
+                name: base / value
+                for name, value in {
+                    "review": "custom/review.csv",
+                    "verdicts": "custom/verdicts.jsonl",
+                    "synthetic_people": "custom/synthetic.csv",
+                    "facts_dir": "custom/facts",
+                    "people_csv": "custom/people.csv",
+                    "parents_dir": "custom/parents",
+                    "dossier_dir": "custom/dossiers",
+                    "profile_cache_dir": "custom/profiles",
+                    "manifest": "custom/review/manifest.json",
+                    "enrichment_manifest": "custom/research/manifest.json",
+                    "avatar_dir": "custom/avatars",
+                }.items()
+            }
+            args = mock.Mock(
+                **{name: str(path) for name, path in paths.items()},
+                host="127.0.0.1",
+                port=43210,
+                stage="linkedin",
+                fresh=False,
+                open=False,
+                confirm_threshold=0.7,
+                detach_threshold=0.85,
+            )
+            fake_server = mock.Mock(server_address=("127.0.0.1", 43210))
+            with mock.patch.object(
+                    web.urllib.request, "urlopen",
+                    side_effect=web.urllib.error.URLError("not running")), \
+                 mock.patch.object(web, "_all_review_parents", return_value=[]) as build, \
+                 mock.patch.object(web, "ThreadingHTTPServer", return_value=fake_server):
+                web.cmd_serve(args)
+
+        build.assert_called_once_with(
+            paths["verdicts"],
+            paths["review"],
+            paths["synthetic_people"],
+            paths["facts_dir"],
+            paths["people_csv"],
+            paths["parents_dir"],
+            paths["dossier_dir"],
+            paths["profile_cache_dir"],
+        )
+        fake_server.serve_forever.assert_called_once_with()
+
+    def test_browser_observer_polls_only_while_external_updates_are_possible(self):
         script = web.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn('fetch("/api/status", { cache: "no-store" })', script)
         self.assertIn("const statusPollMs = 1000;", script)
+        self.assertIn(
+            'const observesExternalUpdates = document.body.dataset.externalUpdates === "true";',
+            script,
+        )
+        self.assertIn("if (!observesExternalUpdates) return;", script)
+        self.assertIn("if (observesExternalUpdates) {", script)
+        self.assertNotIn("adoptServerState", script)
+        self.assertIn("adoptMutationState(response);", script)
+        self.assertIn("const linkedinBufferTarget = 10;", script)
+        self.assertIn("const linkedinRefillAt = 5;", script)
+        self.assertIn(
+            "`/api/linkedin-cards?offset=${held}&limit=${limit}`",
+            script,
+        )
+        self.assertLess(
+            script.index("const advance = optimisticLinkedinAdvance(card, values);"),
+            script.index('const response = await post("/decide", values);'),
+        )
         self.assertIn(
             'document.querySelectorAll("[data-fix-form] input[name=\'new_url\']")',
             script,
@@ -2034,9 +2101,15 @@ class TestReviewWeb(unittest.TestCase):
             script,
         )
 
-    def test_every_review_stage_loads_the_same_file_state_observer(self):
+    def test_pages_mark_only_external_file_update_boundaries_for_polling(self):
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
+            expected = {
+                "worth": "false",
+                "enrich": "true",
+                "linkedin": "true",  # early preview: enrichment is not current
+                "done": "true",
+            }
             for stage in ("worth", "enrich", "linkedin", "done"):
                 html = web.page_html(
                     [],
@@ -2048,13 +2121,14 @@ class TestReviewWeb(unittest.TestCase):
                     enrichment_manifest_path=base / "research" / "manifest.json",
                 ).decode("utf-8")
                 self.assertIn(f"data-stage='{stage}'", html)
+                self.assertIn(f"data-external-updates='{expected[stage]}'", html)
                 self.assertIn("data-preview='false'", html)
                 self.assertIn(
                     "<script src='/assets/reconcile-review.js' defer></script>",
                     html,
                 )
 
-    def test_progress_step_preview_keeps_polling_without_forcing_current_stage(self):
+    def test_early_linkedin_preview_polls_without_forcing_current_stage(self):
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
             html = web.page_html(
@@ -2068,9 +2142,45 @@ class TestReviewWeb(unittest.TestCase):
             ).decode("utf-8")
             self.assertIn("data-stage='linkedin'", html)
             self.assertIn("data-preview='true'", html)
+            self.assertIn("data-external-updates='true'", html)
             self.assertIn("href='/?stage=worth&amp;preview=1'", html)
             self.assertIn("href='/?stage=enrich&amp;preview=1'", html)
             self.assertIn("href='/?stage=linkedin&amp;preview=1'", html)
+
+    def test_current_linkedin_queue_does_not_poll(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            review_manifest = base / "review" / "manifest.json"
+            review_manifest.parent.mkdir(parents=True)
+            review_manifest.write_text(json.dumps({
+                "stage": "enrich",
+                "status": "completed",
+                "completed_stages": ["worth", "enrich"],
+                "people_revision": "revision-1",
+            }), encoding="utf-8")
+            selection = web.worth_selection_from_parents(
+                [], manifest_path=review_manifest)
+            enrichment_manifest = base / "research" / "manifest.json"
+            enrichment_manifest.parent.mkdir(parents=True)
+            enrichment_manifest.write_text(json.dumps({
+                "stage": "enrich",
+                "status": "completed",
+                "selection": selection,
+                "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0},
+            }), encoding="utf-8")
+
+            html = web.page_html(
+                [],
+                {"stage": ["linkedin"]},
+                base / "review.csv",
+                parents_dir=base / "parents",
+                dossier_dir=base / "dossiers",
+                manifest_path=review_manifest,
+                enrichment_manifest_path=enrichment_manifest,
+            ).decode("utf-8")
+
+        self.assertIn("data-stage='linkedin'", html)
+        self.assertIn("data-external-updates='false'", html)
 
     def test_every_workflow_wait_state_maps_to_a_polled_browser_stage(self):
         expected = {
