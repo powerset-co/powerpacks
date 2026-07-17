@@ -457,6 +457,200 @@ class TestMintingFromCandidateResearch(unittest.TestCase):
             self.assertEqual(row["last_interaction"], "2026-05-01T00:00:00Z")
 
 
+class TestStaleParentMergeCollapse(unittest.TestCase):
+    """A later cluster_merge folds two former parents (each separately researched into
+    a synthetic row) into one. On the next assemble rerun the two stale synthetic rows
+    must collapse to ONE row keyed to the current parent — no re-fetch, no lost decision
+    (mirrors the live Lukas Kroc parent34/parent58 -> parent06 case)."""
+
+    # Two email candidates that a later merge folds under one current parent.
+    EMAIL_A = "lukas.kroc@example.com"
+    EMAIL_B = "lukas@brainoft.example.com"
+    PID_A = "candidate:email:lukas.kroc@example.com"
+    PID_B = "candidate:email:lukas@brainoft.example.com"
+
+    def _profile(self, name, city, positions, education, completeness) -> dict:
+        return {
+            "person": {"full_name": name, "first_name": name.split()[0],
+                       "last_name": name.split()[-1], "confidence": 0.8},
+            "location": {"city": city, "country": "Czechia", "raw": ""},
+            "headline": {"text": f"{name} headline"}, "summary": {"text": "s"},
+            "positions": positions, "education": education,
+            "social": {"linkedin_url": None},
+            "metadata": {"estimated_completeness": completeness, "gaps": []},
+        }
+
+    def _index_json(self, base: Path) -> Path:
+        """index.json where a merged parent06 owns BOTH children (the post-merge state)."""
+        idx = {
+            "parents": {
+                "lukas-kroc-parent06": {
+                    "parent_id": "parent-061853d39742",
+                    "name": "Lukas Kroc",
+                    "children": ["lukas-kroc-342c581f", "lukas-kroc-58723ea8"],
+                    "needs_review": [],
+                },
+            },
+            "slugs": {
+                "lukas-kroc-342c581f": {"name": "Lukas Kroc", "person_id": self.PID_A},
+                "lukas-kroc-58723ea8": {"name": "Lukas Kroc", "person_id": self.PID_B},
+            },
+        }
+        path = base / "index.json"
+        common.write_json(path, idx)
+        return path
+
+    def _stale_research(self, base: Path) -> Path:
+        """Two stale per-child research dirs (parent34, parent58) — the pre-merge keys."""
+        research = base / "research"
+        common.write_json(research / "lukas-kroc-parent34" / "01_research_parallel.json",
+                          self._profile("Lukas Kroc", "Prague",
+                                        [{"title": "Consultant", "company_name": "Caspar.ai",
+                                          "is_current": True}],
+                                        [{"school_name": "CTU", "degree": "MSc"}], 0.9))
+        common.write_json(research / "lukas-kroc-parent58" / "01_research_parallel.json",
+                          self._profile("Lukas Kroc", "Palo Alto",
+                                        [], [{"school_name": "Stanford", "degree": "PhD"}], 0.6))
+        return research
+
+    def _stale_queue(self, base: Path) -> Path:
+        """The current queue still carries the STALE per-child handles (as it does live)."""
+        queue = base / "research" / "research_queue.csv"
+        queue.parent.mkdir(parents=True, exist_ok=True)
+        with queue.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=dresearch.QUEUE_FIELDS)
+            writer.writeheader()
+            writer.writerow({"handle": "lukas-kroc-parent34",
+                             "source_parent_slug": "lukas-kroc-parent34",
+                             "source_person_ids": json.dumps([self.PID_A]),
+                             "source_candidate_public_identifier": self.PID_A,
+                             "display_name": "Lukas Kroc", "primary_email": self.EMAIL_A,
+                             "source_channel": "email"})
+            writer.writerow({"handle": "lukas-kroc-parent58",
+                             "source_parent_slug": "lukas-kroc-parent58",
+                             "source_person_ids": json.dumps([self.PID_B]),
+                             "source_candidate_public_identifier": self.PID_B,
+                             "display_name": "Lukas Kroc", "primary_email": self.EMAIL_B,
+                             "source_channel": "email"})
+        return queue
+
+    def _assemble(self, base: Path, out: Path, index_json: Path) -> list[dict]:
+        research = base / "research"
+        queue = self._stale_queue(base)
+        people = base / "people.csv"
+        people.write_text("id,primary_email,primary_phone\n", encoding="utf-8")
+        empty_overrides = base / "no-review.csv"      # keep the real overrides file out of the run
+        with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+             mock.patch.object(asp, "LINKEDIN_OVERRIDES_CSV", empty_overrides), \
+             contextlib.redirect_stdout(io.StringIO()):
+            asp.main(["--research-dir", str(research), "--queue-csv", str(queue),
+                      "--people-csv", str(people), "--index-json", str(index_json),
+                      "--verdicts-jsonl", str(base / "verdicts.jsonl"),
+                      "--out", str(out)])
+        with out.open(newline="", encoding="utf-8") as fh:
+            return list(csv.DictReader(fh))
+
+    def test_two_stale_rows_collapse_to_one_current_parent(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._stale_research(base)
+            index_json = self._index_json(base)
+            out = base / "synthetic-people.csv"
+            rows = self._assemble(base, out, index_json)
+            # ONE synthetic for the merged parent, keyed to the CURRENT parent slug.
+            self.assertEqual(len(rows), 1)
+            (row,) = rows
+            self.assertEqual(row["source_parent_slug"], "lukas-kroc-parent06")
+            # Union of both children's person_ids retained (so the human can still pick).
+            self.assertEqual(sorted(json.loads(row["source_person_ids"])),
+                             sorted([self.PID_A, self.PID_B]))
+            # Research unioned deterministically: both schools + the one position.
+            edu = json.dumps(json.loads(row["education"]))
+            self.assertIn("CTU", edu)
+            self.assertIn("Stanford", edu)
+            self.assertEqual(row["current_company"], "Caspar.ai")
+
+    def test_collapse_is_idempotent_and_needs_no_refetch(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._stale_research(base)
+            index_json = self._index_json(base)
+            out = base / "synthetic-people.csv"
+            first = self._assemble(base, out, index_json)
+            second = self._assemble(base, out, index_json)     # rerun, nothing re-fetched
+            self.assertEqual(len(first), 1)
+            self.assertEqual(len(second), 1)
+            self.assertEqual(first[0]["public_identifier"], second[0]["public_identifier"])
+            self.assertEqual(first[0]["source_parent_slug"], second[0]["source_parent_slug"])
+
+    def test_collapse_carries_forward_a_user_approval(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._stale_research(base)
+            index_json = self._index_json(base)
+            out = base / "synthetic-people.csv"
+            # Seed the two PRE-MERGE synthetic rows; the user approved one (keep=yes).
+            pub_a = asp.synth_public_identifier(self.EMAIL_A, "", "")
+            pub_b = asp.synth_public_identifier(self.EMAIL_B, "", "")
+            asp.write_rows(out, {
+                pub_a: {"id": pub_a, "public_identifier": pub_a, "full_name": "Lukas Kroc",
+                        "enrichment_provider": "synthetic", "approved": "yes",
+                        "source_parent_slug": "lukas-kroc-parent34"},
+                pub_b: {"id": pub_b, "public_identifier": pub_b, "full_name": "Lukas Kroc",
+                        "enrichment_provider": "synthetic", "approved": "auto",
+                        "source_parent_slug": "lukas-kroc-parent58"},
+            })
+            rows = self._assemble(base, out, index_json)
+            self.assertEqual(len(rows), 1)                          # collapsed to one
+            self.assertEqual(rows[0]["approved"], "yes")            # the human keep survived
+
+    def test_collapse_prefers_an_exclude_over_a_keep(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._stale_research(base)
+            index_json = self._index_json(base)
+            out = base / "synthetic-people.csv"
+            pub_a = asp.synth_public_identifier(self.EMAIL_A, "", "")
+            pub_b = asp.synth_public_identifier(self.EMAIL_B, "", "")
+            asp.write_rows(out, {
+                pub_a: {"id": pub_a, "public_identifier": pub_a, "full_name": "Lukas Kroc",
+                        "enrichment_provider": "synthetic", "approved": "yes",
+                        "source_parent_slug": "lukas-kroc-parent34"},
+                pub_b: {"id": pub_b, "public_identifier": pub_b, "full_name": "Lukas Kroc",
+                        "enrichment_provider": "synthetic", "approved": "no",
+                        "source_parent_slug": "lukas-kroc-parent58"},
+            })
+            rows = self._assemble(base, out, index_json)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["approved"], "no")             # exclude beats keep
+
+    def test_two_distinct_people_stay_two_rows(self):
+        """A genuinely-two-people case (each under its OWN current parent) is untouched."""
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._stale_research(base)
+            # index folds each child under a DIFFERENT current parent -> not the same person.
+            idx = {
+                "parents": {
+                    "lukas-kroc-parentaa": {"children": ["c-a"], "name": "Lukas Kroc",
+                                            "needs_review": []},
+                    "lukas-kroc-parentbb": {"children": ["c-b"], "name": "Lukas Kroc",
+                                            "needs_review": []},
+                },
+                "slugs": {
+                    "c-a": {"name": "Lukas Kroc", "person_id": self.PID_A},
+                    "c-b": {"name": "Lukas Kroc", "person_id": self.PID_B},
+                },
+            }
+            index_json = base / "index.json"
+            common.write_json(index_json, idx)
+            out = base / "synthetic-people.csv"
+            rows = self._assemble(base, out, index_json)
+            self.assertEqual(len(rows), 2)                          # still two people
+            slugs = sorted(r["source_parent_slug"] for r in rows)
+            self.assertEqual(slugs, ["lukas-kroc-parentaa", "lukas-kroc-parentbb"])
+
+
 def _facts_record(decision: str = "", reason: str = "", name: str = "") -> str:
     """One facts JSONL line exactly as synthesize_person_context.on_result writes it
     (the extracted profile nested under 'facts')."""
@@ -1416,6 +1610,102 @@ class TestSyntheticWorthGateSync(unittest.TestCase):
             (parent,) = web.load_synthetic_parents(
                 path, parents_dir, dossier_dir, facts_dir)
         self.assertEqual(parent["dossier_slug"], child_slug)
+
+
+class TestReviewUiDedupMergedParent(unittest.TestCase):
+    """Defensive UI dedup: two stale review-parents (synthetic rows) that resolve to
+    the SAME current deep-context parent must render as ONE card, offering both
+    candidate options — even before an assemble rerun re-keys the artifacts."""
+
+    PID_A = "candidate:email:lukas.kroc@example.com"
+    PID_B = "candidate:email:lukas@brainoft.example.com"
+
+    def _synthetic_csv(self, base: Path) -> Path:
+        path = base / "synthetic-people.csv"
+        columns = ["id", "public_identifier", "full_name", "enrichment_provider",
+                   "approved", "source_parent_slug", "source_person_ids",
+                   "source_candidate_public_identifier"]
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=columns)
+            writer.writeheader()
+            writer.writerow({"id": self.PID_A, "public_identifier": "synth-email-aaa",
+                             "full_name": "Lukas Kroc", "enrichment_provider": "synthetic",
+                             "approved": "auto", "source_parent_slug": "lukas-kroc-parent34",
+                             "source_person_ids": json.dumps([self.PID_A]),
+                             "source_candidate_public_identifier": self.PID_A})
+            writer.writerow({"id": self.PID_B, "public_identifier": "synth-email-bbb",
+                             "full_name": "Lukas Kroc", "enrichment_provider": "synthetic",
+                             "approved": "auto", "source_parent_slug": "lukas-kroc-parent58",
+                             "source_person_ids": json.dumps([self.PID_B]),
+                             "source_candidate_public_identifier": self.PID_B})
+        return path
+
+    def _index_json(self, base: Path, same_parent: bool) -> Path:
+        if same_parent:
+            parents = {"lukas-kroc-parent06": {"children": ["c-a", "c-b"],
+                                               "name": "Lukas Kroc", "needs_review": []}}
+        else:
+            parents = {"lukas-kroc-parentaa": {"children": ["c-a"], "name": "Lukas Kroc",
+                                               "needs_review": []},
+                       "lukas-kroc-parentbb": {"children": ["c-b"], "name": "Lukas Kroc",
+                                               "needs_review": []}}
+        idx = {"parents": parents,
+               "slugs": {"c-a": {"name": "Lukas Kroc", "person_id": self.PID_A},
+                         "c-b": {"name": "Lukas Kroc", "person_id": self.PID_B}}}
+        path = base / "index.json"
+        common.write_json(path, idx)
+        return path
+
+    def _load(self, base: Path, same_parent: bool) -> list[dict]:
+        synthetic = self._synthetic_csv(base)
+        index_json = self._index_json(base, same_parent)
+        parents_dir = base / "parents"
+        dossier_dir = base / "dossiers"
+        facts_dir = base / "facts"
+        for directory in (parents_dir, dossier_dir, facts_dir):
+            directory.mkdir(exist_ok=True)
+        people = base / "people.csv"
+        people.write_text("id,public_identifier\n", encoding="utf-8")
+        return web._all_review_parents(
+            base / "verdicts.jsonl", base / "review.csv", synthetic,
+            facts_dir, people, parents_dir, dossier_dir, base / "cache",
+            index_json=index_json)
+
+    def test_merged_parent_renders_one_card_with_both_options(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parents = self._load(base, same_parent=True)
+            # ONE review card, not two, for the merged person.
+            self.assertEqual(len(parents), 1)
+            (parent,) = parents
+            # Both candidate options are offered inside that single card...
+            pubs = sorted(c["pub"] for c in parent["candidates"])
+            self.assertEqual(pubs, ["synth-email-aaa", "synth-email-bbb"])
+            # ...and >1 candidate routes the card into the conflict tab (existing path).
+            self.assertTrue(web.parent_in_tab(parent, "conflict"))
+
+    def test_two_distinct_parents_render_two_cards(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parents = self._load(base, same_parent=False)
+            self.assertEqual(len(parents), 2)                      # genuinely two people
+            for parent in parents:
+                self.assertEqual(len(parent["candidates"]), 1)
+
+    def test_collapse_helper_leaves_unindexed_parents_untouched(self):
+        # A parent whose person_ids are not under any current parent is passed through.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            index_json = base / "index.json"
+            common.write_json(index_json, {"parents": {}, "slugs": {}})
+            parents = [
+                {"slug": "a", "name": "A", "person_ids": ["candidate:email:a@x.com"],
+                 "candidates": [{"pub": "synth-a"}], "sources": ["gmail"]},
+                {"slug": "b", "name": "B", "person_ids": ["candidate:email:b@x.com"],
+                 "candidates": [{"pub": "synth-b"}], "sources": ["gmail"]},
+            ]
+            out = web.collapse_by_current_parent(parents, index_json)
+        self.assertEqual(len(out), 2)
 
 
 class TestStagedReviewUI(unittest.TestCase):

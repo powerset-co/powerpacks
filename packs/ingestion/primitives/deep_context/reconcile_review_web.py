@@ -31,6 +31,7 @@ from typing import Any, Callable
 from packs.ingestion.primitives.deep_context.candidates import (
     NETWORK_WORTH_VALUES,
     candidates_resolved_by_existing,
+    current_parent_by_person_id,
     effective_network_worth,
     is_candidate_id,
     load_candidates,
@@ -43,6 +44,7 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     GMAIL_CHANNEL,
     IMESSAGE_CHANNEL,
+    INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
@@ -979,19 +981,79 @@ def summarize(parents: list[dict[str, Any]]) -> dict[str, int]:
     return s
 
 
+def collapse_by_current_parent(parents: list[dict[str, Any]],
+                               index_json: Path = INDEX_JSON) -> list[dict[str, Any]]:
+    """Defensively fold review-parents that resolve to the SAME current deep-context
+    parent into ONE card.
+
+    A later cluster_merge can fold two former parents into one while stale, parent-scoped
+    artifacts (a synthetic row, a research verdict) still carry the OLD parent slug — the
+    assemble step self-heals those on rerun, but a stale artifact must never render two cards
+    for one merged person in the meantime. Parents whose ``person_ids`` map to the same current
+    parent (via the child->parent membership index.json already encodes) merge: candidates are
+    unioned (deduped by pub) so BOTH LinkedIn/synthetic options land in the one card, and a
+    parent with >1 candidate already flows into the conflict tab. Parents whose person_ids are
+    not co-located under one current parent are left untouched, so genuinely-distinct people
+    still get one card each.
+    """
+    parent_map = current_parent_by_person_id(index_json)
+
+    def current_slug(parent: dict[str, Any]) -> str:
+        for pid in parent.get("person_ids") or []:
+            slug = parent_map.get(str(pid or "").strip().lower())
+            if slug:
+                return slug
+        return ""
+
+    order: list[str] = []
+    groups: dict[str, dict[str, Any]] = {}
+    passthrough: list[dict[str, Any]] = []
+    for parent in parents:
+        slug = current_slug(parent)
+        if not slug:
+            passthrough.append(parent)
+            continue
+        if slug not in groups:
+            groups[slug] = parent
+            order.append(slug)
+            continue
+        base = groups[slug]
+        seen = {str(c.get("pub") or "").strip().lower() for c in base["candidates"]}
+        for cand in parent.get("candidates") or []:
+            pub = str(cand.get("pub") or "").strip().lower()
+            if pub and pub in seen:
+                continue
+            seen.add(pub)
+            base["candidates"].append(cand)
+        for pid in parent.get("person_ids") or []:
+            if pid not in base["person_ids"]:
+                base["person_ids"].append(pid)
+        base_sources = base.get("sources") or []
+        for source in parent.get("sources") or []:
+            if source not in base_sources:
+                base_sources.append(source)
+        base["sources"] = base_sources
+    merged = passthrough + [groups[slug] for slug in order]
+    # Preserve the original relative ordering as closely as possible (grouped parents
+    # keep the position of their first occurrence).
+    return merged
+
+
 def extend_and_annotate(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
                         synthetic_path: Path, facts_dir: Path,
                         connections: set[str] | None = None, *,
                         parents_dir: Path = PARENTS_DIR,
                         dossier_dir: Path = DOSSIER_DIR,
                         profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                        research_dir: Path = DEEP_RESEARCH_DIR) -> list[dict[str, Any]]:
+                        research_dir: Path = DEEP_RESEARCH_DIR,
+                        index_json: Path = INDEX_JSON) -> list[dict[str, Any]]:
     """Add the synthetic + pre-research candidate rows to the verdict parents and
     annotate everyone's worth — the full row set page_html/summarize operate on."""
     parents.extend(load_synthetic_parents(
         synthetic_path, parents_dir, dossier_dir, facts_dir))
     shown = {pid.lower() for p in parents for pid in p["person_ids"]}
     parents.extend(load_candidate_parents(facts_dir, overrides, shown))
+    parents[:] = collapse_by_current_parent(parents, index_json)
     hydrate_proposed_profiles(
         parents, profile_cache_dir=profile_cache_dir, research_dir=research_dir)
     annotate_worth(parents, overrides, facts_dir, connections)
@@ -2423,11 +2485,16 @@ def _all_review_parents(verdicts_path: Path, review_path: Path, synthetic_path: 
                         facts_dir: Path, people_csv: Path,
                         parents_dir: Path = PARENTS_DIR,
                         dossier_dir: Path = DOSSIER_DIR,
-                        profile_cache_dir: Path = PROFILE_CACHE_DIR) -> list[dict[str, Any]]:
+                        profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                        index_json: Path | None = None) -> list[dict[str, Any]]:
+    # index.json is the sibling of the parents dir (ROOT/index.json vs ROOT/parents);
+    # deriving it from parents_dir keeps test fixtures self-contained.
+    index_json = index_json if index_json is not None else parents_dir.parent / "index.json"
     parents, overrides = build_parents(verdicts_path, review_path)
     extend_and_annotate(parents, overrides, synthetic_path, facts_dir,
                         load_connection_keys(people_csv), parents_dir=parents_dir,
-                        dossier_dir=dossier_dir, profile_cache_dir=profile_cache_dir)
+                        dossier_dir=dossier_dir, profile_cache_dir=profile_cache_dir,
+                        index_json=index_json)
     annotate_sources(parents, load_people_sources(people_csv))
     return parents
 
