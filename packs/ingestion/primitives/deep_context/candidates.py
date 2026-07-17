@@ -144,6 +144,46 @@ def candidate_carry(row: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def current_parent_by_person_id(index_json: Path = INDEX_JSON) -> dict[str, str]:
+    """Map every child person_id -> the CURRENT parent slug that owns it.
+
+    This is the durable child->parent membership that ``parents/*.md`` + index.json
+    already encode: ``parents[slug].children`` lists child dossier slugs and
+    ``slugs[child].person_id`` names the person. A later cluster_merge can fold two
+    former parents' children under one new parent; parent-scoped artifacts keyed on
+    the OLD (now-dead) parent slug are re-keyed to the current parent by looking up
+    their person_ids here. Keys are lowercased for case-insensitive lookup.
+    """
+    try:
+        index = json.loads(index_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    slugs = index.get("slugs") or {}
+    mapping: dict[str, str] = {}
+    for parent_slug, parent in (index.get("parents") or {}).items():
+        for child_slug in parent.get("children") or []:
+            person_id = str((slugs.get(child_slug) or {}).get("person_id") or "").strip()
+            if person_id:
+                mapping.setdefault(person_id.lower(), parent_slug)
+    return mapping
+
+
+def resolve_current_parent(person_ids: list[str], stale_slug: str = "",
+                           index_json: Path = INDEX_JSON) -> str:
+    """The current parent slug that owns any of ``person_ids`` (via index membership).
+
+    Falls back to ``stale_slug`` when no person_id is currently indexed under a
+    parent (unchanged behavior for artifacts whose parent is still live). Empty only
+    when neither a mapping nor a fallback slug is available.
+    """
+    mapping = current_parent_by_person_id(index_json)
+    for person_id in person_ids:
+        slug = mapping.get(str(person_id or "").strip().lower())
+        if slug:
+            return slug
+    return stale_slug
+
+
 def candidates_resolved_by_existing(index_json: Path = INDEX_JSON) -> set[str]:
     """Candidate person ids already folded into a canonical parent that also has
     a real people.csv child.
