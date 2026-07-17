@@ -2063,7 +2063,7 @@ class TestReviewWeb(unittest.TestCase):
     def test_browser_observer_polls_only_while_external_updates_are_possible(self):
         script = web.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn('fetch("/api/status", { cache: "no-store" })', script)
-        self.assertIn("const statusPollMs = 5000;", script)
+        self.assertIn("const statusPollMs = 1000;", script)
         self.assertIn(
             'const observesExternalUpdates = document.body.dataset.externalUpdates === "true";',
             script,
@@ -2095,6 +2095,7 @@ class TestReviewWeb(unittest.TestCase):
         self.assertIn("void pollFileState();", script)
         self.assertIn("window.setInterval(pollFileState, statusPollMs);", script)
         self.assertIn('document.addEventListener("visibilitychange"', script)
+        self.assertIn('leaveAndNavigate("People complete", "/?stage=enrich")', script)
         self.assertNotIn(
             'document.visibilityState !== "visible" || hasIdentityDraft()',
             script,
@@ -2394,7 +2395,7 @@ class TestReviewWeb(unittest.TestCase):
             pending = web.pending_linkedin_candidates(sam)
             self.assertEqual([cand["pub"] for cand in pending], ["samreal", "sammaybe", "samwrong"])
             html = web.render_linkedin_card(sam, pending[0], d, d)
-            self.assertIn("Is this the right LinkedIn?", html)
+            self.assertIn("Is this the right profile?", html)
             self.assertIn("data-decide='keep'", html)
             self.assertIn("data-open-fix", html)
             self.assertIn("class='alternate'", html)
@@ -2714,7 +2715,9 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertNotIn("Use a different LinkedIn", html)
             self.assertIn(">Use this</button>", html)
             self.assertIn(">Skip</button>", html)
-            self.assertNotIn("data-decide='keep'", html)
+            # explicit approve control for the researched profile (synthetic keep)
+            self.assertIn("data-decide='keep'", html)
+            self.assertIn(">Use this profile</button>", html)
             self.assertNotIn(">Yes</button>", html)
             self.assertNotIn(">No</button>", html)
             # approved=auto surfaces as verified

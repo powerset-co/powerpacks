@@ -72,11 +72,13 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
+[People] Connect this Codex thread to the review UI
 [People] Review people worth adding to network
 [Match] Confirm imported LinkedIn matches the person
 [Match] Preview and approve one lookup for Added candidates and eligible wrong links
 [Match] Assemble researched profiles without LinkedIn
 [LinkedIn] Review LinkedIn profiles we found for network
+[LinkedIn] Disconnect the review bridge
 [Match] Apply approved replacement LinkedIns
 [Build] Build merged people list
 [Build] Rebuild the search index
@@ -210,13 +212,37 @@ Launch the local UI once in a background terminal:
 bin/deep-context review --fresh
 ```
 
+When the current harness exports `CODEX_THREAD_ID`, `review` automatically
+starts or replaces one local same-thread bridge before opening the UI. Confirm
+that its JSON output says `deep_context_review_agent_bridge` / `started`, then
+mark `[People] Connect this Codex thread to the review UI` complete. The bridge:
+
+- listens only on the fixed local Unix socket
+  `.powerpacks/deep-context/review/agent-bridge.sock`;
+- receives only an inert `state_changed` notification after a successful UI
+  mutation;
+- rereads the existing `review-status` contract and wakes this exact Codex
+  thread only for an actionable next step;
+- waits for the current foreground turn's persisted `task_complete` event
+  before resuming the thread, and serializes all later wakes;
+- sends one fixed prompt — browser text, form fields, and URLs never become
+  agent instructions; and
+- stops after waking this thread for `retry_enrichment` or `realize`.
+
+No bridge ledger, run id, or progress manifest exists. Review and enrichment
+manifests remain the only workflow state. If bridge startup is unavailable or
+fails, say so and use the one-minute `review-status` polling fallback below.
+Reopening the UI from a different Codex thread intentionally replaces the
+bridge target with that current thread.
+
 The UI is the user's control surface for review and approval. It records choices
 in the existing review CSVs and fixed manifests. The agent owns workflow control:
-keep polling `bin/deep-context review-status`, run only its exact next action, and
-let the UI reflect progress. Direct progress-step navigation is preview only; it
-does not itself advance provider work. A clicked preview stage stays visible and
-keeps refreshing from file changes instead of being forced back to the actual
-workflow stage.
+when the same-thread bridge started, yield on human waits and let UI mutations
+wake this thread; otherwise keep polling `bin/deep-context review-status`. Run
+only its exact next action and let the UI reflect progress. Direct progress-step
+navigation is preview only; it does not itself advance provider work. A clicked
+preview stage stays visible and keeps refreshing from file changes instead of
+being forced back to the actual workflow stage.
 The browser observes those fixed files and automatically refreshes or moves to
 the current stage. People and LinkedIn decisions are local SPA mutations: the
 server keeps the review model in memory, the LinkedIn page buffers ten pending
@@ -225,29 +251,35 @@ poll or next-card request is part of a decision click. When five cards remain,
 the browser refills back to ten from the cached server queue.
 The `/api/status` observer runs only while external changes are possible: on
 Enrich and Done, plus a LinkedIn preview opened before enrichment completes.
-It checks immediately and every five seconds, with another immediate check when
+It checks immediately and every second, with another immediate check when
 a hidden tab becomes visible again. Once enrichment is current, LinkedIn stops
 polling and remains a purely local buffered review queue.
-Open the UI once; do not open additional tabs or repeatedly open stage URLs as
-the workflow advances.
+A non-empty replacement URL on a polled preview pauses reload/navigation until
+it is saved; merely focusing an empty field does not. Open the UI once; do not
+open additional tabs or repeatedly open stage URLs as the workflow advances.
 
 The main Review tab shows only people the model marked `maybe`, one at a time
 with Yes/No. The Yes and No tabs are paginated, editable tables with one action
 per row: No from the Yes table and Yes from the No table.
 Model Yes starts in Yes; model No/spam, user No, and legacy Exclude share No.
 When the final maybe is answered, the server writes People completion
-automatically. Continue only changes the visible page to Enrich Contacts.
+automatically and the browser goes straight to Enrich Contacts, where an
+indeterminate "Asking agent to continue" bar remains visible until the next
+manifest state arrives.
 
-From the agent session, poll the read-only deterministic primitive:
+From the agent session, the bridge wake — or the fallback poll — always runs the
+read-only deterministic primitive first:
 
 ```bash
 bin/deep-context review-status
 ```
 
-Run it once per minute while its action is a human wait or provider wait. It
-reads CSVs/manifests and emits one `next_action`; it does not mutate files, open
-a browser, shell out, or call a network. Follow only that exact action. In
-particular, do not infer readiness from chat text or browser state.
+Without a live bridge, run it once per minute while its action is a human wait
+or provider wait. With a live bridge, do not create a competing timer loop; yield
+until the UI wakes this same thread. The primitive reads CSVs/manifests and emits
+one `next_action`; it does not mutate files, open a browser, shell out, or call a
+network. Follow only that exact action. In particular, do not infer readiness
+from chat text or browser state.
 
 The fixed files are:
 
@@ -276,13 +308,17 @@ bin/deep-context reconcile-deep-research --dry-run --include-candidates --includ
 
 Show gross eligible, completed-result reuse, duplicate handles skipped, net-new
 submissions, price/person, total estimate, and the proposed budget. The approval
-amount is based on net-new submissions only. The Enrich Contacts page renders an
-`Approve $X.XX` button for that exact current estimate. Clicking it writes the
-approval into the existing enrichment `manifest.json`, bound to the current
-People revision, full Yes/Maybe/No fingerprint, net-new count, and budget. It
-does not start a provider call.
+amount is based on net-new submissions only. For a positive estimate, the
+Enrich Contacts page renders an `Approve $X.XX` button for that exact current
+estimate. Clicking it writes the approval into the existing enrichment
+`manifest.json`, bound to the current People revision, full Yes/Maybe/No
+fingerprint, net-new count, and budget. It does not start a provider call. When
+net-new is zero, the page says cached results need no approval and the bridge
+advances through `run_enrichment_from_cache`; do not ask for or synthesize a
+zero-dollar approval.
 
-Keep polling `bin/deep-context review-status`. While it emits
+Continue through same-thread bridge wakes (or fallback polling). While
+`bin/deep-context review-status` emits
 `next_action == "await_enrichment_approval"`, wait for the UI button. When it
 emits `next_action == "run_approved_enrichment"`, run the exact command it
 prints, which always includes the approved cap:
@@ -326,8 +362,10 @@ the person out of the index for now. A synthetic result has the same two
 outcomes: paste the LinkedIn URL to create an approved retarget, or Skip it.
 Synthetic rows are never directly approved for indexing.
 
-Keep polling `bin/deep-context review-status` about once per minute. Continue to
-realization only when it emits `next_action == "realize"`. A LinkedIn page opened
+Continue through same-thread bridge wakes (or poll about once per minute without
+a bridge). Continue to realization only when `bin/deep-context review-status`
+emits `next_action == "realize"`. That wake automatically stops the bridge; mark
+`[LinkedIn] Disconnect the review bridge` complete. A LinkedIn page opened
 directly before current enrichment completes remains a read-only waiting view.
 
 ### 8. Apply and realize

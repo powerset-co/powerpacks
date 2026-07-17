@@ -4,7 +4,9 @@
 The browser reviews uncertain People decisions, observes Enrich Contacts progress,
 then confirms new identities. Human choices remain the existing durable
 ``review.csv`` / synthetic gates; two fixed manifests tell the agent when to advance.
-No provider call, subprocess, or paid work happens in this server.
+No provider call, subprocess, or paid work happens in this server. Profile data is
+read from the local RapidAPI cache only; cache misses are surfaced as a passive
+note pointing at the offline ``prefetch_profiles`` stage.
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from packs.ingestion.primitives.deep_context.candidates import (
     NETWORK_WORTH_VALUES,
@@ -1259,6 +1261,13 @@ def approve_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
     enrichment = read_enrichment_manifest(path, selection=selection)
     if not enrichment.get("current"):
         raise ValueError("Enrichment preview is stale; refresh the preview before approving")
+    # A five-second browser observer can leave a just-completed approval button
+    # visible briefly after the bridge has already advanced the fixed manifest.
+    # Treat that stale click as an idempotent success so the client simply
+    # reloads into the current progress state instead of showing a false error.
+    if enrichment.get("status") in {
+            "running", "submitted", "research_complete", "completed"}:
+        return enrichment
     if enrichment.get("status") != "needs_approval":
         raise ValueError("Enrichment is not waiting for approval")
     if enrichment.get("approval_current"):
@@ -1551,9 +1560,10 @@ def _clean_text(value: str) -> str:
 def relationship_summary(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
     """The dossier's "Relationship & cadence" prose as clean, readable text.
 
-    This is the card's Summary — NOT the dossier's own "## Summary" (which holds
-    the "Network worth:" line and is intentionally dropped). The trailing
-    "_grokked ..._" bookkeeping line is stripped; '' when the section is absent.
+    Shown on cards under the "Relationship" label — NOT the dossier's own
+    "## Summary" (which holds the "Network worth:" line and is intentionally
+    dropped). The trailing "_grokked ..._" bookkeeping line is stripped;
+    '' when the section is absent.
     """
     markdown = render_dossier(parents_dir, dossier_dir, slug)
     body = _dossier_section(markdown, "Relationship & cadence")
@@ -1595,8 +1605,8 @@ def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str) -> list
 def render_dossier_markdown(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
     """The card's dossier preview: exactly two extracted sections as safe HTML.
 
-    "Summary" is the "Relationship & cadence" prose (never the dossier's own
-    "## Summary", which carries the Network worth line). "Timeline" keeps its
+    "Relationship" is the "Relationship & cadence" prose (never the dossier's
+    own "## Summary", which carries the Network worth line). "Timeline" keeps its
     per-date bullets. Everything else (name block, wiki links, Topics,
     Identifiers, Possible same person, worth lines) is dropped; identifiers are
     bubbled up into the card's Contact section instead. Absent sections are
@@ -1608,11 +1618,11 @@ def render_dossier_markdown(parents_dir: Path, dossier_dir: Path, slug: str) -> 
         paragraphs = "".join(
             f"<p>{esc(block.strip())}</p>"
             for block in re.split(r"\n\s*\n", summary) if block.strip())
-        parts.append(f"<h4>Summary</h4>{paragraphs}")
+        parts.append(f"<div><dt>Relationship</dt><dd>{paragraphs}</dd></div>")
     timeline = timeline_entries(parents_dir, dossier_dir, slug)
     if timeline:
         items = "".join(f"<li>{esc(entry)}</li>" for entry in timeline)
-        parts.append(f"<h4>Timeline</h4><ul>{items}</ul>")
+        parts.append(f"<div><dt>Timeline</dt><dd><ul class='fact-list'>{items}</ul></dd></div>")
     return "".join(parts)
 
 
@@ -1678,27 +1688,77 @@ def _merge_contacts(contacts: list[str], identifiers: list[str]) -> list[str]:
     return merged
 
 
+# Shown as the card's Summary when no verified identity summary exists (a
+# research-blob-only or empty reason means exactly that).
+NO_PROFILE_SUMMARY = "Couldn't find profile"
+
+
+def _display_reason(reason: str) -> str:
+    """Card display only (stored CSV reasons are never rewritten): the
+    "deep research: <process notes>" text is NEVER shown. A real summary before
+    a "; deep research:" tail is kept; a reason that is only the research blob
+    (or empty) falls back to "Couldn't find profile" — research-blob-only means
+    no verified identity summary exists."""
+    marker = reason.lower().find("deep research:")
+    cleaned = reason if marker == -1 else reason[:marker]
+    cleaned = cleaned.strip().rstrip(";,·—–-").strip()
+    return cleaned or NO_PROFILE_SUMMARY
+
+
+# Top entries pinned in Work/Education fact lists; the rest sit behind a toggle.
+FACT_LIST_PINNED = 3
+
+
+def _fact_list(items: list[str], *, pinned: int = FACT_LIST_PINNED) -> str:
+    """Bullet list with the first ``pinned`` entries shown; longer lists keep the
+    rest behind a "+ show N more" toggle (wired in reconcile_review.js)."""
+    shown = "".join(f"<li>{esc(item)}</li>" for item in items[:pinned])
+    hidden = "".join(f"<li hidden data-more-item>{esc(item)}</li>" for item in items[pinned:])
+    extra = len(items) - pinned
+    toggle = (f"<button type='button' class='show-more' data-show-more "
+              f"data-more-label='+ show {extra} more' data-less-label='show fewer'>"
+              f"+ show {extra} more</button>" if extra > 0 else "")
+    return f"<ul class='fact-list'>{shown}{hidden}</ul>{toggle}"
+
+
+def profile_fact_rows(candidate: dict[str, Any]) -> list[str]:
+    """Work / Education dt-dd rows in the same section style as Contact."""
+    rows: list[str] = []
+    if candidate.get("experiences"):
+        rows.append(f"<div><dt>Work</dt><dd>{_fact_list(candidate['experiences'])}</dd></div>")
+    if candidate.get("education"):
+        rows.append(f"<div><dt>Education</dt><dd>{_fact_list(candidate['education'])}</dd></div>")
+    return rows
+
+
 def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: bool,
-             profile_facts: str = "", identifiers: list[str] | None = None) -> str:
+             profile_rows: list[str] | None = None,
+             identifiers: list[str] | None = None,
+             profile_placeholder: str = "") -> str:
     contacts = _merge_contacts(
         [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
         identifiers or [])
     evidence = [*(candidate.get("supporting") or []), *(candidate.get("contradicting") or [])]
-    reason = str(candidate.get("reason") or "")
+    reason = _display_reason(str(candidate.get("reason") or ""))
+    # Section order: Contact -> Summary (the judge/verify reason) -> Evidence,
+    # then the lazily loaded dossier rows (Relationship -> Timeline), then the
+    # profile facts (Work / Education) when profile data exists.
     rows: list[str] = []
     if contacts:
         rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
-    if identity and reason:
-        rows.append(f"<div><dt>Match signal</dt><dd>{esc(reason)}</dd></div>")
+    if identity:
+        rows.append(f"<div><dt>Summary</dt><dd>{esc(reason)}</dd></div>")
     if evidence:
         rows.append(f"<div><dt>Evidence</dt><dd>{esc(' · '.join(evidence[:5]))}</dd></div>")
     extra = f"<dl>{''.join(rows)}</dl>" if rows else ""
+    profile_dl = (f"<dl>{''.join(profile_rows)}</dl>" if profile_rows else "")
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
-    # No "Details"/"Context" section labels: the contact facts and the extracted
-    # dossier preview (Summary/Timeline) read fine on their own.
+    # No "Details"/"Context" section labels; the dossier preview renders as more
+    # dt/dd rows in the SAME dl style (no inset box), lazily via /api/dossier.
     return (f"<section class='details' data-slug='{esc(dossier_slug)}'>"
-            f"<div class='details-body'>{profile_facts}{extra}"
-            "<div class='dossier-text' aria-busy='true'>Loading…</div></div></section>")
+            f"<div class='details-body'>{profile_placeholder}{extra}"
+            "<dl class='dossier-text' aria-busy='true'></dl>"
+            f"{profile_dl}</div></section>")
 
 
 def _scroll_region(content: str) -> str:
@@ -1747,18 +1807,44 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], **_: Any) -> st
             f"<button data-worth='yes' data-pub='{esc(key)}'>Yes</button></div>")
 
 
+def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) -> bool:
+    """Cache-ONLY render-time hydration for a card whose verdict snapshot has no
+    profile facts (e.g. the cache was empty at reconcile time and the offline
+    prefetch stage has since filled it). Local file read, never a provider call.
+    Returns True when the candidate still has no profile facts afterwards."""
+    if candidate.get("synthetic"):
+        return False
+    if (candidate.get("experiences") or candidate.get("education")
+            or candidate.get("headline")):
+        return False
+    pub = str(candidate.get("profile_pub") or candidate.get("pub") or "").strip().lower()
+    url = str(candidate.get("url") or "")
+    if not pub and not url:
+        return False
+    view = linkedin_view({"public_identifier": pub or extract_public_identifier(url).lower(),
+                          "linkedin_url": url}, profile_cache_dir)
+    if view.get("has_profile"):
+        for field in ("full_name", "headline", "profile_pic_url", "experiences",
+                      "education", "location"):
+            if view.get(field):
+                candidate[field] = view[field]
+        candidate["has_profile"] = True
+        return False
+    return True  # attached link, nothing cached -> surface the prefetch note
+
+
 def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
-                         parents_dir: Path, dossier_dir: Path) -> str:
+                         parents_dir: Path, dossier_dir: Path,
+                         profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
     name = str(parent.get("name") or candidate.get("full_name") or "this person")
     synthetic = bool(candidate.get("synthetic"))
+    cache_miss = _hydrate_card_profile(candidate, profile_cache_dir)
     profile_name = str(candidate.get("full_name") or name)
-    roles = "".join(f"<li>{esc(role)}</li>" for role in (candidate.get("experiences") or [])[:3])
-    education = " · ".join(candidate.get("education") or [])
     if synthetic:
         eyebrow = "No LinkedIn found"
         link = "<span class='linkedin-label'>Researched profile</span>"
     else:
-        question = "Is this the right LinkedIn?"
+        question = "Is this the right profile?"
         eyebrow = ""
         url = str(candidate.get("url") or "")
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
@@ -1774,10 +1860,10 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
       <button class='button button-ghost alternate-skip' data-decide='detach'
               data-toast='Skipped' data-pub='{esc(candidate.get('pub'))}'
               data-parent='{esc(parent.get('slug'))}'>Skip</button>"""
-    profile_facts = (
-        (f"<ul class='roles'>{roles}</ul>" if roles else "")
-        + (f"<p class='education'>{esc(education)}</p>" if education else "")
-    )
+    # Attached LinkedIn with nothing in the local profile cache: passive note
+    # only — the UI never fetches; the offline prefetch stage fills the cache.
+    placeholder = ("<p class='profile-note'>No cached profile data — "
+                   "run profile prefetch to fetch it.</p>" if cache_miss else "")
     identifiers = dossier_identifiers(
         parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
     scroll_content = f"""
@@ -1791,12 +1877,16 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
             {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
           </div>
         </div>
-        {_details(parent, candidate, identity=True, profile_facts=profile_facts, identifiers=identifiers)}"""
+        {_details(parent, candidate, identity=True, profile_rows=profile_fact_rows(candidate),
+                  identifiers=identifiers, profile_placeholder=placeholder)}"""
     return f"""
     <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
         {f"""<div class='synthetic-correction'>
+          <button class='button button-primary use-profile' data-decide='keep'
+                  data-toast='Profile approved' data-pub='{esc(candidate.get('pub'))}'
+                  data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
           <div class='question'>Add their LinkedIn</div>
           {fix_form}
         </div>""" if synthetic else f"""<div class='question'>{question}</div>
@@ -1805,7 +1895,7 @@ def render_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
                   aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>
           <button class='button button-primary' data-decide='keep'
                   data-pub='{esc(candidate.get('pub'))}'
-                  data-parent='{esc(parent.get('slug'))}'>Yes</button>
+                  data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
         </div>
         <div class='alternate' id='fix-section-{esc(candidate.get('pub'))}' hidden>
           {fix_form}
@@ -1893,7 +1983,7 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
             {f"<div class='row-badges'>{badges}</div>" if badges else ""}
             <dl class='row-facts'>{''.join(fact_rows)}</dl>
             <h4 class='dossier-heading'>Who they are</h4>
-            <div class='dossier-text' aria-busy='true'>Loading…</div>
+            <dl class='row-facts dossier-text' aria-busy='true'></dl>
           </div>
         </details>"""
 
@@ -1972,24 +2062,36 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
            aria-valuemin='0' aria-valuemax='{total}' aria-valuenow='{completed}'>
         <div class='enrich-progress-fill' style='width:{percent}%'></div>
       </div>"""
+    agent_handoff_bar = """
+      <div class='enrich-progress is-indeterminate' role='progressbar'
+           aria-label='Asking agent to continue'>
+        <div class='enrich-progress-fill'></div>
+      </div>"""
     if progress["worth_pending"]:
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>1</div>"
                 "<h2>Review in progress</h2>"
                 f"<p>{progress['worth_pending']} decisions left · {progress['lookup_ready']} currently yes</p>"
                 f"{progress_bar}</div>")
     if status in {"not_started", "stale"}:
-        return ("<div class='empty-state enrich-state'><div class='empty-mark'>2</div>"
-                "<h2>Preparing enrichment</h2>"
-                f"<p>{progress['lookup_ready']} approved contact{'s' if progress['lookup_ready'] != 1 else ''}</p>"
-                f"{progress_bar}</div>")
+        return ("<div class='empty-state enrich-state'>"
+                "<h2>Asking agent to continue</h2>"
+                f"<p>Preparing {progress['lookup_ready']} approved "
+                f"contact{'s' if progress['lookup_ready'] != 1 else ''}</p>"
+                f"{agent_handoff_bar}</div>")
     if status == "needs_approval":
         estimate = float(enrichment.get("estimated_usd") or 0)
         new_count = max(0, int(enrichment.get("would_submit") or 0))
         reused = max(0, int(enrichment.get("reused_completed") or 0))
+        if new_count == 0:
+            return ("<div class='empty-state enrich-state'>"
+                    "<h2>Asking agent to continue</h2>"
+                    f"<p>0 new · {reused} reused · no approval needed</p>"
+                    f"{agent_handoff_bar}</div>")
         if enrichment.get("approval_current"):
-            return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
-                    "<h2>Approved</h2>"
-                    f"<p>${estimate:.2f} approved · waiting to start</p>{progress_bar}</div>")
+            return ("<div class='empty-state enrich-state'>"
+                    "<h2>Asking agent to continue</h2>"
+                    f"<p>Approval saved · starting {new_count} new lookup"
+                    f"{'s' if new_count != 1 else ''}</p>{agent_handoff_bar}</div>")
         details = f"{new_count} new · {reused} reused · up to ${estimate:.2f}"
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>2</div>"
                 "<h2>Ready to enrich</h2>"
@@ -2025,15 +2127,30 @@ def _step(number: int, label: str, active: bool, complete: bool, count: int = 0,
     return f"<div class='step{state}'{current}>{content}</div>"
 
 
+def _carousel_nav() -> str:
+    """Debug-only Prev/Next arrows flanking the queue card (browse, no decisions)."""
+    return ("<button class='carousel-nav carousel-prev' type='button' "
+            "data-carousel='prev' aria-label='Previous card'>&#8249;</button>"
+            "<button class='carousel-nav carousel-next' type='button' "
+            "data-carousel='next' aria-label='Next card'>&#8250;</button>")
+
+
 def worth_review_body(parents: list[dict[str, Any]], progress: dict[str, int],
-                      parents_dir: Path, dossier_dir: Path) -> str:
+                      parents_dir: Path, dossier_dir: Path, *,
+                      debug: bool = False, index: int = 0) -> str:
     """The Review tab's current item: the next queue card, or the stage-complete
     state. Shared by page_html and /api/worth-card so a decision click can swap
-    in the next card client-side without a full page reload."""
+    in the next card client-side without a full page reload. ``debug`` adds the
+    browse-only carousel; ``index`` picks a queue position (default unchanged)."""
     queue = [parent for parent in parents if needs_worth_review(parent)]
     if queue:
         queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
-        return render_worth_card(queue[0], parents_dir, dossier_dir)
+        index = index % len(queue)
+        card = render_worth_card(queue[index], parents_dir, dossier_dir)
+        if debug:
+            return (f"<div class='carousel-shell' data-queue-index='{index}' "
+                    f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>")
+        return card
     return ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
             "<h2>Decisions ready</h2>"
             f"<p>{progress['lookup_ready']} people will be enriched</p>"
@@ -2077,6 +2194,7 @@ def linkedin_cards_payload(
     parents: list[dict[str, Any]], progress: dict[str, int], *,
     offset: int = 0, limit: int = LINKEDIN_CARD_BATCH_SIZE,
     linkedin_complete: bool, parents_dir: Path, dossier_dir: Path,
+    profile_cache_dir: Path = PROFILE_CACHE_DIR,
 ) -> dict[str, Any]:
     """One cached queue window for the SPA.
 
@@ -2095,7 +2213,7 @@ def linkedin_cards_payload(
         cards.append(
             "<div class='linkedin-buffer-card' data-linkedin-buffer-card "
             f"data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
-            f"{render_linkedin_card(parent, candidate, parents_dir, dossier_dir)}</div>"
+            f"{render_linkedin_card(parent, candidate, parents_dir, dossier_dir, profile_cache_dir)}</div>"
         )
     return {
         "offset": offset,
@@ -2109,19 +2227,51 @@ def linkedin_cards_payload(
     }
 
 
+def _profile_miss_count(
+    queue: list[tuple[dict[str, Any], dict[str, Any]]],
+    profile_cache_dir: Path,
+) -> int:
+    """How many queue cards have an attached link but no cached profile at all
+    (the population the offline prefetch stage would fetch)."""
+    return sum(
+        1 for _, candidate in queue
+        if _hydrate_card_profile(candidate, profile_cache_dir)
+    )
+
+
 def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
                          enrichment_complete: bool, linkedin_complete: bool,
                          parents_dir: Path, dossier_dir: Path,
-                         enrichment: dict[str, Any] | None = None) -> str:
-    """Render the initial ten-card SPA buffer for Check LinkedIn."""
+                         enrichment: dict[str, Any] | None = None,
+                         profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                         debug: bool = False, index: int = 0) -> str:
+    """Render the ten-card LinkedIn SPA buffer or the debug carousel."""
     note = "" if enrichment_complete else _enrichment_note(enrichment)
+    queue = linkedin_review_queue(parents)
+    misses = _profile_miss_count(queue, profile_cache_dir)
+    if misses:
+        plural = "person here has" if misses == 1 else "people here have"
+        note += (f"<p class='enrichment-note' role='status'>{misses} {plural} no cached "
+                 "profile — run profile prefetch to fetch them.</p>")
+
+    if debug and queue:
+        index %= len(queue)
+        parent, candidate = queue[index]
+        body = render_linkedin_card(
+            parent, candidate, parents_dir, dossier_dir, profile_cache_dir)
+        return (
+            f"<div class='linkedin-stage' data-queue-index='{index}' "
+            f"data-queue-total='{len(queue)}'>{note}{_carousel_nav()}{body}</div>"
+        )
+
     payload = linkedin_cards_payload(
         parents, progress, linkedin_complete=linkedin_complete,
-        parents_dir=parents_dir, dossier_dir=dossier_dir)
+        parents_dir=parents_dir, dossier_dir=dossier_dir,
+        profile_cache_dir=profile_cache_dir)
     if payload["cards"]:
         cards = []
-        for index, card in enumerate(payload["cards"]):
-            hidden = " hidden" if index else ""
+        for card_index, card in enumerate(payload["cards"]):
+            hidden = " hidden" if card_index else ""
             cards.append(card.replace("data-linkedin-buffer-card ",
                                       f"data-linkedin-buffer-card{hidden} ", 1))
         body = (
@@ -2140,7 +2290,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
               review_path: Path, *, parents_dir: Path = PARENTS_DIR,
               dossier_dir: Path = DOSSIER_DIR,
               manifest_path: Path = REVIEW_MANIFEST,
-              enrichment_manifest_path: Path = ENRICH_MANIFEST) -> bytes:
+              enrichment_manifest_path: Path = ENRICH_MANIFEST,
+              profile_cache_dir: Path = PROFILE_CACHE_DIR) -> bytes:
     progress = review_progress(parents)
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
     enrichment = read_enrichment_manifest(enrichment_manifest_path, selection=selection)
@@ -2148,6 +2299,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     state_token = review_state_token(progress, selection, enrichment, review_manifest)
     view = _phase_view(params, progress, manifest_path)
     preview = str((params.get("preview") or [""])[0]).strip() == "1"
+    debug = str((params.get("debug") or [""])[0]).strip() == "1"
     worth_complete = phase_is_completed("worth", progress, manifest_path) or not progress["worth_total"]
     enrichment_complete = enrichment.get("status") == "completed" and enrichment.get("current")
     enrichment_continued = enrichment_handoff_completed(manifest_path)
@@ -2166,7 +2318,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         decision_view = decision_view if decision_view in {"review", "yes", "no"} else "review"
         tabs = render_decision_tabs(progress, decision_view, preview=preview)
         if decision_view == "review":
-            body = worth_review_body(parents, progress, parents_dir, dossier_dir)
+            body = worth_review_body(parents, progress, parents_dir, dossier_dir,
+                                     debug=debug)
         else:
             # Legacy ?page= URLs still land here; the infinite-scroll list always
             # starts from the top and streams the rest via /api/decision-rows.
@@ -2179,7 +2332,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         content = linkedin_review_body(
             parents, progress, enrichment_complete=bool(enrichment_complete),
             linkedin_complete=bool(linkedin_complete),
-            parents_dir=parents_dir, dossier_dir=dossier_dir, enrichment=enrichment)
+            parents_dir=parents_dir, dossier_dir=dossier_dir, enrichment=enrichment,
+            profile_cache_dir=profile_cache_dir, debug=debug)
     else:
         content = ("<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
                    f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p></div>")
@@ -2241,7 +2395,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                  enrichment_manifest_path: Path = ENRICH_MANIFEST,
                  profile_cache_dir: Path = PROFILE_CACHE_DIR,
                  avatar_dir: Path | None = None,
-                 initial_parents: list[dict[str, Any]] | None = None):
+                 initial_parents: list[dict[str, Any]] | None = None,
+                 agent_notifier: Callable[[], object] | None = None):
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
     avatar_dir = avatar_dir or manifest_path.parent / "avatars"
     mutation_lock = threading.Lock()
@@ -2261,6 +2416,17 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             except OSError:
                 values.append((str(path), 0, 0))
         return tuple(values)
+
+    def notify_agent() -> None:
+        """Best-effort wake after durable UI mutations; file state stays authoritative."""
+        if agent_notifier is None:
+            return
+        try:
+            agent_notifier()
+        except Exception:
+            # Review decisions must never fail because the optional Codex bridge
+            # is absent, stale, or shutting down.
+            pass
 
     cached_parents = (
         initial_parents if initial_parents is not None else
@@ -2396,15 +2562,6 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     parents, view, offset=offset, limit=min(max(1, limit), 200),
                     parents_dir=parents_dir, dossier_dir=dossier_dir))
                 return
-            if parsed.path == "/api/worth-card":
-                # The Review queue's next card (or its stage-complete state), so a
-                # decision click swaps content in place instead of reloading.
-                with mutation_lock:
-                    parents = parents_now()
-                body = worth_review_body(parents, review_progress(parents),
-                                         parents_dir, dossier_dir)
-                self.send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
-                return
             if parsed.path == "/api/linkedin-cards":
                 try:
                     offset = int(str((params.get("offset") or ["0"])[0]))
@@ -2419,28 +2576,43 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         parents, progress, offset=offset, limit=limit,
                         linkedin_complete=phase_is_completed(
                             "linkedin", progress, manifest_path),
-                        parents_dir=parents_dir, dossier_dir=dossier_dir)
+                        parents_dir=parents_dir, dossier_dir=dossier_dir,
+                        profile_cache_dir=profile_cache_dir)
                     payload.update({
                         "progress": progress,
                         "state_token": state_token_for(parents, progress),
                     })
                 self.send_json(payload)
                 return
-            if parsed.path == "/api/linkedin-card":
+            if parsed.path in {"/api/worth-card", "/api/linkedin-card"}:
+                # The next queue card (or its stage-complete state), so a decision
+                # click swaps content in place instead of reloading. Optional
+                # debug/index params drive the browse-only carousel; defaults are
+                # exactly the pre-carousel behavior.
+                debug = str((params.get("debug") or [""])[0]).strip() == "1"
+                try:
+                    index = max(0, int(str((params.get("index") or ["0"])[0])))
+                except ValueError:
+                    index = 0
                 with mutation_lock:
                     parents = parents_now()
                 progress = review_progress(parents)
-                selection = worth_selection_from_parents(
-                    parents, manifest_path=manifest_path)
-                enrichment = read_enrichment_manifest(
-                    enrichment_manifest_path, selection=selection)
-                body = linkedin_review_body(
-                    parents, progress,
-                    enrichment_complete=bool(enrichment.get("status") == "completed"
-                                             and enrichment.get("current")),
-                    linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
-                    parents_dir=parents_dir, dossier_dir=dossier_dir,
-                    enrichment=enrichment)
+                if parsed.path == "/api/worth-card":
+                    body = worth_review_body(parents, progress, parents_dir, dossier_dir,
+                                             debug=debug, index=index)
+                else:
+                    selection = worth_selection_from_parents(
+                        parents, manifest_path=manifest_path)
+                    enrichment = read_enrichment_manifest(
+                        enrichment_manifest_path, selection=selection)
+                    body = linkedin_review_body(
+                        parents, progress,
+                        enrichment_complete=bool(enrichment.get("status") == "completed"
+                                                 and enrichment.get("current")),
+                        linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
+                        parents_dir=parents_dir, dossier_dir=dossier_dir,
+                        enrichment=enrichment, profile_cache_dir=profile_cache_dir,
+                        debug=debug, index=index)
                 self.send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/avatar":
@@ -2463,7 +2635,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 parents = parents_now()
             self.send_bytes(page_html(parents, params, review_path, parents_dir=parents_dir,
                                       dossier_dir=dossier_dir, manifest_path=manifest_path,
-                                      enrichment_manifest_path=enrichment_manifest_path))
+                                      enrichment_manifest_path=enrichment_manifest_path,
+                                      profile_cache_dir=profile_cache_dir))
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
@@ -2491,6 +2664,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=409)
                     return
+                notify_agent()
                 self.send_json({"ok": True, "enrichment": enrichment})
                 return
 
@@ -2516,6 +2690,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=409)
                     return
+                notify_agent()
                 self.send_json({"ok": True, "manifest": manifest, "progress": progress})
                 return
 
@@ -2580,6 +2755,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=400)
                     return
+                notify_agent()
                 self.send_json({
                     "ok": True, "pub": pub, **result,
                     "action": decided["action"], "approved": decided["approved"],
@@ -2695,6 +2871,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                 status=400)
                 return
+            notify_agent()
             self.send_json(payload)
 
         def log_message(self, fmt: str, *args: Any) -> None:
@@ -2760,6 +2937,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     if requested_stage == "worth":
         begin_people_review()
+    # Local import avoids a module cycle: the bridge imports workflow_status.
+    from packs.ingestion.primitives.deep_context.review_agent_bridge import notify_bridge
     server = ThreadingHTTPServer((args.host, args.port),
                                  make_handler(review_path, verdicts_path, parents_dir, Path(args.dossier_dir),
                                               args.confirm_threshold, args.detach_threshold,
@@ -2770,7 +2949,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
                                               enrichment_manifest_path=Path(args.enrichment_manifest),
                                               profile_cache_dir=Path(args.profile_cache_dir),
                                               avatar_dir=Path(args.avatar_dir),
-                                              initial_parents=parents))
+                                              initial_parents=parents,
+                                              agent_notifier=notify_bridge))
     host, port = server.server_address
     url = f"http://{host}:{port}/{query}"
     print(json.dumps({"primitive": "reconcile_review_web", "status": "serving", "url": url,
