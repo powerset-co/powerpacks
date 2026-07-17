@@ -897,6 +897,20 @@ details.decision-row.leaving {
     min-height: 0;
   }
 
+  /* The virtualization buffer (and its one visible buffer-card) sits between
+     .linkedin-stage and .identity-card. Both must forward the locked height, or
+     .identity-card's height:100% resolves against an auto-height parent and
+     collapses to content height — clipping the decision buttons off-screen. */
+  body[data-stage="linkedin"] .linkedin-card-buffer {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  body[data-stage="linkedin"] .linkedin-buffer-card {
+    flex: 1;
+    min-height: 0;
+  }
+
   body[data-stage="worth"] .avatar:not(.avatar-small),
   body[data-stage="linkedin"] .avatar:not(.avatar-small) {
     width: 58px;
