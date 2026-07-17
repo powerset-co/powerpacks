@@ -62,7 +62,6 @@ from packs.ingestion.primitives.deep_context.candidates import (
     candidate_key_of,
     candidate_row,
     is_candidate_id,
-    llm_network_worth,
 )
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
@@ -86,6 +85,13 @@ from packs.ingestion.primitives.deep_context.common import (
     parse_list,
     write_json,
 )
+from packs.ingestion.primitives.deep_context.review_store import (
+    OVERRIDE_COLUMNS,
+    USER_APPROVED,
+    load_override_rows,
+    row_keys_for_person,
+    write_override_rows,
+)
 from packs.ingestion.primitives.enrich_people.enrich_people import (
     profile_cache_path,
     read_usable_cached_profile,
@@ -107,6 +113,11 @@ DR_COST_PER_PERSON = 0.05      # Parallel.ai core2x $/person (matches reconcile_
 DEFAULT_DR_BUDGET = 25.0
 
 VERDICTS = ["confirmed", "wrong_person", "needs_review"]
+
+# Backwards-compatible name used by the review UI and tests. The storage
+# implementation lives outside LinkedIn reconciliation so identity is not a
+# second worth writer.
+_write_override_rows = write_override_rows
 
 SYSTEM_PROMPT = (
     "You verify whether a LinkedIn profile is the SAME PERSON as a contact I know from my "
@@ -168,29 +179,7 @@ SYSTEM_PROMPT = (
     "would not have a (matching) profile, set linkedin_plausibly_absent=true rather than "
     "forcing a verdict. Set recommend_deep_research=true only when EXTERNAL research could "
     "realistically resolve the identity (i.e. not when they plausibly have no profile at all). "
-    "Cite concrete supporting and contradicting evidence.\n\n"
-    "SPAM / COLD-OUTREACH SCREEN (separate from identity): also assess whether this CONTACT "
-    "is a spammy relationship not worth indexing — unsolicited cold outreach ('hey, would you "
-    "be interested in X', sales/SEO/agency/recruiting pitches, automated sequences) where I "
-    "never engaged, replied 'not interested', or asked them to stop. Set spam_contact=true with "
-    "spam_confidence and a one-line spam_reason. A real relationship — a colleague, friend, "
-    "warm intro, anyone I initiated with or had a genuine back-and-forth with — is NEVER spam, "
-    "no matter how pitchy a single message reads. When in doubt, spam_contact=false.\n\n"
-    "NETWORK WORTH (required for every contact, including contacts with no LinkedIn): "
-    "classify the relationship as yes, maybe, or no. This is primarily a human-vs-noise "
-    "filter, not a prestige contest.\n"
-    "- yes: a real person I genuinely know or correspond with — family/relatives, friends, classmates, "
-    "professors/teachers/mentors, alumni or school contacts, colleagues, collaborators, "
-    "warm introductions, founders, investors, operators, researchers, or another meaningful "
-    "two-way personal/professional relationship. Personal, old, academic, social, or sparse "
-    "professional context is still yes when the human relationship is real.\n"
-    "- no: automated/broadcast mail, newsletters, receipts/notifications, mass marketing, "
-    "cold sales/recruiting/SEO/agency outreach I did not meaningfully engage with, spam, or "
-    "a purely transactional support/vendor/service exchange with no durable relationship.\n"
-    "- maybe: only when evidence is genuinely balanced or incomplete about whether a real "
-    "relationship exists. Maybe is exceptional. Never use it merely because job/seniority/"
-    "professional value is unknown or because the relationship is personal, old, academic, "
-    "or social. Choose yes or no whenever the evidence supports either conclusion."
+    "Cite concrete supporting and contradicting evidence."
 )
 
 RECONCILE_SCHEMA: dict[str, Any] = {
@@ -204,22 +193,9 @@ RECONCILE_SCHEMA: dict[str, Any] = {
         "linkedin_plausibly_absent": {"type": "boolean"},
         "recommend_deep_research": {"type": "boolean"},
         "reason": {"type": "string", "description": "One-line rationale."},
-        "spam_contact": {"type": "boolean", "description": "Unsolicited cold-outreach contact I never engaged with."},
-        "spam_confidence": {"type": "number"},
-        "spam_reason": {"type": "string", "description": "One line; empty when spam_contact=false."},
-        "network_worth": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "decision": {"type": "string", "enum": ["yes", "maybe", "no"]},
-                "reason": {"type": "string"},
-            },
-            "required": ["decision", "reason"],
-        },
     },
     "required": ["verdict", "confidence", "supporting_evidence", "contradicting_evidence",
-                 "linkedin_plausibly_absent", "recommend_deep_research", "reason",
-                 "spam_contact", "spam_confidence", "spam_reason", "network_worth"],
+                 "linkedin_plausibly_absent", "recommend_deep_research", "reason"],
 }
 
 
@@ -521,11 +497,6 @@ def connection_verdict() -> dict[str, Any]:
                                 "Connections import) — you are connected, so it is the same person."],
         "contradicting_evidence": [], "linkedin_plausibly_absent": False, "recommend_deep_research": False,
         "reason": "Ground truth: you're connected to this person on LinkedIn (linkedin_csv import).",
-        "spam_contact": False, "spam_confidence": 0.0, "spam_reason": "",
-        "network_worth": {
-            "decision": "yes",
-            "reason": "Existing first-degree LinkedIn connection.",
-        },
     }
 
 
@@ -644,38 +615,11 @@ def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
         f"  messages me→them:\n{me}\n  messages them→me:\n{them}\n\n"
     )
     if task.get("no_link"):
-        verified = task.get("verified_profile") or {}
-        if verified.get("has_profile"):
-            # Limbo re-judge: the identity was already verified at the link level, so we can
-            # now hand the worth judge the professional context (headline/title/company/
-            # location/experience) the ORIGINAL worth judge lacked. This is a WORTH decision
-            # only — do not re-open identity (it is settled).
-            verified_block = "\n".join([
-                f"  name: {verified.get('full_name') or '(unknown)'}",
-                f"  headline: {verified.get('headline') or '(none)'}",
-                f"  location: {verified.get('location') or '(unknown)'}",
-                "  experience:",
-                _bullets(verified.get("experiences") or [], "(none listed)"),
-                "  education:",
-                _bullets(verified.get("education") or [], "(none listed)"),
-            ])
-            return (
-                f"{contact}"
-                f"THIS CONTACT'S LINKEDIN IS ALREADY VERIFIED (identity settled) — "
-                f"{verified.get('linkedin_url') or 'n/a'}\n{verified_block}\n\n"
-                "Re-judge ONLY network_worth (and spam) using BOTH the relationship evidence "
-                "above AND this verified professional context — a real title/company/school is "
-                "exactly the signal an earlier 'real person but no professional context' maybe was "
-                "missing. For the identity-only fields, return verdict=needs_review, confidence=0, "
-                "no supporting or contradicting evidence, linkedin_plausibly_absent=false, "
-                "recommend_deep_research=false, and reason='linkedin already verified'."
-            )
         return (
             f"{contact}"
             "NO LINKEDIN PROFILE IS ATTACHED.\n"
-            "Judge network_worth and spam from the relationship evidence above. For the "
-            "identity-only fields, return verdict=needs_review, confidence=0, no supporting "
-            "or contradicting evidence, linkedin_plausibly_absent=true, "
+            "There is no identity to reconcile. Return verdict=needs_review, confidence=0, "
+            "no supporting or contradicting evidence, linkedin_plausibly_absent=true, "
             "recommend_deep_research=false, and reason='no LinkedIn attached'."
         )
     if task.get("research_proposal"):
@@ -759,28 +703,23 @@ def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
                          if task.get("research_unverified") else f" (carried confidence {carried:.2f} < 0.50)"))
             return {"verdict": "wrong_person", "confidence": 0.0, "supporting_evidence": [],
                     "contradicting_evidence": [reason], "linkedin_plausibly_absent": False,
-                    "recommend_deep_research": False, "reason": reason,
-                    "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
+                    "recommend_deep_research": False, "reason": reason}
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": False,
                 "recommend_deep_research": False,
-                "reason": "speculative deep-research proposal needs the LLM judge (offline stub won't confirm)",
-                "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
+                "reason": "speculative deep-research proposal needs the LLM judge (offline stub won't confirm)"}
     if task.get("name_matched"):
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": False,
                 "recommend_deep_research": False,
-                "reason": "speculative name-match needs the LLM judge (offline stub won't confirm)",
-                "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
+                "reason": "speculative name-match needs the LLM judge (offline stub won't confirm)"}
     if not li or not li.get("has_profile"):
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": True,
-                "recommend_deep_research": False, "reason": "no usable LinkedIn profile",
-                "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
+                "recommend_deep_research": False, "reason": "no usable LinkedIn profile"}
     return {"verdict": "confirmed", "confidence": 0.9, "supporting_evidence": ["attached link (offline stub)"],
             "contradicting_evidence": [], "linkedin_plausibly_absent": False,
-            "recommend_deep_research": False, "reason": "offline stub: trusts attached link",
-            "spam_contact": False, "spam_confidence": 0.0, "spam_reason": ""}
+            "recommend_deep_research": False, "reason": "offline stub: trusts attached link"}
 
 
 # Below this carried identity confidence a deep-research guess is treated as unverified by the
@@ -927,8 +866,8 @@ def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
 def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_threshold: float,
                                     overrides: dict[str, dict[str, str]], facts_dir: Path) -> int:
     """An optimistic name-match the judge did NOT confirm reverts to a plain no-link parent so the
-    worth review + deep-research lookup proceed exactly as if we never guessed a LinkedIn, and a
-    real connection is never touched by a wrong guess. Confirmed matches stay put and fold onto the
+    deep-research lookup proceeds exactly as if we never guessed a LinkedIn, and a real connection
+    is never touched by a wrong guess. Confirmed matches stay put and fold onto the
     connection at merge. Runs once, after judging and before the decide/override/consolidate tail —
     so only confirmed matches are ever persisted as identity rows.
 
@@ -936,7 +875,7 @@ def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_thresho
     <Name>, I probably know them"), we do NOT let it vanish. We stash a `name_match_review` payload
     on the task (the connection's name, pub, url) so upsert_name_match_reviews() surfaces a visible
     needs_review row explaining that the judge found no non-name corroboration — the human confirms
-    or rejects it. The task itself still reverts to no-link (worth/lookup unchanged)."""
+    or rejects it. The task itself still reverts to the no-link lookup path."""
     reverted = 0
     for t in tasks:
         if not t.get("name_matched"):
@@ -957,7 +896,6 @@ def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_thresho
         }
         t.update({"no_link": True, "name_matched": False, "candidate_key": "",
                   "linkedin": {}, "conflict": False, "from_connections": False})
-        t["worth_person_ids"] = worth_person_ids_for_review(t, overrides, facts_dir)
         reverted += 1
     return reverted
 
@@ -1046,146 +984,31 @@ def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]],
 
 # --- durable override (consumed by the fan-in merge) ------------------------
 
-OVERRIDE_COLUMNS = ["public_identifier", "action", "approved", "new_linkedin_url",
-                    "new_public_identifier", "linkedin_url", "match_emails", "match_phones",
-                    "confidence", "reason", "person_id", "source", "updated_at",
-                    # Machine-owned spam screen (backwards compatible: older files simply lack
-                    # them). The LLM may ALWAYS refresh the machine-owned llm_* columns — and
-                    # ONLY those — on any row, including user-decided ones; action/approved
-                    # stay user-owned.
-                    "llm_reject", "llm_reject_confidence", "llm_reject_reason",
-                    # Machine-owned network-worth judgment (like the llm_reject trio: ALWAYS
-                    # refreshed, never a decision). Reconcile freshly judges dossier-backed
-                    # contacts; a confident spam screen is folded in as one way to say `no`.
-                    # Older synthesis facts remain a backwards-compatible fallback.
-                    "llm_worth", "llm_worth_reason",
-                    # USER-owned network-worth mark (yes|maybe|no; blank = defer to the
-                    # synthesis LLM's network_worth in facts). Sticky like approved —
-                    # the machine never writes it.
-                    "network_worth"]
-# A user-touched approval is sticky — re-runs never overwrite these rows.
-USER_APPROVED = {"yes", "no"}
-
-
-def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
-    """Existing decisions keyed by public_identifier (tolerates a pre-approval-column file)."""
-    rows: dict[str, dict[str, str]] = {}
-    if path.exists():
-        with path.open(newline="", encoding="utf-8") as fh:
-            for row in csv.DictReader(fh):
-                pub = (row.get("public_identifier") or "").strip().lower()
-                if pub:
-                    rows[pub] = row
-    return rows
-
-
-def _write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=OVERRIDE_COLUMNS)
-        w.writeheader()
-        for pub in sorted(rows):
-            w.writerow({k: rows[pub].get(k, "") for k in OVERRIDE_COLUMNS})
-
 
 # A low-confidence verdict still suggests an action, written PENDING for the user to approve.
 _VERDICT_TO_ACTION = {"wrong_person": "detach", "confirmed": "verify", "needs_review": "verify"}
 
 
-def _llm_reject_fields(v: dict[str, Any]) -> dict[str, str]:
-    """The machine-owned spam columns. Always refreshable — including on user-decided rows —
-    because they never carry a decision, only the model's latest read of the relationship."""
-    if v.get("spam_contact"):
-        return {"llm_reject": "spam",
-                "llm_reject_confidence": f"{float(v.get('spam_confidence') or 0):.3f}",
-                "llm_reject_reason": v.get("spam_reason", "")}
-    return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": ""}
-
-
-# Spam at/above this bar is the LLM saying network_worth=no (mirrors the fan-in merge's
-# SPAM_DROP_CONFIDENCE); below it the spam flag stays informational only.
-SPAM_WORTH_CONFIDENCE = 0.85
-
-
-def _llm_worth_fields(v: dict[str, Any], person_ids: list[str], facts_dir: Path) -> dict[str, str]:
-    """Machine-owned worth fields for rows explicitly selected for re-review.
-
-    A confident spam screen is one way the LLM says no; otherwise use reconcile's
-    fresh worth judgment, falling back to the older synthesis fact for
-    reapply/offline compatibility.
-    """
-    if v.get("spam_contact") and float(v.get("spam_confidence") or 0) >= SPAM_WORTH_CONFIDENCE:
-        return {"llm_worth": "no", "llm_worth_reason": v.get("spam_reason", "")}
-    fresh = v.get("network_worth") or {}
-    fresh_decision = str(fresh.get("decision") or "").strip().lower()
-    if fresh_decision in ("yes", "maybe", "no"):
-        return {
-            "llm_worth": fresh_decision,
-            "llm_worth_reason": str(fresh.get("reason") or ""),
-        }
-    worth = llm_network_worth(person_ids[0], facts_dir) if person_ids else {"decision": "", "reason": ""}
-    return {"llm_worth": worth["decision"],
-            "llm_worth_reason": worth["reason"] if worth["decision"] else ""}
-
-
 def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = FACTS_DIR) -> dict[str, Any]:
-    """Upsert EVERY judged row into the single durable, approval-aware decisions table — the
-    one file the user edits and the fan-in merge re-applies.
+    """Upsert LinkedIn identity decisions without judging or rewriting worth.
 
     High-confidence (action confirm/detach) -> `approved=auto` (applied at merge).
     Everything else (low-confidence / needs_review / ambiguous conflict) -> `approved=` PENDING,
     with a suggested action mapped from the verdict (wrong_person->detach, confirmed/needs_review
     ->verify). The merge applies only approved ∈ {auto,yes}; pending rows wait for the user to set
     `yes` (or flip the action). Idempotent + INCREMENTAL: keyed by public_identifier, a row the
-    USER has touched (approved ∈ {yes,no}) is NEVER overwritten — sticky across re-runs. people.csv
-    is NOT touched. Candidate-origin people without LinkedIn get the same machine-owned
-    worth/spam columns while their user-owned Yes/No remains sticky."""
+    USER has touched (approved ∈ {yes,no}) is NEVER overwritten — sticky across re-runs.
+    Synthesis is the sole machine writer for llm_worth; this identity writer merely carries
+    any existing worth fields forward when a person-id row acquires a LinkedIn-keyed row."""
     existing = load_override_rows(path)
-    detach = verify = pending = preserved = worth_refreshed = 0
+    detach = verify = pending = preserved = 0
     for t in tasks:
         if t.get("no_link"):
-            target_person_ids = t.get("worth_person_ids")
-            if target_person_ids is None:
-                # Backwards-compatible direct-call behavior for already-judged
-                # tasks. Pipeline-built tasks always carry an explicit target list.
-                target_person_ids = (
-                    t.get("person_ids") or []
-                    if (t.get("verdict") or {}).get("network_worth")
-                    else []
-                )
-            machine = {
-                **_llm_reject_fields(t.get("verdict") or {}),
-                **_llm_worth_fields(t.get("verdict") or {},
-                                    t.get("person_ids") or [], facts_dir),
-            }
-            for person_id in target_person_ids:
-                if not is_candidate_id(person_id):
-                    continue
-                pub = str(person_id).strip().lower()
-                prior = existing.get(pub, {})
-                row = {column: prior.get(column, "") for column in OVERRIDE_COLUMNS}
-                row.update(machine)
-                row.update({
-                    "public_identifier": pub,
-                    "person_id": person_id,
-                    "source": prior.get("source") or "deep-context-reconcile",
-                    "updated_at": now_iso(),
-                })
-                existing[pub] = row
-                worth_refreshed += 1
-                if str(prior.get("network_worth") or "").strip().lower() in ("yes", "no"):
-                    preserved += 1
             continue
         pub = (t.get("candidate_key") or "").strip().lower()
         if not pub:
             continue
         if (existing.get(pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
-            # sticky: never overwrite a user decision — but the machine-owned llm_* columns
-            # are always refreshed, so a re-review can flag spam / update the worth judgment
-            # without touching the decision (or the user-owned network_worth mark).
-            existing[pub].update({**_llm_reject_fields(t.get("verdict") or {}),
-                                  **_llm_worth_fields(t.get("verdict") or {},
-                                                      t.get("person_ids") or [], facts_dir)})
             preserved += 1
             continue
         v = t.get("verdict") or {}
@@ -1196,6 +1019,15 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = F
             ov_action, approved = "detach", "auto"
         else:  # review -> pending, suggest an action from the verdict
             ov_action, approved = _VERDICT_TO_ACTION.get(v.get("verdict", ""), "verify"), ""
+        person_id = (t.get("person_ids") or [""])[0]
+        prior = existing.get(pub, {})
+        if not prior and person_id:
+            person_keys = row_keys_for_person(existing, person_id)
+            prior = existing.get(person_keys[0], {}) if person_keys else {}
+        carried = {column: prior.get(column, "") for column in (
+            "llm_reject", "llm_reject_confidence", "llm_reject_reason",
+            "llm_worth", "llm_worth_reason", "network_worth",
+        )}
         existing[pub] = {
             "public_identifier": pub, "action": ov_action, "approved": approved,
             "new_linkedin_url": "", "new_public_identifier": "",
@@ -1203,12 +1035,9 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = F
             "match_emails": "|".join(t.get("match_emails") or []),
             "match_phones": "|".join(t.get("match_phones") or []),
             "confidence": f"{float(v.get('confidence') or 0):.3f}",
-            "reason": v.get("reason", ""), "person_id": (t.get("person_ids") or [""])[0],
+            "reason": v.get("reason", ""), "person_id": person_id,
             "source": "deep-context-reconcile", "updated_at": now_iso(),
-            **_llm_reject_fields(v),
-            **_llm_worth_fields(v, t.get("person_ids") or [], facts_dir),
-            # user-owned; survives machine rebuilds even on non-user-approved rows
-            "network_worth": existing.get(pub, {}).get("network_worth", ""),
+            **carried,
         }
         if approved == "auto":
             detach += ov_action == "detach"
@@ -1218,7 +1047,6 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = F
 
     _write_override_rows(path, existing)
     return {"path": str(path), "detached": detach, "verified": verify, "pending": pending,
-            "worth_refreshed": worth_refreshed,
             "preserved_user_rows": preserved, "total_rows": len(existing)}
 
 
@@ -1226,109 +1054,6 @@ def count_pending(path: Path) -> int:
     """Rows awaiting the user's decision (pending or rejected-but-revisitable)."""
     return sum(1 for r in load_override_rows(path).values()
                if (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no"))
-
-
-def has_human_worth_decision(task: dict[str, Any],
-                             overrides: dict[str, dict[str, str]]) -> bool:
-    """Whether every import-candidate child has a terminal human worth choice.
-
-    A merged parent is one LLM task, but review rows remain candidate-keyed. One
-    decided duplicate must not suppress a fresh machine judgment for an untouched
-    sibling; the task is skippable only when every candidate child is decided.
-    """
-    candidate_ids = [
-        person_id for person_id in (task.get("person_ids") or [])
-        if is_candidate_id(person_id)
-    ]
-    if not candidate_ids:
-        return False
-    for person_id in candidate_ids:
-        row = overrides.get(str(person_id).strip().lower()) or {}
-        if str(row.get("network_worth") or "").strip().lower() in ("yes", "no"):
-            continue
-        if (str(row.get("action") or "").strip().lower() == "exclude"
-                and str(row.get("approved") or "").strip().lower() == "yes"):
-            continue
-        return False
-    return True
-
-
-def machine_worth_decision(person_id: str,
-                           overrides: dict[str, dict[str, str]],
-                           facts_dir: Path) -> str:
-    """Latest machine-only worth, ignoring the human-owned decision column."""
-    row = overrides.get(str(person_id).strip().lower()) or {}
-    fresh = str(row.get("llm_worth") or "").strip().lower()
-    if fresh in ("yes", "maybe", "no"):
-        return fresh
-    return str(llm_network_worth(person_id, facts_dir).get("decision") or "").strip().lower()
-
-
-def worth_person_ids_for_review(task: dict[str, Any],
-                                overrides: dict[str, dict[str, str]],
-                                facts_dir: Path) -> list[str]:
-    """Candidate children whose machine worth is Maybe/unjudged and not human-decided."""
-    person_ids: list[str] = []
-    for person_id in task.get("person_ids") or []:
-        if not is_candidate_id(person_id):
-            continue
-        one = {**task, "person_ids": [person_id]}
-        if has_human_worth_decision(one, overrides):
-            continue
-        if machine_worth_decision(person_id, overrides, facts_dir) not in ("yes", "no"):
-            person_ids.append(person_id)
-    return person_ids
-
-
-# A candidate whose attached LinkedIn was kept at the link level (verify) or corrected
-# (retarget) and applied at/above the auto bar (or by the user) is VERIFIED — we now know
-# who they are professionally. Only a machine link-level pass counts as "verified" here; a
-# still-pending or rejected link decision does not add professional context.
-_KEPT_LINK_ACTIONS = {"verify", "retarget"}
-_KEPT_LINK_APPROVED = {"auto", "yes"}
-
-
-def kept_linkedin_for_candidate(row: dict[str, str]) -> dict[str, str]:
-    """The kept/verified LinkedIn (pub + url) for a candidate's override row, or {} when its
-    link decision is not a kept verify/retarget. A retarget carries the corrected profile in
-    ``new_*``; a verify keeps the originally attached ``linkedin_url``."""
-    action = str(row.get("action") or "").strip().lower()
-    approved = str(row.get("approved") or "").strip().lower()
-    if action not in _KEPT_LINK_ACTIONS or approved not in _KEPT_LINK_APPROVED:
-        return {}
-    if action == "retarget":
-        url = str(row.get("new_linkedin_url") or "").strip()
-        pub = (str(row.get("new_public_identifier") or "").strip().lower()
-               or extract_public_identifier(url).lower())
-    else:
-        url = str(row.get("linkedin_url") or "").strip()
-        pub = extract_public_identifier(url).lower()
-    if not pub:
-        return {}
-    return {"public_identifier": pub, "linkedin_url": url}
-
-
-def verified_profile_for_worth(task: dict[str, Any],
-                               overrides: dict[str, dict[str, str]],
-                               cache_dir: Path) -> dict[str, Any]:
-    """A verified-LinkedIn evidence block for a no-link worth re-review task, or {} when no
-    candidate child carries a kept/verified link with a usable cached profile.
-
-    This is the professional context the ORIGINAL worth judge lacked (its maybe-reasons say
-    "real person but no professional context"): the contact's LinkedIn is now verified, so the
-    hydrated profile cache carries a headline/title/company/location we can hand the worth judge.
-    Read-only — it reuses the same cache-first ``linkedin_view`` the identity judge uses and never
-    fetches anything from the network."""
-    for person_id in task.get("worth_person_ids") or task.get("person_ids") or []:
-        if not is_candidate_id(person_id):
-            continue
-        kept = kept_linkedin_for_candidate(overrides.get(str(person_id).strip().lower()) or {})
-        if not kept:
-            continue
-        view = linkedin_view(kept, cache_dir)
-        if view.get("has_profile"):
-            return view
-    return {}
 
 
 def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1370,7 +1095,7 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
                 "llm_reject_reason": p.get("llm_reject_reason", ""),
             })
         # Retarget research changes only identity fields. Preserve both the
-        # human-owned network_worth mark and the latest machine-owned worth/spam
+        # human-owned network_worth mark and the latest synthesis-owned worth
         # columns so a found LinkedIn cannot silently change the People decision.
         existing[old_pub] = row
         proposed += 1
@@ -1627,8 +1352,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     facts_dir = Path(args.facts_dir)
     tasks = build_tasks(index, people, facts_dir, Path(args.raw_dir), Path(args.profile_cache_dir))
     overrides = load_override_rows(Path(args.overrides_csv))
-    # Subset targeting (--slug/--limit): cheap spot re-reviews (e.g. testing the spam screen)
-    # without re-judging everyone. Results MERGE into verdicts.jsonl (see _finalize).
+    # Subset targeting (--slug/--limit): cheap spot identity re-reviews without
+    # re-judging everyone. Results MERGE into verdicts.jsonl (see _finalize).
     if getattr(args, "slug", None):
         wanted = {s.strip().lower() for s in args.slug}
         tasks = [t for t in tasks if (t.get("parent_slug") or "").lower() in wanted]
@@ -1638,52 +1363,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     connections = [t for t in tasks if t.get("from_connections") and not t.get("no_link")]
     for t in connections:
         t["verdict"], t["error"] = connection_verdict(), ""
-    profile_cache_dir = Path(args.profile_cache_dir)
-    for task in tasks:
-        if task.get("no_link"):
-            task["worth_person_ids"] = worth_person_ids_for_review(
-                task, overrides, facts_dir)
-            # Limbo class: a machine-Maybe candidate whose LinkedIn was kept/verified at the
-            # link level now has professional context the original worth judge lacked. Attach
-            # that verified-profile evidence (cache-first, no network) so the worth re-judge can
-            # decide with a headline/title/company/location instead of dossier-only signal.
-            if task.get("worth_person_ids"):
-                verified = verified_profile_for_worth(task, overrides, profile_cache_dir)
-                if verified:
-                    task["verified_profile"] = verified
-    limbo_worth_reprofile = sum(
-        1 for t in tasks
-        if t.get("no_link")
-        and (t.get("dossier") or {}).get("has_messages")
-        and t.get("worth_person_ids")
-        and t.get("verified_profile")
-    )
     identity_judgeable = [
         t for t in tasks
         if not t.get("no_link") and t["linkedin"].get("has_profile")
         and not t.get("from_connections")
     ]
-    worth_only_judgeable = [
-        t for t in tasks
-        if t.get("no_link")
-        and (t.get("dossier") or {}).get("has_messages")
-        and bool(t.get("worth_person_ids"))
-    ]
-    worth_only_human_preserved = sum(
-        1 for t in tasks
-        if t.get("no_link")
-        and any(is_candidate_id(person_id) for person_id in t.get("person_ids") or [])
-        and has_human_worth_decision(t, overrides)
-    )
-    worth_only_machine_stable = sum(
-        1 for t in tasks
-        if t.get("no_link")
-        and (t.get("dossier") or {}).get("has_messages")
-        and any(is_candidate_id(person_id) for person_id in t.get("person_ids") or [])
-        and not has_human_worth_decision(t, overrides)
-        and not t.get("worth_person_ids")
-    )
-    judgeable = identity_judgeable + worth_only_judgeable
+    judgeable = identity_judgeable
 
     if args.dry_run:
         # ~ cost bracket: judgeable tasks * (rich-context floor/ceiling) — no spend.
@@ -1693,12 +1378,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "parents": len(index.get("parents", {})), "tasks": len(tasks),
             "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
             "identity_judgeable": len(identity_judgeable),
-            "worth_only_judgeable": len(worth_only_judgeable),
-            # Limbo re-judges: worth-only tasks that now carry a verified-profile evidence block.
-            # These are a subset of worth_only_judgeable, re-judged WITH professional context.
-            "limbo_worth_reprofile": limbo_worth_reprofile,
-            "worth_only_human_preserved": worth_only_human_preserved,
-            "worth_only_machine_stable": worth_only_machine_stable,
             "ground_truth_connections": len(connections),
             "conflicts": sum(1 for t in tasks if t.get("conflict")),
             "estimated_cost_usd_low": round(len(judgeable) * per_lo, 2),
@@ -1748,8 +1427,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             task["verdict"] = deterministic_verdict(task)
             task["error"] = ""
 
-    # Optimistic name-matches the judge didn't confirm fall back to the plain no-link path
-    # (worth review + lookup) — so only confirmed matches are ever persisted / auto-applied.
+    # Optimistic name-matches the judge didn't confirm fall back to the plain
+    # no-link lookup path, so only confirmed matches persist / auto-apply.
     revert_unconfirmed_name_matches(tasks, args.confirm_threshold, overrides, facts_dir)
 
     # A subset run must not clobber the full verdicts file: overlay the fresh rows onto the

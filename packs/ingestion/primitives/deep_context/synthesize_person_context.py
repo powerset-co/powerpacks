@@ -42,6 +42,7 @@ from packs.indexing.lib.openai_responses import (
 )
 from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
+    LINKEDIN_OVERRIDES_CSV,
     RAW_DIR,
     emit,
     load_env,
@@ -49,6 +50,12 @@ from packs.ingestion.primitives.deep_context.common import (
     now_iso,
     owner_background_block,
     write_json,
+)
+from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
+from packs.ingestion.primitives.deep_context.review_store import (
+    has_human_worth,
+    load_override_rows,
+    mirror_facts_worth,
 )
 
 DEFAULT_CHUNK_CHARS = 9000
@@ -73,8 +80,9 @@ SYSTEM_PROMPT = (
     "specific, evidence-backed facts over guesses; set low confidence when the signal is "
     "thin. Leave a field empty rather than inventing it.\n\n"
     "Also decide `network_worth`: is this contact worth adding to (or keeping in) my "
-    "network? Judge the ACTUAL relationship shown in the messages. This is primarily a "
-    "human-vs-noise filter, not a prestige contest.\n"
+    "network? Use only the message dossier and the contact identifiers supplied with it. "
+    "Never use or infer a LinkedIn profile. This is primarily a human-vs-noise filter, "
+    "not a prestige contest.\n"
     "- yes: a real person I genuinely know or correspond with — family/relatives, friends, classmates, "
     "professors/teachers/mentors, alumni or school contacts, colleagues, collaborators, "
     "warm introductions, founders, investors, operators, researchers, or any meaningful "
@@ -88,7 +96,9 @@ SYSTEM_PROMPT = (
     "there is a real relationship versus noise. Maybe is exceptional, not a catch-all. "
     "Never use maybe merely because their job, seniority, or professional value is unknown, "
     "or because the relationship is personal, old, academic, or social. Choose yes or no "
-    "whenever the messages support either conclusion.\n"
+    "whenever the messages support either conclusion. A recognizable or notable name, or "
+    "a plausible phone area code, may be a weak positive prior when the message evidence "
+    "is sparse, but never invent an identity or biographical fact from either.\n"
     "Give a terse concrete reason."
 )
 
@@ -238,6 +248,50 @@ def render_chunk(person: dict[str, Any], chunk: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def worth_channel_policy(person: dict[str, Any]) -> str:
+    """Return the source-specific rubric used by the one synthesis worth judge."""
+    channels = {
+        str(channel or "").strip().lower()
+        for channel in person.get("source_channels") or []
+        if str(channel or "").strip()
+    }
+    channels.update(
+        str(message.get("channel") or "").strip().lower()
+        for message in person.get("messages") or []
+        if str(message.get("channel") or "").strip()
+    )
+    email_present = bool(channels & {"gmail", "email"})
+    phone_present = bool(channels & {"imessage", "whatsapp", "sms", "phone"})
+
+    if email_present and phone_present:
+        rule = (
+            "This dossier has both email and phone-message context. Bias toward yes when "
+            "either channel shows a genuine human relationship; automated noise in one "
+            "channel must not erase real correspondence in the other. Use maybe only when "
+            "both channels remain genuinely ambiguous."
+        )
+    elif email_present:
+        rule = (
+            "This is an email-backed dossier. Bias toward yes for clearly human, "
+            "person-directed correspondence, including sparse, one-off, old, academic, "
+            "or plausibly important professional contacts. Use no only for clear automated "
+            "mail, broadcast/transactional noise, or unengaged cold spam. Maybe should be rare."
+        )
+    elif phone_present:
+        rule = (
+            "This is a phone-message-backed dossier. Repeated or clearly two-way personal "
+            "or professional conversation is yes. Sparse context, a bare number, or an "
+            "uncertain one-sided exchange may be maybe; automated service traffic or obvious "
+            "spam is no. A name or area code is weak context only."
+        )
+    else:
+        rule = (
+            "The source is unclear. Judge only the supplied message context and identifiers; "
+            "prefer maybe over inventing a relationship when the evidence is truly sparse."
+        )
+    return "\n\nWORTH SOURCE POLICY:\n" + rule
+
+
 def fact_keys(facts: dict[str, Any]) -> set[str]:
     """Comparable keys for adaptive early-stop (did this chunk add anything new?)."""
     keys: set[str] = set()
@@ -264,7 +318,7 @@ def render_batch(person: dict[str, Any], batch: list[dict[str, Any]], prior: dic
             "facts unless a message contradicts them; raise `confidence` only as the picture "
             "gets more complete and certain):\n" + json.dumps(compact, ensure_ascii=False)
         )
-    parts.append(render_chunk(person, batch))
+    parts.append(render_chunk(person, batch) + worth_channel_policy(person))
     return "\n\n".join(parts)
 
 
@@ -365,20 +419,38 @@ async def _call_one(
                 return {}, {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}, f"{type(exc).__name__}: {exc}"[:300]
 
 
-def pending_target_paths(raw_dir: Path, facts_dir: Path, *, force: bool, person_id: str) -> list[Path]:
+def pending_target_paths(
+    raw_dir: Path,
+    facts_dir: Path,
+    *,
+    force: bool,
+    person_id: str,
+    rejudge: bool = False,
+    review_rows: dict[str, dict[str, str]] | None = None,
+) -> list[Path]:
     """Bundle paths needing synthesis — WITHOUT loading message bodies into memory.
 
     Streaming relies on this: we hold only the path list (cheap), then load bundle
-    bodies one chunk at a time. The 'has messages' check is deferred to load time."""
+    bodies one chunk at a time. The 'has messages' check is deferred to load time.
+
+    Normal runs are monotonic: keep terminal machine Yes/No and human Yes/No,
+    while retrying missing/Maybe verdicts. ``rejudge`` deliberately ignores both
+    caches and evaluates every dossier; the review writer still preserves the
+    human-owned column."""
     paths: list[Path] = []
+    rows = review_rows or {}
     for path in sorted(raw_dir.glob("*.json")):
         if path.name == "manifest.json":
             continue
         pid = path.stem
         if person_id and pid != person_id:
             continue
-        if (facts_dir / f"{pid}.jsonl").exists() and not force:
-            continue
+        if not force and not rejudge:
+            if has_human_worth(rows, pid):
+                continue
+            existing = llm_network_worth(pid, facts_dir).get("decision", "")
+            if existing in {"yes", "no"}:
+                continue
         paths.append(path)
     return paths
 
@@ -405,10 +477,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     owner = load_owner() if not args.no_owner else None
     system_prompt = SYSTEM_PROMPT + (
         owner_identity_block(owner) + OWNER_PROMPT_SUFFIX + owner_background_block(owner) if owner else "")
+    review_path = Path(args.review_csv)
+    review_rows = load_override_rows(review_path)
 
     # Only the path list is held in memory; bundle bodies are loaded one chunk at a
     # time, so peak RAM is bounded by --chunk-people, not the network size.
-    paths = pending_target_paths(raw_dir, facts_dir, force=args.force, person_id=args.person)
+    paths = pending_target_paths(
+        raw_dir,
+        facts_dir,
+        force=args.force,
+        rejudge=args.rejudge,
+        person_id=args.person,
+        review_rows=review_rows,
+    )
 
     def make_batches(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         newest = sorted(messages, key=lambda m: m.get("at") or "", reverse=True)
@@ -438,6 +519,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "model": args.model,
             "reasoning_effort": reasoning_effort(args.reasoning_effort),
             "owner_context": bool(owner),
+            "rejudge": bool(args.rejudge),
             "target_confidence": args.target_confidence,
             "max_batches": args.max_batches,
             "estimated_cost_floor_usd": estimate_cost_usd(floor_tokens, people * 750, args.model),
@@ -446,6 +528,39 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "note": "approximate (output/reasoning tokens vary with --reasoning-effort); floor=1 batch each, ceiling=all batches. Confidence/saturation usually stops near the floor.",
             "updated_at": now_iso(),
         }
+
+    if not paths:
+        worth_sync = mirror_facts_worth(
+            review_path,
+            facts_dir,
+            include_human_rows=bool(args.rejudge),
+        )
+        manifest = {
+            "source": "synthesize_person_context",
+            "status": "completed",
+            "people": 0,
+            "chunk_people": args.chunk_people,
+            "people_done": 0,
+            "batches_run": 0,
+            "avg_batches_per_person": 0.0,
+            "stop_reasons": {},
+            "errors": 0,
+            "model": args.model,
+            "reasoning_effort": reasoning_effort(args.reasoning_effort),
+            "owner_context": bool(owner),
+            "rejudge": bool(args.rejudge),
+            "target_confidence": args.target_confidence,
+            "max_batches": args.max_batches,
+            "concurrency": 0,
+            "tokens": {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
+            "estimated_cost_usd": 0.0,
+            "out_dir": str(facts_dir),
+            "worth_sync": worth_sync,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "updated_at": now_iso(),
+        }
+        write_json(facts_dir / "manifest.json", manifest)
+        return manifest
 
     load_env()
     concurrency = args.concurrency or env_or_profile_int(
@@ -505,6 +620,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     asyncio.run(driver())
 
+    worth_sync = mirror_facts_worth(
+        review_path,
+        facts_dir,
+        include_human_rows=bool(args.rejudge),
+    )
     billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
     manifest = {
         "source": "synthesize_person_context",
@@ -519,12 +639,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "model": args.model,
         "reasoning_effort": effort,
         "owner_context": bool(owner),
+        "rejudge": bool(args.rejudge),
         "target_confidence": args.target_confidence,
         "max_batches": args.max_batches,
         "concurrency": concurrency,
         "tokens": usage_total,
         "estimated_cost_usd": estimate_cost_usd(usage_total["input_tokens"], billed_output, args.model),
         "out_dir": str(facts_dir),
+        "worth_sync": worth_sync,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "updated_at": now_iso(),
     }
@@ -536,6 +658,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Synthesize structured facts from message bundles (OpenAI Responses).")
     p.add_argument("--raw-dir", default=str(RAW_DIR))
     p.add_argument("--out-dir", default=str(FACTS_DIR))
+    p.add_argument("--review-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])
     p.add_argument("--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS, help="Per-batch char budget")
@@ -549,6 +672,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--person", default="", help="Only this person id")
     p.add_argument("--no-owner", action="store_true", help="Ignore owner.json (skip shared-context inference)")
     p.add_argument("--force", action="store_true", help="Re-synthesize even if facts exist")
+    p.add_argument(
+        "--rejudge",
+        action="store_true",
+        help="Rejudge every message-backed dossier despite cached machine/human worth; preserve the human column",
+    )
     p.add_argument("--dry-run", action="store_true", help="Estimate calls/cost, spend nothing")
     return p
 

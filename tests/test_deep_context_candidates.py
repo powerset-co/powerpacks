@@ -35,6 +35,7 @@ from packs.ingestion.primitives.deep_context import (
     reconcile_deep_research as dresearch,
     reconcile_linkedin as reconcile,
     reconcile_review_web as web,
+    review_store,
     synthesize_person_context as synth,
 )
 from packs.ingestion.schemas.candidates_schema import (
@@ -235,7 +236,8 @@ class TestCandidateBundlesInheritDownstream(unittest.TestCase):
                 "chunk_index": 0,
                 "facts": {"canonical_name": "Cass Doe", "confidence": 0.9, "employers": [],
                           "topics": [], "identifiers": [], "notable_events": [],
-                          "aliases": [], "shared_context": []},
+                          "aliases": [], "shared_context": [],
+                          "network_worth": {"decision": "yes", "reason": "real correspondent"}},
             }) + "\n", encoding="utf-8")
             self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id=""), [])
             compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
@@ -478,10 +480,10 @@ class TestNetworkWorth(unittest.TestCase):
         self.assertIn("family/relatives", synth.SYSTEM_PROMPT)
         self.assertIn("professors/teachers/mentors", synth.SYSTEM_PROMPT)
         self.assertIn("Maybe is exceptional", synth.SYSTEM_PROMPT)
-        self.assertIn("network_worth", reconcile.RECONCILE_SCHEMA["required"])
-        self.assertIn("family/relatives", reconcile.SYSTEM_PROMPT)
-        self.assertIn("professors/teachers/mentors", reconcile.SYSTEM_PROMPT)
-        self.assertIn("Maybe is exceptional", reconcile.SYSTEM_PROMPT)
+        self.assertIn("Never use or infer a LinkedIn profile", synth.SYSTEM_PROMPT)
+        self.assertNotIn("network_worth", reconcile.RECONCILE_SCHEMA["required"])
+        self.assertNotIn("spam_contact", reconcile.RECONCILE_SCHEMA["required"])
+        self.assertNotIn("network_worth", reconcile.SYSTEM_PROMPT)
         self.assertEqual(candidates.NETWORK_WORTH_VALUES, ("yes", "maybe", "no"))
         self.assertIn("network_worth", reconcile.OVERRIDE_COLUMNS)
 
@@ -505,7 +507,12 @@ class TestNetworkWorth(unittest.TestCase):
             got = candidates.effective_network_worth(pid, {pid: {"network_worth": "yes"}}, facts)
             self.assertEqual((got["decision"], got["source"]), ("yes", "user"))          # user wins
             got = candidates.effective_network_worth(pid, {pid: {"network_worth": "dunno"}}, facts)
-            self.assertEqual((got["decision"], got["source"]), ("no", "llm"))            # invalid mark -> LLM
+            self.assertEqual((got["decision"], got["source"]), ("maybe", "default"))
+            review = facts.parent / "review.csv"
+            review_store.mirror_facts_worth(review, facts)
+            rows = review_store.load_override_rows(review)
+            got = candidates.effective_network_worth(pid, rows, facts)
+            self.assertEqual((got["decision"], got["source"]), ("no", "llm"))
             self.assertEqual(got["reason"], "vendor")
             got = candidates.effective_network_worth("ghost", {}, facts)
             self.assertEqual((got["decision"], got["source"]), ("maybe", "default"))     # nothing -> maybe
@@ -552,6 +559,46 @@ class TestNetworkWorth(unittest.TestCase):
                 "janedoe", {"janedoe": {"action": "exclude", "approved": "yes", "network_worth": "yes"}}, facts)
             self.assertEqual((got["decision"], got["source"]), ("yes", "user"))
 
+    def test_synthesis_selection_is_monotonic_and_rejudge_selects_every_dossier(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw, facts = base / "raw", base / "facts"
+            raw.mkdir()
+            facts.mkdir()
+            for pid in ("yes-person", "maybe-person", "blank-person", "human-person"):
+                (raw / f"{pid}.json").write_text(json.dumps({"person_id": pid}), encoding="utf-8")
+            (facts / "yes-person.jsonl").write_text(_facts_record("yes", "stable") + "\n",
+                                                     encoding="utf-8")
+            (facts / "maybe-person.jsonl").write_text(_facts_record("maybe", "uncertain") + "\n",
+                                                       encoding="utf-8")
+            review_rows = {"human-person": {
+                "public_identifier": "human-person",
+                "person_id": "human-person",
+                "network_worth": "no",
+            }}
+            normal = synth.pending_target_paths(
+                raw, facts, force=False, person_id="", review_rows=review_rows)
+            self.assertEqual([path.stem for path in normal], ["blank-person", "maybe-person"])
+            rejudge = synth.pending_target_paths(
+                raw, facts, force=False, rejudge=True, person_id="", review_rows=review_rows)
+            self.assertEqual(
+                [path.stem for path in rejudge],
+                ["blank-person", "human-person", "maybe-person", "yes-person"],
+            )
+
+    def test_channel_policy_splits_email_phone_and_mixed_without_linkedin(self):
+        email = synth.worth_channel_policy(
+            {"source_channels": ["gmail_msgvault"], "messages": [{"channel": "gmail"}]})
+        phone = synth.worth_channel_policy(
+            {"source_channels": ["imessage"], "messages": [{"channel": "imessage"}]})
+        mixed = synth.worth_channel_policy(
+            {"source_channels": ["gmail_msgvault", "imessage"],
+             "messages": [{"channel": "gmail"}, {"channel": "imessage"}]})
+        self.assertIn("Bias toward yes", email)
+        self.assertIn("Sparse context", phone)
+        self.assertIn("either channel", mixed)
+        self.assertNotIn("LinkedIn", email + phone + mixed)
+
 
 class TestCandidateSubsetWorthGate(unittest.TestCase):
     def test_added_pile_is_eligible_and_user_override_wins(self):
@@ -564,9 +611,12 @@ class TestCandidateSubsetWorthGate(unittest.TestCase):
             (facts / "candidate:phone:+14155551234.jsonl").write_text(
                 _facts_record("no", "food delivery updates") + "\n", encoding="utf-8")
             pools = _pools(base, [GMAIL_ROW], [PHONE_ROW])
+            review = base / "review.csv"
+            review_store.mirror_facts_worth(review, facts)
+            machine_rows = review_store.load_override_rows(review)
             with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
                 skipped: list[str] = []
-                subset = dresearch.candidate_subset(facts, {}, worth_skipped=skipped)
+                subset = dresearch.candidate_subset(facts, machine_rows, worth_skipped=skipped)
                 self.assertEqual([row["candidate_key"] for row in subset],
                                  ["candidate:email:cass@x.com"])
                 self.assertEqual(skipped, ["candidate:phone:+14155551234"])
@@ -796,9 +846,12 @@ class TestReviewWebCandidateRows(unittest.TestCase):
                     "identifiers": ["cass@x.com", "alias@example.com", "not an email"],
                 }
             }) + "\n", encoding="utf-8")
+            review = Path(d) / "review.csv"
+            review_store.mirror_facts_worth(review, facts)
+            overrides = review_store.load_override_rows(review)
             with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
-                parents = web.load_candidate_parents(facts, {}, set())
-            web.annotate_worth(parents, {}, facts)
+                parents = web.load_candidate_parents(facts, overrides, set())
+            web.annotate_worth(parents, overrides, facts)
             by = {p["person_ids"][0]: p for p in parents}
             cass, tex = by["candidate:email:cass@x.com"], by["candidate:phone:+14155551234"]
             self.assertEqual(cass["name"], "Cassandra Doe")                # canonical name from facts
@@ -871,18 +924,17 @@ class TestLimboMaybeVisibility(unittest.TestCase):
         ("email:gil@example.com", "verify", "auto", "yes", "clearly worth adding", {}),
         # machine no — effective-no, not in the queue.
         ("email:hana@example.net", "verify", "auto", "no", "automated vendor", {}),
-        # verified but spam-flagged — effective-no despite a Maybe worth.
+        # A legacy spam flag is identity-era residue and no longer changes worth.
         ("email:ivan@example.com", "verify", "auto", "maybe", "cold recruiter",
          {"llm_reject": "spam", "llm_reject_confidence": "0.950", "llm_reject_reason": "cold recruiter"}),
         # a second plain pending candidate — visible before AND after.
         ("email:juno@example.net", "", "", "maybe", "no professional context", {}),
     ]
     LIMBO = ["candidate:email:ada@example.com", "candidate:email:bram@example.net",
-             "candidate:email:cleo@example.com"]
+             "candidate:email:cleo@example.com", "candidate:email:ivan@example.com"]
     ALWAYS_VISIBLE = ["candidate:email:dara@example.net", "candidate:email:juno@example.net"]
     NEVER_VISIBLE = ["candidate:email:evan@example.com", "candidate:email:faye@example.net",
-                     "candidate:email:gil@example.com", "candidate:email:hana@example.net",
-                     "candidate:email:ivan@example.com"]
+                     "candidate:email:gil@example.com", "candidate:email:hana@example.net"]
 
     def _build(self, base: Path):
         facts = base / "facts"
@@ -942,9 +994,9 @@ class TestLimboMaybeVisibility(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             _, parents = self._build(base)
-            # worth_pending now surfaces the 3 limbo + 2 plain pending maybes.
+            # worth_pending surfaces 4 verified/retargeted maybes + 2 plain maybes.
             progress = web.review_progress(parents)
-            self.assertEqual(progress["worth_pending"], 5)
+            self.assertEqual(progress["worth_pending"], 6)
             # The pre-fix count would have shown only the 2 plain pending candidates.
             old_pending = sum(1 for parent in parents if _old_needs_worth_review(parent))
             self.assertEqual(old_pending, 2)
@@ -979,132 +1031,104 @@ class TestComposeNetworkWorth(unittest.TestCase):
 
 
 class TestLlmWorthColumns(unittest.TestCase):
-    """The machine-owned llm_worth/llm_worth_reason columns: written from facts or the
-    spam screen, ALWAYS refreshed (sticky rows included), never touching the
-    user-owned network_worth mark."""
+    """Synthesis facts are the sole machine worth source and review.csv is its mirror."""
 
-    def _task(self, pub: str, pid: str, spam: bool = False, spam_conf: float = 0.9) -> dict:
-        return {"no_link": False, "candidate_key": pub, "action": "review",
-                "person_ids": [pid], "match_emails": [], "match_phones": [],
-                "linkedin": {"linkedin_url": f"https://www.linkedin.com/in/{pub}"},
-                "verdict": {"verdict": "needs_review", "confidence": 0.5, "reason": "r",
-                            "spam_contact": spam, "spam_confidence": spam_conf,
-                            "spam_reason": "cold outreach" if spam else ""}}
-
-    def test_fresh_row_mirrors_facts_worth(self):
+    def test_facts_mirror_creates_rows_and_linkedin_writer_only_carries_them(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             facts = base / "facts"
             facts.mkdir()
             (facts / "pid-1.jsonl").write_text(_facts_record("no", "vendor") + "\n", encoding="utf-8")
             review = base / "review.csv"
-            reconcile.write_overrides(review, [self._task("janedoe", "pid-1"),
-                                               self._task("ghost", "pid-ghost")], facts)
-            rows = reconcile.load_override_rows(review)
-            self.assertEqual((rows["janedoe"]["llm_worth"], rows["janedoe"]["llm_worth_reason"]),
-                             ("no", "vendor"))
-            self.assertEqual(rows["janedoe"]["network_worth"], "")     # user column stays user-owned
-            # no facts + no spam -> the machine columns stay blank
-            self.assertEqual((rows["ghost"]["llm_worth"], rows["ghost"]["llm_worth_reason"]), ("", ""))
-
-    def test_confident_spam_is_an_llm_no_and_keeps_reject_detail(self):
-        with tempfile.TemporaryDirectory() as d:
-            base = Path(d)
-            facts = base / "facts"
-            facts.mkdir()
-            review = base / "review.csv"
-            reconcile.write_overrides(review, [self._task("spammy", "pid-2", spam=True),
-                                               self._task("softspam", "pid-3", spam=True, spam_conf=0.5)],
-                                      facts)
-            rows = reconcile.load_override_rows(review)
-            self.assertEqual((rows["spammy"]["llm_worth"], rows["spammy"]["llm_worth_reason"]),
-                             ("no", "cold outreach"))                  # spam is one way the LLM says no
-            self.assertEqual(rows["spammy"]["llm_reject"], "spam")     # detail columns kept as-is
-            # below the bar the flag stays informational: worth falls back to facts (blank here)
-            self.assertEqual(rows["softspam"]["llm_worth"], "")
-            self.assertEqual(rows["softspam"]["llm_reject"], "spam")
-
-    def test_sticky_user_row_refreshes_llm_worth_without_touching_user_columns(self):
-        with tempfile.TemporaryDirectory() as d:
-            base = Path(d)
-            facts = base / "facts"
-            facts.mkdir()
-            (facts / "pid-1.jsonl").write_text(_facts_record("no", "vendor") + "\n", encoding="utf-8")
-            review = base / "review.csv"
-            reconcile._write_override_rows(review, {"janedoe": {
-                **{k: "" for k in reconcile.OVERRIDE_COLUMNS},
-                "public_identifier": "janedoe", "action": "verify", "approved": "yes",
-                "network_worth": "yes"}})
-            reconcile.write_overrides(review, [self._task("janedoe", "pid-1")], facts)
-            row = reconcile.load_override_rows(review)["janedoe"]
-            self.assertEqual((row["action"], row["approved"]), ("verify", "yes"))  # decision untouched
-            self.assertEqual(row["network_worth"], "yes")                          # user mark untouched
+            stats = review_store.mirror_facts_worth(review, facts)
+            self.assertEqual(stats["synced_people"], 1)
+            row = review_store.load_override_rows(review)["pid-1"]
             self.assertEqual((row["llm_worth"], row["llm_worth_reason"]), ("no", "vendor"))
 
-    def test_no_link_candidates_get_fresh_machine_worth_and_keep_human_decisions(self):
+            task = {
+                "no_link": False,
+                "candidate_key": "janedoe",
+                "action": "review",
+                "person_ids": ["pid-1"],
+                "match_emails": [],
+                "match_phones": [],
+                "linkedin": {"linkedin_url": "https://www.linkedin.com/in/janedoe"},
+                "verdict": {"verdict": "needs_review", "confidence": 0.5, "reason": "thin identity"},
+            }
+            reconcile.write_overrides(review, [task], facts)
+            linked = review_store.load_override_rows(review)["janedoe"]
+            self.assertEqual((linked["llm_worth"], linked["llm_worth_reason"]), ("no", "vendor"))
+
+    def test_normal_mirror_skips_human_but_rejudge_refreshes_machine_only(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             facts = base / "facts"
             facts.mkdir()
+            pid = "candidate:email:human@example.com"
+            (facts / f"{pid}.jsonl").write_text(_facts_record("no", "new machine read") + "\n",
+                                                encoding="utf-8")
             review = base / "review.csv"
-            human_pid = "candidate:email:human@example.com"
-            untouched_pid = "candidate:email:untouched@example.com"
-            stable_pid = "candidate:email:stable@example.com"
-            reconcile._write_override_rows(review, {
-                human_pid: {
-                    **{k: "" for k in reconcile.OVERRIDE_COLUMNS},
-                    "public_identifier": human_pid,
-                    "person_id": human_pid,
-                    "network_worth": "yes",
-                    "llm_worth": "maybe",
-                },
-                stable_pid: {
-                    **{k: "" for k in reconcile.OVERRIDE_COLUMNS},
-                    "public_identifier": stable_pid,
-                    "person_id": stable_pid,
-                    "llm_worth": "yes",
-                    "llm_worth_reason": "already decisive",
-                },
-            })
-            task = {
-                "no_link": True,
-                "person_ids": [human_pid, untouched_pid, stable_pid],
-                "worth_person_ids": [untouched_pid],
-                "verdict": {
-                    "spam_contact": False,
-                    "spam_confidence": 0.0,
-                    "spam_reason": "",
-                    "network_worth": {
-                        "decision": "no",
-                        "reason": "automated marketing sender",
-                    },
-                },
-            }
-            stats = reconcile.write_overrides(review, [task], facts)
-            rows = reconcile.load_override_rows(review)
-            self.assertEqual(stats["worth_refreshed"], 1)
-            self.assertEqual(rows[human_pid]["network_worth"], "yes")
-            self.assertEqual(rows[human_pid]["llm_worth"], "maybe")
-            self.assertEqual(rows[untouched_pid]["network_worth"], "")
-            self.assertEqual(
-                (rows[untouched_pid]["llm_worth"], rows[untouched_pid]["llm_worth_reason"]),
-                ("no", "automated marketing sender"),
-            )
-            self.assertEqual(
-                (rows[stable_pid]["llm_worth"], rows[stable_pid]["llm_worth_reason"]),
-                ("yes", "already decisive"),
-            )
+            review_store.write_override_rows(review, {pid: {
+                **{key: "" for key in review_store.OVERRIDE_COLUMNS},
+                "public_identifier": pid,
+                "person_id": pid,
+                "network_worth": "yes",
+                "llm_worth": "maybe",
+                "llm_worth_reason": "old machine read",
+            }})
+            normal = review_store.mirror_facts_worth(review, facts)
+            row = review_store.load_override_rows(review)[pid]
+            self.assertEqual(normal["skipped_human"], 1)
+            self.assertEqual((row["network_worth"], row["llm_worth"]), ("yes", "maybe"))
 
-            task["verdict"]["network_worth"] = {
-                "decision": "yes",
-                "reason": "real professor relationship",
-            }
-            reconcile.write_overrides(review, [task], facts)
-            rows = reconcile.load_override_rows(review)
-            self.assertEqual(rows[human_pid]["network_worth"], "yes")
-            self.assertEqual(rows[human_pid]["llm_worth"], "maybe")
-            self.assertEqual(rows[untouched_pid]["llm_worth"], "yes")
-            self.assertEqual(rows[stable_pid]["llm_worth"], "yes")
+            review_store.mirror_facts_worth(review, facts, include_human_rows=True)
+            row = review_store.load_override_rows(review)[pid]
+            self.assertEqual(row["network_worth"], "yes")
+            self.assertEqual((row["llm_worth"], row["llm_worth_reason"]),
+                             ("no", "new machine read"))
+
+    def test_mirror_retires_only_legacy_spam_reject(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            (facts / "pid-spam.jsonl").write_text(_facts_record("no", "automated sender") + "\n",
+                                                   encoding="utf-8")
+            review = base / "review.csv"
+            review_store.write_override_rows(review, {"profile": {
+                **{key: "" for key in review_store.OVERRIDE_COLUMNS},
+                "public_identifier": "profile",
+                "person_id": "pid-spam",
+                "llm_reject": "spam",
+                "llm_reject_confidence": "0.99",
+                "llm_reject_reason": "legacy screen",
+            }})
+            review_store.mirror_facts_worth(review, facts)
+            row = review_store.load_override_rows(review)["profile"]
+            self.assertEqual(row["llm_reject"], "")
+            self.assertEqual((row["llm_worth"], row["llm_worth_reason"]),
+                             ("no", "automated sender"))
+
+    def test_no_work_synthesis_still_syncs_review_without_openai(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw, facts, review = base / "raw", base / "facts", base / "review.csv"
+            raw.mkdir()
+            facts.mkdir()
+            (facts / "pid-1.jsonl").write_text(_facts_record("yes", "known human") + "\n",
+                                                encoding="utf-8")
+            args = synth.build_parser().parse_args([
+                "--raw-dir", str(raw),
+                "--out-dir", str(facts),
+                "--review-csv", str(review),
+                "--no-owner",
+            ])
+            with mock.patch.object(synth, "load_env",
+                                   side_effect=AssertionError("no-work sync must not load OpenAI")):
+                manifest = synth.run(args)
+            self.assertEqual(manifest["people_done"], 0)
+            self.assertEqual(manifest["worth_sync"]["synced_people"], 1)
+            self.assertEqual(review_store.load_override_rows(review)["pid-1"]["llm_worth"], "yes")
 
 
 def _verdict_jsonl(path: Path, rows: list[dict]) -> Path:
@@ -1174,6 +1198,7 @@ class TestUnifiedRejected(unittest.TestCase):
                                                  encoding="utf-8")
             review = base / "review.csv"
             reconcile.write_overrides(review, [dict(self.VERDICT, action="review")], facts)
+            review_store.mirror_facts_worth(review, facts)
             verdicts = _verdict_jsonl(base / "verdicts.jsonl", [self.VERDICT])
             empty_facts = base / "nofacts"
             empty_facts.mkdir()
@@ -1234,12 +1259,14 @@ class TestUnifiedRejected(unittest.TestCase):
             facts.mkdir()
             (facts / "pid-leon.jsonl").write_text(_facts_record("no", "newsletter blasts") + "\n",
                                                   encoding="utf-8")
+            review = base / "review.csv"
+            review_store.mirror_facts_worth(review, facts)
             verdicts = _verdict_jsonl(base / "verdicts.jsonl", [{
                 "parent_slug": "leon-james", "name": "Leon James", "candidate_key": "",
                 "person_ids": ["pid-leon"], "conflict": False, "no_link": True,
                 "linkedin": {}, "verdict": {"verdict": "needs_review", "confidence": 0.0,
                                             "reason": "no usable LinkedIn profile"}, "error": ""}])
-            parents, overrides = web.build_parents(verdicts, base / "review.csv")
+            parents, overrides = web.build_parents(verdicts, review)
             web.annotate_worth(parents, overrides, facts)
             (p,) = parents
             self.assertEqual(p["candidates"][0]["worth_key"], "pid-leon")    # falls back to person_id
@@ -1890,7 +1917,7 @@ class TestStagedReviewUI(unittest.TestCase):
         beyond = web.decision_rows_payload(parents, "yes", offset=500, limit=40)
         self.assertEqual((beyond["total"], beyond["rows"]), (120, []))
 
-    def test_rejected_spam_uses_the_classifier_reason_not_default_worth_copy(self):
+    def test_legacy_spam_flag_does_not_act_as_a_second_worth_judge(self):
         parent = self._candidate_parent("maybe", "default")
         parent["machine_worth"] = {
             "decision": "maybe", "source": "default", "reason": "not yet judged",
@@ -1902,11 +1929,7 @@ class TestStagedReviewUI(unittest.TestCase):
             "worth": parent["worth"],
             "machine_worth": parent["machine_worth"],
         })
-        self.assertTrue(web.is_effective_no(parent))
-        self.assertEqual(
-            web._rejection_reason(parent),
-            "Unsolicited recruiter outreach with no engagement.",
-        )
+        self.assertFalse(web.is_effective_no(parent))
 
     def test_manifest_completion_requires_zero_pending_and_rejects_stale_counts(self):
         with tempfile.TemporaryDirectory() as d:

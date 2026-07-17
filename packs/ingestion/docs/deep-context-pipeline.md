@@ -50,10 +50,10 @@ flowchart TD
     B --> C{"Include small iMessage groups?"}
     C --> D["Collect people + candidate messages"]
     D --> E{"Preview + approve OpenAI synthesis"}
-    E --> F["Synthesize facts, compose dossiers, validate"]
+    E --> F["Synthesize facts + worth from messages, compose dossiers, validate"]
     F --> G["Judge duplicate pairs and build canonical parents"]
     G --> H{"Preview + approve reconcile"}
-    H --> I["Judge worth + attached LinkedIn identity"]
+    H --> I["Judge attached LinkedIn identity only"]
     I --> J["People UI: review only Maybe; edit Yes / No"]
     J --> K{"People review complete"}
     K --> K1["Local bridge resumes the originating Codex thread"]
@@ -155,10 +155,10 @@ button and cannot be blocked by the Done page.
 | --- | --- | --- |
 | Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON and `owner.json` |
 | Collection | Reads Gmail and message bodies into bounded per-person bundles. Candidates are included in full processing. The default depth is `--deep-cap 1600`; small iMessage groups are optional. | `raw/<person_id>.json` and `raw/manifest.json` |
-| Synthesis | Sends bounded message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and an initial worth recommendation. | `facts/<person_id>.jsonl` |
+| Synthesis | Sends bounded message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, and is mirrored into `review.csv`. Normal reruns rejudge missing/Maybe verdicts. | `facts/<person_id>.jsonl`, `overrides/review.csv` |
 | Composition | Deterministically renders facts into Markdown dossiers and name/email/phone lookup indexes. | `dossiers/*.md`, `index.json`, `index.md` |
 | Duplicate resolution | Generates plausible same-person pairs, judges them with OpenAI, and builds transitive canonical parents. A candidate merged into an existing person contributes its contact metadata and skips standalone review/research. | Merge audit CSVs and `parents/*.md` |
-| Reconcile | Before the browser opens, jointly refreshes machine-owned Maybe/unjudged worth decisions and judges attached LinkedIn identity. Human worth decisions and machine Yes/No are preserved. | `reconcile/verdicts.jsonl`, `overrides/review.csv` |
+| Reconcile | Before the browser opens, compares message-derived dossiers with attached LinkedIn profiles for identity only. It may verify, detach, or request human review; it never reads or writes worth. | `reconcile/verdicts.jsonl`, identity fields in `overrides/review.csv` |
 | People review | Shows only model Maybe contacts in the main binary queue. The paginated Yes and No tables remain editable. Finishing the last Maybe completes the People gate and moves directly to an animated agent-handoff state on Enrich Contacts. | Updated `review.csv` and `review/manifest.json` |
 | Enrichment preview and approval | Builds one queue from the current effective-Yes selection plus eligible wrong-link recovery. It reports gross eligible people, completed-result reuse, duplicate handles, net-new submissions, and the exact estimate. A positive estimate requires the UI's inert approval record; zero net-new work automatically continues from cache without an approval button. | `research_queue.csv` and enrichment `manifest.json` |
 | Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
@@ -238,26 +238,29 @@ review revision.
 
 Worth is intentionally decisive:
 
-- **Yes:** a genuine human relationship, including family, friends,
-  classmates, professors, mentors, alumni, colleagues, and other real personal
-  or professional correspondence.
-- **No:** broadcast/automated mail, marketing, cold sales or recruiting without
-  meaningful engagement, spam, and purely transactional service/vendor
-  exchanges.
-- **Maybe:** only genuinely balanced evidence about whether a real relationship
-  exists. Missing prestige, title, seniority, or current employer is not a reason
-  for Maybe.
+- **Gmail or Gmail+phone:** bias toward Yes for clearly human, person-directed
+  correspondence, including sparse, old, academic, personal, or plausibly
+  important professional contacts. No is for clear automated/broadcast/
+  transactional noise or unengaged cold spam; Maybe should be rare.
+- **Phone-only:** real two-way or repeated conversation is Yes. Sparse or
+  ambiguous exchanges may be Maybe; automated noise is No.
+- **Mixed sources:** a genuine relationship in one channel wins over noise in
+  another. A recognizable name or plausible area code is weak context only.
 
 The durable worth table is
 `.powerpacks/network-import/overrides/review.csv`.
 
 - Model Yes starts in the Yes table.
-- Model No/spam, human No, and legacy Exclude share the No table.
+- Model No, human No, and legacy Exclude share the No table.
 - Model Maybe is the only main review queue.
 - Human Yes/No is sticky and authoritative.
-- On a repeated full run or `$deep-context re-review`, only machine-owned
-  Maybe/unjudged dossier-backed candidates are rescored. Machine Yes/No is
-  reused.
+- On a normal repeated full run, only missing/Maybe dossier worth is rescored.
+  Machine Yes/No and human Yes/No are reused.
+- `$deep-context rejudge` deliberately rescores every collected Gmail,
+  iMessage, WhatsApp, or mixed-source dossier regardless of candidate status,
+  attached LinkedIn, cached machine verdict, or human verdict. LinkedIn is
+  never evidence; refreshed machine columns may sit beside but never overwrite
+  the human-owned `network_worth`.
 - The enrichment selection is the current effective Yes table: model Yes unless
   a human removed it, plus anyone a human added.
 
@@ -402,7 +405,7 @@ Not every request needs the full workflow:
 | Check readiness | `bin/deep-context check` | Free, read-only source/config check. |
 | Validate dossiers | `bin/deep-context validate` | Free validation only. |
 | Reopen review | `bin/deep-context review` | Opens the current file-derived stage; does not restart processing. |
-| Improve uncertain worth decisions | `bin/deep-context re-review --dry-run`, then approved `re-review` | Rescores only machine Maybe/unjudged rows; preserves machine and human Yes/No. |
+| Rejudge all message-backed worth decisions | `bin/deep-context rejudge --dry-run`, then approved `rejudge` | Rescores every collected dossier without LinkedIn evidence; preserves the human column. |
 
 ## Implementation map
 
@@ -412,11 +415,11 @@ Not every request needs the full workflow:
 | Command dispatcher | [`bin/deep-context`](../../../bin/deep-context) |
 | Collection and provenance | [`collect_person_context.py`](../primitives/deep_context/collect_person_context.py) |
 | Per-source body readers | [`sources.py`](../primitives/deep_context/sources.py) |
-| Synthesis | [`synthesize_person_context.py`](../primitives/deep_context/synthesize_person_context.py) |
+| Message-context synthesis and worth judge | [`synthesize_person_context.py`](../primitives/deep_context/synthesize_person_context.py) |
 | Dossier composition | [`compose_dossier.py`](../primitives/deep_context/compose_dossier.py) |
 | Duplicate judge | [`cluster_merge_candidates.py`](../primitives/deep_context/cluster_merge_candidates.py) |
 | Canonical parents | [`build_parents.py`](../primitives/deep_context/build_parents.py) |
-| Worth and attached-LinkedIn judge | [`reconcile_linkedin.py`](../primitives/deep_context/reconcile_linkedin.py) |
+| Attached-LinkedIn identity judge | [`reconcile_linkedin.py`](../primitives/deep_context/reconcile_linkedin.py) |
 | Review UI and deterministic status | [`reconcile_review_web.py`](../primitives/deep_context/reconcile_review_web.py) |
 | Same-thread Codex wake bridge | [`review_agent_bridge.py`](../primitives/deep_context/review_agent_bridge.py) |
 | Parallel enrichment | [`reconcile_deep_research.py`](../primitives/deep_context/reconcile_deep_research.py) |

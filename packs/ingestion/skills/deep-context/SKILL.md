@@ -28,10 +28,12 @@ Use the narrow path when the user names one:
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page" -> run only
   `bin/deep-context review`; it auto-opens the current stage.
-- `$deep-context re-review` -> preview with `bin/deep-context re-review --dry-run`,
+- `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
-  This refreshes only dossier-backed machine Maybe/unjudged import candidates.
-  Machine Yes/No is reused, and every human Yes/No remains authoritative.
+  This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed
+  dossier, including mixed-source people and people with an attached LinkedIn.
+  It ignores cached machine and human worth for selection, never uses LinkedIn
+  as evidence, and never overwrites the human-owned `network_worth` column.
 - A bare `$deep-context`, "process/resolve/enrich my contacts", "build deep
   context", or a full rerun -> use the complete staged workflow below.
 
@@ -139,8 +141,27 @@ bin/deep-context dry
 Show its contact count and cost floor/ceiling. Get explicit approval, then run
 the exact `bin/deep-context synthesize ...` command printed by `dry`. Do not
 invent a different scope. Synthesis also produces an initial `network_worth`
-recommendation and reason. Reconcile refreshes only machine Maybe/unjudged
-recommendations before People review; machine Yes/No is stable.
+recommendation and reason, then always mirrors that machine verdict into
+`review.csv.llm_worth` / `llm_worth_reason` unless that person already has a
+human Yes/No. Normal repeated synthesis rejudges only missing/Maybe machine
+verdicts; machine Yes/No and human Yes/No are stable.
+
+Worth uses message context and contact identifiers only — never LinkedIn:
+
+- For Gmail or Gmail+phone, bias toward Yes for clearly human, person-directed
+  correspondence, including sparse, old, academic, personal, or plausibly
+  important professional contacts. Use No only for clear automated/broadcast/
+  transactional noise or unengaged cold spam. Maybe should be rare.
+- For phone-only dossiers, genuine two-way or repeated conversation is Yes;
+  sparse or ambiguous exchanges may be Maybe, and automated noise is No.
+- For mixed sources, a real relationship on either channel wins over noise on
+  the other. A recognizable name or plausible area code is weak context only
+  and must not become an invented identity or fact.
+
+`bin/deep-context rejudge` is the explicit reset: it selects every collected
+message-backed dossier regardless of candidate status, source combination,
+existing LinkedIn, cached machine verdict, or human verdict. It refreshes the
+machine columns beside a human decision but preserves the human column itself.
 
 Then run:
 
@@ -181,30 +202,10 @@ bin/deep-context reconcile --dry-run
 
 Show the OpenAI estimate, get fresh approval, then run
 `bin/deep-context reconcile`. This happens before People review so the UI can
-incorporate the current spam and attached-identity judgments without another
-hidden stage later. The dry run reports attached-profile identity tasks and
-worth-only no-LinkedIn import-candidate tasks separately. Reconcile judges both
-in the same approved pass.
-
-Worth is deliberately decisive:
-
-- Yes for a genuine human relationship, including family/relatives, friends, classmates,
-  professors/teachers/mentors, alumni/school contacts, colleagues, and other
-  real personal or professional correspondence.
-- No for automated/broadcast mail, marketing, cold sales/recruiting/agency
-  outreach without meaningful engagement, spam, and purely transactional
-  service/vendor exchanges.
-- Maybe only when the evidence is genuinely balanced about whether a real
-  relationship exists. Missing professional prestige, job details, or seniority
-  is not a reason for Maybe.
-
-On every repeated full `$deep-context`, this reconcile pass refreshes only the
-machine-owned Maybe/unjudged tail even when existing dossier facts are reused.
-Machine Yes/No is not re-judged. A human-owned `network_worth` Yes/No in
-`review.csv` always wins and is never overwritten.
-The narrower `bin/deep-context re-review` command applies the same rule and
-automatically rebuilds the free parent layer first when a newer `compose` pass
-has replaced the shared lookup index.
+incorporate current attached-identity judgments. Reconcile is identity-only:
+it compares a message-derived dossier to an attached LinkedIn and may verify,
+detach, or request human review. It never judges, refreshes, or writes worth,
+and no-link people create no reconcile task.
 
 Launch the local UI once in a background terminal:
 
@@ -261,7 +262,7 @@ open additional tabs or repeatedly open stage URLs as the workflow advances.
 The main Review tab shows only people the model marked `maybe`, one at a time
 with Yes/No. The Yes and No tabs are paginated, editable tables with one action
 per row: No from the Yes table and Yes from the No table.
-Model Yes starts in Yes; model No/spam, user No, and legacy Exclude share No.
+Model Yes starts in Yes; model No, user No, and legacy Exclude share No.
 When the final maybe is answered, the server writes People completion
 automatically and the browser goes straight to Enrich Contacts, where an
 indeterminate "Asking agent to continue" bar remains visible until the next

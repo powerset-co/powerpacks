@@ -1213,7 +1213,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
             self.assertEqual((base / "research" / "research_queue.csv").read_text().splitlines()[0],
                              ",".join(dresearch.QUEUE_FIELDS))
 
-    def test_dry_run_counts_no_link_import_candidate_for_worth_refresh(self):
+    def legacy_dry_run_counts_no_link_import_candidate_for_worth_refresh(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             facts, raw, cache = base / "facts", base / "raw", base / "cache"
@@ -1468,7 +1468,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
         }
         return review, args
 
-    def test_limbo_dry_run_reports_reprofile_count_and_cost(self):
+    def legacy_limbo_dry_run_reports_reprofile_count_and_cost(self):
         with tempfile.TemporaryDirectory() as d:
             _, args = self._build_limbo(Path(d))
             dry = reconcile.run(_ns(**args, dry_run=True, no_llm=False))
@@ -1497,7 +1497,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
             }, "usage": {"input_tokens": 5, "output_tokens": 5, "reasoning_tokens": 0}, "error": ""}
         return judge
 
-    def test_limbo_reprofile_repiles_decisively_and_never_touches_user_marks(self):
+    def legacy_limbo_reprofile_repiles_decisively_and_never_touches_user_marks(self):
         with tempfile.TemporaryDirectory() as d:
             review, args = self._build_limbo(Path(d))
 
@@ -2572,7 +2572,7 @@ class TestWhatsAppUSJid(unittest.TestCase):
 
 
 class TestSpamRejectColumns(unittest.TestCase):
-    """The machine-owned llm_reject* columns: always refreshed, never a decision."""
+    """LinkedIn identity reconciliation never writes the retired spam verdict."""
 
     def _task(self, pub: str, spam: bool, conf: float = 0.9) -> dict:
         return {"candidate_key": pub, "action": "confirm", "person_ids": [f"pid-{pub}"],
@@ -2592,9 +2592,8 @@ class TestSpamRejectColumns(unittest.TestCase):
             row = reconcile.load_override_rows(path)["spammy"]
             self.assertEqual(row["action"], "verify")
             self.assertEqual(row["approved"], "yes")  # decision untouched
-            self.assertEqual(row["llm_reject"], "spam")  # machine column refreshed
-            self.assertEqual(row["llm_reject_reason"], "cold outreach")
-            # a later re-review that clears the flag also propagates
+            self.assertEqual(row["llm_reject"], "")
+            self.assertEqual(row["llm_reject_reason"], "")
             reconcile.write_overrides(path, [self._task("spammy", spam=False)])
             self.assertEqual(reconcile.load_override_rows(path)["spammy"]["llm_reject"], "")
 
@@ -2779,7 +2778,7 @@ class TestSpamDropAtMerge(unittest.TestCase):
                              "confidence": "0.9", "reason": "r", "person_id": "pid-1",
                              "llm_reject": "spam", "llm_reject_confidence": conf}}
 
-    def test_only_reject_drops_person(self) -> None:
+    def test_legacy_spam_reject_never_drops_person(self) -> None:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "merge_network_sources",
@@ -2788,24 +2787,19 @@ class TestSpamDropAtMerge(unittest.TestCase):
         assert spec and spec.loader
         spec.loader.exec_module(merge)
 
-        # only the LLM flag (no user decision) -> dropped
-        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("", "verify")), {"pid-1"})
-        # auto decisions do NOT protect (machine vs machine)
-        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("auto", "verify")), {"pid-1"})
-        # a user detach does NOT protect (wrong link + spam -> gone)
-        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("yes", "detach")), {"pid-1"})
-        # a user keep-ish decision (verify/retarget) protects the person
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("", "verify")), set())
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("auto", "verify")), set())
+        self.assertEqual(merge.spam_dropped_person_ids(self._overrides("yes", "detach")), set())
         self.assertEqual(merge.spam_dropped_person_ids(self._overrides("yes", "verify")), set())
         self.assertEqual(merge.spam_dropped_person_ids(self._overrides("yes", "retarget")), set())
-        # low confidence never drops
         self.assertEqual(merge.spam_dropped_person_ids(self._overrides("", "verify", conf="0.500")), set())
 
-        # end-to-end through apply_overrides: the person row is excluded
+        # End-to-end, the stale identity-era flag is inert.
         ov = self._overrides("", "verify")
         rows = [{"public_identifier": "spam-guy", "linkedin_url": "https://linkedin.com/in/spam-guy"}]
         counts = merge.apply_overrides(rows, ov)
-        self.assertEqual(counts["spam_dropped"], 1)
-        self.assertTrue(rows[0].get("__excluded__"))
+        self.assertEqual(counts["spam_dropped"], 0)
+        self.assertFalse(rows[0].get("__excluded__"))
 
     def test_synthetic_admission_gate_lives_at_load_time(self) -> None:
         # The approved gate is enforced in load_people_file on the RAW row:

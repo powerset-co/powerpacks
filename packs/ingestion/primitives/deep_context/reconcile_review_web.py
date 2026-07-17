@@ -119,7 +119,7 @@ def load_connection_keys(people_csv: Path) -> set[str]:
     """Keys (person ids + LinkedIn pubs, lowercased) of first-degree LinkedIn
     connections — people whose source_channels include linkedin_csv. Connections
     are GROUND TRUTH in this product: the user is literally connected, so a
-    MACHINE no (worth judgment / spam flag) never rejects or drops them; only
+    MACHINE no (the synthesis worth judgment) never rejects or drops them; only
     the user's own No/Exclude can."""
     out: set[str] = set()
     if not people_csv.exists():
@@ -700,7 +700,7 @@ def hydrate_proposed_profiles(parents: list[dict[str, Any]], *,
 def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
                    facts_dir: Path, connections: set[str] | None = None) -> None:
     """Attach the effective network-worth (user review.csv mark / approved exclude >
-    fresh review.csv llm_worth > synthesis LLM fallback > default 'maybe') to EVERY row — verdict,
+    synthesis-mirrored review.csv llm_worth > default 'maybe') to EVERY row — verdict,
     candidate, and synthetic alike — plus the machine's own view (for the secondary
     text and the unified Rejected grouping). The mark's review.csv key is the primary
     candidate's LinkedIn pub for verdict rows, else the row's person_id."""
@@ -775,7 +775,7 @@ def effective_no_for_key(key: str, override_rows: dict[str, dict[str, str]],
     connected = bool(connections) and (
         key_l in connections
         or (row.get("person_id") or "").strip().lower() in connections)
-    machine_no = machine["decision"] == "no" or (row.get("llm_reject") or "").strip().lower() == "spam"
+    machine_no = machine["decision"] == "no"
     rejected = user_mark == "no" or (
         user_mark != "yes" and machine_no and not keepish and not connected)
     return {"worth": worth, "machine": machine, "rejected": rejected, "connected": connected}
@@ -878,16 +878,12 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
             "action": action,
             "approved": approved,
             "new_url": new_url,
-            # machine-owned spam screen (review.csv llm_* columns)
+            # machine-owned profile-proposal rejection (identity, not worth)
             "llm_reject": (dec.get("llm_reject") or "").strip().lower(),
             "llm_reject_confidence": dec.get("llm_reject_confidence", ""),
             "llm_reject_reason": dec.get("llm_reject_reason", ""),
         })
     return list(parents.values()), overrides
-
-
-def is_llm_rejected(parent: dict[str, Any]) -> bool:
-    return any(c.get("llm_reject") == "spam" for c in parent["candidates"])
 
 
 def is_worth_no(parent: dict[str, Any]) -> bool:
@@ -906,8 +902,8 @@ def _keepish(parent: dict[str, Any]) -> bool:
 def is_effective_no(parent: dict[str, Any]) -> bool:
     """The unified 'effective no' (== the Rejected tab == dropped at the next fan-in
     merge): the user said no (worth mark or approved Exclude — both surface as a
-    user-sourced worth of no), or the machine said no (worth judgment or spam flag)
-    with no user rescue (worth-Yes or a keep-ish decision)."""
+    user-sourced worth of no), or synthesis said no with no user rescue
+    (worth-Yes or a keep-ish decision)."""
     if any(str(c.get("action") or "").strip().lower() == "exclude"
            and str(c.get("approved") or "").strip().lower() in APPLIED_APPROVED
            for c in parent.get("candidates") or []):
@@ -925,7 +921,7 @@ def is_effective_no(parent: dict[str, Any]) -> bool:
     # LinkedIn connections are GROUND TRUTH — a machine no never rejects them
     if parent.get("connection"):
         return False
-    machine_no = (parent.get("machine_worth") or {}).get("decision") == "no" or is_llm_rejected(parent)
+    machine_no = (parent.get("machine_worth") or {}).get("decision") == "no"
     return machine_no and not _keepish(parent)
 
 
@@ -939,7 +935,7 @@ def parent_in_tab(parent: dict[str, Any], tab: str) -> bool:
     if tab == "rejected":
         return is_effective_no(parent)
     if tab == "review":
-        # effective-no people (spam, worth-no, excluded) live on the Rejected tab
+        # effective-no people (worth-no or excluded) live on the Rejected tab
         return parent_status(parent) == "review" and not is_effective_no(parent)
     return parent_status(parent) == tab
 
@@ -1974,15 +1970,9 @@ def _rejection_reason(parent: dict[str, Any]) -> str:
            and str(candidate.get("approved") or "").strip().lower() in APPLIED_APPROVED
            for candidate in parent.get("candidates") or []):
         return "Excluded"
-    spam_reason = next((str(candidate.get("llm_reject_reason") or "").strip()
-                        for candidate in parent.get("candidates") or []
-                        if candidate.get("llm_reject") == "spam"), "")
-    if spam_reason:
-        reason = spam_reason
-    else:
-        reason = str(machine.get("reason") or "").strip()
-        if not reason or reason.lower() == "not yet judged":
-            reason = "Not worth adding"
+    reason = str(machine.get("reason") or "").strip()
+    if not reason or reason.lower() == "not yet judged":
+        reason = "Not worth adding"
     return reason if len(reason) <= 140 else reason[:137].rsplit(" ", 1)[0] + "…"
 
 

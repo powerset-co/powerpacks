@@ -170,10 +170,9 @@ def candidates_resolved_by_existing(index_json: Path = INDEX_JSON) -> set[str]:
 
 # --- Network-worth (yes | maybe | no) ----------------------------------------
 # The synthesis LLM judges every profiled contact's `network_worth` from the
-# actual message relationship (facts/<person_id>.jsonl). The user may overrule
-# it per row via the sticky, user-owned `network_worth` column in
-# overrides/review.csv. `no` gates a candidate out of paid reverse lookup and
-# synthetic minting.
+# actual message relationship (facts/<person_id>.jsonl), then mirrors it into
+# overrides/review.csv. Runtime consumers read that single review surface. The
+# user may overrule it via the sticky, user-owned `network_worth` column.
 
 NETWORK_WORTH_VALUES = ("yes", "maybe", "no")
 DEFAULT_NETWORK_WORTH = "maybe"
@@ -218,8 +217,9 @@ def effective_network_worth(
 ) -> dict[str, str]:
     """Resolved worth for a person: the user's review.csv mark wins (an approved
     `exclude` action counts as a user `no` — one unified way of saying no), else the
-    fresh machine-owned `llm_worth` column from reconcile, else the synthesis LLM's
-    older judgment from facts, else the default ('maybe' — needs a human look).
+    machine-owned `llm_worth` mirrored from synthesis, else the default ('maybe' —
+    needs a human look). Facts are the machine source of truth, but are copied into
+    review.csv by synthesis rather than read here as a hidden fallback.
     Returns {'decision', 'reason', 'source': user|llm|default}."""
     row = (override_rows or {}).get(person_id.lower()) or {}
     user_mark = str(row.get("network_worth") or "").strip().lower()
@@ -231,7 +231,4 @@ def effective_network_worth(
     row_llm = str(row.get("llm_worth") or "").strip().lower()
     if row_llm in NETWORK_WORTH_VALUES:
         return {"decision": row_llm, "reason": str(row.get("llm_worth_reason") or ""), "source": "llm"}
-    llm = llm_network_worth(person_id, facts_dir)
-    if llm["decision"]:
-        return {**llm, "source": "llm"}
     return {"decision": DEFAULT_NETWORK_WORTH, "reason": "not yet judged", "source": "default"}

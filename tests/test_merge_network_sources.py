@@ -629,8 +629,8 @@ class WorthDropAtMergeTests(unittest.TestCase):
         return {"row-key": base}
 
     def test_linkedin_connection_never_machine_dropped(self):
-        # LinkedIn connections are GROUND TRUTH: a machine no (worth judgment or
-        # spam) can never drop a linkedin_csv person — only the user's own no can.
+        # LinkedIn connections are GROUND TRUTH: a machine worth no can never
+        # drop a linkedin_csv person — only the user's own no can.
         def conn_row(**kw) -> dict:
             row = {"id": "pid-li", "public_identifier": "connfriend",
                    "linkedin_url": "https://www.linkedin.com/in/connfriend",
@@ -644,7 +644,7 @@ class WorthDropAtMergeTests(unittest.TestCase):
         counts = merge_network_sources.apply_overrides(rows, ov)
         self.assertFalse(rows[0].get("__excluded__"))
         self.assertEqual(counts["worth_dropped"], 0)
-        # confident spam likewise cannot drop a connection
+        # Legacy spam residue never drops anyone.
         ov["connfriend"].update({"llm_worth": "", "llm_reject": "spam",
                                  "llm_reject_confidence": "0.95"})
         rows = [conn_row()]
@@ -671,10 +671,10 @@ class WorthDropAtMergeTests(unittest.TestCase):
         self.assertEqual(wd(self._ov(llm_worth="no", network_worth="yes")), set())          # user yes rescues
         self.assertEqual(wd(self._ov(llm_worth="no", approved="yes")), set())               # keep-ish rescues
         self.assertEqual(wd(self._ov(llm_worth="no", approved="yes", action="detach")), {"pid-1"})
-        # the spam screen folds into the same path
-        self.assertEqual(wd(self._ov(llm_reject="spam", llm_reject_confidence="0.9")), {"pid-1"})
+        # The retired LinkedIn spam screen is not a second worth gate.
+        self.assertEqual(wd(self._ov(llm_reject="spam", llm_reject_confidence="0.9")), set())
         self.assertEqual(wd(self._ov(llm_reject="spam", llm_reject_confidence="0.9",
-                                     network_worth="yes")), set())                          # yes rescues spam
+                                     network_worth="yes")), set())
         self.assertEqual(wd(self._ov(llm_reject="spam", llm_reject_confidence="0.5")), set())
         # an approved exclude is the same user no
         self.assertEqual(wd(self._ov(action="exclude", approved="yes")), {"pid-1"})
