@@ -2991,11 +2991,16 @@ class TestMultiOptionDecideResolvesParent(unittest.TestCase):
         self.people.write_text("id,public_identifier\n", encoding="utf-8")
         self.manifest = base / "review" / "manifest.json"
         self.enrichment = base / "deep-research" / "manifest.json"
-        # Two synthetic rows for the SAME person, both pending (approved=auto == pending).
+        # Two synthetic rows for the SAME person, both pending (approved=auto ==
+        # pending), each carrying a DIFFERENT real email so the pick can union them.
+        self.email_a = "lukas.kroc@example.com"
+        self.email_b = "lukas@brainoft.example.com"
         self.synthetic = base / "synthetic-people.csv"
+        self.phone_b = "+14155550199"
         columns = ["id", "public_identifier", "full_name", "enrichment_provider",
                    "approved", "source_parent_slug", "source_person_ids",
-                   "source_candidate_public_identifier"]
+                   "source_candidate_public_identifier", "primary_email", "all_emails",
+                   "primary_phone", "all_phones", "source_channels", "interaction_counts"]
         with self.synthetic.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.DictWriter(fh, fieldnames=columns)
             writer.writeheader()
@@ -3003,12 +3008,17 @@ class TestMultiOptionDecideResolvesParent(unittest.TestCase):
                              "full_name": "Lukas Kroc", "enrichment_provider": "synthetic",
                              "approved": "auto", "source_parent_slug": "lukas-kroc-parent34",
                              "source_person_ids": json.dumps([self.PID_A]),
-                             "source_candidate_public_identifier": self.PID_A})
+                             "source_candidate_public_identifier": self.PID_A,
+                             "primary_email": self.email_a, "source_channels": "gmail_msgvault",
+                             "interaction_counts": json.dumps({"gmail": 4})})
             writer.writerow({"id": self.PID_B, "public_identifier": "synth-bbb",
                              "full_name": "Lukas Kroc", "enrichment_provider": "synthetic",
                              "approved": "auto", "source_parent_slug": "lukas-kroc-parent58",
                              "source_person_ids": json.dumps([self.PID_B]),
-                             "source_candidate_public_identifier": self.PID_B})
+                             "source_candidate_public_identifier": self.PID_B,
+                             "primary_email": self.email_b, "primary_phone": self.phone_b,
+                             "source_channels": "imessage",
+                             "interaction_counts": json.dumps({"imessage": 9})})
         # index.json folds BOTH children under one current parent (post cluster_merge).
         common.write_json(base / "index.json", {
             "parents": {"lukas-kroc-parent06": {"children": ["c-a", "c-b"],
@@ -3067,6 +3077,110 @@ class TestMultiOptionDecideResolvesParent(unittest.TestCase):
         # The parent no longer needs an identity decision -> it does not reappear.
         self.assertEqual(result["progress"]["linkedin_pending"], 0)
         self.assertEqual(web.linkedin_review_queue(self._parents()), [])
+
+    def _kept_synthetic_row(self) -> dict:
+        with self.synthetic.open(newline="", encoding="utf-8") as fh:
+            return {r["public_identifier"]: r for r in csv.DictReader(fh)}["synth-aaa"]
+
+    def test_pick_unions_withdrawn_sibling_contacts_onto_survivor(self):
+        self._post("/decide", pub="synth-aaa", decision="keep",
+                   parent_slug="synthetic-synth-aaa")
+        kept = self._kept_synthetic_row()
+        # The survivor now carries BOTH emails (its own + the withdrawn sibling's) and
+        # BOTH per-channel interaction counts — nothing lost.
+        self.assertEqual(sorted(json.loads(kept["all_emails"])),
+                         sorted([self.email_a, self.email_b]))
+        self.assertIn(self.email_a, kept["all_emails"])
+        self.assertIn(self.email_b, kept["all_emails"])
+        self.assertEqual(json.loads(kept["all_phones"]), [self.phone_b])   # sibling's phone kept
+        self.assertEqual(json.loads(kept["interaction_counts"]),
+                         {"gmail": 4, "imessage": 9})
+        self.assertEqual(set(kept["source_channels"].split(",")),
+                         {"gmail_msgvault", "imessage"})
+        # No second person minted: the sibling row is still present but withdrawn (no).
+        with self.synthetic.open(newline="", encoding="utf-8") as fh:
+            rows = {r["public_identifier"]: r for r in csv.DictReader(fh)}
+        self.assertEqual(rows["synth-bbb"]["approved"], "no")
+        self.assertEqual(len(rows), 2)                              # exactly the two rows, no dup
+
+    def test_contact_carry_is_idempotent_on_repick(self):
+        self._post("/decide", pub="synth-aaa", decision="keep",
+                   parent_slug="synthetic-synth-aaa")
+        first = json.loads(self._kept_synthetic_row()["all_emails"])
+        # Re-run the carry against the same parent -> emails don't duplicate.
+        (parent,) = self._parents()
+        kept_cand = next(c for c in parent["candidates"] if c["pub"] == "synth-aaa")
+        web.carry_forward_multi_option_contacts(
+            parent, kept_cand, synthetic_path=self.synthetic, people_csv=self.people)
+        second = json.loads(self._kept_synthetic_row()["all_emails"])
+        self.assertEqual(first, second)
+        self.assertEqual(sorted(second), sorted([self.email_a, self.email_b]))
+
+
+class TestContactCarryHelpers(unittest.TestCase):
+    """Unit coverage for the multi-option contact carry-forward: single-option no-op,
+    real-LinkedIn kept option folds a consolidate row, and the union helper is DRY."""
+
+    def _synth_parent(self, options: list[dict], person_ids: list[str]) -> dict:
+        return {"slug": "synthetic-synth-1", "name": "Dana Fox", "dossier_slug": "",
+                "person_ids": person_ids, "sources": ["gmail"], "candidates": options}
+
+    def test_single_option_pick_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            synth = base / "synthetic-people.csv"
+            synth.write_text(
+                "id,public_identifier,full_name,enrichment_provider,approved,primary_email,all_emails\n"
+                "pid-1,synth-1,Dana Fox,synthetic,auto,dana@example.com,\n", encoding="utf-8")
+            people = base / "people.csv"; people.write_text("id,primary_email\n", encoding="utf-8")
+            parent = self._synth_parent(
+                [{"pub": "synth-1", "synthetic": True, "match_emails": ["dana@example.com"],
+                  "match_phones": []}], ["pid-1"])
+            out = web.carry_forward_multi_option_contacts(
+                parent, parent["candidates"][0], synthetic_path=synth, people_csv=people)
+            self.assertFalse(out["carried"])                        # single option: no-op
+            # The synthetic row is untouched (no all_emails backfill from a no-op carry).
+            with synth.open(newline="", encoding="utf-8") as fh:
+                self.assertEqual(next(csv.DictReader(fh))["all_emails"], "")
+
+    def test_real_linkedin_kept_option_writes_consolidate_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            synth = base / "synthetic-people.csv"
+            # One real-LinkedIn option + one synthetic sibling carrying a distinct email.
+            synth.write_text(
+                "id,public_identifier,full_name,enrichment_provider,approved,primary_email,source_channels\n"
+                "pid-s,synth-sib,Dana Fox,synthetic,auto,dana.alt@example.com,imessage\n",
+                encoding="utf-8")
+            people = base / "people.csv"
+            people.write_text("id,primary_email,source_channels\n"
+                              "pid-real,dana@example.com,linkedin_csv\n", encoding="utf-8")
+            consolidate = base / "consolidate-people.csv"
+            parent = {"slug": "dana-p", "name": "Dana Fox", "dossier_slug": "",
+                      "person_ids": ["pid-real", "pid-s"], "sources": ["gmail"],
+                      "candidates": [
+                          {"pub": "dana-real", "url": "https://www.linkedin.com/in/dana-real",
+                           "synthetic": False, "match_emails": ["dana@example.com"],
+                           "match_phones": [], "profile_pub": "dana-real"},
+                          {"pub": "synth-sib", "synthetic": True,
+                           "match_emails": ["dana.alt@example.com"], "match_phones": []}]}
+            out = web.carry_forward_multi_option_contacts(
+                parent, parent["candidates"][0], synthetic_path=synth,
+                people_csv=people, consolidate_path=consolidate)
+            self.assertTrue(out["carried"])
+            self.assertEqual(out["target"], "consolidate-people.csv")
+            with consolidate.open(newline="", encoding="utf-8") as fh:
+                (row,) = list(csv.DictReader(fh))
+            self.assertEqual(row["public_identifier"], "dana-real")   # keyed on kept LinkedIn
+            self.assertEqual(sorted(json.loads(row["all_emails"])),
+                             sorted(["dana@example.com", "dana.alt@example.com"]))  # union
+            self.assertEqual(row["linkedin_url"], "https://www.linkedin.com/in/dana-real")
+
+    def test_union_helper_is_shared_with_write_consolidations(self):
+        # DRY: write_consolidations uses the same union_child_contacts helper.
+        import inspect
+        src = inspect.getsource(reconcile.write_consolidations)
+        self.assertIn("union_child_contacts", src)
 
 
 class TestReadinessCandidateCounts(unittest.TestCase):
