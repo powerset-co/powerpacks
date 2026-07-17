@@ -1825,8 +1825,7 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn("aria-label='Scroll down'", html)
         self.assertIn("<section class='details' data-slug='ada-lovelace'>", html)
         self.assertIn(
-            "<p class='context-notice'><strong>Not enough information.</strong> "
-            "Need your review.</p>",
+            "<p class='context-empty'>Not enough information.</p>",
             html,
         )
         # no "Details"/"Context" section labels — the facts + preview stand alone
@@ -1961,8 +1960,7 @@ class TestStagedReviewUI(unittest.TestCase):
             html = web.render_decision_table(
                 [parent], "yes", parents_dir=base / "parents", dossier_dir=base / "dossiers")
         self.assertIn(
-            "<p class='context-notice'><strong>Not enough information.</strong> "
-            "Need your review.</p>",
+            "<p class='context-empty'>Not enough information.</p>",
             html,
         )
         self.assertNotIn("Who they are", html)

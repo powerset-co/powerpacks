@@ -1830,8 +1830,7 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
         # kept link with no displayable reason: omit the row entirely
     extra = f"<dl>{''.join(rows)}</dl>" if rows else ""
     context_notice = (
-        "<p class='context-notice'><strong>Not enough information.</strong> "
-        "Need your review.</p>"
+        "<p class='context-empty'>Not enough information.</p>"
         if sparse_context else ""
     )
     profile_dl = (f"<dl>{''.join(profile_rows)}</dl>" if profile_rows else "")
@@ -2227,8 +2226,7 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
         fact_rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
     fact_rows.append(f"<div><dt>{why_label}</dt><dd>{esc(reason)}</dd></div>")
     dossier_preview = (
-        "<p class='context-notice'><strong>Not enough information.</strong> "
-        "Need your review.</p>"
+        "<p class='context-empty'>Not enough information.</p>"
         if sparse_context
         else (
             "<h4 class='dossier-heading'>Who they are</h4>"
