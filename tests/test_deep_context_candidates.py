@@ -1668,6 +1668,37 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn("data-complete='linkedin'", finished)
         self.assertNotIn("data-complete='linkedin'", completed)
 
+    def test_linkedin_review_buffers_ten_and_pages_the_current_pending_queue(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parents = []
+            for index in range(12):
+                parent = self._linkedin_parent()
+                parent["slug"] = f"person-{index:02d}"
+                parent["name"] = f"Person {index:02d}"
+                parent["person_ids"] = [f"pid-{index:02d}"]
+                candidate = parent["candidates"][0]
+                candidate["pub"] = f"person-{index:02d}"
+                candidate["profile_pub"] = candidate["pub"]
+                parents.append(parent)
+            progress = web.review_progress(parents)
+            first = web.linkedin_cards_payload(
+                parents, progress, offset=0, limit=10, linkedin_complete=False,
+                parents_dir=base / "parents", dossier_dir=base / "dossiers")
+            second = web.linkedin_cards_payload(
+                parents, progress, offset=10, limit=10, linkedin_complete=False,
+                parents_dir=base / "parents", dossier_dir=base / "dossiers")
+            body = web.linkedin_review_body(
+                parents, progress, enrichment_complete=True, linkedin_complete=False,
+                parents_dir=base / "parents", dossier_dir=base / "dossiers")
+        self.assertEqual((first["total"], len(first["cards"])), (12, 10))
+        self.assertEqual((second["offset"], len(second["cards"])), (10, 2))
+        self.assertIn("person-00", first["cards"][0])
+        self.assertIn("person-10", second["cards"][0])
+        self.assertEqual(body.count("data-linkedin-buffer-card"), 10)
+        self.assertEqual(body.count("data-linkedin-buffer-card hidden"), 9)
+        self.assertIn("data-buffer-target='10'", body)
+
     def test_linkedin_review_is_not_blocked_by_incomplete_enrichment(self):
         # The old hard gate ("Enrichment not finished" wall) is gone: cards render
         # for every enrichment status, with only a passive status note added.
@@ -2236,6 +2267,20 @@ class TestLiveEndpoints(unittest.TestCase):
         self.assertEqual(j["counts"]["rejected"], 0)
         self.assertEqual(reconcile.load_override_rows(self.review)["bob-1"]["action"], "verify")
 
+    def test_worth_yes_clears_exclude_in_the_cached_response_model(self):
+        self._post("/decide", pub="bob-1", decision="exclude")
+
+        rescued = self._post("/worth", pub="bob-1", worth="yes")
+
+        self.assertFalse(rescued["rejected"])
+        self.assertEqual((rescued["action"], rescued["approved"]), ("", ""))
+        self.assertEqual(
+            (rescued["counts"]["excluded"], rescued["counts"]["rejected"]),
+            (0, 0),
+        )
+        self.assertEqual(
+            reconcile.load_override_rows(self.review)["bob-1"]["action"], "")
+
     def test_synthetic_worth_and_decide_report_gate_state(self):
         j = self._post("/worth", pub="pid-9", worth="no")           # the mint gate follows
         self.assertTrue(j["rejected"])
@@ -2302,6 +2347,70 @@ class TestLiveEndpoints(unittest.TestCase):
         self.assertIn("class='enrichment-note'", linkedin_html)
         self.assertIn("identity-card", linkedin_html)
         self.assertNotIn("Enrichment not finished", linkedin_html)
+
+    def test_linkedin_cards_endpoint_pages_without_rebuilding_the_review_model(self):
+        with mock.patch.object(
+                web, "_all_review_parents",
+                side_effect=AssertionError("cached card paging must not rebuild")):
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/api/linkedin-cards?offset=0&limit=1") as resp:
+                first = json.loads(resp.read())
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/api/linkedin-cards?offset=1&limit=1") as resp:
+                second = json.loads(resp.read())
+        self.assertEqual(first["offset"], 0)
+        self.assertLessEqual(len(first["cards"]), 1)
+        self.assertEqual(second["offset"], 1)
+        self.assertIn("state_token", first)
+
+    def test_status_endpoint_uses_the_cached_review_model(self):
+        with mock.patch.object(
+                web, "_all_review_parents",
+                side_effect=AssertionError("cached status must not rebuild")):
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/api/status") as resp:
+                status = json.loads(resp.read())
+        self.assertTrue(status["ok"])
+        self.assertIn("state_token", status)
+
+    def test_identity_save_uses_cached_session_and_returns_queue_delta(self):
+        with mock.patch.object(
+                web, "_all_review_parents",
+                side_effect=AssertionError("decision save must not rebuild")):
+            result = self._post("/decide", pub="bob-1", decision="keep")
+        self.assertEqual(result["resolved_pubs"], ["bob-1"])
+        self.assertTrue(result["state_token"])
+        self.assertEqual(
+            reconcile.load_override_rows(self.review)["bob-1"]["approved"], "yes")
+
+    def test_keep_resolves_every_pending_sibling_in_the_cached_parent(self):
+        sibling = dict(
+            TestUnifiedRejected.VERDICT,
+            candidate_key="bob-2",
+            linkedin={
+                "linkedin_url": "https://www.linkedin.com/in/bob-2",
+                "has_profile": True,
+            },
+        )
+        _verdict_jsonl(
+            self.verdicts, [TestUnifiedRejected.VERDICT, sibling])
+        rows = reconcile.load_override_rows(self.review)
+        rows["bob-2"] = {
+            **{key: "" for key in reconcile.OVERRIDE_COLUMNS},
+            "public_identifier": "bob-2",
+            "person_id": "pid-bob",
+        }
+        reconcile._write_override_rows(self.review, rows)
+
+        result = self._post("/decide", pub="bob-1", decision="keep")
+
+        self.assertEqual(result["resolved_pubs"], ["bob-1", "bob-2"])
+        saved = reconcile.load_override_rows(self.review)
+        self.assertEqual(
+            (saved["bob-2"]["action"], saved["bob-2"]["approved"]),
+            ("detach", "yes"),
+        )
+        self.assertEqual(result["progress"]["linkedin_pending"], 1)
 
     def test_identity_post_rejects_mismatched_parent_slug(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:

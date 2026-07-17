@@ -92,18 +92,10 @@ function applyProgress(progress) {
   updateStepCount(steps[2], progress.linkedin_pending);
 }
 
-// After an in-place mutation the server's state token changes; adopt it so the
-// background file-state poller doesn't treat our own write as external news and
-// reload the page we just updated optimistically.
-async function adoptServerState() {
-  try {
-    const response = await fetch("/api/status", { cache: "no-store" });
-    if (!response.ok) return;
-    const state = await response.json();
-    if (state.state_token) reviewStateToken = state.state_token;
-  } catch {
-    // the next poll will resync
-  }
+// Local mutation responses already carry the authoritative token. Status polling
+// is reserved for external agent/provider handoffs; never re-poll after our own save.
+function adoptMutationState(response) {
+  if (response?.state_token) reviewStateToken = response.state_token;
 }
 
 async function decideDecisionRow(button, row) {
@@ -118,7 +110,7 @@ async function decideDecisionRow(button, row) {
       post("/worth", { pub: button.dataset.pub || "", worth }),
       delay(170),
     ]);
-    await adoptServerState();
+    adoptMutationState(response);
     const list = row.closest("[data-decision-list]");
     if (list && typeof list.virtualRemove === "function") list.virtualRemove(row);
     else row.remove();
@@ -144,7 +136,7 @@ async function decideWorthCard(button, card) {
       post("/worth", { pub: button.dataset.pub || "", worth }),
       delay(170),
     ]);
-    await adoptServerState();
+    adoptMutationState(response);
     applyProgress(response.progress);
     announce(worth === "yes" ? "Added" : "Rejected");
     const panel = card.closest(".worth-panel");
@@ -164,29 +156,131 @@ async function decideWorthCard(button, card) {
   }
 }
 
-async function decideLinkedinCard(card, values, message) {
-  card.querySelectorAll("button").forEach((item) => { item.disabled = true; });
-  card.classList.add("leaving");
+const linkedinBufferTarget = 10;
+const linkedinRefillAt = 5;
+
+function linkedinBufferCards(buffer) {
+  return Array.from(buffer?.querySelectorAll(":scope > [data-linkedin-buffer-card]") || []);
+}
+
+function setLinkedinBufferSaving(buffer, saving) {
+  if (!buffer) return;
+  buffer.toggleAttribute("data-saving", saving);
+  buffer.setAttribute("aria-busy", saving ? "true" : "false");
+  buffer.querySelectorAll("button, input").forEach((item) => { item.disabled = saving; });
+}
+
+function showFirstLinkedinCard(buffer) {
+  const cards = linkedinBufferCards(buffer);
+  cards.forEach((item, index) => { item.hidden = index !== 0; });
+  if (cards[0]) wireDynamicContent(cards[0]);
+  return cards[0] || null;
+}
+
+function optimisticLinkedinAdvance(card, values) {
+  const buffer = card.closest("[data-linkedin-buffer]");
+  const current = card.closest("[data-linkedin-buffer-card]");
+  if (!buffer || !current) return null;
+  const sameParentResolves = values.decision === "keep" || values.decision === "fix";
+  const parent = current.dataset.parent || "";
+  current.hidden = true;
+  const next = linkedinBufferCards(buffer).find((item) => {
+    if (item === current) return false;
+    return !(sameParentResolves && item.dataset.parent === parent);
+  });
+  if (next) {
+    next.hidden = false;
+    wireDynamicContent(next);
+  } else {
+    const saving = document.createElement("div");
+    saving.className = "empty-state linkedin-saving";
+    saving.dataset.linkedinSaving = "true";
+    saving.innerHTML = "<h2>Saving…</h2>";
+    buffer.append(saving);
+  }
+  setLinkedinBufferSaving(buffer, true);
+  return { buffer, current };
+}
+
+function rollbackLinkedinAdvance(advance) {
+  if (!advance) return;
+  advance.buffer.querySelector("[data-linkedin-saving]")?.remove();
+  linkedinBufferCards(advance.buffer).forEach((item) => { item.hidden = true; });
+  advance.current.hidden = false;
+  setLinkedinBufferSaving(advance.buffer, false);
+  wireDynamicContent(advance.current);
+}
+
+function appendLinkedinCards(buffer, htmlCards) {
+  const existing = new Set(
+    linkedinBufferCards(buffer).map((item) => `${item.dataset.parent}:${item.dataset.pub}`),
+  );
+  const template = document.createElement("template");
+  template.innerHTML = (htmlCards || []).join("");
+  template.content.querySelectorAll("[data-linkedin-buffer-card]").forEach((item) => {
+    const key = `${item.dataset.parent}:${item.dataset.pub}`;
+    if (existing.has(key)) return;
+    item.hidden = true;
+    existing.add(key);
+    buffer.append(item);
+    wireDynamicContent(item);
+  });
+}
+
+async function refillLinkedinBuffer(buffer) {
+  const held = linkedinBufferCards(buffer).length;
+  if (held > linkedinRefillAt) return;
+  const target = parseInt(buffer.dataset.bufferTarget || `${linkedinBufferTarget}`, 10);
+  const limit = Math.max(0, target - held);
+  if (!limit) return;
   try {
-    const [response] = await Promise.all([post("/decide", values), delay(170)]);
-    await adoptServerState();
-    applyProgress(response.progress);
-    announce(message);
-    const nextHtml = await fetchText("/api/linkedin-card");
-    if (nextHtml === null) {
-      leaveAndReload("Saved");
-      return;
-    }
-    const template = document.createElement("template");
-    template.innerHTML = nextHtml; // next identity card, or the finished state
-    const next = template.content.firstElementChild;
-    // Swap the whole stage wrapper so the passive enrichment note refreshes too.
-    const holder = card.closest(".linkedin-stage") || card;
-    holder.replaceWith(...template.content.childNodes);
-    if (next) wireDynamicContent(next);
+    const response = await fetch(
+      `/api/linkedin-cards?offset=${held}&limit=${limit}`,
+      { cache: "no-store" },
+    );
+    if (!response.ok) throw new Error("Could not preload more people");
+    const payload = await response.json();
+    appendLinkedinCards(buffer, payload.cards);
+    adoptMutationState(payload);
   } catch (error) {
-    card.classList.remove("leaving");
-    card.querySelectorAll("button").forEach((item) => { item.disabled = false; });
+    // The visible queue remains usable; the next successful save retries refill.
+    announce(error.message, true);
+  }
+}
+
+async function decideLinkedinCard(card, values, message) {
+  const advance = optimisticLinkedinAdvance(card, values);
+  if (!advance) {
+    lock(card.querySelector("button"));
+    try {
+      await post("/decide", values);
+      leaveAndReload(message);
+    } catch (error) {
+      unlock(card.querySelector("button"));
+      announce(error.message, true);
+    }
+    return;
+  }
+  try {
+    const response = await post("/decide", values);
+    adoptMutationState(response);
+    applyProgress(response.progress);
+    const resolved = new Set(response.resolved_pubs || [values.pub]);
+    linkedinBufferCards(advance.buffer).forEach((item) => {
+      if (resolved.has(item.dataset.pub || "")) item.remove();
+    });
+    advance.buffer.querySelector("[data-linkedin-saving]")?.remove();
+    if (response.complete_html) {
+      advance.buffer.outerHTML = response.complete_html;
+      wireDynamicContent(document);
+    } else {
+      showFirstLinkedinCard(advance.buffer);
+      setLinkedinBufferSaving(advance.buffer, false);
+      void refillLinkedinBuffer(advance.buffer);
+    }
+    announce(message);
+  } catch (error) {
+    rollbackLinkedinAdvance(advance);
     announce(error.message, true);
   }
 }
@@ -583,6 +677,7 @@ if (decisionList) setupInfiniteDecisionList(decisionList);
 
 let reviewStateToken = document.body.dataset.stateToken || "";
 const statusPollMs = 5000;
+const observesExternalUpdates = document.body.dataset.externalUpdates === "true";
 
 function hasIdentityDraft() {
   return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(
@@ -592,11 +687,12 @@ function hasIdentityDraft() {
 
 async function pollFileState() {
   if (document.visibilityState !== "visible") return;
+  const currentStage = document.body.dataset.stage || "";
+  if (!observesExternalUpdates) return;
   try {
     const response = await fetch("/api/status", { cache: "no-store" });
     if (!response.ok) return;
     const state = await response.json();
-    const currentStage = document.body.dataset.stage || "";
     const isStagePreview = document.body.dataset.preview === "true";
     const preserveDraft = hasIdentityDraft();
     if (!isStagePreview && state.stage && state.stage !== currentStage) {
@@ -613,8 +709,10 @@ async function pollFileState() {
   }
 }
 
-void pollFileState();
-window.setInterval(pollFileState, statusPollMs);
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") void pollFileState();
-});
+if (observesExternalUpdates) {
+  void pollFileState();
+  window.setInterval(pollFileState, statusPollMs);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void pollFileState();
+  });
+}

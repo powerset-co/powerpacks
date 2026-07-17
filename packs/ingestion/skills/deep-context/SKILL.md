@@ -218,12 +218,18 @@ does not itself advance provider work. A clicked preview stage stays visible and
 keeps refreshing from file changes instead of being forced back to the actual
 workflow stage.
 The browser observes those fixed files and automatically refreshes or moves to
-the current stage. Its shared observer checks `/api/status` immediately, then
-every five seconds on People, Enrich, LinkedIn, and Done, with an immediate check
-when a hidden tab becomes visible again. A non-empty replacement URL in either
-the correction panel or synthetic-profile form pauses reload/navigation until
-it is saved; merely focusing an empty field does not. Open the UI once; do not
-open additional tabs or repeatedly open stage URLs as the workflow advances.
+the current stage. People and LinkedIn decisions are local SPA mutations: the
+server keeps the review model in memory, the LinkedIn page buffers ten pending
+cards, and each durable save returns the new state token directly. No status
+poll or next-card request is part of a decision click. When five cards remain,
+the browser refills back to ten from the cached server queue.
+The `/api/status` observer runs only while external changes are possible: on
+Enrich and Done, plus a LinkedIn preview opened before enrichment completes.
+It checks immediately and every five seconds, with another immediate check when
+a hidden tab becomes visible again. Once enrichment is current, LinkedIn stops
+polling and remains a purely local buffered review queue.
+Open the UI once; do not open additional tabs or repeatedly open stage URLs as
+the workflow advances.
 
 The main Review tab shows only people the model marked `maybe`, one at a time
 with Yes/No. The Yes and No tabs are paginated, editable tables with one action

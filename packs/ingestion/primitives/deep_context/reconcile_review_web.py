@@ -74,6 +74,10 @@ USER_WORTH_VALUES = {"yes", "no"}
 # Decision tables load rows in chunks over /api/decision-rows (infinite scroll);
 # this is both the server-rendered first window and the fetch increment.
 DECISION_CHUNK_SIZE = 40
+# LinkedIn review is a real client-side queue. The initial page and refill
+# endpoint keep ten lightweight cards buffered so a click never waits on a
+# second request before showing the next person.
+LINKEDIN_CARD_BATCH_SIZE = 10
 REVIEW_CSS = Path(__file__).with_name("reconcile_review.css")
 REVIEW_JS = Path(__file__).with_name("reconcile_review.js")
 AVATAR_DIR = REVIEW_DIR / "avatars"
@@ -2049,28 +2053,86 @@ def _enrichment_note(enrichment: dict[str, Any] | None) -> str:
     return f"<p class='enrichment-note' role='status'>{esc(copy)}</p>"
 
 
+def linkedin_review_queue(
+    parents: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Stable flattened queue of every pending LinkedIn candidate."""
+    queue: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    ordered = sorted(parents, key=lambda parent: str(parent.get("name") or "").lower())
+    for parent in ordered:
+        queue.extend((parent, candidate) for candidate in pending_linkedin_candidates(parent))
+    return queue
+
+
+def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool) -> str:
+    finish_button = ("" if linkedin_complete else
+                     "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
+    return ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
+            "<h2>LinkedIn profiles checked</h2>"
+            f"<p>{progress['linkedin_done']} decisions saved</p>"
+            f"{finish_button}</div>")
+
+
+def linkedin_cards_payload(
+    parents: list[dict[str, Any]], progress: dict[str, int], *,
+    offset: int = 0, limit: int = LINKEDIN_CARD_BATCH_SIZE,
+    linkedin_complete: bool, parents_dir: Path, dossier_dir: Path,
+) -> dict[str, Any]:
+    """One cached queue window for the SPA.
+
+    ``offset`` is relative to the *current pending queue*. Since completed cards
+    disappear from that queue, the browser refills with ``offset=len(buffer)``;
+    it never carries a cumulative page cursor that could skip people.
+    """
+    queue = linkedin_review_queue(parents)
+    offset = max(0, offset)
+    limit = max(1, min(limit, 50))
+    window = queue[offset:offset + limit]
+    cards = []
+    for parent, candidate in window:
+        pub = str(candidate.get("pub") or "").strip().lower()
+        parent_slug = str(parent.get("slug") or "")
+        cards.append(
+            "<div class='linkedin-buffer-card' data-linkedin-buffer-card "
+            f"data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
+            f"{render_linkedin_card(parent, candidate, parents_dir, dossier_dir)}</div>"
+        )
+    return {
+        "offset": offset,
+        "limit": limit,
+        "total": len(queue),
+        "cards": cards,
+        "complete_html": (
+            linkedin_finished_body(progress, linkedin_complete=linkedin_complete)
+            if not queue else ""
+        ),
+    }
+
+
 def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
                          enrichment_complete: bool, linkedin_complete: bool,
                          parents_dir: Path, dossier_dir: Path,
                          enrichment: dict[str, Any] | None = None) -> str:
-    """The Check-LinkedIn stage's current item (same client-swap contract as
-    worth_review_body; served by page_html and /api/linkedin-card).
-
-    Non-blocking: whatever is currently reviewable renders regardless of
-    enrichment status; an incomplete enrichment only adds a passive note."""
+    """Render the initial ten-card SPA buffer for Check LinkedIn."""
     note = "" if enrichment_complete else _enrichment_note(enrichment)
-    queue = [parent for parent in parents if pending_linkedin_candidates(parent)]
-    if queue:
-        queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
-        body = render_linkedin_card(
-            queue[0], pending_linkedin_candidates(queue[0])[0], parents_dir, dossier_dir)
+    payload = linkedin_cards_payload(
+        parents, progress, linkedin_complete=linkedin_complete,
+        parents_dir=parents_dir, dossier_dir=dossier_dir)
+    if payload["cards"]:
+        cards = []
+        for index, card in enumerate(payload["cards"]):
+            hidden = " hidden" if index else ""
+            cards.append(card.replace("data-linkedin-buffer-card ",
+                                      f"data-linkedin-buffer-card{hidden} ", 1))
+        body = (
+            f"<div class='linkedin-card-buffer' data-linkedin-buffer "
+            f"data-buffer-target='{LINKEDIN_CARD_BATCH_SIZE}' "
+            f"data-buffer-total='{payload['total']}'>"
+            + "".join(cards)
+            + "</div>"
+        )
     else:
-        finish_button = ("" if linkedin_complete else
-                         "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
-        body = ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
-                "<h2>LinkedIn profiles checked</h2>"
-                f"<p>{progress['linkedin_done']} decisions saved</p>"
-                f"{finish_button}</div>")
+        body = payload["complete_html"]
     return f"<div class='linkedin-stage'>{note}{body}</div>"
 
 
@@ -2091,6 +2153,10 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     enrichment_continued = enrichment_handoff_completed(manifest_path)
     linkedin_complete = (phase_is_completed("linkedin", progress, manifest_path)
                          or (view == "done" and not progress["linkedin_total"]))
+    external_updates = (
+        view in {"enrich", "done"}
+        or (view == "linkedin" and not enrichment_complete)
+    )
     people_active = view == "worth"
     enrich_active = view == "enrich"
     linkedin_active = view in {"linkedin", "done"}
@@ -2135,7 +2201,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
 <html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <meta name='color-scheme' content='dark'><title>{esc(title)} · Powerpacks</title>
 <link rel='stylesheet' href='/assets/reconcile-review.css'></head>
-<body data-stage='{esc(view)}' data-preview='{"true" if preview else "false"}' data-state-token='{esc(state_token)}' data-enrichment-status='{esc("approved" if enrichment.get("approval_current") else enrichment.get("status"))}'><div class='app-shell'>
+<body data-stage='{esc(view)}' data-preview='{"true" if preview else "false"}' data-external-updates='{"true" if external_updates else "false"}' data-state-token='{esc(state_token)}' data-enrichment-status='{esc("approved" if enrichment.get("approval_current") else enrichment.get("status"))}'><div class='app-shell'>
   <header class='topbar'><a class='brand' href='/?stage=worth'>POWERPACKS</a><h1 class='topbar-title'>{esc(title)}</h1><span></span></header>
   <main><nav class='stepper' aria-label='Progress'>{stepper}</nav>
     <section class='stage' aria-live='polite'>{content}</section>
@@ -2174,15 +2240,76 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                  manifest_path: Path | None = None,
                  enrichment_manifest_path: Path = ENRICH_MANIFEST,
                  profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                 avatar_dir: Path | None = None):
+                 avatar_dir: Path | None = None,
+                 initial_parents: list[dict[str, Any]] | None = None):
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
     avatar_dir = avatar_dir or manifest_path.parent / "avatars"
     mutation_lock = threading.Lock()
 
-    def parents_now() -> list[dict[str, Any]]:
-        return _all_review_parents(
+    def input_signature() -> tuple[tuple[str, int, int], ...]:
+        """Cheap invalidation key for files that can change the review queue.
+
+        Facts/dossiers are fixed before review. Provider work changes the durable
+        review/synthetic CSVs, so those files are sufficient to notice external
+        agent progress without recursively scanning thousands of artifacts.
+        """
+        values = []
+        for path in (review_path, verdicts_path, synthetic_path, people_csv):
+            try:
+                stat = path.stat()
+                values.append((str(path), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                values.append((str(path), 0, 0))
+        return tuple(values)
+
+    cached_parents = (
+        initial_parents if initial_parents is not None else
+        _all_review_parents(
             verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
             parents_dir, dossier_dir, profile_cache_dir)
+    )
+    cached_signature = input_signature()
+    connection_keys = load_connection_keys(people_csv)
+
+    def parents_now() -> list[dict[str, Any]]:
+        """Return the in-memory SPA model, reloading only after an external write."""
+        nonlocal cached_parents, cached_signature, connection_keys
+        signature = input_signature()
+        if signature != cached_signature:
+            cached_parents = _all_review_parents(
+                verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
+                parents_dir, dossier_dir, profile_cache_dir)
+            connection_keys = load_connection_keys(people_csv)
+            cached_signature = signature
+        return cached_parents
+
+    def accept_local_write() -> None:
+        """The caller already updated ``cached_parents`` to mirror its durable write."""
+        nonlocal cached_signature
+        cached_signature = input_signature()
+
+    def candidate_in_snapshot(pub: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        pub_lower = pub.strip().lower()
+        for parent in cached_parents:
+            for candidate in parent.get("candidates") or []:
+                if str(candidate.get("pub") or "").strip().lower() == pub_lower:
+                    return parent, candidate
+        return None
+
+    def worth_parent_in_snapshot(key: str) -> dict[str, Any] | None:
+        key_lower = key.strip().lower()
+        return next(
+            (parent for parent in cached_parents
+             if str(_worth_key(parent) or "").strip().lower() == key_lower),
+            None,
+        )
+
+    def state_token_for(parents: list[dict[str, Any]], progress: dict[str, int]) -> str:
+        selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
+        enrichment = read_enrichment_manifest(
+            enrichment_manifest_path, selection=selection)
+        return review_state_token(
+            progress, selection, enrichment, read_review_manifest(manifest_path))
 
     def invalidate_manifest(stage: str, progress: dict[str, int], *, launched: bool = False) -> None:
         write_review_manifest(stage, "awaiting_user", progress, path=manifest_path,
@@ -2211,13 +2338,10 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_bytes(b"ok", "text/plain")
                 return
             if parsed.path == "/api/status":
-                status = workflow_status(
-                    review_path=review_path, verdicts_path=verdicts_path,
-                    synthetic_path=synthetic_path, facts_dir=facts_dir,
-                    people_csv=people_csv, manifest_path=manifest_path,
-                    enrichment_manifest_path=enrichment_manifest_path,
-                    parents_dir=parents_dir, dossier_dir=dossier_dir,
-                    profile_cache_dir=profile_cache_dir)
+                with mutation_lock:
+                    status = workflow_status_from_parents(
+                        parents_now(), manifest_path=manifest_path,
+                        enrichment_manifest_path=enrichment_manifest_path)
                 self.send_json({
                     "primitive": "reconcile_review_web",
                     "ok": True,
@@ -2280,6 +2404,27 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 body = worth_review_body(parents, review_progress(parents),
                                          parents_dir, dossier_dir)
                 self.send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
+                return
+            if parsed.path == "/api/linkedin-cards":
+                try:
+                    offset = int(str((params.get("offset") or ["0"])[0]))
+                    limit = int(str((params.get("limit") or
+                                     [str(LINKEDIN_CARD_BATCH_SIZE)])[0]))
+                except ValueError:
+                    offset, limit = 0, LINKEDIN_CARD_BATCH_SIZE
+                with mutation_lock:
+                    parents = parents_now()
+                    progress = review_progress(parents)
+                    payload = linkedin_cards_payload(
+                        parents, progress, offset=offset, limit=limit,
+                        linkedin_complete=phase_is_completed(
+                            "linkedin", progress, manifest_path),
+                        parents_dir=parents_dir, dossier_dir=dossier_dir)
+                    payload.update({
+                        "progress": progress,
+                        "state_token": state_token_for(parents, progress),
+                    })
+                self.send_json(payload)
                 return
             if parsed.path == "/api/linkedin-card":
                 with mutation_lock:
@@ -2382,20 +2527,42 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 stored_worth = "" if worth_val == "restore" else worth_val
                 try:
                     with mutation_lock:
+                        parents_now()
+                        target_parent = worth_parent_in_snapshot(pub)
                         result = apply_worth_decision(review_path, pub, stored_worth)
                         gate = sync_synthetic_gate(synthetic_path, pub, stored_worth)
                         rows_now = load_override_rows(review_path)
-                        conns = load_connection_keys(people_csv)
                         state = effective_no_for_key(
                             pub, rows_now, facts_dir,
                             keepish=(gate["approved"] == "yes") if gate else None,
-                            connections=conns)
+                            connections=connection_keys)
                         row_now = rows_now.get(pub.strip().lower()) or {}
                         decided = gate or {
                             "action": (row_now.get("action") or "").strip().lower(),
                             "approved": (row_now.get("approved") or "").strip().lower(),
                         }
-                        current_parents = parents_now()
+                        if target_parent:
+                            target_parent["worth"] = state["worth"]
+                            target_parent["machine_worth"] = state["machine"]
+                            primary = _primary_candidate(target_parent)
+                            primary["worth"] = state["worth"]
+                            primary["machine_worth"] = state["machine"]
+                            durable_candidate = next(
+                                (candidate for candidate in target_parent.get("candidates") or []
+                                 if str(candidate.get("pub") or "").strip().lower()
+                                 == pub.strip().lower()),
+                                None,
+                            )
+                            if durable_candidate:
+                                durable_candidate["action"] = decided["action"]
+                                durable_candidate["approved"] = decided["approved"]
+                                durable_candidate["new_url"] = row_now.get(
+                                    "new_linkedin_url", "")
+                            if gate and primary.get("synthetic"):
+                                primary["action"] = gate["action"]
+                                primary["approved"] = gate["approved"]
+                        accept_local_write()
+                        current_parents = cached_parents
                         progress = review_progress(current_parents)
                         if progress["worth_pending"] == 0:
                             review_manifest = write_review_manifest(
@@ -2408,6 +2575,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 review_path=review_path, synthetic_path=synthetic_path)
                             next_stage = "worth"
                         counts = summarize(current_parents)
+                        state_token = state_token_for(current_parents, progress)
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=400)
@@ -2424,6 +2592,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     "progress": progress,
                     "review_manifest": review_manifest,
                     "next_stage": next_stage,
+                    "state_token": state_token,
                 })
                 return
 
@@ -2435,17 +2604,17 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             try:
                 with mutation_lock:
-                    before = parents_now()
+                    parents_now()
                     pub_lower = pub.strip().lower()
-                    target_parent = next((parent for parent in before
-                                          if any(str(cand.get("pub") or "").strip().lower() == pub_lower
-                                                 for cand in parent.get("candidates") or [])), None)
-                    if not target_parent:
+                    target = candidate_in_snapshot(pub)
+                    if not target:
                         raise ValueError(f"review row not found: {pub}")
+                    target_parent, target_candidate = target
                     actual_slug = str(target_parent.get("slug") or "")
                     if parent_slug and parent_slug != actual_slug:
                         raise ValueError("stale or mismatched person card")
-                    if pub.strip().lower().startswith("synth-"):
+                    synthetic_target = pub_lower.startswith("synth-")
+                    if synthetic_target:
                         worth_key = synthetic_worth_key(synthetic_path, pub)
                         if decision == "fix":
                             if not worth_key:
@@ -2459,17 +2628,27 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             _write_override_rows(review_path, rows)
                             apply_synthetic_decision(synthetic_path, pub, "detach")
                             keepish = True
+                            target_candidate["action"] = "verify"
+                            target_candidate["approved"] = "no"
+                            target_candidate["new_url"] = ""
                         else:
                             result = apply_synthetic_decision(synthetic_path, pub, decision)
                             keepish = result["approved"] == "yes"
+                            target_candidate["action"] = result["action"]
+                            target_candidate["approved"] = result["approved"]
+                            target_candidate["new_url"] = result.get("new_url", "")
                     else:
                         result = apply_decision(
                             review_path, verdicts_path, pub, decision, new_url,
                             confirm_threshold, detach_threshold)
                         worth_key, keepish = pub, None
+                        target_candidate["action"] = result["action"]
+                        target_candidate["approved"] = result["approved"]
+                        target_candidate["new_url"] = result.get("new_url", "")
 
                     # One affirmative answer resolves a multi-match person: other
                     # still-pending LinkedIns are link-level No decisions, never person rejects.
+                    resolved_pubs = [pub_lower]
                     if decision in {"keep", "fix"}:
                         for sibling in target_parent.get("candidates") or []:
                             sibling_pub = str(sibling.get("pub") or "").strip().lower()
@@ -2479,20 +2658,34 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 apply_decision(
                                     review_path, verdicts_path, sibling_pub, "detach", "",
                                     confirm_threshold, detach_threshold)
+                                sibling["action"] = "detach"
+                                sibling["approved"] = "yes"
+                                sibling["new_url"] = ""
+                                resolved_pubs.append(sibling_pub)
 
-                    conns = load_connection_keys(people_csv)
-                    current_parents = parents_now()
+                    accept_local_write()
+                    current_parents = cached_parents
                     progress = review_progress(current_parents)
                     invalidate_manifest("linkedin", progress)
                     payload: dict[str, Any] = {
                         "ok": True, "pub": pub, **result,
                         "counts": summarize(current_parents),
                         "progress": progress,
+                        "resolved_pubs": resolved_pubs,
+                        "state_token": state_token_for(current_parents, progress),
+                        "complete_html": (
+                            linkedin_finished_body(
+                                progress,
+                                linkedin_complete=phase_is_completed(
+                                    "linkedin", progress, manifest_path),
+                            )
+                            if progress["linkedin_pending"] == 0 else ""
+                        ),
                     }
                     if worth_key:
                         state = effective_no_for_key(
                             worth_key, load_override_rows(review_path), facts_dir,
-                            keepish=keepish, connections=conns)
+                            keepish=keepish, connections=connection_keys)
                         payload.update({
                             "rejected": state["rejected"],
                             "effective": state["worth"]["decision"],
@@ -2516,8 +2709,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
     parents_dir = Path(args.parents_dir)
     synthetic_path = Path(args.synthetic_people)
     manifest_path = Path(args.manifest)
-    parents = _all_review_parents(verdicts_path, review_path, synthetic_path,
-                                  Path(args.facts_dir), Path(args.people_csv))
+    parents = _all_review_parents(
+        verdicts_path, review_path, synthetic_path,
+        Path(args.facts_dir), Path(args.people_csv),
+        Path(args.parents_dir), Path(args.dossier_dir), Path(args.profile_cache_dir))
     progress = review_progress(parents)
     requested_stage = args.stage or "worth"
     query = f"?stage={urllib.parse.quote(requested_stage)}"
@@ -2574,7 +2769,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
                                               manifest_path=manifest_path,
                                               enrichment_manifest_path=Path(args.enrichment_manifest),
                                               profile_cache_dir=Path(args.profile_cache_dir),
-                                              avatar_dir=Path(args.avatar_dir)))
+                                              avatar_dir=Path(args.avatar_dir),
+                                              initial_parents=parents))
     host, port = server.server_address
     url = f"http://{host}:{port}/{query}"
     print(json.dumps({"primitive": "reconcile_review_web", "status": "serving", "url": url,
@@ -2588,22 +2784,12 @@ def cmd_serve(args: argparse.Namespace) -> None:
         print("\nshutting down", file=sys.stderr)
 
 
-def workflow_status(
-    *, review_path: Path = LINKEDIN_OVERRIDES_CSV,
-    verdicts_path: Path = VERDICTS_JSONL,
-    synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
-    facts_dir: Path = FACTS_DIR,
-    people_csv: Path = DEFAULT_PEOPLE_CSV,
+def workflow_status_from_parents(
+    parents: list[dict[str, Any]], *,
     manifest_path: Path = REVIEW_MANIFEST,
     enrichment_manifest_path: Path = ENRICH_MANIFEST,
-    parents_dir: Path = PARENTS_DIR,
-    dossier_dir: Path = DOSSIER_DIR,
-    profile_cache_dir: Path = PROFILE_CACHE_DIR,
 ) -> dict[str, Any]:
-    """Read-only next-action contract for the agent's one-minute poll loop."""
-    parents = _all_review_parents(
-        verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
-        parents_dir, dossier_dir, profile_cache_dir)
+    """Read-only next-action contract from an already-loaded server snapshot."""
     progress = review_progress(parents)
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
     enrichment = read_enrichment_manifest(
@@ -2678,6 +2864,27 @@ def workflow_status(
         "review_manifest": read_review_manifest(manifest_path),
         "enrichment": enrichment,
     }
+
+
+def workflow_status(
+    *, review_path: Path = LINKEDIN_OVERRIDES_CSV,
+    verdicts_path: Path = VERDICTS_JSONL,
+    synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
+    facts_dir: Path = FACTS_DIR,
+    people_csv: Path = DEFAULT_PEOPLE_CSV,
+    manifest_path: Path = REVIEW_MANIFEST,
+    enrichment_manifest_path: Path = ENRICH_MANIFEST,
+    parents_dir: Path = PARENTS_DIR,
+    dossier_dir: Path = DOSSIER_DIR,
+    profile_cache_dir: Path = PROFILE_CACHE_DIR,
+) -> dict[str, Any]:
+    """Read-only next-action contract for the agent's one-minute CLI poll."""
+    parents = _all_review_parents(
+        verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
+        parents_dir, dossier_dir, profile_cache_dir)
+    return workflow_status_from_parents(
+        parents, manifest_path=manifest_path,
+        enrichment_manifest_path=enrichment_manifest_path)
 
 
 def cmd_status(args: argparse.Namespace) -> None:
