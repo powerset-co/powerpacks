@@ -1103,6 +1103,56 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
     return {"path": str(path), "proposed": proposed, "preserved_user_rows": preserved, "total_rows": len(existing)}
 
 
+def union_child_contacts(
+    person_ids: list[str],
+    people: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    """UNION of emails / phones / per-channel interaction_counts / source_channels
+    across a set of person_ids.
+
+    Sources each person's contacts from people.csv, falling back to the raw
+    candidates.csv row (via candidate_carry) for an unresolved import candidate that
+    is not in people.csv — mirroring how the LinkedIn consolidation path folds a
+    parent's children onto its kept identity. Per-channel counts use the channel-wise
+    ``merge_interaction_counts`` (max, never summed). Order-stable; the shared union
+    helper for write_consolidations and the multi-option-pick contact carry-forward,
+    so the two never drift.
+
+    Returns {'emails': [...], 'phones': [...], 'interaction_counts': {...},
+    'source_channels': sorted[...]}."""
+    emails: list[str] = []
+    phones: list[str] = []
+    ic_values: list[str] = []
+    channels: set[str] = set()
+    for pid in person_ids:
+        r = people.get(pid)
+        if not r and is_candidate_id(pid):
+            raw_candidate = candidate_row(candidate_key_of(pid))
+            if raw_candidate:
+                r = candidate_carry(raw_candidate)
+        if not r:
+            continue
+        for e in [r.get("primary_email", ""), *parse_list(r.get("all_emails"))]:
+            ne = normalize_email(e)
+            if ne and "@" in ne and ne not in emails:
+                emails.append(ne)
+        for ph in [r.get("primary_phone", ""), *parse_list(r.get("all_phones"))]:
+            npn = normalize_phone(ph)
+            if npn and npn not in phones:
+                phones.append(npn)
+        if r.get("interaction_counts"):
+            ic_values.append(r["interaction_counts"])
+        for c in (r.get("source_channels") or "").split(","):
+            if c.strip():
+                channels.add(c.strip())
+    return {
+        "emails": emails,
+        "phones": phones,
+        "interaction_counts": merge_interaction_counts(*ic_values),
+        "source_channels": sorted(channels),
+    }
+
+
 def write_consolidations(path: Path, tasks: list[dict[str, Any]], people_csv: Path) -> dict[str, Any]:
     """Fold a parent's children onto its KEPT LinkedIn (trust Phase 2's grouping).
 
@@ -1138,32 +1188,9 @@ def write_consolidations(path: Path, tasks: list[dict[str, Any]], people_csv: Pa
         pub = (kept.get("candidate_key") or "").strip().lower()
         if not pub:
             continue
-        emails: list[str] = []
-        phones: list[str] = []
-        ic_values: list[str] = []
-        channels: set[str] = set()
-        for pid in all_pids:
-            r = people.get(pid)
-            if not r and is_candidate_id(pid):
-                raw_candidate = candidate_row(candidate_key_of(pid))
-                if raw_candidate:
-                    r = candidate_carry(raw_candidate)
-            if not r:
-                continue
-            for e in [r.get("primary_email", ""), *parse_list(r.get("all_emails"))]:
-                ne = normalize_email(e)
-                if ne and "@" in ne and ne not in emails:
-                    emails.append(ne)
-            for ph in [r.get("primary_phone", ""), *parse_list(r.get("all_phones"))]:
-                npn = normalize_phone(ph)
-                if npn and npn not in phones:
-                    phones.append(npn)
-            if r.get("interaction_counts"):
-                ic_values.append(r["interaction_counts"])
-            for c in (r.get("source_channels") or "").split(","):
-                if c.strip():
-                    channels.add(c.strip())
-        ic = merge_interaction_counts(*ic_values)
+        contacts = union_child_contacts(all_pids, people)
+        emails, phones = contacts["emails"], contacts["phones"]
+        ic = contacts["interaction_counts"]
         row = {c: "" for c in PEOPLE_SCHEMA_COLUMNS}
         row["public_identifier"] = pub
         row["linkedin_url"] = (kept.get("linkedin") or {}).get("linkedin_url", "")
@@ -1172,7 +1199,7 @@ def write_consolidations(path: Path, tasks: list[dict[str, Any]], people_csv: Pa
         row["primary_phone"] = phones[0] if phones else ""
         row["all_phones"] = json.dumps(phones) if phones else ""
         row["interaction_counts"] = json.dumps(ic) if ic else ""
-        row["source_channels"] = ",".join(sorted(channels))
+        row["source_channels"] = ",".join(contacts["source_channels"])
         rows.append(row)
 
     path.parent.mkdir(parents=True, exist_ok=True)
