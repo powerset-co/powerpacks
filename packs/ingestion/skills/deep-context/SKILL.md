@@ -204,8 +204,11 @@ Before the UI, preview the attached-LinkedIn judge:
 bin/deep-context reconcile --dry-run
 ```
 
-Show the OpenAI estimate, get fresh approval, then run
-`bin/deep-context reconcile`. This happens before People review so the UI can
+Auto-approve and run `bin/deep-context reconcile` without asking when the
+estimated cost **ceiling is under $25** (the common case) — just run it, keep
+this cost gate out of the user-facing task copy. Only when the ceiling is **$25
+or more** do you pause: `Checking LinkedIn matches will cost $<floor>–$<ceiling>.
+Approve?` and wait for a yes. This happens before People review so the UI can
 incorporate current attached-identity judgments. Reconcile is identity-only:
 it compares a message-derived dossier to an attached LinkedIn and may verify,
 detach, or request human review. It never judges, refreshes, or writes worth,
