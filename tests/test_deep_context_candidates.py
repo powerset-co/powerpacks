@@ -2943,9 +2943,14 @@ class TestMultiOptionLinkedinCard(unittest.TestCase):
         self.assertIn("data-pub='synth-bbb'", html)
         # The person's H1 name is shown once (options use H3).
         self.assertEqual(html.count("<h2>Lukas Kroc</h2>"), 1)
-        # A shared "None of these" opens the fix form + Skip detaches.
+        # A shared "None of these" opens the fix form; Skip is the inline link folded
+        # into the question line (keyed on the parent's primary pub), not a button.
         self.assertIn("None of these", html)
-        self.assertIn("data-decide='detach'", html)
+        self.assertIn("Is this the right profile? Or <button", html)
+        self.assertIn("class='skip-link' data-decide='detach'", html)
+        self.assertIn("data-pub='synth-aaa'", html)          # skip keyed on primary pub
+        self.assertIn(">Skip</button>?", html)
+        self.assertNotIn("alternate-skip", html)             # no standalone Skip button
 
 
 class TestMultiOptionDecideResolvesParent(unittest.TestCase):

@@ -1940,6 +1940,18 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
     return True  # attached link, nothing cached -> surface the prefetch note
 
 
+def _skip_link(pub: Any, parent_slug: Any) -> str:
+    """The inline "Skip" affordance folded into the card's question line.
+
+    A real ``<button>`` (keyboard-activatable, proper hit area, wired by the SAME
+    ``data-decide`` click delegation as before) styled as a subtle secondary link.
+    Behavior is unchanged from the old standalone Skip button: detach the card,
+    keyed on the parent's pub/slug."""
+    return (f"<button type='button' class='skip-link' data-decide='detach' "
+            f"data-toast='Skipped' data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
+            "Skip</button>")
+
+
 def render_linkedin_card(parent: dict[str, Any],
                          candidates: dict[str, Any] | list[dict[str, Any]],
                          parents_dir: Path, dossier_dir: Path,
@@ -1975,11 +1987,13 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # which is redundant with the Summary/Relationship/Timeline sections below, so
     # it (and the "Researched profile" / "No LinkedIn found" labels) are dropped.
     # Both a real and a synthetic row present the SAME decision UI ("Is this the
-    # right profile?" + [No] [Use this profile] + a hidden fix form behind No). A
-    # synthetic row simply has no genuine LinkedIn header (no View-LinkedIn link, no
-    # headline); the SEMANTIC difference lives only in the /decide endpoint, which
-    # routes a keep on a ``synth-`` pub through the synthetic approve gate.
-    question = "Is this the right profile?"
+    # right profile? Or Skip?" + [No] [Use this profile] + a hidden fix form behind
+    # No). The "Skip" is an inline secondary link folded into the question line (same
+    # detach behavior as the old standalone button). A synthetic row simply has no
+    # genuine LinkedIn header (no View-LinkedIn link, no headline); the SEMANTIC
+    # difference lives only in the /decide endpoint, which routes a keep on a
+    # ``synth-`` pub through the synthetic approve gate.
+    question = f"Is this the right profile? Or {_skip_link(candidate.get('pub'), parent.get('slug'))}?"
     eyebrow = ""
     if synthetic:
         link = ""
@@ -1995,10 +2009,7 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         <div><input id='fix-{esc(candidate.get('pub'))}' name='new_url' inputmode='url'
           autocomplete='url' placeholder='linkedin.com/in/…' required>
         <button class='button button-outline' type='submit'>Use this</button></div>
-      </form>
-      <button class='button button-ghost alternate-skip' data-decide='detach'
-              data-toast='Skipped' data-pub='{esc(candidate.get('pub'))}'
-              data-parent='{esc(parent.get('slug'))}'>Skip</button>"""
+      </form>"""
     # Attached LinkedIn with nothing in the local profile cache: passive note
     # only — the UI never fetches; the offline prefetch stage fills the cache.
     placeholder = ("<p class='profile-note'>No cached profile data — "
@@ -2106,23 +2117,23 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
         {_details(parent, primary, identity=True, identifiers=identifiers)}
         <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
         <ul class='linkedin-options'>{options}</ul>"""
-    # "None of these" / Skip act on the parent via its primary candidate's pub, reusing
-    # the existing fix-form + detach paths unchanged.
+    # "None of these" / the inline Skip act on the parent via its primary candidate's
+    # pub, reusing the existing fix-form + detach paths unchanged. Skip is folded into
+    # the question line (secondary link), not a standalone button.
     fix_form = f"""<form class='linkedin-fix-form' data-fix-form
           data-pub='{esc(primary.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
         <label class='sr-only' for='fix-{esc(primary.get('pub'))}'>LinkedIn URL</label>
         <div><input id='fix-{esc(primary.get('pub'))}' name='new_url' inputmode='url'
           autocomplete='url' placeholder='linkedin.com/in/…' required>
         <button class='button button-outline' type='submit'>Use this</button></div>
-      </form>
-      <button class='button button-ghost alternate-skip' data-decide='detach'
-              data-toast='Skipped' data-pub='{esc(primary.get('pub'))}'
-              data-parent='{esc(parent.get('slug'))}'>Skip</button>"""
+      </form>"""
+    question = f"Is this the right profile? Or {_skip_link(primary.get('pub'), parent.get('slug'))}?"
     return f"""
     <article class='decision-card identity-card identity-card-multi' data-card
              data-parent='{esc(parent.get('slug'))}' data-multi-option>
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
+        <div class='question'>{question}</div>
         <div class='binary-actions'>
           <button class='button button-outline' data-open-fix aria-expanded='false'
                   aria-controls='fix-section-{esc(primary.get('pub'))}'>None of these</button>
