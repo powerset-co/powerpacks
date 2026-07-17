@@ -644,6 +644,32 @@ def judge_prompt(task: dict[str, Any], owner_block: str) -> str:
         f"  messages me→them:\n{me}\n  messages them→me:\n{them}\n\n"
     )
     if task.get("no_link"):
+        verified = task.get("verified_profile") or {}
+        if verified.get("has_profile"):
+            # Limbo re-judge: the identity was already verified at the link level, so we can
+            # now hand the worth judge the professional context (headline/title/company/
+            # location/experience) the ORIGINAL worth judge lacked. This is a WORTH decision
+            # only — do not re-open identity (it is settled).
+            verified_block = "\n".join([
+                f"  name: {verified.get('full_name') or '(unknown)'}",
+                f"  headline: {verified.get('headline') or '(none)'}",
+                f"  location: {verified.get('location') or '(unknown)'}",
+                "  experience:",
+                _bullets(verified.get("experiences") or [], "(none listed)"),
+                "  education:",
+                _bullets(verified.get("education") or [], "(none listed)"),
+            ])
+            return (
+                f"{contact}"
+                f"THIS CONTACT'S LINKEDIN IS ALREADY VERIFIED (identity settled) — "
+                f"{verified.get('linkedin_url') or 'n/a'}\n{verified_block}\n\n"
+                "Re-judge ONLY network_worth (and spam) using BOTH the relationship evidence "
+                "above AND this verified professional context — a real title/company/school is "
+                "exactly the signal an earlier 'real person but no professional context' maybe was "
+                "missing. For the identity-only fields, return verdict=needs_review, confidence=0, "
+                "no supporting or contradicting evidence, linkedin_plausibly_absent=false, "
+                "recommend_deep_research=false, and reason='linkedin already verified'."
+            )
         return (
             f"{contact}"
             "NO LINKEDIN PROFILE IS ATTACHED.\n"
@@ -1254,6 +1280,57 @@ def worth_person_ids_for_review(task: dict[str, Any],
     return person_ids
 
 
+# A candidate whose attached LinkedIn was kept at the link level (verify) or corrected
+# (retarget) and applied at/above the auto bar (or by the user) is VERIFIED — we now know
+# who they are professionally. Only a machine link-level pass counts as "verified" here; a
+# still-pending or rejected link decision does not add professional context.
+_KEPT_LINK_ACTIONS = {"verify", "retarget"}
+_KEPT_LINK_APPROVED = {"auto", "yes"}
+
+
+def kept_linkedin_for_candidate(row: dict[str, str]) -> dict[str, str]:
+    """The kept/verified LinkedIn (pub + url) for a candidate's override row, or {} when its
+    link decision is not a kept verify/retarget. A retarget carries the corrected profile in
+    ``new_*``; a verify keeps the originally attached ``linkedin_url``."""
+    action = str(row.get("action") or "").strip().lower()
+    approved = str(row.get("approved") or "").strip().lower()
+    if action not in _KEPT_LINK_ACTIONS or approved not in _KEPT_LINK_APPROVED:
+        return {}
+    if action == "retarget":
+        url = str(row.get("new_linkedin_url") or "").strip()
+        pub = (str(row.get("new_public_identifier") or "").strip().lower()
+               or extract_public_identifier(url).lower())
+    else:
+        url = str(row.get("linkedin_url") or "").strip()
+        pub = extract_public_identifier(url).lower()
+    if not pub:
+        return {}
+    return {"public_identifier": pub, "linkedin_url": url}
+
+
+def verified_profile_for_worth(task: dict[str, Any],
+                               overrides: dict[str, dict[str, str]],
+                               cache_dir: Path) -> dict[str, Any]:
+    """A verified-LinkedIn evidence block for a no-link worth re-review task, or {} when no
+    candidate child carries a kept/verified link with a usable cached profile.
+
+    This is the professional context the ORIGINAL worth judge lacked (its maybe-reasons say
+    "real person but no professional context"): the contact's LinkedIn is now verified, so the
+    hydrated profile cache carries a headline/title/company/location we can hand the worth judge.
+    Read-only — it reuses the same cache-first ``linkedin_view`` the identity judge uses and never
+    fetches anything from the network."""
+    for person_id in task.get("worth_person_ids") or task.get("person_ids") or []:
+        if not is_candidate_id(person_id):
+            continue
+        kept = kept_linkedin_for_candidate(overrides.get(str(person_id).strip().lower()) or {})
+        if not kept:
+            continue
+        view = linkedin_view(kept, cache_dir)
+        if view.get("has_profile"):
+            return view
+    return {}
+
+
 def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, Any]:
     """Add/refresh `retarget` rows (the CORRECT LinkedIn for a detached person) into the same
     decisions table. Default `approved=` pending (re-attaching a wrong identity is worse than
@@ -1561,10 +1638,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     connections = [t for t in tasks if t.get("from_connections") and not t.get("no_link")]
     for t in connections:
         t["verdict"], t["error"] = connection_verdict(), ""
+    profile_cache_dir = Path(args.profile_cache_dir)
     for task in tasks:
         if task.get("no_link"):
             task["worth_person_ids"] = worth_person_ids_for_review(
                 task, overrides, facts_dir)
+            # Limbo class: a machine-Maybe candidate whose LinkedIn was kept/verified at the
+            # link level now has professional context the original worth judge lacked. Attach
+            # that verified-profile evidence (cache-first, no network) so the worth re-judge can
+            # decide with a headline/title/company/location instead of dossier-only signal.
+            if task.get("worth_person_ids"):
+                verified = verified_profile_for_worth(task, overrides, profile_cache_dir)
+                if verified:
+                    task["verified_profile"] = verified
+    limbo_worth_reprofile = sum(
+        1 for t in tasks
+        if t.get("no_link")
+        and (t.get("dossier") or {}).get("has_messages")
+        and t.get("worth_person_ids")
+        and t.get("verified_profile")
+    )
     identity_judgeable = [
         t for t in tasks
         if not t.get("no_link") and t["linkedin"].get("has_profile")
@@ -1601,6 +1694,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
             "identity_judgeable": len(identity_judgeable),
             "worth_only_judgeable": len(worth_only_judgeable),
+            # Limbo re-judges: worth-only tasks that now carry a verified-profile evidence block.
+            # These are a subset of worth_only_judgeable, re-judged WITH professional context.
+            "limbo_worth_reprofile": limbo_worth_reprofile,
             "worth_only_human_preserved": worth_only_human_preserved,
             "worth_only_machine_stable": worth_only_machine_stable,
             "ground_truth_connections": len(connections),

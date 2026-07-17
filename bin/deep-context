@@ -45,7 +45,9 @@ usage: bin/deep-context <command> [args]
   assemble-synthetic  build synthetic people-rows from deep-research output for
                people with NO real LinkedIn (free, local; approved rows merge)
   re-review    LLM re-review: refresh machine Maybe/unjudged worth rows (spends
-               OpenAI; try `re-review --dry-run` first; machine + human yes/no are stable)
+               OpenAI; try `re-review --dry-run` first; machine + human yes/no are stable).
+               Machine-Maybe candidates whose LinkedIn is now verified are re-judged WITH
+               that verified professional context (see dry-run limbo_worth_reprofile count).
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
   apply-retargets           enrich approved retargets -> retarget-people.csv
   realize      fan-in merge applying your decisions (free, local)
@@ -139,7 +141,10 @@ case "$cmd" in
   re-review)
     # LLM re-review (spends OpenAI; try `re-review --dry-run` first for a free estimate):
     # re-judge only machine Maybe/unjudged Gmail candidates. Machine Yes/No is stable,
-    # while human Yes/No remains authoritative and untouched.
+    # while human Yes/No remains authoritative and untouched. A machine-Maybe candidate whose
+    # LinkedIn was kept/verified at the link level is re-judged WITH a verified-profile evidence
+    # block appended (headline/title/company/location, cache-first, no network fetch) — the
+    # professional context the original "real person but no professional context" maybe lacked.
     # compose intentionally rewrites the child lookup index, so a direct re-review may
     # need to restore the free canonical-parent layer before reconcile can find work.
     if ! uv run --project . python -c \

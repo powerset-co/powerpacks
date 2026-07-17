@@ -836,6 +836,130 @@ class TestReviewWebCandidateRows(unittest.TestCase):
         self.assertEqual([p["person_ids"][0] for p in parents], ["candidate:phone:+14155551234"])
 
 
+def _old_needs_worth_review(parent: dict) -> bool:
+    """The pre-fix predicate: required is_import_candidate_parent, so an auto-verified
+    machine-Maybe candidate (import_candidate now False) fell out of every worth tab."""
+    machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
+    return (web.is_worth_subject(parent)
+            and web.is_import_candidate_parent(parent)
+            and not web.is_effective_no(parent)
+            and machine == "maybe"
+            and web.explicit_worth(parent) not in web.USER_WORTH_VALUES)
+
+
+class TestLimboMaybeVisibility(unittest.TestCase):
+    """Part 1: a machine-Maybe candidate whose LinkedIn was auto-verified at the link level
+    (approved=auto) keeps its candidate-id worth key, so it is still a standalone contact whose
+    add/no decision is unmade. Before the fix it flipped is_import_candidate_parent off and
+    vanished from every worth tab (the digest still counted it); now it stays reviewable, while
+    plain pending candidates, user marks, machine yes/no, and effective-no rows are unchanged."""
+
+    # 10 fictional people: (candidate_key, action, approved, machine_worth, reason, extra).
+    PEOPLE = [
+        # 3 LIMBO maybes: an auto link-level decision, machine worth still Maybe.
+        ("email:ada@example.com", "verify", "auto", "maybe", "real person but no professional context", {}),
+        ("email:bram@example.net", "verify", "auto", "maybe", "real person but no professional context", {}),
+        ("email:cleo@example.com", "retarget", "auto", "maybe", "real person but no professional context", {}),
+        # plain pending candidate (no identity decision) — visible before AND after.
+        ("email:dara@example.net", "", "", "maybe", "no professional context", {}),
+        # user marks — terminal, never in the queue.
+        ("email:evan@example.com", "verify", "auto", "maybe", "x", {"network_worth": "yes"}),
+        ("email:faye@example.net", "verify", "auto", "maybe", "x", {"network_worth": "no"}),
+        # machine yes — not Maybe, not in the queue.
+        ("email:gil@example.com", "verify", "auto", "yes", "clearly worth adding", {}),
+        # machine no — effective-no, not in the queue.
+        ("email:hana@example.net", "verify", "auto", "no", "automated vendor", {}),
+        # verified but spam-flagged — effective-no despite a Maybe worth.
+        ("email:ivan@example.com", "verify", "auto", "maybe", "cold recruiter",
+         {"llm_reject": "spam", "llm_reject_confidence": "0.950", "llm_reject_reason": "cold recruiter"}),
+        # a second plain pending candidate — visible before AND after.
+        ("email:juno@example.net", "", "", "maybe", "no professional context", {}),
+    ]
+    LIMBO = ["candidate:email:ada@example.com", "candidate:email:bram@example.net",
+             "candidate:email:cleo@example.com"]
+    ALWAYS_VISIBLE = ["candidate:email:dara@example.net", "candidate:email:juno@example.net"]
+    NEVER_VISIBLE = ["candidate:email:evan@example.com", "candidate:email:faye@example.net",
+                     "candidate:email:gil@example.com", "candidate:email:hana@example.net",
+                     "candidate:email:ivan@example.com"]
+
+    def _build(self, base: Path):
+        facts = base / "facts"
+        facts.mkdir()
+        cand_rows: list[dict] = []
+        overrides: dict[str, dict] = {}
+        for key, action, approved, worth, reason, extra in self.PEOPLE:
+            pid = f"candidate:{key}"
+            handle = key.split(":", 1)[1].split("@", 1)[0]
+            (facts / f"{pid}.jsonl").write_text(
+                _facts_record(worth, reason, name=handle.title()) + "\n", encoding="utf-8")
+            cand_rows.append({
+                "candidate_key": key, "source": "gmail", "full_name": handle.title(),
+                "primary_email": key.split(":", 1)[1], "all_emails": [key.split(":", 1)[1]],
+            })
+            row = {**{col: "" for col in reconcile.OVERRIDE_COLUMNS},
+                   "public_identifier": pid, "person_id": pid,
+                   "action": action, "approved": approved,
+                   "llm_worth": worth, "llm_worth_reason": reason, **extra}
+            if action == "verify":
+                row["linkedin_url"] = f"https://www.linkedin.com/in/{handle}-li"
+            elif action == "retarget":
+                row["new_linkedin_url"] = f"https://www.linkedin.com/in/{handle}-li"
+                row["new_public_identifier"] = f"{handle}-li"
+            overrides[pid] = row
+        pools = [_write_candidates_csv(base / "gmail" / "candidates.csv", cand_rows),
+                 _write_candidates_csv(base / "messages" / "candidates.csv", [])]
+        review = base / "review.csv"
+        reconcile._write_override_rows(review, overrides)
+        with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
+            parents = web.load_candidate_parents(
+                facts, reconcile.load_override_rows(review), set(), resolved_candidates=set())
+        web.annotate_worth(parents, reconcile.load_override_rows(review), facts)
+        return facts, parents
+
+    def test_limbo_maybes_hidden_before_visible_after(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, parents = self._build(Path(d))
+            by = {p["person_ids"][0]: p for p in parents}
+            self.assertEqual(len(parents), 10)
+            for pid in self.LIMBO:
+                parent = by[pid]
+                # A verified limbo person is a worth subject but no longer import_candidate.
+                self.assertTrue(web.is_worth_subject(parent), pid)
+                self.assertFalse(web.is_import_candidate_parent(parent), pid)
+                self.assertEqual(parent["machine_worth"]["decision"], "maybe", pid)
+                # Hidden before the fix, visible after it.
+                self.assertFalse(_old_needs_worth_review(parent), f"{pid} should be hidden before")
+                self.assertTrue(web.needs_worth_review(parent), f"{pid} should be visible after")
+            for pid in self.ALWAYS_VISIBLE:  # plain pending candidates unchanged
+                self.assertTrue(_old_needs_worth_review(by[pid]), pid)
+                self.assertTrue(web.needs_worth_review(by[pid]), pid)
+            for pid in self.NEVER_VISIBLE:   # user marks / machine yes-no / effective-no unchanged
+                self.assertFalse(web.needs_worth_review(by[pid]), pid)
+
+    def test_pending_count_jumps_and_digest_symmetry_holds(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            _, parents = self._build(base)
+            # worth_pending now surfaces the 3 limbo + 2 plain pending maybes.
+            progress = web.review_progress(parents)
+            self.assertEqual(progress["worth_pending"], 5)
+            # The pre-fix count would have shown only the 2 plain pending candidates.
+            old_pending = sum(1 for parent in parents if _old_needs_worth_review(parent))
+            self.assertEqual(old_pending, 2)
+            # The worth-selection digest counts is_worth_subject rows by decision and is UNCHANGED
+            # by Part 1 (it never depended on needs_worth_review) — so the review-side and
+            # enrichment-side digests stay identical and cannot drift by the surfaced people.
+            manifest = base / "review" / "manifest.json"
+            review_side = web.worth_selection_from_parents(parents, manifest_path=manifest)
+            enrichment_side = web.worth_selection_from_parents(parents, manifest_path=manifest)
+            self.assertEqual(review_side, enrichment_side)
+            self.assertEqual(review_side["sha256"], enrichment_side["sha256"])
+            # Every candidate here is a worth subject, so the digest counted them all along —
+            # the limbo people were in `total`/`maybe` even while no tab showed them.
+            self.assertEqual(review_side["total"], 10)
+            self.assertEqual(review_side["maybe"], 6)   # ada,bram,cleo,dara,juno,ivan
+
+
 class TestComposeNetworkWorth(unittest.TestCase):
     def test_merge_carries_last_worth_and_dossier_renders_it(self):
         chunks = [json.loads(_facts_record("maybe", "early read", name="Cass Doe")),
