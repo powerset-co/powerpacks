@@ -90,6 +90,18 @@ class TestDeepContextRunnerSafety(unittest.TestCase):
         self.assertEqual(help_result.returncode, 0)
         self.assertIn("paid stages require", help_result.stderr)
 
+    def test_profile_prefetch_is_an_explicit_runner_task(self):
+        runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
+        result = subprocess.run(
+            [str(runner), "profile-prefetch", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--fetch", result.stdout)
+        self.assertIn("RapidAPI", result.stdout)
+
 
 import sqlite3  # noqa: E402  (local to the msgvault-con helper below)
 
