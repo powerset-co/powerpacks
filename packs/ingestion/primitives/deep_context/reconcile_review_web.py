@@ -1751,13 +1751,19 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
         identifiers or [])
     evidence = [*(candidate.get("supporting") or []), *(candidate.get("contradicting") or [])]
     reason = _display_reason(str(candidate.get("reason") or ""))
-    # Section order: Contact -> Summary (the judge/verify reason) -> Evidence,
-    # then the lazily loaded dossier rows (Relationship -> Timeline), then the
-    # profile facts (Work / Education) when profile data exists.
+    # The prefetch stage's LLM-written profile summary, lifted onto the candidate
+    # from the local cache at render time (display-only; the server never calls
+    # an LLM). It is PREFERRED for the Summary row over the stored judge reason.
+    simple_summary = str(candidate.get("simple_summary") or "").strip()
+    # Section order: Contact -> Summary (simple_summary || the judge/verify reason)
+    # -> Evidence, then the lazily loaded dossier rows (Relationship -> Timeline),
+    # then the profile facts (Work / Education) when profile data exists.
     rows: list[str] = []
     if contacts:
         rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
-    if identity:
+    if simple_summary:
+        rows.append(f"<div><dt>Summary</dt><dd>{esc(simple_summary)}</dd></div>")
+    elif identity:
         if reason:
             rows.append(f"<div><dt>Summary</dt><dd>{esc(reason)}</dd></div>")
         elif not str(candidate.get("url") or "").strip():
@@ -1786,8 +1792,13 @@ def _scroll_region(content: str) -> str:
             "<path d='m7 9 5 5 5-5'></path></svg></button></div>")
 
 
-def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path) -> str:
+def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
+                      profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
     candidate = _primary_candidate(parent)
+    # Cache-only: prefer the prefetch stage's profile summary in the Summary row
+    # (display-only; never a provider call). Worth cards render identity=False, so
+    # this is the ONLY thing that can put a Summary row on them.
+    candidate["simple_summary"] = _cached_simple_summary(candidate, profile_cache_dir)
     key = _worth_key(parent)
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
     slug = parent.get("dossier_slug") or parent.get("slug")
@@ -1823,11 +1834,36 @@ def render_candidate(idx: int, total: int, cand: dict[str, Any], **_: Any) -> st
             f"<button data-worth='yes' data-pub='{esc(key)}'>Yes</button></div>")
 
 
+def _cached_simple_summary(candidate: dict[str, Any], profile_cache_dir: Path) -> str:
+    """The prefetch stage's persisted ``simple_summary`` for this card's profile,
+    read from the local cache record (display-only; never a provider call).
+
+    Synthetic rows have no real LinkedIn cache entry, so they never carry one."""
+    if candidate.get("synthetic"):
+        return ""
+    pub = str(candidate.get("profile_pub") or candidate.get("pub") or "").strip().lower()
+    url = str(candidate.get("url") or "")
+    pub = pub or extract_public_identifier(url).lower()
+    if not pub or pub.startswith("candidate:"):
+        return ""
+    cache_path = profile_cache_dir / f"{pub}.json"
+    if not cache_path.exists():
+        return ""
+    try:
+        record = json.loads(cache_path.read_text(encoding="utf-8")) or {}
+    except (json.JSONDecodeError, OSError):
+        return ""
+    return str(record.get("simple_summary") or "").strip()
+
+
 def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) -> bool:
     """Cache-ONLY render-time hydration for a card whose verdict snapshot has no
     profile facts (e.g. the cache was empty at reconcile time and the offline
     prefetch stage has since filled it). Local file read, never a provider call.
-    Returns True when the candidate still has no profile facts afterwards."""
+    Also lifts the prefetch stage's ``simple_summary`` onto the candidate so the
+    Summary row can prefer it. Returns True when the candidate still has no
+    profile facts afterwards."""
+    candidate["simple_summary"] = _cached_simple_summary(candidate, profile_cache_dir)
     if candidate.get("synthetic"):
         return False
     if (candidate.get("experiences") or candidate.get("education")
@@ -2153,7 +2189,8 @@ def _carousel_nav() -> str:
 
 def worth_review_body(parents: list[dict[str, Any]], progress: dict[str, int],
                       parents_dir: Path, dossier_dir: Path, *,
-                      debug: bool = False, index: int = 0) -> str:
+                      debug: bool = False, index: int = 0,
+                      profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
     """The Review tab's current item: the next queue card, or the stage-complete
     state. Shared by page_html and /api/worth-card so a decision click can swap
     in the next card client-side without a full page reload. ``debug`` adds the
@@ -2162,7 +2199,7 @@ def worth_review_body(parents: list[dict[str, Any]], progress: dict[str, int],
     if queue:
         queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
         index = index % len(queue)
-        card = render_worth_card(queue[index], parents_dir, dossier_dir)
+        card = render_worth_card(queue[index], parents_dir, dossier_dir, profile_cache_dir)
         if debug:
             return (f"<div class='carousel-shell' data-queue-index='{index}' "
                     f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>")
@@ -2335,7 +2372,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         tabs = render_decision_tabs(progress, decision_view, preview=preview)
         if decision_view == "review":
             body = worth_review_body(parents, progress, parents_dir, dossier_dir,
-                                     debug=debug)
+                                     debug=debug, profile_cache_dir=profile_cache_dir)
         else:
             # Legacy ?page= URLs still land here; the infinite-scroll list always
             # starts from the top and streams the rest via /api/decision-rows.
@@ -2615,7 +2652,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 progress = review_progress(parents)
                 if parsed.path == "/api/worth-card":
                     body = worth_review_body(parents, progress, parents_dir, dossier_dir,
-                                             debug=debug, index=index)
+                                             debug=debug, index=index,
+                                             profile_cache_dir=profile_cache_dir)
                 else:
                     selection = worth_selection_from_parents(
                         parents, manifest_path=manifest_path)

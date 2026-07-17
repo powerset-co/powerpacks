@@ -12,6 +12,7 @@ import contextlib
 import csv
 import io
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -1109,6 +1110,50 @@ class TestLlmWorthColumns(unittest.TestCase):
 def _verdict_jsonl(path: Path, rows: list[dict]) -> Path:
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     return path
+
+
+class _FakeUsageDetails:
+    def __init__(self, reasoning: int) -> None:
+        self.reasoning_tokens = reasoning
+
+
+class _FakeUsage:
+    def __init__(self, inp: int, out: int, reasoning: int) -> None:
+        self.input_tokens = inp
+        self.output_tokens = out
+        self.output_tokens_details = _FakeUsageDetails(reasoning)
+
+
+class _FakeResponse:
+    """Stand-in for an OpenAI Responses result (no live call)."""
+
+    def __init__(self, summary: str) -> None:
+        self.output_text = json.dumps({"summary": summary})
+        self.status = "completed"
+        self.usage = _FakeUsage(40, 20, 5)
+
+
+class _FakeResponses:
+    def __init__(self, owner: "_FakeAsyncClient") -> None:
+        self._owner = owner
+
+    async def create(self, **kwargs):
+        self._owner.calls.append(kwargs)
+        # Echo a deterministic 2-sentence summary derived from the prompt so the
+        # test can assert it was persisted verbatim; NEVER hits the network.
+        return _FakeResponse(self._owner.summary)
+
+
+class _FakeAsyncClient:
+    """Records every call and returns a canned summary — asserts zero live calls."""
+
+    def __init__(self, summary: str = "Ada Lovelace is a mathematician. She leads engines.") -> None:
+        self.summary = summary
+        self.calls: list[dict] = []
+        self.responses = _FakeResponses(self)
+
+    async def close(self) -> None:
+        pass
 
 
 class TestUnifiedRejected(unittest.TestCase):
@@ -2699,6 +2744,63 @@ class TestCardProfileAndReasonDisplay(unittest.TestCase):
         self.assertIn("<dt>Summary</dt><dd>Couldn&#x27;t find profile</dd>", without_link)
         self.assertIn("<dt>Summary</dt><dd>name matches messages</dd>", with_reason)
 
+    def _write_cached_profile_with_summary(self, cache_dir: Path, summary: str) -> None:
+        self._write_cached_profile(cache_dir)
+        path = cache_dir / "ada-lovelace.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["simple_summary"] = summary
+        path.write_text(json.dumps(record), encoding="utf-8")
+
+    def test_simple_summary_is_preferred_over_stored_judge_reason(self):
+        # (g) a cached simple_summary is shown in the Summary row IN PREFERENCE to
+        # the stored judge reason — on the identity (Check-Profile) card.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            cache = base / "cache"
+            self._write_cached_profile_with_summary(
+                cache, "Ada Lovelace leads analytical engines. She studied mathematics.")
+            parent = self._card_parent()          # candidate reason = "name matches messages"
+            html = web.render_linkedin_card(
+                parent, parent["candidates"][0], base / "parents", base / "dossiers", cache)
+        self.assertIn("<dt>Summary</dt><dd>Ada Lovelace leads analytical engines. "
+                      "She studied mathematics.</dd>", html)
+        self.assertNotIn("name matches messages", html)   # judge reason is superseded
+
+    def test_simple_summary_shows_on_worth_card_which_otherwise_omits_summary(self):
+        # (g) the summary flows to the worth card too (identity=False normally has
+        # no Summary row); with a cached summary it appears.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            cache = base / "cache"
+            parent = self._card_parent()
+            without = web.render_worth_card(parent, base / "parents", base / "dossiers", cache)
+            self._write_cached_profile_with_summary(cache, "Ada builds engines.")
+            with_summary = web.render_worth_card(
+                self._card_parent(), base / "parents", base / "dossiers", cache)
+        self.assertNotIn("<dt>Summary</dt>", without)      # no summary, worth card omits it
+        self.assertIn("<dt>Summary</dt><dd>Ada builds engines.</dd>", with_summary)
+
+    def test_no_simple_summary_keeps_prior_summary_precedence(self):
+        # (g) without a simple_summary the prior precedence is unchanged: real judge
+        # reason shown; kept link + no reason -> omit; no link -> "Couldn't find profile".
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            cache = base / "cache"                          # empty cache, no summary
+            reasoned = web.render_linkedin_card(
+                self._card_parent(), self._card_parent()["candidates"][0],
+                base / "parents", base / "dossiers", cache)
+            linked = self._card_parent()
+            linked["candidates"][0]["reason"] = "deep research: only process notes"
+            omitted = web.render_linkedin_card(
+                linked, linked["candidates"][0], base / "parents", base / "dossiers", cache)
+            unlinked = self._card_parent()
+            unlinked["candidates"][0].update({"url": "", "reason": ""})
+            no_profile = web.render_linkedin_card(
+                unlinked, unlinked["candidates"][0], base / "parents", base / "dossiers", cache)
+        self.assertIn("<dt>Summary</dt><dd>name matches messages</dd>", reasoned)
+        self.assertNotIn("<dt>Summary</dt>", omitted)
+        self.assertIn("<dt>Summary</dt><dd>Couldn&#x27;t find profile</dd>", no_profile)
+
     def test_meeting_links_are_filtered_from_contact_identifiers(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -2762,7 +2864,11 @@ class TestPrefetchProfiles(unittest.TestCase):
             synthetic_people=str(base / "synthetic-people.csv"),
             facts_dir=str(base / "facts"), people_csv=str(base / "people.csv"),
             parents_dir=str(base / "parents"), dossier_dir=str(base / "dossiers"),
-            profile_cache_dir=str(base / "cache"), fetch=False, limit=0)
+            profile_cache_dir=str(base / "cache"), fetch=False, limit=0,
+            no_llm=False, model=prefetch.DEFAULT_SUMMARY_MODEL,
+            reasoning_effort=prefetch.DEFAULT_SUMMARY_EFFORT,
+            concurrency=4, fetch_concurrency=4, rapidapi_rpm=0,
+            timeout=30, max_retries=1)
         values.update(overrides)
         return _ns(**values)
 
@@ -2773,64 +2879,253 @@ class TestPrefetchProfiles(unittest.TestCase):
 
     @staticmethod
     def _fake_fetch(pub, url, key, cache_dir=None, **_):
+        """Write a rich cached profile (NO simple_summary) — the summary step is
+        what fills that in afterward."""
         path = prefetch.profile_cache_path(cache_dir, pub)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
             "public_identifier": pub, "linkedin_url": url,
             "raw_response": {"firstName": "Ada"},
-            "normalized_profile": {"success": True, "public_identifier": pub},
+            "normalized_profile": {
+                "success": True, "public_identifier": pub, "full_name": "Ada Lovelace",
+                "headline": "Analytical Engines Lead", "location_str": "London",
+                "experiences": [{"title": "Lead", "company_name": "Example Engines"}],
+                "education": [{"school": "Home Study", "degree": "Mathematics"}],
+            },
         }), encoding="utf-8")
         return {"status_code": 200, "data": {"firstName": "Ada"}, "error": "",
                 "from_cache": False, "normalized_profile": {"success": True}}
 
-    def test_dry_run_reports_misses_and_never_fetches(self):
+    def _write_cached_no_summary(self, base: Path) -> Path:
+        """A profile already in the cache but WITHOUT a simple_summary."""
+        cache = base / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        path = cache / "ada-lovelace.json"
+        path.write_text(json.dumps({
+            "public_identifier": "ada-lovelace",
+            "linkedin_url": "https://www.linkedin.com/in/ada-lovelace",
+            "raw_response": {"firstName": "Ada"},
+            "normalized_profile": {
+                "success": True, "public_identifier": "ada-lovelace",
+                "full_name": "Ada Lovelace", "headline": "Analytical Engines Lead",
+                "location_str": "London",
+                "experiences": [{"title": "Lead", "company_name": "Example Engines"}],
+                "education": [{"school": "Home Study", "degree": "Mathematics"}],
+            },
+        }), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _cached_summary(base: Path, pub: str = "ada-lovelace") -> str:
+        record = json.loads((base / "cache" / f"{pub}.json").read_text(encoding="utf-8"))
+        return record.get("simple_summary") or ""
+
+    def test_dry_run_reports_both_miss_counts_and_combined_cost_no_spend(self):
+        # (e) dry-run reports fetch + summary misses + a combined cost, spends nothing.
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             self._fixture(base)
             fetcher = mock.MagicMock()
+            client = _FakeAsyncClient()
             with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
                     mock.patch.object(prefetch, "ROOT", base / "out"), \
-                    mock.patch.object(prefetch, "rapidapi_profile", fetcher):
+                    mock.patch.object(prefetch, "rapidapi_profile", fetcher), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client):
                 manifest = prefetch.run(self._args(base))
         self.assertEqual(manifest["status"], "dry_run")
         self.assertEqual(manifest["queue_links"], 1)
         self.assertEqual(manifest["cache_misses"], 1)
+        # An uncached person has no simple_summary either, so they are BOTH a fetch
+        # miss and a summary miss (the two checks are independent).
+        self.assertEqual(manifest["summary_misses"], 1)
+        self.assertEqual(manifest["already_cached"], 0)
+        self.assertEqual(manifest["already_summarized"], 0)
         self.assertEqual(manifest["estimated_rapidapi_calls"], 1)
+        self.assertEqual(manifest["estimated_summary_calls"], 1)
         self.assertEqual(manifest["missing_public_identifiers"], ["ada-lovelace"])
+        self.assertIn("estimated_llm_cost_usd_low", manifest)
+        self.assertIn("estimated_llm_cost_usd_high", manifest)
+        self.assertGreater(manifest["estimated_llm_cost_usd_high"],
+                           manifest["estimated_llm_cost_usd_low"])
+        self.assertEqual(manifest["model"], prefetch.DEFAULT_SUMMARY_MODEL)
         fetcher.assert_not_called()
+        self.assertEqual(client.calls, [])                    # no LLM call
         self.assertFalse(manifest["privacy"]["paid_provider_called"])
 
-    def test_fetch_writes_cache_and_second_run_has_zero_misses(self):
+    def test_dry_run_counts_cached_profiles_lacking_a_summary(self):
+        # (e cont.) a cached-but-unsummarized profile is a summary miss, not a fetch miss.
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             self._fixture(base)
+            self._write_cached_no_summary(base)
+            fetcher = mock.MagicMock()
+            client = _FakeAsyncClient()
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_profile", fetcher), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client):
+                manifest = prefetch.run(self._args(base))
+        self.assertEqual(manifest["cache_misses"], 0)          # already cached
+        self.assertEqual(manifest["summary_misses"], 1)        # but no summary yet
+        self.assertEqual(manifest["estimated_summary_calls"], 1)
+        self.assertEqual(manifest["summary_missing_public_identifiers"], ["ada-lovelace"])
+        fetcher.assert_not_called()
+        self.assertEqual(client.calls, [])
+
+    def test_fetch_then_summarize_writes_cache_and_summary(self):
+        # (a) mocked fetch also generates + caches a summary; (c) second run = 0 calls.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            client = _FakeAsyncClient()
+            fetcher2 = mock.MagicMock()
+            client2 = _FakeAsyncClient()
             with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
                     mock.patch.object(prefetch, "ROOT", base / "out"), \
                     mock.patch.object(prefetch, "rapidapi_key", lambda: "test-key"), \
-                    mock.patch.object(prefetch, "rapidapi_profile", self._fake_fetch):
+                    mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-openai"}), \
+                    mock.patch.object(prefetch, "rapidapi_profile", self._fake_fetch), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client):
                 first = prefetch.run(self._args(base, fetch=True))
-                second = prefetch.run(self._args(base))  # idempotent recheck
             cache_written = (base / "cache" / "ada-lovelace.json").exists()
+            summary = self._cached_summary(base)
+            # (c) a second full run over a fully-summarized cache: 0 LLM + 0 RapidAPI.
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_key", lambda: "test-key"), \
+                    mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-openai"}), \
+                    mock.patch.object(prefetch, "rapidapi_profile", fetcher2), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client2):
+                second = prefetch.run(self._args(base, fetch=True))
         self.assertEqual(first["status"], "completed")
         self.assertEqual(first["counts"], {"fetched": 1, "from_cache": 0,
-                                           "failed": 0, "attempted": 1})
+                                           "failed": 0, "attempted": 1,
+                                           "already_cached": 0})
         self.assertEqual(first["remaining_misses"], 0)
         self.assertTrue(cache_written)
-        self.assertEqual(second["status"], "dry_run")
+        self.assertEqual(first["summary"]["status"], "completed")
+        self.assertEqual(first["summary"]["counts"]["summarized"], 1)
+        self.assertEqual(first["remaining_summary_misses"], 0)
+        self.assertEqual(len(client.calls), 1)                 # exactly one LLM call
+        self.assertTrue(summary)                               # persisted in the cache
+        self.assertEqual(summary, client.summary)
+        # second run: no misses left, so zero RapidAPI + zero LLM calls.
         self.assertEqual(second["cache_misses"], 0)
+        self.assertEqual(second["summary_misses"], 0)
+        self.assertEqual(second["summary"]["counts"]["attempted"], 0)
+        fetcher2.assert_not_called()
+        self.assertEqual(client2.calls, [])
 
-    def test_fetch_without_key_is_blocked_and_spends_nothing(self):
+    def test_already_cached_profile_without_summary_gets_summarized(self):
+        # (b) a profile already in the cache lacking a summary gets summarized on --fetch.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            self._write_cached_no_summary(base)
+            fetcher = mock.MagicMock()          # nothing to fetch — all cached
+            client = _FakeAsyncClient()
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_key", lambda: "test-key"), \
+                    mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-openai"}), \
+                    mock.patch.object(prefetch, "rapidapi_profile", fetcher), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client):
+                manifest = prefetch.run(self._args(base, fetch=True))
+            summary = self._cached_summary(base)
+        self.assertEqual(manifest["counts"]["attempted"], 0)   # no fetch needed
+        fetcher.assert_not_called()
+        self.assertEqual(manifest["summary"]["counts"]["summarized"], 1)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(summary, client.summary)
+        self.assertEqual(manifest["remaining_summary_misses"], 0)
+
+    def test_no_llm_fetches_but_does_not_summarize(self):
+        # (d) --no-llm fetches but never summarizes.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            client = _FakeAsyncClient()
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_key", lambda: "test-key"), \
+                    mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-openai"}), \
+                    mock.patch.object(prefetch, "rapidapi_profile", self._fake_fetch), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client):
+                manifest = prefetch.run(self._args(base, fetch=True, no_llm=True))
+            persisted_summary = self._cached_summary(base)
+        self.assertEqual(manifest["counts"]["fetched"], 1)     # fetched
+        self.assertEqual(manifest["summary"]["status"], "skipped_no_llm")
+        self.assertEqual(client.calls, [])                     # never summarized
+        self.assertEqual(persisted_summary, "")                # no summary persisted
+        self.assertEqual(manifest["estimated_summary_calls"], 0)
+
+    def test_summarize_blocked_gracefully_without_openai_key(self):
+        # (f) missing OpenAI key: fetch runs, summary blocked, never crashes.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            client = mock.MagicMock(side_effect=AssertionError("LLM called without a key"))
+            env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_key", lambda: "test-key"), \
+                    mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(prefetch, "rapidapi_profile", self._fake_fetch), \
+                    mock.patch.object(prefetch, "make_async_client", client):
+                manifest = prefetch.run(self._args(base, fetch=True))
+            persisted_summary = self._cached_summary(base)
+        self.assertEqual(manifest["counts"]["fetched"], 1)     # RapidAPI still ran
+        self.assertEqual(manifest["summary"]["status"], "blocked_no_key")
+        client.assert_not_called()
+        self.assertEqual(persisted_summary, "")                # no summary persisted
+
+    def test_fetch_concurrency_is_bounded_and_rpm_gate_paces(self):
+        # Fetches fan out under a bounded worker pool; the RPM gate only paces a
+        # cohort large enough to exceed its budget. No live provider (mocked).
+        gate = prefetch._RpmGate(0)
+        gate.acquire()                                          # rpm<=0 is a no-op
+        paced = prefetch._RpmGate(2)
+        paced.acquire(); paced.acquire()                        # first two pass free
+        self.assertEqual(len(paced._starts), 2)
+        # A tight budget with three quick starts must have waited at least once.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            links = [{"public_identifier": f"p{i}",
+                      "linkedin_url": f"https://www.linkedin.com/in/p{i}"} for i in range(3)]
+            calls: list[str] = []
+
+            def fake(pub, url, key, cache_dir=None, **_):
+                calls.append(pub)
+                p = prefetch.profile_cache_path(cache_dir, pub)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(json.dumps({
+                    "public_identifier": pub, "linkedin_url": url,
+                    "raw_response": {"x": 1},
+                    "normalized_profile": {"success": True, "public_identifier": pub},
+                }), encoding="utf-8")
+                return {"from_cache": False, "normalized_profile": {"success": True}}
+
+            with mock.patch.object(prefetch, "rapidapi_profile", fake):
+                counts = prefetch.prefetch(links, base / "cache", "k",
+                                           concurrency=40, rpm=0)
+        self.assertEqual(counts["fetched"], 3)
+        self.assertEqual(sorted(calls), ["p0", "p1", "p2"])
+
+    def test_fetch_without_rapidapi_key_is_blocked_and_spends_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             self._fixture(base)
             fetcher = mock.MagicMock()
+            client = _FakeAsyncClient()
             with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
                     mock.patch.object(prefetch, "ROOT", base / "out"), \
                     mock.patch.object(prefetch, "rapidapi_key", lambda: ""), \
-                    mock.patch.object(prefetch, "rapidapi_profile", fetcher):
+                    mock.patch.object(prefetch, "rapidapi_profile", fetcher), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client):
                 manifest = prefetch.run(self._args(base, fetch=True))
         self.assertEqual(manifest["status"], "blocked_no_key")
         fetcher.assert_not_called()
+        self.assertEqual(client.calls, [])
         self.assertFalse(manifest["privacy"]["paid_provider_called"])
 
 
