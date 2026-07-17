@@ -688,12 +688,19 @@ def build_profile_contract_records(people: Iterable[dict[str, Any]]) -> list[dic
     return records
 
 
-def build_unified_profiles(people: Iterable[dict[str, Any]], roles: Iterable[dict[str, Any]] | None = None, companies: Iterable[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """Build hydrated profile artifacts from local person rows."""
+def build_unified_profiles(people: Iterable[dict[str, Any]], roles: Iterable[dict[str, Any]] | None = None, companies: Iterable[dict[str, Any]] | None = None, age_lookup: dict[str, int] | None = None) -> list[dict[str, Any]]:
+    """Build hydrated profile artifacts from local person rows.
+
+    ``age_lookup`` maps person_id -> inferred birth year (the ``inferred_ages``
+    pipeline artifact). Retrieval filters ages on the role-row copies of
+    ``inferred_birth_year``; the profile artifact must expose the same value or
+    an enforced age filter is indistinguishable from an unsupported one.
+    """
 
     profiles: list[dict[str, Any]] = []
     for person in people:
         context = _hydrated_context(person)
+        birth_year = _int_or_zero(person.get("inferred_birth_year")) or int((age_lookup or {}).get(str(person.get("id") or ""), 0))
         profiles.append({
             "id": context["person_id"],
             "base_id": context["person_id"],
@@ -713,7 +720,8 @@ def build_unified_profiles(people: Iterable[dict[str, Any]], roles: Iterable[dic
             "x_twitter_followers": context["x_twitter_followers"],
             "instagram_handle": context["instagram_handle"],
             "instagram_followers": context["instagram_followers"],
-            "inferred_age": None,
+            "inferred_birth_year": birth_year or None,
+            "inferred_age": (date.today().year - birth_year) if birth_year else None,
             "years_of_experience": context["years_of_experience"],
             "total_interactions": context["total_interactions"] or None,
             "interaction_counts": context["interaction_counts"],

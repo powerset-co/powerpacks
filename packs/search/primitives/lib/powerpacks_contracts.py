@@ -291,12 +291,11 @@ def normalize_hydrated_context(row: dict[str, Any]) -> dict[str, Any]:
         education = []
 
     inferred_birth_year = row.get("inferred_birth_year") or context.get("inferred_birth_year")
-    inferred_age = None
-    if inferred_birth_year:
-        try:
-            inferred_age = date.today().year - int(inferred_birth_year)
-        except (TypeError, ValueError):
-            inferred_age = None
+    try:
+        inferred_birth_year = int(inferred_birth_year) if inferred_birth_year else None
+    except (TypeError, ValueError):
+        inferred_birth_year = None
+    inferred_age = date.today().year - inferred_birth_year if inferred_birth_year else None
 
     city_state_country = ", ".join(str(row.get(k)) for k in ["city", "state", "country"] if row.get(k))
     location = context.get("location") or row.get("location_raw") or city_state_country or None
@@ -318,6 +317,7 @@ def normalize_hydrated_context(row: dict[str, Any]) -> dict[str, Any]:
         "x_twitter_followers": row.get("x_twitter_followers"),
         "instagram_handle": row.get("ig_handle"),
         "instagram_followers": row.get("ig_followers"),
+        "inferred_birth_year": inferred_birth_year,
         "inferred_age": inferred_age,
         "years_of_experience": context.get("years_of_experience") or compute_years_of_experience(positions),
         "total_interactions": row.get("total_interactions"),

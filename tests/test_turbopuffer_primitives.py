@@ -515,6 +515,31 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             self.assertEqual(rows[0]["overall_reasoning"], "Strong SWE match")
             self.assertEqual(rows[0]["matched_position_indexes"], "[]")
 
+    def test_result_rows_expose_inferred_age_fields(self) -> None:
+        state = {
+            "task_id": "task",
+            "query": "founders under 30",
+            "steps": [
+                {"id": "execute_role_search", "output": {"candidate_ids": ["p1", "p2"]}},
+                {
+                    "id": "hydrate_people",
+                    "output": {
+                        "profiles": [
+                            {"person_id": "p1", "name": "One", "positions": [], "inferred_birth_year": 1997, "inferred_age": 29},
+                            {"person_id": "p2", "name": "Two", "positions": []},
+                        ]
+                    },
+                },
+            ],
+        }
+        rows = results_io.result_rows(state)
+        self.assertEqual(rows[0]["inferred_birth_year"], 1997)
+        self.assertEqual(rows[0]["inferred_age"], 29)
+        self.assertEqual(rows[1]["inferred_birth_year"], "")
+        self.assertEqual(rows[1]["inferred_age"], "")
+        self.assertIn("inferred_birth_year", results_io.CSV_FIELDS)
+        self.assertIn("inferred_age", results_io.CSV_FIELDS)
+
     def test_social_and_interaction_prefilters_are_postgres_backed(self) -> None:
         original_social = apply_prefilters.fetch_social_filter_person_ids
         original_interaction = apply_prefilters.fetch_interaction_filter_person_ids

@@ -303,6 +303,20 @@ class IndexingTransformTests(unittest.TestCase):
         self.assertGreater(profile["years_of_experience"], 4)
         self.assertIn("linkedin_csv", profile["vertical_sources"])
 
+    def test_build_unified_profiles_expose_inferred_birth_year_and_age(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            people = flatten_people(self._people_csv(Path(td)))
+
+        # Without ages (no CSV value, no lookup) both fields stay None.
+        profiles = build_unified_profiles(people)
+        self.assertIsNone(profiles[0]["inferred_birth_year"])
+        self.assertIsNone(profiles[0]["inferred_age"])
+
+        # The inferred_ages artifact lookup populates both fields.
+        profiles = build_unified_profiles(people, age_lookup={str(people[0]["id"]): 1997})
+        self.assertEqual(profiles[0]["inferred_birth_year"], 1997)
+        self.assertEqual(profiles[0]["inferred_age"], datetime.now().year - 1997)
+
 
 if __name__ == "__main__":
     unittest.main()

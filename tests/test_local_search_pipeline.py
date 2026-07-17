@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from unittest import mock
 from pathlib import Path
 
@@ -1107,6 +1108,39 @@ class NarrowPoolPreviewTests(unittest.TestCase):
                                return_value={"status": "completed", "matched_people": 150, "total_people": 500}):
             preview = module.compact_preview_local(payload, Path("payload.json"), Path("db.duckdb"), [])
         self.assertFalse(any("suspiciously narrow" in note for note in preview["runtime_notes"]), preview["runtime_notes"])
+
+
+class AgeFilterPreviewTests(unittest.TestCase):
+    def test_age_constraint_visible_with_boundary_note(self):
+        module = load_pipeline_module()
+        payload = {"normalized_query": "founders under 30",
+                   "role_search_filters": {"cities": ["San Francisco"], "age_max": 29}}
+        with mock.patch.object(module, "local_pool_estimate",
+                               return_value={"status": "completed", "matched_people": 20, "total_people": 500}):
+            preview = module.compact_preview_local(payload, Path("payload.json"), Path("db.duckdb"), [])
+        self.assertEqual(preview["filters"]["age_max"], 29)
+        boundary = datetime.now().year - 29
+        self.assertTrue(any(f"inferred_birth_year >= {boundary}" in note for note in preview["runtime_notes"]),
+                        preview["runtime_notes"])
+
+    def test_age_min_boundary_note(self):
+        module = load_pipeline_module()
+        payload = {"normalized_query": "executives over 50", "role_search_filters": {"age_min": 50}}
+        with mock.patch.object(module, "local_pool_estimate",
+                               return_value={"status": "completed", "matched_people": 20, "total_people": 500}):
+            preview = module.compact_preview_local(payload, Path("payload.json"), Path("db.duckdb"), [])
+        self.assertEqual(preview["filters"]["age_min"], 50)
+        boundary = datetime.now().year - 50
+        self.assertTrue(any(f"inferred_birth_year <= {boundary}" in note for note in preview["runtime_notes"]),
+                        preview["runtime_notes"])
+
+    def test_no_age_note_without_age_filters(self):
+        module = load_pipeline_module()
+        payload = {"normalized_query": "engineers", "role_search_filters": {"cities": ["New York"]}}
+        with mock.patch.object(module, "local_pool_estimate",
+                               return_value={"status": "completed", "matched_people": 150, "total_people": 500}):
+            preview = module.compact_preview_local(payload, Path("payload.json"), Path("db.duckdb"), [])
+        self.assertFalse(any("inferred_birth_year" in note for note in preview["runtime_notes"]), preview["runtime_notes"])
 
 
 if __name__ == "__main__":

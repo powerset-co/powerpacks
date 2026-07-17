@@ -1978,12 +1978,7 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
             founder_position_ids.add(str(row.get("position_id", "")))
             founder_person_ids.add(str(row.get("person_id", "")))
     # Load inferred ages
-    age_lookup: dict[str, int] = {}
-    for row in _iter_jsonl(ps["inferred_ages"]):
-        pid = str(row.get("person_id", "")).strip()
-        by = row.get("birth_year")
-        if pid and isinstance(by, (int, float)) and int(by) > 0:
-            age_lookup[pid] = int(by)
+    age_lookup = _load_age_lookup(ps)
     contract = load_search_contract("turbopuffer/people.namespace.json")
     # Streaming join: people are flattened/enriched/normalized one person at a
     # time and written incrementally, so the full position-record list (with
@@ -2068,8 +2063,18 @@ def step_people(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, 
     return {"people": str(ps["people_records"])}, stats
 
 
+def _load_age_lookup(ps: dict[str, Path]) -> dict[str, int]:
+    age_lookup: dict[str, int] = {}
+    for row in _iter_jsonl(ps["inferred_ages"]):
+        pid = str(row.get("person_id", "")).strip()
+        by = row.get("birth_year")
+        if pid and isinstance(by, (int, float)) and int(by) > 0:
+            age_lookup[pid] = int(by)
+    return age_lookup
+
+
 def step_profiles(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str, str], dict[str, Any]]:
-    profiles = build_unified_profiles(read_jsonl(ps["flattened"]))
+    profiles = build_unified_profiles(read_jsonl(ps["flattened"]), age_lookup=_load_age_lookup(ps))
     write_jsonl(ps["profiles"], profiles)
     stats = {"profiles": len(profiles)}
     write_stats(ledger, "build_unified_profiles", stats)

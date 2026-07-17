@@ -1244,6 +1244,30 @@ def postprocess_cross_tables(con: Any) -> None:
                   AND (p.company_name IS NULL OR CAST(p.company_name AS VARCHAR) <> CAST(c.company_name AS VARCHAR))
                 """
             )
+    # Age filters run against the role-row copies of inferred_birth_year
+    # (ROLE_ROW_PREFERRED_PROFILE_FIELDS in local_duckdb_store). The person
+    # profile projection must expose the same value, otherwise an enforced age
+    # filter reads as NULL on local_person_profiles and looks unsupported to
+    # anyone auditing the result.
+    if {"local_person_profiles", "local_people_positions"} <= tables:
+        profile_cols = table_columns(con, "local_person_profiles")
+        position_cols = table_columns(con, "local_people_positions")
+        if "inferred_birth_year" in profile_cols and "inferred_birth_year" in position_cols:
+            con.execute(
+                """
+                UPDATE local_person_profiles AS p
+                SET inferred_birth_year = r.inferred_birth_year
+                FROM (
+                    SELECT CAST(COALESCE(person_id, base_id) AS VARCHAR) AS pid,
+                           MAX(inferred_birth_year) AS inferred_birth_year
+                    FROM local_people_positions
+                    WHERE inferred_birth_year IS NOT NULL AND inferred_birth_year > 0
+                    GROUP BY 1
+                ) AS r
+                WHERE CAST(COALESCE(p.person_id, p.base_id) AS VARCHAR) = r.pid
+                  AND (p.inferred_birth_year IS NULL OR p.inferred_birth_year <= 0)
+                """
+            )
 
 
 def build_pipeline(args: argparse.Namespace, run_dir: Path) -> None:
