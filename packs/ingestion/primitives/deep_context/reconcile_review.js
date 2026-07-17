@@ -269,9 +269,17 @@ async function decideLinkedinCard(card, values, message) {
     const response = await post("/decide", values);
     adoptMutationState(response);
     applyProgress(response.progress);
+    // A keep/fix resolves the WHOLE parent (siblings are withdrawn server-side), so
+    // remove the parent's card. resolved_pubs still drives per-pub removal for any
+    // legacy single-candidate markup where the wrapper is keyed on the pub.
     const resolved = new Set(response.resolved_pubs || [values.pub]);
+    const resolvedParent = advance.current.dataset.parent || values.parent_slug || "";
+    const sameParentResolves = values.decision === "keep" || values.decision === "fix";
     linkedinBufferCards(advance.buffer).forEach((item) => {
-      if (resolved.has(item.dataset.pub || "")) item.remove();
+      const byPub = resolved.has(item.dataset.pub || "");
+      const byParent = sameParentResolves && resolvedParent
+        && item.dataset.parent === resolvedParent;
+      if (byPub || byParent) item.remove();
     });
     advance.buffer.querySelector("[data-linkedin-saving]")?.remove();
     if (response.complete_html) {
