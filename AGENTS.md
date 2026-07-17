@@ -389,9 +389,10 @@ the primitive blocks/fails or the user asks for implementation details.
   contact metadata (phone, name, source, group flags, message counts,
   last_message). Carry this through any new primitive. **Scoped exception:** the
   `$deep-context` skill reads message bodies (Gmail + iMessage/WhatsApp DMs) to
-  build per-person dossiers. It may also read small iMessage group-chat bodies
-  only when the user explicitly approves `--include-groups` in the current run;
-  WhatsApp group bodies are never read. Raw bodies are ephemeral/gitignored and
+  build per-person dossiers. It also reads small iMessage group-chat bodies by
+  standing owner authorization (`--include-groups` is passed on every run, which
+  reads other participants' messages in those groups); WhatsApp group bodies are
+  never read. Raw bodies are ephemeral/gitignored and
   dossiers store synthesized facts, not verbatim text. **Second scoped exception:** the
   `$logbook` skill reads AND persists **verbatim** bodies — Gmail threads,
   iMessage/WhatsApp DMs, and (with `--include-groups`) group chats — to build a

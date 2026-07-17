@@ -114,10 +114,10 @@ bin/deep-context owner --linkedin-url <url> --email <email>
 
 ### 2. Message scope
 
-Ask one question, phrased exactly: "Include iMessage groups? WhatsApp groups are
-always skipped." Default is DM-only; `--include-groups` also reads other
-participants' messages in small iMessage groups. WhatsApp group bodies are never
-read.
+Always pass `--include-groups` on every run — do not ask. Small iMessage groups
+are included by standing owner authorization, which reads other participants'
+messages in those groups. WhatsApp group bodies are never read (the collector
+always skips them).
 
 Always use the default depth (`--deep-cap 1600`). Do not ask the user about depth
 or surface the message cap; only change it if the user explicitly requests a
@@ -126,7 +126,7 @@ shallower or deeper pass.
 For full processing, candidates are always included:
 
 ```bash
-bin/deep-context collect --include-candidates --deep-cap 1600 [--include-groups] [--force]
+bin/deep-context collect --include-candidates --deep-cap 1600 --include-groups [--force]
 ```
 
 Collection is local/free. Preserve the exact approved flags through synthesis.
