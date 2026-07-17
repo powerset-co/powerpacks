@@ -1556,9 +1556,10 @@ def _clean_text(value: str) -> str:
 def relationship_summary(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
     """The dossier's "Relationship & cadence" prose as clean, readable text.
 
-    This is the card's Summary — NOT the dossier's own "## Summary" (which holds
-    the "Network worth:" line and is intentionally dropped). The trailing
-    "_grokked ..._" bookkeeping line is stripped; '' when the section is absent.
+    Shown on cards under the "Relationship" label — NOT the dossier's own
+    "## Summary" (which holds the "Network worth:" line and is intentionally
+    dropped). The trailing "_grokked ..._" bookkeeping line is stripped;
+    '' when the section is absent.
     """
     markdown = render_dossier(parents_dir, dossier_dir, slug)
     body = _dossier_section(markdown, "Relationship & cadence")
@@ -1600,8 +1601,8 @@ def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str) -> list
 def render_dossier_markdown(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
     """The card's dossier preview: exactly two extracted sections as safe HTML.
 
-    "Summary" is the "Relationship & cadence" prose (never the dossier's own
-    "## Summary", which carries the Network worth line). "Timeline" keeps its
+    "Relationship" is the "Relationship & cadence" prose (never the dossier's
+    own "## Summary", which carries the Network worth line). "Timeline" keeps its
     per-date bullets. Everything else (name block, wiki links, Topics,
     Identifiers, Possible same person, worth lines) is dropped; identifiers are
     bubbled up into the card's Contact section instead. Absent sections are
@@ -1613,7 +1614,7 @@ def render_dossier_markdown(parents_dir: Path, dossier_dir: Path, slug: str) -> 
         paragraphs = "".join(
             f"<p>{esc(block.strip())}</p>"
             for block in re.split(r"\n\s*\n", summary) if block.strip())
-        parts.append(f"<div><dt>Summary</dt><dd>{paragraphs}</dd></div>")
+        parts.append(f"<div><dt>Relationship</dt><dd>{paragraphs}</dd></div>")
     timeline = timeline_entries(parents_dir, dossier_dir, slug)
     if timeline:
         items = "".join(f"<li>{esc(entry)}</li>" for entry in timeline)
@@ -1683,16 +1684,21 @@ def _merge_contacts(contacts: list[str], identifiers: list[str]) -> list[str]:
     return merged
 
 
+# Shown as the card's Summary when no verified identity summary exists (a
+# research-blob-only or empty reason means exactly that).
+NO_PROFILE_SUMMARY = "Couldn't find profile"
+
+
 def _display_reason(reason: str) -> str:
-    """Card display only (stored CSV reasons are never rewritten): when a reason
-    reads "<useful summary>; deep research: <verbose process notes>", show just
-    the summary. When the whole reason IS the deep-research blob, keep it —
-    losing the only signal is worse than verbosity."""
+    """Card display only (stored CSV reasons are never rewritten): the
+    "deep research: <process notes>" text is NEVER shown. A real summary before
+    a "; deep research:" tail is kept; a reason that is only the research blob
+    (or empty) falls back to "Couldn't find profile" — research-blob-only means
+    no verified identity summary exists."""
     marker = reason.lower().find("deep research:")
-    if marker == -1:
-        return reason
-    head = reason[:marker].strip().rstrip(";,·—–-").strip()
-    return head or reason
+    cleaned = reason if marker == -1 else reason[:marker]
+    cleaned = cleaned.strip().rstrip(";,·—–-").strip()
+    return cleaned or NO_PROFILE_SUMMARY
 
 
 # Top entries pinned in Work/Education fact lists; the rest sit behind a toggle.
@@ -1730,20 +1736,25 @@ def _details(parent: dict[str, Any], candidate: dict[str, Any], *, identity: boo
         identifiers or [])
     evidence = [*(candidate.get("supporting") or []), *(candidate.get("contradicting") or [])]
     reason = _display_reason(str(candidate.get("reason") or ""))
-    rows: list[str] = list(profile_rows or [])
+    # Section order: Contact -> Summary (the judge/verify reason) -> Evidence,
+    # then the lazily loaded dossier rows (Relationship -> Timeline), then the
+    # profile facts (Work / Education) when profile data exists.
+    rows: list[str] = []
     if contacts:
         rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
-    if identity and reason:
-        rows.append(f"<div><dt>Match signal</dt><dd>{esc(reason)}</dd></div>")
+    if identity:
+        rows.append(f"<div><dt>Summary</dt><dd>{esc(reason)}</dd></div>")
     if evidence:
         rows.append(f"<div><dt>Evidence</dt><dd>{esc(' · '.join(evidence[:5]))}</dd></div>")
     extra = f"<dl>{''.join(rows)}</dl>" if rows else ""
+    profile_dl = (f"<dl>{''.join(profile_rows)}</dl>" if profile_rows else "")
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
     # No "Details"/"Context" section labels; the dossier preview renders as more
     # dt/dd rows in the SAME dl style (no inset box), lazily via /api/dossier.
     return (f"<section class='details' data-slug='{esc(dossier_slug)}'>"
             f"<div class='details-body'>{profile_placeholder}{extra}"
-            "<dl class='dossier-text' aria-busy='true'></dl></div></section>")
+            "<dl class='dossier-text' aria-busy='true'></dl>"
+            f"{profile_dl}</div></section>")
 
 
 def _scroll_region(content: str) -> str:

@@ -1501,10 +1501,11 @@ class TestStagedReviewUI(unittest.TestCase):
             (dossiers / "ada-lovelace.md").write_text(self._FULL_DOSSIER, encoding="utf-8")
             rendered = web.render_dossier_markdown(base / "parents", dossiers, "ada-lovelace")
         # exactly two extracted sections, in order, as dt/dd rows (same style
-        # as the card's Contact / Match signal sections — no inset box)
-        self.assertIn("<dt>Summary</dt>", rendered)
+        # as the card's Contact / Summary sections — no inset box)
+        self.assertIn("<dt>Relationship</dt>", rendered)
         self.assertIn("<dt>Timeline</dt>", rendered)
-        self.assertLess(rendered.index("<dt>Summary</dt>"), rendered.index("<dt>Timeline</dt>"))
+        self.assertLess(rendered.index("<dt>Relationship</dt>"),
+                        rendered.index("<dt>Timeline</dt>"))
         # Summary body is the Relationship & cadence prose, cleaned of markdown
         self.assertIn("Longtime colleague at Example Co; we coordinated on hiring.", rendered)
         self.assertNotIn("[[", rendered)
@@ -1543,10 +1544,10 @@ class TestStagedReviewUI(unittest.TestCase):
                 "# Alan Turing\n\n## Relationship & cadence\n\nOld friend from the lab.\n",
                 encoding="utf-8")
             rel_only = web.render_dossier_markdown(base / "parents", dossiers, "rel-only")
-        self.assertNotIn("<dt>Summary</dt>", no_rel)
+        self.assertNotIn("<dt>Relationship</dt>", no_rel)
         self.assertIn("<dt>Timeline</dt>", no_rel)
         self.assertEqual(missing, "")
-        self.assertIn("<dt>Summary</dt>", rel_only)
+        self.assertIn("<dt>Relationship</dt>", rel_only)
         self.assertIn("Old friend from the lab.", rel_only)
         self.assertNotIn("<dt>Timeline</dt>", rel_only)
 
@@ -1619,7 +1620,8 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn("https://example.net/ada", contact)
         # LinkedIn-specific parts of the card are unchanged (and no section labels)
         self.assertIn(">View LinkedIn", html)
-        self.assertIn("<dt>Match signal</dt><dd>name matches messages</dd>", html)
+        self.assertIn("<dt>Summary</dt><dd>name matches messages</dd>", html)
+        self.assertNotIn("Match signal", html)
         self.assertIn("data-decide='keep'", html)
         self.assertNotIn("details-heading", html)
         self.assertNotIn(">Context</h4>", html)
@@ -2515,6 +2517,12 @@ class TestCardProfileAndReasonDisplay(unittest.TestCase):
         self.assertIn("Role 0 @ Example Engines", html)
         self.assertIn("<dt>Education</dt>", html)
         self.assertNotIn("No cached profile data", html)
+        # section order: Contact -> Summary -> (dossier: Relationship/Timeline)
+        # -> Work/Education
+        self.assertLess(html.index("<dt>Contact</dt>"), html.index("<dt>Summary</dt>"))
+        self.assertLess(html.index("<dt>Summary</dt>"), html.index("dossier-text"))
+        self.assertLess(html.index("dossier-text"), html.index("<dt>Work</dt>"))
+        self.assertLess(html.index("<dt>Work</dt>"), html.index("<dt>Education</dt>"))
 
     def test_card_cache_miss_shows_passive_prefetch_note(self):
         with tempfile.TemporaryDirectory() as d:
@@ -2545,13 +2553,15 @@ class TestCardProfileAndReasonDisplay(unittest.TestCase):
         self.assertIn("data-show-more", work)
         self.assertNotIn("data-show-more", education)              # short list, no toggle
 
-    def test_display_reason_trims_deep_research_tail_only_when_summary_exists(self):
+    def test_display_reason_never_shows_deep_research_text(self):
         self.assertEqual(
             web._display_reason("Longtime teammate at ExampleCo; deep research: matched "
                                 "employer, school and location with process notes"),
             "Longtime teammate at ExampleCo")
-        blob = "deep research: matched employer and school"
-        self.assertEqual(web._display_reason(blob), blob)          # only signal -> keep
+        # a research-blob-only reason means no verified identity summary exists
+        self.assertEqual(web._display_reason("deep research: matched employer and school"),
+                         "Couldn't find profile")
+        self.assertEqual(web._display_reason(""), "Couldn't find profile")
         self.assertEqual(web._display_reason("plain reason"), "plain reason")
 
     def test_debug_carousel_renders_only_with_flag_and_indexes_the_queue(self):
