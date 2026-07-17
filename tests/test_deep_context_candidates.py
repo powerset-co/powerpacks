@@ -2915,6 +2915,29 @@ class TestPrefetchProfiles(unittest.TestCase):
         }), encoding="utf-8")
         return path
 
+    def _write_cached_failed(self, base: Path, *, garbage_summary: bool = False) -> Path:
+        """A cache FILE that represents a FAILED/empty fetch (a bad research-guess
+        LinkedIn URL): ``normalized_profile.success`` is False with an ``error`` and
+        no substance. Optionally seed a garbage ``simple_summary`` a pre-guard run
+        would have written, so tests can assert self-heal cleanup + LLM exclusion."""
+        cache = base / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        path = cache / "ada-lovelace.json"
+        record: dict = {
+            "public_identifier": "ada-lovelace",
+            "linkedin_url": "https://www.linkedin.com/in/ada-lovelace",
+            "raw_response": {},
+            "normalized_profile": {
+                "success": False, "public_identifier": "ada-lovelace",
+                "error": "unrecognized linkedin profile payload",
+            },
+        }
+        if garbage_summary:
+            record["simple_summary"] = (
+                "Ada Lovelace is a professional at a company in an unspecified role.")
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return path
+
     @staticmethod
     def _cached_summary(base: Path, pub: str = "ada-lovelace") -> str:
         record = json.loads((base / "cache" / f"{pub}.json").read_text(encoding="utf-8"))
@@ -2971,6 +2994,71 @@ class TestPrefetchProfiles(unittest.TestCase):
         self.assertEqual(manifest["summary_missing_public_identifiers"], ["ada-lovelace"])
         fetcher.assert_not_called()
         self.assertEqual(client.calls, [])
+
+    def test_dry_run_excludes_cached_failed_profile_from_summary_misses(self):
+        # A cached-but-FAILED/empty fetch (bad research-guess URL) is NOT a summary
+        # miss — it already tried and produced nothing summarizable, so projecting an
+        # LLM call for it would only invite hallucinated filler. It DOES stay a fetch
+        # miss (a re-fetch might succeed) and is surfaced as not_summarizable.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            self._write_cached_failed(base)
+            fetcher = mock.MagicMock()
+            client = _FakeAsyncClient()
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_profile", fetcher), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client):
+                manifest = prefetch.run(self._args(base))
+        self.assertEqual(manifest["status"], "dry_run")
+        self.assertEqual(manifest["queue_links"], 1)
+        self.assertEqual(manifest["cache_misses"], 1)          # re-fetch the bad entry
+        self.assertEqual(manifest["summary_misses"], 0)        # but NOT a summary miss
+        self.assertEqual(manifest["estimated_summary_calls"], 0)
+        self.assertEqual(manifest["not_summarizable"], 1)
+        self.assertEqual(manifest["not_summarizable_public_identifiers"], ["ada-lovelace"])
+        self.assertEqual(manifest["already_summarized"], 0)
+        fetcher.assert_not_called()
+        self.assertEqual(client.calls, [])                     # no LLM cost projected
+
+    def test_run_cleans_garbage_summary_on_cached_failed_and_never_calls_llm(self):
+        # Self-heal + exclusion in one --fetch run: a cached-FAILED entry carrying a
+        # generic garbage summary from a pre-guard run has that summary STRIPPED, is
+        # excluded from the LLM population, and (re-fetch failing again) never reaches
+        # the model — so no "Ada Lovelace is a professional at a company" filler.
+        def _refetch_fails(pub, url, key, cache_dir=None, **_):
+            # Overwrite in place with another FAILED result (bad URL still bad).
+            path = prefetch.profile_cache_path(cache_dir, pub)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "public_identifier": pub, "linkedin_url": url, "raw_response": {},
+                "normalized_profile": {"success": False,
+                                       "error": "unrecognized linkedin profile payload"},
+            }), encoding="utf-8")
+            return {"status_code": 404, "data": {}, "error": "not found",
+                    "from_cache": False, "normalized_profile": {"success": False}}
+
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            self._fixture(base)
+            self._write_cached_failed(base, garbage_summary=True)
+            self.assertTrue(self._cached_summary(base))        # garbage present up front
+            client = _FakeAsyncClient()
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []), \
+                    mock.patch.object(prefetch, "ROOT", base / "out"), \
+                    mock.patch.object(prefetch, "rapidapi_key", lambda: "test-key"), \
+                    mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-openai"}), \
+                    mock.patch.object(prefetch, "rapidapi_profile", _refetch_fails), \
+                    mock.patch.object(prefetch, "make_async_client", lambda **_: client):
+                manifest = prefetch.run(self._args(base, fetch=True))
+            persisted_summary = self._cached_summary(base)
+        self.assertEqual(manifest["cleaned_garbage_summaries"], 1)  # stale filler stripped
+        self.assertEqual(manifest["cleaned_public_identifiers"], ["ada-lovelace"])
+        self.assertEqual(persisted_summary, "")                # and gone from the cache
+        self.assertEqual(client.calls, [])                     # never fed to the LLM
+        self.assertEqual(manifest["summary"]["counts"]["summarized"], 0)
+        self.assertEqual(manifest["summary"]["counts"]["skipped_no_profile"], 1)
 
     def test_fetch_then_summarize_writes_cache_and_summary(self):
         # (a) mocked fetch also generates + caches a summary; (c) second run = 0 calls.

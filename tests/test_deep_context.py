@@ -2708,18 +2708,31 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertEqual(cand["experiences"], ["CTO @ StealthCo (present)"])
             self.assertIn("research gaps: education dates", cand["reason"])
             html = web.render_linkedin_card(parents[0], cand, Path(tmpdir), Path(tmpdir))
-            self.assertIn("No LinkedIn found", html)
-            self.assertIn("Add their LinkedIn", html)
+            # A synthetic card renders the SAME decision UI as a real-LinkedIn card:
+            # the "Is this the right profile?" question, a [No] [Use this profile]
+            # binary-actions pair, and a hidden fix form revealed by No. No synthetic-
+            # only affordances ("No LinkedIn found" eyebrow / "Add their LinkedIn").
+            self.assertNotIn("No LinkedIn found", html)
+            self.assertNotIn("Add their LinkedIn", html)
+            self.assertNotIn("synthetic-correction", html)
+            self.assertIn("Is this the right profile?", html)
+            self.assertIn("<div class='binary-actions'>", html)
             self.assertIn("class='sr-only' for='fix-synth-email-abc'>LinkedIn URL</label>", html)
             self.assertNotIn("<label for='fix-synth-email-abc'>LinkedIn URL</label>", html)
             self.assertNotIn("Use a different LinkedIn", html)
             self.assertIn(">Use this</button>", html)
             self.assertIn(">Skip</button>", html)
-            # explicit approve control for the researched profile (synthetic keep)
+            # The hidden fix form sits behind the No button (same as a real card).
+            self.assertIn("data-open-fix", html)
+            self.assertIn("class='alternate' id='fix-section-synth-email-abc' hidden", html)
+            # synthetic keep still routes through the synthetic approve gate (/decide
+            # treats a keep on a synth- pub as the synthetic-people.csv approval).
             self.assertIn("data-decide='keep'", html)
             self.assertIn(">Use this profile</button>", html)
+            self.assertIn(">No</button>", html)
             self.assertNotIn(">Yes</button>", html)
-            self.assertNotIn(">No</button>", html)
+            # A synthetic row has no genuine LinkedIn header: no View-LinkedIn link.
+            self.assertNotIn("View LinkedIn", html)
             # approved=auto surfaces as verified
             path.write_text(self.CSV_HEADER + self._csv_row("auto"), encoding="utf-8")
             cand = web.load_synthetic_parents(path)[0]["candidates"][0]

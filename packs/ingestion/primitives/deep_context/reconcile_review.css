@@ -467,8 +467,6 @@ h1 {
 .linkedin-fix-form { padding: 4px 0 2px; }
 .linkedin-fix-form label { display: block; margin-bottom: 8px; color: var(--foreground); font-size: 12px; font-weight: 700; }
 .linkedin-fix-form > div { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-.synthetic-correction .use-profile { margin-bottom: 16px; }
-.synthetic-correction .question { margin-bottom: 12px; }
 .sr-only {
   position: absolute;
   width: 1px;
