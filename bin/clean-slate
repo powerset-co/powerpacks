@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Clean-slate scrub of derived pipeline state (merged people, directories,
+# review decisions, cluster indexes) while preserving every paid artifact
+# (facts, cluster/judge verdicts, deep-research, profile caches, linkedin
+# import). Everything scrubbed is MOVED — never deleted — to a timestamped
+# backup OUTSIDE the repo (default ~/powerpacks-backups/clean-slate-<utc>).
+#
+#   bin/clean-slate            # dry run: table of what would move / stay
+#   bin/clean-slate --apply    # move + write clean-slate-manifest.json
+#
+# Afterwards, pipeclean the flow: $setup (LinkedIn) -> $import-gmail ->
+# $import-messages -> $deep-context. LLM stages cache-hit on stable keys.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  exec "$ROOT/.venv/bin/python" -m packs.ingestion.primitives.clean_slate.clean_slate "$@"
+fi
+exec uv run --project . python -m packs.ingestion.primitives.clean_slate.clean_slate "$@"
