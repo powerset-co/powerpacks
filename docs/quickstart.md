@@ -94,7 +94,10 @@ go install github.com/powerset-co/wacli/cmd/wacli@v0.13.0-fullsync
 ```
 
 It installs to `~/.powerpacks/bin/wacli` and is always invoked by that absolute
-path, so a stray upstream `wacli` on `PATH` never shadows the pinned fork. QR
+path, so a stray upstream `wacli` on `PATH` never shadows the pinned fork. The
+install stamps its pinned tag next to the binary, so when the repo later bumps
+the pin the next import detects the drift and rebuilds — `$update-powerpacks`
+alone does not refresh the binary (it only updates the repo + skills). QR
 rendering may separately request `brew install qrencode`.
 
 You'll also need WhatsApp on your phone to scan the QR code that pops up

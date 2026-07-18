@@ -435,6 +435,73 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                  mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/wacli"):
                 self.assertEqual(mod.wacli_bin(), "/opt/homebrew/bin/wacli")
 
+    def _fake_install(self, td: Path):
+        """Context helpers pinning the fork binary + stamp into a temp dir."""
+        binp = td / "wacli"
+        binp.write_text("#!/bin/sh\n"); binp.chmod(0o755)
+        stamp = td / ".wacli-version"
+        return binp, stamp
+
+    def test_wacli_pinned_current_requires_matching_stamp(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            binp, stamp = self._fake_install(td)
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
+                 mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
+                 mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.13.0-fullsync"):
+                # binary present but no stamp -> not current
+                self.assertFalse(mod.wacli_pinned_current())
+                # stamp matches -> current
+                stamp.write_text("v0.13.0-fullsync\n")
+                self.assertTrue(mod.wacli_pinned_current())
+                # a bumped pin makes the old stamp stale
+                with mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"):
+                    self.assertFalse(mod.wacli_pinned_current())
+
+    def test_ensure_wacli_blocks_on_stale_pin_when_no_install(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            binp, stamp = self._fake_install(td)
+            stamp.write_text("v0.13.0-fullsync\n")  # installed = old pin
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
+                 mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
+                 mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
+                 mock.patch.object(mod, "WACLI_INSTALL_SPEC", "github.com/powerset-co/wacli/cmd/wacli@v0.14.0-fullsync"):
+                with self.assertRaises(mod.PrimitiveBlocked) as ctx:
+                    mod.ensure_wacli_installed(install=False)
+            payload = ctx.exception.payload
+            self.assertIn("stale", payload["message"])
+            self.assertIn("v0.14.0-fullsync", payload["message"])
+            self.assertIn("v0.14.0-fullsync", payload["install_command"])
+
+    def test_ensure_wacli_reinstalls_on_pin_bump_and_restamps(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            binp, stamp = self._fake_install(td)
+            stamp.write_text("v0.13.0-fullsync\n")  # stale
+            calls = {}
+
+            def fake_run_command(cmd, *, timeout, env=None):
+                calls["cmd"] = cmd
+                calls["gobin"] = (env or {}).get("GOBIN")
+                return {"returncode": 0, "stdout": "", "stderr": "", "json": None}
+
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
+                 mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
+                 mock.patch.object(mod, "WACLI_BIN_DIR", td), \
+                 mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
+                 mock.patch.object(mod, "WACLI_INSTALL_SPEC", "github.com/powerset-co/wacli/cmd/wacli@v0.14.0-fullsync"), \
+                 mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/go"), \
+                 mock.patch.object(mod, "run_command", side_effect=fake_run_command), \
+                 mock.patch.object(mod, "wacli_version", return_value={"path": str(binp), "version": "0.14.0", "pinned": True}):
+                out = mod.ensure_wacli_installed(install=True)
+            self.assertIn("go", calls["cmd"][0] if isinstance(calls["cmd"][0], str) else "")
+            self.assertIn("v0.14.0-fullsync", " ".join(calls["cmd"]))
+            self.assertEqual(calls["gobin"], str(td))
+            # stamp rewritten to the new pin
+            self.assertEqual(stamp.read_text().strip(), "v0.14.0-fullsync")
+            self.assertEqual(out["version"], "0.14.0")
+
 
 if __name__ == "__main__":
     unittest.main()
