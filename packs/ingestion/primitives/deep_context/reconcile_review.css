@@ -475,8 +475,11 @@ h1 {
   padding: 14px;
   background: var(--background);
 }
-.linkedin-option .profile-copy h3 { margin: 0; font-size: 17px; }
-.linkedin-option dl { margin: 10px 0 0; }
+.linkedin-option dl { margin: 0; }
+.linkedin-option dl > div { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 5px 0; }
+.linkedin-option dt { color: var(--muted); font-size: 12px; font-weight: 700; }
+.linkedin-option dd { margin: 0; color: var(--foreground); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.linkedin-option .linkedin-label { margin-top: 0; }
 .linkedin-option .button-primary { margin-top: 12px; width: 100%; }
 
 .alternate { padding-top: 14px; }
