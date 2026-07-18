@@ -2237,10 +2237,11 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
           autocomplete='url' placeholder='linkedin.com/in/…' required>
         <button class='button button-outline' type='submit'>Use this</button></div>
       </form>"""
-    # Attached LinkedIn with nothing in the local profile cache: passive note
-    # only — the UI never fetches; the offline prefetch stage fills the cache.
-    placeholder = ("<p class='profile-note'>No cached profile data — "
-                   "run profile prefetch to fetch it.</p>" if cache_miss else "")
+    # Attached LinkedIn with nothing in the local profile cache: neutral copy
+    # only — no operator plumbing in the card. The UI never fetches; the skill's
+    # profile-prefetch stage fills the cache and logs every miss in its manifest.
+    placeholder = ("<p class='profile-note'>Not enough profile information "
+                   "available.</p>" if cache_miss else "")
     identifiers = dossier_identifiers(
         parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
     scroll_content = f"""
@@ -2701,19 +2702,6 @@ def linkedin_card_body(parents: list[dict[str, Any]], progress: dict[str, int], 
     return linkedin_finished_body(progress, linkedin_complete=linkedin_complete)
 
 
-def _profile_miss_count(
-    queue: list[tuple[dict[str, Any], list[dict[str, Any]]]],
-    profile_cache_dir: Path,
-) -> int:
-    """How many queue cards have an attached link but no cached profile at all
-    (the population the offline prefetch stage would fetch). A card counts once even
-    if several of its options miss the cache."""
-    return sum(
-        1 for _, pending in queue
-        if any(_hydrate_card_profile(candidate, profile_cache_dir) for candidate in pending)
-    )
-
-
 def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
                          enrichment_complete: bool, linkedin_complete: bool,
                          parents_dir: Path, dossier_dir: Path,
@@ -2724,11 +2712,6 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
     (the worth pattern), or the debug carousel."""
     note = "" if enrichment_complete else _enrichment_note(enrichment)
     queue = linkedin_review_queue(parents)
-    misses = _profile_miss_count(queue, profile_cache_dir)
-    if misses:
-        plural = "person here has" if misses == 1 else "people here have"
-        note += (f"<p class='enrichment-note' role='status'>{misses} {plural} no cached "
-                 "profile — run profile prefetch to fetch them.</p>")
 
     if debug and queue:
         index %= len(queue)

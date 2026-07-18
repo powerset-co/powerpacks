@@ -50,6 +50,10 @@ usage: bin/deep-context <command> [args]
   rejudge      re-run synthesis worth for every message-backed dossier, ignoring
                cached machine/human decisions (spends OpenAI; try --dry-run first).
                Human network_worth cells remain untouched; LinkedIn is never evidence.
+  restart      clear all HUMAN review decisions (review.csv network_worth +
+               synthetic approvals) keeping every machine verdict — start the
+               review over without re-spending (free; dry run by default,
+               --apply writes after .bkup backups)
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
   apply-retargets           enrich approved retargets -> retarget-people.csv
   realize      fan-in merge applying your decisions (free, local)
@@ -144,6 +148,11 @@ case "$cmd" in
     # Cache-only LinkedIn review is prepared by this explicit task. Default is a
     # free preview; --fetch crosses the RapidAPI + OpenAI approval boundary.
     "${PY[@]}" "$PKG.prefetch_profiles" "$@"
+    ;;
+  restart)
+    # The complement of rejudge: clear the HUMAN decisions (worth marks +
+    # synthetic approvals), keep every machine verdict. Free and backed up.
+    "${PY[@]}" "$PKG.restart_review" "$@"
     ;;
   rejudge|re-review)
     # The old re-review alias is kept for scripts, but now uses the sole worth judge:
