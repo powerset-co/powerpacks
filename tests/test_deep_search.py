@@ -6,6 +6,7 @@ import csv
 import gzip
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -2714,6 +2715,121 @@ class TestNoCliBulkFilter(unittest.TestCase):
         finally:
             sys.argv = argv
         self.assertTrue((run_dir / "loop.json").exists())
+
+
+class TestJudgeDefault(unittest.TestCase):
+    """The phase-2 judge defaults to the paid gpt API; codex is the free opt-in.
+    The selected judge + reasoning effort are recorded in loop.json history."""
+
+    def _staged_run(self, d):
+        run_dir = d / "run"
+        e0 = run_dir / "epoch0"
+        e0.mkdir(parents=True)
+        (e0 / "plan.json").write_text(json.dumps({"traits": {"must_have": []}, "created_at": "t"}))
+        rows = [{"person_id": "p0", "candidate_id": "p0"}]
+        (e0 / "union.jsonl").write_text(json.dumps({"person_id": "p0", "found_by": ["q0"]}) + "\n")
+        (e0 / "candidate_frontier.jsonl").write_text(json.dumps(rows[0]) + "\n")
+        (e0 / "candidate_frontier.json").write_text(json.dumps({"candidates": rows}))
+        (e0 / "probe_summaries.json").write_text("[]")
+        jd = d / "jd.txt"
+        jd.write_text("Build systems")
+        return run_dir, jd
+
+    def test_default_judge_is_gpt_and_recorded_in_history(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("POWERPACKS_DEEP_JUDGE", None)
+            dsl = _load("deep_search_loop")
+            d = Path(tempfile.mkdtemp())
+            run_dir, jd = self._staged_run(d)
+            seen = {}
+
+            def fake_run(cmd, *, expected_paths=None, description=None):
+                if description and "consensus" in description:
+                    out = run_dir / "shortlist"
+                    out.mkdir(parents=True, exist_ok=True)
+                    (out / "consensus.json").write_text("[]")
+                    (out / "ground_truth_ranked.json").write_text("[]")
+                    (out / "shortlist_ranked.json").write_text("[]")
+                    (out / "sendable_ranked.json").write_text("[]")
+                    (out / "bench_ranked.json").write_text("[]")
+
+            def fake_judge(edir, candidates, judge_kind, effort, concurrency):
+                seen["judge"] = judge_kind
+                seen["effort"] = effort
+                (edir / "candidate_evaluations.raw.jsonl").write_text(
+                    json.dumps({"candidate_id": "p0", "jd_score": 0.1}) + "\n")
+
+            argv = sys.argv
+            sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
+                        "--max-epochs", "1", "--plan-approved", "--no-triage"]
+            try:
+                with unittest.mock.patch.object(dsl, "run", side_effect=fake_run), \
+                     unittest.mock.patch.object(dsl, "validate_approved_plan"), \
+                     unittest.mock.patch.object(
+                         dsl,
+                         "resolve_retrieval_identity",
+                         return_value=({"backend": "powerset", "set_id": "x"}, "x", "db"),
+                     ), \
+                     unittest.mock.patch.object(
+                         dsl,
+                         "bind_approved_plan",
+                         return_value=(run_dir / "epoch0" / "plan.json", "digest"),
+                     ), \
+                     unittest.mock.patch.object(dsl, "judge", side_effect=fake_judge):
+                    dsl.main()
+            finally:
+                sys.argv = argv
+        self.assertEqual(seen["judge"], "gpt")
+        self.assertEqual(seen["effort"], "low")
+        history = json.loads((run_dir / "loop.json").read_text())
+        epoch_rows = [row for row in history if row.get("epoch") == 0 and "judge" in row]
+        self.assertTrue(epoch_rows, history)
+        self.assertEqual(epoch_rows[0]["judge"], "gpt")
+        self.assertEqual(epoch_rows[0]["reasoning_effort"], "low")
+
+    def test_env_preference_still_selects_codex(self):
+        with mock.patch.dict(os.environ, {"POWERPACKS_DEEP_JUDGE": "codex"}):
+            dsl = _load("deep_search_loop")
+            d = Path(tempfile.mkdtemp())
+            run_dir, jd = self._staged_run(d)
+            seen = {}
+
+            def fake_run(cmd, *, expected_paths=None, description=None):
+                if description and "consensus" in description:
+                    out = run_dir / "shortlist"
+                    out.mkdir(parents=True, exist_ok=True)
+                    (out / "consensus.json").write_text("[]")
+                    (out / "ground_truth_ranked.json").write_text("[]")
+                    (out / "shortlist_ranked.json").write_text("[]")
+                    (out / "sendable_ranked.json").write_text("[]")
+                    (out / "bench_ranked.json").write_text("[]")
+
+            def fake_judge(edir, candidates, judge_kind, effort, concurrency):
+                seen["judge"] = judge_kind
+                (edir / "candidate_evaluations.raw.jsonl").write_text(
+                    json.dumps({"candidate_id": "p0", "jd_score": 0.1}) + "\n")
+
+            argv = sys.argv
+            sys.argv = ["loop", "--jd-file", str(jd), "--run-dir", str(run_dir), "--created-at", "t",
+                        "--max-epochs", "1", "--plan-approved", "--no-triage"]
+            try:
+                with unittest.mock.patch.object(dsl, "run", side_effect=fake_run), \
+                     unittest.mock.patch.object(dsl, "validate_approved_plan"), \
+                     unittest.mock.patch.object(
+                         dsl,
+                         "resolve_retrieval_identity",
+                         return_value=({"backend": "powerset", "set_id": "x"}, "x", "db"),
+                     ), \
+                     unittest.mock.patch.object(
+                         dsl,
+                         "bind_approved_plan",
+                         return_value=(run_dir / "epoch0" / "plan.json", "digest"),
+                     ), \
+                     unittest.mock.patch.object(dsl, "judge", side_effect=fake_judge):
+                    dsl.main()
+            finally:
+                sys.argv = argv
+        self.assertEqual(seen["judge"], "codex")
 
 
 if __name__ == "__main__":
