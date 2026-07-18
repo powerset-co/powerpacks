@@ -80,9 +80,9 @@ and rely on the primitives.
   owns its local provider store. Only contact metadata (phone, name, channels,
   message counts, last-message timestamps) is read.
 - **Consent gates (pause for the user):** macOS Full Disk Access (Step 2); the
-  WhatsApp QR scan (Step 2); a Go-toolchain install only if Go is absent when the
-  pinned wacli fork needs building; and the import confirmation when Step 4 would
-  add new rows. The pinned wacli fork itself auto-builds without a prompt.
+  WhatsApp QR scan (Step 2); and the import confirmation when Step 4 would add new
+  rows. The pinned wacli fork auto-downloads a prebuilt binary without a prompt
+  (blocks only on an unsupported platform); no Go toolchain is needed.
 
 ### Repo root
 
