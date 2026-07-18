@@ -6,6 +6,9 @@ description: Add iMessage/WhatsApp contacts to your local network. Use for $impo
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-18: Documented first-backfill duration (30 min up to a few hours;
+  3 h hard cap, raised from ~2 h) and the never-kill-mid-backfill rule with
+  `$import-messages full` recovery.
 - 2026-07-17: Added smart-default incremental WhatsApp sync. First import full-
   backfills; later runs auto-detect the populated wacli store and pull only the
   delta. New verbs: `$import-messages sync` (explicit incremental) and
@@ -125,9 +128,17 @@ There is *no* sync-window question (unlike Gmail). WhatsApp scope follows the
 **sync mode**, which you pick from how the user invoked the skill:
 
 - **first import / plain `$import-messages`** → `auto`. The **first** run
-  full-backfills all WhatsApp history (~15–20 min) to build the local archive;
-  **every later run auto-detects the populated store and pulls only the delta**
-  (fast). You do not need to ask.
+  full-backfills all WhatsApp history (default window ~3 years) to build the
+  local archive; **every later run auto-detects the populated store and pulls
+  only the delta** (fast). You do not need to ask.
+
+  **The first backfill takes 30 minutes up to a few hours** depending on
+  history size (hard cap 3 h). The sync prints a heartbeat every ~2 minutes,
+  so quiet stretches between heartbeats are normal — keep waiting on the same
+  process and **never kill or restart it mid-backfill**: an interrupted
+  backfill leaves a partially populated store, and every later `auto` run then
+  goes incremental against it, so history silently stays incomplete. If a
+  backfill was interrupted, recover with `$import-messages full`.
 - **`$import-messages sync`** (or "sync/update/refresh my messages") → the
   explicit fast incremental path.
 - **`$import-messages full`** (or "re-import everything / full resync") → forces

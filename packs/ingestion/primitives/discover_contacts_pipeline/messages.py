@@ -49,7 +49,9 @@ except ModuleNotFoundError:
 DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
 DEFAULT_MESSAGES_OUTPUT_DIR = DEFAULT_BASE_DIR / "discover" / "messages"
 DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES = 0
-DEFAULT_WACLI_SYNC_TIMEOUT = 7600
+# First full backfill scales with history size (~3-year default window):
+# ~30 minutes on small accounts, a few hours on large ones. 3h hard cap.
+DEFAULT_WACLI_SYNC_TIMEOUT = 10800
 
 MESSAGES_DIR = Path(".powerpacks/messages")
 IMESSAGE_CONTACTS = MESSAGES_DIR / "imessage.contacts.csv"
