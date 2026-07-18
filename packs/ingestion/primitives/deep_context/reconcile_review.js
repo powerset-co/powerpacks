@@ -313,10 +313,11 @@ document.addEventListener("click", async (event) => {
     // The end-of-review handoff: hand the user the exact phrase for Codex.
     event.preventDefault();
     try {
-      await navigator.clipboard.writeText("continue deep-context setup");
+      const phrase = button.dataset.phrase || "Review complete proceed with enrichment";
+      await navigator.clipboard.writeText(phrase);
       announce(button.dataset.toast || "Copied");
     } catch (error) {
-      announce("Copy failed — type: continue deep-context setup", true);
+      announce(`Copy failed — type: ${button.dataset.phrase || "the phrase shown"}`, true);
     }
     return;
   }

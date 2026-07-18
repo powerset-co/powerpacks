@@ -2658,11 +2658,15 @@ def linkedin_review_queue(
 
 # The single human -> agent handoff at the end of review: the app is done,
 # the agent finishes setup (realize + index) from its blocking wait — or, if
-# that session ended, the user pastes the copied phrase into Codex.
+# that session ended, the user pastes the shown phrase
+# ("Review complete proceed with enrichment") into Codex.
 GO_BACK_HTML = (
-    "<p class='handoff-note'>Review complete — go back to Codex to finish setup.</p>"
+    "<p class='handoff-note'>Review complete — go back to Codex.</p>"
+    "<div class='handoff-copy'>"
+    "<code>Review complete proceed with enrichment</code>"
     "<button class='button button-outline' type='button' data-copy-continue "
-    "data-toast='Copied'>Copy “continue deep-context setup”</button>")
+    "data-phrase='Review complete proceed with enrichment' "
+    "data-toast='Copied'>Copy</button></div>")
 
 
 def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool) -> str:
