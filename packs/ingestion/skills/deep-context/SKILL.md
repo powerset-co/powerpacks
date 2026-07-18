@@ -39,17 +39,17 @@ Use the narrow path when the user names one:
   `bin/deep-context review-status` and continue from its `next_action`
   (normally `realize` -> merge + index).
 - `$deep-context restart`, "restart the review", "clear my review decisions",
-  "take the staged review again" -> a free human-decisions-only reset, NOT a
-  full rerun. Run `bin/deep-context restart` (dry run), show what would clear
+  "take the staged review again" -> a cleanup-only reset of the HUMAN
+  decisions. Run `bin/deep-context restart` (dry run), show what would clear
   (human worth marks, Check-LinkedIn clicks incl. pasted URLs, synthetic
   approvals), confirm, then `bin/deep-context restart --apply` (backs files up
-  to `.bkup-*` first) and relaunch `bin/deep-context review`. Every machine
-  verdict survives (`llm_worth`, `approved=auto` rows, facts, dossiers,
-  deep-research artifacts, profile caches) and the enrichment re-run reuses
-  cached paid results. Do NOT re-run collect/synthesize/cluster/reconcile and
-  do NOT build the full-workflow plan — after the relaunch, continue exactly
-  like "Review complete proceed with enrichment": wait for the review, then
-  follow `review-status`'s `next_action`.
+  to `.bkup-*` first). Every machine verdict survives (`llm_worth`,
+  `approved=auto` rows, facts, dossiers, deep-research artifacts, profile
+  caches) and later enrichment reuses cached paid results. Then STOP — do not
+  launch the review, build the full-workflow plan, or run any other command.
+  End by telling the user: run `$deep-context` whenever you're ready to take
+  the flow again (already-built stages complete as cached no-ops and the
+  review opens fresh).
 - A bare `$deep-context`, "process/resolve/enrich my contacts", "build deep
   context", or a full rerun -> use the complete staged workflow below.
 
