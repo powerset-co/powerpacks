@@ -68,6 +68,12 @@ WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.13.0-fulls
 WACLI_INSTALL_SPEC = f"{WACLI_MODULE}/cmd/wacli@{WACLI_PINNED_VERSION}"
 WACLI_BIN_DIR = Path(os.environ.get("POWERPACKS_WACLI_BIN_DIR", str(Path.home() / ".powerpacks" / "bin")))
 WACLI_PINNED_BIN = WACLI_BIN_DIR / "wacli"
+# Records which pinned tag the installed binary was built from. `wacli --version`
+# only reports the upstream semver (e.g. "0.13.0"), not our fork tag, so we can't
+# read the pin off the binary — stamp it at install time and compare on every run
+# so a bumped WACLI_PINNED_VERSION triggers a rebuild instead of silently using
+# the stale binary.
+WACLI_VERSION_STAMP = WACLI_BIN_DIR / ".wacli-version"
 QR_REDACTION = "[whatsapp qr payload redacted]"
 STATUS_PREFIX = "[import-whatsapp]"
 GROUP_SEPARATOR = " | "
@@ -258,6 +264,23 @@ def wacli_bin() -> str | None:
     return shutil.which("wacli")
 
 
+def installed_wacli_version() -> str | None:
+    try:
+        return WACLI_VERSION_STAMP.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def wacli_pinned_current() -> bool:
+    """True when the pinned fork binary is present AND was built from the version
+    we currently pin to (so a bumped pin counts as needing a reinstall)."""
+    return (
+        WACLI_PINNED_BIN.exists()
+        and os.access(WACLI_PINNED_BIN, os.X_OK)
+        and installed_wacli_version() == WACLI_PINNED_VERSION
+    )
+
+
 def wacli_version(timeout: int = 30) -> dict[str, Any]:
     exe = wacli_bin()
     if not exe:
@@ -270,13 +293,18 @@ def wacli_version(timeout: int = 30) -> dict[str, Any]:
 
 
 def ensure_wacli_installed(*, install: bool = True) -> dict[str, Any]:
-    # Only the pinned fork gives full history sync; a PATH wacli is not enough.
-    if WACLI_PINNED_BIN.exists() and os.access(WACLI_PINNED_BIN, os.X_OK):
+    # Only the pinned fork at the currently-pinned version gives the full history
+    # sync; a PATH wacli or a stale build of our fork is not enough.
+    if wacli_pinned_current():
         return wacli_version()
+    stale = WACLI_PINNED_BIN.exists()  # present, but a different (older) pinned tag
     if not install:
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": f"wacli (pinned fork) is not installed. Install it, then rerun $import-whatsapp.",
+            "message": (
+                f"wacli pinned fork is {'stale' if stale else 'not installed'} "
+                f"(need {WACLI_PINNED_VERSION}). Install it, then rerun $import-whatsapp."
+            ),
             "install_command": f"go install {WACLI_INSTALL_SPEC}",
         })
     go = shutil.which("go")
@@ -286,7 +314,7 @@ def ensure_wacli_installed(*, install: bool = True) -> dict[str, Any]:
             "message": "Go is required to install the pinned wacli fork. Install Go (`brew install go`), then rerun $import-whatsapp.",
             "install_command": f"go install {WACLI_INSTALL_SPEC}",
         })
-    emit_status("Installing WhatsApp sync helper (pinned fork).")
+    emit_status(f"{'Updating' if stale else 'Installing'} WhatsApp sync helper (pinned fork {WACLI_PINNED_VERSION}).")
     WACLI_BIN_DIR.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["GOBIN"] = str(WACLI_BIN_DIR)
@@ -300,6 +328,7 @@ def ensure_wacli_installed(*, install: bool = True) -> dict[str, Any]:
             "detail": detail[-4000:],
             "install_command": f"go install {WACLI_INSTALL_SPEC}",
         })
+    WACLI_VERSION_STAMP.write_text(WACLI_PINNED_VERSION + "\n", encoding="utf-8")
     return wacli_version()
 
 
