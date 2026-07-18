@@ -535,10 +535,12 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertEqual(stamp.read_text().strip(), "v0.14.0-fullsync")
             self.assertEqual(out["version"], "0.14.0")
 
-    def test_cmd_ensure_wacli_reports_ok_when_current(self) -> None:
+    def test_cmd_ensure_wacli_reports_action_and_version(self) -> None:
         import argparse as _argparse
+        # already current -> action "current"
         buf = io.StringIO()
-        with mock.patch.object(mod, "ensure_wacli_installed",
+        with mock.patch.object(mod, "wacli_pinned_current", return_value=True), \
+             mock.patch.object(mod, "ensure_wacli_installed",
                                return_value={"path": "/x/wacli", "version": "wacli 0.13.0", "pinned": True}), \
              redirect_stdout(buf):
             rc = mod.cmd_ensure_wacli(_argparse.Namespace())
@@ -546,7 +548,16 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         payload = json.loads(buf.getvalue())
         self.assertEqual(payload["command"], "ensure-wacli")
         self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "current")
         self.assertEqual(payload["pinned_version"], mod.WACLI_PINNED_VERSION)
+        # was stale/missing -> action "downloaded"
+        buf = io.StringIO()
+        with mock.patch.object(mod, "wacli_pinned_current", return_value=False), \
+             mock.patch.object(mod, "ensure_wacli_installed",
+                               return_value={"path": "/x/wacli", "version": "wacli 0.13.0", "pinned": True}), \
+             redirect_stdout(buf):
+            mod.cmd_ensure_wacli(_argparse.Namespace())
+        self.assertEqual(json.loads(buf.getvalue())["action"], "downloaded")
 
     def test_ensure_wacli_does_not_stamp_on_download_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:

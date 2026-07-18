@@ -1307,11 +1307,13 @@ def cmd_ensure_wacli(args: argparse.Namespace) -> int:
     (a no-op when already current). Called by $update-powerpacks so a pin bump
     reaches the machine without running an import."""
     try:
+        already_current = wacli_pinned_current()
         info = ensure_wacli_installed()
         emit({
             "primitive": "import_whatsapp_wacli",
             "command": "ensure-wacli",
             "status": "ok",
+            "action": "current" if already_current else "downloaded",
             "pinned_version": WACLI_PINNED_VERSION,
             "wacli": info,
         })
