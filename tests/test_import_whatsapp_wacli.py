@@ -559,6 +559,39 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             mod.cmd_ensure_wacli(_argparse.Namespace())
         self.assertEqual(json.loads(buf.getvalue())["action"], "downloaded")
 
+    def test_pairing_full_sync_status_detects_pre_full_sync_session(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td)
+            # not authenticated
+            self.assertEqual(mod.pairing_full_sync_status(store, authenticated=False)["state"],
+                             "not_authenticated")
+            # authenticated but no marker -> paired the old way, can deepen
+            pre = mod.pairing_full_sync_status(store, authenticated=True)
+            self.assertEqual(pre["state"], "pre_full_sync")
+            self.assertTrue(pre["can_deepen"])
+            self.assertIn("Re-link", pre["hint"])
+            # after our flow stamps the pairing -> full_sync, no re-link needed
+            mod.write_pairing_marker(store)
+            full = mod.pairing_full_sync_status(store, authenticated=True)
+            self.assertEqual(full["state"], "full_sync")
+            self.assertFalse(full["can_deepen"])
+            self.assertEqual(full["paired_wacli_version"], mod.WACLI_PINNED_VERSION)
+
+    def test_pairing_marker_is_written_with_full_sync_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td)
+            mod.write_pairing_marker(store)
+            marker = json.loads((store / mod.PAIRING_MARKER_NAME).read_text())
+            self.assertIs(marker["full_sync"], True)
+            self.assertEqual(marker["wacli_version"], mod.WACLI_PINNED_VERSION)
+            self.assertEqual(marker["full_sync_days"], mod.DEFAULT_FULL_SYNC_DAYS)
+
+    def test_read_pairing_marker_tolerates_corrupt_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td)
+            (store / mod.PAIRING_MARKER_NAME).write_text("{not json")
+            self.assertIsNone(mod.read_pairing_marker(store))
+
     def test_ensure_wacli_does_not_stamp_on_download_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)

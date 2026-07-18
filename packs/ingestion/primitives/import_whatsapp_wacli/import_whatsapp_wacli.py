@@ -62,6 +62,12 @@ DEFAULT_SYNC_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_SYNC_TIMEOUT", "900"
 DEFAULT_DEVICE_PLATFORM = os.environ.get("POWERPACKS_WACLI_DEVICE_PLATFORM", "DESKTOP")
 DEFAULT_DEVICE_LABEL = os.environ.get("POWERPACKS_WACLI_DEVICE_LABEL", "Mac OS")
 DEFAULT_FULL_SYNC_DAYS = os.environ.get("POWERPACKS_WACLI_FULL_SYNC_DAYS", "3650")
+# Written into the store when OUR flow pairs (which always sends RequireFullSync).
+# A linked session missing this marker was paired the old way — upstream wacli or
+# a pre-full-sync build — and would pull years more history if re-linked. There's
+# no reliable way to read "was RequireFullSync sent?" back out of session.db, so
+# we stamp it at pair time instead.
+PAIRING_MARKER_NAME = ".powerpacks-pairing.json"
 # Pinned powerset-co fork of wacli that forces a full history sync at pairing
 # (RequireFullSync). We download a prebuilt binary from the fork's GitHub Release
 # for this tag — no Go toolchain on the user's machine — and keep it off the
@@ -389,6 +395,54 @@ def auth_status(store: Path) -> dict[str, Any]:
                 timezone.utc,
             ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return status
+
+
+def pairing_marker_path(store: Path) -> Path:
+    return store / PAIRING_MARKER_NAME
+
+
+def write_pairing_marker(store: Path) -> None:
+    """Record that this session was paired by our full-sync flow. Call on the
+    not-authenticated -> authenticated transition (i.e. when WE just paired)."""
+    write_json(pairing_marker_path(store), {
+        "full_sync": True,
+        "full_sync_days": DEFAULT_FULL_SYNC_DAYS,
+        "wacli_version": WACLI_PINNED_VERSION,
+        "device_platform": os.environ.get("WACLI_DEVICE_PLATFORM", DEFAULT_DEVICE_PLATFORM),
+        "paired_at": now_iso(),
+    })
+
+
+def read_pairing_marker(store: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(pairing_marker_path(store).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def pairing_full_sync_status(store: Path, *, authenticated: bool) -> dict[str, Any]:
+    """Whether the current WhatsApp link was set up with full history sync. A
+    linked session with no full-sync marker predates our full-sync flow (upstream
+    wacli or an old build), so re-linking would pull years more history."""
+    if not authenticated:
+        return {"state": "not_authenticated", "can_deepen": False}
+    marker = read_pairing_marker(store)
+    if marker and marker.get("full_sync"):
+        return {
+            "state": "full_sync",
+            "can_deepen": False,
+            "paired_wacli_version": marker.get("wacli_version"),
+            "paired_at": marker.get("paired_at"),
+        }
+    return {
+        "state": "pre_full_sync",
+        "can_deepen": True,
+        "hint": (
+            "This WhatsApp link was set up before full history sync. Re-link "
+            "(log out and re-scan the QR) to pull years more history."
+        ),
+    }
 
 
 def linked_device_blocked(text: str) -> bool:
@@ -1268,6 +1322,7 @@ def completed_payload(
     csv_rows: int,
     jsonl_rows: int,
     elapsed_ms: int,
+    pairing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "primitive": "import_whatsapp_wacli",
@@ -1276,6 +1331,7 @@ def completed_payload(
         "completed_at": now_iso(),
         "elapsed_ms": elapsed_ms,
         "store": str(store),
+        "pairing": pairing or {},
         "artifacts": {
             "csv": str(output_csv),
             "jsonl": str(output_jsonl) if output_jsonl else None,
@@ -1345,6 +1401,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "store": str(store),
             "wacli": wacli_info,
             "auth": status,
+            "pairing": pairing_full_sync_status(store, authenticated=bool(status.get("authenticated"))),
             "doctor": doctor,
             "store_stats": stats,
         })
@@ -1385,10 +1442,16 @@ def cmd_auth(args: argparse.Namespace) -> int:
         status_after = auth_status(store)
         auth_summary["authenticated_after"] = status_after.get("authenticated")
         linked = bool(status_after.get("authenticated"))
+        if not status_before.get("authenticated") and linked:
+            write_pairing_marker(store)  # we just paired with full sync
+        pairing = pairing_full_sync_status(store, authenticated=linked)
+        if pairing.get("state") == "pre_full_sync":
+            emit_status(pairing["hint"])
         emit({
             "primitive": "import_whatsapp_wacli",
             "command": "auth",
             "status": "linked" if linked else "blocked_user_action",
+            "pairing": pairing,
             "message": (
                 "WhatsApp account is linked. No WhatsApp sync or export was run."
                 if linked
@@ -1502,7 +1565,12 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "store": str(store),
                 })
         auth_summary["authenticated_after"] = status.get("authenticated")
-        write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary})
+        if not auth_summary.get("authenticated_before") and status.get("authenticated"):
+            write_pairing_marker(store)  # we just paired with full sync
+        pairing = pairing_full_sync_status(store, authenticated=bool(status.get("authenticated")))
+        if pairing.get("state") == "pre_full_sync":
+            emit_status(pairing["hint"])
+        write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing})
 
         stats_before_sync = store_stats(store)
         existing_messages = store_message_count(stats_before_sync) or 0
@@ -1554,6 +1622,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             csv_rows=csv_rows,
             jsonl_rows=jsonl_rows,
             elapsed_ms=elapsed_ms,
+            pairing=pairing,
         )
         payload["command"] = "run"
         payload["auth"] = auth_summary
