@@ -2440,10 +2440,7 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
     dossier_preview = (
         "<p class='context-empty'>Not enough information.</p>"
         if sparse_context
-        else (
-            "<h4 class='dossier-heading'>Who they are</h4>"
-            "<dl class='row-facts dossier-text' aria-busy='true'></dl>"
-        )
+        else "<dl class='row-facts dossier-text' aria-busy='true'></dl>"
     )
     # Left-edge chevron = the expand/collapse affordance; the decision button
     # stays on the far right of the summary row.
