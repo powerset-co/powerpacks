@@ -125,38 +125,79 @@ async function decideDecisionRow(button, row) {
   }
 }
 
+// --- worth queue prefetch ----------------------------------------------------
+// The NEXT card is fetched while the user reads the current one, so a decision
+// swaps instantly instead of serializing behind the POST (which rewrites
+// review.csv and can take hundreds of ms on large datasets). `exclude` carries
+// the current card plus any in-flight decisions so the server's pick is
+// race-free without waiting for those saves to land.
+const inFlightWorth = new Set();
+let worthPrefetch = null; // { promise } for the card AFTER the one on screen
+
+function prefetchWorthCard(currentPub) {
+  const exclude = [...inFlightWorth];
+  if (currentPub) exclude.push(currentPub);
+  worthPrefetch = {
+    promise: fetchText(`/api/worth-card?exclude=${encodeURIComponent(exclude.join(","))}`),
+  };
+}
+
 async function decideWorthCard(button, card) {
   const worth = button.dataset.worth;
+  const pub = button.dataset.pub || "";
   card.querySelectorAll("button").forEach((item) => { item.disabled = true; });
   card.classList.add("leaving");
   bumpTabCount("review", -1); // leaves the Review queue for the yes/no pile
   bumpTabCount(worth, 1);
+  inFlightWorth.add(pub);
+  const panel = card.closest(".worth-panel");
+  const oldHtml = panel ? panel.innerHTML : null;
+  const postPromise = post("/worth", { pub, worth }); // fire-and-track, no await
+  postPromise.finally(() => inFlightWorth.delete(pub));
+  const prefetched = worthPrefetch?.promise
+    || fetchText(`/api/worth-card?exclude=${encodeURIComponent(pub)}`);
+  worthPrefetch = null; // consumed — the swap re-prefetches for the new card
   try {
-    const [response] = await Promise.all([
-      post("/worth", { pub: button.dataset.pub || "", worth }),
-      delay(170),
-    ]);
-    adoptMutationState(response);
-    applyProgress(response.progress);
-    announce(worth === "yes" ? "Added" : "Rejected");
-    if (Number(response.progress?.worth_pending) === 0) {
-      leaveAndNavigate("People complete", "/?stage=enrich");
-      return;
-    }
-    const panel = card.closest(".worth-panel");
-    const nextHtml = await fetchText("/api/worth-card");
+    const [nextHtml] = await Promise.all([prefetched, delay(170)]);
     if (!panel || nextHtml === null) {
-      leaveAndReload("Saved"); // fallback: could not swap in the next card
+      // Could not swap in the next card: fall back to the serialized save+reload.
+      const response = await postPromise;
+      adoptMutationState(response);
+      leaveAndReload("Saved");
       return;
     }
     panel.innerHTML = nextHtml; // next queue card, or the Decisions-ready state
-    wireDynamicContent(panel);
+    wireDynamicContent(panel);  // also prefetches the card after this one
+    postPromise.then((response) => {
+      adoptMutationState(response);
+      applyProgress(response.progress);
+      announce(worth === "yes" ? "Added" : "Rejected");
+      if (Number(response.progress?.worth_pending) === 0) {
+        leaveAndNavigate("People complete", "/?stage=enrich");
+      }
+    }).catch((error) => {
+      // The save failed after the optimistic swap: restore the undecided card.
+      if (panel && oldHtml !== null) {
+        panel.innerHTML = oldHtml;
+        wireDynamicContent(panel);
+      }
+      bumpTabCount("review", 1);
+      bumpTabCount(worth, -1);
+      announce(error.message, true);
+    });
   } catch (error) {
-    card.classList.remove("leaving");
-    card.querySelectorAll("button").forEach((item) => { item.disabled = false; });
-    bumpTabCount("review", 1);
-    bumpTabCount(worth, -1);
-    announce(error.message, true);
+    try {
+      const response = await postPromise; // next-card fetch failed; save may still land
+      adoptMutationState(response);
+      applyProgress(response.progress);
+      leaveAndReload("Saved");
+    } catch (postError) {
+      card.classList.remove("leaving");
+      card.querySelectorAll("button").forEach((item) => { item.disabled = false; });
+      bumpTabCount("review", 1);
+      bumpTabCount(worth, -1);
+      announce(postError.message, true);
+    }
   }
 }
 
@@ -535,6 +576,10 @@ function wireDynamicContent(root) {
   root.querySelectorAll("[data-fix-form]").forEach(wireFixForm);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
   refreshScrollCues();
+  // A visible worth queue card kicks off the prefetch of the card after it,
+  // so the next decision swaps instantly instead of waiting on the save.
+  const worthButton = root.querySelector(".worth-card [data-worth][data-pub]");
+  if (worthButton) prefetchWorthCard(worthButton.dataset.pub || "");
 }
 
 wireDynamicContent(document);
