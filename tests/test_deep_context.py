@@ -121,6 +121,33 @@ class TestDeepContextRunnerSafety(unittest.TestCase):
 
 
 class TestRestartReview(unittest.TestCase):
+    def test_restart_clears_human_identity_decisions_but_keeps_auto(self):
+        rows = {
+            "human-keep": {"public_identifier": "human-keep",
+                           "action": "verify", "approved": "yes",
+                           "new_linkedin_url": ""},
+            "human-fix": {"public_identifier": "human-fix",
+                          "action": "retarget", "approved": "yes",
+                          "new_linkedin_url": "https://linkedin.com/in/ada-ex"},
+            "human-pasted-unapproved": {"public_identifier": "human-pasted-unapproved",
+                                        "action": "", "approved": "",
+                                        "new_linkedin_url": "https://linkedin.com/in/bo-ex"},
+            "machine-auto": {"public_identifier": "machine-auto",
+                             "action": "detach", "approved": "auto",
+                             "new_linkedin_url": ""},
+            "untouched": {"public_identifier": "untouched",
+                          "action": "", "approved": "", "new_linkedin_url": ""},
+        }
+        cleared = restart_review.clear_human_identity_decisions(rows)
+        self.assertEqual(cleared, 3)
+        for key in ("human-keep", "human-fix", "human-pasted-unapproved"):
+            self.assertEqual(
+                (rows[key]["action"], rows[key]["approved"], rows[key]["new_linkedin_url"]),
+                ("", "", ""), key)
+        # LLM auto-verify/auto-detach work survives, exactly as a new user sees it
+        self.assertEqual(rows["machine-auto"]["action"], "detach")
+        self.assertEqual(rows["machine-auto"]["approved"], "auto")
+
     def test_restart_clears_human_worth_and_keeps_machine_verdicts(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)

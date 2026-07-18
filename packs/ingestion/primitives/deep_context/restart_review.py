@@ -1,17 +1,27 @@
 """Restart the human review while preserving every machine (LLM) verdict.
 
-``bin/deep-context restart`` clears the HUMAN-owned decisions so the staged
-review can be taken from the top without re-spending anything:
+``bin/deep-context restart`` clears the HUMAN-owned decisions so the FULL
+staged journey (People review -> Enrich -> Check LinkedIn) can be taken from
+the top without re-spending anything:
 
 - review.csv ``network_worth`` cells are blanked (the sticky human worth marks);
+- review.csv HUMAN identity decisions are blanked — rows a person clicked in
+  Check LinkedIn (``approved`` yes/no, plus their ``action`` and any pasted
+  ``new_linkedin_url``). Machine auto-verify/auto-detach rows
+  (``approved=auto``) are LLM work and stay applied, exactly as a brand-new
+  user would see them;
 - synthetic-people.csv ``approved`` cells are reset to pending (they mirror
   human worth clicks and are re-derived / re-clicked for free).
 
-Machine columns (``llm_worth`` / ``llm_worth_reason`` / reject columns), facts,
-dossiers, enrichment results, and profile caches are untouched — the machine's
-work survives; only the human's answers are cleared. This is the complement of
-``rejudge`` (which refreshes the MACHINE's verdicts and never touches the human
-column).
+Everything else resets itself: the next ``bin/deep-context review`` launch
+writes worth back to ``awaiting_user``, which clears the completed-stage ladder
+and the Enrich Continue handoff; the enrichment selection sha then mismatches,
+so the flow re-previews and re-runs FROM CACHE (paid Parallel results are
+reused). Machine columns (``llm_worth`` / reject columns), facts, dossiers,
+verdicts, deep-research artifacts, and profile caches are untouched — the
+machine's work survives; only the human's answers are cleared. This is the
+complement of ``rejudge`` (which refreshes the MACHINE's verdicts and never
+touches the human columns).
 
 Default is a spend-free dry run reporting what would clear. Pass ``--apply`` to
 write; the current files are first copied to timestamped ``.bkup-*`` siblings —
@@ -54,6 +64,26 @@ def clear_human_worth(rows: dict[str, dict[str, str]]) -> int:
     return cleared
 
 
+def clear_human_identity_decisions(rows: dict[str, dict[str, str]]) -> int:
+    """Blank every HUMAN Check-LinkedIn decision in place; returns how many.
+
+    Human clicks write ``approved`` yes/no (keep / detach / fix / an approved
+    exclude); the fix form additionally stores a pasted ``new_linkedin_url``.
+    Machine auto-verify/auto-detach writes ``approved=auto`` — that is LLM work
+    and is preserved so the re-run starts exactly where a new user would."""
+    cleared = 0
+    for row in rows.values():
+        approved = (row.get("approved") or "").strip().lower()
+        pasted_url = (row.get("new_linkedin_url") or "").strip()
+        human = approved in {"yes", "no"} or (pasted_url and approved != "auto")
+        if human:
+            row["action"] = ""
+            row["approved"] = ""
+            row["new_linkedin_url"] = ""
+            cleared += 1
+    return cleared
+
+
 def clear_synthetic_approvals(path: Path, *, apply: bool) -> dict[str, int | str]:
     """Reset synthetic-people.csv ``approved`` to pending. Returns counts."""
     if not path.exists():
@@ -89,11 +119,13 @@ def main() -> int:
                                   "synthetic_people": str(args.synthetic_people)}
     rows = load_override_rows(args.review)
     would_clear = clear_human_worth(rows)
+    identity_cleared = clear_human_identity_decisions(rows)
     payload["review_rows"] = len(rows)
     payload["human_worth_cleared"] = would_clear
+    payload["human_identity_cleared"] = identity_cleared
 
     if args.apply:
-        if args.review.exists() and would_clear:
+        if args.review.exists() and (would_clear or identity_cleared):
             payload["review_backup"] = str(_backup(args.review))
             write_override_rows(args.review, rows)
         payload["synthetic"] = clear_synthetic_approvals(
