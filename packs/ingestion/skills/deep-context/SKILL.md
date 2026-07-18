@@ -34,6 +34,10 @@ Use the narrow path when the user names one:
   dossier, including mixed-source people and people with an attached LinkedIn.
   It ignores cached machine and human worth for selection, never uses LinkedIn
   as evidence, and never overwrites the human-owned `network_worth` column.
+- "Review complete proceed with enrichment" (the phrase the Done screen
+  hands the user) -> the review is finished; run
+  `bin/deep-context review-status` and continue from its `next_action`
+  (normally `realize` -> merge + index).
 - A bare `$deep-context`, "process/resolve/enrich my contacts", "build deep
   context", or a full rerun -> use the complete staged workflow below.
 
