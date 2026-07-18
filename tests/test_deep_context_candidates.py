@@ -2760,6 +2760,26 @@ class TestLiveEndpoints(unittest.TestCase):
         # failure or full completion.
         self.assertEqual(web.AGENT_ACTIONS, {"retry_enrichment", "realize"})
 
+    def test_zero_net_new_preview_continuation_passes_the_spend_gate(self):
+        # The $0 all-reused continuation must pass --approve: the enrichment
+        # primitive refuses ANY run without it, so omitting it strands the
+        # manifest at needs_approval and the UI on "Preparing enrichment".
+        calls = []
+        with mock.patch.object(web, "_run_pipeline_job",
+                               lambda name, steps: steps()), \
+             mock.patch.object(dresearch, "main",
+                               side_effect=lambda argv: calls.append(argv)), \
+             mock.patch.object(web, "read_enrichment_manifest",
+                               return_value={"status": "needs_approval",
+                                             "would_submit": 0}), \
+             mock.patch.object(web, "current_worth_selection", return_value={}), \
+             mock.patch.object(web, "_post_enrichment_chain") as chain:
+            web.start_enrichment_preview_job()
+        self.assertEqual(calls[0], ["--dry-run", *web.ENRICH_FLAGS])
+        self.assertIn("--approve", calls[1])
+        self.assertIn("0.00", calls[1])
+        chain.assert_called_once()
+
     def test_in_app_jobs_stay_off_for_non_canonical_paths(self):
         # The in-app jobs call primitives on their CANONICAL default paths, so
         # this temp-path test server must never kick one. /complete for worth
