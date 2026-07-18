@@ -2791,6 +2791,40 @@ class TestLiveEndpoints(unittest.TestCase):
                 following = resp.read().decode("utf-8")
         self.assertNotIn(f"data-parent='{parent_slug}'", following)
 
+    def test_complete_is_verified_against_a_fresh_rebuild(self):
+        # Stage completion is a durable handoff to the agent. The agent's
+        # review-status CLI always rebuilds fresh from files, so /complete must
+        # decide from a FRESH rebuild too — never the optimistically patched
+        # cache — or the UI says "waiting on the agent" while the agent's own
+        # read says N people are still pending (the off-by-N handoff split).
+        worth = {"decision": "maybe", "source": "llm", "reason": "unsure"}
+        pending_parent = {
+            "slug": "ada-lovelace", "name": "Ada Lovelace",
+            "person_ids": ["candidate:email:ada@example.com"], "sources": ["gmail"],
+            "candidates": [{
+                "pub": "candidate:email:ada@example.com", "full_name": "Ada Lovelace",
+                "import_candidate": True, "synthetic": False, "approved": "",
+                "action": "", "worth": worth, "machine_worth": worth,
+                "worth_key": "candidate:email:ada@example.com",
+            }],
+            "worth": worth, "machine_worth": worth, "connection": False,
+        }
+        with mock.patch.object(web, "_all_review_parents",
+                               return_value=[pending_parent]):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/complete",
+                    data=urllib.parse.urlencode({"stage": "worth"}).encode())
+        self.assertEqual(ctx.exception.code, 409)
+        self.assertIn("still need review", ctx.exception.read().decode())
+        # with the fresh queue genuinely empty, the same click completes
+        with mock.patch.object(web, "_all_review_parents", return_value=[]):
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/complete",
+                    data=urllib.parse.urlencode({"stage": "worth"}).encode()) as resp:
+                payload = json.loads(resp.read())
+        self.assertTrue(payload["ok"])
+
     def test_status_endpoint_uses_the_cached_review_model(self):
         with mock.patch.object(
                 web, "_all_review_parents",

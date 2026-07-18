@@ -146,6 +146,28 @@ class TestBridgeController(unittest.TestCase):
         self.assertEqual(len(wakes), 2)
         self.assertTrue(all(thread_id == self.THREAD_ID for thread_id, _ in wakes))
 
+    def test_failed_wake_keeps_token_so_a_retry_reattempts(self):
+        # A wake that raises (Codex thread mid-turn, transient app-server
+        # failure) must NOT record the state token — the serve loop's bounded
+        # retry (or the next datagram) gets a genuine second attempt instead of
+        # being deduped into silence.
+        status = _status("run_approved_enrichment")
+        attempts: list[int] = []
+
+        def flaky_waker(thread_id: str, prompt: str) -> dict:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise TimeoutError("Codex thread did not reach task_complete")
+            return {}
+
+        controller = bridge.BridgeController(
+            self.THREAD_ID, status_reader=lambda: status, waker=flaky_waker)
+        with self.assertRaises(TimeoutError):
+            controller.handle("state_changed")
+        self.assertEqual(controller.last_token, "")   # not recorded on failure
+        self.assertTrue(controller.handle("state_changed")["woke"])  # retry lands
+        self.assertEqual(len(attempts), 2)
+
     def test_dispatch_is_reported_before_blocking_waker_finishes(self):
         entered = threading.Event()
         release = threading.Event()
