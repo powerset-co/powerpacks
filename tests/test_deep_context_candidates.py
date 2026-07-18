@@ -13,6 +13,7 @@ import csv
 import io
 import json
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -2052,11 +2053,15 @@ class TestStagedReviewUI(unittest.TestCase):
         self.assertIn("data-complete='linkedin'", finished)
         self.assertNotIn("data-complete='linkedin'", completed)
 
-    def test_linkedin_review_buffers_ten_and_pages_the_current_pending_queue(self):
+    def test_linkedin_review_renders_one_card_and_excludes_in_flight_parents(self):
+        # One card-advance system (the worth pattern): the page renders the FIRST
+        # pending parent's card inside the swap panel, and `exclude` (parent
+        # slugs whose decision POST is in flight) lets the client prefetch the
+        # FOLLOWING card without waiting for the save.
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             parents = []
-            for index in range(12):
+            for index in range(3):
                 parent = self._linkedin_parent()
                 parent["slug"] = f"person-{index:02d}"
                 parent["name"] = f"Person {index:02d}"
@@ -2066,22 +2071,27 @@ class TestStagedReviewUI(unittest.TestCase):
                 candidate["profile_pub"] = candidate["pub"]
                 parents.append(parent)
             progress = web.review_progress(parents)
-            first = web.linkedin_cards_payload(
-                parents, progress, offset=0, limit=10, linkedin_complete=False,
+            first = web.linkedin_card_body(
+                parents, progress, linkedin_complete=False,
                 parents_dir=base / "parents", dossier_dir=base / "dossiers")
-            second = web.linkedin_cards_payload(
-                parents, progress, offset=10, limit=10, linkedin_complete=False,
-                parents_dir=base / "parents", dossier_dir=base / "dossiers")
+            following = web.linkedin_card_body(
+                parents, progress, linkedin_complete=False,
+                parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                exclude=frozenset({"person-00"}))
+            drained = web.linkedin_card_body(
+                parents, progress, linkedin_complete=False,
+                parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                exclude=frozenset({"person-00", "person-01", "person-02"}))
             body = web.linkedin_review_body(
                 parents, progress, enrichment_complete=True, linkedin_complete=False,
                 parents_dir=base / "parents", dossier_dir=base / "dossiers")
-        self.assertEqual((first["total"], len(first["cards"])), (12, 10))
-        self.assertEqual((second["offset"], len(second["cards"])), (10, 2))
-        self.assertIn("person-00", first["cards"][0])
-        self.assertIn("person-10", second["cards"][0])
-        self.assertEqual(body.count("data-linkedin-buffer-card"), 10)
-        self.assertEqual(body.count("data-linkedin-buffer-card hidden"), 9)
-        self.assertIn("data-buffer-target='10'", body)
+        self.assertIn("data-parent='person-00'", first)
+        self.assertIn("data-parent='person-01'", following)
+        self.assertNotIn("data-parent='person-00'", following)
+        self.assertIn("LinkedIn profiles checked", drained)  # queue drained -> finished
+        self.assertIn("data-linkedin-panel", body)
+        self.assertEqual(body.count("<article"), 1)  # ONE card, no hidden buffer
+        self.assertNotIn("data-linkedin-buffer", body)
 
     def test_linkedin_review_is_not_blocked_by_incomplete_enrichment(self):
         # The old hard gate ("Enrichment not finished" wall) is gone: cards render
@@ -2754,26 +2764,32 @@ class TestLiveEndpoints(unittest.TestCase):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/linkedin-card") as resp:
             self.assertEqual(resp.status, 200)
             linkedin_html = resp.read().decode("utf-8")
-        # enrichment hasn't run, yet the reviewable synthetic card still renders,
-        # with only a passive status note (the stage is never hard-blocked)
-        self.assertIn("class='enrichment-note'", linkedin_html)
+        # enrichment hasn't run, yet the reviewable synthetic card still renders
+        # (the stage is never hard-blocked). The card endpoint serves ONLY the
+        # card — the passive enrichment note lives in the page shell, outside the
+        # swap panel, so it survives card swaps without being re-served.
         self.assertIn("identity-card", linkedin_html)
+        self.assertNotIn("class='enrichment-note'", linkedin_html)
         self.assertNotIn("Enrichment not finished", linkedin_html)
 
-    def test_linkedin_cards_endpoint_pages_without_rebuilding_the_review_model(self):
+    def test_linkedin_card_prefetch_excludes_without_rebuilding_the_review_model(self):
+        # The client prefetches the FOLLOWING card with ?exclude=<in-flight
+        # parents>; that path must serve from the cached model snapshot (it may
+        # run while a decision POST holds the mutation lock).
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/api/linkedin-card") as resp:
+            current = resp.read().decode("utf-8")
+        match = re.search(r"data-parent='([^']+)'", current)
+        self.assertIsNotNone(match)
+        parent_slug = match.group(1)
         with mock.patch.object(
                 web, "_all_review_parents",
-                side_effect=AssertionError("cached card paging must not rebuild")):
+                side_effect=AssertionError("prefetch must not rebuild")):
             with urllib.request.urlopen(
-                    f"http://127.0.0.1:{self.port}/api/linkedin-cards?offset=0&limit=1") as resp:
-                first = json.loads(resp.read())
-            with urllib.request.urlopen(
-                    f"http://127.0.0.1:{self.port}/api/linkedin-cards?offset=1&limit=1") as resp:
-                second = json.loads(resp.read())
-        self.assertEqual(first["offset"], 0)
-        self.assertLessEqual(len(first["cards"]), 1)
-        self.assertEqual(second["offset"], 1)
-        self.assertIn("state_token", first)
+                    f"http://127.0.0.1:{self.port}/api/linkedin-card?exclude="
+                    + urllib.parse.quote(parent_slug)) as resp:
+                following = resp.read().decode("utf-8")
+        self.assertNotIn(f"data-parent='{parent_slug}'", following)
 
     def test_status_endpoint_uses_the_cached_review_model(self):
         with mock.patch.object(

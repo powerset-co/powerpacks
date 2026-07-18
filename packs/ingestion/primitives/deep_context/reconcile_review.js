@@ -201,101 +201,29 @@ async function decideWorthCard(button, card) {
   }
 }
 
-const linkedinBufferTarget = 10;
-const linkedinRefillAt = 5;
+// --- linkedin queue prefetch -------------------------------------------------
+// Same pattern as the worth queue: the next parent's card is fetched while the
+// user reads the current one (exclude = current + in-flight PARENT SLUGS — the
+// linkedin queue is parent-keyed), so a decision swaps instantly and the
+// /decide POST settles in the background. A parent that still has pending
+// candidates after a partial decision simply reappears on a later fetch once
+// its save lands and it leaves the in-flight set.
+const inFlightLinkedin = new Set();
+let linkedinPrefetch = null; // { promise } for the card AFTER the one on screen
 
-function linkedinBufferCards(buffer) {
-  return Array.from(buffer?.querySelectorAll(":scope > [data-linkedin-buffer-card]") || []);
-}
-
-function setLinkedinBufferSaving(buffer, saving) {
-  if (!buffer) return;
-  buffer.toggleAttribute("data-saving", saving);
-  buffer.setAttribute("aria-busy", saving ? "true" : "false");
-  buffer.querySelectorAll("button, input").forEach((item) => { item.disabled = saving; });
-}
-
-function showFirstLinkedinCard(buffer) {
-  const cards = linkedinBufferCards(buffer);
-  cards.forEach((item, index) => { item.hidden = index !== 0; });
-  if (cards[0]) wireDynamicContent(cards[0]);
-  return cards[0] || null;
-}
-
-function optimisticLinkedinAdvance(card, values) {
-  const buffer = card.closest("[data-linkedin-buffer]");
-  const current = card.closest("[data-linkedin-buffer-card]");
-  if (!buffer || !current) return null;
-  const sameParentResolves = values.decision === "keep" || values.decision === "fix";
-  const parent = current.dataset.parent || "";
-  current.hidden = true;
-  const next = linkedinBufferCards(buffer).find((item) => {
-    if (item === current) return false;
-    return !(sameParentResolves && item.dataset.parent === parent);
-  });
-  if (next) {
-    next.hidden = false;
-    wireDynamicContent(next);
-  } else {
-    const saving = document.createElement("div");
-    saving.className = "empty-state linkedin-saving";
-    saving.dataset.linkedinSaving = "true";
-    saving.innerHTML = "<h2>Saving…</h2>";
-    buffer.append(saving);
-  }
-  setLinkedinBufferSaving(buffer, true);
-  return { buffer, current };
-}
-
-function rollbackLinkedinAdvance(advance) {
-  if (!advance) return;
-  advance.buffer.querySelector("[data-linkedin-saving]")?.remove();
-  linkedinBufferCards(advance.buffer).forEach((item) => { item.hidden = true; });
-  advance.current.hidden = false;
-  setLinkedinBufferSaving(advance.buffer, false);
-  wireDynamicContent(advance.current);
-}
-
-function appendLinkedinCards(buffer, htmlCards) {
-  const existing = new Set(
-    linkedinBufferCards(buffer).map((item) => `${item.dataset.parent}:${item.dataset.pub}`),
-  );
-  const template = document.createElement("template");
-  template.innerHTML = (htmlCards || []).join("");
-  template.content.querySelectorAll("[data-linkedin-buffer-card]").forEach((item) => {
-    const key = `${item.dataset.parent}:${item.dataset.pub}`;
-    if (existing.has(key)) return;
-    item.hidden = true;
-    existing.add(key);
-    buffer.append(item);
-    wireDynamicContent(item);
-  });
-}
-
-async function refillLinkedinBuffer(buffer) {
-  const held = linkedinBufferCards(buffer).length;
-  if (held > linkedinRefillAt) return;
-  const target = parseInt(buffer.dataset.bufferTarget || `${linkedinBufferTarget}`, 10);
-  const limit = Math.max(0, target - held);
-  if (!limit) return;
-  try {
-    const response = await fetch(
-      `/api/linkedin-cards?offset=${held}&limit=${limit}`,
-      { cache: "no-store" },
-    );
-    if (!response.ok) throw new Error("Could not preload more people");
-    const payload = await response.json();
-    appendLinkedinCards(buffer, payload.cards);
-    adoptMutationState(payload);
-  } catch (error) {
-    // The visible queue remains usable; the next successful save retries refill.
-    announce(error.message, true);
-  }
+function prefetchLinkedinCard(currentParent) {
+  const exclude = [...inFlightLinkedin];
+  if (currentParent) exclude.push(currentParent);
+  linkedinPrefetch = {
+    promise: fetchText(`/api/linkedin-card?exclude=${encodeURIComponent(exclude.join(","))}`),
+  };
 }
 
 async function decideLinkedinCard(card, values, message) {
-  const advance = optimisticLinkedinAdvance(card, values);
-  if (!advance) {
+  const panel = card.closest("[data-linkedin-panel]");
+  const parentSlug = values.parent_slug || card.dataset.parent || "";
+  if (!panel) {
+    // Markup without the swap panel: serialized save + reload.
     lock(card.querySelector("button"));
     try {
       await post("/decide", values);
@@ -306,35 +234,47 @@ async function decideLinkedinCard(card, values, message) {
     }
     return;
   }
+  card.querySelectorAll("button, input").forEach((item) => { item.disabled = true; });
+  card.classList.add("leaving");
+  inFlightLinkedin.add(parentSlug);
+  const oldHtml = panel.innerHTML;
+  const postPromise = post("/decide", values); // fire-and-track, no await
+  postPromise.finally(() => inFlightLinkedin.delete(parentSlug));
+  const prefetched = linkedinPrefetch?.promise
+    || fetchText(`/api/linkedin-card?exclude=${encodeURIComponent(parentSlug)}`);
+  linkedinPrefetch = null; // consumed — the swap re-prefetches for the new card
   try {
-    const response = await post("/decide", values);
-    adoptMutationState(response);
-    applyProgress(response.progress);
-    // A keep/fix resolves the WHOLE parent (siblings are withdrawn server-side), so
-    // remove the parent's card. resolved_pubs still drives per-pub removal for any
-    // legacy single-candidate markup where the wrapper is keyed on the pub.
-    const resolved = new Set(response.resolved_pubs || [values.pub]);
-    const resolvedParent = advance.current.dataset.parent || values.parent_slug || "";
-    const sameParentResolves = values.decision === "keep" || values.decision === "fix";
-    linkedinBufferCards(advance.buffer).forEach((item) => {
-      const byPub = resolved.has(item.dataset.pub || "");
-      const byParent = sameParentResolves && resolvedParent
-        && item.dataset.parent === resolvedParent;
-      if (byPub || byParent) item.remove();
-    });
-    advance.buffer.querySelector("[data-linkedin-saving]")?.remove();
-    if (response.complete_html) {
-      advance.buffer.outerHTML = response.complete_html;
-      wireDynamicContent(document);
-    } else {
-      showFirstLinkedinCard(advance.buffer);
-      setLinkedinBufferSaving(advance.buffer, false);
-      void refillLinkedinBuffer(advance.buffer);
+    const [nextHtml] = await Promise.all([prefetched, delay(170)]);
+    if (nextHtml === null) {
+      // Could not fetch the next card: fall back to the serialized save+reload.
+      const response = await postPromise;
+      adoptMutationState(response);
+      leaveAndReload(message);
+      return;
     }
-    announce(message);
+    panel.innerHTML = nextHtml; // next parent's card, or the finished state
+    wireDynamicContent(panel);  // also prefetches the card after this one
+    postPromise.then((response) => {
+      adoptMutationState(response);
+      applyProgress(response.progress);
+      announce(message);
+    }).catch((error) => {
+      // The save failed after the optimistic swap: restore the undecided card.
+      panel.innerHTML = oldHtml;
+      wireDynamicContent(panel);
+      announce(error.message, true);
+    });
   } catch (error) {
-    rollbackLinkedinAdvance(advance);
-    announce(error.message, true);
+    try {
+      const response = await postPromise; // next-card fetch failed; save may still land
+      adoptMutationState(response);
+      applyProgress(response.progress);
+      leaveAndReload(message);
+    } catch (postError) {
+      card.classList.remove("leaving");
+      card.querySelectorAll("button, input").forEach((item) => { item.disabled = false; });
+      announce(postError.message, true);
+    }
   }
 }
 
@@ -576,10 +516,15 @@ function wireDynamicContent(root) {
   root.querySelectorAll("[data-fix-form]").forEach(wireFixForm);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
   refreshScrollCues();
-  // A visible worth queue card kicks off the prefetch of the card after it,
-  // so the next decision swaps instantly instead of waiting on the save.
+  // A visible queue card kicks off the prefetch of the card after it, so the
+  // next decision swaps instantly instead of waiting on the save.
   const worthButton = root.querySelector(".worth-card [data-worth][data-pub]");
   if (worthButton) prefetchWorthCard(worthButton.dataset.pub || "");
+  const linkedinPanel = document.querySelector("[data-linkedin-panel]");
+  if (linkedinPanel) {
+    const currentCard = linkedinPanel.querySelector("[data-card][data-parent]");
+    if (currentCard) prefetchLinkedinCard(currentCard.dataset.parent || "");
+  }
 }
 
 wireDynamicContent(document);
