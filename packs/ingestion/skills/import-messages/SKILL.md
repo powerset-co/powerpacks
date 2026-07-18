@@ -6,6 +6,11 @@ description: Add iMessage/WhatsApp contacts to your local network. Use for $impo
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-17: Added smart-default incremental WhatsApp sync. First import full-
+  backfills; later runs auto-detect the populated wacli store and pull only the
+  delta. New verbs: `$import-messages sync` (explicit incremental) and
+  `$import-messages full` (force a full re-backfill), forwarded as
+  `--wacli-sync-mode` to discovery. iMessage is unchanged (local chat.db read).
 - 2026-07-14: Refocused on contact sync only. Dropped the in-skill LLM triage,
   Parallel deep-research, LLM-scored review UI, and the Modal index/validate
   steps — identity research + index building move to the centralized $deep-context
@@ -112,9 +117,22 @@ they have already been run.
 ### Step 1 — Choose Messages sources (iMessage / WhatsApp)
 
 Ask the user which channels to add: **iMessage**, **WhatsApp**, **both**, or
-**skip**. Record the choice. Messages **pull all history** — there is *no*
-sync-window question (unlike Gmail). If the user skips, stop. Source extraction
-is local and the flow never uploads to a Powerset set.
+**skip**. Record the choice. If the user skips, stop. Source extraction is local
+and the flow never uploads to a Powerset set.
+
+There is *no* sync-window question (unlike Gmail). WhatsApp scope follows the
+**sync mode**, which you pick from how the user invoked the skill:
+
+- **first import / plain `$import-messages`** → `auto`. The **first** run
+  full-backfills all WhatsApp history (~15–20 min) to build the local archive;
+  **every later run auto-detects the populated store and pulls only the delta**
+  (fast). You do not need to ask.
+- **`$import-messages sync`** (or "sync/update/refresh my messages") → the
+  explicit fast incremental path.
+- **`$import-messages full`** (or "re-import everything / full resync") → forces
+  a full re-backfill.
+
+iMessage always does a cheap local `chat.db` read regardless of mode.
 
 ### Step 2 — Link & discover message contacts
 
@@ -129,7 +147,10 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_cont
   --include-imessage --include-whatsapp
 ```
 
-(Drop `--include-imessage` or `--include-whatsapp` if that channel wasn't picked.)
+Default is smart `auto`. For an explicit verb from Step 1, add the mode flag:
+`--wacli-sync-mode incremental` for **sync**, or `--wacli-sync-mode full` for
+**full**. (Drop `--include-imessage` or `--include-whatsapp` if that channel
+wasn't picked.)
 It writes `.powerpacks/messages/contacts.csv` and stages the discovery artifact
 at `.powerpacks/network-import/discover/messages/contacts.csv`, with status and
 counts in that fixed stage directory's `manifest.json`. It does not create a run

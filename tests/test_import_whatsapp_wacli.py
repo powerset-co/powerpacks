@@ -158,6 +158,31 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(mod.effective_max_messages(0, 25000), 0)
         self.assertEqual(mod.effective_max_messages(10000, 25000), 26000)
 
+    def test_resolve_effective_max(self) -> None:
+        # Incremental target grows from what the store already has (existing +
+        # headroom), computed via the unchanged effective_max_messages helper.
+        incr = mod.effective_max_messages(mod.DEFAULT_INCREMENTAL_BUDGET, 25000)
+        self.assertGreater(incr, 25000)  # only the delta beyond existing
+
+        # auto: full on the first run (empty store), incremental once populated.
+        self.assertEqual(mod.resolve_effective_max("auto", 0, 0), 0)
+        self.assertEqual(mod.resolve_effective_max("auto", 0, 25000), incr)
+
+        # full: always a full re-backfill (0 = unlimited), regardless of store.
+        self.assertEqual(mod.resolve_effective_max("full", 0, 0), 0)
+        self.assertEqual(mod.resolve_effective_max("full", 0, 25000), 0)
+
+        # incremental: bounded delta even on a fresh store.
+        self.assertEqual(mod.resolve_effective_max("incremental", 0, 25000), incr)
+        self.assertEqual(
+            mod.resolve_effective_max("incremental", 0, 0),
+            mod.effective_max_messages(mod.DEFAULT_INCREMENTAL_BUDGET, 0),
+        )
+
+        # An explicit positive --max-messages wins over the mode.
+        self.assertEqual(mod.resolve_effective_max("full", 10000, 25000), 26000)
+        self.assertEqual(mod.resolve_effective_max("auto", 10000, 0), 10000)
+
     def test_qr_payloads_are_redacted_from_diagnostics(self) -> None:
         text = 'before\n2@secret-whatsapp-pairing-payload\n{"event":"qr_code","data":{"code":"2@secret"}}\nafter'
         self.assertEqual(
