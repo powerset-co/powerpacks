@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -118,6 +119,53 @@ class TestDeepContextRunnerSafety(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("--apply", result.stdout)
         self.assertIn("machine", result.stdout)
+
+    def test_review_status_does_not_need_uv_cache_access(self):
+        # The agent's wait target must run from the provisioned repo
+        # interpreter without touching uv's user-level cache.
+        root = Path(__file__).resolve().parents[1]
+        env = os.environ.copy()
+        env["UV_CACHE_DIR"] = "/dev/null/powerpacks-uv-cache"
+        result = subprocess.run(
+            [str(root / "bin" / "deep-context"), "review-status"],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["primitive"],
+                         "deep_context_review_status")
+
+    def test_review_status_wait_returns_waiting_on_timeout(self):
+        # --wait on a human-pending state must return (never hang) with
+        # status=waiting so the caller simply runs it again.
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            result = subprocess.run(
+                [str(root / "bin" / "deep-context"), "review-status", "--wait",
+                 "--timeout", "1",
+                 "--review", str(base / "review.csv"),
+                 "--verdicts", str(base / "verdicts.jsonl"),
+                 "--facts-dir", str(base / "facts"),
+                 "--people-csv", str(base / "people.csv"),
+                 "--synthetic-people", str(base / "synthetic.csv"),
+                 "--manifest", str(base / "review" / "manifest.json"),
+                 "--enrichment-manifest", str(base / "research" / "manifest.json")],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "waiting")
+        self.assertEqual(payload["next_action"], "review_people")
+        self.assertGreaterEqual(payload["waited_seconds"], 1)
 
 
 class TestRestartReview(unittest.TestCase):

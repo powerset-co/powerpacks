@@ -41,8 +41,8 @@ usage: bin/deep-context <command> [args]
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
   review       open the staged people / LinkedIn decision UI (local, free)
-  review-agent manage the optional same-thread Codex wake bridge
   review-status  read manifests/CSVs and print the exact next workflow action
+               (--wait [--timeout N] blocks until the next action is the agent's)
   assemble-synthetic  build synthetic people-rows from deep-research output for
                people with NO real LinkedIn (free, local; approved rows merge)
   profile-prefetch  preview/fetch cached profiles for LinkedIn review
@@ -189,24 +189,14 @@ case "$cmd" in
         fi
       done
     fi
-    # The UI remains file-driven. When Codex supplied its current thread id,
-    # start/replace the fixed local bridge that wakes this same thread only
-    # after a durable UI mutation reaches an actionable review-status state.
-    if (( ! wants_help )) && [[ -n "${CODEX_THREAD_ID:-}" ]]; then
-      if ! "${PY[@]}" "$PKG.review_agent_bridge" start; then
-        echo "warning: same-thread review bridge did not start; use review-status polling" >&2
-      fi
-    fi
     "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
     ;;
-  review-agent)
-    "${PY[@]}" "$PKG.review_agent_bridge" "$@"
-    ;;
   review-status)
-    # Read-only deterministic poll target. No browser, provider, subprocess, or write.
-    # Prefer the already-provisioned repo interpreter so a background Codex
-    # bridge does not need write access to uv's user-level cache just to read
-    # the fixed review manifests. Keep uv as the setup fallback.
+    # Read-only deterministic status target. No browser, provider, or write.
+    # `--wait [--timeout N]` blocks until next_action is an AGENT action by
+    # statting the durable files once a second — the entire agent-handoff
+    # mechanism, deliberately primitive so it always works. Prefer the
+    # already-provisioned repo interpreter; keep uv as the setup fallback.
     if [[ -x "$ROOT/.venv/bin/python" ]]; then
       "$ROOT/.venv/bin/python" -m "$PKG.reconcile_review_web" status "$@"
     else

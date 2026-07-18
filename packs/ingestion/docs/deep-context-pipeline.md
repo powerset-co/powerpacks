@@ -56,16 +56,16 @@ flowchart TD
     H --> I["Judge attached LinkedIn identity only"]
     I --> J["People UI: review only Maybe; edit Yes / No"]
     J --> K{"People review complete"}
-    K --> K1["Local bridge resumes the originating Codex thread"]
+    K --> K1["Agent's review-status --wait returns"]
     K1 --> L["Preview one enrichment pass"]
     L --> M{"Approve exact net-new Parallel estimate in UI, unless zero"}
-    M --> M1["Local bridge resumes the same thread"]
+    M --> M1["Agent's wait returns the approved run"]
     M1 --> N["Agent runs approved lookup; completed work is reused"]
     N --> O["Assemble no-LinkedIn research cards"]
     O --> P{"User clicks Continue"}
     P --> Q["LinkedIn UI: verify, replace, or Skip"]
     Q --> R{"LinkedIn review complete"}
-    R --> R1["Local bridge resumes the same thread, then stops"]
+    R --> R1["Agent's wait returns realize"]
     R1 --> S{"Approve RapidAPI cache misses for retargets"}
     S --> T["Apply retargets + rebuild merged people.csv"]
     T --> U{"Approve Modal upload/build"}
@@ -93,37 +93,30 @@ surface, not an orchestration service.
 
 | Component | Responsibilities | Must not do |
 | --- | --- | --- |
-| Browser UI | Read current CSVs/manifests, save human decisions, mark review handoffs, write the exact revision-bound enrichment approval, and let the local server emit an inert state-changed notification. | Send prompts or commands to Codex, call identity/research providers, start paid work, or rebuild the index. |
-| Same-thread bridge | Listen on one fixed local Unix socket, reread `review-status`, and resume the Codex thread that launched review only for actionable state changes. | Accept browser text as instructions, create another workflow state store, cross approval gates, or run overlapping turns. |
-| Agent session | Start/replace the bridge before review, run `bin/deep-context review-status` first on every wake, show required estimates/disclosures, and run only its exact next primitive after approval. | Infer completion from chat text, reuse an old approval, or invent a parallel state machine. |
+| Browser UI | Read current CSVs/manifests, save human decisions, mark review handoffs, and write the exact revision-bound enrichment approval. | Send prompts or commands to any agent, call identity/research providers, start paid work, or rebuild the index. |
+| Agent session | Block on `bin/deep-context review-status --wait`, show required estimates/disclosures, and run only the exact next primitive it returns after approval. | Infer completion from chat text, reuse an old approval, or invent a parallel state machine. |
 | Primitives | Write stage outputs and one manifest into fixed directories, overwrite current queues, reuse completed per-person work, and enforce budgets/fingerprints. | Create run-scoped directories, ledgers, or hidden browser jobs. |
 
 The review server may fetch and cache an existing signed LinkedIn CDN avatar
 image for presentation. That fetch does not perform identity resolution or
 advance the workflow.
 
-The deterministic agent wake/poll command is:
+The deterministic agent wait command is:
 
 ```bash
-bin/deep-context review-status
+bin/deep-context review-status --wait --timeout 900
 ```
 
-It is read-only and returns one `next_action`, such as `review_people`,
-`preview_enrichment`, `await_enrichment_approval`,
-`run_approved_enrichment`, `assemble_synthetic`, `review_linkedin`, or
-`realize`. In Codex, `bin/deep-context review --fresh` starts a same-thread
-bridge when `CODEX_THREAD_ID` is available. Successful UI mutations notify that
-bridge, which filters on `review-status` and resumes the same thread only when
-agent work is ready. Other harnesses, or a failed bridge startup, retain the
-one-minute polling fallback.
-
-The bridge is runtime plumbing, not workflow state. It uses the fixed socket
-`.powerpacks/deep-context/review/agent-bridge.sock`, records no ledger or run id,
-and stops after the `retry_enrichment` or `realize` wake. Before every wake it
-waits for the foreground Codex rollout's persisted `task_complete`, then starts
-a short-lived App Server client that reloads the latest version of the same
-thread. This keeps the visible plan and approval context in one conversation
-without letting browser-controlled text enter the prompt.
+It is read-only and blocks — statting the fixed CSVs/manifests once a second —
+until `next_action` is an agent action, then prints the contract and exits.
+Agent actions are `preview_enrichment`, `run_approved_enrichment`,
+`run_enrichment_from_cache`, `assemble_synthetic`, `retry_enrichment`, and
+`realize`; every other action is the human's move, and a timeout returns
+`status: waiting` so the caller simply runs the command again. There is no
+daemon, socket, thread id, or harness coupling — the same command works from
+Codex, Claude Code, or a plain terminal, which is the point: the entire
+agent-handoff mechanism is one blocking subprocess any harness already knows
+how to run.
 
 The browser has a separate, faster observer:
 
@@ -187,12 +180,8 @@ bin/deep-context reconcile
 bin/deep-context review --fresh
 ```
 
-When Codex supplies `CODEX_THREAD_ID`, the final command also starts/replaces
-the same-thread bridge. `bin/deep-context review-agent stop` is the manual
-cleanup command; normal completion stops it automatically at the transition
-from LinkedIn review to realization.
-
-After the browser opens, the agent follows `review-status`. The enrichment path
+After the browser opens, the agent blocks on
+`bin/deep-context review-status --wait` and acts on what it returns. The enrichment path
 uses:
 
 ```bash
@@ -422,7 +411,6 @@ Not every request needs the full workflow:
 | Canonical parents | [`build_parents.py`](../primitives/deep_context/build_parents.py) |
 | Attached-LinkedIn identity judge | [`reconcile_linkedin.py`](../primitives/deep_context/reconcile_linkedin.py) |
 | Review UI and deterministic status | [`reconcile_review_web.py`](../primitives/deep_context/reconcile_review_web.py) |
-| Same-thread Codex wake bridge | [`review_agent_bridge.py`](../primitives/deep_context/review_agent_bridge.py) |
 | Parallel enrichment | [`reconcile_deep_research.py`](../primitives/deep_context/reconcile_deep_research.py) |
 | No-LinkedIn research cards | [`assemble_synthetic_profile.py`](../primitives/deep_context/assemble_synthetic_profile.py) |
 | LinkedIn review profile prefetch | [`prefetch_profiles.py`](../primitives/deep_context/prefetch_profiles.py) |

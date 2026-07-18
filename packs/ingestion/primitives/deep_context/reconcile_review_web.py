@@ -1531,7 +1531,7 @@ def approve_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
     if not enrichment.get("current"):
         raise ValueError("Enrichment preview is stale; refresh the preview before approving")
     # A five-second browser observer can leave a just-completed approval button
-    # visible briefly after the bridge has already advanced the fixed manifest.
+    # visible briefly after the agent has already advanced the fixed manifest.
     # Treat that stale click as an idempotent success so the client simply
     # reloads into the current progress state instead of showing a false error.
     if enrichment.get("status") in {
@@ -2858,8 +2858,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         try:
             agent_notifier()
         except Exception:
-            # Review decisions must never fail because the optional Codex bridge
-            # is absent, stale, or shutting down.
+            # Review decisions must never fail because an optional observer
+            # hook (tests use it to count mutations) raised.
             pass
 
     cached_parents = (
@@ -3445,8 +3445,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     if requested_stage == "worth":
         begin_people_review()
-    # Local import avoids a module cycle: the bridge imports workflow_status.
-    from packs.ingestion.primitives.deep_context.review_agent_bridge import notify_bridge
+    # No push notifier: the agent watches state with `review-status --wait`,
+    # which stats the same durable files this server writes. Simplicity wins.
     server = ThreadingHTTPServer((args.host, args.port),
                                  make_handler(review_path, verdicts_path, parents_dir, Path(args.dossier_dir),
                                               args.confirm_threshold, args.detach_threshold,
@@ -3457,8 +3457,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
                                               enrichment_manifest_path=Path(args.enrichment_manifest),
                                               profile_cache_dir=Path(args.profile_cache_dir),
                                               avatar_dir=Path(args.avatar_dir),
-                                              initial_parents=parents,
-                                              agent_notifier=notify_bridge))
+                                              initial_parents=parents))
     host, port = server.server_address
     url = f"http://{host}:{port}/{query}"
     print(json.dumps({"primitive": "reconcile_review_web", "status": "serving", "url": url,
@@ -3575,13 +3574,63 @@ def workflow_status(
         enrichment_manifest_path=enrichment_manifest_path)
 
 
+# next_action values the AGENT acts on; everything else is the human's move.
+AGENT_ACTIONS = {
+    "preview_enrichment",
+    "run_approved_enrichment",
+    "run_enrichment_from_cache",
+    "assemble_synthetic",
+    "retry_enrichment",
+    "realize",
+}
+
+
 def cmd_status(args: argparse.Namespace) -> None:
-    print(json.dumps(workflow_status(
+    """Print the next-action contract; ``--wait`` blocks until it is an AGENT
+    action (or the timeout passes), then prints and exits.
+
+    This is the whole agent-handoff mechanism — deliberately primitive so it
+    always works: stat six local files once a second, recompute the contract
+    only when one changed. No sockets, no daemons, no thread ids, no coupling
+    to any harness. On timeout the payload carries ``status: waiting`` and the
+    caller simply runs the command again."""
+    paths = dict(
         review_path=Path(args.review), verdicts_path=Path(args.verdicts),
         synthetic_path=Path(args.synthetic_people), facts_dir=Path(args.facts_dir),
         people_csv=Path(args.people_csv), manifest_path=Path(args.manifest),
         enrichment_manifest_path=Path(args.enrichment_manifest),
-    ), indent=2))
+    )
+    watched = (paths["review_path"], paths["verdicts_path"], paths["synthetic_path"],
+               paths["people_csv"], paths["manifest_path"],
+               paths["enrichment_manifest_path"])
+
+    def file_signature() -> tuple[tuple[int, int], ...]:
+        values = []
+        for path in watched:
+            try:
+                stat = path.stat()
+                values.append((stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                values.append((0, 0))
+        return tuple(values)
+
+    status = workflow_status(**paths)
+    if getattr(args, "wait", False):
+        started = time.monotonic()
+        deadline = started + max(1, int(args.timeout))
+        signature = file_signature()
+        while (status["next_action"] not in AGENT_ACTIONS
+               and time.monotonic() < deadline):
+            time.sleep(1)
+            current = file_signature()
+            if current == signature:
+                continue
+            signature = current
+            status = workflow_status(**paths)
+        status["waited_seconds"] = int(time.monotonic() - started)
+        if status["next_action"] not in AGENT_ACTIONS:
+            status["status"] = "waiting"  # still the human's move — run me again
+    print(json.dumps(status, indent=2))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3616,6 +3665,12 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--synthetic-people", default=str(SYNTHETIC_PEOPLE_CSV))
     status.add_argument("--manifest", default=str(REVIEW_MANIFEST))
     status.add_argument("--enrichment-manifest", default=str(ENRICH_MANIFEST))
+    status.add_argument("--wait", action="store_true",
+                        help="block until next_action is an AGENT action "
+                             "(or --timeout passes), then print and exit")
+    status.add_argument("--timeout", type=int, default=900,
+                        help="max seconds to --wait before returning "
+                             "status=waiting (default 900)")
     status.set_defaults(func=cmd_status)
     return parser
 
