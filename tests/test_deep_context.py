@@ -1234,6 +1234,45 @@ class TestApplyRetargets(unittest.TestCase):
             self.assertEqual(rows[0]["public_identifier"], "bob-real")
             self.assertEqual(rows[0]["primary_email"], "bob@x.com")     # contact identity carried
             self.assertEqual(rows[0]["interaction_counts"], '{"gmail": 9}')
+            # carol: pending proposal whose old identity resolves nowhere -> stranded, surfaced
+            self.assertEqual(man["stranded_count"], 1)
+            self.assertEqual(man["stranded"][0]["old"], "carol")
+
+    def test_realized_retarget_is_finalized_and_not_reapplied(self):
+        # After the fan-in merge realizes a retarget (the NEW pub lives in
+        # people.csv), the source marker must be closed out (approved=yes) and
+        # skipped — not re-enriched, not counted as pending forever.
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            ov = base / "ov.csv"
+            with ov.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=reconcile.OVERRIDE_COLUMNS)
+                w.writeheader()
+                # proposal whose new pub was ALREADY merged into people.csv
+                w.writerow({"public_identifier": "ada-old-42", "action": "retarget",
+                            "approved": "",  # never explicitly approved
+                            "new_linkedin_url": "https://www.linkedin.com/in/ada-real"})
+            people = base / "people.csv"
+            cols = ["id", "public_identifier", "linkedin_url", "full_name", "primary_email",
+                    "all_emails", "primary_phone", "all_phones", "interaction_counts",
+                    "last_interaction", "source_channels"]
+            with people.open("w", newline="") as fh:
+                w = __import__("csv").DictWriter(fh, fieldnames=cols)
+                w.writeheader()
+                w.writerow({"id": "pid-ada", "public_identifier": "ada-real",
+                            "full_name": "Ada"})
+            with mock.patch.object(retargets, "rapidapi_profile",
+                                   side_effect=AssertionError("realized rows must not re-enrich")):
+                man = retargets.run(_ns(overrides_csv=ov, people_csv=people,
+                    profile_cache_dir=base / "cache", out_csv=base / "retarget-people.csv"))
+            self.assertEqual(man["finalized_applied"], 1)
+            self.assertEqual(man["enriched"], 0)
+            self.assertEqual(man["stranded_count"], 0)
+            import csv as _csv
+            with ov.open() as fh:
+                saved = {r["public_identifier"]: r for r in _csv.DictReader(fh)}
+            self.assertEqual(saved["ada-old-42"]["approved"], "yes")  # marker closed out
 
 
 class TestReconcileDeepResearch(unittest.TestCase):
