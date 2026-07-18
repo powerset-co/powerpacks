@@ -351,13 +351,6 @@ h1 {
 .details dt { color: var(--muted); font-size: 12px; font-weight: 700; }
 .details dd { margin: 0; color: var(--foreground); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 
-.dossier-heading {
-  margin: 0 0 8px;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.4;
-}
 
 /* The dossier preview (Summary / Timeline) renders as dt/dd rows in the SAME
    section style as Contact / Match signal — no inset box. The dl grid comes
@@ -673,7 +666,9 @@ input::placeholder { color: var(--muted); }
 .row-facts > div { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 5px 0; }
 .row-facts dt { color: var(--muted); font-size: 12px; font-weight: 700; }
 .row-facts dd { margin: 0; color: var(--foreground); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-.decision-row-detail .dossier-heading { margin: 0 0 6px; }
+/* An expanded row shows the full "Why yes/no" fact in the detail below, so the
+   summary line's duplicate reason snippet hides while open. */
+details.decision-row[open] .decision-row-main > span { display: none; }
 .decision-row-detail .dossier-text {
   font-size: 13px;
   line-height: 1.55;
