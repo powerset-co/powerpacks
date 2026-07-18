@@ -2330,7 +2330,7 @@ class TestStagedReviewUI(unittest.TestCase):
             self.assertNotEqual(first_selection["review_revision"],
                                 repeated_selection["review_revision"])
             stale_html = web.render_enrichment(stale, progress)
-            self.assertIn("Asking agent to continue", stale_html)
+            self.assertIn("Preparing enrichment", stale_html)
             self.assertIn("is-indeterminate", stale_html)
 
     def test_enrichment_approval_is_bound_to_current_revision_and_budget(self):
@@ -2378,7 +2378,7 @@ class TestStagedReviewUI(unittest.TestCase):
             }
             zero_html = web.render_enrichment(zero_work, progress)
             self.assertNotIn("data-approve-enrichment", zero_html)
-            self.assertIn("Asking agent to continue", zero_html)
+            self.assertIn("Preparing enrichment", zero_html)
             self.assertIn("no approval needed", zero_html)
             self.assertIn("is-indeterminate", zero_html)
 
@@ -2389,7 +2389,7 @@ class TestStagedReviewUI(unittest.TestCase):
             self.assertNotIn("data-approve-enrichment",
                              web.render_enrichment(approved, progress))
             self.assertIn(
-                "<h2>Asking agent to continue</h2>",
+                "<h2>Preparing enrichment</h2>",
                 web.render_enrichment(approved, progress),
             )
             self.assertIn("is-indeterminate", web.render_enrichment(approved, progress))
@@ -2754,6 +2754,35 @@ class TestLiveEndpoints(unittest.TestCase):
             urllib.request.urlopen(
                 f"http://127.0.0.1:{self.port}/api/decision-rows?view=bogus")
         self.assertEqual(ctx.exception.code, 400)
+
+    def test_wait_actions_are_only_retry_and_realize(self):
+        # The app runs the mid-flow itself; the agent's --wait returns only on
+        # failure or full completion.
+        self.assertEqual(web.AGENT_ACTIONS, {"retry_enrichment", "realize"})
+
+    def test_in_app_jobs_stay_off_for_non_canonical_paths(self):
+        # The in-app jobs call primitives on their CANONICAL default paths, so
+        # this temp-path test server must never kick one. /complete for worth
+        # (fresh queue empty -> completes) is the trigger point.
+        with mock.patch.object(web, "start_enrichment_preview_job") as kick, \
+             mock.patch.object(web, "_all_review_parents", return_value=[]):
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/complete",
+                    data=urllib.parse.urlencode({"stage": "worth"}).encode()) as resp:
+                payload = json.loads(resp.read())
+        self.assertTrue(payload["ok"])
+        kick.assert_not_called()
+
+    def test_finished_and_done_bodies_hand_back_to_codex(self):
+        finished = web.linkedin_finished_body(
+            {"linkedin_done": 5}, linkedin_complete=True)
+        self.assertIn("go back to Codex", finished)
+        self.assertIn("data-copy-continue", finished)
+        # before Finish is clicked there is no handoff yet, just the button
+        pending = web.linkedin_finished_body(
+            {"linkedin_done": 5}, linkedin_complete=False)
+        self.assertIn("data-complete='linkedin'", pending)
+        self.assertNotIn("data-copy-continue", pending)
 
     def test_card_endpoints_serve_stage_content_for_reloadless_swaps(self):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/api/worth-card") as resp:

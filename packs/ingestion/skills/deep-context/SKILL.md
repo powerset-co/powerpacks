@@ -77,9 +77,7 @@ Create a visible plan with these exact phases and keep it current:
 [People] Wait for review to complete
 [People] Review people worth adding to network
 [Match] Confirm imported LinkedIn matches the person
-[Match] Preview and approve one lookup for Added candidates and eligible wrong links
-[Match] Assemble researched profiles without LinkedIn
-[LinkedIn] Fetch cached profiles for review
+[Match] App runs enrichment + profile prep after in-UI approval
 [LinkedIn] Review LinkedIn profiles we found for network
 [Match] Apply approved replacement LinkedIns
 [Build] Build merged people list
@@ -234,10 +232,12 @@ bin/deep-context review-status --wait --timeout 900
 ```
 
 It stats the fixed CSVs/manifests once a second and returns the moment
-`next_action` is an AGENT action (`preview_enrichment`,
-`run_approved_enrichment`, `run_enrichment_from_cache`, `assemble_synthetic`,
-`retry_enrichment`, `realize`). On timeout it returns `status: waiting` with
-the current human-wait action — just run it again. Mark
+`next_action` is an AGENT action — only `retry_enrichment` (something the app
+ran failed; inspect the enrichment manifest error) or `realize` (the whole
+review is done; finish setup). The app itself runs everything in between:
+preview, approved enrichment, from-cache continuation, synthetic assembly,
+and profile prefetch. On timeout the wait returns `status: waiting` with the
+current human-wait action — just run it again. Mark
 `[People] Wait for review to complete` complete once the
 first wait is running.
 
@@ -268,7 +268,7 @@ per row: No from the Yes table and Yes from the No table.
 Model Yes starts in Yes; model No, user No, and legacy Exclude share No.
 When the final maybe is answered, the server writes People completion
 automatically and the browser goes straight to Enrich Contacts, where an
-indeterminate "Asking agent to continue" bar remains visible until the next
+indeterminate "Preparing enrichment" bar remains visible until the next
 manifest state arrives.
 
 The wait command is the read-only deterministic primitive — it reads
@@ -290,72 +290,27 @@ revision and the full current effective-worth fingerprint (Yes, Maybe, and No).
 This prevents stale lookup success from skipping a repeated review while still
 allowing per-person research artifacts to be reused.
 
-### 6. Identity preparation and one lookup
+### 6. Identity preparation and one lookup — THE APP RUNS THIS
 
-When `review-status.next_action == "preview_enrichment"`, preview the single
-Parallel pass. Candidate eligibility is the current Yes table (model Yes unless
-the user removed it, plus anyone the user added).
-The command also covers eligible wrong-link recoveries and plausibly-absent
-LinkedIns:
+The review app runs the whole mid-flow itself, in-process, when the user acts:
 
-```bash
-bin/deep-context reconcile-deep-research --dry-run --include-candidates --include-plausibly-absent
-```
+- **People review completes** → the app builds the free preview
+  (`reconcile-deep-research --dry-run`) and the Enrich Contacts page renders
+  the exact `Approve $X.XX` estimate (gross eligible, completed-result reuse,
+  net-new submissions, budget). When net-new is zero it continues from cache
+  immediately — no approval exists for zero dollars.
+- **The user clicks Approve $X.XX** → that click IS the spend approval: the
+  app runs the approved Parallel pass with exactly that budget cap.
+- **Research completes** → the app chains the free follow-ups automatically:
+  `assemble-synthetic` (no-LinkedIn cards) and `profile-prefetch --fetch`
+  (cached profiles + nano summaries; pennies).
 
-Show gross eligible, completed-result reuse, duplicate handles skipped, net-new
-submissions, price/person, total estimate, and the proposed budget. The approval
-amount is based on net-new submissions only. For a positive estimate, the
-Enrich Contacts page renders an `Approve $X.XX` button for that exact current
-estimate. Clicking it writes the approval into the existing enrichment
-`manifest.json`, bound to the current People revision, full Yes/Maybe/No
-fingerprint, net-new count, and budget. It does not start a provider call. When
-net-new is zero, the page says cached results need no approval and the wait
-returns `run_enrichment_from_cache`; do not ask for or synthesize a
-zero-dollar approval.
-
-Continue through the wait loop. While `review-status --wait` returns
-`next_action == "await_enrichment_approval"` (a timeout `status: waiting`),
-wait again for the UI button. When it returns
-`next_action == "run_approved_enrichment"`, run the exact command it
-prints, which always includes the approved cap:
-
-```bash
-bin/deep-context reconcile-deep-research --include-candidates --include-plausibly-absent \
-  --approve --budget <approved-estimate>
-```
-
-Budget defaults to zero; never omit it on an approved run. Then build local
-fallback profiles for researched Yes people with no real LinkedIn:
-
-```bash
-bin/deep-context assemble-synthetic
-```
-
-Before telling the user to click Continue into LinkedIn review, complete the
-explicit profile-prefetch task. Start with its free preview:
-
-```bash
-bin/deep-context profile-prefetch
-```
-
-If both miss counts are zero, mark the task complete as a no-op. Otherwise
-auto-approve and run `--fetch` without asking when the estimated summary cost
-**ceiling is under $25** (the common case — RapidAPI is credits-based and each
-person costs at most one call ever, so the only dollar cost is the nano
-summaries) — just run it, keep this cost gate out of the user-facing task copy:
-
-```bash
-bin/deep-context profile-prefetch --fetch
-```
-
-Only when the summary-cost ceiling is **$25 or more** do you pause: show the
-uncached/summary miss counts and cost floor/ceiling as `Fetching profiles will
-cost $<floor>–$<ceiling>. Approve?` and wait for a yes before running `--fetch`.
-
-Report fetched/cached/failed and summarized/failed counts. Complete this task
-before LinkedIn review even when the preceding wait returned
-`assemble_synthetic`; do not fall through to the Continue wait first.
-The review UI remains cache-only and never calls either provider itself.
+The agent runs NONE of these steps and must not run them manually while a
+review server is up — the app owns them, progress streams through the fixed
+enrichment manifest the Enrich page already polls, and a crash surfaces as
+`status: failed` (your wait then returns `retry_enrichment`; inspect the
+manifest error). The manual commands remain available for headless/broken-UI
+recovery only.
 
 The lookup wrapper and its provider child continuously overwrite the fixed
 enrichment manifest with `needs_approval`, `running`, `research_complete`,

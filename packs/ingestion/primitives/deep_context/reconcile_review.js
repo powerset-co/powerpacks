@@ -309,6 +309,18 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (button.hasAttribute("data-copy-continue")) {
+    // The end-of-review handoff: hand the user the exact phrase for Codex.
+    event.preventDefault();
+    try {
+      await navigator.clipboard.writeText("continue deep-context setup");
+      announce(button.dataset.toast || "Copied");
+    } catch (error) {
+      announce("Copy failed — type: continue deep-context setup", true);
+    }
+    return;
+  }
+
   if (button.hasAttribute("data-show-more")) {
     // "+ show N more" toggle on Work/Education fact lists.
     event.preventDefault();
