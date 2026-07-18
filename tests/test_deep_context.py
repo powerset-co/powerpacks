@@ -2084,15 +2084,18 @@ class TestReviewWeb(unittest.TestCase):
         self.assertIn("if (observesExternalUpdates) {", script)
         self.assertNotIn("adoptServerState", script)
         self.assertIn("adoptMutationState(response);", script)
-        self.assertIn("const linkedinBufferTarget = 10;", script)
-        self.assertIn("const linkedinRefillAt = 5;", script)
-        self.assertIn(
-            "`/api/linkedin-cards?offset=${held}&limit=${limit}`",
-            script,
-        )
+        # One card-advance system: both queues prefetch the NEXT card while the
+        # user reads the current one, and the decision POST settles in the
+        # background (fired before the prefetched card is awaited/swapped in).
+        self.assertIn("function prefetchWorthCard(", script)
+        self.assertIn("function prefetchLinkedinCard(", script)
+        self.assertIn("/api/linkedin-card?exclude=", script)
+        self.assertIn("/api/worth-card?exclude=", script)
+        self.assertNotIn("linkedinBufferTarget", script)
+        self.assertNotIn("/api/linkedin-cards?", script)
         self.assertLess(
-            script.index("const advance = optimisticLinkedinAdvance(card, values);"),
-            script.index('const response = await post("/decide", values);'),
+            script.index('const postPromise = post("/decide", values);'),
+            script.index("panel.innerHTML = nextHtml; // next parent's card"),
         )
         self.assertIn(
             'document.querySelectorAll("[data-fix-form] input[name=\'new_url\']")',

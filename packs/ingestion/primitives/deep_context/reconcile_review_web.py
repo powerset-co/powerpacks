@@ -87,10 +87,6 @@ USER_WORTH_VALUES = {"yes", "no"}
 # Decision tables load rows in chunks over /api/decision-rows (infinite scroll);
 # this is both the server-rendered first window and the fetch increment.
 DECISION_CHUNK_SIZE = 40
-# LinkedIn review is a real client-side queue. The initial page and refill
-# endpoint keep ten lightweight cards buffered so a click never waits on a
-# second request before showing the next person.
-LINKEDIN_CARD_BATCH_SIZE = 10
 REVIEW_CSS = Path(__file__).with_name("reconcile_review.css")
 REVIEW_JS = Path(__file__).with_name("reconcile_review.js")
 AVATAR_DIR = REVIEW_DIR / "avatars"
@@ -2684,44 +2680,25 @@ def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool)
             f"{finish_button}</div>")
 
 
-def linkedin_cards_payload(
-    parents: list[dict[str, Any]], progress: dict[str, int], *,
-    offset: int = 0, limit: int = LINKEDIN_CARD_BATCH_SIZE,
-    linkedin_complete: bool, parents_dir: Path, dossier_dir: Path,
-    profile_cache_dir: Path = PROFILE_CACHE_DIR,
-) -> dict[str, Any]:
-    """One cached queue window for the SPA.
-
-    ``offset`` is relative to the *current pending queue*. Since completed cards
-    disappear from that queue, the browser refills with ``offset=len(buffer)``;
-    it never carries a cumulative page cursor that could skip people.
-    """
+def linkedin_card_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
+                       linkedin_complete: bool, parents_dir: Path, dossier_dir: Path,
+                       profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                       exclude: frozenset[str] | None = None) -> str:
+    """The LinkedIn queue's current item: the next pending parent's card, or the
+    stage-finished state — the linkedin twin of ``worth_review_body``. Shared by
+    page_html and /api/linkedin-card so a decision click swaps in the next card
+    client-side. ``exclude`` skips PARENT SLUGS whose decision POST is still in
+    flight (the linkedin queue is parent-keyed), so the client can prefetch the
+    FOLLOWING card without waiting for the save."""
     queue = linkedin_review_queue(parents)
-    offset = max(0, offset)
-    limit = max(1, min(limit, 50))
-    window = queue[offset:offset + limit]
-    cards = []
-    for parent, pending in window:
-        parent_slug = str(parent.get("slug") or "")
-        # The buffer-card wraps ONE parent; it is keyed on data-parent (a parent may carry
-        # several options each with its own pub). data-pub keeps the primary pub for the
-        # single-candidate case so nothing about normal cards changes.
-        pub = str((pending[0] if pending else {}).get("pub") or "").strip().lower()
-        cards.append(
-            "<div class='linkedin-buffer-card' data-linkedin-buffer-card "
-            f"data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
-            f"{render_linkedin_card(parent, pending, parents_dir, dossier_dir, profile_cache_dir)}</div>"
-        )
-    return {
-        "offset": offset,
-        "limit": limit,
-        "total": len(queue),
-        "cards": cards,
-        "complete_html": (
-            linkedin_finished_body(progress, linkedin_complete=linkedin_complete)
-            if not queue else ""
-        ),
-    }
+    if exclude:
+        queue = [(parent, pending) for parent, pending in queue
+                 if str(parent.get("slug") or "").strip().lower() not in exclude]
+    if queue:
+        parent, pending = queue[0]
+        return render_linkedin_card(parent, pending, parents_dir, dossier_dir,
+                                    profile_cache_dir)
+    return linkedin_finished_body(progress, linkedin_complete=linkedin_complete)
 
 
 def _profile_miss_count(
@@ -2743,7 +2720,8 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
                          enrichment: dict[str, Any] | None = None,
                          profile_cache_dir: Path = PROFILE_CACHE_DIR,
                          debug: bool = False, index: int = 0) -> str:
-    """Render the ten-card LinkedIn SPA buffer or the debug carousel."""
+    """Render the LinkedIn stage: one pending parent card inside the swap panel
+    (the worth pattern), or the debug carousel."""
     note = "" if enrichment_complete else _enrichment_note(enrichment)
     queue = linkedin_review_queue(parents)
     misses = _profile_miss_count(queue, profile_cache_dir)
@@ -2762,25 +2740,11 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
             f"data-queue-total='{len(queue)}'>{note}{_carousel_nav()}{body}</div>"
         )
 
-    payload = linkedin_cards_payload(
+    card = linkedin_card_body(
         parents, progress, linkedin_complete=linkedin_complete,
         parents_dir=parents_dir, dossier_dir=dossier_dir,
         profile_cache_dir=profile_cache_dir)
-    if payload["cards"]:
-        cards = []
-        for card_index, card in enumerate(payload["cards"]):
-            hidden = " hidden" if card_index else ""
-            cards.append(card.replace("data-linkedin-buffer-card ",
-                                      f"data-linkedin-buffer-card{hidden} ", 1))
-        body = (
-            f"<div class='linkedin-card-buffer' data-linkedin-buffer "
-            f"data-buffer-target='{LINKEDIN_CARD_BATCH_SIZE}' "
-            f"data-buffer-total='{payload['total']}'>"
-            + "".join(cards)
-            + "</div>"
-        )
-    else:
-        body = payload["complete_html"]
+    body = f"<div class='linkedin-panel' data-linkedin-panel>{card}</div>"
     return f"<div class='linkedin-stage'>{note}{body}</div>"
 
 
@@ -3092,28 +3056,6 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     parents, view, offset=offset, limit=min(max(1, limit), 200),
                     parents_dir=parents_dir, dossier_dir=dossier_dir))
                 return
-            if parsed.path == "/api/linkedin-cards":
-                try:
-                    offset = int(str((params.get("offset") or ["0"])[0]))
-                    limit = int(str((params.get("limit") or
-                                     [str(LINKEDIN_CARD_BATCH_SIZE)])[0]))
-                except ValueError:
-                    offset, limit = 0, LINKEDIN_CARD_BATCH_SIZE
-                with mutation_lock:
-                    parents = parents_now()
-                    progress = review_progress(parents)
-                    payload = linkedin_cards_payload(
-                        parents, progress, offset=offset, limit=limit,
-                        linkedin_complete=phase_is_completed(
-                            "linkedin", progress, manifest_path),
-                        parents_dir=parents_dir, dossier_dir=dossier_dir,
-                        profile_cache_dir=profile_cache_dir)
-                    payload.update({
-                        "progress": progress,
-                        "state_token": state_token_for(parents, progress),
-                    })
-                self.send_json(payload)
-                return
             if parsed.path in {"/api/worth-card", "/api/linkedin-card"}:
                 # The next queue card (or its stage-complete state), so a decision
                 # click swaps content in place instead of reloading. Optional
@@ -3128,7 +3070,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     key.strip().lower()
                     for key in str((params.get("exclude") or [""])[0]).split(",")
                     if key.strip())
-                if exclude and parsed.path == "/api/worth-card":
+                if exclude:
                     # Prefetch of the FOLLOWING card while a decision POST holds
                     # the mutation lock: render from the current snapshot without
                     # blocking. The excluded keys make the pick race-free, and the
@@ -3143,7 +3085,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                              debug=debug, index=index,
                                              profile_cache_dir=profile_cache_dir,
                                              exclude=exclude or None)
-                else:
+                elif debug:
                     selection = worth_selection_from_parents(
                         parents, manifest_path=manifest_path)
                     enrichment = read_enrichment_manifest(
@@ -3156,6 +3098,13 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         parents_dir=parents_dir, dossier_dir=dossier_dir,
                         enrichment=enrichment, profile_cache_dir=profile_cache_dir,
                         debug=debug, index=index)
+                else:
+                    body = linkedin_card_body(
+                        parents, progress,
+                        linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
+                        parents_dir=parents_dir, dossier_dir=dossier_dir,
+                        profile_cache_dir=profile_cache_dir,
+                        exclude=exclude or None)
                 self.send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/avatar":
@@ -3416,14 +3365,6 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         "progress": progress,
                         "resolved_pubs": resolved_pubs,
                         "state_token": state_token_for(current_parents, progress),
-                        "complete_html": (
-                            linkedin_finished_body(
-                                progress,
-                                linkedin_complete=phase_is_completed(
-                                    "linkedin", progress, manifest_path),
-                            )
-                            if progress["linkedin_pending"] == 0 else ""
-                        ),
                     }
                     if worth_key:
                         state = effective_no_for_key(
