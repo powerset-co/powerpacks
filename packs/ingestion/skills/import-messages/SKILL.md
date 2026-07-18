@@ -76,9 +76,10 @@ and rely on the primitives.
 - **Metadata only.** Powerpacks never selects or sends message bodies; wacli
   owns its local provider store. Only contact metadata (phone, name, channels,
   message counts, last-message timestamps) is read.
-- **Consent gates (pause for the user):** macOS Full Disk Access (Step 2);
-  Homebrew installs requested by the WhatsApp child and the WhatsApp QR scan
-  (Step 2); and the import confirmation when Step 4 would add new rows.
+- **Consent gates (pause for the user):** macOS Full Disk Access (Step 2); the
+  WhatsApp QR scan (Step 2); a Go-toolchain install only if Go is absent when the
+  pinned wacli fork needs building; and the import confirmation when Step 4 would
+  add new rows. The pinned wacli fork itself auto-builds without a prompt.
 
 ### Repo root
 
@@ -165,16 +166,18 @@ the same `discover` command to advance:
   cd "$REPO" && uv run --project . python packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py open-privacy-settings
   ```
 
-- **Missing WhatsApp helper** (`status: blocked_user_action` with an
-  `install_command`): show the exact command and ask before running it. After the
-  user approves and the install completes, re-run discovery. The child uses
-  `--no-install`, so the canonical flow never starts a Homebrew install silently.
+- **WhatsApp helper (pinned wacli fork):** builds automatically when missing or
+  stale — it is our own pinned `go install` component, so the flow rebuilds it
+  without prompting. The only block here is `status: blocked_user_action` when
+  the **Go toolchain is missing** (`message` mentions "Go is required"): run the
+  `install_command` (`brew install go`) after asking, then re-run discovery.
 - **WhatsApp QR / expired session** (`status: blocked_user_action`, step
   `authenticate_whatsapp`): surface the QR page, have the user scan it in
   WhatsApp, then re-run discovery. (Default provider is wacli.)
 
-**Consent gates: Full Disk Access, WhatsApp helper install, WhatsApp QR.** The
-run completes with `selected_steps_completed` once contacts are merged.
+**Consent gates: Full Disk Access, WhatsApp QR** (and Go install only if the
+toolchain is absent). The pinned wacli fork itself auto-builds. The run
+completes with `selected_steps_completed` once contacts are merged.
 
 ### Step 3 — Match contacts against LinkedIn & Gmail
 

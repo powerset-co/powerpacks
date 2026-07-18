@@ -313,7 +313,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertIsNone(result)
         command = run_cmd.call_args.args[0]
         self.assertEqual(command[command.index("--max-messages") + 1], "0")
-        self.assertIn("--no-install", command)
+        # The pinned wacli fork auto-builds; discovery no longer suppresses install.
+        self.assertNotIn("--no-install", command)
 
     def test_existing_channel_exports_are_refreshed(self) -> None:
         with tempfile.TemporaryDirectory() as td:

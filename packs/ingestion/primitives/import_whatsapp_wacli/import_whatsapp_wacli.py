@@ -15,6 +15,7 @@ import csv
 import html
 import json
 import os
+import platform
 import queue
 import re
 import shutil
@@ -24,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,11 +63,15 @@ DEFAULT_DEVICE_PLATFORM = os.environ.get("POWERPACKS_WACLI_DEVICE_PLATFORM", "DE
 DEFAULT_DEVICE_LABEL = os.environ.get("POWERPACKS_WACLI_DEVICE_LABEL", "Mac OS")
 DEFAULT_FULL_SYNC_DAYS = os.environ.get("POWERPACKS_WACLI_FULL_SYNC_DAYS", "3650")
 # Pinned powerset-co fork of wacli that forces a full history sync at pairing
-# (RequireFullSync). Installed by module path so `go install` resolves this exact
-# tag; kept off the upstream Homebrew tap so we control the version.
-WACLI_MODULE = "github.com/powerset-co/wacli"
+# (RequireFullSync). We download a prebuilt binary from the fork's GitHub Release
+# for this tag — no Go toolchain on the user's machine — and keep it off the
+# upstream Homebrew tap so we control the version.
+WACLI_REPO = "powerset-co/wacli"
 WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.13.0-fullsync")
-WACLI_INSTALL_SPEC = f"{WACLI_MODULE}/cmd/wacli@{WACLI_PINNED_VERSION}"
+WACLI_RELEASE_BASE = os.environ.get(
+    "POWERPACKS_WACLI_RELEASE_BASE",
+    f"https://github.com/{WACLI_REPO}/releases/download",
+)
 WACLI_BIN_DIR = Path(os.environ.get("POWERPACKS_WACLI_BIN_DIR", str(Path.home() / ".powerpacks" / "bin")))
 WACLI_PINNED_BIN = WACLI_BIN_DIR / "wacli"
 # Records which pinned tag the installed binary was built from. `wacli --version`
@@ -292,44 +298,68 @@ def wacli_version(timeout: int = 30) -> dict[str, Any]:
     return {"path": exe, "version": version, "pinned": exe == str(WACLI_PINNED_BIN)}
 
 
+def wacli_asset_name() -> str | None:
+    """Release asset name for this platform, e.g. `wacli-darwin-arm64`, or None
+    if we don't publish a prebuilt for it."""
+    os_name = {"darwin": "darwin", "linux": "linux"}.get(platform.system().lower())
+    arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(platform.machine().lower())
+    if not os_name or not arch:
+        return None
+    return f"wacli-{os_name}-{arch}"
+
+
+def wacli_download_url() -> str | None:
+    asset = wacli_asset_name()
+    return f"{WACLI_RELEASE_BASE}/{WACLI_PINNED_VERSION}/{asset}" if asset else None
+
+
+def download_file(url: str, dest: Path, *, timeout: int = 120) -> None:
+    """Stream a URL to dest via a temp file + atomic replace (GitHub release URLs
+    redirect to blob storage; urlopen follows redirects)."""
+    tmp = dest.with_name(dest.name + ".download")
+    request = urllib.request.Request(url, headers={"User-Agent": "powerpacks-import-whatsapp"})
+    with urllib.request.urlopen(request, timeout=timeout) as response, tmp.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+    tmp.replace(dest)
+
+
 def ensure_wacli_installed(*, install: bool = True) -> dict[str, Any]:
-    # Only the pinned fork at the currently-pinned version gives the full history
-    # sync; a PATH wacli or a stale build of our fork is not enough.
+    # The pinned fork at the currently-pinned version is the only thing that gives
+    # the full history sync. We download the prebuilt binary for this platform from
+    # the fork's GitHub Release whenever it's missing or stale — no toolchain on the
+    # machine, no prompt (the `install` flag is retained for signature compatibility
+    # but no longer gates this).
     if wacli_pinned_current():
         return wacli_version()
     stale = WACLI_PINNED_BIN.exists()  # present, but a different (older) pinned tag
-    if not install:
+    url = wacli_download_url()
+    if not url:
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
             "message": (
-                f"wacli pinned fork is {'stale' if stale else 'not installed'} "
-                f"(need {WACLI_PINNED_VERSION}). Install it, then rerun $import-whatsapp."
+                f"No prebuilt wacli for this platform "
+                f"({platform.system()}/{platform.machine()}). Build it from "
+                f"{WACLI_REPO} @ {WACLI_PINNED_VERSION}, place it at {WACLI_PINNED_BIN}, "
+                f"and write {WACLI_PINNED_VERSION} to {WACLI_VERSION_STAMP}."
             ),
-            "install_command": f"go install {WACLI_INSTALL_SPEC}",
         })
-    go = shutil.which("go")
-    if not go:
-        raise PrimitiveBlocked({
-            "status": "blocked_user_action",
-            "message": "Go is required to install the pinned wacli fork. Install Go (`brew install go`), then rerun $import-whatsapp.",
-            "install_command": f"go install {WACLI_INSTALL_SPEC}",
-        })
-    emit_status(f"{'Updating' if stale else 'Installing'} WhatsApp sync helper (pinned fork {WACLI_PINNED_VERSION}).")
+    emit_status(f"{'Updating' if stale else 'Installing'} WhatsApp sync helper ({WACLI_PINNED_VERSION}).")
     WACLI_BIN_DIR.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
-    env["GOBIN"] = str(WACLI_BIN_DIR)
-    env["CGO_ENABLED"] = "1"  # mattn/go-sqlite3
-    result = run_command([go, "install", WACLI_INSTALL_SPEC], timeout=900, env=env)
-    if result["returncode"] != 0 or not WACLI_PINNED_BIN.exists():
-        detail = (result.get("stderr") or result.get("stdout") or "").strip()
+    try:
+        download_file(url, WACLI_PINNED_BIN)
+    except Exception as exc:
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "Failed to build the pinned wacli fork. Ensure Go and the Xcode command line tools (clang) are installed, then rerun $import-whatsapp.",
-            "detail": detail[-4000:],
-            "install_command": f"go install {WACLI_INSTALL_SPEC}",
-        })
+            "message": (
+                f"Failed to download the pinned wacli binary from {url}: {exc}. "
+                "Check network access, then rerun $import-whatsapp."
+            ),
+            "install_command": f"curl -fsSL {url} -o {WACLI_PINNED_BIN} && chmod +x {WACLI_PINNED_BIN}",
+        }) from exc
+    WACLI_PINNED_BIN.chmod(0o755)
+    info = wacli_version()  # verify the download actually runs before trusting it
     WACLI_VERSION_STAMP.write_text(WACLI_PINNED_VERSION + "\n", encoding="utf-8")
-    return wacli_version()
+    return info
 
 
 def wacli_json(store: Path, args: list[str], *, timeout: int = 300) -> dict[str, Any]:
@@ -1272,6 +1302,33 @@ def completed_payload(
     }
 
 
+def cmd_ensure_wacli(args: argparse.Namespace) -> int:
+    """Download/refresh the pinned wacli binary to the current pin. Idempotent
+    (a no-op when already current). Called by $update-powerpacks so a pin bump
+    reaches the machine without running an import."""
+    try:
+        info = ensure_wacli_installed()
+        emit({
+            "primitive": "import_whatsapp_wacli",
+            "command": "ensure-wacli",
+            "status": "ok",
+            "pinned_version": WACLI_PINNED_VERSION,
+            "wacli": info,
+        })
+        return 0
+    except PrimitiveBlocked as exc:
+        emit({"primitive": "import_whatsapp_wacli", "command": "ensure-wacli", **exc.payload})
+        return exc.code
+    except Exception as exc:
+        emit({
+            "primitive": "import_whatsapp_wacli",
+            "command": "ensure-wacli",
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+        return 1
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     store = Path(args.store)
     try:
@@ -1569,7 +1626,7 @@ def main() -> int:
     run.add_argument("--sync-timeout", type=int, default=DEFAULT_SYNC_TIMEOUT)
     run.add_argument("--group-info-timeout", type=int, default=60)
     run.add_argument("--group-info-interval", type=float, default=0.2)
-    run.add_argument("--no-install", action="store_true", help="fail instead of installing wacli with Homebrew")
+    run.add_argument("--no-install", action="store_true", help="deprecated no-op; the pinned wacli fork always auto-downloads when missing or stale")
     run.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
     run.set_defaults(func=cmd_run)
 
@@ -1577,11 +1634,14 @@ def main() -> int:
     add_common_args(status)
     status.set_defaults(func=cmd_status)
 
+    ensure = sub.add_parser("ensure-wacli", help="download/refresh the pinned wacli binary to the current pin (idempotent)")
+    ensure.set_defaults(func=cmd_ensure_wacli)
+
     auth = sub.add_parser("auth", help="authenticate WhatsApp without syncing or exporting metadata")
     add_common_args(auth)
     auth.add_argument("--idle-exit", default=DEFAULT_IDLE_EXIT)
     auth.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
-    auth.add_argument("--no-install", action="store_true", help="fail instead of installing wacli with Homebrew")
+    auth.add_argument("--no-install", action="store_true", help="deprecated no-op; the pinned wacli fork always auto-downloads when missing or stale")
     auth.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
     auth.set_defaults(func=cmd_auth)
 

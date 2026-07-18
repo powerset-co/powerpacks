@@ -84,19 +84,17 @@ WhatsApp uses the local
 [`wacli`](https://github.com/powerset-co/wacli) helper by default — a pinned
 Powerpacks fork of [openclaw/wacli](https://github.com/openclaw/wacli) that
 forces a full multi-year history sync at pairing (upstream only pulls a recent
-window). Canonical discovery does not install software silently: if the pinned
-wacli or its QR renderer is missing, `$import-messages` shows the exact command
-and asks before running it. The wacli install is a pinned `go install` (needs
-Go + the Xcode command line tools for CGo):
+window). `$import-messages` **downloads the prebuilt pinned binary** for your
+platform from the fork's GitHub Release — no Go toolchain, no compile:
 
-```bash
-go install github.com/powerset-co/wacli/cmd/wacli@v0.13.0-fullsync
+```text
+https://github.com/powerset-co/wacli/releases/download/v0.13.0-fullsync/wacli-<os>-<arch>
 ```
 
-It installs to `~/.powerpacks/bin/wacli` and is always invoked by that absolute
+It downloads to `~/.powerpacks/bin/wacli` and is always invoked by that absolute
 path, so a stray upstream `wacli` on `PATH` never shadows the pinned fork. The
-install stamps its pinned tag next to the binary, so when the repo later bumps
-the pin the next import detects the drift and rebuilds — `$update-powerpacks`
+download stamps its pinned tag next to the binary, so when the repo later bumps
+the pin the next import detects the drift and re-downloads — `$update-powerpacks`
 alone does not refresh the binary (it only updates the repo + skills). QR
 rendering may separately request `brew install qrencode`.
 
