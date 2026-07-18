@@ -168,8 +168,14 @@ case "$cmd" in
     # A reused live server keeps serving the Python it loaded at startup, so a
     # repo update would leave the UI stale. Restart any running review server on
     # the target port (state is file-driven; nothing is lost) so serve always
-    # loads current code. Only reconcile_review_web listeners are killed.
-    if (( ! wants_help )); then
+    # loads current code. Only reconcile_review_web listeners are killed —
+    # EXCEPT while the app's in-process enrichment run is active: killing the
+    # server then would kill the paid run with it. Reuse the live server and
+    # let the fresh code load on the next launch instead.
+    if (( ! wants_help )) && grep -qE '"status": *"(running|submitted)"' \
+        "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null; then
+      echo "note: enrichment is running inside the live review server; reusing it (code refresh deferred)" >&2
+    elif (( ! wants_help )); then
       review_port=8765
       _prev=""
       for _a in "$@"; do

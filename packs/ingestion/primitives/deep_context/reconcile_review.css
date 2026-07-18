@@ -560,6 +560,8 @@ input::placeholder { color: var(--muted); }
 .empty-state h2 { margin: 22px 0 0; font-size: 25px; }
 .empty-state p { margin: 8px 0 0; color: var(--muted); }
 .phase-finish .button { min-width: 180px; margin-top: 28px; }
+.handoff-note { margin: 26px 0 0 !important; color: var(--foreground) !important; font-weight: 700; }
+.empty-state [data-copy-continue] { min-width: 180px; margin-top: 12px; }
 
 .worth-stage {
   min-height: 0;

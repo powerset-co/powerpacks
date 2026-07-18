@@ -611,7 +611,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     return manifest
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verdicts", default=str(VERDICTS_JSONL))
     parser.add_argument("--review", default=str(LINKEDIN_OVERRIDES_CSV))
@@ -645,7 +645,7 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=120, help="per-call OpenAI timeout (s)")
     parser.add_argument("--max-retries", type=int, default=4,
                         help="retries per summary call on transient failures")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     load_env()
     emit(run(args))
 

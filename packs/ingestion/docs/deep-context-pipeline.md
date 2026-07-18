@@ -56,11 +56,11 @@ flowchart TD
     H --> I["Judge attached LinkedIn identity only"]
     I --> J["People UI: review only Maybe; edit Yes / No"]
     J --> K{"People review complete"}
-    K --> K1["Agent's review-status --wait returns"]
-    K1 --> L["Preview one enrichment pass"]
+    K --> K1["App builds the preview in-process"]
+    K1 --> L["Enrich page shows the exact estimate"]
     L --> M{"Approve exact net-new Parallel estimate in UI, unless zero"}
-    M --> M1["Agent's wait returns the approved run"]
-    M1 --> N["Agent runs approved lookup; completed work is reused"]
+    M --> M1["App runs the approved lookup in-process"]
+    M1 --> N["Completed work is reused; app chains assemble + prefetch"]
     N --> O["Assemble no-LinkedIn research cards"]
     O --> P{"User clicks Continue"}
     P --> Q["LinkedIn UI: verify, replace, or Skip"]
@@ -93,7 +93,7 @@ surface, not an orchestration service.
 
 | Component | Responsibilities | Must not do |
 | --- | --- | --- |
-| Browser UI | Read current CSVs/manifests, save human decisions, mark review handoffs, and write the exact revision-bound enrichment approval. | Send prompts or commands to any agent, call identity/research providers, start paid work, or rebuild the index. |
+| Review app (server) | Read current CSVs/manifests, save human decisions, write the exact revision-bound enrichment approval, and run the approved/free mid-flow primitives in-process (preview, approved enrichment, assemble, prefetch) with progress in the fixed manifests. | Send prompts or commands to any agent, start paid work the user has not just approved on-screen, or rebuild the index. |
 | Agent session | Block on `bin/deep-context review-status --wait`, show required estimates/disclosures, and run only the exact next primitive it returns after approval. | Infer completion from chat text, reuse an old approval, or invent a parallel state machine. |
 | Primitives | Write stage outputs and one manifest into fixed directories, overwrite current queues, reuse completed per-person work, and enforce budgets/fingerprints. | Create run-scoped directories, ledgers, or hidden browser jobs. |
 
@@ -109,9 +109,11 @@ bin/deep-context review-status --wait --timeout 900
 
 It is read-only and blocks — statting the fixed CSVs/manifests once a second —
 until `next_action` is an agent action, then prints the contract and exits.
-Agent actions are `preview_enrichment`, `run_approved_enrichment`,
-`run_enrichment_from_cache`, `assemble_synthetic`, `retry_enrichment`, and
-`realize`; every other action is the human's move, and a timeout returns
+Agent actions are only `retry_enrichment` and `realize` — the review app
+runs the mid-flow work itself (preview, approved enrichment, from-cache
+continuation, synthetic assembly, profile prefetch) as in-process jobs
+the moment the user's clicks authorize them. Every other action is the
+human's move, and a timeout returns
 `status: waiting` so the caller simply runs the command again. There is no
 daemon, socket, thread id, or harness coupling — the same command works from
 Codex, Claude Code, or a plain terminal, which is the point: the entire
@@ -155,7 +157,7 @@ button and cannot be blocked by the Done page.
 | People review | Shows only model Maybe contacts in the main binary queue. The paginated Yes and No tables remain editable. Finishing the last Maybe completes the People gate and moves directly to an animated agent-handoff state on Enrich Contacts. | Updated `review.csv` and `review/manifest.json` |
 | Enrichment preview and approval | Builds one queue from the current effective-Yes selection plus eligible wrong-link recovery. It reports gross eligible people, completed-result reuse, duplicate handles, net-new submissions, and the exact estimate. A positive estimate requires the UI's inert approval record; zero net-new work automatically continues from cache without an approval button. | `research_queue.csv` and enrichment `manifest.json` |
 | Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
-| Profile prefetch | Before LinkedIn review, the agent runs `bin/deep-context profile-prefetch`, reports uncached profiles and missing summaries, then auto-runs `--fetch` when the summary-cost ceiling is under $25 (the common case; RapidAPI is credits-based and each person costs at most one call ever) and only pauses for approval at $25+. The UI stays cache-only. | Shared profile cache and `profile-prefetch/manifest.json` |
+| Profile prefetch | The review app runs `profile-prefetch --fetch` automatically after research completes (RapidAPI is credits-based, one call per person ever; summaries are nano-priced). The UI stays cache-only. | Shared profile cache and `profile-prefetch/manifest.json` |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
 | Realization | Approved replacement URLs are hydrated cache-first, then fan-in reapplies worth, identity, retarget, and consolidation decisions to the fixed merged people CSV. | `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |

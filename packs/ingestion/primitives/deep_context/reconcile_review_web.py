@@ -2525,7 +2525,7 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
       </div>"""
     agent_handoff_bar = """
       <div class='enrich-progress is-indeterminate' role='progressbar'
-           aria-label='Asking agent to continue'>
+           aria-label='Preparing enrichment'>
         <div class='enrich-progress-fill'></div>
       </div>"""
     if progress["worth_pending"]:
@@ -2535,7 +2535,7 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
                 f"{progress_bar}</div>")
     if status in {"not_started", "stale"}:
         return ("<div class='empty-state enrich-state'>"
-                "<h2>Asking agent to continue</h2>"
+                "<h2>Preparing enrichment</h2>"
                 f"<p>Preparing {progress['lookup_ready']} approved "
                 f"contact{'s' if progress['lookup_ready'] != 1 else ''}</p>"
                 f"{agent_handoff_bar}</div>")
@@ -2545,12 +2545,12 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
         reused = max(0, int(enrichment.get("reused_completed") or 0))
         if new_count == 0:
             return ("<div class='empty-state enrich-state'>"
-                    "<h2>Asking agent to continue</h2>"
+                    "<h2>Preparing enrichment</h2>"
                     f"<p>0 new · {reused} reused · no approval needed</p>"
                     f"{agent_handoff_bar}</div>")
         if enrichment.get("approval_current"):
             return ("<div class='empty-state enrich-state'>"
-                    "<h2>Asking agent to continue</h2>"
+                    "<h2>Preparing enrichment</h2>"
                     f"<p>Approval saved · starting {new_count} new lookup"
                     f"{'s' if new_count != 1 else ''}</p>{agent_handoff_bar}</div>")
         details = f"{new_count} new · {reused} reused · up to ${estimate:.2f}"
@@ -2656,13 +2656,22 @@ def linkedin_review_queue(
     return queue
 
 
+# The single human -> agent handoff at the end of review: the app is done,
+# the agent finishes setup (realize + index) from its blocking wait — or, if
+# that session ended, the user pastes the copied phrase into Codex.
+GO_BACK_HTML = (
+    "<p class='handoff-note'>Review complete — go back to Codex to finish setup.</p>"
+    "<button class='button button-outline' type='button' data-copy-continue "
+    "data-toast='Copied'>Copy “continue deep-context setup”</button>")
+
+
 def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool) -> str:
-    finish_button = ("" if linkedin_complete else
-                     "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
+    tail = (GO_BACK_HTML if linkedin_complete else
+            "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
     return ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
             "<h2>LinkedIn profiles checked</h2>"
             f"<p>{progress['linkedin_done']} decisions saved</p>"
-            f"{finish_button}</div>")
+            f"{tail}</div>")
 
 
 def linkedin_card_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
@@ -2765,7 +2774,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
             profile_cache_dir=profile_cache_dir, debug=debug)
     else:
         content = ("<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
-                   f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p></div>")
+                   f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p>"
+                   f"{GO_BACK_HTML}</div>")
 
     stepper = (_step(1, "Review Decisions", people_active, worth_complete, progress["worth_pending"],
                      "/?stage=worth&preview=1")
@@ -2821,6 +2831,84 @@ def _manifest_for_review_path(review_path: Path) -> Path:
     return review_path.parent / "review" / "manifest.json"
 
 
+# --- in-app pipeline jobs ----------------------------------------------------
+# The review app runs the mid-flow work itself (owner decision: the app is
+# self-sufficient from People review through Check LinkedIn; the agent's
+# `review-status --wait` returns only for retry_enrichment/realize). One
+# daemon thread at a time; the primitives keep owning their manifests, so the
+# UI's existing /api/status polling renders progress with no new state store.
+ENRICH_FLAGS = ["--include-candidates", "--include-plausibly-absent"]
+_job_lock = threading.Lock()
+
+
+def _mark_enrichment_failed(error: str) -> None:
+    """Best-effort: surface a job crash in the fixed enrichment manifest so
+    workflow_status turns it into retry_enrichment instead of a silent stall."""
+    try:
+        existing = json.loads(ENRICH_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    existing.update({"stage": "enrich", "status": "failed", "error": error[:500],
+                     "updated_at": now_iso()})
+    try:
+        ENRICH_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
+        ENRICH_MANIFEST.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
+    if not _job_lock.acquire(blocking=False):
+        return  # one job at a time; the durable manifests re-trigger any rerun
+
+    def runner() -> None:
+        try:
+            steps()
+        except Exception as exc:  # the manifest is the UI's/agent's error surface
+            _mark_enrichment_failed(f"{name}: {type(exc).__name__}: {exc}")
+        finally:
+            _job_lock.release()
+
+    threading.Thread(target=runner, name=f"pipeline-job-{name}", daemon=True).start()
+
+
+def _post_enrichment_chain() -> None:
+    """Free follow-ups once research is done: no-LinkedIn cards + profile cache."""
+    # Local imports avoid a module cycle (these primitives import this module).
+    from packs.ingestion.primitives.deep_context import assemble_synthetic_profile
+    from packs.ingestion.primitives.deep_context import prefetch_profiles
+    assemble_synthetic_profile.main([])
+    prefetch_profiles.main(["--fetch"])
+
+
+def start_enrichment_preview_job() -> None:
+    """After People review completes: build the free preview/estimate. When it
+    needs no approval (zero net-new), continue from cache and chain at once."""
+    def steps() -> None:
+        from packs.ingestion.primitives.deep_context import reconcile_deep_research
+        reconcile_deep_research.main(["--dry-run", *ENRICH_FLAGS])
+        enrichment = read_enrichment_manifest(selection=current_worth_selection())
+        if (enrichment.get("status") == "needs_approval"
+                and int(enrichment.get("would_submit") or 0) == 0):
+            reconcile_deep_research.main(list(ENRICH_FLAGS))
+            _post_enrichment_chain()
+
+    _run_pipeline_job("enrichment-preview", steps)
+
+
+def start_approved_enrichment_job(budget: float) -> None:
+    """The Approve $X click IS the user's spend approval: run exactly that."""
+    def steps() -> None:
+        from packs.ingestion.primitives.deep_context import reconcile_deep_research
+        reconcile_deep_research.main(
+            [*ENRICH_FLAGS, "--approve", "--budget", f"{budget:.2f}"])
+        _post_enrichment_chain()
+
+    _run_pipeline_job("approved-enrichment", steps)
+
+
 def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, dossier_dir: Path,
                  confirm_threshold: float, detach_threshold: float,
                  synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
@@ -2830,8 +2918,16 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                  profile_cache_dir: Path = PROFILE_CACHE_DIR,
                  avatar_dir: Path | None = None,
                  initial_parents: list[dict[str, Any]] | None = None,
-                 agent_notifier: Callable[[], object] | None = None):
+                 agent_notifier: Callable[[], object] | None = None,
+                 run_jobs: bool | None = None):
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
+    # In-app jobs call the primitives on their CANONICAL default paths, so they
+    # only auto-enable for the canonical server (tests use temp paths -> off).
+    if run_jobs is None:
+        try:
+            run_jobs = review_path.resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
+        except OSError:
+            run_jobs = False
     avatar_dir = avatar_dir or manifest_path.parent / "avatars"
     mutation_lock = threading.Lock()
 
@@ -3139,6 +3235,11 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=409)
                     return
+                if run_jobs:
+                    # The click IS the approval: run exactly the approved budget.
+                    approved = float(
+                        (enrichment.get("approval") or {}).get("approved_budget_usd") or 0)
+                    start_approved_enrichment_job(approved)
                 notify_agent()
                 self.send_json({"ok": True, "enrichment": enrichment})
                 return
@@ -3172,6 +3273,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             manifest = write_review_manifest(
                                 stage, "completed", progress, path=manifest_path,
                                 review_path=review_path, synthetic_path=synthetic_path)
+                            if stage == "worth" and run_jobs:
+                                start_enrichment_preview_job()
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=409)
@@ -3238,6 +3341,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 "worth", "completed", progress, path=manifest_path,
                                 review_path=review_path, synthetic_path=synthetic_path)
                             next_stage = "enrich"
+                            if run_jobs:
+                                start_enrichment_preview_job()
                         else:
                             review_manifest = write_review_manifest(
                                 "worth", "awaiting_user", progress, path=manifest_path,
@@ -3574,12 +3679,11 @@ def workflow_status(
         enrichment_manifest_path=enrichment_manifest_path)
 
 
-# next_action values the AGENT acts on; everything else is the human's move.
+# next_action values the AGENT acts on. The review app runs the mid-flow work
+# itself (preview, approved enrichment, from-cache continue, assemble,
+# prefetch — see the in-app pipeline jobs), so the agent's wait returns only
+# when something went wrong or when everything is done.
 AGENT_ACTIONS = {
-    "preview_enrichment",
-    "run_approved_enrichment",
-    "run_enrichment_from_cache",
-    "assemble_synthetic",
     "retry_enrichment",
     "realize",
 }
