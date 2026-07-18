@@ -2896,7 +2896,11 @@ def start_enrichment_preview_job() -> None:
         enrichment = read_enrichment_manifest(selection=current_worth_selection())
         if (enrichment.get("status") == "needs_approval"
                 and int(enrichment.get("would_submit") or 0) == 0):
-            reconcile_deep_research.main(list(ENRICH_FLAGS))
+            # Zero net-new means a $0.00 estimate, but the primitive's spend
+            # gate refuses ANY run without --approve — omit it and this parks
+            # at needs_approval forever ("Preparing enrichment" stuck screen).
+            reconcile_deep_research.main(
+                [*ENRICH_FLAGS, "--approve", "--budget", "0.00"])
             _post_enrichment_chain()
 
     _run_pipeline_job("enrichment-preview", steps)
@@ -3554,6 +3558,25 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     if requested_stage == "worth":
         begin_people_review()
+    # Self-heal: a server restart can kill the in-app preview job between its
+    # dry-run write and the free continuation, stranding the manifest at
+    # needs_approval / would_submit=0 (the "Preparing enrichment" stuck screen).
+    # Resume the free continuation on launch; the would_submit>0 case correctly
+    # keeps waiting for the user's Approve click. The job re-runs the dry run
+    # first, so a stale manifest only ever leads to a fresh, correct estimate.
+    try:
+        canonical_paths = review_path.resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
+    except (OSError, RuntimeError):
+        canonical_paths = False
+    if canonical_paths and progress["worth_pending"] == 0:
+        try:
+            stranded = json.loads(ENRICH_MANIFEST.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            stranded = {}
+        if (isinstance(stranded, dict)
+                and stranded.get("status") == "needs_approval"
+                and int(stranded.get("would_submit") or 0) == 0):
+            start_enrichment_preview_job()
     # No push notifier: the agent watches state with `review-status --wait`,
     # which stats the same durable files this server writes. Simplicity wins.
     server = ThreadingHTTPServer((args.host, args.port),
