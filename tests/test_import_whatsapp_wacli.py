@@ -347,6 +347,69 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertEqual(diagnostics["name_fallback_rows"], 1)
             self.assertEqual(contacts["+14155557777"].name, "Fallback Name")
 
+    def test_wacli_device_env_defaults_to_macos_desktop_identity(self) -> None:
+        # Only DESKTOP makes WhatsApp render the OS label; specific device enums
+        # (e.g. CATALINA) get overridden with WhatsApp's own fixed device name.
+        with mock.patch.object(mod, "DEFAULT_DEVICE_PLATFORM", "DESKTOP"), \
+             mock.patch.object(mod, "DEFAULT_DEVICE_LABEL", "Mac OS"), \
+             mock.patch.dict(mod.os.environ):
+            mod.os.environ.pop("WACLI_DEVICE_PLATFORM", None)
+            mod.os.environ.pop("WACLI_DEVICE_LABEL", None)
+            env = mod.wacli_device_env()
+        self.assertEqual(env["WACLI_DEVICE_PLATFORM"], "DESKTOP")
+        self.assertEqual(env["WACLI_DEVICE_LABEL"], "Mac OS")
+
+    def test_wacli_device_env_respects_preset_environment(self) -> None:
+        with mock.patch.dict(mod.os.environ, {
+            "WACLI_DEVICE_PLATFORM": "DESKTOP",
+            "WACLI_DEVICE_LABEL": "my custom label",
+            "WACLI_DEVICE_FULL_SYNC_DAYS": "1000",
+        }):
+            env = mod.wacli_device_env()
+        self.assertEqual(env["WACLI_DEVICE_PLATFORM"], "DESKTOP")
+        self.assertEqual(env["WACLI_DEVICE_LABEL"], "my custom label")
+        self.assertEqual(env["WACLI_DEVICE_FULL_SYNC_DAYS"], "1000")
+
+    def test_wacli_device_env_defaults_include_full_sync(self) -> None:
+        with mock.patch.dict(mod.os.environ):
+            for key in ("WACLI_DEVICE_PLATFORM", "WACLI_DEVICE_LABEL", "WACLI_DEVICE_FULL_SYNC_DAYS"):
+                mod.os.environ.pop(key, None)
+            env = mod.wacli_device_env()
+        self.assertEqual(env["WACLI_DEVICE_FULL_SYNC_DAYS"], "3650")
+
+    def test_wa_qr_payload_handles_bare_and_wa_me_url_forms(self) -> None:
+        # wacli <=0.11 bare ref
+        self.assertEqual(mod.wa_qr_payload("2@abc,def,ghi"), "2@abc,def,ghi")
+        # wacli 0.13 wa.me URL form — must encode the WHOLE url, not just the 2@ tail
+        url = "https://wa.me/settings/linked_devices#2@abc,def,ghi"
+        self.assertEqual(mod.wa_qr_payload(url), url)
+        self.assertEqual(mod.wa_qr_payload(f"  {url}  "), url)
+        # non-QR text
+        self.assertIsNone(mod.wa_qr_payload("just a log line"))
+        self.assertIsNone(mod.wa_qr_payload('{"event":"connected"}'))
+
+    def test_wa_me_url_qr_is_redacted(self) -> None:
+        url = "https://wa.me/settings/linked_devices#2@secret-ref,keys"
+        self.assertEqual(mod.redact_qr_payloads(f"pre\n{url}\npost"),
+                         f"pre\n{mod.QR_REDACTION}\npost")
+
+    def test_pinned_install_spec_points_at_powerset_fork(self) -> None:
+        self.assertEqual(mod.WACLI_MODULE, "github.com/powerset-co/wacli")
+        self.assertTrue(mod.WACLI_INSTALL_SPEC.endswith("/cmd/wacli@" + mod.WACLI_PINNED_VERSION))
+        self.assertTrue(mod.WACLI_PINNED_VERSION.startswith("v0.13.0"))
+
+    def test_wacli_bin_prefers_pinned_over_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            pinned = Path(td) / "wacli"
+            pinned.write_text("#!/bin/sh\n"); pinned.chmod(0o755)
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", pinned), \
+                 mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/wacli"):
+                self.assertEqual(mod.wacli_bin(), str(pinned))
+            # falls back to PATH when the pinned binary is absent
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", Path(td) / "absent"), \
+                 mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/wacli"):
+                self.assertEqual(mod.wacli_bin(), "/opt/homebrew/bin/wacli")
+
 
 if __name__ == "__main__":
     unittest.main()

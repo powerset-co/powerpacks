@@ -51,6 +51,17 @@ DEFAULT_GROUP_PARTICIPANTS_CACHE = DEFAULT_OUT_DIR / "wacli.group-participants.j
 DEFAULT_IDLE_EXIT = os.environ.get("POWERPACKS_WACLI_IDLE_EXIT", "30s")
 DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "600"))
 DEFAULT_SYNC_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_SYNC_TIMEOUT", "900"))
+DEFAULT_DEVICE_PLATFORM = os.environ.get("POWERPACKS_WACLI_DEVICE_PLATFORM", "DESKTOP")
+DEFAULT_DEVICE_LABEL = os.environ.get("POWERPACKS_WACLI_DEVICE_LABEL", "Mac OS")
+DEFAULT_FULL_SYNC_DAYS = os.environ.get("POWERPACKS_WACLI_FULL_SYNC_DAYS", "3650")
+# Pinned powerset-co fork of wacli that forces a full history sync at pairing
+# (RequireFullSync). Installed by module path so `go install` resolves this exact
+# tag; kept off the upstream Homebrew tap so we control the version.
+WACLI_MODULE = "github.com/powerset-co/wacli"
+WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.13.0-fullsync")
+WACLI_INSTALL_SPEC = f"{WACLI_MODULE}/cmd/wacli@{WACLI_PINNED_VERSION}"
+WACLI_BIN_DIR = Path(os.environ.get("POWERPACKS_WACLI_BIN_DIR", str(Path.home() / ".powerpacks" / "bin")))
+WACLI_PINNED_BIN = WACLI_BIN_DIR / "wacli"
 QR_REDACTION = "[whatsapp qr payload redacted]"
 STATUS_PREFIX = "[import-whatsapp]"
 GROUP_SEPARATOR = " | "
@@ -233,57 +244,61 @@ def command_text(cmd: list[str]) -> str:
     return " ".join(cmd)
 
 
-def install_remediation(text: str) -> str:
-    lowered = text.lower()
-    if "xcode-select" in lowered or "command line tools" in lowered:
-        return "Install Command Line Tools with `xcode-select --install`, then rerun $import-whatsapp."
-    if "permission denied" in lowered:
-        return "Homebrew hit a permission error. Fix the Homebrew permission issue above, then rerun $import-whatsapp."
-    return "Install failed. Fix the Homebrew error above, then rerun $import-whatsapp."
+def wacli_bin() -> str | None:
+    """Resolve the wacli binary, preferring our pinned fork install so a stray
+    PATH wacli (e.g. the upstream Homebrew tap) can never shadow it."""
+    if WACLI_PINNED_BIN.exists() and os.access(WACLI_PINNED_BIN, os.X_OK):
+        return str(WACLI_PINNED_BIN)
+    return shutil.which("wacli")
 
 
 def wacli_version(timeout: int = 30) -> dict[str, Any]:
-    exe = shutil.which("wacli")
+    exe = wacli_bin()
     if not exe:
         raise PrimitiveFailed("wacli is not installed")
     result = run_command([exe, "--version"], timeout=timeout)
     version = (result.get("stdout") or "").strip()
     if result["returncode"] != 0 or not version:
         raise PrimitiveFailed(((result.get("stderr") or result.get("stdout") or "").strip())[-1000:])
-    return {"path": exe, "version": version}
+    return {"path": exe, "version": version, "pinned": exe == str(WACLI_PINNED_BIN)}
 
 
 def ensure_wacli_installed(*, install: bool = True) -> dict[str, Any]:
-    if shutil.which("wacli"):
+    # Only the pinned fork gives full history sync; a PATH wacli is not enough.
+    if WACLI_PINNED_BIN.exists() and os.access(WACLI_PINNED_BIN, os.X_OK):
         return wacli_version()
     if not install:
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "wacli is not installed. Install it, then rerun $import-whatsapp.",
-            "install_command": "brew install steipete/tap/wacli",
+            "message": f"wacli (pinned fork) is not installed. Install it, then rerun $import-whatsapp.",
+            "install_command": f"go install {WACLI_INSTALL_SPEC}",
         })
-    brew = shutil.which("brew")
-    if not brew:
+    go = shutil.which("go")
+    if not go:
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "Homebrew is required to install wacli automatically.",
-            "install_command": "brew install steipete/tap/wacli",
+            "message": "Go is required to install the pinned wacli fork. Install Go (`brew install go`), then rerun $import-whatsapp.",
+            "install_command": f"go install {WACLI_INSTALL_SPEC}",
         })
-    emit_status("Installing WhatsApp sync helper.")
-    result = run_command([brew, "install", "steipete/tap/wacli"], timeout=900)
-    if result["returncode"] != 0:
+    emit_status("Installing WhatsApp sync helper (pinned fork).")
+    WACLI_BIN_DIR.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["GOBIN"] = str(WACLI_BIN_DIR)
+    env["CGO_ENABLED"] = "1"  # mattn/go-sqlite3
+    result = run_command([go, "install", WACLI_INSTALL_SPEC], timeout=900, env=env)
+    if result["returncode"] != 0 or not WACLI_PINNED_BIN.exists():
         detail = (result.get("stderr") or result.get("stdout") or "").strip()
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": install_remediation(detail),
+            "message": "Failed to build the pinned wacli fork. Ensure Go and the Xcode command line tools (clang) are installed, then rerun $import-whatsapp.",
             "detail": detail[-4000:],
-            "install_command": "brew install steipete/tap/wacli",
+            "install_command": f"go install {WACLI_INSTALL_SPEC}",
         })
     return wacli_version()
 
 
 def wacli_json(store: Path, args: list[str], *, timeout: int = 300) -> dict[str, Any]:
-    cmd = ["wacli", "--store", str(store), "--json", *args]
+    cmd = [wacli_bin() or "wacli", "--store", str(store), "--json", *args]
     result = run_command(cmd, timeout=timeout)
     payload = result.get("json")
     if result["returncode"] != 0:
@@ -343,11 +358,29 @@ def write_qr_html(path: Path, png_path: Path) -> None:
     )
 
 
+WA_QR_URL_MARKER = "wa.me/settings/linked_devices#2@"
+
+
+def wa_qr_payload(text: str) -> str | None:
+    """Return the exact QR payload to encode if text is a WhatsApp linked-device
+    QR, else None. wacli <=0.11 emits a bare `2@...` ref; wacli 0.13 emits a
+    `https://wa.me/settings/linked_devices#2@...` URL. WhatsApp must receive
+    exactly what wacli emits, so encode the whole string either way (encoding
+    only the trailing `2@` fragment of the 0.13 URL is what broke pairing)."""
+    stripped = text.strip()
+    if stripped.startswith("2@"):
+        return stripped
+    idx = stripped.find("https://wa.me/")
+    if idx != -1 and WA_QR_URL_MARKER in stripped:
+        return stripped[idx:].split()[0]
+    return None
+
+
 def redact_qr_payloads(text: str) -> str:
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("2@") or '"event":"qr_code"' in stripped or '"event": "qr_code"' in stripped:
+        if wa_qr_payload(stripped) or '"event":"qr_code"' in stripped or '"event": "qr_code"' in stripped:
             lines.append(QR_REDACTION)
         else:
             lines.append(line)
@@ -380,6 +413,24 @@ def update_qr_page(payload: str, png_path: Path, html_path: Path, *, open_page: 
         subprocess.run(["open", str(html_path)], check=False)
 
 
+def wacli_device_env() -> dict[str, str]:
+    """Device identity WhatsApp records at PAIRING time only (re-pair to change it).
+
+    Only PlatformType DESKTOP makes WhatsApp's Linked Devices list render the OS
+    label we set (WACLI_DEVICE_LABEL). whatsmeow's other platform enum names are
+    reverse-engineered guesses whose *numbers* WhatsApp maps to its own fixed
+    device names, ignoring the label (e.g. CATALINA/12 currently shows as
+    "Portal TV", not macOS). See tulir/whatsmeow discussion #469. DESKTOP + a
+    "Mac OS" label registers as a desktop and displays as macOS. Pre-set
+    WACLI_DEVICE_* values in the environment win.
+    """
+    env = dict(os.environ)
+    env.setdefault("WACLI_DEVICE_PLATFORM", DEFAULT_DEVICE_PLATFORM)
+    env.setdefault("WACLI_DEVICE_LABEL", DEFAULT_DEVICE_LABEL)
+    env.setdefault("WACLI_DEVICE_FULL_SYNC_DAYS", DEFAULT_FULL_SYNC_DAYS)
+    return env
+
+
 def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> dict[str, Any]:
     if not shutil.which("qrencode"):
         raise PrimitiveBlocked({
@@ -390,7 +441,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     emit_status("WhatsApp needs a QR scan.")
     clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG)
     cmd = [
-        "wacli",
+        wacli_bin() or "wacli",
         "--store", str(store),
         "--events",
         "auth",
@@ -398,7 +449,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
         "--follow=false",
         "--idle-exit", idle_exit,
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=wacli_device_env())
     output: list[str] = []
     opened = False
     connected = False
@@ -429,8 +480,9 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
             event_name = event.get("event")
             data = event.get("data") if isinstance(event.get("data"), dict) else {}
             code = data.get("code")
-            if event_name == "qr_code" and isinstance(code, str) and code.startswith("2@"):
-                update_qr_page(code, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=open_qr_page and not opened)
+            payload = wa_qr_payload(code) if isinstance(code, str) else None
+            if event_name == "qr_code" and payload:
+                update_qr_page(payload, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=open_qr_page and not opened)
                 opened = True
                 emit_status("Refreshed WhatsApp QR page.")
             elif event_name == "connected":
@@ -439,8 +491,9 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                     proc.send_signal(signal.SIGINT)
                     interrupted_bootstrap_sync = True
             return
-        if source == "stdout" and text.startswith("2@"):
-            update_qr_page(text, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=open_qr_page and not opened)
+        stdout_payload = wa_qr_payload(text) if source == "stdout" else None
+        if stdout_payload:
+            update_qr_page(stdout_payload, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=open_qr_page and not opened)
             opened = True
             emit_status("Refreshed WhatsApp QR page.")
 
@@ -517,7 +570,7 @@ def effective_max_messages(requested: int, existing: int) -> int:
 def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) -> dict[str, Any]:
     emit_status("Syncing WhatsApp Messages and Contacts.")
     cmd = [
-        "wacli",
+        wacli_bin() or "wacli",
         "--store", str(store),
         "sync",
         "--once",
@@ -589,7 +642,7 @@ def refresh_group_info(store: Path, *, timeout: int, min_interval: float) -> dic
     }
     for jid in jids:
         result = run_command(
-            ["wacli", "--store", str(store), "--json", "groups", "info", "--jid", jid],
+            [wacli_bin() or "wacli", "--store", str(store), "--json", "groups", "info", "--jid", jid],
             timeout=timeout,
         )
         text = (result.get("stderr") or result.get("stdout") or "").lower()

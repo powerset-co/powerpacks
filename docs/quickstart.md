@@ -81,16 +81,21 @@ the skill from:
 The primitive is stdlib-only; no new Python packages required.
 
 WhatsApp uses the local
-[`wacli`](https://github.com/openclaw/wacli) helper by default. Canonical
-discovery does not install software silently: if wacli or its QR renderer is
-missing, `$import-messages` shows the exact Homebrew command and asks before
-running it. The wacli command is:
+[`wacli`](https://github.com/powerset-co/wacli) helper by default — a pinned
+Powerpacks fork of [openclaw/wacli](https://github.com/openclaw/wacli) that
+forces a full multi-year history sync at pairing (upstream only pulls a recent
+window). Canonical discovery does not install software silently: if the pinned
+wacli or its QR renderer is missing, `$import-messages` shows the exact command
+and asks before running it. The wacli install is a pinned `go install` (needs
+Go + the Xcode command line tools for CGo):
 
 ```bash
-brew install steipete/tap/wacli
+go install github.com/powerset-co/wacli/cmd/wacli@v0.13.0-fullsync
 ```
 
-QR rendering may separately request `brew install qrencode`.
+It installs to `~/.powerpacks/bin/wacli` and is always invoked by that absolute
+path, so a stray upstream `wacli` on `PATH` never shadows the pinned fork. QR
+rendering may separately request `brew install qrencode`.
 
 You'll also need WhatsApp on your phone to scan the QR code that pops up
 during the auth step.
