@@ -228,6 +228,12 @@ def _extract_whatsapp(
         return _failed_child("extract_whatsapp", payload, stderr)
     artifacts["whatsapp_contacts_csv"] = str(WHATSAPP_CONTACTS)
     artifacts["whatsapp_provider"] = "wacli"
+    # Surface the non-blocking "re-link for deeper history" nudge to the skill when
+    # the WhatsApp session predates full history sync.
+    pairing = payload.get("pairing") if isinstance(payload.get("pairing"), dict) else {}
+    if pairing.get("state") == "pre_full_sync":
+        artifacts["whatsapp_pairing_state"] = "pre_full_sync"
+        artifacts["whatsapp_pairing_notice"] = str(pairing.get("hint") or "")
     return None
 
 
