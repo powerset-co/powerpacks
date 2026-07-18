@@ -2280,20 +2280,22 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
                      profile_cache_dir: Path) -> str:
     """One selectable profile option inside a multi-candidate parent card.
 
-    Shows the candidate's own profile summary/headline/View-LinkedIn (a synthetic row
-    has no real LinkedIn header) and its own "Use this profile" action keyed on that
-    option's pub. Picking it resolves the whole parent."""
+    The card header already names the person once — options never repeat the
+    name. Each option leads with its profile link ("LinkedIn ↗" for a real
+    profile, "N/A" for a synthetic no-LinkedIn row) plus its own summary and
+    "Use this profile" action keyed on that option's pub. Picking it resolves
+    the whole parent."""
     _hydrate_card_profile(candidate, profile_cache_dir)
     pub = str(candidate.get("pub") or "")
     synthetic = bool(candidate.get("synthetic"))
-    option_name = str(candidate.get("full_name") or parent.get("name") or "")
+    na = "<span class='linkedin-label linkedin-label-na'>N/A</span>"
     if synthetic:
-        link = ""
+        link = na
         headline = ""
     else:
         url = str(candidate.get("url") or "")
-        link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
-                "<span aria-hidden='true'>↗</span></a>") if url else ""
+        link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>LinkedIn"
+                "<span aria-hidden='true'>↗</span></a>") if url else na
         headline = str(candidate.get("headline") or "")
     summary = (str(candidate.get("simple_summary") or "").strip()
                or _display_reason(str(candidate.get("reason") or "")))
@@ -2308,7 +2310,6 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
         <div class='profile-card'>
           {_avatar(parent, candidate, small=True)}
           <div class='profile-copy'>
-            <h3>{esc(option_name)}</h3>
             {link}
             {f"<p>{esc(headline)}</p>" if headline else ""}
             {f"<span>{esc(location)}</span>" if location else ""}
