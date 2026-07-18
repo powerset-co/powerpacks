@@ -324,7 +324,10 @@ Routes:
   research-candidates pool → fan-in merge → suggest/process tail); no LLM,
   research, review, or index build in-skill — processing/identity
   resolution/indexing is `$deep-context`; local
-  only, never uploads to Powerset →
+  only, never uploads to Powerset. Sub-verbs: `$import-messages sync` (fast
+  incremental WhatsApp pull; the default `auto` is already incremental after the
+  first full backfill) and `$import-messages full` (force a full re-backfill),
+  forwarded as `--wacli-sync-mode` →
   `packs/ingestion/skills/import-messages/SKILL.md`
 - `$import-whatsapp`, isolated WhatsApp metadata sync/export through wacli; no
   identity resolution, fan-in, or indexing →

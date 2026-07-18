@@ -44,6 +44,12 @@ DEFAULT_MANIFEST = DEFAULT_OUTPUT_CSV.with_suffix(DEFAULT_OUTPUT_CSV.suffix + ".
 DEFAULT_PROGRESS_JSONL = DEFAULT_MANIFEST.with_suffix(DEFAULT_MANIFEST.suffix + ".progress.jsonl")
 DEFAULT_NAME_FALLBACK_CSV = DEFAULT_OUT_DIR / "contacts.csv"
 DEFAULT_MAX_MESSAGES = int(os.environ.get("POWERPACKS_WACLI_MAX_MESSAGES", "0"))
+# Store-size target used by incremental sync: existing messages + headroom for
+# new ones (headroom = max(1000, budget // 10) via effective_max_messages). A
+# rerun therefore pulls only the delta, not the whole history. Tunable — higher
+# is safer for very active accounts between syncs, but slower.
+DEFAULT_INCREMENTAL_BUDGET = int(os.environ.get("POWERPACKS_WACLI_INCREMENTAL_BUDGET", "20000"))
+SYNC_MODES = ("auto", "full", "incremental")
 DEFAULT_QR_PNG = DEFAULT_OUT_DIR / "wacli-login-qr.png"
 DEFAULT_QR_HTML = DEFAULT_OUT_DIR / "wacli-login-qr.html"
 DEFAULT_MAX_GROUP_PARTICIPANTS = int(os.environ.get("POWERPACKS_WACLI_MAX_GROUP_PARTICIPANTS", "30"))
@@ -512,6 +518,26 @@ def effective_max_messages(requested: int, existing: int) -> int:
     if requested <= 0:
         return 0
     return max(requested, existing + max(1000, requested // 10))
+
+
+def resolve_effective_max(mode: str, requested: int, existing: int) -> int:
+    """Resolve the wacli --max-messages target from the sync mode.
+
+    `full` always re-backfills everything (0 = unlimited). `incremental` targets
+    existing + headroom so a rerun pulls only the delta. `auto` (default) is
+    smart: a first run (empty store) backfills fully, later runs go incremental.
+    An explicit positive ``requested`` (someone passed --max-messages N) always
+    wins over the mode."""
+    if requested and requested > 0:
+        return effective_max_messages(requested, existing)
+    if mode == "full":
+        return 0
+    if mode == "incremental":
+        return effective_max_messages(DEFAULT_INCREMENTAL_BUDGET, existing)
+    # auto: full on the first run, incremental once the store is populated.
+    if existing > 0:
+        return effective_max_messages(DEFAULT_INCREMENTAL_BUDGET, existing)
+    return 0
 
 
 def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) -> dict[str, Any]:
@@ -1339,13 +1365,18 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         stats_before_sync = store_stats(store)
         existing_messages = store_message_count(stats_before_sync) or 0
-        effective_max_messages_value = effective_max_messages(args.max_messages, existing_messages)
+        sync_mode = getattr(args, "sync_mode", "auto")
+        effective_max_messages_value = resolve_effective_max(
+            sync_mode, args.max_messages, existing_messages
+        )
         sync_summary = run_sync(
             store,
             timeout=args.sync_timeout,
             idle_exit=args.idle_exit,
             max_messages=effective_max_messages_value,
         )
+        sync_summary["sync_mode"] = sync_mode
+        sync_summary["incremental"] = effective_max_messages_value > 0
         sync_summary["requested_max_messages"] = args.max_messages
         sync_summary["existing_messages_before_sync"] = existing_messages
         write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
@@ -1447,6 +1478,10 @@ def main() -> int:
     add_output_args(run)
     run.add_argument("--progress-jsonl", default=str(DEFAULT_PROGRESS_JSONL))
     run.add_argument("--max-messages", type=int, default=DEFAULT_MAX_MESSAGES)
+    run.add_argument("--sync-mode", choices=SYNC_MODES, default="auto",
+                     help="auto: full on first run, incremental after; "
+                          "full: always re-backfill everything; "
+                          "incremental: only pull new messages since last sync")
     run.add_argument("--idle-exit", default=DEFAULT_IDLE_EXIT)
     run.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
     run.add_argument("--sync-timeout", type=int, default=DEFAULT_SYNC_TIMEOUT)
