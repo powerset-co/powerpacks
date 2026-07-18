@@ -3309,7 +3309,10 @@ class TestCardProfileAndReasonDisplay(unittest.TestCase):
         self.assertLess(html.index("dossier-text"), html.index("<dt>Work</dt>"))
         self.assertLess(html.index("<dt>Work</dt>"), html.index("<dt>Education</dt>"))
 
-    def test_card_cache_miss_shows_passive_prefetch_note(self):
+    def test_card_cache_miss_shows_neutral_copy_without_operator_plumbing(self):
+        # A cache miss reads as "not enough information" to the reviewer; the
+        # prefetch instruction lives in the skill (which runs it automatically)
+        # and its manifest logs every miss — never in the review UI.
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             parent = self._card_parent()
@@ -3321,10 +3324,9 @@ class TestCardProfileAndReasonDisplay(unittest.TestCase):
                 [self._card_parent()], progress, enrichment_complete=True,
                 linkedin_complete=False, parents_dir=base / "parents",
                 dossier_dir=base / "dossiers", profile_cache_dir=base / "empty-cache")
-        self.assertIn("No cached profile data", html)
-        self.assertIn("run profile prefetch", html)
-        # ...and the stage surfaces the aggregate miss count passively
-        self.assertIn("1 person here has no cached profile", body)
+        self.assertIn("Not enough profile information available", html)
+        self.assertNotIn("profile prefetch", html)
+        self.assertNotIn("no cached profile", body)
 
     def test_profile_fact_rows_pin_three_with_show_more_toggle(self):
         rows = web.profile_fact_rows({

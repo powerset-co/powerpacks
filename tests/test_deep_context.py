@@ -25,8 +25,13 @@ from packs.ingestion.primitives.deep_context import (
     reconcile_deep_research as dresearch,
     reconcile_linkedin as reconcile,
     reconcile_review_web as web,
+    restart_review,
     sources,
     synthesize_person_context as synth,
+)
+from packs.ingestion.primitives.deep_context.review_store import (
+    load_override_rows as load_rows,
+    write_override_rows as write_rows,
 )
 
 
@@ -101,6 +106,64 @@ class TestDeepContextRunnerSafety(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("--fetch", result.stdout)
         self.assertIn("RapidAPI", result.stdout)
+
+    def test_restart_is_wired_and_defaults_to_dry_run(self):
+        runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
+        result = subprocess.run(
+            [str(runner), "restart", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--apply", result.stdout)
+        self.assertIn("machine", result.stdout)
+
+
+class TestRestartReview(unittest.TestCase):
+    def test_restart_clears_human_worth_and_keeps_machine_verdicts(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review = base / "review.csv"
+            rows = {
+                "candidate:email:ana@example.com": {
+                    "public_identifier": "candidate:email:ana@example.com",
+                    "network_worth": "yes",         # human — must clear
+                    "llm_worth": "no",              # machine — must survive
+                    "llm_worth_reason": "thin thread",
+                },
+                "candidate:email:bo@example.com": {
+                    "public_identifier": "candidate:email:bo@example.com",
+                    "network_worth": "",            # no human mark
+                    "llm_worth": "yes",
+                    "llm_worth_reason": "dense two-way thread",
+                },
+            }
+            write_rows(review, rows)
+            synthetic = base / "synthetic-people.csv"
+            with synthetic.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=["person_id", "approved"])
+                writer.writeheader()
+                writer.writerow({"person_id": "candidate:email:ana@example.com",
+                                 "approved": "yes"})
+
+            loaded = load_rows(review)
+            self.assertEqual(restart_review.clear_human_worth(loaded), 1)
+            write_rows(review, loaded)
+            synth_result = restart_review.clear_synthetic_approvals(
+                synthetic, apply=True)
+
+            after = load_rows(review)
+            ana = after["candidate:email:ana@example.com"]
+            self.assertEqual(ana["network_worth"], "")          # human cleared
+            self.assertEqual(ana["llm_worth"], "no")            # machine kept
+            self.assertEqual(ana["llm_worth_reason"], "thin thread")
+            self.assertEqual(synth_result["cleared"], 1)
+            with synthetic.open(newline="", encoding="utf-8") as fh:
+                synth_rows = list(csv.DictReader(fh))
+            self.assertEqual(synth_rows[0]["approved"], "")
+            # nothing deleted: the synthetic file was backed up first
+            self.assertTrue(list(base.glob("synthetic-people.csv.bkup-*")))
 
 
 import sqlite3  # noqa: E402  (local to the msgvault-con helper below)
