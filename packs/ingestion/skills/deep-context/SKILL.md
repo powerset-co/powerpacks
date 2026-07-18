@@ -221,6 +221,11 @@ Launch the local UI once in a background terminal:
 bin/deep-context review --fresh
 ```
 
+`review` first restarts any review server already running on the port so the UI
+always serves the current code (state is file-driven; nothing is lost). Never
+skip the launch because "a server is already up" — a leftover server keeps
+serving the stale Python it loaded at startup.
+
 When the current harness exports `CODEX_THREAD_ID`, `review` automatically
 starts or replaces one local same-thread bridge before opening the UI. Confirm
 that its JSON output says `deep_context_review_agent_bridge` / `started`, then
