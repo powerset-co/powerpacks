@@ -48,6 +48,10 @@ WAKE_ACTIONS = {
     "realize",
 }
 STOP_AFTER_ACTIONS = {"retry_enrichment", "realize"}
+# Failed wakes retry a few times (thread mid-turn, transient app-server error);
+# each attempt re-reads review-status so a stale retry no-ops.
+RETRY_LIMIT = 3
+RETRY_DELAY_SECONDS = 60.0
 BRIDGE_SANDBOX_POLICY = {
     "type": "workspaceWrite",
     "writableRoots": [str(REPO_ROOT)],
@@ -497,16 +501,26 @@ def serve_bridge(thread_id: str, *, socket_path: Path | str = DEFAULT_SOCKET) ->
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
+    # A failed wake (Codex thread mid-turn, transient app-server error) used to
+    # be dropped forever — if it was the session's LAST UI mutation, the thread
+    # never updated. Schedule bounded retries instead; handle() re-reads
+    # review-status each attempt, so a retry no-ops once the state moves on.
+    retry_event = ""
+    retry_at = 0.0
+    retry_attempts = 0
     try:
         while not stopping:
             try:
                 payload = server.recv(4096)
+                try:
+                    event = str((json.loads(payload) or {}).get("event") or "")
+                except (json.JSONDecodeError, AttributeError):
+                    continue
             except socket.timeout:
-                continue
-            try:
-                event = str((json.loads(payload) or {}).get("event") or "")
-            except (json.JSONDecodeError, AttributeError):
-                continue
+                if not retry_event or time.time() < retry_at:
+                    continue
+                event = retry_event
+                retry_event = ""
             if event == "stop":
                 break
             if event not in {"state_changed", "smoke"}:
@@ -518,14 +532,19 @@ def serve_bridge(thread_id: str, *, socket_path: Path | str = DEFAULT_SOCKET) ->
                         json.dumps(payload, sort_keys=True), flush=True),
                 )
                 print(json.dumps(result, sort_keys=True), flush=True)
+                retry_attempts = 0
             except Exception as exc:
-                # A failed wake must not launch repeated turns for the same
-                # datagram. Keep only a terse local diagnostic; never log
-                # prompts, thread history, environment values, or form data.
+                # Terse local diagnostic only; never log prompts, thread
+                # history, environment values, or form data.
                 print(json.dumps({
                     "event": event,
                     "error": f"{type(exc).__name__}: {exc}",
+                    "retry_attempt": retry_attempts + 1,
                 }, sort_keys=True), file=sys.stderr, flush=True)
+                retry_attempts += 1
+                if retry_attempts <= RETRY_LIMIT:
+                    retry_event = event
+                    retry_at = time.time() + RETRY_DELAY_SECONDS
                 continue
             if result.get("stop"):
                 break

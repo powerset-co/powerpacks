@@ -2904,6 +2904,22 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         nonlocal cached_signature
         cached_signature = input_signature()
 
+    def refresh_parents_from_disk() -> list[dict[str, Any]]:
+        """Rebuild the model FRESH from files, discarding optimistic patches.
+
+        Used at stage-completion boundaries: the agent's `review-status` CLI
+        always rebuilds fresh, so "completed" must only ever be written when a
+        fresh derivation agrees — otherwise the UI shows "waiting on the agent"
+        while the agent's own read says N people are still pending (the
+        off-by-N handoff split)."""
+        nonlocal cached_parents, cached_signature, connection_keys
+        cached_parents = _all_review_parents(
+            verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
+            parents_dir, dossier_dir, profile_cache_dir)
+        connection_keys = load_connection_keys(people_csv)
+        cached_signature = input_signature()
+        return cached_parents
+
     # Parsed review.csv rows, cached so a decision click does not re-read a
     # potentially large CSV per POST. Invalidation mirrors input_signature:
     # any external write changes the file stat and forces a reload; our own
@@ -3147,8 +3163,19 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 stage = (form.get("stage") or [""])[0].strip().lower()
                 try:
                     with mutation_lock:
-                        current_parents = parents_now()
+                        # Stage completion is a durable handoff to the agent —
+                        # decide it from a FRESH rebuild, never the patched
+                        # cache, so `review-status` can never disagree.
+                        current_parents = refresh_parents_from_disk()
                         progress = review_progress(current_parents)
+                        pending_key = {"worth": "worth_pending",
+                                       "linkedin": "linkedin_pending"}.get(stage)
+                        if pending_key and progress[pending_key]:
+                            self.send_bytes(
+                                (f"{progress[pending_key]} people still need review — "
+                                 "the page refreshed with the current queue").encode("utf-8"),
+                                "text/plain; charset=utf-8", status=409)
+                            return
                         if stage == "enrich":
                             selection = worth_selection_from_parents(
                                 current_parents, manifest_path=manifest_path)
@@ -3216,6 +3243,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         accept_local_write()
                         current_parents = cached_parents
                         progress = review_progress(current_parents)
+                        if progress["worth_pending"] == 0:
+                            # The patched cache says done — confirm against a
+                            # FRESH rebuild before declaring completion, so the
+                            # agent's own fresh read can never disagree.
+                            current_parents = refresh_parents_from_disk()
+                            progress = review_progress(current_parents)
                         if progress["worth_pending"] == 0:
                             review_manifest = write_review_manifest(
                                 "worth", "completed", progress, path=manifest_path,
