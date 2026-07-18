@@ -40,6 +40,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     USER_APPROVED,
     load_override_rows,
 )
+from packs.ingestion.primitives.deep_context.review_store import write_override_rows
 from packs.ingestion.primitives.enrich_people.enrich_people import (
     merge_provider_profile,
     normalize_rapidapi,
@@ -106,10 +107,49 @@ def build_retarget_row(new_url: str, new_pub: str, raw: dict[str, Any],
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     overrides = load_override_rows(Path(args.overrides_csv))
-    retargets = [r for r in overrides.values()
-                 if (r.get("action") or "").strip().lower() == "retarget"
-                 and (r.get("approved") or "").strip().lower() in APPLY_APPROVED]
     by_pub, by_id = load_people_index(Path(args.people_csv))
+
+    # Marker lifecycle: retarget-people.csv is overwritten each run and the
+    # fan-in merge consumes it, so nothing used to close out the SOURCE row —
+    # applied retargets kept reading as "pending" forever (and re-enriched on
+    # later runs), while proposals whose old identity left the review model
+    # became invisible limbo. Reconcile both here, before selecting work:
+    #  - a row whose new pub already lives in people.csv is REALIZED: stamp
+    #    approved=yes (recording what the merge already did) and skip it;
+    #  - a still-pending proposal that resolves to NO current identity (old pub,
+    #    person id, and candidate row all gone) and is not realized is STRANDED:
+    #    reported so the agent can re-propose or drop it, never silently lost.
+    all_markers = [r for r in overrides.values()
+                   if (r.get("action") or "").strip().lower() == "retarget"]
+    finalized = 0
+    stranded: list[dict[str, str]] = []
+    realized_pubs: set[str] = set()
+    for r in all_markers:
+        new_url = normalize_linkedin_url(r.get("new_linkedin_url") or "")
+        new_pub = (r.get("new_public_identifier") or "").strip().lower() or \
+            extract_public_identifier(new_url).lower()
+        old_pub = (r.get("public_identifier") or "").strip().lower()
+        approved = (r.get("approved") or "").strip().lower()
+        if new_pub and new_pub in by_pub:
+            realized_pubs.add(old_pub)
+            if approved not in ("yes", "no"):
+                r["approved"] = "yes"
+                finalized += 1
+            continue
+        if approved:
+            continue
+        pid = (r.get("person_id") or "").strip()
+        resolvable = bool(
+            by_pub.get(old_pub) or by_id.get(pid)
+            or candidate_row(candidate_key_of(pid) or candidate_key_of(old_pub)))
+        if not resolvable:
+            stranded.append({"old": old_pub, "new": new_pub})
+    if finalized:
+        write_override_rows(Path(args.overrides_csv), overrides)
+
+    retargets = [r for r in all_markers
+                 if (r.get("public_identifier") or "").strip().lower() not in realized_pubs
+                 and (r.get("approved") or "").strip().lower() in APPLY_APPROVED]
 
     if retargets:
         load_env()
@@ -155,6 +195,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source": "apply_retargets", "status": "completed",
         "approved_retargets": len(retargets), "enriched": enriched,
         "cache_hits": cache_hits, "rapidapi_misses": misses, "skipped": skipped,
+        "finalized_applied": finalized,
+        "stranded_count": len(stranded), "stranded": stranded[:25],
         "retarget_people_csv": str(out_path), "rows": len(rows),
         "details": details[:50],
         "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
