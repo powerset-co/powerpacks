@@ -941,19 +941,23 @@ def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str,
         primary["worth_key"] = key
 
 
-def apply_worth_decision(review_path: Path, pub: str, worth: str) -> dict[str, str]:
+def apply_worth_decision(review_path: Path, pub: str, worth: str,
+                         rows: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
     """Upsert the USER-owned `network_worth` mark for one review.csv row (keyed by the
     row's key — a verdict row's pub, a candidate/synthetic row's person_id). '' clears
     the mark (back to the LLM's judgment). Never touches action/approved — with ONE
     exception: a worth-Yes on an excluded row clears the exclude (an approved exclude
-    IS a user no, so the rescue must clear both stores)."""
+    IS a user no, so the rescue must clear both stores). ``rows`` lets a caller pass
+    already-parsed override rows (mutated in place) so a hot decision path does not
+    re-read a large review.csv per click."""
     pub = (pub or "").strip().lower()
     worth = (worth or "").strip().lower()
     if not pub:
         raise ValueError("worth mark needs a row key")
     if worth not in ("", *NETWORK_WORTH_VALUES):
         raise ValueError(f"unknown worth mark: {worth}")
-    rows = load_override_rows(review_path)
+    if rows is None:
+        rows = load_override_rows(review_path)
     row = rows.get(pub) or {k: "" for k in OVERRIDE_COLUMNS}
     row["public_identifier"] = pub
     row["network_worth"] = worth
@@ -2614,12 +2618,18 @@ def _carousel_nav() -> str:
 def worth_review_body(parents: list[dict[str, Any]], progress: dict[str, int],
                       parents_dir: Path, dossier_dir: Path, *,
                       debug: bool = False, index: int = 0,
-                      profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+                      profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                      exclude: frozenset[str] | None = None) -> str:
     """The Review tab's current item: the next queue card, or the stage-complete
     state. Shared by page_html and /api/worth-card so a decision click can swap
     in the next card client-side without a full page reload. ``debug`` adds the
-    browse-only carousel; ``index`` picks a queue position (default unchanged)."""
+    browse-only carousel; ``index`` picks a queue position (default unchanged).
+    ``exclude`` skips worth keys whose decision POST is still in flight, so the
+    client can prefetch the FOLLOWING card without waiting for the save."""
     queue = [parent for parent in parents if needs_worth_review(parent)]
+    if exclude:
+        queue = [parent for parent in queue
+                 if str(_worth_key(parent) or "").strip().lower() not in exclude]
     if queue:
         queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
         index = index % len(queue)
@@ -2947,6 +2957,33 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         nonlocal cached_signature
         cached_signature = input_signature()
 
+    # Parsed review.csv rows, cached so a decision click does not re-read a
+    # potentially large CSV per POST. Invalidation mirrors input_signature:
+    # any external write changes the file stat and forces a reload; our own
+    # writes refresh the stat via accept_rows_write (the dict itself was
+    # mutated in place by apply_worth_decision, so it is already current).
+    cached_rows: dict[str, dict[str, str]] | None = None
+    cached_rows_sig: tuple[int, int] | None = None
+
+    def _review_rows_sig() -> tuple[int, int]:
+        try:
+            stat = review_path.stat()
+            return (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return (0, 0)
+
+    def review_rows_now() -> dict[str, dict[str, str]]:
+        nonlocal cached_rows, cached_rows_sig
+        sig = _review_rows_sig()
+        if cached_rows is None or sig != cached_rows_sig:
+            cached_rows = load_override_rows(review_path)
+            cached_rows_sig = sig
+        return cached_rows
+
+    def accept_rows_write() -> None:
+        nonlocal cached_rows_sig
+        cached_rows_sig = _review_rows_sig()
+
     def candidate_in_snapshot(pub: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
         pub_lower = pub.strip().lower()
         for parent in cached_parents:
@@ -3087,13 +3124,25 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     index = max(0, int(str((params.get("index") or ["0"])[0])))
                 except ValueError:
                     index = 0
-                with mutation_lock:
-                    parents = parents_now()
+                exclude = frozenset(
+                    key.strip().lower()
+                    for key in str((params.get("exclude") or [""])[0]).split(",")
+                    if key.strip())
+                if exclude and parsed.path == "/api/worth-card":
+                    # Prefetch of the FOLLOWING card while a decision POST holds
+                    # the mutation lock: render from the current snapshot without
+                    # blocking. The excluded keys make the pick race-free, and the
+                    # POST's own response re-syncs counts when it lands.
+                    parents = cached_parents
+                else:
+                    with mutation_lock:
+                        parents = parents_now()
                 progress = review_progress(parents)
                 if parsed.path == "/api/worth-card":
                     body = worth_review_body(parents, progress, parents_dir, dossier_dir,
                                              debug=debug, index=index,
-                                             profile_cache_dir=profile_cache_dir)
+                                             profile_cache_dir=profile_cache_dir,
+                                             exclude=exclude or None)
                 else:
                     selection = worth_selection_from_parents(
                         parents, manifest_path=manifest_path)
@@ -3198,9 +3247,11 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     with mutation_lock:
                         parents_now()
                         target_parent = worth_parent_in_snapshot(pub)
-                        result = apply_worth_decision(review_path, pub, stored_worth)
+                        rows_now = review_rows_now()
+                        result = apply_worth_decision(review_path, pub, stored_worth,
+                                                      rows=rows_now)
+                        accept_rows_write()
                         gate = sync_synthetic_gate(synthetic_path, pub, stored_worth)
-                        rows_now = load_override_rows(review_path)
                         state = effective_no_for_key(
                             pub, rows_now, facts_dir,
                             keepish=(gate["approved"] == "yes") if gate else None,
