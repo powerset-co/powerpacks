@@ -196,7 +196,6 @@ def _extract_whatsapp(
     command = py_cmd(
         "packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
         "run",
-        "--no-install",
         "--output-csv",
         str(WHATSAPP_CONTACTS),
         "--output-jsonl",

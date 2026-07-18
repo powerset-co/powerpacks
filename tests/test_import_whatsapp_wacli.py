@@ -418,10 +418,25 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(mod.redact_qr_payloads(f"pre\n{url}\npost"),
                          f"pre\n{mod.QR_REDACTION}\npost")
 
-    def test_pinned_install_spec_points_at_powerset_fork(self) -> None:
-        self.assertEqual(mod.WACLI_MODULE, "github.com/powerset-co/wacli")
-        self.assertTrue(mod.WACLI_INSTALL_SPEC.endswith("/cmd/wacli@" + mod.WACLI_PINNED_VERSION))
+    def test_pinned_release_points_at_powerset_fork(self) -> None:
+        self.assertEqual(mod.WACLI_REPO, "powerset-co/wacli")
         self.assertTrue(mod.WACLI_PINNED_VERSION.startswith("v0.13.0"))
+        self.assertIn("powerset-co/wacli/releases/download", mod.WACLI_RELEASE_BASE)
+
+    def test_wacli_asset_name_and_download_url_by_platform(self) -> None:
+        with mock.patch.object(mod.platform, "system", return_value="Darwin"), \
+             mock.patch.object(mod.platform, "machine", return_value="arm64"):
+            self.assertEqual(mod.wacli_asset_name(), "wacli-darwin-arm64")
+        with mock.patch.object(mod.platform, "system", return_value="Linux"), \
+             mock.patch.object(mod.platform, "machine", return_value="x86_64"):
+            self.assertEqual(mod.wacli_asset_name(), "wacli-linux-amd64")
+            url = mod.wacli_download_url()
+            self.assertTrue(url.endswith(f"/{mod.WACLI_PINNED_VERSION}/wacli-linux-amd64"))
+        # unsupported platform -> no asset / url
+        with mock.patch.object(mod.platform, "system", return_value="Windows"), \
+             mock.patch.object(mod.platform, "machine", return_value="AMD64"):
+            self.assertIsNone(mod.wacli_asset_name())
+            self.assertIsNone(mod.wacli_download_url())
 
     def test_wacli_bin_prefers_pinned_over_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -458,49 +473,98 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 with mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"):
                     self.assertFalse(mod.wacli_pinned_current())
 
-    def test_ensure_wacli_blocks_on_stale_pin_when_no_install(self) -> None:
+    def test_ensure_wacli_auto_downloads_even_with_no_install(self) -> None:
+        # The pinned fork is our own component, so it auto-downloads regardless of
+        # the --no-install flag (which only ever gated the old brew path).
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
             binp, stamp = self._fake_install(td)
-            stamp.write_text("v0.13.0-fullsync\n")  # installed = old pin
-            with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
-                 mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
-                 mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
-                 mock.patch.object(mod, "WACLI_INSTALL_SPEC", "github.com/powerset-co/wacli/cmd/wacli@v0.14.0-fullsync"):
-                with self.assertRaises(mod.PrimitiveBlocked) as ctx:
-                    mod.ensure_wacli_installed(install=False)
-            payload = ctx.exception.payload
-            self.assertIn("stale", payload["message"])
-            self.assertIn("v0.14.0-fullsync", payload["message"])
-            self.assertIn("v0.14.0-fullsync", payload["install_command"])
+            stamp.write_text("v0.13.0-fullsync\n")  # installed = old pin (stale)
+            got = {}
 
-    def test_ensure_wacli_reinstalls_on_pin_bump_and_restamps(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            td = Path(td)
-            binp, stamp = self._fake_install(td)
-            stamp.write_text("v0.13.0-fullsync\n")  # stale
-            calls = {}
-
-            def fake_run_command(cmd, *, timeout, env=None):
-                calls["cmd"] = cmd
-                calls["gobin"] = (env or {}).get("GOBIN")
-                return {"returncode": 0, "stdout": "", "stderr": "", "json": None}
+            def fake_download(url, dest, *, timeout=120):
+                got["url"] = url
+                Path(dest).write_text("#!/bin/sh\n")
 
             with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
                  mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
                  mock.patch.object(mod, "WACLI_BIN_DIR", td), \
                  mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
-                 mock.patch.object(mod, "WACLI_INSTALL_SPEC", "github.com/powerset-co/wacli/cmd/wacli@v0.14.0-fullsync"), \
-                 mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/go"), \
-                 mock.patch.object(mod, "run_command", side_effect=fake_run_command), \
+                 mock.patch.object(mod.platform, "system", return_value="Darwin"), \
+                 mock.patch.object(mod.platform, "machine", return_value="arm64"), \
+                 mock.patch.object(mod, "download_file", side_effect=fake_download), \
+                 mock.patch.object(mod, "wacli_version", return_value={"path": str(binp), "version": "0.14.0", "pinned": True}):
+                mod.ensure_wacli_installed(install=False)  # --no-install still auto-downloads
+            self.assertTrue(got["url"].endswith("/v0.14.0-fullsync/wacli-darwin-arm64"))
+            self.assertEqual(stamp.read_text().strip(), "v0.14.0-fullsync")
+
+    def test_ensure_wacli_blocks_on_unsupported_platform(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            binp, stamp = self._fake_install(td)  # stale / no matching stamp
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
+                 mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
+                 mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
+                 mock.patch.object(mod.platform, "system", return_value="Windows"), \
+                 mock.patch.object(mod.platform, "machine", return_value="AMD64"):
+                with self.assertRaises(mod.PrimitiveBlocked) as ctx:
+                    mod.ensure_wacli_installed(install=False)
+            self.assertIn("No prebuilt wacli", ctx.exception.payload["message"])
+
+    def test_ensure_wacli_downloads_on_pin_bump_and_restamps(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            binp, stamp = self._fake_install(td)
+            stamp.write_text("v0.13.0-fullsync\n")  # stale
+            got = {}
+
+            def fake_download(url, dest, *, timeout=120):
+                got["url"] = url
+                Path(dest).write_text("#!/bin/sh\n")
+
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
+                 mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
+                 mock.patch.object(mod, "WACLI_BIN_DIR", td), \
+                 mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
+                 mock.patch.object(mod.platform, "system", return_value="Linux"), \
+                 mock.patch.object(mod.platform, "machine", return_value="x86_64"), \
+                 mock.patch.object(mod, "download_file", side_effect=fake_download), \
                  mock.patch.object(mod, "wacli_version", return_value={"path": str(binp), "version": "0.14.0", "pinned": True}):
                 out = mod.ensure_wacli_installed(install=True)
-            self.assertIn("go", calls["cmd"][0] if isinstance(calls["cmd"][0], str) else "")
-            self.assertIn("v0.14.0-fullsync", " ".join(calls["cmd"]))
-            self.assertEqual(calls["gobin"], str(td))
-            # stamp rewritten to the new pin
+            self.assertTrue(got["url"].endswith("/v0.14.0-fullsync/wacli-linux-amd64"))
             self.assertEqual(stamp.read_text().strip(), "v0.14.0-fullsync")
             self.assertEqual(out["version"], "0.14.0")
+
+    def test_cmd_ensure_wacli_reports_ok_when_current(self) -> None:
+        import argparse as _argparse
+        buf = io.StringIO()
+        with mock.patch.object(mod, "ensure_wacli_installed",
+                               return_value={"path": "/x/wacli", "version": "wacli 0.13.0", "pinned": True}), \
+             redirect_stdout(buf):
+            rc = mod.cmd_ensure_wacli(_argparse.Namespace())
+        self.assertEqual(rc, 0)
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(payload["command"], "ensure-wacli")
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["pinned_version"], mod.WACLI_PINNED_VERSION)
+
+    def test_ensure_wacli_does_not_stamp_on_download_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            binp, stamp = self._fake_install(td)  # no matching stamp -> needs install
+            def boom(url, dest, *, timeout=120):
+                raise OSError("network down")
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
+                 mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
+                 mock.patch.object(mod, "WACLI_BIN_DIR", td), \
+                 mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
+                 mock.patch.object(mod.platform, "system", return_value="Darwin"), \
+                 mock.patch.object(mod.platform, "machine", return_value="arm64"), \
+                 mock.patch.object(mod, "download_file", side_effect=boom):
+                with self.assertRaises(mod.PrimitiveBlocked) as ctx:
+                    mod.ensure_wacli_installed(install=True)
+            self.assertIn("Failed to download", ctx.exception.payload["message"])
+            self.assertFalse(stamp.exists())  # not stamped -> next run retries
 
 
 if __name__ == "__main__":
