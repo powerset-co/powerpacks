@@ -148,7 +148,10 @@ The first `deep_search_loop` invocation builds/validates/critiques the plan and 
 uv run --env-file .env --project . python packs/search/primitives/deep_search/deep_search_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
   --max-epochs 3 --score-threshold 0.40 --sendable-threshold 0.55 \
-  --judge codex --reasoning-effort high
+  --reasoning-effort high
+# The phase-2 judge defaults to the paid gpt-5.4 API (fast); pass --judge codex (or set
+# POWERPACKS_DEEP_JUDGE=codex) only when the user prefers the free subscription judge and
+# accepts ~30s/candidate — do not pass --judge explicitly otherwise, so the env preference wins.
 # If the user supplied recruiter preferences, first write a JSON object matching
 # recruiter-preferences.schema.json and add: --preferences <run>/preferences.json
 # or, from a job-posting URL (no separate fetch step):
@@ -165,7 +168,7 @@ the selected judge, **core-gates** the shortlist, and expands from judged-strong
 uv run --env-file .env --project . python packs/search/primitives/deep_search/deep_search_loop.py \
   --jd-file <run>/jd.txt --run-dir <run> --set-id <set> --created-at <iso> \
   --max-epochs 3 --score-threshold 0.40 --sendable-threshold 0.55 \
-  --judge codex --reasoning-effort high \
+  --reasoning-effort high \
   --plan-approved
 ```
 
@@ -267,21 +270,22 @@ critic, decomposition, probe preparation, and default triage still use configure
    per candidate; triage cuts the judged pool several-fold for cents. It is mildly lossy
    (measured on an earlier pass: 2 reachable GT dropped) — pass `--no-triage` for a
    maximum-fidelity run where wall-clock/cost don't matter. Pick the phase-2 engine with
-   `--judge codex|gpt` (or the `POWERPACKS_DEEP_JUDGE` env preference): codex = free/slower,
-   gpt = paid `gpt-5.4` on the flex tier, fast. **CLI agent engines (codex/claude) are phase-2
+   `--judge codex|gpt` (or the `POWERPACKS_DEEP_JUDGE` env preference): gpt = paid `gpt-5.4` on
+   the flex tier, fast (**default**); codex = free/slower opt-in. **CLI agent engines (codex/claude) are phase-2
    judges only — they never do the thousands→hundreds bulk cut, and there is no fallback that
    hands them one:** triage failure fails the run loud, and `--no-triage` over a frontier with
    more than ~300 unjudged candidates requires `--judge gpt`.
 
 4. **Judge (the precision stage)** ✅ `evaluate_profile_candidates` — the canonical bar-raiser
    rubric with IC seniority hard-gates. The automated loop runs **one selected judge**:
-   `--judge codex` (default/free/slower) or `--judge gpt` (paid/faster). An independently configured
+   `--judge gpt` (default/paid/fast) or `--judge codex` (free/slower). An independently configured
    panel can still be run manually by placing judge JSONL files in a directory and calling
    `judge_consensus`; automated panel/dissent orchestration is planned, not shipped.
    - **FREE / portable judge:** `deep_search/codex_judge.py` spawns `codex exec` subprocesses, reusing
      the *exact* canonical rubric + deterministic scorer (so the bar is identical, the engine is $0
-     via ChatGPT-subscription auth). This is the default cheap judge; the paid `gpt-5.4` API path is
-     an optional cross-vendor second opinion. A Claude-CLI variant is the same shape once `claude`
+     via ChatGPT-subscription auth). It is the opt-in cheap judge (`--judge codex` or
+     `POWERPACKS_DEEP_JUDGE=codex`, ~30s/candidate) and doubles as a cross-vendor second opinion on
+     the default paid `gpt-5.4` API path. A Claude-CLI variant is the same shape once `claude`
      is installed.
    - **Tune the shortlist cutoff, don't loosen the rubric.** Measured (AgentMail): every strict
      LLM judge (gpt-5.4 *and* codex) rejects ~40–50% of a leniently-built GT at the default

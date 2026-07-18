@@ -393,8 +393,8 @@ def main() -> None:
     ap.add_argument("--score-threshold", type=float, default=0.40, help="Shortlist cutoff on the canonical score")
     ap.add_argument("--sendable-threshold", type=float, default=0.55,
                     help="Sendable shortlist cutoff on the canonical score (provisional default: 0.55)")
-    ap.add_argument("--judge", choices=["codex", "gpt"], default=os.environ.get("POWERPACKS_DEEP_JUDGE", "codex"),
-                    help="Phase-2 judge engine: codex = free (subscription, slower); gpt = paid gpt-5.4 on the flex tier (fast). Default from POWERPACKS_DEEP_JUDGE env, else codex.")
+    ap.add_argument("--judge", choices=["codex", "gpt"], default=os.environ.get("POWERPACKS_DEEP_JUDGE", "gpt"),
+                    help="Phase-2 judge engine: gpt = paid gpt-5.4 API on the flex tier (fast, default); codex = free via ChatGPT subscription but ~30s/candidate in subprocess spawns. Default from POWERPACKS_DEEP_JUDGE env, else gpt.")
     ap.add_argument("--triage", action=argparse.BooleanOptionalAction, default=True,
                     help="Phase-1 cheap conservative filter (triage_candidates) over each epoch's frontier before the judge; --no-triage judges the full frontier")
     ap.add_argument("--micro-sort", action=argparse.BooleanOptionalAction, default=False,
@@ -706,6 +706,7 @@ def main() -> None:
             new_strong = now_pids - strong_pids
             history.append({"epoch": epoch, "phase": "jd" if epoch == 0 else "anchor",
                             "plan_sha256": approved_plan_sha256,
+                            "judge": args.judge, "reasoning_effort": args.reasoning_effort,
                             "triage_pool": triage_pool, "frontier": len(frontier),
                             "new_judged": new_judged, "judged_total": len(judged_pids),
                             "judge_errors_dropped": judge_errors_dropped,
