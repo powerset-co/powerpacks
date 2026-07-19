@@ -36,6 +36,7 @@ from packs.ingestion.primitives.deep_context.candidates import (
     llm_network_worth,
     load_candidates,
 )
+from packs.ingestion.primitives.deep_context import worth_view
 from packs.ingestion.primitives.deep_context.common import (
     DEEP_RESEARCH_DIR,
     DEFAULT_PEOPLE_CSV,
@@ -928,12 +929,24 @@ def hydrate_proposed_profiles(parents: list[dict[str, Any]], *,
 
 
 def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
-                   facts_dir: Path, connections: set[str] | None = None) -> None:
+                   facts_dir: Path, connections: set[str] | None = None,
+                   index_json: Path | None = None) -> None:
     """Attach the effective network-worth (user review.csv mark / approved exclude >
     synthesis-mirrored review.csv llm_worth > default 'maybe') to EVERY row — verdict,
     candidate, and synthetic alike — plus the machine's own view (for the secondary
     text and the unified Rejected grouping). The mark's review.csv key is the primary
-    candidate's LinkedIn pub for verdict rows, else the row's person_id."""
+    candidate's LinkedIn pub for verdict rows, else the row's person_id.
+
+    Also stamps each parent with its worth_view row (``parent["worth_row"]``) —
+    the single worth-section truth (see worth_view.py's header). Every worth
+    predicate/count reads the stamp; nothing else may decide worth visibility."""
+    by_pid = worth_view.rows_by_person_id(worth_view.rows_from(
+        facts_dir, overrides,
+        index_json if index_json is not None else worth_view.INDEX_JSON))
+    for p in parents:
+        p["worth_row"] = next(
+            (by_pid[str(pid or "").lower()] for pid in p.get("person_ids") or []
+             if str(pid or "").lower() in by_pid), None)
     for p in parents:
         cands = p["candidates"]
         if not cands:
@@ -1284,7 +1297,8 @@ def extend_and_annotate(parents: list[dict[str, Any]], overrides: dict[str, dict
     parents[:] = collapse_by_current_parent(parents, index_json)
     hydrate_proposed_profiles(
         parents, profile_cache_dir=profile_cache_dir, research_dir=research_dir)
-    annotate_worth(parents, overrides, facts_dir, connections)
+    annotate_worth(parents, overrides, facts_dir, connections,
+                   index_json=index_json)
     return parents
 
 
@@ -1325,14 +1339,11 @@ def is_worth_subject(parent: dict[str, Any]) -> bool:
 
 
 def in_worth_view(parent: dict[str, Any]) -> bool:
-    """The worth SECTION is a pure view over the facts verdicts: any parent
-    whose worth key carries a machine yes/maybe/no from facts/*.jsonl shows
-    here, regardless of people.csv / network membership — the worth UI never
-    infers membership (owner decision 2026-07-19). Standalone candidates
-    without a verdict yet stay in view as default-maybe. Paid research
-    selection stays on the narrower ``is_worth_subject``."""
-    machine = str((parent.get("machine_worth") or {}).get("decision") or "").strip().lower()
-    return machine in {"yes", "maybe", "no"} or is_worth_subject(parent)
+    """The worth SECTION is worth_view's row set, nothing else: judged people
+    (facts verdict + human override, identities grouped by index parent),
+    regardless of people.csv / network membership. See worth_view.py's header
+    for the entire logic — this module only renders it."""
+    return parent.get("worth_row") is not None
 
 
 def explicit_worth(parent: dict[str, Any]) -> str:
@@ -1343,30 +1354,23 @@ def explicit_worth(parent: dict[str, Any]) -> str:
 
 
 def _effective_yes(parent: dict[str, Any]) -> bool:
-    machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
-    user = explicit_worth(parent)
-    return (not is_effective_no(parent)
-            and (user == "yes" or (not user and machine == "yes")))
+    row = parent.get("worth_row")
+    return bool(row) and row["effective"] == "yes"
+
+
+def _effective_no_row(parent: dict[str, Any]) -> bool:
+    row = parent.get("worth_row")
+    return bool(row) and row["effective"] == "no"
 
 
 def needs_worth_review(parent: dict[str, Any]) -> bool:
-    """Only model-uncertain people need the first human decision.
-
-    Model Yes starts in Added, model No/spam starts in Rejected, and both piles
-    remain editable. A model Maybe is the only item highlighted in the main
-    binary queue until the user places it in one of those piles.
-
-    Scope is ``in_worth_view`` — the facts-verdict view, membership-blind. A
-    synthetic-profile row is already past the worth decision (it went through
-    research/minting) and is handled in the LinkedIn/mint stage, so it is
-    excluded here even when it is in view.
-    """
-    machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
-    return (in_worth_view(parent)
-            and not any(cand.get("synthetic") for cand in parent.get("candidates") or [])
-            and not is_effective_no(parent)
-            and machine == "maybe"
-            and explicit_worth(parent) not in USER_WORTH_VALUES)
+    """Only model-uncertain people need the first human decision: worth_view
+    effective == maybe. A synthetic-profile row is already past the worth
+    decision (it went through research/minting) and is handled in the
+    LinkedIn/mint stage, so it is excluded even when its row is a maybe."""
+    row = parent.get("worth_row")
+    return (bool(row) and row["effective"] == "maybe"
+            and not any(cand.get("synthetic") for cand in parent.get("candidates") or []))
 
 
 def is_lookup_ready(parent: dict[str, Any]) -> bool:
@@ -1409,17 +1413,31 @@ def identity_in_scope(parent: dict[str, Any]) -> bool:
 
 
 def review_progress(parents: list[dict[str, Any]]) -> dict[str, int]:
-    worth_scope = [parent for parent in parents if in_worth_view(parent)]
-    worth_pending = [parent for parent in worth_scope if needs_worth_review(parent)]
+    # Worth counts come from worth_view rows, deduped: several review-parents
+    # can share one PERSON row (merged identities render once, count once).
+    seen: set[int] = set()
+    worth_total = worth_pending = worth_yes = worth_no = 0
+    for parent in parents:
+        row = parent.get("worth_row")
+        if row is None or id(row) in seen:
+            continue
+        seen.add(id(row))
+        worth_total += 1
+        if needs_worth_review(parent):
+            worth_pending += 1
+        elif row["effective"] == "yes":
+            worth_yes += 1
+        elif row["effective"] == "no":
+            worth_no += 1
     lookup_ready = [parent for parent in parents if is_lookup_ready(parent)]
     identity_scope = [parent for parent in parents if identity_in_scope(parent)]
     identity_pending = [parent for parent in identity_scope if pending_linkedin_candidates(parent)]
     return {
         "total": len(parents),
-        "worth_total": len(worth_scope),
-        "worth_pending": len(worth_pending),
-        "worth_yes": sum(1 for parent in worth_scope if _effective_yes(parent)),
-        "worth_no": sum(1 for parent in worth_scope if is_effective_no(parent)),
+        "worth_total": worth_total,
+        "worth_pending": worth_pending,
+        "worth_yes": worth_yes,
+        "worth_no": worth_no,
         "lookup_ready": len(lookup_ready),
         "linkedin_total": len(identity_scope),
         "linkedin_pending": len(identity_pending),
@@ -2420,7 +2438,7 @@ def _decision_scope(parents: list[dict[str, Any]], decision: str) -> list[dict[s
         parent for parent in parents
         if in_worth_view(parent)
         and ((decision == "yes" and _effective_yes(parent))
-             or (decision == "no" and is_effective_no(parent)))
+             or (decision == "no" and _effective_no_row(parent)))
     ]
     rows_in_scope.sort(key=lambda item: str(item.get("name") or "").lower())
     return rows_in_scope
