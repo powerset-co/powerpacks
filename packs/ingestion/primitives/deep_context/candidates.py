@@ -218,14 +218,26 @@ NETWORK_WORTH_VALUES = ("yes", "maybe", "no")
 DEFAULT_NETWORK_WORTH = "maybe"
 
 
+# (facts_dir, person_id) -> (mtime_ns, worth). effective_network_worth reads
+# facts per person on every model build; the stat-keyed cache makes repeat
+# reads one os.stat instead of a file parse.
+_WORTH_CACHE: dict[tuple[str, str], tuple[int, dict[str, str]]] = {}
+
+
 def llm_network_worth(person_id: str, facts_dir: Path = FACTS_DIR) -> dict[str, str]:
     """The synthesis LLM's {'decision','reason'} for a person ('' when absent).
 
     The incremental synthesizer refines ONE running profile, so the last record
     carries the final judgment."""
     path = facts_dir / f"{person_id}.jsonl"
-    if not path.exists():
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
         return {"decision": "", "reason": ""}
+    cache_key = (str(facts_dir), person_id)
+    cached = _WORTH_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        return dict(cached[1])
     worth: dict[str, str] = {"decision": "", "reason": ""}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -247,6 +259,7 @@ def llm_network_worth(person_id: str, facts_dir: Path = FACTS_DIR) -> dict[str, 
                 "decision": str(value.get("decision")).lower(),
                 "reason": str(value.get("reason") or ""),
             }
+    _WORTH_CACHE[cache_key] = (mtime, dict(worth))
     return worth
 
 
@@ -256,11 +269,12 @@ def effective_network_worth(
     facts_dir: Path = FACTS_DIR,
 ) -> dict[str, str]:
     """Resolved worth for a person: the user's review.csv mark wins (an approved
-    `exclude` action counts as a user `no` — one unified way of saying no), else the
-    machine-owned `llm_worth` mirrored from synthesis, else the default ('maybe' —
-    needs a human look). Facts are the machine source of truth, but are copied into
-    review.csv by synthesis rather than read here as a hidden fallback.
-    Returns {'decision', 'reason', 'source': user|llm|default}."""
+    `exclude` action counts as a user `no` — one unified way of saying no), else
+    the machine verdict read DIRECTLY from facts/<pid>.jsonl (the source of
+    truth — owner decision 2026-07-19: the worth view shows the facts verdict
+    regardless of any mirror/membership state), else the review.csv `llm_worth`
+    mirror for people whose facts file is absent, else the default ('maybe' —
+    needs a human look). Returns {'decision', 'reason', 'source': user|llm|default}."""
     row = (override_rows or {}).get(person_id.lower()) or {}
     user_mark = str(row.get("network_worth") or "").strip().lower()
     if user_mark in NETWORK_WORTH_VALUES:
@@ -268,6 +282,10 @@ def effective_network_worth(
     if str(row.get("action") or "").strip().lower() == "exclude" and \
             str(row.get("approved") or "").strip().lower() == "yes":
         return {"decision": "no", "reason": "user excluded this person", "source": "user"}
+    facts = llm_network_worth(person_id, facts_dir)
+    if facts.get("decision") in NETWORK_WORTH_VALUES:
+        return {"decision": facts["decision"], "reason": facts.get("reason") or "",
+                "source": "llm"}
     row_llm = str(row.get("llm_worth") or "").strip().lower()
     if row_llm in NETWORK_WORTH_VALUES:
         return {"decision": row_llm, "reason": str(row.get("llm_worth_reason") or ""), "source": "llm"}

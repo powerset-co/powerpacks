@@ -701,8 +701,10 @@ class TestNetworkWorth(unittest.TestCase):
             (facts / f"{pid}.jsonl").write_text(_facts_record("no", "vendor") + "\n", encoding="utf-8")
             got = candidates.effective_network_worth(pid, {pid: {"network_worth": "yes"}}, facts)
             self.assertEqual((got["decision"], got["source"]), ("yes", "user"))          # user wins
+            # an invalid user mark falls through to the FACTS verdict — facts are
+            # the machine source of truth for the worth view, mirror or no mirror
             got = candidates.effective_network_worth(pid, {pid: {"network_worth": "dunno"}}, facts)
-            self.assertEqual((got["decision"], got["source"]), ("maybe", "default"))
+            self.assertEqual((got["decision"], got["source"]), ("no", "llm"))
             review = facts.parent / "review.csv"
             review_store.mirror_facts_worth(review, facts)
             rows = review_store.load_override_rows(review)
@@ -720,11 +722,12 @@ class TestNetworkWorth(unittest.TestCase):
                 "janedoe", {"janedoe": {"llm_worth": "no", "llm_worth_reason": "cold outreach"}}, facts)
             self.assertEqual((got["decision"], got["source"], got["reason"]),
                              ("no", "llm", "cold outreach"))
-            # fresh reconcile judgment wins over the older synthesis fact
+            # facts are the source of truth: when a facts verdict exists it wins
+            # over any (possibly stale) review.csv mirror
             (facts / "janedoe.jsonl").write_text(_facts_record("yes", "founder") + "\n", encoding="utf-8")
             got = candidates.effective_network_worth(
                 "janedoe", {"janedoe": {"llm_worth": "no", "llm_worth_reason": "stale"}}, facts)
-            self.assertEqual((got["decision"], got["source"], got["reason"]), ("no", "llm", "stale"))
+            self.assertEqual((got["decision"], got["source"], got["reason"]), ("yes", "llm", "founder"))
             # the user's mark still beats every machine signal
             got = candidates.effective_network_worth(
                 "janedoe", {"janedoe": {"network_worth": "no", "llm_worth": "yes"}}, facts)
