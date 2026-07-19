@@ -30,10 +30,10 @@ from typing import Any, Callable
 
 from packs.ingestion.primitives.deep_context.candidates import (
     NETWORK_WORTH_VALUES,
-    candidates_resolved_by_existing,
     current_parent_by_person_id,
     effective_network_worth,
     is_candidate_id,
+    llm_network_worth,
     load_candidates,
 )
 from packs.ingestion.primitives.deep_context.common import (
@@ -722,16 +722,37 @@ def load_candidate_parents(facts_dir: Path, overrides: dict[str, dict[str, str]]
     """Dossier-bearing import candidates (facts exist, NO research/synthetic result yet)
     as the binary People-stage queue before any paid identity research. The review.csv
     key for a candidate is its person_id. Candidates already shown via a researched
-    synthetic/LinkedIn row are deduped by person_id."""
+    synthetic/LinkedIn row are deduped by person_id.
+
+    The worth VIEW is membership-blind (owner decision 2026-07-19): every
+    facts-judged candidate materializes here regardless of people.csv, and
+    ``collapse_by_current_parent`` dedupes merged identities into one card.
+    ``candidates_resolved_by_existing`` remains a paid-research SELECTION
+    filter in reconcile_deep_research only — it must never hide a person from
+    the review UI."""
     parents: list[dict[str, Any]] = []
-    resolved_candidates = (candidates_resolved_by_existing()
-                           if resolved_candidates is None else resolved_candidates)
-    for person in load_candidates():
-        pid = person.person_id
-        if (pid.lower() in shown_person_ids or pid.lower() in resolved_candidates
+    resolved_candidates = set() if resolved_candidates is None else resolved_candidates
+    emitted: set[str] = set()
+    pool = [(person.person_id, person.full_name, person.source_channels,
+             person.emails, person.phones) for person in load_candidates()]
+    # Facts-only sweep: the worth view is over facts/*.jsonl, so a judged person
+    # must render even when no candidate pool currently lists them (dead pool
+    # identities, mid-rerun imports). Pool-less rows still need a verdict to
+    # appear; unjudged people only enter via a pool, exactly as before.
+    pool_pids = {pid.lower() for pid, *_ in pool}
+    for path in sorted(facts_dir.glob("*.jsonl")):
+        pid = path.stem
+        if (pid.lower() in pool_pids or pid.lower() in shown_person_ids
+                or not llm_network_worth(pid, facts_dir).get("decision")):
+            continue
+        pool.append((pid, "", [], [], []))
+    for pid, fallback_name, source_channels, emails, phones in pool:
+        if (pid.lower() in emitted or pid.lower() in shown_person_ids
+                or pid.lower() in resolved_candidates
                 or not (facts_dir / f"{pid}.jsonl").exists()):
             continue
-        name = _facts_canonical_name(facts_dir, pid) or person.full_name or pid
+        emitted.add(pid.lower())
+        name = _facts_canonical_name(facts_dir, pid) or fallback_name or pid
         dec = overrides.get(pid.lower(), {})
         action = str(dec.get("action") or "").strip().lower()
         approved = str(dec.get("approved") or "").strip().lower()
@@ -748,7 +769,7 @@ def load_candidate_parents(facts_dir: Path, overrides: dict[str, dict[str, str]]
             "slug": slugify(name, pid),  # the composed CHILD dossier's slug (no parent stub needed)
             "name": name,
             "person_ids": [pid],
-            "sources": _sources_of(person.source_channels),
+            "sources": _sources_of(source_channels),
             "candidates": [{
                 "pub": pid,  # candidates key review.csv on their person_id
                 "profile_pub": proposed_pub,
@@ -765,10 +786,10 @@ def load_candidate_parents(facts_dir: Path, overrides: dict[str, dict[str, str]]
                            "unresolved import candidate — no LinkedIn attached yet"),
                 "plausibly_absent": False, "recommend_dr": False,
                 "match_emails": list(dict.fromkeys([
-                    *person.emails,
+                    *emails,
                     *_facts_identifier_emails(facts_dir, pid),
                 ])),
-                "match_phones": person.phones,
+                "match_phones": phones,
                 "conflict": False, "import_candidate": not identity_result,
                 "candidate_origin": True,
                 "action": action,
@@ -1303,6 +1324,17 @@ def is_worth_subject(parent: dict[str, Any]) -> bool:
     )
 
 
+def in_worth_view(parent: dict[str, Any]) -> bool:
+    """The worth SECTION is a pure view over the facts verdicts: any parent
+    whose worth key carries a machine yes/maybe/no from facts/*.jsonl shows
+    here, regardless of people.csv / network membership — the worth UI never
+    infers membership (owner decision 2026-07-19). Standalone candidates
+    without a verdict yet stay in view as default-maybe. Paid research
+    selection stays on the narrower ``is_worth_subject``."""
+    machine = str((parent.get("machine_worth") or {}).get("decision") or "").strip().lower()
+    return machine in {"yes", "maybe", "no"} or is_worth_subject(parent)
+
+
 def explicit_worth(parent: dict[str, Any]) -> str:
     """The user's terminal binary worth decision, ignoring model/default advice."""
     worth = parent.get("worth") or {}
@@ -1310,26 +1342,27 @@ def explicit_worth(parent: dict[str, Any]) -> str:
     return decision if worth.get("source") == "user" and decision in USER_WORTH_VALUES else ""
 
 
+def _effective_yes(parent: dict[str, Any]) -> bool:
+    machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
+    user = explicit_worth(parent)
+    return (not is_effective_no(parent)
+            and (user == "yes" or (not user and machine == "yes")))
+
+
 def needs_worth_review(parent: dict[str, Any]) -> bool:
-    """Only model-uncertain standalone imports need the first human decision.
+    """Only model-uncertain people need the first human decision.
 
     Model Yes starts in Added, model No/spam starts in Rejected, and both piles
     remain editable. A model Maybe is the only item highlighted in the main
     binary queue until the user places it in one of those piles.
 
-    Scope is ``is_worth_subject`` — an import-candidate parent OR a candidate
-    whose durable worth key is still its candidate id — NOT the narrower
-    ``is_import_candidate_parent``. A machine-Maybe candidate whose attached
-    LinkedIn was auto-verified at the link level (``approved=auto``) flips
-    ``is_import_candidate_parent`` off, but its worth key stays the candidate id,
-    so it remains a standalone contact whose add/no decision is unmade — it must
-    stay in this queue instead of silently entering the network un-reviewed. A
+    Scope is ``in_worth_view`` — the facts-verdict view, membership-blind. A
     synthetic-profile row is already past the worth decision (it went through
     research/minting) and is handled in the LinkedIn/mint stage, so it is
-    excluded here even though it is a worth subject.
+    excluded here even when it is in view.
     """
     machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
-    return (is_worth_subject(parent)
+    return (in_worth_view(parent)
             and not any(cand.get("synthetic") for cand in parent.get("candidates") or [])
             and not is_effective_no(parent)
             and machine == "maybe"
@@ -1337,11 +1370,7 @@ def needs_worth_review(parent: dict[str, Any]) -> bool:
 
 
 def is_lookup_ready(parent: dict[str, Any]) -> bool:
-    machine = str((parent.get("machine_worth") or {}).get("decision") or "maybe").lower()
-    user = explicit_worth(parent)
-    return (is_worth_subject(parent)
-            and not is_effective_no(parent)
-            and (user == "yes" or (not user and machine == "yes")))
+    return is_worth_subject(parent) and _effective_yes(parent)
 
 
 def pending_linkedin_candidates(parent: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1380,16 +1409,16 @@ def identity_in_scope(parent: dict[str, Any]) -> bool:
 
 
 def review_progress(parents: list[dict[str, Any]]) -> dict[str, int]:
-    worth_scope = [parent for parent in parents if is_worth_subject(parent)]
+    worth_scope = [parent for parent in parents if in_worth_view(parent)]
     worth_pending = [parent for parent in worth_scope if needs_worth_review(parent)]
-    lookup_ready = [parent for parent in worth_scope if is_lookup_ready(parent)]
+    lookup_ready = [parent for parent in parents if is_lookup_ready(parent)]
     identity_scope = [parent for parent in parents if identity_in_scope(parent)]
     identity_pending = [parent for parent in identity_scope if pending_linkedin_candidates(parent)]
     return {
         "total": len(parents),
         "worth_total": len(worth_scope),
         "worth_pending": len(worth_pending),
-        "worth_yes": len(lookup_ready),
+        "worth_yes": sum(1 for parent in worth_scope if _effective_yes(parent)),
         "worth_no": sum(1 for parent in worth_scope if is_effective_no(parent)),
         "lookup_ready": len(lookup_ready),
         "linkedin_total": len(identity_scope),
@@ -2389,8 +2418,8 @@ def _decision_scope(parents: list[dict[str, Any]], decision: str) -> list[dict[s
         raise ValueError(f"unknown decision table: {decision}")
     rows_in_scope = [
         parent for parent in parents
-        if is_worth_subject(parent)
-        and ((decision == "yes" and is_lookup_ready(parent))
+        if in_worth_view(parent)
+        and ((decision == "yes" and _effective_yes(parent))
              or (decision == "no" and is_effective_no(parent)))
     ]
     rows_in_scope.sort(key=lambda item: str(item.get("name") or "").lower())
