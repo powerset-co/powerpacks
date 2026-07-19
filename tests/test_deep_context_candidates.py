@@ -663,6 +663,20 @@ def _facts_record(decision: str = "", reason: str = "", name: str = "") -> str:
     return json.dumps({"chunk_index": 0, "facts": facts})
 
 
+def _worth_row_for(key: str, name: str, person_ids: list[str],
+                   decision: str, source: str) -> dict:
+    """The worth_view row a hand-built fixture parent corresponds to (real
+    parents get this stamped from facts/review.csv by _all_review_parents)."""
+    effective = decision if decision in ("yes", "maybe", "no") else "maybe"
+    human = ({"decision": effective, "updated_at": "2026-07-19T00:00:00Z"}
+             if source == "user" else None)
+    machine = ({"decision": effective, "reason": "useful relationship"}
+               if source == "llm" else {"decision": "", "reason": ""})
+    return {"key": key, "name": name, "person_ids": list(person_ids),
+            "machine": machine, "human": human, "effective": effective,
+            "source": source}
+
+
 class TestNetworkWorth(unittest.TestCase):
     """The yes|maybe|no worth judgment: schema pins, LLM read, and precedence."""
 
@@ -1755,6 +1769,9 @@ class TestStagedReviewUI(unittest.TestCase):
             "person_ids": ["candidate:email:ada@example.com"], "sources": ["gmail"],
             "candidates": [candidate], "worth": worth, "machine_worth": worth,
             "connection": False,
+            "worth_row": _worth_row_for(
+                "ada-lovelace", "Ada Lovelace",
+                ["candidate:email:ada@example.com"], decision, source),
         }
 
     def test_proposed_linkedin_uses_current_research_profile_without_provider_call(self):
@@ -2471,6 +2488,9 @@ class TestStagedReviewUI(unittest.TestCase):
                 "slug": "synth", "name": "Ada Lovelace",
                 "person_ids": ["candidate:email:ada@example.com"], "sources": ["gmail"],
                 "worth": synth_worth, "machine_worth": synth_worth, "connection": False,
+                "worth_row": _worth_row_for(
+                    "synth", "Ada Lovelace",
+                    ["candidate:email:ada@example.com"], "yes", "user"),
                 "candidates": [{
                     "pub": "synth-ada", "full_name": "Ada Lovelace", "synthetic": True,
                     "import_candidate": False, "approved": "auto", "action": "verify",
@@ -2860,6 +2880,9 @@ class TestLiveEndpoints(unittest.TestCase):
                 "worth_key": "candidate:email:ada@example.com",
             }],
             "worth": worth, "machine_worth": worth, "connection": False,
+            "worth_row": _worth_row_for(
+                "ada-lovelace", "Ada Lovelace",
+                ["candidate:email:ada@example.com"], "maybe", "llm"),
         }
         with mock.patch.object(web, "_all_review_parents",
                                return_value=[pending_parent]):
