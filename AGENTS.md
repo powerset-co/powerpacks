@@ -352,6 +352,10 @@ Routes:
   synthetic profiles, fan-in + Modal index + validate. This is the single
   post-import processing surface; `$deep-setup` is retired →
   `packs/ingestion/skills/deep-context/SKILL.md`
+- `$clean-slate`, "clean slate", "pipeclean", "start over from scratch", full
+  derived-state reset preserving every paid artifact (backed up outside the
+  repo, never deleted; `$deep-context restart` is the human-decisions-only
+  small hammer) → `packs/ingestion/skills/clean-slate/SKILL.md`
 - `$logbook`, raw verbatim message archive from a people CSV, "build a logbook",
   "archive/dump everything I've said with these people", "every email/text/whatsapp
   with <person> verbatim", append-only incremental sync (no LLM, no spend) →
