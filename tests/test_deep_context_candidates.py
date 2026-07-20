@@ -16,6 +16,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
 import urllib.error
@@ -2349,7 +2350,15 @@ class TestStagedReviewUI(unittest.TestCase):
             self.assertEqual(stale["status"], "stale")
             self.assertNotEqual(first_selection["review_revision"],
                                 repeated_selection["review_revision"])
-            stale_html = web.render_enrichment(stale, progress)
+            # Derived at read: a stale receipt with zero net-new is free_pending —
+            # the render triggers the $0 rerun instead of stranding the page.
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", []):
+                derived = web.derive_enrichment_state(
+                    repeated_selection, verdicts_path=base / "verdicts.jsonl",
+                    review_path=base / "review.csv", facts_dir=base / "facts",
+                    manifest_path=enrichment_manifest)
+            self.assertEqual(derived["state"], "free_pending")
+            stale_html = web.render_enrichment(derived, progress)
             self.assertIn("Preparing enrichment", stale_html)
             self.assertIn("is-indeterminate", stale_html)
 
@@ -2376,9 +2385,26 @@ class TestStagedReviewUI(unittest.TestCase):
                 "would_submit": 3, "reused_completed": 1, "estimated_usd": 0.15,
                 "counts": {"total": 4, "completed": 1, "pending": 3, "failed": 0},
             }), encoding="utf-8")
+            # Three eligible detaches with no research artifact: derived net-new 3
+            # matches the receipt, so the Approve button binds to that receipt.
+            _verdict_jsonl(base / "verdicts.jsonl", [
+                {"parent_slug": f"p-{i}", "name": f"P {i}", "candidate_key": f"pub-{i}",
+                 "person_ids": [f"pid-{i}"], "linkedin":
+                     {"linkedin_url": f"https://www.linkedin.com/in/pub-{i}"},
+                 "verdict": {"verdict": "wrong_person", "confidence": 0.95,
+                             "recommend_deep_research": True, "reason": "wrong"}}
+                for i in (1, 2, 3)])
 
-            pending = web.read_enrichment_manifest(
-                enrichment_manifest, selection=selection)
+            def derived_now():
+                with mock.patch.object(candidates, "CANDIDATE_CSVS", []):
+                    return web.derive_enrichment_state(
+                        selection, verdicts_path=base / "verdicts.jsonl",
+                        review_path=base / "review.csv", facts_dir=base / "facts",
+                        manifest_path=enrichment_manifest)
+
+            pending = derived_now()
+            self.assertEqual((pending["state"], pending["net_new"]), ("needs_approval", 3))
+            self.assertTrue(pending["approvable"])
             self.assertFalse(pending["approval_current"])
             self.assertIn("data-approve-enrichment", web.render_enrichment(pending, progress))
             self.assertIn("Approve $0.15", web.render_enrichment(pending, progress))
@@ -2390,29 +2416,27 @@ class TestStagedReviewUI(unittest.TestCase):
                     enrichment_manifest_path=enrichment_manifest)
             self.assertEqual(waiting["next_action"], "await_enrichment_approval")
 
-            zero_work = {
-                **pending,
-                "would_submit": 0,
-                "reused_completed": 4,
-                "estimated_usd": 0.0,
-            }
-            zero_html = web.render_enrichment(zero_work, progress)
-            self.assertNotIn("data-approve-enrichment", zero_html)
-            self.assertIn("Preparing enrichment", zero_html)
-            self.assertIn("no approval needed", zero_html)
-            self.assertIn("is-indeterminate", zero_html)
+            # A receipt whose count no longer matches the derived net-new is NOT
+            # approvable: the free job refreshes the estimate first ($0).
+            mismatched = {**pending, "would_submit": 1, "approvable": False}
+            mismatch_html = web.render_enrichment(mismatched, progress)
+            self.assertNotIn("data-approve-enrichment", mismatch_html)
+            self.assertIn("Preparing enrichment", mismatch_html)
+            self.assertIn("is-indeterminate", mismatch_html)
 
             approved = web.approve_enrichment_manifest(
                 enrichment_manifest, selection=selection)
             self.assertTrue(approved["approval_current"])
             self.assertEqual(approved["approval"]["approved_budget_usd"], 0.15)
+            approved_state = derived_now()
+            self.assertTrue(approved_state["approval_current"])
             self.assertNotIn("data-approve-enrichment",
-                             web.render_enrichment(approved, progress))
+                             web.render_enrichment(approved_state, progress))
             self.assertIn(
                 "<h2>Preparing enrichment</h2>",
-                web.render_enrichment(approved, progress),
+                web.render_enrichment(approved_state, progress),
             )
-            self.assertIn("is-indeterminate", web.render_enrichment(approved, progress))
+            self.assertIn("is-indeterminate", web.render_enrichment(approved_state, progress))
 
             with mock.patch.object(web, "_all_review_parents", return_value=[parent]):
                 status = web.workflow_status(
@@ -2973,43 +2997,50 @@ class TestLiveEndpoints(unittest.TestCase):
         self.assertEqual(parent["worth_row"]["source"], "user")
         self.assertEqual(payload["progress"]["worth_pending"], 0)
 
-    def test_zero_net_new_preview_continuation_passes_the_spend_gate(self):
-        # The $0 all-reused continuation must pass --approve: the enrichment
-        # primitive refuses ANY run without it, so omitting it strands the
-        # manifest at needs_approval and the UI on "Preparing enrichment".
+    def test_free_work_job_runs_the_zero_budget_continue_and_chains(self):
+        # The single free-work job runs the continue with --approve --budget 0.00:
+        # the primitive refuses ANY run without --approve, and the $0 ceiling makes
+        # real spend park at a current needs_approval receipt with zero cost. The
+        # free chain runs only once research is complete; no convergence loop —
+        # the next enrich-page render re-derives and re-triggers if needed.
         calls = []
         with mock.patch.object(web, "_run_pipeline_job",
                                lambda name, steps: steps()), \
              mock.patch.object(dresearch, "main",
                                side_effect=lambda argv: calls.append(argv)), \
              mock.patch.object(web, "read_enrichment_manifest",
-                               side_effect=[{"status": "needs_approval",
-                                             "would_submit": 0},
-                                            {"status": "completed",
-                                             "current": True}]), \
+                               return_value={"status": "research_complete"}), \
              mock.patch.object(web, "current_worth_selection", return_value={}), \
              mock.patch.object(web, "_post_enrichment_chain") as chain:
-            web.start_enrichment_preview_job()
-        self.assertEqual(calls[0], ["--dry-run", *web.ENRICH_FLAGS])
-        self.assertIn("--approve", calls[1])
-        self.assertIn("0.00", calls[1])
-        # the loop re-checks after the chain (the chain can re-drift the
-        # selection) and stops once the state is completed+current
-        self.assertEqual(calls[2], ["--dry-run", *web.ENRICH_FLAGS])
-        self.assertEqual(len(calls), 3)
+            web.start_free_enrichment_job()
+        self.assertEqual(calls, [[*web.ENRICH_FLAGS, "--approve", "--budget", "0.00"]])
         chain.assert_called_once()
+        # Money on the table: the continue parks at needs_approval — the chain must
+        # NOT run (assemble would stamp completed over the needs_approval receipt).
+        calls.clear()
+        with mock.patch.object(web, "_run_pipeline_job",
+                               lambda name, steps: steps()), \
+             mock.patch.object(dresearch, "main",
+                               side_effect=lambda argv: calls.append(argv)), \
+             mock.patch.object(web, "read_enrichment_manifest",
+                               return_value={"status": "needs_approval",
+                                             "would_submit": 3}), \
+             mock.patch.object(web, "current_worth_selection", return_value={}), \
+             mock.patch.object(web, "_post_enrichment_chain") as chain:
+            web.start_free_enrichment_job()
+        self.assertEqual(calls, [[*web.ENRICH_FLAGS, "--approve", "--budget", "0.00"]])
+        chain.assert_not_called()
 
     def test_in_app_jobs_stay_off_for_non_canonical_paths(self):
-        # The in-app jobs call primitives on their CANONICAL default paths, so
-        # this temp-path test server must never kick one. /complete for worth
-        # (fresh queue empty -> completes) is the trigger point.
-        with mock.patch.object(web, "start_enrichment_preview_job") as kick, \
+        # The free-work job calls primitives on their CANONICAL default paths, so
+        # this temp-path test server must never kick one. The enrich-page render
+        # (the one trigger) is the point to prove.
+        with mock.patch.object(web, "start_free_enrichment_job") as kick, \
              mock.patch.object(web, "_all_review_parents", return_value=[]):
+            os.utime(self.review)  # route parents_now() through the mock
             with urllib.request.urlopen(
-                    f"http://127.0.0.1:{self.port}/complete",
-                    data=urllib.parse.urlencode({"stage": "worth"}).encode()) as resp:
-                payload = json.loads(resp.read())
-        self.assertTrue(payload["ok"])
+                    f"http://127.0.0.1:{self.port}/?stage=enrich") as resp:
+                self.assertEqual(resp.status, 200)
         kick.assert_not_called()
 
     def test_finished_and_done_bodies_hand_back_to_codex(self):
@@ -3218,6 +3249,182 @@ class TestLiveEndpoints(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self._post("/approve-enrichment")
         self.assertEqual(ctx.exception.code, 409)
+
+
+class TestDerivedEnrichmentLifecycle(unittest.TestCase):
+    """Enrichment state DERIVES from disk at every enrich-page render, and the
+    render itself starts-or-joins the single free-work job. No persisted status is
+    trusted as truth — the manifest is a receipt — so a stranded/corrupt manifest
+    (external CLI writes, restarts) cannot survive a reload. Money is the only
+    stop. All fixtures are temp-path; the free job's steps are stubbed, so no
+    canonical primitive, LLM, or network call can ever run from here."""
+
+    PROGRESS = {"total": 0, "worth_total": 0, "worth_pending": 0, "worth_yes": 0,
+                "worth_no": 0, "lookup_ready": 0, "linkedin_total": 0,
+                "linkedin_pending": 0, "linkedin_done": 0, "rejected": 0}
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self._tmp.name)
+        self.verdicts = self.base / "verdicts.jsonl"
+        self.review = self.base / "review.csv"
+        reconcile._write_override_rows(self.review, {})
+        self.facts = self.base / "facts"
+        self.facts.mkdir()
+        self.review_manifest = self.base / "review" / "manifest.json"
+        self.enrichment = self.base / "deep-research" / "manifest.json"
+        self._pools = mock.patch.object(candidates, "CANDIDATE_CSVS", [])
+        self._pools.start()
+
+    def tearDown(self):
+        self._pools.stop()
+        self._tmp.cleanup()
+
+    def _derive(self, selection=None, **kw):
+        return web.derive_enrichment_state(
+            selection if selection is not None else
+            web.worth_selection_from_parents([], manifest_path=self.review_manifest),
+            verdicts_path=self.verdicts, review_path=self.review,
+            facts_dir=self.facts, manifest_path=self.enrichment, **kw)
+
+    def _eligible_verdict(self, i: int) -> dict:
+        return {"parent_slug": f"p-{i}", "name": f"P {i}", "candidate_key": f"pub-{i}",
+                "person_ids": [f"pid-{i}"],
+                "linkedin": {"linkedin_url": f"https://www.linkedin.com/in/pub-{i}"},
+                "verdict": {"verdict": "wrong_person", "confidence": 0.95,
+                            "recommend_deep_research": True, "reason": "wrong"}}
+
+    def _current_selection(self) -> dict:
+        web.write_review_manifest(
+            "worth", "awaiting_user", self.PROGRESS, path=self.review_manifest,
+            review_path=self.review, synthetic_path=self.base / "synthetic.csv",
+            launched=True)
+        return web.worth_selection_from_parents([], manifest_path=self.review_manifest)
+
+    # --- the four states, from disk fixtures ---------------------------------
+    def test_derive_returns_each_of_the_four_states(self):
+        # free_pending: nothing on disk at all — $0 work would make it current.
+        self.assertEqual(self._derive()["state"], "free_pending")
+        # running: the in-process job is alive; nothing else matters.
+        self.assertEqual(self._derive(job_running=True)["state"], "running")
+        # needs_approval: an eligible person with no research artifact = net-new.
+        _verdict_jsonl(self.verdicts, [self._eligible_verdict(1)])
+        selection = self._current_selection()
+        pending = self._derive(selection)
+        self.assertEqual((pending["state"], pending["net_new"]), ("needs_approval", 1))
+        self.assertFalse(pending["approvable"])              # no current receipt yet
+        # ...approvable once a current receipt matches the derived count.
+        self.enrichment.parent.mkdir(parents=True, exist_ok=True)
+        self.enrichment.write_text(json.dumps({
+            "stage": "enrich", "status": "needs_approval", "selection": selection,
+            "would_submit": 1, "estimated_usd": 0.05}), encoding="utf-8")
+        self.assertTrue(self._derive(selection)["approvable"])
+        # done: research artifact exists for everyone selected + completed receipt.
+        (self.enrichment.parent / "p-1").mkdir(parents=True)
+        (self.enrichment.parent / "p-1" / "01_research_parallel.json").write_text(
+            "{}", encoding="utf-8")
+        self.enrichment.write_text(json.dumps({
+            "stage": "enrich", "status": "completed", "selection": selection,
+            "counts": {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+        }), encoding="utf-8")
+        done = self._derive(selection)
+        self.assertEqual((done["state"], done["net_new"]), ("done", 0))
+        # ...and a garbage status on the SAME artifacts is merely free_pending.
+        self.enrichment.write_text(json.dumps({
+            "stage": "enrich", "status": "definitely-not-a-state"}), encoding="utf-8")
+        self.assertEqual(self._derive(selection)["state"], "free_pending")
+
+    # --- server: render is the trigger ---------------------------------------
+    def _server(self, steps):
+        handler = web.make_handler(
+            self.review, self.verdicts, self.base / "parents", self.base / "dossiers",
+            0.7, 0.85, synthetic_path=self.base / "synthetic.csv", facts_dir=self.facts,
+            people_csv=self.base / "people.csv", manifest_path=self.review_manifest,
+            enrichment_manifest_path=self.enrichment, initial_parents=[], run_jobs=True)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server, mock.patch.object(web, "_free_enrichment_steps", steps)
+
+    def _get_enrich(self, port: int) -> str:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/?stage=enrich") as resp:
+            return resp.read().decode("utf-8")
+
+    def _wait_for_job(self):
+        for _ in range(200):
+            if not web._job_lock.locked():
+                return
+            time.sleep(0.01)
+        self.fail("free-work job did not finish")
+
+    def test_free_pending_render_starts_the_job_exactly_once_under_concurrent_renders(self):
+        started = threading.Event()
+        release = threading.Event()
+        calls: list[int] = []
+
+        def steps() -> None:
+            calls.append(1)
+            started.set()
+            release.wait(timeout=5)
+
+        server, patched = self._server(steps)
+        port = server.server_address[1]
+        try:
+            with patched:
+                workers = [threading.Thread(target=self._get_enrich, args=(port,))
+                           for _ in range(6)]
+                for worker in workers:
+                    worker.start()
+                for worker in workers:
+                    worker.join(timeout=10)
+                self.assertTrue(started.wait(timeout=5))
+                self.assertEqual(sum(calls), 1)      # the mutex: started-or-joined
+        finally:
+            release.set()
+        self._wait_for_job()
+
+    def test_external_manifest_rewrite_then_rerender_retriggers(self):
+        # THE stuck-state regression: any writer outside the app (external CLI run,
+        # restart, crash) used to strand "Preparing enrichment" forever because
+        # only edge-triggered kicks converged the state. Now a reload re-derives
+        # and re-triggers; the page can never be stuck behind a stale manifest.
+        calls: list[int] = []
+        selection = self._current_selection()
+
+        def steps() -> None:
+            calls.append(1)
+            self.enrichment.parent.mkdir(parents=True, exist_ok=True)
+            self.enrichment.write_text(json.dumps({
+                "stage": "enrich", "status": "completed", "selection": selection,
+                "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0},
+            }), encoding="utf-8")
+
+        server, patched = self._server(steps)
+        port = server.server_address[1]
+        with patched:
+            self._get_enrich(port)                   # free_pending -> triggers
+            self._wait_for_job()
+            self.assertEqual(sum(calls), 1)
+            self.assertIn("Contacts enriched", self._get_enrich(port))  # done; no re-kick
+            self.assertEqual(sum(calls), 1)
+            # An external writer scribbles a garbage/stale status over the manifest
+            # while the server keeps running...
+            self.enrichment.write_text(json.dumps({
+                "stage": "enrich", "status": "garbage-from-external-writer"}),
+                encoding="utf-8")
+            html = self._get_enrich(port)            # ...one reload re-derives...
+            self.assertIn("Preparing enrichment", html)
+            self._wait_for_job()
+            self.assertEqual(sum(calls), 2)          # ...and re-triggers the job
+            self.assertIn("Contacts enriched", self._get_enrich(port))  # reconverged
+
+    def test_running_render_shows_the_judging_heartbeat(self):
+        html = web.render_enrichment(
+            {"state": "running", "phase": "judging_retargets", "done": 3, "total": 9},
+            self.PROGRESS)
+        self.assertIn("Judging found profiles", html)
+        self.assertIn("3 of 9 checked", html)
 
 
 class TestMultiOptionLinkedinCard(unittest.TestCase):

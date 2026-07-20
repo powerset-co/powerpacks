@@ -2523,6 +2523,8 @@ class TestReviewWeb(unittest.TestCase):
                     dossier_dir=base / "dossiers",
                     manifest_path=base / "review" / "manifest.json",
                     enrichment_manifest_path=base / "research" / "manifest.json",
+                    verdicts_path=base / "verdicts.jsonl",
+                    facts_dir=base / "facts",
                 ).decode("utf-8")
                 self.assertIn(f"data-stage='{stage}'", html)
                 self.assertIn(f"data-external-updates='{expected[stage]}'", html)
