@@ -113,12 +113,13 @@ except ModuleNotFoundError:
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 FALSY = {"0", "false", "no", "n", "off"}
-MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v3"
+MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v4"
 WORKING_CONTACTS_CSV = Path(".powerpacks/messages/contacts.csv")
 MATCH_MANIFEST_JSON = Path(".powerpacks/messages/contacts.csv.match.manifest.json")
 DEFAULT_MIN_MESSAGE_COUNT = 1
-# Group-appearance-only contacts below this DM volume are low-signal noise
-# (someone from a group thread, not a relationship) unless opted in.
+# Group-appearance-only contacts below this volume are low-signal noise
+# (someone from a group thread, not a relationship) unless opted in. A positive
+# WhatsApp direct-chat count is explicit relationship evidence and bypasses it.
 GROUP_ONLY_MIN_MESSAGES = 10
 
 # Deterministic "worth researching" floor: the historical pre-LLM eligibility
@@ -204,6 +205,11 @@ def bad_name_reason(name: str, phone: str = "") -> str:
     return ""
 
 
+def has_whatsapp_direct_messages(row: dict[str, str]) -> bool:
+    """Whether discovery found a real WhatsApp direct-message thread."""
+    return parse_int_field(row.get("whatsapp_message_count")) > 0
+
+
 def contact_floor_reason(
     row: dict[str, str],
     *,
@@ -228,6 +234,7 @@ def contact_floor_reason(
     if (
         not include_group_only
         and normalize_bool(row.get("is_in_group_chats", "")) is True
+        and not has_whatsapp_direct_messages(row)
         and message_count < GROUP_ONLY_MIN_MESSAGES
     ):
         return "group_only_low_signal"

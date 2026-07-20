@@ -190,7 +190,7 @@ Permission and QR failures are recorded as structured user-action status in the
 manifest, and rerunning the same command continues at the fixed paths. Each
 explicit discovery run refreshes every selected channel export before merging.
 
-Message import is also stateless (contract `messages-contacts-direct-v3`). It
+Message import is also stateless (contract `messages-contacts-direct-v4`). It
 reads the fixed match-annotated `contacts.csv`, splits it into `people.csv`
 (matched) and `candidates.csv` (floor-passing unmatched), and writes one
 `manifest.json` with the diff, per-reason skip counts, and stats. Unchanged
