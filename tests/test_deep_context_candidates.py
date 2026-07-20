@@ -2783,6 +2783,39 @@ class TestLiveEndpoints(unittest.TestCase):
         # failure or full completion.
         self.assertEqual(web.AGENT_ACTIONS, {"retry_enrichment", "realize"})
 
+    def test_worth_click_patches_the_stamped_row_so_the_decision_sticks(self):
+        # Regression: the optimistic /worth patch must update worth_row (the
+        # sole worth truth) — not just the legacy worth fields — or the click
+        # lands on disk while the live model keeps serving the card as pending.
+        worth = {"decision": "maybe", "source": "llm", "reason": "unsure"}
+        parent = {
+            "slug": "ada-lovelace", "name": "Ada Lovelace",
+            "person_ids": ["candidate:email:ada@example.com"], "sources": ["gmail"],
+            "candidates": [{
+                "pub": "candidate:email:ada@example.com", "full_name": "Ada Lovelace",
+                "import_candidate": True, "synthetic": False, "approved": "",
+                "action": "", "worth": worth, "machine_worth": worth,
+                "worth_key": "candidate:email:ada@example.com",
+            }],
+            "worth": worth, "machine_worth": worth, "connection": False,
+            "worth_row": _worth_row_for(
+                "ada-lovelace", "Ada Lovelace",
+                ["candidate:email:ada@example.com"], "maybe", "llm"),
+        }
+        with mock.patch.object(web, "_all_review_parents", return_value=[parent]):
+            # bump the watched review.csv stat so the POST's parents_now()
+            # rebuilds through the mock and the cache holds THIS parent
+            os.utime(self.review)
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/worth",
+                    data=urllib.parse.urlencode({
+                        "pub": "candidate:email:ada@example.com",
+                        "worth": "yes"}).encode()) as resp:
+                payload = json.loads(resp.read())
+        self.assertEqual(parent["worth_row"]["effective"], "yes")
+        self.assertEqual(parent["worth_row"]["source"], "user")
+        self.assertEqual(payload["progress"]["worth_pending"], 0)
+
     def test_zero_net_new_preview_continuation_passes_the_spend_gate(self):
         # The $0 all-reused continuation must pass --approve: the enrichment
         # primitive refuses ANY run without it, so omitting it strands the
