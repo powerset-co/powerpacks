@@ -34,6 +34,9 @@ Use the narrow path when the user names one:
   dossier, including mixed-source people and people with an attached LinkedIn.
   It ignores cached machine and human worth for selection, never uses LinkedIn
   as evidence, and never overwrites the human-owned `network_worth` column.
+  Both commands first rebuild every raw bundle from the current message stores
+  (free, local, no LLM), so a deeper message sync is picked up automatically —
+  expect a higher estimate than the original run when history got deeper.
 - "Review complete proceed with enrichment" (the phrase the Done screen
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
