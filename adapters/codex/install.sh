@@ -174,4 +174,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context logbook discover-contacts import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context clean-slate logbook discover-contacts import-twitter"
