@@ -171,6 +171,7 @@ async function decideWorthCard(button, card) {
     postPromise.then((response) => {
       adoptMutationState(response);
       applyProgress(response.progress);
+      pruneWorthPending(pub); // the settled decision leaves the typeahead's queue
       announce(worth === "yes" ? "Added" : "Rejected");
       if (Number(response.progress?.worth_pending) === 0) {
         leaveAndNavigate("People complete", "/?stage=enrich");
@@ -199,6 +200,170 @@ async function decideWorthCard(button, card) {
       announce(postError.message, true);
     }
   }
+}
+
+// --- worth live search ---------------------------------------------------------
+// ONE input shared by every worth view (filters as you type; no Search button).
+// On the Yes/No tables it hides non-matching rows client-side with an "N of M"
+// count. On the Review card view it is a typeahead over the pending queue the
+// server embedded at render time; picking a name fetches that person's card
+// through the same lock-free /api/worth-card path the prefetch uses and swaps
+// it in — the current card stays visible until the selection lands.
+let worthPendingNames = null; // [{key, name}] — pruned as decisions settle
+
+function pruneWorthPending(key) {
+  if (!worthPendingNames) return;
+  const lower = (key || "").toLowerCase();
+  worthPendingNames = worthPendingNames.filter(
+    (entry) => (entry.key || "").toLowerCase() !== lower,
+  );
+}
+
+async function jumpToWorthCard(key) {
+  const panel = document.querySelector(".worth-panel");
+  if (!panel) return;
+  if (inFlightWorth.has(key)) {
+    // Its decision is already saving: treat it as decided, keep the card.
+    pruneWorthPending(key);
+    announce("Already decided");
+    return;
+  }
+  let response;
+  try {
+    response = await fetch(`/api/worth-card?pick=${encodeURIComponent(key)}`, { cache: "no-store" });
+  } catch {
+    announce("Could not load card", true);
+    return;
+  }
+  if (response.status === 404) {
+    // No longer pending (decided elsewhere / stale): prune locally, keep the
+    // current card, no error dialog.
+    pruneWorthPending(key);
+    announce("Already decided");
+    return;
+  }
+  if (!response.ok) {
+    announce("Could not load card", true);
+    return;
+  }
+  const nextHtml = await response.text();
+  panel.querySelector("[data-card]")?.classList.add("leaving");
+  await delay(170);
+  panel.innerHTML = nextHtml; // the picked card, via the existing swap path
+  wireDynamicContent(panel);  // re-prefetches with the picked card excluded
+}
+
+function wireWorthTypeahead(box, input) {
+  const listbox = box.querySelector("[data-search-list]");
+  const island = box.querySelector("script[data-worth-pending]");
+  if (!listbox || !island) return;
+  if (worthPendingNames === null) {
+    try {
+      worthPendingNames = JSON.parse(island.textContent || "[]");
+    } catch {
+      worthPendingNames = [];
+    }
+  }
+  let matches = [];
+  let active = -1;
+
+  function close(clear = false) {
+    listbox.hidden = true;
+    listbox.textContent = "";
+    matches = [];
+    active = -1;
+    if (clear) input.value = "";
+  }
+
+  function select(index) {
+    const entry = matches[index];
+    if (!entry) return;
+    close(true);
+    void jumpToWorthCard(entry.key || "");
+  }
+
+  function render() {
+    const query = input.value.trim().toLowerCase();
+    if (!query) {
+      close();
+      return;
+    }
+    matches = (worthPendingNames || [])
+      .filter((entry) => (entry.name || "").toLowerCase().includes(query))
+      .slice(0, 8);
+    active = matches.length ? 0 : -1;
+    listbox.textContent = "";
+    matches.forEach((entry, index) => {
+      const item = document.createElement("li");
+      item.setAttribute("role", "option");
+      item.textContent = entry.name || entry.key || "";
+      if (index === active) item.classList.add("active");
+      // mousedown beats the input's blur, so a click still selects
+      item.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        select(index);
+      });
+      listbox.append(item);
+    });
+    if (!matches.length) {
+      const empty = document.createElement("li");
+      empty.className = "worth-search-empty";
+      empty.textContent = "No matches";
+      listbox.append(empty);
+    }
+    listbox.hidden = false;
+  }
+
+  function highlight(delta) {
+    if (!matches.length) return;
+    active = (active + delta + matches.length) % matches.length;
+    listbox.querySelectorAll("li").forEach((item, index) => {
+      item.classList.toggle("active", index === active);
+    });
+  }
+
+  input.addEventListener("input", render);
+  input.addEventListener("focus", render);
+  input.addEventListener("blur", () => close());
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      highlight(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      highlight(-1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (active >= 0) select(active);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      close(true);
+    }
+  });
+}
+
+function wireWorthTableFilter(box, input) {
+  const count = box.querySelector("[data-search-count]");
+  input.addEventListener("input", async () => {
+    const query = input.value.trim().toLowerCase();
+    const list = document.querySelector("[data-decision-list]");
+    if (!list || typeof list.applyNameFilter !== "function") return;
+    const result = await list.applyNameFilter(query);
+    if (input.value.trim().toLowerCase() !== query) return; // superseded keystroke
+    if (count) {
+      count.hidden = !query;
+      if (query) count.textContent = `${result.shown} of ${result.total}`;
+    }
+  });
+}
+
+function wireWorthSearch(box) {
+  if (box.dataset.wired) return;
+  box.dataset.wired = "true";
+  const input = box.querySelector("input");
+  if (!input) return;
+  if (box.dataset.searchView === "review") wireWorthTypeahead(box, input);
+  else wireWorthTableFilter(box, input);
 }
 
 // --- linkedin queue prefetch -------------------------------------------------
@@ -527,6 +692,7 @@ function wireDynamicContent(root) {
   root.querySelectorAll(".details[data-slug]").forEach((details) => { void loadDossier(details); });
   root.querySelectorAll("details.decision-row[data-slug]").forEach(wireDecisionRow);
   root.querySelectorAll("[data-fix-form]").forEach(wireFixForm);
+  root.querySelectorAll("[data-worth-search]").forEach(wireWorthSearch);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
   refreshScrollCues();
   // A visible queue card kicks off the prefetch of the card after it, so the
@@ -574,6 +740,7 @@ function setupInfiniteDecisionList(list) {
   let lastLive = 0;
   let fetchedRows = chunks[0].nodes.length;
   let fetching = false;
+  let filterQuery = ""; // non-empty while the live-search filter owns the row set
 
   const spacerHeight = (spacer) => parseFloat(spacer.style.height) || 0;
   const setSpacer = (spacer, delta) => {
@@ -608,12 +775,12 @@ function setupInfiniteDecisionList(list) {
     setSpacer(bottomSpacer, -chunk.height);
   }
 
-  async function fetchChunk() {
+  async function fetchChunk(limit = chunkSize) {
     if (fetching) return;
     fetching = true;
     loadingNote.hidden = false;
     try {
-      const query = `view=${encodeURIComponent(view)}&offset=${fetchedRows}&limit=${chunkSize}`;
+      const query = `view=${encodeURIComponent(view)}&offset=${fetchedRows}&limit=${limit}`;
       const response = await fetch(`/api/decision-rows?${query}`, { cache: "no-store" });
       if (!response.ok) throw new Error("Could not load more rows");
       const payload = await response.json();
@@ -657,6 +824,7 @@ function setupInfiniteDecisionList(list) {
   }
 
   function updateWindow() {
+    if (filterQuery) return; // the live-search filter owns the row set
     for (let guard = 0; guard < 20; guard += 1) {
       const band = visibleBand();
       const nearBottom = bottomSpacer.getBoundingClientRect().top <= band.bottom + edge;
@@ -694,6 +862,42 @@ function setupInfiniteDecisionList(list) {
       void fetchChunk();
     }
   }
+
+  // --- live name filter (worth search) ---------------------------------------
+  // While a query is active the virtual window is suspended: every fetched row
+  // is made live (parked chunks re-inserted, spacers zeroed, remaining rows
+  // fetched) and non-matching rows are hidden — pure client-side filtering.
+  // Clearing the query unhides everything and hands control back to the
+  // windowing logic, which re-parks whatever sits outside the viewport.
+  async function ensureAllLive() {
+    while (firstLive > 0) unparkTop();
+    while (lastLive < chunks.length - 1) unparkBottom();
+    topSpacer.style.height = "0px";
+    bottomSpacer.style.height = "0px";
+    while (fetchedRows < total) {
+      const before = fetchedRows;
+      await fetchChunk(200); // the server caps each window at 200 rows
+      if (fetchedRows === before) break; // fetch failed: filter what we have
+    }
+  }
+
+  let filterChain = Promise.resolve();
+  list.applyNameFilter = (query) => {
+    // Serialized so rapid keystrokes resolve in order with correct counts.
+    filterChain = filterChain.then(async () => {
+      filterQuery = query;
+      if (query) await ensureAllLive();
+      let shown = 0;
+      chunks.forEach((chunk) => chunk.nodes.forEach((node) => {
+        const match = !query || (node.dataset.name || "").includes(query);
+        node.hidden = !match;
+        if (match) shown += 1;
+      }));
+      if (!query) scheduleUpdate(); // windowing resumes over the restored rows
+      return { shown, total };
+    });
+    return filterChain;
+  };
 
   // Optimistic decisions remove a live row without a reload: drop it from its
   // chunk, shrink the totals the fetch offsets are computed from, and let the

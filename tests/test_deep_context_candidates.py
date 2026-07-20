@@ -2576,6 +2576,163 @@ class TestStagedReviewUI(unittest.TestCase):
                 fetch.assert_not_called()
 
 
+def _search_parent(slug: str, name: str, email: str,
+                   decision: str = "maybe", source: str = "llm") -> dict:
+    """A hand-built review parent for the worth live-search tests."""
+    worth = {"decision": decision, "source": source, "reason": "useful relationship"}
+    key = f"candidate:email:{email}"
+    return {
+        "slug": slug, "name": name, "person_ids": [key], "sources": ["gmail"],
+        "candidates": [{
+            "pub": key, "full_name": name, "import_candidate": True,
+            "synthetic": False, "approved": "", "action": "",
+            "worth": worth, "machine_worth": worth, "worth_key": key,
+            "match_emails": [email], "match_phones": [],
+        }],
+        "worth": worth, "machine_worth": worth, "connection": False,
+        "worth_row": _worth_row_for(slug, name, [key], decision, source),
+    }
+
+
+class TestWorthLiveSearch(unittest.TestCase):
+    """ONE shared live-search input across the worth views (no Search button):
+    the Yes/No tables carry data-name markers for client-side row filtering,
+    and the Review card view embeds the pending queue as a JSON island feeding
+    the typeahead that jumps via /api/worth-card?pick=."""
+
+    def _page(self, parents: list[dict], base: Path, view: str = "") -> str:
+        params: dict = {"stage": ["worth"]}
+        if view:
+            params["view"] = [view]
+        return web.page_html(
+            parents, params, base / "review.csv",
+            parents_dir=base / "parents", dossier_dir=base / "dossiers",
+            manifest_path=base / "review" / "manifest.json",
+            enrichment_manifest_path=base / "deep-research" / "manifest.json",
+        ).decode("utf-8")
+
+    def _parents(self) -> list[dict]:
+        return [
+            _search_parent("ada-lovelace", "Ada Lovelace", "ada@example.com"),
+            _search_parent("grace-hopper", "Grace Hopper", "grace@example.com"),
+            _search_parent("alan-turing", "Alan Turing", "alan@example.com",
+                           decision="yes"),
+            _search_parent("marie-curie", "Marie Curie", "marie@example.com",
+                           decision="no"),
+        ]
+
+    def test_review_view_renders_typeahead_with_embedded_pending_names(self):
+        with tempfile.TemporaryDirectory() as d:
+            html_out = self._page(self._parents(), Path(d))
+        self.assertIn("data-worth-search", html_out)
+        self.assertIn("data-search-view='review'", html_out)
+        self.assertIn("data-search-list", html_out)
+        self.assertNotIn(">Search<", html_out)  # filters as you type, no button
+        island = re.search(
+            r"<script type='application/json' data-worth-pending>(.*?)</script>",
+            html_out, re.S)
+        self.assertIsNotNone(island)
+        pending = json.loads(island.group(1))
+        # only still-pending maybes, in queue (name) order — decided people never listed
+        self.assertEqual([entry["name"] for entry in pending],
+                         ["Ada Lovelace", "Grace Hopper"])
+        self.assertEqual(pending[0]["key"], "candidate:email:ada@example.com")
+        # the input lives OUTSIDE the swap panel so card swaps never remove it
+        self.assertLess(html_out.index("data-worth-search"),
+                        html_out.index("worth-panel"))
+
+    def test_review_view_without_pending_queue_renders_no_search(self):
+        with tempfile.TemporaryDirectory() as d:
+            html_out = self._page(
+                [_search_parent("alan-turing", "Alan Turing", "alan@example.com",
+                                decision="yes")], Path(d))
+        self.assertNotIn("data-worth-search", html_out)
+
+    def test_tables_render_search_input_and_row_name_markers(self):
+        for view, shown in (("yes", "Alan Turing"), ("no", "Marie Curie")):
+            with tempfile.TemporaryDirectory() as d:
+                html_out = self._page(self._parents(), Path(d), view=view)
+            self.assertIn(f"data-search-view='{view}'", html_out)
+            self.assertIn("data-search-count", html_out)
+            self.assertIn(shown, html_out)
+            # the row filter's match target: the lowercased display name
+            self.assertIn(f"data-name='{shown.lower()}'", html_out)
+            # the search header is part of the table card, ahead of the list
+            self.assertLess(html_out.index("data-worth-search"),
+                            html_out.index("data-decision-list"))
+            # tables filter fully client-side: no typeahead island or listbox
+            self.assertNotIn("data-worth-pending", html_out)
+            self.assertNotIn("data-search-list", html_out)
+
+    def test_client_script_wires_the_shared_search_component(self):
+        script = web.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn("wireWorthSearch", script)
+        self.assertIn("/api/worth-card?pick=", script)
+        self.assertIn("data-worth-pending", script)
+        self.assertIn("applyNameFilter", script)
+
+
+class TestWorthCardPickEndpoint(unittest.TestCase):
+    """/api/worth-card?pick= serves ONE pending person's card from the cached
+    snapshot (the same lock-free path as the exclude prefetch — never rebuilds,
+    never takes the mutation lock) and answers 404 for a key that is no longer
+    pending so the client prunes it and keeps the current card."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        base = Path(self._tmp.name)
+        (base / "facts").mkdir()
+        self._pools = mock.patch.object(candidates, "CANDIDATE_CSVS", [])
+        self._pools.start()
+        handler = web.make_handler(
+            base / "review.csv", base / "verdicts.jsonl", base / "parents",
+            base / "dossiers", 0.7, 0.85,
+            synthetic_path=base / "synthetic-people.csv",
+            facts_dir=base / "facts", people_csv=base / "people.csv",
+            manifest_path=base / "review" / "manifest.json",
+            enrichment_manifest_path=base / "deep-research" / "manifest.json",
+            initial_parents=[
+                _search_parent("ada-lovelace", "Ada Lovelace", "ada@example.com"),
+                _search_parent("grace-hopper", "Grace Hopper", "grace@example.com"),
+                _search_parent("alan-turing", "Alan Turing", "alan@example.com",
+                               decision="yes"),
+            ])
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.port = self.server.server_address[1]
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self._pools.stop()
+        self._tmp.cleanup()
+
+    def _pick(self, key: str) -> str:
+        url = (f"http://127.0.0.1:{self.port}/api/worth-card?pick="
+               + urllib.parse.quote(key))
+        with urllib.request.urlopen(url) as resp:
+            self.assertEqual(resp.status, 200)
+            return resp.read().decode("utf-8")
+
+    def test_pick_serves_the_picked_pending_card_from_the_snapshot(self):
+        with mock.patch.object(web, "_all_review_parents",
+                               side_effect=AssertionError("pick must not rebuild")):
+            card = self._pick("candidate:email:grace@example.com")
+        self.assertIn("worth-card", card)
+        self.assertIn("Grace Hopper", card)
+        self.assertIn("data-pub='candidate:email:grace@example.com'", card)
+        self.assertNotIn("Ada Lovelace", card)
+
+    def test_pick_of_gone_or_decided_key_is_a_graceful_404(self):
+        for key in ("candidate:email:alan@example.com",      # already decided
+                    "candidate:email:missing@example.com"):  # never pending
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/api/worth-card?pick="
+                    + urllib.parse.quote(key))
+            self.assertEqual(ctx.exception.code, 404)
+
+
 class TestWorthSelectionSingleSource(unittest.TestCase):
     """The People-review status and the enrichment manifest must stamp the SAME worth-
     selection digest. A candidate promoted to a verified LinkedIn parent (retargeted, so its
