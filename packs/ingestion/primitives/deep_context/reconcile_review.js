@@ -576,6 +576,7 @@ document.addEventListener("click", async (event) => {
   if (button.dataset.complete) {
     event.preventDefault();
     lock(button);
+    completingStage = true;
     try {
       await post("/complete", { stage: button.dataset.complete });
       const next = {
@@ -585,6 +586,7 @@ document.addEventListener("click", async (event) => {
       }[button.dataset.complete] || ["Saved", window.location.href];
       leaveAndNavigate(next[0], next[1]);
     } catch (error) {
+      completingStage = false;
       unlock(button);
       announce(error.message, true);
     }
@@ -936,6 +938,11 @@ const decisionList = document.querySelector("[data-decision-list]");
 if (decisionList) setupInfiniteDecisionList(decisionList);
 
 let reviewStateToken = document.body.dataset.stateToken || "";
+// True from the moment a stage-complete button is clicked: the freshness
+// observer must not reload the page out from under the pending POST +
+// navigation (the free-work job's manifest writes rotate the state token in
+// exactly that window, and a reload tears down the JS before it can leave).
+let completingStage = false;
 const statusPollMs = 1000;
 const observesExternalUpdates = document.body.dataset.externalUpdates === "true";
 
@@ -947,6 +954,7 @@ function hasIdentityDraft() {
 
 async function pollFileState() {
   if (document.visibilityState !== "visible") return;
+  if (completingStage) return; // a stage-complete navigation is in flight
   const currentStage = document.body.dataset.stage || "";
   if (!observesExternalUpdates) return;
   try {
