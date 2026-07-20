@@ -14,7 +14,7 @@ MANAGED_SKILLS=(
   setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
   # deep-setup was consolidated into deep-context; keep it managed so stale installs are removed
   import-email import-gmail enrich-email-markers discover-contacts import-twitter deep-context deep-setup logbook
-  import-messages import-imessage import-contacts-review
+  import-messages import-imessage import-contacts-review clean-slate
 )
 
 mkdir -p "$SKILLS_DIR"
@@ -136,6 +136,7 @@ install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
 install_skill enrich-email-markers "$REPO_ROOT/packs/ingestion/skills/enrich-email-markers/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
+install_skill clean-slate "$REPO_ROOT/packs/ingestion/skills/clean-slate/SKILL.md"
 install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
 install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"

@@ -51,17 +51,9 @@ Use the narrow path when the user names one:
   the flow again (already-built stages complete as cached no-ops and the
   review opens fresh).
 - `$deep-context clean`, "clean slate", "pipeclean", "start over from
-  scratch", "scrub the derived state" -> the FULL derived-state reset (a
-  bigger hammer than `restart`). Run `bin/clean-slate` (dry run), show the
-  scrub/preserve table, confirm, then `bin/clean-slate --apply`. Everything
-  scrubbed is MOVED — never deleted — to `~/powerpacks-backups/clean-slate-
-  <utc>/` with a restore manifest; every paid artifact stays in place (facts,
-  cluster pair verdicts, LinkedIn-judge verdicts, deep-research, profile
-  caches, the LinkedIn import, message stores, logbook). Then STOP and tell
-  the user the pipeclean order: `$setup` -> `$import-gmail` ->
-  `$import-messages` -> `$deep-context` (LLM stages cache-hit on stable
-  keys). Kill any running review server first; do not start the reimports
-  yourself.
+  scratch" -> the FULL derived-state reset (a bigger hammer than `restart`):
+  load and follow `packs/ingestion/skills/clean-slate/SKILL.md` — do not
+  improvise the steps here.
 - A bare `$deep-context`, "process/resolve/enrich my contacts", "build deep
   context", or a full rerun -> use the complete staged workflow below.
 
