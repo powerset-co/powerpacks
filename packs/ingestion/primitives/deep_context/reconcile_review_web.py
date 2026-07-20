@@ -2906,7 +2906,10 @@ def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
     def runner() -> None:
         try:
             steps()
-        except Exception as exc:  # the manifest is the UI's/agent's error surface
+        # BaseException on purpose: the primitives raise SystemExit on their
+        # guard paths, which `except Exception` misses — the thread then died
+        # silently and the manifest stranded mid-state with no failure marker.
+        except BaseException as exc:  # the manifest is the UI's/agent's error surface
             _mark_enrichment_failed(f"{name}: {type(exc).__name__}: {exc}")
         finally:
             _job_lock.release()
@@ -2924,20 +2927,29 @@ def _post_enrichment_chain() -> None:
 
 
 def start_enrichment_preview_job() -> None:
-    """After People review completes: build the free preview/estimate. When it
-    needs no approval (zero net-new), continue from cache and chain at once."""
+    """Make enrichment CURRENT whenever that is free. Loops because the chain
+    itself can re-drift the selection (assemble rewrites synthetic rows), which
+    used to strand the page on 'Preparing enrichment' forever. Each pass: free
+    preview; when $0 (zero net-new) continue from cache and chain; stop the
+    moment money is involved (the Approve button owns that) or the state is
+    completed+current."""
     def steps() -> None:
         from packs.ingestion.primitives.deep_context import reconcile_deep_research
-        reconcile_deep_research.main(["--dry-run", *ENRICH_FLAGS])
-        enrichment = read_enrichment_manifest(selection=current_worth_selection())
-        if (enrichment.get("status") == "needs_approval"
-                and int(enrichment.get("would_submit") or 0) == 0):
-            # Zero net-new means a $0.00 estimate, but the primitive's spend
-            # gate refuses ANY run without --approve — omit it and this parks
-            # at needs_approval forever ("Preparing enrichment" stuck screen).
-            reconcile_deep_research.main(
-                [*ENRICH_FLAGS, "--approve", "--budget", "0.00"])
-            _post_enrichment_chain()
+        for _ in range(3):
+            reconcile_deep_research.main(["--dry-run", *ENRICH_FLAGS])
+            enrichment = read_enrichment_manifest(selection=current_worth_selection())
+            if enrichment.get("status") == "completed" and enrichment.get("current"):
+                return
+            if (enrichment.get("status") == "needs_approval"
+                    and int(enrichment.get("would_submit") or 0) == 0):
+                # Zero net-new means a $0.00 estimate, but the primitive's spend
+                # gate refuses ANY run without --approve — omit it and this
+                # parks at needs_approval forever (stuck 'Preparing' screen).
+                reconcile_deep_research.main(
+                    [*ENRICH_FLAGS, "--approve", "--budget", "0.00"])
+                _post_enrichment_chain()
+                continue  # the chain may have re-drifted the selection: re-check
+            return  # needs a real approval (or failed): the UI owns it now
 
     _run_pipeline_job("enrichment-preview", steps)
 
@@ -2983,7 +2995,11 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         agent progress without recursively scanning thousands of artifacts.
         """
         values = []
-        for path in (review_path, verdicts_path, synthetic_path, people_csv):
+        # ENRICH_MANIFEST included so an enrichment state change (in-app or an
+        # external CLI completion) invalidates the cached model — without it
+        # the enrich page served a stale phase until a manual server restart.
+        for path in (review_path, verdicts_path, synthetic_path, people_csv,
+                     ENRICH_MANIFEST):
             try:
                 stat = path.stat()
                 values.append((str(path), stat.st_mtime_ns, stat.st_size))
@@ -3330,6 +3346,19 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 review_path=review_path, synthetic_path=synthetic_path)
                             if stage == "worth" and run_jobs:
                                 start_enrichment_preview_job()
+                            elif stage == "linkedin" and run_jobs:
+                                # LinkedIn decisions can drift the worth
+                                # selection (exclude = user no), leaving the
+                                # finished enrichment "stale" — which used to
+                                # bounce the user to a dead "Preparing
+                                # enrichment" page at Finish. Reconcile it now;
+                                # the job is a no-op when already current.
+                                fresh_enrichment = read_enrichment_manifest(
+                                    selection=worth_selection_from_parents(
+                                        current_parents, manifest_path=manifest_path))
+                                if not (fresh_enrichment.get("status") == "completed"
+                                        and fresh_enrichment.get("current")):
+                                    start_enrichment_preview_job()
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=409)
@@ -3624,24 +3653,22 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     if requested_stage == "worth":
         begin_people_review()
-    # Self-heal: a server restart can kill the in-app preview job between its
-    # dry-run write and the free continuation, stranding the manifest at
-    # needs_approval / would_submit=0 (the "Preparing enrichment" stuck screen).
-    # Resume the free continuation on launch; the would_submit>0 case correctly
-    # keeps waiting for the user's Approve click. The job re-runs the dry run
-    # first, so a stale manifest only ever leads to a fresh, correct estimate.
+    # Self-heal: once People review is complete, the SERVER owns the
+    # enrichment lifecycle. Any not-current state on launch — a job killed
+    # mid-run (needs_approval/$0, research_complete), a selection drifted by
+    # later decisions ("stale"), an external CLI write — gets the preview job,
+    # which converges to completed+current for free and stops the moment real
+    # spend needs the user's Approve click. Stranded states owned by nobody
+    # were the #1 recurring failure of this flow.
     try:
         canonical_paths = review_path.resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
     except (OSError, RuntimeError):
         canonical_paths = False
     if canonical_paths and progress["worth_pending"] == 0:
-        try:
-            stranded = json.loads(ENRICH_MANIFEST.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            stranded = {}
-        if (isinstance(stranded, dict)
-                and stranded.get("status") == "needs_approval"
-                and int(stranded.get("would_submit") or 0) == 0):
+        stranded = read_enrichment_manifest(
+            selection=worth_selection_from_parents(parents, manifest_path=manifest_path))
+        if str(stranded.get("status") or "") not in {"running", "submitted"} and not (
+                stranded.get("status") == "completed" and stranded.get("current")):
             start_enrichment_preview_job()
     # No push notifier: the agent watches state with `review-status --wait`,
     # which stats the same durable files this server writes. Simplicity wins.
