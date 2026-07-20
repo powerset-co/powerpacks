@@ -49,6 +49,8 @@ usage: bin/deep-context <command> [args]
                (default dry run; --fetch spends RapidAPI + OpenAI)
   rejudge      re-run synthesis worth for every message-backed dossier, ignoring
                cached machine/human decisions (spends OpenAI; try --dry-run first).
+               First rebuilds every raw bundle from the current message stores
+               (free, local) so deeper-synced history is what gets judged.
                Human network_worth cells remain untouched; LinkedIn is never evidence.
   restart      clear all HUMAN review decisions (worth marks, Check-LinkedIn
                clicks incl. pasted URLs, synthetic approvals) keeping every
@@ -162,6 +164,14 @@ case "$cmd" in
     if [[ "$cmd" == "re-review" ]]; then
       echo "warning: 're-review' is deprecated; use 'bin/deep-context rejudge'" >&2
     fi
+    # Rejudging stale evidence would be silent: bundles skip re-collection when
+    # their policy matches, so a deeper message sync never reaches an existing
+    # bundle on its own. Rebuild them all first (free, local, no LLM) — also on
+    # --dry-run, so the estimate prices the bundles that will actually be judged.
+    # Flags mirror the skill's canonical collect line: groups are standing owner
+    # authorization and candidates have bundles too; dropping either would
+    # silently shed evidence for part of the rejudged population.
+    "${PY[@]}" "$PKG.collect_person_context" --force --include-groups --include-candidates
     "${PY[@]}" "$PKG.synthesize_person_context" --rejudge "$@"
     ;;
   review)
