@@ -66,6 +66,10 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertIn("import_contacts_pipeline/messages.py run", messages)
         self.assertIn("index_contacts_pipeline.py fan-in", messages)
         self.assertIn("import_contacts_pipeline/status.py status", messages)
+        # Pre-full-sync link is surfaced as an explicit re-link prompt wired to
+        # the logout primitive, keyed off the hoisted top-level nudge flag.
+        self.assertIn("whatsapp_pairing_state", messages)
+        self.assertIn("import_whatsapp_wacli/import_whatsapp_wacli.py logout", messages)
         self.assertNotIn("discover_contacts_pipeline/gmail.py discover", messages)
 
         # Contact-sync boundary: the import skills never index and never run
@@ -315,6 +319,49 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertEqual(command[command.index("--max-messages") + 1], "0")
         # The pinned wacli fork auto-builds; discovery no longer suppresses install.
         self.assertNotIn("--no-install", command)
+
+    def test_extract_whatsapp_records_pre_full_sync_nudge_in_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "whatsapp.csv"
+            artifacts: dict = {}
+            payload = {
+                "status": "completed",
+                "pairing": {"state": "pre_full_sync",
+                            "hint": "Re-link to pull years more history."},
+            }
+            with mock.patch.object(discover_messages, "WHATSAPP_CONTACTS", missing), \
+                    mock.patch.object(discover_messages, "run_cmd", return_value=(0, payload, "")):
+                result = discover_messages._extract_whatsapp(
+                    artifacts,
+                    Path(td) / "accounts.json",
+                    discover_messages.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
+                    False,
+                )
+        self.assertIsNone(result)
+        self.assertEqual(artifacts["whatsapp_pairing_state"], "pre_full_sync")
+        self.assertIn("Re-link", artifacts["whatsapp_pairing_notice"])
+
+    def test_discover_hoists_pre_full_sync_nudge_to_top_level(self) -> None:
+        # A fast-path completed run must surface the nudge at the top level, not
+        # bury it under child.artifacts where a happy-path agent won't look.
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "discover"
+            merged = Path(td) / "merged-contacts.csv"  # absent -> empty contacts.csv
+
+            def fake_extract(artifacts, *a, **k):
+                artifacts["whatsapp_pairing_state"] = "pre_full_sync"
+                artifacts["whatsapp_pairing_notice"] = "Re-link to pull years more history."
+                return None
+
+            with mock.patch.object(discover_messages, "DEFAULT_MESSAGES_OUTPUT_DIR", out), \
+                    mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
+                    mock.patch.object(discover_messages, "_extract_whatsapp", side_effect=fake_extract), \
+                    mock.patch.object(discover_messages, "_normalize_channel", return_value=None), \
+                    mock.patch.object(discover_messages, "_merge_contacts", return_value=None):
+                result = discover_messages.discover(include_imessage=False, include_whatsapp=True)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["whatsapp_pairing_state"], "pre_full_sync")
+        self.assertIn("Re-link", result["whatsapp_pairing_notice"])
 
     def test_existing_channel_exports_are_refreshed(self) -> None:
         with tempfile.TemporaryDirectory() as td:

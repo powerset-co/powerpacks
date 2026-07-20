@@ -185,18 +185,34 @@ the same `discover` command to advance:
 - **WhatsApp QR / expired session** (`status: blocked_user_action`, step
   `authenticate_whatsapp`): surface the QR page, have the user scan it in
   WhatsApp, then re-run discovery. (Default provider is wacli.)
-- **Pre-full-sync link (deeper history available):** the WhatsApp run reports a
-  `pairing` object. When `pairing.state == "pre_full_sync"` (a linked session set
-  up before full history sync — upstream wacli or an old build), tell the user —
-  **do not block or auto-logout** — that re-linking would pull years more
-  history, and how: log out and re-scan (`wacli auth logout`, then re-run
-  discovery to get a fresh QR). Their existing contacts still import; this is an
-  optional deepen. `pairing.state == "full_sync"` means nothing to do.
+**After a completed discovery — deeper-history re-link prompt.** When the
+discovery result reports `whatsapp_pairing_state == "pre_full_sync"` at the top
+level of `.powerpacks/network-import/discover/messages/manifest.json` (a WhatsApp
+link set up before full history sync — upstream wacli or an old build, so only
+recent history was pulled), **stop and ask the user before continuing to Step
+3** — do not log out or re-pair without an explicit yes:
+
+> Your WhatsApp link predates full history sync, so only recent history was
+> pulled. Re-link now to fetch years more? This logs you out and shows a fresh
+> QR to scan. Your already-imported contacts stay either way. (yes / no)
+
+- **User says yes** → log out, then re-run the Step 2 `discover` command to issue
+  a fresh QR (the re-paired session syncs full history):
+
+  ```bash
+  cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py logout
+  ```
+
+- **User says no** → proceed to Step 3 with the contacts already imported; the
+  deepen is optional.
+
+A missing `whatsapp_pairing_state` (or `pairing.state == "full_sync"`) means
+nothing to do — continue to Step 3.
 
 **Consent gates: Full Disk Access, WhatsApp QR.** The pinned wacli fork itself
-auto-downloads (blocks only on an unsupported platform). The re-link nudge is a
-non-blocking suggestion, never forced. The run completes with
-`selected_steps_completed` once contacts are merged.
+auto-downloads (blocks only on an unsupported platform). The deeper-history
+re-link is an explicit yes/no prompt (stop and ask), never auto-executed. The run
+completes with `selected_steps_completed` once contacts are merged.
 
 ### Step 3 — Match contacts against LinkedIn & Gmail
 
