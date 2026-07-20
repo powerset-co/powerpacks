@@ -2467,9 +2467,10 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
         else "<dl class='row-facts dossier-text' aria-busy='true'></dl>"
     )
     # Left-edge chevron = the expand/collapse affordance; the decision button
-    # stays on the far right of the summary row.
+    # stays on the far right of the summary row. data-name is the live-search
+    # filter's match target (lowercased display name, matched client-side).
     return f"""
-        <details class='decision-row' data-card data-slug='{esc(dossier_slug)}'>
+        <details class='decision-row' data-card data-slug='{esc(dossier_slug)}' data-name='{esc(str(parent.get('name') or '').lower())}'>
           <summary class='decision-row-summary'>
             <span class='decision-row-caret' aria-hidden='true'></span>
             {_avatar(parent, candidate, small=True)}
@@ -2522,9 +2523,38 @@ def render_decision_table(parents: list[dict[str, Any]], decision: str, *,
     rows = [_decision_row_html(parent, decision, parents_dir, dossier_dir)
             for parent in rows_in_scope[:chunk_size]]
     return ("<div class='decision-page'>"
-            f"<section class='decision-list' data-decision-list data-view='{esc(decision)}' "
+            + worth_search_html(decision)
+            + f"<section class='decision-list' data-decision-list data-view='{esc(decision)}' "
             f"data-total='{len(rows_in_scope)}' data-chunk='{chunk_size}'>"
             + "".join(rows) + "</section></div>")
+
+
+def worth_pending_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Name + worth key of every still-pending Review person, in queue order —
+    the typeahead's dataset, embedded in the rendered page as a JSON island and
+    pruned client-side as decisions settle (no separate names endpoint)."""
+    queue = [parent for parent in parents if needs_worth_review(parent)]
+    queue.sort(key=lambda parent: str(parent.get("name") or "").lower())
+    return [{"key": str(_worth_key(parent) or ""), "name": str(parent.get("name") or "")}
+            for parent in queue]
+
+
+def worth_search_html(view: str, pending: list[dict[str, str]] | None = None) -> str:
+    """The ONE live-search input shared by all worth views (filters as you type;
+    never a Search button). The Yes/No tables hide non-matching rows client-side
+    with an "N of M" count; the Review card view (``pending`` given) gets a
+    typeahead dropdown over the embedded pending queue that jumps straight to a
+    picked person's card via /api/worth-card?pick=."""
+    extras = ""
+    if pending is not None:
+        payload = json.dumps(pending, ensure_ascii=False).replace("<", "\\u003c")
+        extras = (f"<script type='application/json' data-worth-pending>{payload}</script>"
+                  "<ul class='worth-search-list' data-search-list role='listbox' hidden></ul>")
+    return (f"<div class='worth-search' data-worth-search data-search-view='{esc(view)}'>"
+            "<input class='worth-search-input' type='search' placeholder='Search people…' "
+            "aria-label='Search people by name' autocomplete='off' spellcheck='false'>"
+            "<span class='worth-search-count' data-search-count hidden></span>"
+            f"{extras}</div>")
 
 
 def render_decision_tabs(progress: dict[str, int], active: str, *, preview: bool = False) -> str:
@@ -2795,15 +2825,20 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         decision_view = str((params.get("view") or ["review"])[0]).strip().lower()
         decision_view = decision_view if decision_view in {"review", "yes", "no"} else "review"
         tabs = render_decision_tabs(progress, decision_view, preview=preview)
+        search = ""
         if decision_view == "review":
             body = worth_review_body(parents, progress, parents_dir, dossier_dir,
                                      debug=debug, profile_cache_dir=profile_cache_dir)
+            # The typeahead lives OUTSIDE the swap panel so card swaps never
+            # touch it; its pending queue is embedded once at page render.
+            pending = worth_pending_entries(parents)
+            search = worth_search_html("review", pending) if pending else ""
         else:
             # Legacy ?page= URLs still land here; the infinite-scroll list always
             # starts from the top and streams the rest via /api/decision-rows.
             body = render_decision_table(
                 parents, decision_view, parents_dir=parents_dir, dossier_dir=dossier_dir)
-        content = f"<div class='worth-stage'>{tabs}<div class='worth-panel'>{body}</div></div>"
+        content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
     elif view == "enrich":
         content = render_enrichment(enrichment, progress)
     elif view == "linkedin":
@@ -3220,6 +3255,26 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     key.strip().lower()
                     for key in str((params.get("exclude") or [""])[0]).split(",")
                     if key.strip())
+                pick = str((params.get("pick") or [""])[0]).strip().lower()
+                if parsed.path == "/api/worth-card" and pick:
+                    # Typeahead jump: ONE specific pending person's card, served
+                    # from the same lock-free snapshot as the exclude prefetch
+                    # (never takes the mutation lock, never rebuilds the model).
+                    # A key that is no longer pending — decided elsewhere or
+                    # stale — answers 404 so the client prunes it locally and
+                    # keeps the current card.
+                    picked = next(
+                        (parent for parent in cached_parents
+                         if needs_worth_review(parent)
+                         and str(_worth_key(parent) or "").strip().lower() == pick),
+                        None)
+                    if picked is None:
+                        self.send_bytes(b"gone", "text/plain; charset=utf-8", status=404)
+                        return
+                    card = render_worth_card(picked, parents_dir, dossier_dir,
+                                             profile_cache_dir)
+                    self.send_bytes(card.encode("utf-8"), "text/html; charset=utf-8")
+                    return
                 if exclude:
                     # Prefetch of the FOLLOWING card while a decision POST holds
                     # the mutation lock: render from the current snapshot without

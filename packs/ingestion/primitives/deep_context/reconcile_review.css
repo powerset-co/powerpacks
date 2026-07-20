@@ -581,7 +581,73 @@ input::placeholder { color: var(--muted); }
   gap: 14px;
 }
 
+/* Review view: the live-search typeahead sits between the tabs and the swap
+   panel (outside the panel, so card swaps never touch it). */
+.worth-stage:has(> .worth-search) { grid-template-rows: auto auto minmax(0, 1fr); }
+
 .worth-panel { min-height: 0; }
+
+/* --- live search (shared by the Review typeahead and the Yes/No tables) ----- */
+.worth-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.worth-search-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.worth-search-input::placeholder { color: var(--muted); }
+
+.worth-search-count {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.worth-search-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .45);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.worth-search-list li {
+  padding: 10px 12px;
+  border-radius: 7px;
+  color: var(--foreground);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.worth-search-list li.active,
+.worth-search-list li:hover { background: var(--secondary); }
+
+.worth-search-list li.worth-search-empty {
+  color: var(--muted);
+  cursor: default;
+  background: none;
+}
 
 .decision-tabs {
   min-height: 44px;
@@ -612,11 +678,12 @@ input::placeholder { color: var(--muted); }
 .decision-tab.active { background: var(--secondary); color: var(--foreground); }
 .decision-tab span { color: var(--muted); font-size: 11px; }
 
+/* Tables: the live-search header is part of the table card, above the list. */
 .decision-page {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
 }
 
