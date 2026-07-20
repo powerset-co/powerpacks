@@ -1094,6 +1094,10 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
                 "llm_reject_confidence": p.get("llm_reject_confidence", ""),
                 "llm_reject_reason": p.get("llm_reject_reason", ""),
             })
+        # The evidence sha the judge saw (or a grandfather stamp for rows judged
+        # before the cache existed). Absent key -> prior fingerprint carries over.
+        if "judge_fingerprint" in p:
+            row["llm_judge_fingerprint"] = str(p.get("judge_fingerprint") or "")
         # Retarget research changes only identity fields. Preserve both the
         # human-owned network_worth mark and the latest synthesis-owned worth
         # columns so a found LinkedIn cannot silently change the People decision.

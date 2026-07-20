@@ -39,6 +39,11 @@ OVERRIDE_COLUMNS = [
     "llm_reject",
     "llm_reject_confidence",
     "llm_reject_reason",
+    # Machine-owned sha256 of the EVIDENCE the retarget identity judge consumed
+    # (proposal_fingerprint in reconcile_deep_research). A later pass whose
+    # would-be proposal matches this sha reuses the stored verdict — including
+    # rejections — instead of re-judging; changed evidence re-judges.
+    "llm_judge_fingerprint",
     # Machine-owned worth mirrored from facts/<person_id>.jsonl.
     "llm_worth",
     "llm_worth_reason",
