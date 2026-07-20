@@ -2106,8 +2106,10 @@ def _recent_messages_html(parent: dict[str, Any], raw_dir: Path = RAW_DIR) -> st
         newest_dt = datetime.fromisoformat(newest.replace("Z", "+00:00"))
         age_days = (datetime.now(timezone.utc) - newest_dt).days
         if age_days > _STALE_MESSAGE_DAYS:
+            # One decimal, never floored: "Aug 2022 — 3 years ago" next to a
+            # 3-year window read as a contradiction when it was really 3.9.
             stale = (f"<p class='worth-messages-stale'>Last message "
-                     f"{newest_dt.strftime('%b %Y')} — {age_days // 365} years ago, "
+                     f"{newest_dt.strftime('%b %Y')} — {age_days / 365.25:.1f} years ago, "
                      "older than your 3-year sync window</p>")
     except ValueError:
         pass

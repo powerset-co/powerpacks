@@ -2638,6 +2638,9 @@ class TestWorthCardRecentMessages(unittest.TestCase):
         self.assertIn("whatsapp · you · 2021-12-27", html)
         self.assertIn("older than your 3-year sync window", html)
         self.assertIn("Dec 2021", html)
+        # age renders with one decimal ("4.6 years ago"), never floored to an
+        # integer that can contradict the 3-year-window phrasing
+        self.assertRegex(html, r"\d+\.\d years ago")
 
     def test_recent_thread_has_no_stale_callout_and_missing_bundle_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
