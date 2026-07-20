@@ -1,6 +1,6 @@
 ---
 name: clean-slate
-description: Full pipeclean of derived Powerpacks pipeline state. Use for $clean-slate, "clean slate", "pipeclean", "start over from scratch", "scrub the derived state", "reset the pipeline but keep my LLM work". Moves ALL derived state (merged people, directory, review decisions, import dirs, cluster index/parents/dossiers, search index) to a timestamped backup OUTSIDE the repo, preserving every paid artifact (facts, cluster pair verdicts, LinkedIn-judge verdicts, deep-research results, profile caches, the LinkedIn import, message stores, logbook). Nothing is ever deleted. This is THE reset — "restart the review" and "clear my decisions" route here too (decisions live in the derived state; the re-walk cache-hits).
+description: Full pipeclean of derived Powerpacks pipeline state. Use for $clean-slate, "clean slate", "pipeclean", "start over from scratch", "scrub the derived state", "reset the pipeline but keep my LLM work". Moves ALL derived state (merged people, directory, review decisions, import dirs, cluster index/parents/dossiers, search index) to a timestamped backup OUTSIDE the repo, preserving every paid artifact (facts, cluster pair verdicts, LinkedIn-judge verdicts, deep-research results, profile caches, the LinkedIn import, message stores, logbook). Nothing is ever deleted. For clearing only human review decisions without the reimport walk, use $deep-context restart instead.
 ---
 
 <!--
@@ -15,9 +15,10 @@ Changelog:
 One purpose: reset the pipeline to "fresh install + paid caches" so the full
 flow can be re-walked from a clean slate with every LLM/API stage cache-hitting.
 
-This is THE one reset. "Restart the review" / "clear my decisions" is the
-same operation: human decisions live in the derived state this scrubs, and the
-re-walk afterwards is all cached no-ops, so one hammer covers both.
+This is the BIG reset (derived state + reimport walk). The SMALL reset is
+`$deep-context restart`: human decisions only, all derived state kept, review
+re-takeable immediately — route there when the user only wants to redo the
+review.
 
 ## Run it
 

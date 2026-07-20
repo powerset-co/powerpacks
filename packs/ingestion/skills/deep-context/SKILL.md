@@ -38,12 +38,19 @@ Use the narrow path when the user names one:
   hands the user) -> the review is finished; run
   `bin/deep-context review-status` and continue from its `next_action`
   (normally `realize` -> merge + index).
-- `$deep-context restart`, `$deep-context clean`, "restart the review",
-  "clear my review decisions", "clean slate", "pipeclean", "start over from
-  scratch" -> THE one reset: load and follow
-  `packs/ingestion/skills/clean-slate/SKILL.md` — do not improvise the steps
-  here. (There is no separate human-decisions-only skill; decisions live in
-  the derived state clean-slate scrubs, and the re-walk cache-hits.)
+- `$deep-context restart`, "restart the review", "clear my review decisions",
+  "take the staged review again" -> the SMALL reset: clear HUMAN decisions
+  only, keep all derived state, review re-takeable immediately (no re-walk).
+  Run `bin/deep-context restart` (dry run), show what would clear (worth
+  marks, Check-LinkedIn clicks incl. pasted URLs, synthetic approvals),
+  confirm, then `bin/deep-context restart --apply` (backs files up to
+  `.bkup-*` first). Every machine verdict, facts file, deep-research artifact
+  and profile cache survives. Then STOP — no review launch, no workflow plan.
+  End by telling the user: run `$deep-context` whenever you're ready.
+- `$deep-context clean`, "clean slate", "pipeclean", "start over from
+  scratch" -> the BIG reset (full derived-state scrub + reimport walk): load
+  and follow `packs/ingestion/skills/clean-slate/SKILL.md` — do not improvise
+  the steps here.
 - A bare `$deep-context`, "process/resolve/enrich my contacts", "build deep
   context", or a full rerun -> use the complete staged workflow below.
 
