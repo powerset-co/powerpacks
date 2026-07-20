@@ -1566,6 +1566,72 @@ def read_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
     return result
 
 
+def derive_enrichment_state(selection: dict[str, Any], *,
+                            verdicts_path: Path = VERDICTS_JSONL,
+                            review_path: Path = LINKEDIN_OVERRIDES_CSV,
+                            facts_dir: Path = FACTS_DIR,
+                            manifest_path: Path = ENRICH_MANIFEST,
+                            job_running: bool = False) -> dict[str, Any]:
+    """THE enrichment state, derived from disk at every enrich-page render.
+
+    No persisted status is trusted as truth: the manifest is a receipt/cache, and
+    any writer may scribble on it (external CLI runs, restarts, crashes) without
+    stranding the page — every reload re-derives. Net-new is counted exactly the
+    way the primitive counts it: the eligible worth selection versus the research
+    artifacts beside the manifest (manifest_path.parent/<handle>/01_research_parallel.json).
+
+    The rules, in order:
+
+      1. running        — the in-process pipeline job is alive; the manifest
+                          carries its heartbeat progress (phase/done/total).
+      2. needs_approval — net-new research > 0: the current selection includes
+                          someone with no completed research artifact, so
+                          continuing costs Parallel money and ONLY the user's
+                          Approve click may start it. ``approvable`` marks a
+                          current receipt whose count matches the derived net-new
+                          (the Approve button binds to that receipt); otherwise
+                          the free job refreshes the receipt first — for $0.
+      3. done           — zero net-new AND the receipt records a completed run
+                          for exactly this worth selection (chain outputs current).
+      4. free_pending   — zero net-new but no current completed receipt: the $0
+                          reuse/judge-cache/assemble/prefetch chain still needs
+                          to run (or re-run); rendering the page triggers it.
+    """
+    # Local import: reconcile_deep_research imports this module (selection digest).
+    from packs.ingestion.primitives.deep_context import reconcile_deep_research as dr
+
+    receipt = read_enrichment_manifest(manifest_path, selection=selection)
+    if job_running:
+        return {**receipt, "state": "running"}
+    verdicts = list(read_jsonl(verdicts_path))
+    overrides = load_override_rows(review_path)
+    # Mirror the in-app job's exact eligibility (ENRICH_FLAGS + the primitive's
+    # own confirm-threshold default) so this count can never disagree with the
+    # estimate the $0 run would stamp.
+    threshold = dr.build_parser().get_default("confirm_threshold")
+    subset = dr.eligible_subset(verdicts, threshold, overrides,
+                                include_plausibly_absent=True)
+    subset += dr.candidate_subset(facts_dir, overrides)
+    handles = {str(r.get("parent_slug") or "").strip() for r in subset} - {""}
+    net_new = sum(1 for handle in handles
+                  if not (manifest_path.parent / handle / "01_research_parallel.json").exists())
+    cost_per = dr.PROCESSOR_PRICING_USD[dr.DEFAULT_PROCESSOR]
+    state = {**receipt, "net_new": net_new,
+             "net_new_estimated_usd": round(net_new * cost_per, 2)}
+    if net_new:
+        try:
+            receipt_count = int(receipt.get("would_submit") or 0)
+        except (TypeError, ValueError):
+            receipt_count = -1
+        approvable = bool(receipt.get("current")
+                          and receipt.get("status") == "needs_approval"
+                          and receipt_count == net_new)
+        return {**state, "state": "needs_approval", "approvable": approvable}
+    if receipt.get("current") and receipt.get("status") == "completed":
+        return {**state, "state": "done"}
+    return {**state, "state": "free_pending"}
+
+
 def approve_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
                                 selection: dict[str, Any]) -> dict[str, Any]:
     """Persist the UI's exact spend approval in the fixed enrichment manifest.
@@ -2578,11 +2644,12 @@ def _phase_view(params: dict[str, list[str]], progress: dict[str, int], manifest
 
 
 def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> str:
-    status = str(enrichment.get("status") or "not_started")
+    """Render one derived enrichment state (see derive_enrichment_state) as HTML.
+    Purely presentational — the state rules live in the derive function alone."""
+    state = str(enrichment.get("state") or "free_pending")
     counts = enrichment.get("counts") if isinstance(enrichment.get("counts"), dict) else {}
     total = max(0, int(counts.get("total") or progress["lookup_ready"] or 0))
     completed = min(total, max(0, int(counts.get("completed") or 0)))
-    failed = max(0, int(counts.get("failed") or 0))
     percent = round((completed / total) * 100) if total else 0
     progress_bar = f"""
       <div class='enrich-progress' role='progressbar' aria-label='Contact enrichment progress'
@@ -2599,47 +2666,57 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
                 "<h2>Review in progress</h2>"
                 f"<p>{progress['worth_pending']} decisions left · {progress['lookup_ready']} currently yes</p>"
                 f"{progress_bar}</div>")
-    if status in {"not_started", "stale"}:
-        return ("<div class='empty-state enrich-state'>"
-                "<h2>Preparing enrichment</h2>"
-                f"<p>Preparing {progress['lookup_ready']} approved "
-                f"contact{'s' if progress['lookup_ready'] != 1 else ''}</p>"
-                f"{agent_handoff_bar}</div>")
-    if status == "needs_approval":
-        estimate = float(enrichment.get("estimated_usd") or 0)
-        new_count = max(0, int(enrichment.get("would_submit") or 0))
-        reused = max(0, int(enrichment.get("reused_completed") or 0))
-        if new_count == 0:
-            return ("<div class='empty-state enrich-state'>"
-                    "<h2>Preparing enrichment</h2>"
-                    f"<p>0 new · {reused} reused · no approval needed</p>"
-                    f"{agent_handoff_bar}</div>")
+    if state == "running":
+        if enrichment.get("phase") == "judging_retargets":
+            # Commit-scoped heartbeat from the judging pass: honest counts, not a
+            # static screen (see reconcile_deep_research's manifest heartbeat).
+            done = max(0, int(enrichment.get("done") or 0))
+            judging = max(done, int(enrichment.get("total") or 0))
+            return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
+                    "<h2>Judging found profiles</h2>"
+                    f"<p>{done} of {judging} checked</p>{agent_handoff_bar}</div>")
+        return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
+                "<h2>Enriching contacts</h2>"
+                f"<p>{completed} of {total} complete</p>{progress_bar}</div>")
+    if state == "needs_approval":
         if enrichment.get("approval_current"):
+            new_count = max(0, int(enrichment.get("would_submit") or 0))
             return ("<div class='empty-state enrich-state'>"
                     "<h2>Preparing enrichment</h2>"
                     f"<p>Approval saved · starting {new_count} new lookup"
                     f"{'s' if new_count != 1 else ''}</p>{agent_handoff_bar}</div>")
+        if not enrichment.get("approvable"):
+            # Net-new exists but the receipt is stale; the free job is refreshing
+            # the estimate ($0) — the Approve button binds to the fresh receipt.
+            return ("<div class='empty-state enrich-state'>"
+                    "<h2>Preparing enrichment</h2>"
+                    f"<p>Estimating {enrichment.get('net_new') or 0} new lookups</p>"
+                    f"{agent_handoff_bar}</div>")
+        estimate = float(enrichment.get("estimated_usd") or 0)
+        new_count = max(0, int(enrichment.get("would_submit") or 0))
+        reused = max(0, int(enrichment.get("reused_completed") or 0))
         details = f"{new_count} new · {reused} reused · up to ${estimate:.2f}"
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>2</div>"
                 "<h2>Ready to enrich</h2>"
                 f"<p>{details}</p>{progress_bar}"
                 f"<button class='button button-primary' data-approve-enrichment>Approve ${estimate:.2f}</button></div>")
-    if status in {"running", "submitted"}:
-        return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
-                "<h2>Enriching contacts</h2>"
-                f"<p>{completed} of {total} complete</p>{progress_bar}</div>")
-    if status == "research_complete":
-        return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
-                "<h2>Building profiles</h2>"
-                f"<p>{completed} of {total} researched</p>{progress_bar}</div>")
-    if status in {"failed", "completed_with_errors"}:
+    if state == "done":
+        return ("<div class='empty-state enrich-state'><div class='empty-mark'>✓</div>"
+                "<h2>Contacts enriched</h2>"
+                f"<p>{completed} profiles ready</p>{progress_bar}"
+                "<button class='button button-primary' data-complete='enrich'>Continue</button></div>")
+    # free_pending: the render already started-or-joined the free job; show work.
+    if enrichment.get("status") in {"failed", "completed_with_errors"}:
+        failed = max(0, int(counts.get("failed") or 0))
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>!</div>"
                 "<h2>Enrichment paused</h2>"
-                f"<p>{failed} failed · {completed} complete</p>{progress_bar}</div>")
-    return ("<div class='empty-state enrich-state'><div class='empty-mark'>✓</div>"
-            "<h2>Contacts enriched</h2>"
-            f"<p>{completed} profiles ready</p>{progress_bar}"
-            "<button class='button button-primary' data-complete='enrich'>Continue</button></div>")
+                f"<p>{failed} failed · {completed} complete · reload to retry</p>"
+                f"{progress_bar}</div>")
+    return ("<div class='empty-state enrich-state'>"
+            "<h2>Preparing enrichment</h2>"
+            f"<p>Preparing {progress['lookup_ready']} approved "
+            f"contact{'s' if progress['lookup_ready'] != 1 else ''}</p>"
+            f"{agent_handoff_bar}</div>")
 
 
 def _step(number: int, label: str, active: bool, complete: bool, count: int = 0,
@@ -2799,7 +2876,10 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
               dossier_dir: Path = DOSSIER_DIR,
               manifest_path: Path = REVIEW_MANIFEST,
               enrichment_manifest_path: Path = ENRICH_MANIFEST,
-              profile_cache_dir: Path = PROFILE_CACHE_DIR) -> bytes:
+              profile_cache_dir: Path = PROFILE_CACHE_DIR,
+              verdicts_path: Path = VERDICTS_JSONL,
+              facts_dir: Path = FACTS_DIR,
+              enrichment_state: dict[str, Any] | None = None) -> bytes:
     progress = review_progress(parents)
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
     enrichment = read_enrichment_manifest(enrichment_manifest_path, selection=selection)
@@ -2840,7 +2920,14 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
                 parents, decision_view, parents_dir=parents_dir, dossier_dir=dossier_dir)
         content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
     elif view == "enrich":
-        content = render_enrichment(enrichment, progress)
+        # The enrich page renders the DERIVED state (never a trusted persisted
+        # status); the HTTP handler pre-derives it so its render matches the
+        # free-job trigger decision it just made.
+        if enrichment_state is None:
+            enrichment_state = derive_enrichment_state(
+                selection, verdicts_path=verdicts_path, review_path=review_path,
+                facts_dir=facts_dir, manifest_path=enrichment_manifest_path)
+        content = render_enrichment(enrichment_state, progress)
     elif view == "linkedin":
         content = linkedin_review_body(
             parents, progress, enrichment_complete=bool(enrichment_complete),
@@ -2925,6 +3012,8 @@ def _mark_enrichment_failed(error: str) -> None:
         existing = {}
     if not isinstance(existing, dict):
         existing = {}
+    if existing.get("status") == "failed" and existing.get("error") == error[:500]:
+        return  # already surfaced; a repeat write would churn the UI poll per retry
     existing.update({"stage": "enrich", "status": "failed", "error": error[:500],
                      "updated_at": now_iso()})
     try:
@@ -2961,32 +3050,25 @@ def _post_enrichment_chain() -> None:
     prefetch_profiles.main(["--fetch"])
 
 
-def start_enrichment_preview_job() -> None:
-    """Make enrichment CURRENT whenever that is free. Loops because the chain
-    itself can re-drift the selection (assemble rewrites synthetic rows), which
-    used to strand the page on 'Preparing enrichment' forever. Each pass: free
-    preview; when $0 (zero net-new) continue from cache and chain; stop the
-    moment money is involved (the Approve button owns that) or the state is
-    completed+current."""
-    def steps() -> None:
-        from packs.ingestion.primitives.deep_context import reconcile_deep_research
-        for _ in range(3):
-            reconcile_deep_research.main(["--dry-run", *ENRICH_FLAGS])
-            enrichment = read_enrichment_manifest(selection=current_worth_selection())
-            if enrichment.get("status") == "completed" and enrichment.get("current"):
-                return
-            if (enrichment.get("status") == "needs_approval"
-                    and int(enrichment.get("would_submit") or 0) == 0):
-                # Zero net-new means a $0.00 estimate, but the primitive's spend
-                # gate refuses ANY run without --approve — omit it and this
-                # parks at needs_approval forever (stuck 'Preparing' screen).
-                reconcile_deep_research.main(
-                    [*ENRICH_FLAGS, "--approve", "--budget", "0.00"])
-                _post_enrichment_chain()
-                continue  # the chain may have re-drifted the selection: re-check
-            return  # needs a real approval (or failed): the UI owns it now
+def _free_enrichment_steps() -> None:
+    """The ONE free-work pass: run the enrichment continue with a $0 ceiling.
+    Zero net-new does ALL the free work (reuse + fingerprint-cached retarget
+    judging) and the follow-up chain; any real spend hits the primitive's budget
+    gate, which stamps a current needs_approval receipt WITHOUT spending a cent
+    (the Approve button owns money). No convergence loop: the chain may re-drift
+    the selection, and the next enrich-page render re-derives and re-triggers."""
+    from packs.ingestion.primitives.deep_context import reconcile_deep_research
+    reconcile_deep_research.main([*ENRICH_FLAGS, "--approve", "--budget", "0.00"])
+    enrichment = read_enrichment_manifest(selection=current_worth_selection())
+    if enrichment.get("status") == "research_complete":
+        _post_enrichment_chain()
 
-    _run_pipeline_job("enrichment-preview", steps)
+
+def start_free_enrichment_job() -> None:
+    """Start-or-join THE single free-work job (one module-level mutex; idempotent).
+    Rendering the enrich page is the only trigger — a stranded manifest state
+    cannot survive a reload because every render re-derives and re-kicks this."""
+    _run_pipeline_job("free-enrichment", _free_enrichment_steps)
 
 
 def start_approved_enrichment_job(budget: float) -> None:
@@ -3326,14 +3408,36 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
 
-            # Serialize the snapshot with decision writes. GET remains read-only:
-            # stage activation and completion are explicit POST/CLI operations.
+            # Serialize the snapshot with decision writes. GET stays read-only for
+            # the durable decision files; rendering the ENRICH page derives its
+            # state from disk and starts-or-joins the one free-work job — so a
+            # stranded manifest (external CLI write, restart, crash) never
+            # survives a reload. Money is the only stop: a needs_approval state
+            # renders the Approve button and starts nothing.
             with mutation_lock:
                 parents = parents_now()
+            enrichment_state = None
+            if _phase_view(params, {}, manifest_path) == "enrich":
+                selection = worth_selection_from_parents(
+                    parents, manifest_path=manifest_path)
+                enrichment_state = derive_enrichment_state(
+                    selection, verdicts_path=verdicts_path, review_path=review_path,
+                    facts_dir=facts_dir, manifest_path=enrichment_manifest_path,
+                    job_running=_job_lock.locked())
+                free_work = (enrichment_state["state"] == "free_pending"
+                             or (enrichment_state["state"] == "needs_approval"
+                                 and not enrichment_state.get("approvable")
+                                 and not enrichment_state.get("approval_current")))
+                if run_jobs and free_work and not review_progress(parents)["worth_pending"]:
+                    # Render keeps the derived free_pending/needs_approval screen
+                    # ("Preparing…"); the next poll derives running + heartbeat.
+                    start_free_enrichment_job()
             self.send_bytes(page_html(parents, params, review_path, parents_dir=parents_dir,
                                       dossier_dir=dossier_dir, manifest_path=manifest_path,
                                       enrichment_manifest_path=enrichment_manifest_path,
-                                      profile_cache_dir=profile_cache_dir))
+                                      profile_cache_dir=profile_cache_dir,
+                                      verdicts_path=verdicts_path, facts_dir=facts_dir,
+                                      enrichment_state=enrichment_state))
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
@@ -3396,24 +3500,11 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 enrichment, path=manifest_path,
                                 review_path=review_path, synthetic_path=synthetic_path)
                         else:
+                            # No enrichment kick here: the next enrich-page render
+                            # derives the state and triggers the free job itself.
                             manifest = write_review_manifest(
                                 stage, "completed", progress, path=manifest_path,
                                 review_path=review_path, synthetic_path=synthetic_path)
-                            if stage == "worth" and run_jobs:
-                                start_enrichment_preview_job()
-                            elif stage == "linkedin" and run_jobs:
-                                # LinkedIn decisions can drift the worth
-                                # selection (exclude = user no), leaving the
-                                # finished enrichment "stale" — which used to
-                                # bounce the user to a dead "Preparing
-                                # enrichment" page at Finish. Reconcile it now;
-                                # the job is a no-op when already current.
-                                fresh_enrichment = read_enrichment_manifest(
-                                    selection=worth_selection_from_parents(
-                                        current_parents, manifest_path=manifest_path))
-                                if not (fresh_enrichment.get("status") == "completed"
-                                        and fresh_enrichment.get("current")):
-                                    start_enrichment_preview_job()
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=409)
@@ -3499,8 +3590,6 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 "worth", "completed", progress, path=manifest_path,
                                 review_path=review_path, synthetic_path=synthetic_path)
                             next_stage = "enrich"
-                            if run_jobs:
-                                start_enrichment_preview_job()
                         else:
                             review_manifest = write_review_manifest(
                                 "worth", "awaiting_user", progress, path=manifest_path,
@@ -3708,23 +3797,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     if requested_stage == "worth":
         begin_people_review()
-    # Self-heal: once People review is complete, the SERVER owns the
-    # enrichment lifecycle. Any not-current state on launch — a job killed
-    # mid-run (needs_approval/$0, research_complete), a selection drifted by
-    # later decisions ("stale"), an external CLI write — gets the preview job,
-    # which converges to completed+current for free and stops the moment real
-    # spend needs the user's Approve click. Stranded states owned by nobody
-    # were the #1 recurring failure of this flow.
-    try:
-        canonical_paths = review_path.resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
-    except (OSError, RuntimeError):
-        canonical_paths = False
-    if canonical_paths and progress["worth_pending"] == 0:
-        stranded = read_enrichment_manifest(
-            selection=worth_selection_from_parents(parents, manifest_path=manifest_path))
-        if str(stranded.get("status") or "") not in {"running", "submitted"} and not (
-                stranded.get("status") == "completed" and stranded.get("current")):
-            start_enrichment_preview_job()
+    # No launch self-heal kick: enrichment state is DERIVED at every enrich-page
+    # render (derive_enrichment_state), and the render starts-or-joins the one
+    # free-work job — so a stranded persisted state cannot survive a reload.
     # No push notifier: the agent watches state with `review-status --wait`,
     # which stats the same durable files this server writes. Simplicity wins.
     server = ThreadingHTTPServer((args.host, args.port),
