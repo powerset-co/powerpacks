@@ -3334,6 +3334,27 @@ class TestDerivedEnrichmentLifecycle(unittest.TestCase):
             "stage": "enrich", "status": "definitely-not-a-state"}), encoding="utf-8")
         self.assertEqual(self._derive(selection)["state"], "free_pending")
 
+    def test_reused_receipt_is_a_completed_run(self):
+        """A real $0 all-reused pass stamps status "reused" as its terminal
+        state; the reader must normalize it to "completed" or a successful free
+        pass never derives done (live bug: perpetual free_pending re-triggering
+        the job and bouncing the Continue click)."""
+        _verdict_jsonl(self.verdicts, [self._eligible_verdict(1)])
+        selection = self._current_selection()
+        (self.enrichment.parent / "p-1").mkdir(parents=True)
+        (self.enrichment.parent / "p-1" / "01_research_parallel.json").write_text(
+            "{}", encoding="utf-8")
+        self.enrichment.write_text(json.dumps({
+            "stage": "enrich", "status": "reused", "selection": selection,
+            "reused_completed": 1, "would_submit": 0}), encoding="utf-8")
+        receipt = web.read_enrichment_manifest(self.enrichment, selection=selection)
+        self.assertEqual((receipt["status"], receipt["current"]), ("completed", True))
+        self.assertEqual(self._derive(selection)["state"], "done")
+        # a reused receipt for a DIFFERENT selection is still stale, not done
+        stale = web.read_enrichment_manifest(
+            self.enrichment, selection={**selection, "sha256": "other"})
+        self.assertEqual(stale["status"], "stale")
+
     # --- server: render is the trigger ---------------------------------------
     def _server(self, steps):
         handler = web.make_handler(

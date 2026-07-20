@@ -1561,6 +1561,12 @@ def read_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
         and approved_budget >= estimated
     )
     result = {**value, "current": current, "approval_current": approval_current}
+    if result.get("status") == "reused":
+        # A $0 all-reused pass IS a completed run — the primitive stamps
+        # "reused" as its terminal status, but every consumer (derive's done
+        # rule, the linkedin gate, the status API) keys on "completed".
+        # Without this mapping a successful free pass never derives done.
+        result["status"] = "completed"
     if not current:
         result["status"] = "stale"
     return result
