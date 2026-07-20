@@ -36,6 +36,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
+from packs.ingestion.primitives.deep_context.enrichment_contract import (
+    STATUS_DRY_RUN,
+    STATUS_FAILED,
+    STATUS_INVALID_BUDGET,
+    STATUS_NEEDS_APPROVAL,
+    STATUS_NOOP,
+    STATUS_RAN,
+    STATUS_RESEARCH_COMPLETE,
+    STATUS_REUSED,
+    STATUS_RUNNING,
+)
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
@@ -606,7 +617,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not math.isfinite(args.budget) or args.budget < 0:
         result = {
             "source": "reconcile_deep_research",
-            "status": "invalid_budget",
+            "status": STATUS_INVALID_BUDGET,
             "budget_usd": args.budget,
             "message": "--budget must be a finite, non-negative USD amount",
             "elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -614,7 +625,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         }
         if manifest_path:
             write_enrichment_manifest({
-                "stage": "enrich", "status": "failed",
+                "stage": "enrich", "status": STATUS_FAILED,
                 "counts": _manifest_counts(total=0, failed=0),
                 "error": result["message"],
             }, manifest_path)
@@ -692,7 +703,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 },
                 "privacy": {
                     "message_bodies_read": False,
-                    "paid_provider_called": status in {"running", "research_complete", "failed"},
+                    "paid_provider_called": status in {STATUS_RUNNING, STATUS_RESEARCH_COMPLETE, STATUS_FAILED},
                 },
                 "result_status": result.get("status", ""),
             }, manifest_path)
@@ -710,7 +721,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         # cheap per-completion writes the UI polls while a pass judges N proposals.
         if manifest_path:
             write_enrichment_manifest({
-                "stage": "enrich", "status": "running",
+                "stage": "enrich", "status": STATUS_RUNNING,
                 "phase": "judging_retargets", "done": done, "total": total,
                 "counts": _manifest_counts(total=len(queue), completed=reused_completed),
                 "selection": selection,
@@ -727,20 +738,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     if not subset:
         return persist(
-            {**base, "status": "noop", "queue_csv": str(QUEUE_CSV),
+            {**base, "status": STATUS_NOOP, "queue_csv": str(QUEUE_CSV),
              "reason": "no effective-Yes contacts need enrichment"},
-            "research_complete")
+            STATUS_RESEARCH_COMPLETE)
 
     if args.dry_run:
         return persist(
-            {**base, "status": "dry_run", "queue_csv": str(QUEUE_CSV),
+            {**base, "status": STATUS_DRY_RUN, "queue_csv": str(QUEUE_CSV),
              "elapsed_ms": int((time.monotonic() - started) * 1000)},
-            "needs_approval", completed=reused_completed)
+            STATUS_NEEDS_APPROVAL, completed=reused_completed)
 
     if not pending_queue:
         proposals = propose()
         return persist(
-            {**base, "status": "reused", "queue_csv": str(QUEUE_CSV),
+            {**base, "status": STATUS_REUSED, "queue_csv": str(QUEUE_CSV),
              "output_dir": str(DR_OUT_DIR),
              "retargets_proposed": proposals.get("proposed", 0),
              "judge_calls": proposals.get("judge_calls", 0),
@@ -748,19 +759,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
              "grandfathered": proposals.get("grandfathered", 0),
              "reason": "all eligible people already have completed Parallel research",
              "elapsed_ms": int((time.monotonic() - started) * 1000)},
-            "research_complete", completed=len(queue))
+            STATUS_RESEARCH_COMPLETE, completed=len(queue))
 
     # Every paid run needs current-run approval, and the estimate must stay below
     # the ceiling the user approved.
     if not args.approve or est_usd > args.budget:
         return persist(
-            {**base, "status": "needs_approval", "queue_csv": str(QUEUE_CSV),
+            {**base, "status": STATUS_NEEDS_APPROVAL, "queue_csv": str(QUEUE_CSV),
              "message": f"deep research for {len(pending_queue)} net-new people is ~${est_usd:.2f} "
                         f"({reused_completed} completed reused, {duplicate_handles} duplicates skipped); "
                         f"get explicit approval, then re-run with --approve and "
                         f"an approved --budget at or above the estimate (current ${args.budget:.2f})",
              "elapsed_ms": int((time.monotonic() - started) * 1000)},
-            "needs_approval", completed=reused_completed)
+            STATUS_NEEDS_APPROVAL, completed=reused_completed)
 
     # Delegate the spend to the existing Parallel.ai primitive (reuse, don't rebuild).
     # STREAM its output live to our stderr (the primitive prints `[deep_research_contacts]
@@ -768,7 +779,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # take minutes. Keep our own stdout clean for the final JSON manifest.
     print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({args.processor}); "
           "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
-    persist({**base, "status": "running"}, "running", completed=reused_completed)
+    persist({**base, "status": STATUS_RUNNING}, STATUS_RUNNING, completed=reused_completed)
     cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_research_contacts.deep_research_contacts",
            "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]
     if manifest_path:
@@ -780,7 +791,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if proc.returncode == 0:
         proposals = propose()
     result = {
-        **base, "status": "ran" if proc.returncode == 0 else "failed",
+        **base, "status": STATUS_RAN if proc.returncode == 0 else STATUS_FAILED,
         "queue_csv": str(QUEUE_CSV), "output_dir": str(DR_OUT_DIR),
         "retargets_proposed": proposals.get("proposed", 0),
         "judge_calls": proposals.get("judge_calls", 0),
@@ -791,7 +802,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     return persist(
         result,
-        "research_complete" if proc.returncode == 0 else "failed",
+        STATUS_RESEARCH_COMPLETE if proc.returncode == 0 else STATUS_FAILED,
         completed=len(queue) if proc.returncode == 0 else reused_completed,
         failed=0 if proc.returncode == 0 else len(pending_queue))
 
