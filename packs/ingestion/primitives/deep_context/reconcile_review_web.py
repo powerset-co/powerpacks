@@ -1975,14 +1975,6 @@ def _worth_key(parent: dict[str, Any]) -> str:
     return str(primary.get("worth_key") or (parent.get("person_ids") or [""])[0] or "")
 
 
-def _source_badges(parent: dict[str, Any]) -> str:
-    labels = {"gmail": "Gmail", "imessage": "iMessage", "whatsapp": "WhatsApp"}
-    return "".join(
-        f"<span class='source source-{esc(source)}'><i aria-hidden='true'></i>{esc(labels.get(source, source))}</span>"
-        for source in parent.get("sources") or []
-    )
-
-
 def _avatar(parent: dict[str, Any], candidate: dict[str, Any] | None = None, *, small: bool = False) -> str:
     cand = candidate or _primary_candidate(parent)
     name = str(cand.get("full_name") or parent.get("name") or "")
@@ -2130,7 +2122,6 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
         <div class='person-top'>
           {_avatar(parent, candidate)}
           <div class='person-copy'>
-            <div class='eyebrow-row'>{_source_badges(parent)}</div>
             <h2>{esc(name)}</h2>
           </div>
         </div>
@@ -2465,7 +2456,6 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
     contacts = _merge_contacts(
         [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
         identifiers)
-    badges = _source_badges(parent)
     why_label = "Why no" if decision == "no" else "Why yes"
     fact_rows = []
     if contacts:
@@ -2489,7 +2479,6 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
             </div>
           </summary>
           <div class='decision-row-detail'>
-            {f"<div class='row-badges'>{badges}</div>" if badges else ""}
             <dl class='row-facts'>{''.join(fact_rows)}</dl>
             {dossier_preview}
           </div>
@@ -3382,6 +3371,25 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             if gate and primary.get("synthetic"):
                                 primary["action"] = gate["action"]
                                 primary["approved"] = gate["approved"]
+                            # worth_row is the SOLE worth truth for queue, tabs,
+                            # and counts — patch it too, or the click lands on
+                            # disk while the live model keeps serving the old
+                            # decision until the next full rebuild. The dict is
+                            # shared across merged-identity parents, so one
+                            # in-place update covers them all.
+                            worth_row = target_parent.get("worth_row")
+                            if worth_row is not None:
+                                machine_dec = (worth_row.get("machine") or {}).get("decision") or ""
+                                if stored_worth:
+                                    worth_row["human"] = {"decision": stored_worth,
+                                                          "updated_at": now_iso()}
+                                    worth_row["effective"] = stored_worth
+                                    worth_row["source"] = "user"
+                                else:  # restore: back to the machine's verdict
+                                    worth_row["human"] = None
+                                    worth_row["effective"] = machine_dec or "maybe"
+                                    worth_row["source"] = ("llm" if machine_dec
+                                                           else "default")
                         accept_local_write()
                         current_parents = cached_parents
                         progress = review_progress(current_parents)
