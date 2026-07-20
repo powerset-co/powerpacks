@@ -1448,11 +1448,17 @@ def review_progress(parents: list[dict[str, Any]]) -> dict[str, int]:
 
 def review_state_token(progress: dict[str, int], selection: dict[str, Any],
                        enrichment: dict[str, Any],
-                       review_manifest: dict[str, Any]) -> str:
-    """Ephemeral browser refresh token derived only from the fixed file state."""
+                       review_manifest: dict[str, Any], *,
+                       job_running: bool = False) -> str:
+    """Ephemeral browser refresh token derived from the fixed file state PLUS
+    whether the in-process pipeline job is alive. The job bit closes a TOCTOU:
+    a page rendered while the job was finishing can carry a token computed from
+    the job's FINAL manifest writes — without the bit, nothing changes after the
+    job exits and the observer never reloads the "working" screen."""
     payload = {
         "progress": progress,
         "selection": selection,
+        "job_running": bool(job_running),
         "enrichment": {
             "status": enrichment.get("status"),
             "current": enrichment.get("current"),
@@ -2890,7 +2896,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
     enrichment = read_enrichment_manifest(enrichment_manifest_path, selection=selection)
     review_manifest = read_review_manifest(manifest_path)
-    state_token = review_state_token(progress, selection, enrichment, review_manifest)
+    state_token = review_state_token(progress, selection, enrichment, review_manifest,
+                                     job_running=_job_lock.locked())
     view = _phase_view(params, progress, manifest_path)
     preview = str((params.get("preview") or [""])[0]).strip() == "1"
     debug = str((params.get("debug") or [""])[0]).strip() == "1"
@@ -3242,7 +3249,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         enrichment = read_enrichment_manifest(
             enrichment_manifest_path, selection=selection)
         return review_state_token(
-            progress, selection, enrichment, read_review_manifest(manifest_path))
+            progress, selection, enrichment, read_review_manifest(manifest_path),
+            job_running=_job_lock.locked())
 
     def invalidate_manifest(stage: str, progress: dict[str, int], *, launched: bool = False) -> None:
         write_review_manifest(stage, "awaiting_user", progress, path=manifest_path,
@@ -3283,7 +3291,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     "next_action": status["next_action"],
                     "state_token": review_state_token(
                         status["progress"], status["selection"],
-                        status["enrichment"], status["review_manifest"]),
+                        status["enrichment"], status["review_manifest"],
+                        job_running=_job_lock.locked()),
                 })
                 return
             if parsed.path == "/api/enrichment":
