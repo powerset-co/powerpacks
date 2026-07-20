@@ -107,6 +107,7 @@ for protected_path in .powerpacks .env; do
 done
 
 git remote get-url origin >/dev/null
+OLD_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo "")"
 git fetch --prune origin main
 
 for protected_path in .powerpacks .env; do
@@ -187,11 +188,22 @@ except Exception:
   fi
 fi
 
+# Human summary FIRST: did anything change, and what. The key=value block
+# below stays for scripts that parse it.
+NEW_COMMIT="$(git rev-parse HEAD)"
+echo
+if [[ -n "$OLD_COMMIT" && "$OLD_COMMIT" != "$NEW_COMMIT" ]]; then
+  change_count="$(git rev-list --count "$OLD_COMMIT..$NEW_COMMIT" 2>/dev/null || echo "?")"
+  echo "✅ updated ${OLD_COMMIT:0:7} -> ${NEW_COMMIT:0:7} ($change_count new commit(s)):"
+  git log --oneline "$OLD_COMMIT..$NEW_COMMIT" 2>/dev/null | head -10 | sed 's/^/   /'
+else
+  echo "✅ already up to date at ${NEW_COMMIT:0:7} ($(git log -1 --format=%s HEAD))"
+fi
 echo
 echo "status=ok"
 echo "repo=$REPO"
 echo "harness=$HARNESS"
-echo "commit=$(git rev-parse HEAD)"
+echo "commit=$NEW_COMMIT"
 echo "stash_commit=${stash_commit:-none}"
 echo "stash_ref=$stash_ref"
 echo "stash_message=${stash_message:-none}"
