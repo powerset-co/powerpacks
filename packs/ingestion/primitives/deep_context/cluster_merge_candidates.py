@@ -3,8 +3,10 @@
 Clustering REQUIRES LLM reasoning — deterministic name/email/phone scoring is only
 the recall net, never the decision. Pipeline:
 
-  1. Blocking + a name-similarity gate produce candidate pairs cheaply (so we never
-     LLM every "Chen", only genuinely ambiguous same/similar-name pairs).
+  1. Blocking (composite first/last-initial name keys + shared email/phone) plus a
+     name-similarity gate produce candidate pairs cheaply -- so we never LLM every
+     record that merely shares a common surname, only genuinely ambiguous
+     same/similar-name pairs.
   2. A high-reasoning LLM judge decides SAME / DIFFERENT per pair by weighing ALL
      evidence HOLISTICALLY — identity (name/nickname, employer, school, location,
      emails), the role each plays in my life, content & behavior (e.g. forwarding
@@ -25,6 +27,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -270,13 +273,42 @@ def _owner_emails(base: Path) -> set[str]:
 
 # --- blocking + recall gate -------------------------------------------------
 
-def name_tokens(name_key: str) -> set[str]:
-    return {t for t in name_key.split() if len(t) > 1}
+def _blocking_tokens(name_key: str) -> list[str]:
+    """Name tokens for the blocking keys. Collapses hyphens/periods/apostrophes so
+    'de-luca' == 'deluca', and KEEPS single-letter tokens so an initial-only
+    surname ('Casey S.') still contributes a usable last-initial."""
+    joined = re.sub(r"[.\-']+", "", name_key)
+    cleaned = re.sub(r"[^a-z ]+", " ", joined)
+    return [t for t in cleaned.split() if t]
+
+
+def blocking_name_keys(name_key: str) -> set[str]:
+    """Two composite name-blocking keys per person (examples are synthetic):
+      <first>|<last-initial>   catches truncated/variant SURNAMES  (Jordan Bravado / Jordan B)
+      <first-initial>|<last>   catches nickname/short FIRST names   (Sam / Samuel)
+    A pair blocks on names iff they share either key. Splitting by first-initial keeps large
+    common-surname buckets from enumerating O(n^2) and from hitting the 200-cap recall cliff,
+    while retaining real duplicates. It also stops surfacing the same-first-name /
+    different-surname pairs that invite false merges (Jordan Alpha / Jordan Bravo).
+
+    A record with NO real surname (a single token, or an initial-only surname) additionally
+    emits a first-name key, so two such sparse records ('Robin' / 'Robin F') can still meet;
+    records WITH a real surname never emit it, so common first names do not re-explode."""
+    toks = _blocking_tokens(name_key)
+    if not toks:
+        return set()
+    first, last = toks[0], toks[-1]
+    keys = {f"fnli:{first}|{last[0]}", f"filn:{first[0]}|{last}"}
+    if len(toks) == 1 or len(last) == 1:
+        keys.add(f"fn:{first}")
+    return keys
 
 
 def generate_pairs(people: list[dict[str, Any]]) -> set[tuple[int, int]]:
     """Blocked pairs that pass a recall gate: shared phone/email/email-localpart,
-    or Jaro-Winkler name >= GATE_NAME_SIM. Keeps LLM calls to ambiguous pairs."""
+    or Jaro-Winkler name >= GATE_NAME_SIM. Names block on composite first/last-initial
+    keys (see `blocking_name_keys`) so common surnames don't enumerate O(n^2). Keeps
+    LLM calls to genuinely ambiguous pairs."""
     buckets: dict[str, list[int]] = {}
     for idx, p in enumerate(people):
         # Full-address keys include message-discovered `extra_emails`; local-part keys do NOT
@@ -284,7 +316,7 @@ def generate_pairs(people: list[dict[str, Any]]) -> set[tuple[int, int]]:
         keys = {f"email:{e}" for e in set(p["emails"]) | set(p.get("extra_emails") or [])}
         keys |= {f"local:{lp}" for lp in email_localparts(p["emails"])}
         keys |= {f"phone:{d}" for d in p["phone_digits"]}
-        keys |= {f"tok:{t}" for t in name_tokens(p["name_key"])}
+        keys |= {f"nm:{k}" for k in blocking_name_keys(p["name_key"])}
         for key in keys:
             buckets.setdefault(key, []).append(idx)
     cand: set[tuple[int, int]] = set()

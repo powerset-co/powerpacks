@@ -3530,6 +3530,61 @@ class TestMergeIdentifierEmails(unittest.TestCase):
             self.assertNotIn("me@owner.example", person["extra_emails"])    # the owner's is dropped as noise
 
 
+class TestCompositeBlockingKeys(unittest.TestCase):
+    """Name blocking uses composite <first>|<last-initial> + <first-initial>|<last> keys, not
+    per-token. Splits common-surname buckets by first-initial (no shared-surname O(n^2), no
+    200-cap cliff), keeps nickname/truncated-surname dupes, and stops same-first-name /
+    different-surname false-merge pairs from ever reaching the judge. Fixtures are synthetic."""
+
+    def _p(self, name, emails=(), extra=(), phones=()):
+        return {"name": name, "name_key": cluster.normalize_name(name), "emails": list(emails),
+                "extra_emails": list(extra), "phone_digits": list(phones)}
+
+    def keys(self, name):
+        return cluster.blocking_name_keys(cluster.normalize_name(name))
+
+    def shares(self, a, b):
+        return bool(self.keys(a) & self.keys(b))
+
+    def test_nickname_first_name_co_blocks(self):
+        self.assertTrue(self.shares("Chris Foxtrot", "Christopher Foxtrot"))    # first-initial|last
+
+    def test_truncated_surname_co_blocks(self):
+        self.assertTrue(self.shares("Jordan Bravado", "Jordan Brav"))           # first|last-initial
+        self.assertTrue(self.shares("Jordan Bravo", "Jordan B"))
+
+    def test_initial_surname_keeps_its_last_initial(self):
+        # 'Casey S.' must keep 'S' as a last-initial so it meets 'Casey Sierra'.
+        self.assertTrue(self.shares("Casey S.", "Casey Sierra"))
+
+    def test_same_first_name_different_surname_does_not_co_block(self):
+        # The false-merge class: same first name, different real surnames never meet on name.
+        self.assertFalse(self.shares("Jordan Alpha", "Jordan Bravo"))
+
+    def test_common_surname_splits_by_first_initial(self):
+        self.assertFalse(self.shares("Alice Kilo", "Bob Kilo"))     # different first-initial -> split
+        # ...but same first-initial + same surname still meets (adversarial case, by design).
+        self.assertTrue(self.shares("Alice Kilo", "Adam Kilo"))
+
+    def test_hyphen_and_spacing_variants_co_block(self):
+        self.assertTrue(self.shares("Robin Del-Tango", "Robin DelTango"))
+
+    def test_surnameless_records_meet_via_first_name_fallback(self):
+        self.assertTrue(self.shares("Robin", "Robin F"))            # both sparse -> fn:robin
+        # a record with a REAL surname never emits fn:* -> common first names don't re-explode
+        self.assertNotIn("fn:alice", self.keys("Alice Kilo"))
+
+    def test_generate_pairs_never_proposes_the_false_merge_class(self):
+        people = [self._p("Jordan Alpha", emails=["a@ex1.example"]),
+                  self._p("Jordan Bravo", emails=["b@ex2.example"])]
+        self.assertEqual(cluster.generate_pairs(people), set())
+
+    def test_generate_pairs_keeps_a_real_nickname_pair(self):
+        people = [self._p("Chris Foxtrot", emails=["c1@ex.example"]),
+                  self._p("Christopher Foxtrot", emails=["c2@ex.example"])]
+        self.assertIn((0, 1), cluster.generate_pairs(people))
+
+
 class TestMergeCache(unittest.TestCase):
     """The same-person merge reuses prior verdicts (merge-verdicts.csv) so reruns only judge
     NEW/changed pairs. The pair signature is the correctness crux: stable across runs, order-
