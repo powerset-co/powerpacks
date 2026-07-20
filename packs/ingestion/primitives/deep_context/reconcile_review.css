@@ -609,6 +609,13 @@ input::placeholder { color: var(--muted); }
 
 .worth-search-input::placeholder { color: var(--muted); }
 
+/* The global 3px focus ring reads as a permanent highlight on an input that
+   stays focused while typing; the caret + border shift signal focus instead. */
+.worth-search-input:focus-visible {
+  outline: none;
+  border-color: var(--muted);
+}
+
 .worth-search-count {
   color: var(--muted);
   font-size: 12px;
