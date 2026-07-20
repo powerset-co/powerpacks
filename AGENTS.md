@@ -410,6 +410,20 @@ the primitive blocks/fails or the user asks for implementation details.
   every other primitive stays metadata-only.
 - **Artifacts under `.powerpacks/`** are derivable. The agent can rebuild
   any of them from the source data; never paste full datasets into chat.
+- **Development privacy — anonymize contact PII in anything committed or shared.**
+  You may READ real pipeline data (`.powerpacks/`, downloaded exports, dossiers,
+  review/merge CSVs, message stores) to analyze behavior, but never copy a real
+  person's data out of it into a committed or externally-visible artifact —
+  tests/fixtures, code comments, docstrings, commit messages, PR titles/bodies, or
+  review comments. Replace real contact names, emails, and phone numbers with
+  obviously-synthetic placeholders (`Jordan Bravo`, `casey@example.com`,
+  `+15550100`) that preserve only the *structure* a case needs (nickname vs full
+  name, shared surname, initial-only surname), never a real identity. Git history
+  and GitHub are permanent and shareable: if a real contact's data already landed
+  in a commit or PR, rewrite the commit / edit the body to remove it rather than
+  leaving it. Investigate on real data, ship synthetic. (The mailbox owner's own
+  identity may be referenced where useful — it's their data; their contacts' is
+  not.)
 
 ---
 
