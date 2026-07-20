@@ -3071,13 +3071,24 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         nonlocal cached_rows_sig
         cached_rows_sig = _review_rows_sig()
 
-    def candidate_in_snapshot(pub: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    def candidate_in_snapshot(pub: str, prefer_slug: str = "",
+                              ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Resolve a candidate pub to (parent, candidate). The same pub can be
+        owned by SEVERAL parents (one confirmed LinkedIn attached to two split
+        parents), so when the client says which card it decided (prefer_slug),
+        honor that parent — resolving globally would hit the other owner first
+        and 409 every click as 'stale or mismatched person card'."""
         pub_lower = pub.strip().lower()
+        hits: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for parent in cached_parents:
             for candidate in parent.get("candidates") or []:
                 if str(candidate.get("pub") or "").strip().lower() == pub_lower:
+                    hits.append((parent, candidate))
+        if prefer_slug:
+            for parent, candidate in hits:
+                if str(parent.get("slug") or "") == prefer_slug:
                     return parent, candidate
-        return None
+        return hits[0] if hits else None
 
     def worth_parent_in_snapshot(key: str) -> dict[str, Any] | None:
         key_lower = key.strip().lower()
@@ -3444,7 +3455,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 with mutation_lock:
                     parents_now()
                     pub_lower = pub.strip().lower()
-                    target = candidate_in_snapshot(pub)
+                    target = candidate_in_snapshot(pub, prefer_slug=parent_slug)
                     if not target:
                         raise ValueError(f"review row not found: {pub}")
                     target_parent, target_candidate = target
