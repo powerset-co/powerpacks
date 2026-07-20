@@ -3334,6 +3334,19 @@ class TestDerivedEnrichmentLifecycle(unittest.TestCase):
             "stage": "enrich", "status": "definitely-not-a-state"}), encoding="utf-8")
         self.assertEqual(self._derive(selection)["state"], "free_pending")
 
+    def test_the_contract_module_is_the_single_home(self):
+        """The receipt reader and state rules live in enrichment_contract and
+        NOWHERE else — the server re-exports the same objects, and the writer's
+        stamped statuses are members of the contract vocabulary."""
+        from packs.ingestion.primitives.deep_context import enrichment_contract as ec
+        from packs.ingestion.primitives.deep_context import reconcile_deep_research as dr
+        self.assertIs(web.read_enrichment_manifest, ec.read_enrichment_manifest)
+        self.assertIs(web.derive_enrichment_state, ec.derive_enrichment_state)
+        self.assertIs(dr.STATUS_REUSED, ec.STATUS_REUSED)
+        self.assertIn(ec.STATUS_REUSED, ec.COMPLETED_EQUIVALENT)
+        self.assertLessEqual(ec.COMPLETED_EQUIVALENT | ec.IN_FLIGHT_STATUSES,
+                             ec.WRITER_STATUSES)
+
     def test_reused_receipt_is_a_completed_run(self):
         """A real $0 all-reused pass stamps status "reused" as its terminal
         state; the reader must normalize it to "completed" or a successful free

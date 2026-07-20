@@ -37,6 +37,18 @@ from packs.ingestion.primitives.deep_context.candidates import (
     load_candidates,
 )
 from packs.ingestion.primitives.deep_context import worth_view
+from packs.ingestion.primitives.deep_context.enrichment_contract import (
+    IN_FLIGHT_STATUSES,
+    STATE_DONE,
+    STATE_FREE_PENDING,
+    STATE_NEEDS_APPROVAL,
+    STATE_RUNNING,
+    STATUS_COMPLETED,
+    STATUS_NEEDS_APPROVAL,
+    STATUS_RESEARCH_COMPLETE,
+    derive_enrichment_state,
+    read_enrichment_manifest,
+)
 from packs.ingestion.primitives.deep_context.common import (
     DEEP_RESEARCH_DIR,
     DEFAULT_PEOPLE_CSV,
@@ -1525,125 +1537,6 @@ def current_worth_selection(*, manifest_path: Path = REVIEW_MANIFEST) -> dict[st
     return worth_selection_from_parents(parents, manifest_path=manifest_path)
 
 
-def read_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
-                             selection: dict[str, Any] | None = None) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"stage": "enrich", "status": "not_started",
-                "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0},
-                "current": False, "approval_current": False}
-    if not isinstance(value, dict):
-        return {"stage": "enrich", "status": "not_started", "counts": {},
-                "current": False, "approval_current": False}
-    recorded_selection = value.get("selection") if isinstance(value.get("selection"), dict) else {}
-    current = bool(
-        selection
-        and recorded_selection.get("sha256") == selection.get("sha256")
-        and recorded_selection.get("review_revision") == selection.get("review_revision")
-        and bool(selection.get("review_revision"))
-    )
-    approval = value.get("approval") if isinstance(value.get("approval"), dict) else {}
-    try:
-        estimated = round(float(value.get("estimated_usd") or 0), 2)
-        approved_estimate = round(float(approval.get("estimated_usd") or -1), 2)
-        approved_budget = round(float(approval.get("approved_budget_usd") or -1), 2)
-        approved_count = int(approval.get("would_submit") or -1)
-        manifest_count = int(value.get("would_submit") or 0)
-    except (TypeError, ValueError, OverflowError):
-        estimated = approved_estimate = approved_budget = -1
-        approved_count = manifest_count = -1
-    approval_current = bool(
-        current
-        and value.get("status") == "needs_approval"
-        and approval.get("status") == "approved"
-        and approval.get("selection_sha256") == recorded_selection.get("sha256")
-        and approval.get("review_revision") == recorded_selection.get("review_revision")
-        and approved_count == manifest_count
-        and math.isfinite(estimated)
-        and math.isfinite(approved_estimate)
-        and math.isfinite(approved_budget)
-        and approved_estimate == estimated
-        and approved_budget >= estimated
-    )
-    result = {**value, "current": current, "approval_current": approval_current}
-    if result.get("status") == "reused":
-        # A $0 all-reused pass IS a completed run — the primitive stamps
-        # "reused" as its terminal status, but every consumer (derive's done
-        # rule, the linkedin gate, the status API) keys on "completed".
-        # Without this mapping a successful free pass never derives done.
-        result["status"] = "completed"
-    if not current:
-        result["status"] = "stale"
-    return result
-
-
-def derive_enrichment_state(selection: dict[str, Any], *,
-                            verdicts_path: Path = VERDICTS_JSONL,
-                            review_path: Path = LINKEDIN_OVERRIDES_CSV,
-                            facts_dir: Path = FACTS_DIR,
-                            manifest_path: Path = ENRICH_MANIFEST,
-                            job_running: bool = False) -> dict[str, Any]:
-    """THE enrichment state, derived from disk at every enrich-page render.
-
-    No persisted status is trusted as truth: the manifest is a receipt/cache, and
-    any writer may scribble on it (external CLI runs, restarts, crashes) without
-    stranding the page — every reload re-derives. Net-new is counted exactly the
-    way the primitive counts it: the eligible worth selection versus the research
-    artifacts beside the manifest (manifest_path.parent/<handle>/01_research_parallel.json).
-
-    The rules, in order:
-
-      1. running        — the in-process pipeline job is alive; the manifest
-                          carries its heartbeat progress (phase/done/total).
-      2. needs_approval — net-new research > 0: the current selection includes
-                          someone with no completed research artifact, so
-                          continuing costs Parallel money and ONLY the user's
-                          Approve click may start it. ``approvable`` marks a
-                          current receipt whose count matches the derived net-new
-                          (the Approve button binds to that receipt); otherwise
-                          the free job refreshes the receipt first — for $0.
-      3. done           — zero net-new AND the receipt records a completed run
-                          for exactly this worth selection (chain outputs current).
-      4. free_pending   — zero net-new but no current completed receipt: the $0
-                          reuse/judge-cache/assemble/prefetch chain still needs
-                          to run (or re-run); rendering the page triggers it.
-    """
-    # Local import: reconcile_deep_research imports this module (selection digest).
-    from packs.ingestion.primitives.deep_context import reconcile_deep_research as dr
-
-    receipt = read_enrichment_manifest(manifest_path, selection=selection)
-    if job_running:
-        return {**receipt, "state": "running"}
-    verdicts = list(read_jsonl(verdicts_path))
-    overrides = load_override_rows(review_path)
-    # Mirror the in-app job's exact eligibility (ENRICH_FLAGS + the primitive's
-    # own confirm-threshold default) so this count can never disagree with the
-    # estimate the $0 run would stamp.
-    threshold = dr.build_parser().get_default("confirm_threshold")
-    subset = dr.eligible_subset(verdicts, threshold, overrides,
-                                include_plausibly_absent=True)
-    subset += dr.candidate_subset(facts_dir, overrides)
-    handles = {str(r.get("parent_slug") or "").strip() for r in subset} - {""}
-    net_new = sum(1 for handle in handles
-                  if not (manifest_path.parent / handle / "01_research_parallel.json").exists())
-    cost_per = dr.PROCESSOR_PRICING_USD[dr.DEFAULT_PROCESSOR]
-    state = {**receipt, "net_new": net_new,
-             "net_new_estimated_usd": round(net_new * cost_per, 2)}
-    if net_new:
-        try:
-            receipt_count = int(receipt.get("would_submit") or 0)
-        except (TypeError, ValueError):
-            receipt_count = -1
-        approvable = bool(receipt.get("current")
-                          and receipt.get("status") == "needs_approval"
-                          and receipt_count == net_new)
-        return {**state, "state": "needs_approval", "approvable": approvable}
-    if receipt.get("current") and receipt.get("status") == "completed":
-        return {**state, "state": "done"}
-    return {**state, "state": "free_pending"}
-
-
 def approve_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
                                 selection: dict[str, Any]) -> dict[str, Any]:
     """Persist the UI's exact spend approval in the fixed enrichment manifest.
@@ -1659,10 +1552,9 @@ def approve_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
     # visible briefly after the agent has already advanced the fixed manifest.
     # Treat that stale click as an idempotent success so the client simply
     # reloads into the current progress state instead of showing a false error.
-    if enrichment.get("status") in {
-            "running", "submitted", "research_complete", "completed"}:
+    if enrichment.get("status") in IN_FLIGHT_STATUSES:
         return enrichment
-    if enrichment.get("status") != "needs_approval":
+    if enrichment.get("status") != STATUS_NEEDS_APPROVAL:
         raise ValueError("Enrichment is not waiting for approval")
     if enrichment.get("approval_current"):
         return enrichment
@@ -1789,7 +1681,7 @@ def write_enrichment_handoff(
     synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
 ) -> dict[str, Any]:
     """Record only the user's Continue handoff after current enrichment finished."""
-    if enrichment.get("status") != "completed" or not enrichment.get("current"):
+    if enrichment.get("status") != STATUS_COMPLETED or not enrichment.get("current"):
         raise ValueError("Enrichment is not complete for the current People decisions")
     existing = read_review_manifest(path)
     completed = {str(value) for value in existing.get("completed_stages") or []
@@ -2658,7 +2550,7 @@ def _phase_view(params: dict[str, list[str]], progress: dict[str, int], manifest
 def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> str:
     """Render one derived enrichment state (see derive_enrichment_state) as HTML.
     Purely presentational — the state rules live in the derive function alone."""
-    state = str(enrichment.get("state") or "free_pending")
+    state = str(enrichment.get("state") or STATE_FREE_PENDING)
     counts = enrichment.get("counts") if isinstance(enrichment.get("counts"), dict) else {}
     total = max(0, int(counts.get("total") or progress["lookup_ready"] or 0))
     completed = min(total, max(0, int(counts.get("completed") or 0)))
@@ -2678,7 +2570,7 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
                 "<h2>Review in progress</h2>"
                 f"<p>{progress['worth_pending']} decisions left · {progress['lookup_ready']} currently yes</p>"
                 f"{progress_bar}</div>")
-    if state == "running":
+    if state == STATE_RUNNING:
         if enrichment.get("phase") == "judging_retargets":
             # Commit-scoped heartbeat from the judging pass: honest counts, not a
             # static screen (see reconcile_deep_research's manifest heartbeat).
@@ -2690,7 +2582,7 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
         return ("<div class='empty-state enrich-state'><div class='progress-spinner' aria-hidden='true'></div>"
                 "<h2>Enriching contacts</h2>"
                 f"<p>{completed} of {total} complete</p>{progress_bar}</div>")
-    if state == "needs_approval":
+    if state == STATE_NEEDS_APPROVAL:
         if enrichment.get("approval_current"):
             new_count = max(0, int(enrichment.get("would_submit") or 0))
             return ("<div class='empty-state enrich-state'>"
@@ -2712,7 +2604,7 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
                 "<h2>Ready to enrich</h2>"
                 f"<p>{details}</p>{progress_bar}"
                 f"<button class='button button-primary' data-approve-enrichment>Approve ${estimate:.2f}</button></div>")
-    if state == "done":
+    if state == STATE_DONE:
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>✓</div>"
                 "<h2>Contacts enriched</h2>"
                 f"<p>{completed} profiles ready</p>{progress_bar}"
@@ -2902,7 +2794,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
     preview = str((params.get("preview") or [""])[0]).strip() == "1"
     debug = str((params.get("debug") or [""])[0]).strip() == "1"
     worth_complete = phase_is_completed("worth", progress, manifest_path) or not progress["worth_total"]
-    enrichment_complete = enrichment.get("status") == "completed" and enrichment.get("current")
+    enrichment_complete = (enrichment.get("status") == STATUS_COMPLETED
+                           and enrichment.get("current"))
     enrichment_continued = enrichment_handoff_completed(manifest_path)
     linkedin_complete = (phase_is_completed("linkedin", progress, manifest_path)
                          or (view == "done" and not progress["linkedin_total"]))
@@ -3073,7 +2966,7 @@ def _free_enrichment_steps() -> None:
     from packs.ingestion.primitives.deep_context import reconcile_deep_research
     reconcile_deep_research.main([*ENRICH_FLAGS, "--approve", "--budget", "0.00"])
     enrichment = read_enrichment_manifest(selection=current_worth_selection())
-    if enrichment.get("status") == "research_complete":
+    if enrichment.get("status") == STATUS_RESEARCH_COMPLETE:
         _post_enrichment_chain()
 
 
@@ -3394,7 +3287,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         enrichment_manifest_path, selection=selection)
                     body = linkedin_review_body(
                         parents, progress,
-                        enrichment_complete=bool(enrichment.get("status") == "completed"
+                        enrichment_complete=bool(enrichment.get("status") == STATUS_COMPLETED
                                                  and enrichment.get("current")),
                         linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
                         parents_dir=parents_dir, dossier_dir=dossier_dir,
@@ -3439,8 +3332,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     selection, verdicts_path=verdicts_path, review_path=review_path,
                     facts_dir=facts_dir, manifest_path=enrichment_manifest_path,
                     job_running=_job_lock.locked())
-                free_work = (enrichment_state["state"] == "free_pending"
-                             or (enrichment_state["state"] == "needs_approval"
+                free_work = (enrichment_state["state"] == STATE_FREE_PENDING
+                             or (enrichment_state["state"] == STATE_NEEDS_APPROVAL
                                  and not enrichment_state.get("approvable")
                                  and not enrichment_state.get("approval_current")))
                 if run_jobs and free_work and not review_progress(parents)["worth_pending"]:
