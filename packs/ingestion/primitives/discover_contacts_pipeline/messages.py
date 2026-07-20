@@ -440,6 +440,11 @@ def discover(
         "child": child,
         "updated_at": now_iso(),
     }
+    # Hoist the non-blocking pre-full-sync nudge to the top level so a fast-path
+    # run surfaces it without digging into child.artifacts (where it was buried).
+    if artifacts.get("whatsapp_pairing_state"):
+        result["whatsapp_pairing_state"] = artifacts["whatsapp_pairing_state"]
+        result["whatsapp_pairing_notice"] = artifacts.get("whatsapp_pairing_notice", "")
     result = write_stage_manifest(manifest_json, result)
     return result
 

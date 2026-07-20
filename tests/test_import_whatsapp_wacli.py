@@ -592,6 +592,43 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             (store / mod.PAIRING_MARKER_NAME).write_text("{not json")
             self.assertIsNone(mod.read_pairing_marker(store))
 
+    def test_logout_is_noop_when_not_authenticated_but_clears_marker(self) -> None:
+        import argparse as _argparse
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td)
+            mod.write_pairing_marker(store)  # a stale marker should still be cleared
+            buf = io.StringIO()
+            with mock.patch.object(mod, "ensure_wacli_installed", return_value={"pinned": True}), \
+                 mock.patch.object(mod, "auth_status", return_value={"authenticated": False}), \
+                 mock.patch.object(mod, "wacli_json") as wacli_json, \
+                 redirect_stdout(buf):
+                rc = mod.cmd_logout(_argparse.Namespace(store=str(store)))
+            self.assertEqual(rc, 0)
+            wacli_json.assert_not_called()  # nothing to invalidate
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["command"], "logout")
+            self.assertEqual(payload["status"], "ok")
+            self.assertFalse(payload["authenticated_before"])
+            self.assertTrue(payload["marker_removed"])
+            self.assertFalse((store / mod.PAIRING_MARKER_NAME).exists())
+
+    def test_logout_invalidates_session_when_authenticated(self) -> None:
+        import argparse as _argparse
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td)
+            buf = io.StringIO()
+            with mock.patch.object(mod, "ensure_wacli_installed", return_value={"pinned": True}), \
+                 mock.patch.object(mod, "auth_status",
+                                   side_effect=[{"authenticated": True}, {"authenticated": False}]), \
+                 mock.patch.object(mod, "wacli_json", return_value={"success": True}) as wacli_json, \
+                 redirect_stdout(buf):
+                rc = mod.cmd_logout(_argparse.Namespace(store=str(store)))
+            self.assertEqual(rc, 0)
+            wacli_json.assert_called_once_with(store, ["auth", "logout"], timeout=60)
+            payload = json.loads(buf.getvalue())
+            self.assertTrue(payload["authenticated_before"])
+            self.assertFalse(payload["authenticated_after"])
+
     def test_ensure_wacli_does_not_stamp_on_download_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)

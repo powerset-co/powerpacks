@@ -1420,6 +1420,48 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_logout(args: argparse.Namespace) -> int:
+    """Invalidate the WhatsApp session so the next auth issues a fresh QR. Backs
+    the pre-full-sync re-link flow: an old (upstream/pre-full-sync) link is logged
+    out here, then discovery re-pairs with full history sync. Idempotent on an
+    already-logged-out store."""
+    store = Path(args.store)
+    try:
+        ensure_wacli_installed(install=False)
+        authenticated_before = bool(auth_status(store).get("authenticated"))
+        result: dict[str, Any] = {}
+        if authenticated_before:
+            result = wacli_json(store, ["auth", "logout"], timeout=60)
+        marker_removed = False
+        marker = pairing_marker_path(store)
+        if marker.exists():
+            marker.unlink()
+            marker_removed = True
+        emit({
+            "primitive": "import_whatsapp_wacli",
+            "command": "logout",
+            "status": "ok",
+            "store": str(store),
+            "authenticated_before": authenticated_before,
+            "authenticated_after": bool(auth_status(store).get("authenticated")),
+            "marker_removed": marker_removed,
+            "result": result,
+        })
+        return 0
+    except PrimitiveBlocked as exc:
+        emit({"primitive": "import_whatsapp_wacli", "command": "logout", **exc.payload})
+        return exc.code
+    except Exception as exc:
+        emit({
+            "primitive": "import_whatsapp_wacli",
+            "command": "logout",
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "store": str(store),
+        })
+        return 1
+
+
 def cmd_auth(args: argparse.Namespace) -> int:
     store = Path(args.store)
     store.mkdir(parents=True, exist_ok=True)
@@ -1720,6 +1762,10 @@ def main() -> int:
     add_common_args(export)
     add_output_args(export)
     export.set_defaults(func=cmd_export)
+
+    logout = sub.add_parser("logout", help="invalidate the WhatsApp session (re-link flow); next discovery shows a fresh QR")
+    add_common_args(logout)
+    logout.set_defaults(func=cmd_logout)
 
     args = parser.parse_args()
     return int(args.func(args))
