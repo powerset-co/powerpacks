@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.error
 import urllib.request
 import webbrowser
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -61,6 +62,7 @@ from packs.ingestion.primitives.deep_context.common import (
     LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
+    RAW_DIR,
     REVIEW_DIR,
     REVIEW_MANIFEST,
     ROOT,
@@ -2072,6 +2074,55 @@ def _scroll_region(content: str) -> str:
             "<path d='m7 9 5 5 5-5'></path></svg></button></div>")
 
 
+_STALE_MESSAGE_DAYS = 3 * 365  # matches the messages sync default (3 years)
+
+
+def _recent_messages_html(parent: dict[str, Any], raw_dir: Path = RAW_DIR) -> str:
+    """The person's last few raw messages, straight from the collected bundles
+    the judge itself read (deep-context's scoped body-reading surface; local
+    display only, nothing leaves the machine). This is what lets a human
+    one-click a "maybe" like a 2021 one-way 'which number should I use' text:
+    the card SHOWS the evidence instead of hiding the person. A stale callout
+    flags threads older than the sync default, since a full WhatsApp backfill
+    happily surfaces half-decade-old fragments."""
+    person_ids = list(parent.get("person_ids") or []) or \
+        list((parent.get("worth_row") or {}).get("person_ids") or [])
+    messages: list[dict[str, Any]] = []
+    for pid in person_ids:
+        bundle_path = raw_dir / f"{pid}.json"
+        try:
+            bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for msg in bundle.get("messages") or []:
+            if isinstance(msg, dict) and str(msg.get("text") or "").strip():
+                messages.append(msg)
+    if not messages:
+        return ""
+    messages.sort(key=lambda m: str(m.get("at") or ""), reverse=True)
+    newest = str(messages[0].get("at") or "")
+    stale = ""
+    try:
+        newest_dt = datetime.fromisoformat(newest.replace("Z", "+00:00"))
+        age_days = (datetime.now(timezone.utc) - newest_dt).days
+        if age_days > _STALE_MESSAGE_DAYS:
+            stale = (f"<p class='worth-messages-stale'>Last message "
+                     f"{newest_dt.strftime('%b %Y')} — {age_days // 365} years ago, "
+                     "older than your 3-year sync window</p>")
+    except ValueError:
+        pass
+    rows = []
+    for msg in messages[:3]:
+        who = "you" if str(msg.get("direction") or "") == "from_me" else "them"
+        when = str(msg.get("at") or "")[:10]
+        text = str(msg.get("text") or "").strip()
+        text = text[:200] + ("…" if len(text) > 200 else "")
+        rows.append(f"<li><span class='worth-message-meta'>{esc(msg.get('channel') or 'message')}"
+                    f" · {esc(who)} · {esc(when)}</span> {esc(text)}</li>")
+    return ("<div class='worth-messages'>"
+            f"{stale}<ul>{''.join(rows)}</ul></div>")
+
+
 def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
                       profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
     candidate = _primary_candidate(parent)
@@ -2101,7 +2152,8 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
             identity=False,
             identifiers=identifiers,
             sparse_context=sparse_context,
-        )}"""
+        )}
+        {_recent_messages_html(parent)}"""
     return f"""
     <article class='decision-card identity-card worth-card' data-card>
       {_scroll_region(scroll_content)}

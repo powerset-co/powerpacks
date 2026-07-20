@@ -21,6 +21,7 @@ import unittest
 import urllib.parse
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
@@ -2616,6 +2617,43 @@ def _search_parent(slug: str, name: str, email: str,
         "worth": worth, "machine_worth": worth, "connection": False,
         "worth_row": _worth_row_for(slug, name, [key], decision, source),
     }
+
+
+class TestWorthCardRecentMessages(unittest.TestCase):
+    """Worth cards show the raw-message evidence the judge itself read (from the
+    collected bundle), plus a stale callout when the newest message is older
+    than the sync window — so a human can one-click an ancient one-way thread
+    instead of wondering why the person is in the queue."""
+
+    def test_card_shows_bundle_messages_and_stale_callout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp)
+            pid = "candidate:phone:+15550100"
+            (raw / f"{pid}.json").write_text(json.dumps({"messages": [{
+                "channel": "whatsapp", "direction": "from_me",
+                "at": "2021-12-27T17:07:49Z", "text": "or I can call. which one to use",
+            }]}), encoding="utf-8")
+            html = web._recent_messages_html({"person_ids": [pid]}, raw_dir=raw)
+        self.assertIn("or I can call. which one to use", html)
+        self.assertIn("whatsapp · you · 2021-12-27", html)
+        self.assertIn("older than your 3-year sync window", html)
+        self.assertIn("Dec 2021", html)
+
+    def test_recent_thread_has_no_stale_callout_and_missing_bundle_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp)
+            pid = "candidate:phone:+15550101"
+            recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            (raw / f"{pid}.json").write_text(json.dumps({"messages": [{
+                "channel": "imessage", "direction": "inbound",
+                "at": recent, "text": "see you tomorrow",
+            }]}), encoding="utf-8")
+            html = web._recent_messages_html({"person_ids": [pid]}, raw_dir=raw)
+            self.assertIn("see you tomorrow", html)
+            self.assertNotIn("older than", html)
+            self.assertEqual(
+                web._recent_messages_html({"person_ids": ["candidate:phone:+15550199"]},
+                                          raw_dir=raw), "")
 
 
 class TestWorthLiveSearch(unittest.TestCase):

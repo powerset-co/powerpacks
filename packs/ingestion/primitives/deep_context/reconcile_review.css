@@ -595,6 +595,24 @@ input::placeholder { color: var(--muted); }
   gap: 10px;
 }
 
+/* Raw-message evidence strip on worth cards (bundle-sourced, local only). */
+.worth-messages {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--secondary);
+}
+.worth-messages ul { margin: 0; padding: 0; list-style: none; }
+.worth-messages li { font-size: 13px; color: var(--foreground); padding: 3px 0; }
+.worth-message-meta { color: var(--muted); font-size: 11px; margin-right: 6px; }
+.worth-messages-stale {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
 .worth-search-input {
   flex: 1;
   min-width: 0;
