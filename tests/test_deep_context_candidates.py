@@ -2826,14 +2826,20 @@ class TestLiveEndpoints(unittest.TestCase):
              mock.patch.object(dresearch, "main",
                                side_effect=lambda argv: calls.append(argv)), \
              mock.patch.object(web, "read_enrichment_manifest",
-                               return_value={"status": "needs_approval",
-                                             "would_submit": 0}), \
+                               side_effect=[{"status": "needs_approval",
+                                             "would_submit": 0},
+                                            {"status": "completed",
+                                             "current": True}]), \
              mock.patch.object(web, "current_worth_selection", return_value={}), \
              mock.patch.object(web, "_post_enrichment_chain") as chain:
             web.start_enrichment_preview_job()
         self.assertEqual(calls[0], ["--dry-run", *web.ENRICH_FLAGS])
         self.assertIn("--approve", calls[1])
         self.assertIn("0.00", calls[1])
+        # the loop re-checks after the chain (the chain can re-drift the
+        # selection) and stops once the state is completed+current
+        self.assertEqual(calls[2], ["--dry-run", *web.ENRICH_FLAGS])
+        self.assertEqual(len(calls), 3)
         chain.assert_called_once()
 
     def test_in_app_jobs_stay_off_for_non_canonical_paths(self):
