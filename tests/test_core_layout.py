@@ -29,6 +29,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertEqual(
             ingestion_pack,
             [
+                "clean-slate",
                 "deep-context",
                 "discover-contacts",
                 "enrich-email-markers",
