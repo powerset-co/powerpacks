@@ -2093,6 +2093,218 @@ class TestJudgedResearchProposals(unittest.TestCase):
         self.assertEqual(dresearch.eligible_subset(verdicts, 0.85, user_kept), [])
 
 
+class TestRetargetJudgeFingerprintCache(unittest.TestCase):
+    """Retarget judgments are cached by an evidence fingerprint stored on the row:
+    unchanged evidence (same research output + dossier) reuses the stored verdict —
+    including rejections, which previously re-judged on every pass — so a steady-state
+    $0 pass makes ZERO judge calls. Changed evidence re-judges; pre-fingerprint rows
+    are grandfathered with a stamp instead of one last bootstrap re-judge. All
+    fictional (example.com); the judge is always mocked — no live LLM/network."""
+
+    PID = "candidate:email:nia@example.com"
+
+    def _research_json(self, out_dir: Path, handle: str, profile: dict) -> None:
+        (out_dir / handle).mkdir(parents=True, exist_ok=True)
+        (out_dir / handle / "01_research_parallel.json").write_text(
+            json.dumps(profile), encoding="utf-8")
+
+    def _facts(self, facts_dir: Path, pid: str, name: str, **over) -> None:
+        facts_dir.mkdir(parents=True, exist_ok=True)
+        facts = {"canonical_name": name, "aliases": [], "employers": [], "title": "",
+                 "school": "", "field_of_study": "", "location": "",
+                 "relationship_to_owner": "friend", "topics": [], "notable_events": [],
+                 "identifiers": [], "shared_context": [], "confidence": 0.8}
+        facts.update(over)
+        (facts_dir / f"{pid}.jsonl").write_text(
+            json.dumps({"chunk_index": 0, "facts": facts, "usage": {}}) + "\n", encoding="utf-8")
+
+    def _profile(self, slug: str = "nia-found", notes: str = "Best contextual match.") -> dict:
+        return {"person": {"full_name": "Nia Field", "confidence": 0.8, "notes": notes},
+                "social": {"linkedin_url": f"https://www.linkedin.com/in/{slug}",
+                           "linkedin_status": "found"}}
+
+    def _subset(self) -> list[dict]:
+        return [{"parent_slug": "nia-field-p", "name": "Nia Field", "person_ids": [self.PID],
+                 "candidate_key": self.PID, "linkedin": {},
+                 "match_emails": ["nia@example.com"], "match_phones": []}]
+
+    def test_same_evidence_second_pass_makes_zero_judge_calls(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            self._facts(facts, self.PID, "Nia Field")
+            self._research_json(out, "nia-field-p", self._profile())
+            rejecting = _verdict("wrong_person", 0.9, reason="no non-name corroboration")
+            with mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=rejecting) as jm:
+                first = dresearch.propose_retargets_from_output(
+                    out, self._subset(), ov, facts_dir=facts, raw_dir=raw, use_llm=True)
+            jm.assert_called_once()
+            self.assertEqual((first["judge_calls"], first["cached_verdicts"]), (1, 0))
+            row = _rows_by_pub(ov)[self.PID]
+            self.assertEqual(row["llm_reject"], "yes")
+            self.assertTrue(row["llm_judge_fingerprint"])              # verdict cached on the row
+            # Second pass, identical evidence: the REJECTED proposal is NOT re-judged.
+            with mock.patch.object(dresearch, "judge_research_proposal") as jm2:
+                second = dresearch.propose_retargets_from_output(
+                    out, self._subset(), ov, facts_dir=facts, raw_dir=raw, use_llm=True)
+            jm2.assert_not_called()
+            self.assertEqual((second["judge_calls"], second["cached_verdicts"]), (0, 1))
+            unchanged = _rows_by_pub(ov)[self.PID]
+            self.assertEqual(unchanged["llm_reject"], "yes")           # prior verdict stands
+            self.assertEqual(unchanged["llm_judge_fingerprint"], row["llm_judge_fingerprint"])
+
+    def test_changed_evidence_is_rejudged(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            self._facts(facts, self.PID, "Nia Field")
+            self._research_json(out, "nia-field-p", self._profile())
+            rejecting = _verdict("wrong_person", 0.9, reason="unverified")
+            with mock.patch.object(dresearch, "judge_research_proposal", return_value=rejecting):
+                dresearch.propose_retargets_from_output(
+                    out, self._subset(), ov, facts_dir=facts, raw_dir=raw, use_llm=True)
+            first_fp = _rows_by_pub(ov)[self.PID]["llm_judge_fingerprint"]
+            # New research output (different proposed URL) -> fingerprint differs -> re-judge.
+            self._research_json(out, "nia-field-p", self._profile(slug="nia-real",
+                                                                  notes="Employer confirmed."))
+            confirming = _verdict("confirmed", 0.9, reason="employer match")
+            with mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=confirming) as jm:
+                res = dresearch.propose_retargets_from_output(
+                    out, self._subset(), ov, facts_dir=facts, raw_dir=raw, use_llm=True,
+                    confirm_threshold=0.7)
+            jm.assert_called_once()
+            self.assertEqual(res["judge_calls"], 1)
+            row = _rows_by_pub(ov)[self.PID]
+            self.assertEqual(row["llm_reject"], "")                    # fresh verdict landed
+            self.assertNotEqual(row["llm_judge_fingerprint"], first_fp)
+            # Changed DOSSIER with identical research output also re-judges.
+            self._facts(facts, self.PID, "Nia Field",
+                        employers=[{"name": "Globex", "role": "Eng", "status": "current"}])
+            with mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=confirming) as jm2:
+                dresearch.propose_retargets_from_output(
+                    out, self._subset(), ov, facts_dir=facts, raw_dir=raw, use_llm=True,
+                    confirm_threshold=0.7)
+            jm2.assert_called_once()
+
+    def test_pre_fingerprint_rows_are_grandfathered_without_a_judge_call(self):
+        # Rows judged BEFORE the fingerprint column existed carry a verdict but no sha.
+        # First post-fix pass must be zero-call: stamp the current evidence sha, keep the
+        # stored verdict. Later passes then hit the normal cache.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            self._facts(facts, self.PID, "Nia Field")
+            self._research_json(out, "nia-field-p", self._profile())
+            legacy = {column: "" for column in reconcile.OVERRIDE_COLUMNS}
+            legacy.update({
+                "public_identifier": self.PID, "action": "retarget", "approved": "",
+                "new_linkedin_url": "https://www.linkedin.com/in/nia-found",
+                "new_public_identifier": "nia-found", "person_id": self.PID,
+                "source": "deep-research", "llm_reject": "yes",
+                "llm_reject_reason": "pre-fix rejection",
+            })
+            reconcile._write_override_rows(ov, {self.PID: legacy})
+            with mock.patch.object(dresearch, "judge_research_proposal") as jm:
+                res = dresearch.propose_retargets_from_output(
+                    out, self._subset(), ov, facts_dir=facts, raw_dir=raw, use_llm=True)
+            jm.assert_not_called()
+            self.assertEqual((res["judge_calls"], res["grandfathered"]), (0, 1))
+            row = _rows_by_pub(ov)[self.PID]
+            self.assertTrue(row["llm_judge_fingerprint"])              # stamped
+            self.assertEqual(row["llm_reject"], "yes")                 # stored verdict kept
+            self.assertEqual(row["llm_reject_reason"], "pre-fix rejection")
+            with mock.patch.object(dresearch, "judge_research_proposal") as jm2:
+                cached = dresearch.propose_retargets_from_output(
+                    out, self._subset(), ov, facts_dir=facts, raw_dir=raw, use_llm=True)
+            jm2.assert_not_called()
+            self.assertEqual(cached["cached_verdicts"], 1)
+
+    def test_heartbeat_reports_judging_progress_and_run_writes_it_to_the_manifest(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            out, facts, raw, ov = base / "r", base / "f", base / "raw", base / "review.csv"
+            subset = []
+            for i in (1, 2):
+                pid = f"candidate:email:p{i}@example.com"
+                self._facts(facts, pid, f"Person {i}")
+                self._research_json(out, f"person-{i}-p", self._profile(slug=f"person-{i}"))
+                subset.append({"parent_slug": f"person-{i}-p", "name": f"Person {i}",
+                               "person_ids": [pid], "candidate_key": pid, "linkedin": {},
+                               "match_emails": [], "match_phones": []})
+            beats: list[tuple[int, int]] = []
+            rejecting = _verdict("wrong_person", 0.9, reason="unverified")
+            with mock.patch.object(dresearch, "judge_research_proposal", return_value=rejecting):
+                res = dresearch.propose_retargets_from_output(
+                    out, subset, ov, facts_dir=facts, raw_dir=raw, use_llm=True,
+                    heartbeat=lambda done, total: beats.append((done, total)))
+            self.assertEqual(res["judge_calls"], 2)
+            self.assertEqual(beats, [(0, 2), (1, 2), (2, 2)])          # per-completion progress
+
+            # Through run(): the heartbeat lands in the ONE fixed enrichment manifest.
+            verdicts_path = base / "verdicts.jsonl"
+            verdicts_path.write_text("".join(
+                json.dumps({"parent_slug": row["parent_slug"], "name": row["name"],
+                            "person_ids": row["person_ids"],
+                            "candidate_key": row["candidate_key"],
+                            "linkedin": {"linkedin_url": "https://www.linkedin.com/in/old-guess"},
+                            "verdict": _verdict("wrong_person", 0.95, dr=True)}) + "\n"
+                for row in subset), encoding="utf-8")
+            manifest = base / "deep-research" / "manifest.json"
+            payloads: list[dict] = []
+            real_write = dresearch.write_enrichment_manifest
+
+            def recording_write(payload, path=manifest):
+                payloads.append(dict(payload))
+                return real_write(payload, path)
+
+            reconcile._write_override_rows(ov, {})
+            old_out, old_queue = dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV
+            dresearch.DR_OUT_DIR = out
+            dresearch.QUEUE_CSV = out / "research_queue.csv"
+            try:
+                with mock.patch.object(dresearch, "judge_research_proposal",
+                                       return_value=rejecting), \
+                     mock.patch.object(dresearch, "write_enrichment_manifest",
+                                       side_effect=recording_write):
+                    # Research is complete for every eligible person -> the $0 reused
+                    # path judges proposals; the queue handles reuse the verdict slugs.
+                    with mock.patch.object(dresearch, "build_queue", side_effect=(
+                            lambda s, people, f, r: [{"handle": row["parent_slug"]}
+                                                     for row in s])):
+                        result = dresearch.run(_ns(
+                            verdicts_jsonl=verdicts_path, overrides_csv=ov,
+                            people_csv=base / "people.csv", facts_dir=facts, raw_dir=raw,
+                            manifest=str(manifest), processor="core2x",
+                            confirm_threshold=0.85, budget=0.0, approve=False,
+                            dry_run=False, include_plausibly_absent=False,
+                            include_candidates=False, no_llm=True))
+            finally:
+                dresearch.DR_OUT_DIR, dresearch.QUEUE_CSV = old_out, old_queue
+            self.assertEqual(result["status"], "reused")
+            self.assertEqual(result["judge_calls"], 2)
+            judging = [p for p in payloads if p.get("phase") == "judging_retargets"]
+            self.assertEqual([(p["done"], p["total"]) for p in judging],
+                             [(0, 2), (1, 2), (2, 2)])
+            self.assertTrue(all(p["status"] == "running" for p in judging))
+            # The pass's terminal persist supersedes the heartbeat in the fixed manifest.
+            final = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(final["status"], "research_complete")
+            self.assertNotIn("phase", final)
+
+    def test_judge_concurrency_defaults_capped_and_env_overridable(self):
+        with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_CONCURRENCY": "",
+                                          "POWERPACKS_OPENAI_USAGE_TIER": "tier_5"}):
+            self.assertEqual(dresearch.judge_concurrency(), 32)        # capped below tier 5's 256
+        with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_CONCURRENCY": "",
+                                          "POWERPACKS_OPENAI_USAGE_TIER": "tier_1"}):
+            self.assertEqual(dresearch.judge_concurrency(), 16)        # low tiers stay lower
+        with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_CONCURRENCY": "64"}):
+            self.assertEqual(dresearch.judge_concurrency(), 64)        # explicit override wins
+
+
 class TestUnsilencedNameMatch(unittest.TestCase):
     """An unconfirmed unique first-degree name match is SURFACED as a visible needs_review row
     naming the connection — not silently reverted to an invisible no_link. All fictional data."""

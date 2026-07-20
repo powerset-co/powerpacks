@@ -25,15 +25,19 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
+import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.build_parents import parent_id_for
 from packs.ingestion.primitives.deep_context.candidates import (
@@ -80,7 +84,10 @@ from packs.ingestion.primitives.deep_context.reconcile_review_web import (
     _research_profile_view,
     current_worth_selection,
 )
-from packs.ingestion.schemas.people_schema import extract_public_identifier
+from packs.ingestion.schemas.people_schema import (
+    extract_public_identifier,
+    normalize_linkedin_url,
+)
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
 from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import (
     PROCESSOR_PRICING_USD,
@@ -432,13 +439,44 @@ def _research_unverified(profile: dict[str, Any]) -> bool:
     return any(marker in blob for marker in _UNVERIFIED_MARKERS)
 
 
+# The retarget identity judge runs at high reasoning effort — heavier per call than
+# profile summaries — so its default fan-out never exceeds this, even on tier 5.
+DEFAULT_JUDGE_CONCURRENCY = 32
+
+
+def judge_concurrency() -> int:
+    """Retarget-judge fan-out: an explicit POWERPACKS_OPENAI_CONCURRENCY env override
+    wins verbatim (the shared OpenAI fan-out knob); otherwise the usage-tier profile
+    capped at DEFAULT_JUDGE_CONCURRENCY. Per-call retry/backoff lives in judge_task."""
+    tier = env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency",
+                              fallback=DEFAULT_JUDGE_CONCURRENCY)
+    if (os.getenv("POWERPACKS_OPENAI_CONCURRENCY") or "").strip():
+        return tier
+    return min(DEFAULT_JUDGE_CONCURRENCY, tier)
+
+
+def proposal_fingerprint(old_pub: str, new_url: str, dossier: dict[str, Any],
+                         profile_view: dict[str, Any]) -> str:
+    """Stable sha256 of the EVIDENCE one retarget judgment consumed: the identity pair
+    (old_pub → proposed LinkedIn URL) plus the exact dossier view and research-profile
+    view fed to the judge. Same sha == same evidence == the stored verdict stands
+    (accepts AND rejections); new research output or a changed dossier yields a
+    different sha and a normal re-judge."""
+    payload = json.dumps(
+        {"old_pub": old_pub, "new_linkedin_url": new_url,
+         "dossier": dossier, "profile": profile_view},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
                                   overrides_csv: Path, *,
                                   facts_dir: Path | None = None, raw_dir: Path | None = None,
                                   use_llm: bool = False, owner_block: str = "",
                                   model: str = "", effort: str = "high",
                                   confirm_threshold: float = DEFAULT_CONFIRM,
-                                  timeout: int = 120, max_retries: int = 6) -> dict[str, Any]:
+                                  timeout: int = 120, max_retries: int = 6,
+                                  heartbeat: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     """After deep research, propose a `retarget` (pending) for each detached person whose research
     found a correct LinkedIn — into the same decisions table (sticky upsert).
 
@@ -446,10 +484,22 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     is JUDGED before it lands: the same email-evidence identity judge that vets attached links vets
     this (dossier × proposed-profile) pair. A judge rejection marks the row llm_reject=yes + reason
     (rendered by the UI) instead of silently sticking a wrong guess. --no-llm uses the deterministic
-    fallback: an unverified / sub-threshold guess is rejected, never auto-approved."""
+    fallback: an unverified / sub-threshold guess is rejected, never auto-approved.
+
+    Judgments are CACHED by evidence fingerprint (see proposal_fingerprint): a person whose
+    would-be proposal matches the sha stored on their retarget row keeps the prior verdict —
+    including rejections, which would otherwise re-judge on every pass — so a steady-state $0
+    pass makes ZERO judge calls. Rows judged before the fingerprint existed are grandfathered:
+    the current sha is stamped without a judge call and the stored verdict kept. Genuinely new
+    evidence is judged CONCURRENTLY (bounded by judge_concurrency(); per-proposal retry/timeout
+    semantics unchanged), with ``heartbeat(done, total)`` called per completion so the UI can
+    render honest progress. User-decided rows are never touched (sticky upsert)."""
     facts_dir = facts_dir if facts_dir is not None else FACTS_DIR
     raw_dir = raw_dir if raw_dir is not None else RAW_DIR
-    proposals = []
+    existing = load_override_rows(overrides_csv)
+    proposals: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    cached = grandfathered = 0
     for r in subset:
         handle = r.get("parent_slug", "")
         profile = _read_json(out_dir / handle / "01_research_parallel.json")
@@ -460,29 +510,70 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
         carried = _find_confidence(profile)
         confidence = carried if carried is not None else 0.0
         unverified = _research_unverified(profile)
-        # Judge the (dossier evidence × proposed profile) pair through the SAME machinery as an
-        # attached link, flavored as a speculative research proposal (non-name corroboration
-        # required). Reject outcomes stamp the UI-rendered llm_reject* columns; never auto-approve.
         person_ids = r.get("person_ids") or []
         dossier = dossier_view(person_ids, facts_dir, raw_dir)
         li_view = _research_profile_view(profile)
-        task = research_proposal_task(
-            dossier, li_view, name=r.get("name", ""),
-            match_emails=r.get("match_emails") or [], match_phones=r.get("match_phones") or [],
-            confidence=confidence, unverified=unverified)
-        verdict = judge_research_proposal(
-            task, use_llm=use_llm, owner_block=owner_block, model=model or "",
-            effort=effort, timeout=timeout, max_retries=max_retries)
-        reject = research_reject_fields(verdict, confirm_threshold)
-        proposals.append({
+        fingerprint = proposal_fingerprint(old_pub, new_url, dossier, li_view)
+        proposal = {
             "old_public_identifier": old_pub, "new_linkedin_url": new_url,
             "linkedin_url": (r.get("linkedin") or {}).get("linkedin_url", ""),
             "match_emails": r.get("match_emails") or [], "match_phones": r.get("match_phones") or [],
             "person_id": (person_ids or [""])[0], "confidence": confidence,
             "reason": _find_reason(profile), "source": "deep-research",
-            **reject,
+            "judge_fingerprint": fingerprint,
+        }
+        prior = existing.get(old_pub) or {}
+        prior_retarget = (prior.get("action") or "").strip().lower() == "retarget"
+        prior_fingerprint = (prior.get("llm_judge_fingerprint") or "").strip()
+        if prior_retarget and prior_fingerprint == fingerprint:
+            cached += 1  # same evidence — the stored verdict stands (incl. rejections)
+            continue
+        if (prior_retarget and not prior_fingerprint
+                and (prior.get("new_linkedin_url") or "").strip() == normalize_linkedin_url(new_url)):
+            # Grandfather rows judged before the fingerprint existed: stamp the current
+            # evidence sha WITHOUT a judge call and keep the stored verdict (no llm_reject
+            # keys on the proposal, so upsert_retargets preserves the prior columns).
+            grandfathered += 1
+            proposals.append(proposal)
+            continue
+        # Judge the (dossier evidence × proposed profile) pair through the SAME machinery as an
+        # attached link, flavored as a speculative research proposal (non-name corroboration
+        # required). Reject outcomes stamp the UI-rendered llm_reject* columns; never auto-approve.
+        pending.append({
+            "proposal": proposal,
+            "task": research_proposal_task(
+                dossier, li_view, name=r.get("name", ""),
+                match_emails=r.get("match_emails") or [], match_phones=r.get("match_phones") or [],
+                confidence=confidence, unverified=unverified),
         })
-    return upsert_retargets(overrides_csv, proposals)
+
+    if pending:
+        # Bounded fan-out via threads: judge_research_proposal is a self-contained sync
+        # wrapper (own client, per-call timeout + retry/backoff), so a thread pool keeps
+        # those semantics — and the existing per-proposal mock seam — intact.
+        if heartbeat:
+            heartbeat(0, len(pending))
+        done = 0
+
+        def judge_one(item: dict[str, Any]) -> dict[str, Any]:
+            return judge_research_proposal(
+                item["task"], use_llm=use_llm, owner_block=owner_block, model=model or "",
+                effort=effort, timeout=timeout, max_retries=max_retries)
+
+        with ThreadPoolExecutor(max_workers=min(judge_concurrency(), len(pending))) as pool:
+            futures = {pool.submit(judge_one, item): item for item in pending}
+            for future in as_completed(futures):
+                item = futures[future]
+                item["proposal"].update(research_reject_fields(future.result(), confirm_threshold))
+                done += 1
+                if heartbeat:
+                    heartbeat(done, len(pending))
+        proposals.extend(item["proposal"] for item in pending)  # stable subset order
+
+    result = upsert_retargets(overrides_csv, proposals)
+    result.update({"judge_calls": len(pending), "cached_verdicts": cached,
+                   "grandfathered": grandfathered})
+    return result
 
 
 def write_enrichment_manifest(payload: dict[str, Any], path: Path = ENRICH_MANIFEST) -> dict[str, Any]:
@@ -614,6 +705,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     use_llm = not getattr(args, "no_llm", False)
     owner_block = owner_background_block(load_owner()) if load_owner() else ""
 
+    def heartbeat(done: int, total: int) -> None:
+        # Honest judging progress in the ONE fixed manifest (no new state files):
+        # cheap per-completion writes the UI polls while a pass judges N proposals.
+        if manifest_path:
+            write_enrichment_manifest({
+                "stage": "enrich", "status": "running",
+                "phase": "judging_retargets", "done": done, "total": total,
+                "counts": _manifest_counts(total=len(queue), completed=reused_completed),
+                "selection": selection,
+            }, manifest_path)
+
     def propose() -> dict[str, Any]:
         return propose_retargets_from_output(
             DR_OUT_DIR, subset, Path(args.overrides_csv),
@@ -621,7 +723,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             use_llm=use_llm, owner_block=owner_block,
             model=getattr(args, "model", "") or "",
             effort=getattr(args, "reasoning_effort", "high") or "high",
-            confirm_threshold=args.confirm_threshold)
+            confirm_threshold=args.confirm_threshold, heartbeat=heartbeat)
 
     if not subset:
         return persist(
@@ -641,6 +743,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             {**base, "status": "reused", "queue_csv": str(QUEUE_CSV),
              "output_dir": str(DR_OUT_DIR),
              "retargets_proposed": proposals.get("proposed", 0),
+             "judge_calls": proposals.get("judge_calls", 0),
+             "cached_verdicts": proposals.get("cached_verdicts", 0),
+             "grandfathered": proposals.get("grandfathered", 0),
              "reason": "all eligible people already have completed Parallel research",
              "elapsed_ms": int((time.monotonic() - started) * 1000)},
             "research_complete", completed=len(queue))
@@ -678,6 +783,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         **base, "status": "ran" if proc.returncode == 0 else "failed",
         "queue_csv": str(QUEUE_CSV), "output_dir": str(DR_OUT_DIR),
         "retargets_proposed": proposals.get("proposed", 0),
+        "judge_calls": proposals.get("judge_calls", 0),
+        "cached_verdicts": proposals.get("cached_verdicts", 0),
+        "grandfathered": proposals.get("grandfathered", 0),
         "returncode": proc.returncode, "progress": "streamed live to stderr",
         "elapsed_ms": int((time.monotonic() - started) * 1000),
     }
