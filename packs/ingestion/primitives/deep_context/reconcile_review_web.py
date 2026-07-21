@@ -3500,25 +3500,64 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         target_parent = worth_parent_in_snapshot(
                             pub, (form.get("parent_slug") or [""])[0])
                         rows_now = review_rows_now()
-                        result = apply_worth_decision(review_path, pub, stored_worth,
+                        # The posted pub is the QUEUE key; the durable mark must
+                        # land on a row worth_view ATTACHES to the parent the
+                        # user decided (row key or row.person_id inside that
+                        # parent's identities). Split twins can share a queue
+                        # key naming a row whose person_id belongs to the OTHER
+                        # twin — writing there decides the wrong person, and the
+                        # served twin re-derives pending on every rebuild: an
+                        # undecidable zombie no click could ever clear.
+                        write_key = pub.strip().lower()
+                        target_ids = {str(value or "").strip().lower()
+                                      for value in (target_parent or {}).get("person_ids") or []}
+                        target_ids.discard("")
+                        if target_parent and target_ids:
+                            posted_row = rows_now.get(write_key) or {}
+                            posted_pid = str(posted_row.get("person_id") or "").strip().lower()
+                            if write_key not in target_ids and posted_pid not in target_ids:
+                                write_key = sorted(target_ids)[0]
+                        result = apply_worth_decision(review_path, write_key, stored_worth,
                                                       rows=rows_now)
                         accept_rows_write()
-                        gate = sync_synthetic_gate(synthetic_path, pub, stored_worth)
+                        gate = sync_synthetic_gate(synthetic_path, write_key, stored_worth)
                         state = effective_no_for_key(
-                            pub, rows_now, facts_dir,
+                            write_key, rows_now, facts_dir,
                             keepish=(gate["approved"] == "yes") if gate else None,
                             connections=connection_keys)
-                        row_now = rows_now.get(pub.strip().lower()) or {}
+                        row_now = rows_now.get(write_key) or {}
                         decided = gate or {
                             "action": (row_now.get("action") or "").strip().lower(),
                             "approved": (row_now.get("approved") or "").strip().lower(),
                         }
+                        # worth_row is the SOLE worth truth for queue, tabs,
+                        # and counts — patch it too, or the click lands on
+                        # disk while the live model keeps serving the old
+                        # decision until the next full rebuild.
+                        def patch_worth_state(model_parent: dict[str, Any]) -> None:
+                            model_parent["worth"] = state["worth"]
+                            model_parent["machine_worth"] = state["machine"]
+                            model_primary = _primary_candidate(model_parent)
+                            model_primary["worth"] = state["worth"]
+                            model_primary["machine_worth"] = state["machine"]
+                            model_row = model_parent.get("worth_row")
+                            if model_row is None:
+                                return
+                            machine_dec = (model_row.get("machine") or {}).get("decision") or ""
+                            if stored_worth:
+                                model_row["human"] = {"decision": stored_worth,
+                                                      "updated_at": now_iso()}
+                                model_row["effective"] = stored_worth
+                                model_row["source"] = "user"
+                            else:  # restore: back to the machine's verdict
+                                model_row["human"] = None
+                                model_row["effective"] = machine_dec or "maybe"
+                                model_row["source"] = ("llm" if machine_dec
+                                                       else "default")
+
                         if target_parent:
-                            target_parent["worth"] = state["worth"]
-                            target_parent["machine_worth"] = state["machine"]
+                            patch_worth_state(target_parent)
                             primary = _primary_candidate(target_parent)
-                            primary["worth"] = state["worth"]
-                            primary["machine_worth"] = state["machine"]
                             durable_candidate = next(
                                 (candidate for candidate in target_parent.get("candidates") or []
                                  if str(candidate.get("pub") or "").strip().lower()
@@ -3533,25 +3572,24 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             if gate and primary.get("synthetic"):
                                 primary["action"] = gate["action"]
                                 primary["approved"] = gate["approved"]
-                            # worth_row is the SOLE worth truth for queue, tabs,
-                            # and counts — patch it too, or the click lands on
-                            # disk while the live model keeps serving the old
-                            # decision until the next full rebuild. The slug
-                            # sent by the card guarantees this is the parent
-                            # the user actually decided.
-                            worth_row = target_parent.get("worth_row")
-                            if worth_row is not None:
-                                machine_dec = (worth_row.get("machine") or {}).get("decision") or ""
-                                if stored_worth:
-                                    worth_row["human"] = {"decision": stored_worth,
-                                                          "updated_at": now_iso()}
-                                    worth_row["effective"] = stored_worth
-                                    worth_row["source"] = "user"
-                                else:  # restore: back to the machine's verdict
-                                    worth_row["human"] = None
-                                    worth_row["effective"] = machine_dec or "maybe"
-                                    worth_row["source"] = ("llm" if machine_dec
-                                                           else "default")
+                            # A FRESH rebuild derives every parent the written
+                            # row ATTACHES to (worth_view rule 3: row key or
+                            # row.person_id inside the person's identities) —
+                            # so the cache must patch exactly that same set, no
+                            # more (an unrelated twin sharing only the queue
+                            # key stays independently decidable) and no less
+                            # (a merged parent sharing the identity must flip,
+                            # or it keeps the queue serving a decided person).
+                            written_pid = str((rows_now.get(write_key) or {})
+                                              .get("person_id") or "").strip().lower()
+                            attach_keys = {write_key, written_pid} - {""}
+                            for sibling in cached_parents:
+                                if sibling is target_parent:
+                                    continue
+                                sibling_ids = {str(value or "").strip().lower()
+                                               for value in sibling.get("person_ids") or []}
+                                if sibling_ids & attach_keys:
+                                    patch_worth_state(sibling)
                         accept_local_write()
                         current_parents = cached_parents
                         progress = review_progress(current_parents)
