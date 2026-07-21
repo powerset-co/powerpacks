@@ -69,6 +69,7 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     VERDICTS_JSONL,
     emit,
+    read_jsonl,
     load_owner,
     now_iso,
     owner_background_block,
@@ -123,12 +124,6 @@ QUEUE_FIELDS = [
     "source_channel",
     "retarget_hint",
 ]
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -630,7 +625,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "error": result["message"],
             }, manifest_path)
         return result
-    verdicts = _read_jsonl(Path(args.verdicts_jsonl))
+    verdicts = list(read_jsonl(Path(args.verdicts_jsonl)))
     overrides = load_override_rows(Path(args.overrides_csv))
     resolved_candidates = candidates_resolved_by_existing()
     # Same authoritative digest the review UI stamps — a candidate promoted to a verified

@@ -24,6 +24,7 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     RAW_DIR,
     emit,
+    read_jsonl,
     now_iso,
     write_json,
 )
@@ -49,7 +50,7 @@ def collect_rows(raw_dir: Path, facts_dir: Path) -> list[dict[str, Any]]:
     for f in facts_dir.glob("*.jsonl"):
         if f.name == "manifest.json":
             continue
-        recs = [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+        recs = list(read_jsonl(f))
         if not recs:
             continue
         rec = recs[-1]
