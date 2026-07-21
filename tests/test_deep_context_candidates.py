@@ -848,6 +848,70 @@ class TestJudgeAcceptedProfilesStand(unittest.TestCase):
         self.assertEqual(len(web.pending_linkedin_candidates(parent)), 1)
 
 
+class TestJudgeRejectedProfilesStand(unittest.TestCase):
+    """The mirror of accepted-stands: a candidate-origin found-LinkedIn the judge
+    rejected AT OR ABOVE the confirm bar leaves the Check-LinkedIn queue too.
+    Below the bar the llm_reject columns conflate near-confirm flavors
+    (wrong_person / needs_review / confirmed-below-bar all stamp llm_reject=yes),
+    so sub-bar rejections keep the human; at/above the bar a confirm would never
+    have been stamped as a rejection at all. Human yes/no stays terminal and
+    real-network people (non candidate:* ids) stay human-gated."""
+
+    def _cand(self, **over):
+        cand = {"pub": "candidate:phone:+15550100", "person_id": "candidate:phone:+15550100",
+                "full_name": "Jordan Bravado", "import_candidate": False, "synthetic": False,
+                "action": "retarget", "approved": "", "llm_reject": "yes",
+                "llm_reject_confidence": "0.900",
+                "new_url": "https://www.linkedin.com/in/jordan-bravado"}
+        cand.update(over)
+        return cand
+
+    def test_predicate_requires_a_confident_candidate_rejection(self):
+        stands = review_store.judge_rejected_candidate_retarget
+        self.assertTrue(stands(self._cand()))
+        # the bar is inclusive and equals the judge's confirm threshold
+        self.assertTrue(stands(self._cand(llm_reject_confidence="0.850")))
+        self.assertEqual(review_store.RESEARCH_CONFIRM_THRESHOLD, 0.85)
+        # sub-bar rejections conflate near-confirms — the human keeps them
+        self.assertFalse(stands(self._cand(llm_reject_confidence="0.840")))
+        self.assertFalse(stands(self._cand(llm_reject_confidence="")))
+        self.assertFalse(stands(self._cand(llm_reject_confidence="not-a-number")))
+        # an unrejected row is the ACCEPTED predicate's business, never this one
+        self.assertFalse(stands(self._cand(llm_reject="")))
+        # a human decision is terminal in both directions
+        self.assertFalse(stands(self._cand(approved="yes")))
+        self.assertFalse(stands(self._cand(approved="no")))
+        self.assertFalse(stands(self._cand(action="verify")))
+        # a REAL person (directory uuid) is never auto-decided
+        self.assertFalse(stands(self._cand(person_id="2645e339-5da9-5805-9557-5c1aae306505",
+                                           pub="jordan-bravado")))
+
+    def test_the_two_predicates_never_both_claim_one_row(self):
+        for cand in (self._cand(), self._cand(llm_reject_confidence="0.700"),
+                     self._cand(llm_reject=""), self._cand(approved="yes")):
+            self.assertFalse(review_store.judge_accepted_candidate_retarget(cand)
+                             and review_store.judge_rejected_candidate_retarget(cand))
+
+    def test_confident_rejection_leaves_the_linkedin_queue(self):
+        parent = {"slug": "jordan-parentff", "person_ids": ["candidate:phone:+15550100"],
+                  "candidates": [self._cand()],
+                  "worth": {"decision": "yes", "source": "llm"},
+                  "worth_row": _worth_row_for("jordan-parentff", "Jordan Bravado",
+                                              ["candidate:phone:+15550100"], "yes", "llm")}
+        self.assertEqual(web.pending_linkedin_candidates(parent), [])
+        # a sub-bar rejection still needs the human
+        parent["candidates"] = [self._cand(llm_reject_confidence="0.820")]
+        self.assertEqual(len(web.pending_linkedin_candidates(parent)), 1)
+
+    def test_a_standing_rejection_is_never_applied(self):
+        # leaving the queue must not make the dead guess appliable: the apply
+        # gate is approved∈{auto,yes} OR the ACCEPTED predicate, and a rejected
+        # row satisfies neither.
+        cand = self._cand()
+        self.assertFalse(review_store.judge_accepted_candidate_retarget(cand))
+        self.assertNotIn(str(cand.get("approved") or "").strip().lower(), {"auto", "yes"})
+
+
 class TestNetworkWorth(unittest.TestCase):
     """The yes|maybe|no worth judgment: schema pins, LLM read, and precedence."""
 

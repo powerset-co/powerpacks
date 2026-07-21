@@ -55,6 +55,14 @@ HUMAN_WORTH_VALUES = {"yes", "no"}
 MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}
 USER_APPROVED = {"yes", "no"}
 
+# The deep-research judge's confirm bar (reconcile_deep_research --confirm-threshold
+# defaults to this). Doing double duty is the point: research_reject_fields stamps
+# llm_reject=yes for wrong_person AND needs_review AND confirmed-below-bar alike, so a
+# rejection's confidence only proves "definitely not a near-confirm" when it is AT or
+# ABOVE the same bar (a confirm at/above it never gets llm_reject at all). Keeping one
+# constant for both keeps that structural guarantee from drifting.
+RESEARCH_CONFIRM_THRESHOLD = 0.85
+
 
 def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
     """A candidate-origin found-LinkedIn the identity judge ACCEPTED and no
@@ -71,6 +79,33 @@ def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
         return False
     person_id = str(row.get("person_id") or row.get("pub") or "").strip().lower()
     return person_id.startswith("candidate:")
+
+
+def judge_rejected_candidate_retarget(row: dict[str, Any]) -> bool:
+    """The mirror image: a candidate-origin found-LinkedIn the judge REJECTED at
+    or above the confirm bar, with no human decision — the rejection STANDS and
+    the card leaves the Check-LinkedIn queue (the reject is never applied, so the
+    person simply moves on without that profile; new evidence can still re-propose).
+
+    The bar matters: llm_reject=yes conflates wrong_person, needs_review, and
+    confirmed-below-bar verdicts, and on real data most sub-bar rejections were
+    NEAR-CONFIRMS ("name + location match, no hard conflicts" at 0.78-0.84).
+    Only at/above RESEARCH_CONFIRM_THRESHOLD is a rejection structurally
+    guaranteed not to be a confirm flavor — those read "the sender is a
+    different named person" — so only those stand. Sub-bar rejections keep the
+    human, and a human yes/no stays terminal either way."""
+    if (str(row.get("action") or "").strip().lower() != "retarget"
+            or str(row.get("llm_reject") or "").strip().lower() not in {"1", "true", "yes"}
+            or str(row.get("approved") or "").strip().lower() in USER_APPROVED):
+        return False
+    person_id = str(row.get("person_id") or row.get("pub") or "").strip().lower()
+    if not person_id.startswith("candidate:"):
+        return False
+    try:
+        confidence = float(str(row.get("llm_reject_confidence") or "").strip())
+    except ValueError:
+        return False
+    return confidence >= RESEARCH_CONFIRM_THRESHOLD
 
 
 def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
