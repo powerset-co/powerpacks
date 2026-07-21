@@ -684,6 +684,13 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             ({"name": "4155550123", "phone": "+14155550123"}, "name_is_phone"),
             ({"message_count": "0", "imessage_message_count": "0"}, "below_min_messages"),
             ({"is_in_group_chats": "true", "message_count": "3", "imessage_message_count": "3"}, "group_only_low_signal"),
+            ({
+                "source": "whatsapp",
+                "is_in_group_chats": "true",
+                "message_count": "3",
+                "imessage_message_count": "",
+                "whatsapp_message_count": "",
+            }, "group_only_low_signal"),
         ]
         for overrides, expected in cases:
             with self.subTest(expected=expected):
@@ -698,6 +705,21 @@ class MessagesImportRuntimeTests(unittest.TestCase):
         row = self.contact_row(is_in_group_chats="true", message_count="3", imessage_message_count="3")
         self.assertEqual(
             import_messages.contact_floor_reason(row, min_message_count=1, include_group_only=True),
+            "",
+        )
+
+        # Appearing in a group does not make a real WhatsApp DM group-only.
+        row = self.contact_row(
+            source="whatsapp",
+            is_in_group_chats="true",
+            message_count="9",
+            imessage_message_count="",
+            whatsapp_message_count="9",
+        )
+        self.assertEqual(
+            import_messages.contact_floor_reason(
+                row, min_message_count=1, include_group_only=False
+            ),
             "",
         )
 
@@ -720,6 +742,52 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 evidence["suggested_linkedin_url"],
                 "https://www.linkedin.com/in/maybe-jane",
+            )
+
+    def test_unmatched_whatsapp_dm_in_group_becomes_candidate(self) -> None:
+        with self.sandbox() as env:
+            self.seed_directory(env)
+            self.write_contacts(env, [
+                self.contact_row(
+                    phone="+15550100123",
+                    name="Jordan Bravo",
+                    source="whatsapp",
+                    is_in_group_chats="true",
+                    group_names="Startup Circle",
+                    message_count="9",
+                    imessage_message_count="",
+                    whatsapp_message_count="9",
+                    imessage_last_message="",
+                    whatsapp_last_message="2026-07-14T22:40:31Z",
+                    match_status="unmatched",
+                ),
+            ])
+
+            completed = self.run_import(env, confirm=True)
+
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["stats"], {"people": 0, "candidates": 1})
+            self.assertNotIn(
+                "group_only_low_signal", completed["materialized"]["skipped"]
+            )
+            candidate = self.csv_rows(env["import_dir"] / "candidates.csv")[0]
+            self.assertEqual(candidate["candidate_key"], "phone:+15550100123")
+            self.assertEqual(candidate["full_name"], "Jordan Bravo")
+            self.assertEqual(candidate["source"], "whatsapp")
+
+            # A pre-fix manifest must not make the corrected import a no-op.
+            manifest_path = env["import_dir"] / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["input"]["pipeline_contract"] = "messages-contacts-direct-v3"
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            rerun = self.run_import(env, confirm=True)
+            self.assertFalse(rerun.get("noop", False))
+            self.assertEqual(
+                rerun["input"]["pipeline_contract"],
+                "messages-contacts-direct-v4",
             )
 
     def test_matched_duplicates_merge_and_email_handles(self) -> None:
