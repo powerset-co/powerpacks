@@ -28,6 +28,7 @@ from typing import Any
 
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.common import (
+    DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
     FACTS_DIR,
     INDEX_JSON,
@@ -75,6 +76,41 @@ def load_pairs(csv_path: Path) -> list[dict[str, Any]]:
         return []
     with csv_path.open(newline="", encoding="utf-8") as fh:
         return list(csv.DictReader(fh))
+
+
+def superseded_pairs(people_csv: Path, slugs_info: dict[str, Any]) -> list[dict[str, Any]]:
+    """Deterministic same-person pairs from import's own witness: a matched
+    people.csv row lists the candidate person-id(s) it superseded (the same
+    contact row under its pre-match key). Both identities' dossier slugs join
+    one cluster at confidence 1.0 — no judge needed, import SAW they were one
+    contact. Ids without a dossier slug are inert (nothing to fold yet)."""
+    if not people_csv.exists():
+        return []
+    slug_by_pid = {str((info or {}).get("person_id") or "").strip().lower(): slug
+                   for slug, info in slugs_info.items()}
+    out: list[dict[str, Any]] = []
+    with people_csv.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            raw = (row.get("superseded_person_ids") or "").strip()
+            if not raw:
+                continue
+            try:
+                superseded = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            durable_slug = slug_by_pid.get((row.get("id") or "").strip().lower())
+            if not durable_slug:
+                continue
+            name = (row.get("full_name") or "").strip()
+            for pid in superseded if isinstance(superseded, list) else []:
+                old_slug = slug_by_pid.get(str(pid or "").strip().lower())
+                if old_slug and old_slug != durable_slug:
+                    out.append({"slug_a": durable_slug, "name_a": name,
+                                "slug_b": old_slug, "name_b": name,
+                                "confidence": "1.0", "tone_consistent": "true",
+                                "reason": "import-superseded identity: the same "
+                                          "contact row under its pre-match key"})
+    return out
 
 
 def clusters_from_pairs(pairs: list[dict[str, Any]]) -> list[list[str]]:
@@ -222,6 +258,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     index = json.loads(Path(args.index_json).read_text(encoding="utf-8")) if Path(args.index_json).exists() else {}
     slugs_info = index.get("slugs", {})
     pairs = load_pairs(Path(args.merge_csv))
+    pairs += superseded_pairs(Path(getattr(args, "people_csv", "") or DEFAULT_PEOPLE_CSV), slugs_info)
     score_by_pair = {tuple(sorted((p["slug_a"], p["slug_b"]))): p for p in pairs}
     clusters = clusters_from_pairs(pairs)
 
@@ -401,6 +438,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Build parent canonical dossiers from merge clusters.")
     p.add_argument("--merge-csv", default=str(MERGE_CSV))
+    p.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV),
+                   help="Merged people.csv; superseded_person_ids rows fold pre-match identities")
     p.add_argument("--index-json", default=str(INDEX_JSON))
     p.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
     p.add_argument("--facts-dir", default=str(FACTS_DIR))

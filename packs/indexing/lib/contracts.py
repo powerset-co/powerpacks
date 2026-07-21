@@ -18,7 +18,8 @@ MERGE_COLUMNS = ["merge_key", "merge_confidence", "merge_sources", "merged_row_c
 # Columns newer than the oldest still-valid people.csv artifacts; absent
 # headers degrade to empty values via normalize_people_row, so their absence
 # is a warning rather than an error.
-OPTIONAL_PEOPLE_SCHEMA_COLUMNS = {"interaction_counts", "last_interaction"}
+OPTIONAL_PEOPLE_SCHEMA_COLUMNS = {"interaction_counts", "last_interaction",
+                                  "superseded_person_ids"}
 CANONICAL_PEOPLE_COLUMNS = PEOPLE_SCHEMA_COLUMNS + MERGE_COLUMNS
 
 
