@@ -578,10 +578,17 @@ document.addEventListener("click", async (event) => {
   if (button.hasAttribute("data-approve-enrichment")) {
     event.preventDefault();
     lock(button);
+    // Same guard as the stage-complete buttons (#291): the approved job's
+    // manifest writes rotate the state token DURING this click, and the
+    // freshness observer's reload would tear down the page before the POST
+    // leaves the browser — the click silently vanishes. Park the observer;
+    // the success path reloads deliberately anyway.
+    completingStage = true;
     try {
       await post("/approve-enrichment", {});
       leaveAndReload("Approved");
     } catch (error) {
+      completingStage = false;
       unlock(button);
       announce(error.message, true);
     }

@@ -3379,6 +3379,45 @@ class TestLiveEndpoints(unittest.TestCase):
             self._post("/approve-enrichment")
         self.assertEqual(ctx.exception.code, 409)
 
+    def test_approve_click_kicks_the_approved_budget_job(self):
+        # The click IS the approval: on a jobs-enabled server the endpoint must
+        # start the approved-budget job with EXACTLY the previewed estimate.
+        # (The other approve tests run jobs-off, so this kick had no coverage —
+        # the whole paid leg hinged on it.) Both job entry points are mocked;
+        # nothing real can run from this temp-path server.
+        self._post("/worth", pub="bob-1", worth="yes")
+        parents = web._all_review_parents(
+            self.verdicts, self.review, self.synthetic, self.facts, self.people)
+        selection = web.worth_selection_from_parents(parents, manifest_path=self.manifest)
+        self.enrichment.parent.mkdir(parents=True, exist_ok=True)
+        self.enrichment.write_text(json.dumps({
+            "stage": "enrich", "status": "needs_approval", "selection": selection,
+            "would_submit": 2, "reused_completed": 1, "estimated_usd": 0.10,
+            "counts": {"total": 3, "completed": 1, "pending": 2, "failed": 0},
+        }), encoding="utf-8")
+        with mock.patch.object(web, "start_approved_enrichment_job") as kick, \
+             mock.patch.object(web, "start_free_enrichment_job") as free_kick:
+            handler = web.make_handler(
+                self.review, self.verdicts, Path(self._tmp.name) / "parents",
+                Path(self._tmp.name) / "dossiers", 0.7, 0.85,
+                synthetic_path=self.synthetic, facts_dir=self.facts,
+                people_csv=self.people, manifest_path=self.manifest,
+                enrichment_manifest_path=self.enrichment, run_jobs=True)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/approve-enrichment",
+                    data=b"", method="POST")
+                with urllib.request.urlopen(req) as resp:
+                    payload = json.loads(resp.read())
+            finally:
+                server.shutdown()
+                server.server_close()
+        self.assertTrue(payload["ok"])
+        kick.assert_called_once_with(0.10)
+        free_kick.assert_not_called()
+
 
 class TestDerivedEnrichmentLifecycle(unittest.TestCase):
     """Enrichment state DERIVES from disk at every enrich-page render, and the
