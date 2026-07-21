@@ -789,6 +789,25 @@ class TestRetiredKeyMigration(unittest.TestCase):
             # rides along inside the durable person's row, evidence intact
             self.assertIn(self.LEGACY, rows[0]["person_ids"])
 
+    def test_the_mailbox_owner_never_reaches_the_review(self):
+        # Synthesis flags the owner's own identities (is_owner); build_parents
+        # already refuses to parent them. The worth view must honor the same
+        # flag — the owner is not a network-membership decision (live repro:
+        # the owner's own uuid identity sat in the No pile).
+        with tempfile.TemporaryDirectory() as d:
+            facts = Path(d) / "facts"
+            facts.mkdir()
+            owner_rec = json.loads(_facts_record("no", "the mailbox owner", "Jordan Bravado"))
+            owner_rec["facts"]["is_owner"] = True
+            (facts / "owner-uuid-1.jsonl").write_text(
+                json.dumps(owner_rec) + "\n", encoding="utf-8")
+            (facts / "candidate:phone:+15550100.jsonl").write_text(
+                _facts_record("yes", "a real contact", "Casey Sierra") + "\n",
+                encoding="utf-8")
+            rows = worth_view.rows_from(facts, {},
+                                        index_json=Path(d) / "missing-index.json")
+            self.assertEqual([r["name"] for r in rows], ["Casey Sierra"])
+
 
 class TestNetworkWorth(unittest.TestCase):
     """The yes|maybe|no worth judgment: schema pins, LLM read, and precedence."""
