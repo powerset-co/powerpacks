@@ -870,10 +870,10 @@ class TestJudgeRejectedProfilesStand(unittest.TestCase):
         stands = review_store.judge_rejected_candidate_retarget
         self.assertTrue(stands(self._cand()))
         # the bar is inclusive and equals the judge's confirm threshold
-        self.assertTrue(stands(self._cand(llm_reject_confidence="0.850")))
-        self.assertEqual(review_store.RESEARCH_CONFIRM_THRESHOLD, 0.85)
+        self.assertTrue(stands(self._cand(llm_reject_confidence="0.800")))
+        self.assertEqual(review_store.RESEARCH_CONFIRM_THRESHOLD, 0.80)
         # sub-bar rejections conflate near-confirms — the human keeps them
-        self.assertFalse(stands(self._cand(llm_reject_confidence="0.840")))
+        self.assertFalse(stands(self._cand(llm_reject_confidence="0.790")))
         self.assertFalse(stands(self._cand(llm_reject_confidence="")))
         self.assertFalse(stands(self._cand(llm_reject_confidence="not-a-number")))
         # an unrejected row is the ACCEPTED predicate's business, never this one
@@ -900,7 +900,7 @@ class TestJudgeRejectedProfilesStand(unittest.TestCase):
                                               ["candidate:phone:+15550100"], "yes", "llm")}
         self.assertEqual(web.pending_linkedin_candidates(parent), [])
         # a sub-bar rejection still needs the human
-        parent["candidates"] = [self._cand(llm_reject_confidence="0.820")]
+        parent["candidates"] = [self._cand(llm_reject_confidence="0.750")]
         self.assertEqual(len(web.pending_linkedin_candidates(parent)), 1)
 
     def test_a_standing_rejection_is_never_applied(self):

@@ -60,8 +60,26 @@ USER_APPROVED = {"yes", "no"}
 # llm_reject=yes for wrong_person AND needs_review AND confirmed-below-bar alike, so a
 # rejection's confidence only proves "definitely not a near-confirm" when it is AT or
 # ABOVE the same bar (a confirm at/above it never gets llm_reject at all). Keeping one
-# constant for both keeps that structural guarantee from drifting.
-RESEARCH_CONFIRM_THRESHOLD = 0.85
+# constant for both keeps that structural guarantee from drifting. NOTE the guarantee
+# only holds for rows STAMPED under this bar: rows stamped under an older, HIGHER bar
+# can be confirm-flavored inside [current bar, old bar) — fresh runs stamp clean, and
+# changed evidence re-judges via the fingerprint cache.
+RESEARCH_CONFIRM_THRESHOLD = 0.80
+
+# review.csv stores llm_reject as free text; these are the truthy spellings.
+_REJECT_TRUTHY = {"1", "true", "yes"}
+
+
+def _undecided_candidate_retarget(row: dict[str, Any]) -> bool:
+    """Shared gate of both stand-predicates below: a found-LinkedIn retarget on
+    a candidate-origin identity (candidate:*) with no terminal human decision.
+    Real-network people (directory uuids etc.) never pass — re-attaching a
+    wrong identity on an existing person stays human-gated."""
+    if (str(row.get("action") or "").strip().lower() != "retarget"
+            or str(row.get("approved") or "").strip().lower() in USER_APPROVED):
+        return False
+    person_id = str(row.get("person_id") or row.get("pub") or "").strip().lower()
+    return person_id.startswith("candidate:")
 
 
 def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
@@ -70,15 +88,9 @@ def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
     queue nor blocks application. The judge ran at high reasoning against the
     dossier and rejects bad matches via llm_reject*, so re-asking a human to
     confirm every acceptance was decision-theater at enrichment scale (569 of
-    642 pending checks on real data). A human yes/no is still terminal either
-    way, and this NEVER covers real-network people (non candidate:* ids) —
-    re-attaching a wrong identity on an existing person stays human-gated."""
-    if (str(row.get("action") or "").strip().lower() != "retarget"
-            or str(row.get("llm_reject") or "").strip().lower() in {"1", "true", "yes"}
-            or str(row.get("approved") or "").strip().lower() in USER_APPROVED):
-        return False
-    person_id = str(row.get("person_id") or row.get("pub") or "").strip().lower()
-    return person_id.startswith("candidate:")
+    642 pending checks on real data). A human yes/no is still terminal."""
+    return (_undecided_candidate_retarget(row)
+            and str(row.get("llm_reject") or "").strip().lower() not in _REJECT_TRUTHY)
 
 
 def judge_rejected_candidate_retarget(row: dict[str, Any]) -> bool:
@@ -89,17 +101,13 @@ def judge_rejected_candidate_retarget(row: dict[str, Any]) -> bool:
 
     The bar matters: llm_reject=yes conflates wrong_person, needs_review, and
     confirmed-below-bar verdicts, and on real data most sub-bar rejections were
-    NEAR-CONFIRMS ("name + location match, no hard conflicts" at 0.78-0.84).
-    Only at/above RESEARCH_CONFIRM_THRESHOLD is a rejection structurally
-    guaranteed not to be a confirm flavor — those read "the sender is a
-    different named person" — so only those stand. Sub-bar rejections keep the
-    human, and a human yes/no stays terminal either way."""
-    if (str(row.get("action") or "").strip().lower() != "retarget"
-            or str(row.get("llm_reject") or "").strip().lower() not in {"1", "true", "yes"}
-            or str(row.get("approved") or "").strip().lower() in USER_APPROVED):
-        return False
-    person_id = str(row.get("person_id") or row.get("pub") or "").strip().lower()
-    if not person_id.startswith("candidate:"):
+    NEAR-CONFIRMS ("name + location match, no hard conflicts") sitting just
+    under the bar. Only at/above RESEARCH_CONFIRM_THRESHOLD is a rejection
+    structurally guaranteed not to be a confirm flavor — those read "the sender
+    is a different named person" — so only those stand. Sub-bar rejections keep
+    the human, and a human yes/no stays terminal either way."""
+    if (not _undecided_candidate_retarget(row)
+            or str(row.get("llm_reject") or "").strip().lower() not in _REJECT_TRUTHY):
         return False
     try:
         confidence = float(str(row.get("llm_reject_confidence") or "").strip())
