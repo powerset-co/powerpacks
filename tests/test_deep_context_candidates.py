@@ -40,7 +40,10 @@ from packs.ingestion.primitives.deep_context import (
     reconcile_review_web as web,
     review_store,
     synthesize_person_context as synth,
+    worth_view,
 )
+from packs.ingestion.primitives.import_contacts_pipeline import messages as msgimport
+from packs.ingestion.schemas import people_schema as schema
 from packs.ingestion.schemas.candidates_schema import (
     CANDIDATES_SCHEMA_COLUMNS,
     normalize_candidate_row,
@@ -714,6 +717,73 @@ def _worth_row_for(key: str, name: str, person_ids: list[str],
     return {"key": key, "name": name, "person_ids": list(person_ids),
             "machine": machine, "human": human, "effective": effective,
             "source": source}
+
+
+class TestRetiredKeyMigration(unittest.TestCase):
+    """A person whose import id transitioned from the retired
+    message-linkedin:<sha16(pub)> key to the durable directory uuid must never
+    surface as TWO worth rows. Import now mints the durable id on first sight;
+    worth_view folds any stranded retired-key facts into the durable sibling
+    (an exact key migration derived from the review row's pub). Synthetic
+    fixtures; the recipe digests are pinned so neither side can drift."""
+
+    PUB = "jordan-bravado"
+    LEGACY = "message-linkedin:dd82e371f95be72b"
+    DURABLE = "2645e339-5da9-5805-9557-5c1aae306505"
+
+    def test_recipes_are_pinned_and_single_homed(self):
+        self.assertEqual(schema.legacy_message_linkedin_id(self.PUB), self.LEGACY)
+        self.assertEqual(schema.generate_person_id(self.PUB), self.DURABLE)
+        # no pub: the legacy recipe hashes the URL (no durable key exists to take)
+        self.assertEqual(
+            schema.legacy_message_linkedin_id("", "https://x.example/p"),
+            schema.legacy_message_linkedin_id("", "https://x.example/p"))
+
+    def test_import_mints_the_durable_id_on_first_sight(self):
+        row = msgimport.contact_row_to_messages_people(
+            {"matched_linkedin_url": f"https://www.linkedin.com/in/{self.PUB}",
+             "matched_name": "Jordan Bravado", "phone": "+15550100"},
+            Path("contacts.csv"))
+        self.assertEqual(row["id"], self.DURABLE)
+        # an upstream-resolved id still wins
+        row = msgimport.contact_row_to_messages_people(
+            {"matched_person_id": "pre-resolved", "matched_name": "Jordan Bravado",
+             "matched_linkedin_url": f"https://www.linkedin.com/in/{self.PUB}",
+             "phone": "+15550100"},
+            Path("contacts.csv"))
+        self.assertEqual(row["id"], "pre-resolved")
+
+    def test_worth_view_folds_retired_key_facts_into_the_durable_person(self):
+        with tempfile.TemporaryDirectory() as d:
+            facts = Path(d) / "facts"
+            facts.mkdir()
+            (facts / f"{self.LEGACY}.jsonl").write_text(
+                _facts_record("maybe", "sparse", "Jordan Bravado") + "\n", encoding="utf-8")
+            (facts / f"{self.DURABLE}.jsonl").write_text(
+                _facts_record("yes", "long thread", "Jordan Bravado") + "\n", encoding="utf-8")
+            # Jake-shape: the review row still maps the pub to the LEGACY id —
+            # the fold must not depend on which key the row happens to carry,
+            # because both keys derive from the pub alone.
+            review_row = {"public_identifier": self.PUB, "person_id": self.LEGACY}
+            rows = worth_view.rows_from(facts, {self.PUB: review_row},
+                                        index_json=Path(d) / "missing-index.json")
+            self.assertEqual(len(rows), 1)                       # ONE human, ONE row
+            self.assertEqual(sorted(rows[0]["person_ids"]),
+                             sorted([self.LEGACY, self.DURABLE]))
+            # ...and identically when the row already carries the durable id
+            review_row = {"public_identifier": self.PUB, "person_id": self.DURABLE}
+            rows = worth_view.rows_from(facts, {self.PUB: review_row},
+                                        index_json=Path(d) / "missing-index.json")
+            self.assertEqual(len(rows), 1)
+            # an unrelated retired-key identity (no review row names its pub)
+            # still stands alone
+            other = "message-linkedin:aaaa111122223333"
+            (facts / f"{other}.jsonl").write_text(
+                _facts_record("maybe", "solo", "Casey Sierra") + "\n", encoding="utf-8")
+            rows = worth_view.rows_from(facts, {self.PUB: review_row},
+                                        index_json=Path(d) / "missing-index.json")
+            self.assertEqual(len(rows), 2)
+            self.assertIn(other, [pid for row in rows for pid in row["person_ids"]])
 
 
 class TestNetworkWorth(unittest.TestCase):
