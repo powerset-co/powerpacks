@@ -13,7 +13,10 @@ The whole logic:
      network_worth verdict is an UNJUDGED identity — still in view, because
      rule 4 defaults it to "maybe" (nobody enters the network unreviewed).
   2. Identities under the same index.json parent are ONE person -> ONE row
-     (never multiple cards for the same human). The newest facts file supplies
+     (never multiple cards for the same human). An identity keyed by the
+     RETIRED message-linkedin recipe folds into its durable sibling (the
+     recipe is a pure function of the review row's pub — an exact key
+     migration, see _legacy_aliases). The newest facts file supplies
      the machine verdict; ties break by person_id sort.
   3. The human decision is review.csv `network_worth` (an approved `exclude`
      action is also a human no) on ANY of the person's identities; the newest
@@ -34,6 +37,11 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+
+from packs.ingestion.schemas.people_schema import (
+    generate_person_id,
+    legacy_message_linkedin_id,
+)
 
 FACTS_DIR = Path(".powerpacks/deep-context/facts")
 REVIEW_CSV = Path(".powerpacks/network-import/overrides/review.csv")
@@ -120,29 +128,51 @@ def _signals_from_rows(rows: list[dict[str, str]]) -> dict[str, tuple[str, str]]
     return signals
 
 
-def _human_signals(review_csv: Path) -> dict[str, tuple[str, str]]:
-    if not review_csv.exists():
-        return {}
-    with review_csv.open(newline="", encoding="utf-8") as fh:
-        return _signals_from_rows(list(csv.DictReader(fh)))
+def _legacy_aliases(rows: list[dict[str, str]]) -> dict[str, str]:
+    """Retired message-linkedin pid (lower) -> the same human's durable person_id.
+
+    The messages import used to mint `message-linkedin:<sha16(pub)>` for a
+    LinkedIn-matched contact before its durable directory id existed, then a
+    later run silently re-keyed the contact — stranding facts under the retired
+    key as a floating twin of the real person. BOTH keys are pure functions of
+    the pub (retired: sha16; durable: the directory UUIDv5), so any review row
+    that names the pub yields the exact equivalence — a key migration, not a
+    guess. Entries for pubs with no stranded facts are inert."""
+    aliases: dict[str, str] = {}
+    for row in rows:
+        pub = str(row.get("public_identifier") or "").strip().lower()
+        # real LinkedIn pubs only — review keys can also be person-id-shaped
+        # (candidate:phone:..., synth-...) and those never minted a legacy id
+        if not pub or ":" in pub or pub.startswith("synth-"):
+            continue
+        aliases[legacy_message_linkedin_id(pub)] = generate_person_id(pub)
+    return aliases
 
 
 def rows_from(facts_dir: Path, override_rows: dict[str, dict[str, str]],
               index_json: Path = INDEX_JSON) -> list[dict[str, Any]]:
     """load() for callers that already hold review.csv rows in memory."""
-    return _build(facts_dir, _signals_from_rows(list(override_rows.values())),
-                  index_json)
+    rows = list(override_rows.values())
+    return _build(facts_dir, _signals_from_rows(rows), index_json,
+                  aliases=_legacy_aliases(rows))
 
 
 def load(facts_dir: Path = FACTS_DIR, review_csv: Path = REVIEW_CSV,
          index_json: Path = INDEX_JSON) -> list[dict[str, Any]]:
     """All worth rows: one per PERSON (identities grouped by index parent)."""
-    return _build(facts_dir, _human_signals(review_csv), index_json)
+    if review_csv.exists():
+        with review_csv.open(newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+    else:
+        rows = []
+    return _build(facts_dir, _signals_from_rows(rows), index_json,
+                  aliases=_legacy_aliases(rows))
 
 
 def _build(facts_dir: Path, humans: dict[str, tuple[str, str]],
-           index_json: Path) -> list[dict[str, Any]]:
+           index_json: Path, aliases: dict[str, str] | None = None) -> list[dict[str, Any]]:
     groups = _identity_groups(index_json)
+    aliases = aliases or {}
 
     people: dict[str, dict[str, Any]] = {}
     for path in sorted(facts_dir.glob("*.jsonl")):
@@ -150,7 +180,10 @@ def _build(facts_dir: Path, humans: dict[str, tuple[str, str]],
         if verdict is None:
             continue
         pid = path.stem
-        key = groups.get(pid.lower(), pid)
+        # A retired-key identity groups AS its durable sibling (rule 2: one
+        # person, one row) — via the sibling's index parent when it has one.
+        canon = aliases.get(pid.lower(), pid)
+        key = groups.get(canon.lower(), canon)
         person = people.setdefault(key, {"key": key, "person_ids": [], "machine": None,
                                          "_machine_mtime": -1, "name": ""})
         person["person_ids"].append(pid)

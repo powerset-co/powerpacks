@@ -26,7 +26,9 @@ try:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
+        generate_person_id,
         latest_interaction,
+        legacy_message_linkedin_id,
         merge_interaction_counts,
         normalize_linkedin_url,
         normalize_people_row,
@@ -70,7 +72,9 @@ except ModuleNotFoundError:
     from packs.ingestion.schemas.people_schema import (
         PEOPLE_SCHEMA_COLUMNS,
         extract_public_identifier,
+        generate_person_id,
         latest_interaction,
+        legacy_message_linkedin_id,
         merge_interaction_counts,
         normalize_linkedin_url,
         normalize_people_row,
@@ -113,7 +117,7 @@ except ModuleNotFoundError:
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 FALSY = {"0", "false", "no", "n", "off"}
-MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v4"
+MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v5"
 WORKING_CONTACTS_CSV = Path(".powerpacks/messages/contacts.csv")
 MATCH_MANIFEST_JSON = Path(".powerpacks/messages/contacts.csv.match.manifest.json")
 DEFAULT_MIN_MESSAGE_COUNT = 1
@@ -292,8 +296,14 @@ def contact_row_to_messages_people(
         summary_parts.append(f"match_method={row.get('match_method')}")
     interaction_counts = contact_interaction_counts(row)
     people = {
+        # The durable directory id is a pure function of the pub, so a matched
+        # contact gets its FINAL key on first sight — never an ephemeral one a
+        # later run silently re-keys (that stranded facts/review rows under
+        # retired message-linkedin:* ids). The legacy recipe remains only for
+        # a match whose URL yields no pub, where no durable key exists to take.
         "id": (row.get("matched_person_id") or "").strip()
-        or f"message-linkedin:{sha(public_identifier or linkedin_url, 16)}",
+        or (generate_person_id(public_identifier) if public_identifier
+            else legacy_message_linkedin_id(public_identifier, linkedin_url)),
         "public_identifier": public_identifier,
         "linkedin_url": linkedin_url,
         "first_name": first_name,

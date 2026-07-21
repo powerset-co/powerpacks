@@ -787,7 +787,7 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             self.assertFalse(rerun.get("noop", False))
             self.assertEqual(
                 rerun["input"]["pipeline_contract"],
-                "messages-contacts-direct-v4",
+                "messages-contacts-direct-v5",
             )
 
     def test_matched_duplicates_merge_and_email_handles(self) -> None:
