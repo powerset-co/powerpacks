@@ -90,6 +90,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 )
 from packs.ingestion.primitives.deep_context.review_store import (
     judge_accepted_candidate_retarget,
+    judge_rejected_candidate_retarget,
 )
 from packs.ingestion.schemas.people_schema import (
     PEOPLE_SCHEMA_COLUMNS,
@@ -1412,10 +1413,14 @@ def pending_linkedin_candidates(parent: dict[str, Any]) -> list[dict[str, Any]]:
             if approved not in {"yes", "no"}:
                 pending.append(cand)
         elif from_candidate:
-            # A judge-ACCEPTED found profile stands (review_store's predicate):
-            # the identity judge already vetted it against the dossier, so only
-            # unjudged/rejected candidates still need the human Yes/No.
-            if approved not in {"yes", "no"} and not judge_accepted_candidate_retarget(cand):
+            # A judge-ACCEPTED found profile stands, and so does a rejection AT
+            # OR ABOVE the confirm bar (review_store's two predicates): the
+            # identity judge already vetted both against the dossier. Only
+            # unjudged candidates and sub-bar rejections — which conflate
+            # near-confirm flavors — still need the human Yes/No.
+            if (approved not in {"yes", "no"}
+                    and not judge_accepted_candidate_retarget(cand)
+                    and not judge_rejected_candidate_retarget(cand)):
                 pending.append(cand)
         elif candidate_state(cand) == "review":
             pending.append(cand)

@@ -88,6 +88,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     research_reject_fields,
     upsert_retargets,
 )
+from packs.ingestion.primitives.deep_context.review_store import RESEARCH_CONFIRM_THRESHOLD
 # The enrichment manifest must stamp the SAME worth-selection digest the review UI computes,
 # so the two never drift and stall the flow. Single source of truth lives in review_web. The
 # research-profile view is reused so the judge sees the SAME (name/headline/experience/education)
@@ -819,7 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--manifest", default=str(ENRICH_MANIFEST),
                    help="Fixed Enrich Contacts progress manifest")
     p.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=sorted(PROCESSOR_PRICING_USD))
-    p.add_argument("--confirm-threshold", type=float, default=0.85)
+    p.add_argument("--confirm-threshold", type=float, default=RESEARCH_CONFIRM_THRESHOLD)
     p.add_argument("--budget", type=_finite_non_negative_float, default=DEFAULT_BUDGET,
                    help="Maximum explicitly approved spend (finite, non-negative USD)")
     p.add_argument("--approve", action="store_true", help="Confirm the user approved this run's displayed estimate")
