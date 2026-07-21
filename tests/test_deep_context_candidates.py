@@ -3038,6 +3038,50 @@ class TestLiveEndpoints(unittest.TestCase):
         self.assertEqual(parent["worth_row"]["source"], "user")
         self.assertEqual(payload["progress"]["worth_pending"], 0)
 
+    def test_worth_click_lands_on_the_slugged_parent_when_split_twins_share_a_key(self):
+        # Regression (the "Archit" zombie): two SPLIT parents can share one
+        # worth key with DISTINCT worth_row dicts. First-hit-by-key patched the
+        # machine-yes twin and left the pending twin unkillable in the live
+        # model (disk was right; only a restart cleared it). The card sends its
+        # parent slug, and the patch must land on exactly that parent.
+        yes = {"decision": "yes", "source": "llm", "reason": "engaged"}
+        maybe = {"decision": "maybe", "source": "llm", "reason": "sparse"}
+
+        def twin(slug: str, pids: list[str], worth: dict, decision: str) -> dict:
+            return {
+                "slug": slug, "name": "Jordan Bravado",
+                "person_ids": pids, "sources": ["gmail"],
+                "candidates": [{
+                    "pub": "jordanbravado", "full_name": "Jordan Bravado",
+                    "import_candidate": True, "synthetic": False, "approved": "",
+                    "action": "", "worth": worth, "machine_worth": worth,
+                    "worth_key": "jordanbravado",
+                }],
+                "worth": worth, "machine_worth": worth, "connection": False,
+                "worth_row": _worth_row_for(slug, "Jordan Bravado", pids,
+                                            decision, "llm"),
+            }
+
+        linkedin_twin = twin("jordan-parent47", ["pid-linkedin"], yes, "yes")
+        pending_twin = twin("jordan-parentff",
+                            ["candidate:phone:+15550100"], maybe, "maybe")
+        with mock.patch.object(web, "_all_review_parents",
+                               return_value=[linkedin_twin, pending_twin]):
+            os.utime(self.review)
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.port}/worth",
+                    data=urllib.parse.urlencode({
+                        "pub": "jordanbravado", "worth": "yes",
+                        "parent_slug": "jordan-parentff"}).encode()) as resp:
+                payload = json.loads(resp.read())
+        # the pending twin the user actually decided is patched...
+        self.assertEqual(pending_twin["worth_row"]["effective"], "yes")
+        self.assertEqual(pending_twin["worth_row"]["source"], "user")
+        # ...and the machine-yes twin stays exactly what a fresh rebuild says
+        self.assertEqual(linkedin_twin["worth_row"]["source"], "llm")
+        self.assertFalse(linkedin_twin["worth_row"].get("human"))
+        self.assertEqual(payload["progress"]["worth_pending"], 0)
+
     def test_free_work_job_runs_the_zero_budget_continue_and_chains(self):
         # The single free-work job runs the continue with --approve --budget 0.00:
         # the primitive refuses ANY run without --approve, and the $0 ceiling makes

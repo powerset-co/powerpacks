@@ -107,7 +107,8 @@ async function decideDecisionRow(button, row) {
   bumpTabCount(worth, 1);
   try {
     const [response] = await Promise.all([
-      post("/worth", { pub: button.dataset.pub || "", worth }),
+      post("/worth", { pub: button.dataset.pub || "", worth,
+                       parent_slug: button.dataset.parent || "" }),
       delay(170),
     ]);
     adoptMutationState(response);
@@ -152,7 +153,11 @@ async function decideWorthCard(button, card) {
   inFlightWorth.add(pub);
   const panel = card.closest(".worth-panel");
   const oldHtml = panel ? panel.innerHTML : null;
-  const postPromise = post("/worth", { pub, worth }); // fire-and-track, no await
+  // parent_slug pins the patch to the exact parent this card was rendered
+  // from — a worth key alone is ambiguous when split parents share a pub
+  const postPromise = post("/worth", {
+    pub, worth, parent_slug: button.dataset.parent || "",
+  }); // fire-and-track, no await
   postPromise.finally(() => inFlightWorth.delete(pub));
   const prefetched = worthPrefetch?.promise
     || fetchText(`/api/worth-card?exclude=${encodeURIComponent(pub)}`);

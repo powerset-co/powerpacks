@@ -2161,8 +2161,8 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
         <div class='binary-actions'>
-          <button class='button button-outline' data-worth='no' data-pub='{esc(key)}'>No</button>
-          <button class='button button-primary' data-worth='yes' data-pub='{esc(key)}'>Yes</button>
+          <button class='button button-outline' data-worth='no' data-pub='{esc(key)}' data-parent='{esc(slug)}'>No</button>
+          <button class='button button-primary' data-worth='yes' data-pub='{esc(key)}' data-parent='{esc(slug)}'>Yes</button>
         </div>
       </div>
     </article>"""
@@ -2500,7 +2500,7 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
             {_avatar(parent, candidate, small=True)}
             <div class='decision-row-main'><strong>{esc(parent.get('name'))}</strong><span>{esc(reason)}</span></div>
             <div class='decision-row-actions'>
-              <button class='button button-ghost' data-worth='{flip}' data-pub='{esc(_worth_key(parent))}' aria-label='Mark {esc(parent.get('name'))} {flip_label}'>{flip_label}</button>
+              <button class='button button-ghost' data-worth='{flip}' data-pub='{esc(_worth_key(parent))}' data-parent='{esc(dossier_slug)}' aria-label='Mark {esc(parent.get('name'))} {flip_label}'>{flip_label}</button>
             </div>
           </summary>
           <div class='decision-row-detail'>
@@ -3183,7 +3183,20 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     return parent, candidate
         return hits[0] if hits else None
 
-    def worth_parent_in_snapshot(key: str) -> dict[str, Any] | None:
+    def worth_parent_in_snapshot(key: str, parent_slug: str = "") -> dict[str, Any] | None:
+        """The cached parent this decision was rendered from. The card/row
+        sends its parent slug (unique), because a worth KEY is not unique:
+        two split parents can share one pub with DISTINCT worth_row dicts,
+        and first-hit-by-key patched the wrong twin — leaving an unkillable
+        pending zombie in the live model (the disk write was always right;
+        only a restart cleared it). Slug match first, key fallback."""
+        slug_lower = parent_slug.strip().lower()
+        if slug_lower:
+            for parent in cached_parents:
+                candidate_slug = str(parent.get("dossier_slug")
+                                     or parent.get("slug") or "").strip().lower()
+                if candidate_slug == slug_lower:
+                    return parent
         key_lower = key.strip().lower()
         return next(
             (parent for parent in cached_parents
@@ -3484,7 +3497,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 try:
                     with mutation_lock:
                         parents_now()
-                        target_parent = worth_parent_in_snapshot(pub)
+                        target_parent = worth_parent_in_snapshot(
+                            pub, (form.get("parent_slug") or [""])[0])
                         rows_now = review_rows_now()
                         result = apply_worth_decision(review_path, pub, stored_worth,
                                                       rows=rows_now)
@@ -3522,9 +3536,9 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             # worth_row is the SOLE worth truth for queue, tabs,
                             # and counts — patch it too, or the click lands on
                             # disk while the live model keeps serving the old
-                            # decision until the next full rebuild. The dict is
-                            # shared across merged-identity parents, so one
-                            # in-place update covers them all.
+                            # decision until the next full rebuild. The slug
+                            # sent by the card guarantees this is the parent
+                            # the user actually decided.
                             worth_row = target_parent.get("worth_row")
                             if worth_row is not None:
                                 machine_dec = (worth_row.get("machine") or {}).get("decision") or ""
