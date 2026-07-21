@@ -40,7 +40,10 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     USER_APPROVED,
     load_override_rows,
 )
-from packs.ingestion.primitives.deep_context.review_store import write_override_rows
+from packs.ingestion.primitives.deep_context.review_store import (
+    judge_accepted_candidate_retarget,
+    write_override_rows,
+)
 from packs.ingestion.primitives.enrich_people.enrich_people import (
     merge_provider_profile,
     normalize_rapidapi,
@@ -147,9 +150,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if finalized:
         write_override_rows(Path(args.overrides_csv), overrides)
 
+    # Appliable: humanly/auto approved, plus judge-accepted candidate-origin
+    # found profiles (their acceptance stands; see review_store's predicate).
+    # Real-network retargets still require the human/auto approval.
     retargets = [r for r in all_markers
                  if (r.get("public_identifier") or "").strip().lower() not in realized_pubs
-                 and (r.get("approved") or "").strip().lower() in APPLY_APPROVED]
+                 and ((r.get("approved") or "").strip().lower() in APPLY_APPROVED
+                      or judge_accepted_candidate_retarget(r))]
 
     if retargets:
         load_env()

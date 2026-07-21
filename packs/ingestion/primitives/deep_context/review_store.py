@@ -56,6 +56,23 @@ MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}
 USER_APPROVED = {"yes", "no"}
 
 
+def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
+    """A candidate-origin found-LinkedIn the identity judge ACCEPTED and no
+    human has overridden: its verdict STANDS — it neither waits in the review
+    queue nor blocks application. The judge ran at high reasoning against the
+    dossier and rejects bad matches via llm_reject*, so re-asking a human to
+    confirm every acceptance was decision-theater at enrichment scale (569 of
+    642 pending checks on real data). A human yes/no is still terminal either
+    way, and this NEVER covers real-network people (non candidate:* ids) —
+    re-attaching a wrong identity on an existing person stays human-gated."""
+    if (str(row.get("action") or "").strip().lower() != "retarget"
+            or str(row.get("llm_reject") or "").strip().lower() in {"1", "true", "yes"}
+            or str(row.get("approved") or "").strip().lower() in USER_APPROVED):
+        return False
+    person_id = str(row.get("person_id") or row.get("pub") or "").strip().lower()
+    return person_id.startswith("candidate:")
+
+
 def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
     """Load existing decisions keyed by the row's public_identifier field."""
     rows: dict[str, dict[str, str]] = {}
