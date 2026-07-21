@@ -3038,13 +3038,17 @@ class TestLiveEndpoints(unittest.TestCase):
         self.assertEqual(parent["worth_row"]["source"], "user")
         self.assertEqual(payload["progress"]["worth_pending"], 0)
 
-    def test_worth_click_lands_on_the_slugged_parent_when_split_twins_share_a_key(self):
-        # Regression (the "Archit" zombie): two SPLIT parents can share one
-        # worth key with DISTINCT worth_row dicts. First-hit-by-key patched the
-        # machine-yes twin and left the pending twin unkillable in the live
-        # model (disk was right; only a restart cleared it). The card sends its
-        # parent slug, and the patch must land on exactly that parent.
-        yes = {"decision": "yes", "source": "llm", "reason": "engaged"}
+    def test_worth_click_decides_the_slugged_twin_not_the_queue_keys_row(self):
+        # Regression (the drain-loop zombie): split twins are DISTINCT
+        # worth_view rows that can share one QUEUE key (the cards' data-pub),
+        # and that key can name a review.csv row whose person_id belongs to
+        # the OTHER twin. Writing the mark on the posted key decided the wrong
+        # person on disk — the served twin re-derived pending on every rebuild,
+        # an unkillable zombie no click could clear (restart-proof). The write
+        # must land on a row that ATTACHES to the slugged parent (worth_view
+        # rule 3: row key or row.person_id inside its identities), and the
+        # cache patch follows the same attach rule, so the unrelated twin
+        # stays independently decidable.
         maybe = {"decision": "maybe", "source": "llm", "reason": "sparse"}
 
         def twin(slug: str, pids: list[str], worth: dict, decision: str) -> dict:
@@ -3062,25 +3066,65 @@ class TestLiveEndpoints(unittest.TestCase):
                                             decision, "llm"),
             }
 
-        linkedin_twin = twin("jordan-parent47", ["pid-linkedin"], yes, "yes")
+        shadow_twin = twin("jordan-parent47", ["pid-linkedin"], maybe, "maybe")
         pending_twin = twin("jordan-parentff",
                             ["candidate:phone:+15550100"], maybe, "maybe")
-        with mock.patch.object(web, "_all_review_parents",
-                               return_value=[linkedin_twin, pending_twin]):
-            os.utime(self.review)
+        # The poisoned queue-key row: both cards POST pub=jordanbravado, but
+        # the row's person_id belongs to the shadow twin alone.
+        rows = web.load_override_rows(self.review)
+        poisoned = {k: "" for k in reconcile.OVERRIDE_COLUMNS}
+        poisoned.update({"public_identifier": "jordanbravado",
+                         "person_id": "pid-linkedin"})
+        rows["jordanbravado"] = poisoned
+        reconcile._write_override_rows(self.review, rows)
+
+        def post_worth(worth: str, slug: str) -> dict:
             with urllib.request.urlopen(
                     f"http://127.0.0.1:{self.port}/worth",
                     data=urllib.parse.urlencode({
-                        "pub": "jordanbravado", "worth": "yes",
-                        "parent_slug": "jordan-parentff"}).encode()) as resp:
-                payload = json.loads(resp.read())
-        # the pending twin the user actually decided is patched...
+                        "pub": "jordanbravado", "worth": worth,
+                        "parent_slug": slug}).encode()) as resp:
+                return json.loads(resp.read())
+
+        with mock.patch.object(web, "_all_review_parents",
+                               return_value=[shadow_twin, pending_twin]):
+            os.utime(self.review)
+            payload = post_worth("yes", "jordan-parentff")
+        # the clicked twin is decided...
         self.assertEqual(pending_twin["worth_row"]["effective"], "yes")
         self.assertEqual(pending_twin["worth_row"]["source"], "user")
-        # ...and the machine-yes twin stays exactly what a fresh rebuild says
-        self.assertEqual(linkedin_twin["worth_row"]["source"], "llm")
-        self.assertFalse(linkedin_twin["worth_row"].get("human"))
+        # ...its twin — possibly a different human — is NOT
+        self.assertEqual(shadow_twin["worth_row"]["effective"], "maybe")
+        self.assertIsNone(shadow_twin["worth_row"]["human"])
+        self.assertEqual(payload["progress"]["worth_pending"], 1)
+        # and the DISK mark attaches to the clicked twin's own identity row,
+        # not the poisoned queue-key row (that one still decides the shadow)
+        on_disk = web.load_override_rows(self.review)
+        self.assertEqual(on_disk["candidate:phone:+15550100"]["network_worth"], "yes")
+        self.assertEqual(on_disk["jordanbravado"]["network_worth"], "")
+
+        # deciding the shadow twin via the same queue key writes the poisoned
+        # row (its person_id IS the shadow's identity) — both twins now decided
+        with mock.patch.object(web, "_all_review_parents",
+                               return_value=[shadow_twin, pending_twin]):
+            payload = post_worth("no", "jordan-parent47")
+        self.assertEqual(shadow_twin["worth_row"]["effective"], "no")
+        self.assertEqual(shadow_twin["worth_row"]["source"], "user")
+        self.assertEqual(pending_twin["worth_row"]["effective"], "yes")
         self.assertEqual(payload["progress"]["worth_pending"], 0)
+        on_disk = web.load_override_rows(self.review)
+        self.assertEqual(on_disk["jordanbravado"]["network_worth"], "no")
+
+        # restore is symmetric: it clears the clicked twin's own row only
+        with mock.patch.object(web, "_all_review_parents",
+                               return_value=[shadow_twin, pending_twin]):
+            payload = post_worth("restore", "jordan-parentff")
+        self.assertEqual(pending_twin["worth_row"]["source"], "llm")
+        self.assertEqual(pending_twin["worth_row"]["effective"], "maybe")
+        self.assertEqual(shadow_twin["worth_row"]["effective"], "no")
+        self.assertEqual(payload["progress"]["worth_pending"], 1)
+        on_disk = web.load_override_rows(self.review)
+        self.assertEqual(on_disk["candidate:phone:+15550100"]["network_worth"], "")
 
     def test_free_work_job_runs_the_zero_budget_continue_and_chains(self):
         # The single free-work job runs the continue with --approve --budget 0.00:
