@@ -88,6 +88,9 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     load_people_rows,
     union_child_contacts,
 )
+from packs.ingestion.primitives.deep_context.review_store import (
+    judge_accepted_candidate_retarget,
+)
 from packs.ingestion.schemas.people_schema import (
     PEOPLE_SCHEMA_COLUMNS,
     extract_public_identifier,
@@ -1409,7 +1412,10 @@ def pending_linkedin_candidates(parent: dict[str, Any]) -> list[dict[str, Any]]:
             if approved not in {"yes", "no"}:
                 pending.append(cand)
         elif from_candidate:
-            if approved not in {"yes", "no"}:
+            # A judge-ACCEPTED found profile stands (review_store's predicate):
+            # the identity judge already vetted it against the dossier, so only
+            # unjudged/rejected candidates still need the human Yes/No.
+            if approved not in {"yes", "no"} and not judge_accepted_candidate_retarget(cand):
                 pending.append(cand)
         elif candidate_state(cand) == "review":
             pending.append(cand)

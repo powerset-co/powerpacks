@@ -809,6 +809,45 @@ class TestRetiredKeyMigration(unittest.TestCase):
             self.assertEqual([r["name"] for r in rows], ["Casey Sierra"])
 
 
+class TestJudgeAcceptedProfilesStand(unittest.TestCase):
+    """A candidate-origin found-LinkedIn the identity judge ACCEPTED neither
+    waits in the Check-LinkedIn queue nor blocks application: the judge ran at
+    high reasoning against the dossier and rejections carry llm_reject*, so
+    re-asking a human to confirm every acceptance was decision-theater (569 of
+    642 pending checks on real data). Human yes/no stays terminal; real-network
+    people (non candidate:* ids) stay human-gated."""
+
+    def _cand(self, **over):
+        cand = {"pub": "candidate:phone:+15550100", "person_id": "candidate:phone:+15550100",
+                "full_name": "Jordan Bravado", "import_candidate": False, "synthetic": False,
+                "action": "retarget", "approved": "", "llm_reject": "",
+                "new_url": "https://www.linkedin.com/in/jordan-bravado"}
+        cand.update(over)
+        return cand
+
+    def test_predicate_accepts_only_unrejected_candidate_retargets(self):
+        self.assertTrue(review_store.judge_accepted_candidate_retarget(self._cand()))
+        self.assertFalse(review_store.judge_accepted_candidate_retarget(self._cand(llm_reject="true")))
+        self.assertFalse(review_store.judge_accepted_candidate_retarget(self._cand(approved="no")))
+        self.assertFalse(review_store.judge_accepted_candidate_retarget(self._cand(approved="yes")))
+        self.assertFalse(review_store.judge_accepted_candidate_retarget(self._cand(action="verify")))
+        # a REAL person (directory uuid) is never auto-accepted
+        self.assertFalse(review_store.judge_accepted_candidate_retarget(
+            self._cand(person_id="2645e339-5da9-5805-9557-5c1aae306505",
+                       pub="jordan-bravado")))
+
+    def test_accepted_profile_leaves_the_linkedin_queue(self):
+        parent = {"slug": "jordan-parentff", "person_ids": ["candidate:phone:+15550100"],
+                  "candidates": [self._cand()],
+                  "worth": {"decision": "yes", "source": "llm"},
+                  "worth_row": _worth_row_for("jordan-parentff", "Jordan Bravado",
+                                              ["candidate:phone:+15550100"], "yes", "llm")}
+        self.assertEqual(web.pending_linkedin_candidates(parent), [])
+        # a rejected guess still needs the human
+        parent["candidates"] = [self._cand(llm_reject="true")]
+        self.assertEqual(len(web.pending_linkedin_candidates(parent)), 1)
+
+
 class TestNetworkWorth(unittest.TestCase):
     """The yes|maybe|no worth judgment: schema pins, LLM read, and precedence."""
 
@@ -2688,6 +2727,17 @@ class TestStagedReviewUI(unittest.TestCase):
             web.annotate_worth(parents, reconcile.load_override_rows(review), facts)
             self.assertFalse(web.is_import_candidate_parent(parents[0]))
             self.assertTrue(web.is_lookup_ready(parents[0]))
+            # The judge-ACCEPTED found profile stands — no pending human check
+            # (policy change: acceptance is the decision; rejects still queue).
+            self.assertEqual(web.pending_linkedin_candidates(parents[0]), [])
+            # A REJECTED guess still needs the human, with the proposed url.
+            rows = reconcile.load_override_rows(review)
+            rows[pid]["llm_reject"] = "true"
+            reconcile._write_override_rows(review, rows)
+            with mock.patch.object(candidates, "CANDIDATE_CSVS", pools):
+                parents = web.load_candidate_parents(
+                    facts, reconcile.load_override_rows(review), set())
+            web.annotate_worth(parents, reconcile.load_override_rows(review), facts)
             pending = web.pending_linkedin_candidates(parents[0])
             self.assertEqual(len(pending), 1)
             self.assertEqual(pending[0]["url"], "https://www.linkedin.com/in/cass-real")
