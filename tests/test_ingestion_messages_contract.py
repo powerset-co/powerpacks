@@ -787,7 +787,7 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             self.assertFalse(rerun.get("noop", False))
             self.assertEqual(
                 rerun["input"]["pipeline_contract"],
-                "messages-contacts-direct-v5",
+                "messages-contacts-direct-v6",
             )
 
     def test_matched_duplicates_merge_and_email_handles(self) -> None:
@@ -826,6 +826,30 @@ class MessagesImportRuntimeTests(unittest.TestCase):
                 {"imessage": 87, "whatsapp": 9},
             )
             self.assertEqual(person["last_interaction"], "2026-06-05T00:00:00+00:00")
+
+    def test_matched_rows_emit_the_superseded_candidate_identity(self) -> None:
+        # Import is the only witness that the phone-axis candidate id and the
+        # matched person are the same contact row; the people row must carry
+        # the equivalence so parent-building can fold the pre-match identity
+        # instead of leaving a floating twin in review.
+        with tempfile.TemporaryDirectory() as td:
+            contacts = Path(td) / "contacts.csv"
+            write_csv_rows(contacts, self.CONTACT_FIELDS, [
+                self.matched_row(),
+                self.matched_row(
+                    phone="+14155550999",
+                    source="whatsapp",
+                    message_count="9",
+                    imessage_message_count="",
+                    whatsapp_message_count="9",
+                ),
+            ])
+            _, people_rows, _ = import_messages.selected_contacts_people(contacts)
+            self.assertEqual(len(people_rows), 1)
+            self.assertEqual(
+                json.loads(people_rows[0]["superseded_person_ids"]),
+                ["candidate:phone:+14155550123", "candidate:phone:+14155550999"],
+            )
 
     def test_missing_inputs_and_empty_contacts(self) -> None:
         with self.sandbox() as env:

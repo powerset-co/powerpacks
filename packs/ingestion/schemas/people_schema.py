@@ -51,6 +51,11 @@ PEOPLE_SCHEMA_COLUMNS = [
     "all_phones",
     "source_channels",
     "source_artifacts",
+    # Identity keys this person ABSORBED: when import matches a contact it had
+    # previously emitted as a candidate, the candidate person-id(s) land here so
+    # downstream grouping folds the old identity into this person instead of
+    # leaving a floating twin. JSON string list; set-unioned on merge.
+    "superseded_person_ids",
     # Interaction signal (blank for channels that have none). interaction_counts
     # is a JSON object of channel -> message count, e.g. {"gmail": 142,
     # "imessage": 87}; last_interaction is the most recent ISO-8601 UTC
@@ -66,7 +71,7 @@ JSON_OBJECT_COLUMNS = {"harmonic_response", "harmonic_location", "rapidapi_respo
 # are set-unioned across all source rows — never first-value-wins — so every
 # directory-resolved alias (e.g. work + personal email) survives into the
 # merged profile and downstream interaction-count joins.
-LIST_VALUE_COLUMNS = {"all_emails", "all_phones"}
+LIST_VALUE_COLUMNS = {"all_emails", "all_phones", "superseded_person_ids"}
 PERSON_ID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 

@@ -2710,6 +2710,32 @@ class TestReviewWeb(unittest.TestCase):
         })
         return verdicts, review
 
+    def test_superseded_pairs_fold_the_pre_match_identity(self):
+        # A matched people.csv row carries the candidate id it superseded; the
+        # two identities' dossier slugs must join one cluster at confidence 1.0
+        # (import witnessed they are one contact row — no judge needed). Ids
+        # without a dossier slug are inert.
+        with tempfile.TemporaryDirectory() as d:
+            people_csv = Path(d) / "people.csv"
+            people_csv.write_text(
+                "id,full_name,superseded_person_ids\n"
+                'durable-uuid-1,Jordan Bravado,"[""candidate:phone:+15550100""]"\n'
+                'durable-uuid-2,Casey Sierra,"[""candidate:phone:+15550199""]"\n',
+                encoding="utf-8")
+            slugs_info = {
+                "jordan-bravado-aaaa1111": {"person_id": "durable-uuid-1"},
+                "jordan-bravado-bbbb2222": {"person_id": "candidate:phone:+15550100"},
+                # Casey's candidate identity has no dossier slug -> inert
+            }
+            got = parents.superseded_pairs(people_csv, slugs_info)
+            self.assertEqual(len(got), 1)
+            self.assertEqual({got[0]["slug_a"], got[0]["slug_b"]},
+                             {"jordan-bravado-aaaa1111", "jordan-bravado-bbbb2222"})
+            self.assertEqual(got[0]["confidence"], "1.0")
+            clusters = parents.clusters_from_pairs(got)
+            self.assertEqual(clusters, [sorted(
+                ["jordan-bravado-aaaa1111", "jordan-bravado-bbbb2222"])])
+
     def test_build_parents_joins_and_states(self):
         with tempfile.TemporaryDirectory() as dd:
             d = Path(dd)

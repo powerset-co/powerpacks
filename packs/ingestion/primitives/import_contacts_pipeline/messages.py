@@ -32,6 +32,7 @@ try:
         merge_interaction_counts,
         normalize_linkedin_url,
         normalize_people_row,
+        parse_jsonish,
     )
     from packs.ingestion.schemas.candidates_schema import (
         CANDIDATES_SCHEMA_COLUMNS,
@@ -78,6 +79,7 @@ except ModuleNotFoundError:
         merge_interaction_counts,
         normalize_linkedin_url,
         normalize_people_row,
+        parse_jsonish,
     )
     from packs.ingestion.schemas.candidates_schema import (
         CANDIDATES_SCHEMA_COLUMNS,
@@ -117,7 +119,7 @@ except ModuleNotFoundError:
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 FALSY = {"0", "false", "no", "n", "off"}
-MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v5"
+MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v6"
 WORKING_CONTACTS_CSV = Path(".powerpacks/messages/contacts.csv")
 MATCH_MANIFEST_JSON = Path(".powerpacks/messages/contacts.csv.match.manifest.json")
 DEFAULT_MIN_MESSAGE_COUNT = 1
@@ -321,6 +323,15 @@ def contact_row_to_messages_people(
         ),
         "source_channels": ",".join(messages_source_channels(row)),
         "source_artifacts": str(contacts_csv),
+        # The candidate identity an earlier run minted for this SAME contact
+        # row (candidate_key_for on the same phone field — kept in lockstep
+        # with contact_row_to_candidate). Import is the only witness that the
+        # phone-axis candidate and this matched person are one human; emitting
+        # the equivalence here lets parent-building fold the old identity in.
+        "superseded_person_ids": (
+            json.dumps([f"candidate:{candidate_key_for('', phone)}"], ensure_ascii=False)
+            if candidate_key_for("", phone) else ""
+        ),
         "interaction_counts": (
             json.dumps(interaction_counts, ensure_ascii=False) if interaction_counts else ""
         ),
@@ -413,6 +424,13 @@ def merge_messages_people_candidate(
     merged["interaction_counts"] = json.dumps(counts, ensure_ascii=False) if counts else ""
     merged["last_interaction"] = latest_interaction(
         merged.get("last_interaction"), incoming.get("last_interaction")
+    )
+    superseded = unique_strings([
+        *parse_jsonish(merged.get("superseded_person_ids"), []),
+        *parse_jsonish(incoming.get("superseded_person_ids"), []),
+    ])
+    merged["superseded_person_ids"] = (
+        json.dumps(superseded, ensure_ascii=False) if superseded else ""
     )
     return normalize_people_row(merged)
 
