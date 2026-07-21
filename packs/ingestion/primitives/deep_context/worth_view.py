@@ -12,9 +12,11 @@ The whole logic:
   1. Every facts/<person_id>.jsonl is one identity. A file without a
      network_worth verdict is an UNJUDGED identity — still in view, because
      rule 4 defaults it to "maybe" (nobody enters the network unreviewed).
-     ONE exclusion: a person whose every identity is a retired
+     TWO exclusions: a person whose every identity is a retired
      message-linkedin:* key is a GHOST — present in no population file, so no
-     decision on them can act — and is not shown (see the _build comment).
+     decision on them can act — and a person any of whose identities carries
+     synthesis's is_owner flag is the MAILBOX OWNER, not a contact. Neither
+     is shown (see the _build comments).
   2. Identities under the same index.json parent are ONE person -> ONE row
      (never multiple cards for the same human). An identity keyed by the
      RETIRED message-linkedin recipe folds into its durable sibling (the
@@ -67,7 +69,7 @@ def _read_facts(path: Path) -> dict[str, str] | None:
     cached = _FACTS_CACHE.get(str(path))
     if cached is not None and cached[0] == mtime:
         return dict(cached[1])
-    out = {"decision": "", "reason": "", "name": ""}
+    out = {"decision": "", "reason": "", "name": "", "is_owner": False}
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -82,6 +84,7 @@ def _read_facts(path: Path) -> dict[str, str] | None:
             continue
         facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
         out["name"] = str(facts.get("canonical_name") or "").strip() or out["name"]
+        out["is_owner"] = bool(facts.get("is_owner")) or out["is_owner"]
         verdict = facts.get("network_worth")
         if isinstance(verdict, dict) and str(verdict.get("decision") or "").lower() in WORTH_VALUES:
             out["decision"] = str(verdict["decision"]).lower()
@@ -188,8 +191,9 @@ def _build(facts_dir: Path, humans: dict[str, tuple[str, str]],
         canon = aliases.get(pid.lower(), pid)
         key = groups.get(canon.lower(), canon)
         person = people.setdefault(key, {"key": key, "person_ids": [], "machine": None,
-                                         "_machine_mtime": -1, "name": ""})
+                                         "_machine_mtime": -1, "name": "", "_owner": False})
         person["person_ids"].append(pid)
+        person["_owner"] = person["_owner"] or bool(verdict.get("is_owner"))
         mtime = path.stat().st_mtime_ns
         if mtime > person["_machine_mtime"] or (
                 mtime == person["_machine_mtime"]
@@ -208,6 +212,11 @@ def _build(facts_dir: Path, humans: dict[str, tuple[str, str]],
         # claimed any ghost with a durable sibling, and a real identity
         # re-appears here the moment the contact matches again.
         if all(pid.startswith("message-linkedin:") for pid in person["person_ids"]):
+            continue
+        # The OWNER is not a network-membership decision: synthesis flags the
+        # mailbox owner's own identities (is_owner), build_parents already
+        # refuses to make them a parent — the review honors the same flag.
+        if person["_owner"]:
             continue
         marks = [humans[pid.lower()] for pid in person["person_ids"]
                  if pid.lower() in humans]
