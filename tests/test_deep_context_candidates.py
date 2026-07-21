@@ -775,15 +775,19 @@ class TestRetiredKeyMigration(unittest.TestCase):
             rows = worth_view.rows_from(facts, {self.PUB: review_row},
                                         index_json=Path(d) / "missing-index.json")
             self.assertEqual(len(rows), 1)
-            # an unrelated retired-key identity (no review row names its pub)
-            # still stands alone
+            # a GHOST — an identity that exists ONLY under a retired key, with
+            # no durable sibling to fold into — is not reviewable (no
+            # population row can act on the decision) and is NOT shown
             other = "message-linkedin:aaaa111122223333"
             (facts / f"{other}.jsonl").write_text(
                 _facts_record("maybe", "solo", "Casey Sierra") + "\n", encoding="utf-8")
             rows = worth_view.rows_from(facts, {self.PUB: review_row},
                                         index_json=Path(d) / "missing-index.json")
-            self.assertEqual(len(rows), 2)
-            self.assertIn(other, [pid for row in rows for pid in row["person_ids"]])
+            self.assertEqual(len(rows), 1)
+            self.assertNotIn(other, [pid for row in rows for pid in row["person_ids"]])
+            # ...but the FOLDED pair keeps its retired identity visible — it
+            # rides along inside the durable person's row, evidence intact
+            self.assertIn(self.LEGACY, rows[0]["person_ids"])
 
 
 class TestNetworkWorth(unittest.TestCase):

@@ -12,6 +12,9 @@ The whole logic:
   1. Every facts/<person_id>.jsonl is one identity. A file without a
      network_worth verdict is an UNJUDGED identity — still in view, because
      rule 4 defaults it to "maybe" (nobody enters the network unreviewed).
+     ONE exclusion: a person whose every identity is a retired
+     message-linkedin:* key is a GHOST — present in no population file, so no
+     decision on them can act — and is not shown (see the _build comment).
   2. Identities under the same index.json parent are ONE person -> ONE row
      (never multiple cards for the same human). An identity keyed by the
      RETIRED message-linkedin recipe folds into its durable sibling (the
@@ -197,6 +200,15 @@ def _build(facts_dir: Path, humans: dict[str, tuple[str, str]],
 
     rows: list[dict[str, Any]] = []
     for person in people.values():
+        # GHOSTS are not reviewable: a person whose EVERY identity is a
+        # retired message-linkedin:* key exists in no population file — a Yes
+        # cannot add them to the network and a No rejects nothing that could
+        # have entered, so the card is pure decision-theater. The live import
+        # can no longer mint this prefix, folding (aliases above) has already
+        # claimed any ghost with a durable sibling, and a real identity
+        # re-appears here the moment the contact matches again.
+        if all(pid.startswith("message-linkedin:") for pid in person["person_ids"]):
+            continue
         marks = [humans[pid.lower()] for pid in person["person_ids"]
                  if pid.lower() in humans]
         human = max(marks, key=lambda item: item[1]) if marks else None
