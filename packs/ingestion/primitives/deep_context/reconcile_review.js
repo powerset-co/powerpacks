@@ -349,6 +349,16 @@ function wireWorthTypeahead(box, input) {
 
 function wireWorthTableFilter(box, input) {
   const count = box.querySelector("[data-search-count]");
+  input.addEventListener("focus", () => {
+    const list = document.querySelector("[data-decision-list]");
+    if (!list) return;
+    if (typeof list.holdRowsLive === "function") list.holdRowsLive(true);
+    if (typeof list.prefetchAllRows === "function") void list.prefetchAllRows();
+  });
+  input.addEventListener("blur", () => {
+    const list = document.querySelector("[data-decision-list]");
+    if (list && typeof list.holdRowsLive === "function") list.holdRowsLive(false);
+  });
   input.addEventListener("input", async () => {
     const query = input.value.trim().toLowerCase();
     const list = document.querySelector("[data-decision-list]");
@@ -748,6 +758,8 @@ function setupInfiniteDecisionList(list) {
   let fetchedRows = chunks[0].nodes.length;
   let fetching = false;
   let filterQuery = ""; // non-empty while the live-search filter owns the row set
+  let allRowsFetch = null; // in-flight fetch-every-remaining-row pass (focus prefetch / filter)
+  let searchHold = false; // true while the search box has focus: keep prefetched rows live
 
   const spacerHeight = (spacer) => parseFloat(spacer.style.height) || 0;
   const setSpacer = (spacer, delta) => {
@@ -831,7 +843,7 @@ function setupInfiniteDecisionList(list) {
   }
 
   function updateWindow() {
-    if (filterQuery) return; // the live-search filter owns the row set
+    if (filterQuery || allRowsFetch || searchHold) return; // filter/prefetch/focus owns the rows
     for (let guard = 0; guard < 20; guard += 1) {
       const band = visibleBand();
       const nearBottom = bottomSpacer.getBoundingClientRect().top <= band.bottom + edge;
@@ -876,16 +888,34 @@ function setupInfiniteDecisionList(list) {
   // fetched) and non-matching rows are hidden — pure client-side filtering.
   // Clearing the query unhides everything and hands control back to the
   // windowing logic, which re-parks whatever sits outside the viewport.
+  // Focusing the search box starts this same pass early (prefetchAllRows), so
+  // the rows usually arrive during the human pause between focus and the first
+  // keystroke instead of stalling the first filter. Single-flight: the focus
+  // prefetch and a keystroke's filter share one run, and windowing stays
+  // suspended while it fetches so mid-run parking can't reorder appended rows.
+  function fetchAllRemainingRows() {
+    if (allRowsFetch) return allRowsFetch;
+    if (fetchedRows >= total) return Promise.resolve();
+    allRowsFetch = (async () => {
+      try {
+        while (fetchedRows < total) {
+          const before = fetchedRows;
+          await fetchChunk(200); // the server caps each window at 200 rows
+          if (fetchedRows === before) break; // fetch failed: filter what we have
+        }
+      } finally {
+        allRowsFetch = null;
+      }
+    })();
+    return allRowsFetch;
+  }
+
   async function ensureAllLive() {
     while (firstLive > 0) unparkTop();
     while (lastLive < chunks.length - 1) unparkBottom();
     topSpacer.style.height = "0px";
     bottomSpacer.style.height = "0px";
-    while (fetchedRows < total) {
-      const before = fetchedRows;
-      await fetchChunk(200); // the server caps each window at 200 rows
-      if (fetchedRows === before) break; // fetch failed: filter what we have
-    }
+    await fetchAllRemainingRows();
   }
 
   let filterChain = Promise.resolve();
@@ -904,6 +934,17 @@ function setupInfiniteDecisionList(list) {
       return { shown, total };
     });
     return filterChain;
+  };
+
+  // The search box warms the table on focus: at a few thousand rows the first
+  // filter otherwise pays ~20 sequential row-window fetches before it can run.
+  // The hold keeps the prefetched rows LIVE while the box has focus — without
+  // it the windowing logic re-parks them and the first keystroke pays the full
+  // re-insertion cost right back.
+  list.prefetchAllRows = () => ensureAllLive();
+  list.holdRowsLive = (on) => {
+    searchHold = Boolean(on);
+    if (!searchHold) scheduleUpdate(); // windowing resumes on blur
   };
 
   // Optimistic decisions remove a live row without a reload: drop it from its
