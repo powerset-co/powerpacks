@@ -35,6 +35,7 @@ from packs.ingestion.primitives.deep_context.common import (
     OWNER_JSON,
     PARENTS_DIR,
     RAW_DIR,
+    read_jsonl,
     emit,
     load_owner,
     normalize_email,
@@ -299,7 +300,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         child_pids: list[str] = []
         for c in confirmed:
             child_pids.append(c["pid"])
-            all_records.extend(_read_jsonl(facts_dir / f"{c['pid']}.jsonl"))
+            all_records.extend(read_jsonl(facts_dir / f"{c['pid']}.jsonl"))
             bundle = _read_json(raw_dir / f"{c['pid']}.json")
             for e in bundle.get("emails") or []:
                 if e not in emails:
@@ -380,18 +381,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     return manifest
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
-
-
 def _is_owner(person_id: str, facts_dir: Path) -> bool:
     """True if synthesis flagged this person as the mailbox owner on another email address."""
     if not person_id:
         return False
-    recs = _read_jsonl(facts_dir / f"{person_id}.jsonl")
-    return any((r.get("facts") or {}).get("is_owner") for r in recs)
+    return any((r.get("facts") or {}).get("is_owner")
+               for r in read_jsonl(facts_dir / f"{person_id}.jsonl"))
 
 
 def _read_json(path: Path) -> dict[str, Any]:

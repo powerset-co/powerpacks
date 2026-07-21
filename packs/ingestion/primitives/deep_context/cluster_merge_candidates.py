@@ -50,6 +50,7 @@ from packs.ingestion.primitives.deep_context.common import (
     MERGE_MD,
     RAW_DIR,
     emit,
+    read_jsonl,
     load_env,
     normalize_name,
     now_iso,
@@ -193,7 +194,7 @@ def _profile(facts_path: Path) -> dict[str, Any]:
     """Compact identity view (relationship + key facts + topics) for the judge."""
     if not facts_path.exists():
         return {}
-    recs = [json.loads(l) for l in facts_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    recs = list(read_jsonl(facts_path))
     fa = compose.merge_facts(recs) if recs else {}
     if not fa:
         return {}

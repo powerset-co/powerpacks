@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context.common import (
     INDEX_MD,
     RAW_DIR,
     emit,
+    read_jsonl,
     normalize_name,
     now_iso,
     phone_digits,
@@ -276,7 +277,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if not raw_path.exists():
             continue
         meta = json.loads(raw_path.read_text(encoding="utf-8"))
-        chunks = list(_read_jsonl(facts_path))
+        chunks = list(read_jsonl(facts_path))
         merged = merge_facts(chunks)
         if not merged:
             continue
@@ -325,14 +326,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     write_json(dossier_dir / "manifest.json", manifest)
     return manifest
-
-
-def _read_jsonl(path: Path) -> Any:
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                yield json.loads(line)
 
 
 def _write_catalog(path: Path, catalog: list[tuple[str, str, str]]) -> None:

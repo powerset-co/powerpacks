@@ -76,6 +76,7 @@ from packs.ingestion.primitives.deep_context.common import (
     VERDICTS_CSV,
     VERDICTS_JSONL,
     emit,
+    read_jsonl,
     load_env,
     load_owner,
     normalize_email,
@@ -210,12 +211,6 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
-
-
 def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
     """person_id -> raw people.csv row (we only need a handful of columns)."""
     rows: dict[str, dict[str, str]] = {}
@@ -331,7 +326,7 @@ def self_linkedin_from_facts(person_ids: list[str], facts_dir: Path) -> tuple[st
     """Self-reported LinkedIn for a candidate, recomputed from facts (used by --reapply, no LLM)."""
     records: list[dict[str, Any]] = []
     for pid in person_ids:
-        records.extend(_read_jsonl(facts_dir / f"{pid}.jsonl"))
+        records.extend(read_jsonl(facts_dir / f"{pid}.jsonl"))
     return _self_linkedin((compose.merge_facts(records) if records else {}).get("identifiers"))
 
 
@@ -340,7 +335,7 @@ def dossier_view(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> dict[
     records: list[dict[str, Any]] = []
     msgs: list[dict[str, Any]] = []
     for pid in child_pids:
-        records.extend(_read_jsonl(facts_dir / f"{pid}.jsonl"))
+        records.extend(read_jsonl(facts_dir / f"{pid}.jsonl"))
         msgs.extend(_read_json(raw_dir / f"{pid}.json").get("messages") or [])
     merged = compose.merge_facts(records) if records else {}
     self_url, self_url_pub = _self_linkedin(merged.get("identifiers"))
@@ -1340,7 +1335,7 @@ def write_verdicts(jsonl_path: Path, csv_path: Path, results: list[dict[str, Any
 def load_tasks_from_verdicts(path: Path) -> list[dict[str, Any]]:
     """Reload already-judged tasks from verdicts.jsonl (for --reapply, no LLM spend)."""
     tasks = []
-    for rec in _read_jsonl(path):
+    for rec in read_jsonl(path):
         rec.setdefault("verdict", {})
         rec.setdefault("linkedin", {})
         tasks.append(rec)

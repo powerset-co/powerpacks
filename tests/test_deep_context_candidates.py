@@ -85,6 +85,43 @@ def _pools(base: Path, gmail: list[dict], messages: list[dict]) -> list[Path]:
     ]
 
 
+class TestOneJsonlReader(unittest.TestCase):
+    """common.read_jsonl is the ONLY JSONL reader in the pack. The private
+    splitlines() copies it replaced also split records on unicode separators
+    (U+2028/U+2029/NEL) INSIDE JSON strings — legal raw output of
+    json.dumps(ensure_ascii=False) — so a perfectly valid verdicts.jsonl
+    crashed the enrichment job with JSONDecodeError (hit live on real data:
+    iOS-pasted text carries U+2028)."""
+
+    def test_records_with_unicode_line_separators_survive_every_module(self):
+        rec = {"parent_slug": "jordan-parentaa",
+               "reason": "pasted iOS text\u2028with raw separators\u2029and\x85kept"}
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "verdicts.jsonl"
+            path.write_text(
+                json.dumps(rec, ensure_ascii=False) + "\n"
+                + json.dumps({"parent_slug": "casey-parentbb"}, ensure_ascii=False) + "\n",
+                encoding="utf-8")
+            rows = list(common.read_jsonl(path))
+        self.assertEqual([r["parent_slug"] for r in rows],
+                         ["jordan-parentaa", "casey-parentbb"])
+        self.assertEqual(rows[0]["reason"], rec["reason"])
+
+    def test_the_pack_has_exactly_one_jsonl_reader(self):
+        # No module may grow a private splitlines()-based copy back.
+        pack = Path(dresearch.__file__).parent
+        offenders = [
+            f"{path.name}:{i}"
+            for path in sorted(pack.glob("*.py"))
+            for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if "splitlines()" in line and "json.loads" in line
+        ]
+        self.assertEqual(offenders, [])
+        for module in (dresearch, reconcile, web):
+            self.assertFalse(hasattr(module, "_read_jsonl"),
+                             f"{module.__name__} regrew a private JSONL reader")
+
+
 class TestLoadCandidates(unittest.TestCase):
     def test_mapping_dedup_and_channel_translation(self):
         with tempfile.TemporaryDirectory() as d:
