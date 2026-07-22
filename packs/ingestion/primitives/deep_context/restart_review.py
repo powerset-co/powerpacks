@@ -74,18 +74,29 @@ def clear_human_identity_decisions(rows: dict[str, dict[str, str]]) -> int:
 
     Human clicks write ``approved`` yes/no (keep / detach / fix / an approved
     exclude); the fix form additionally stores a pasted ``new_linkedin_url``.
-    Machine auto-verify/auto-detach writes ``approved=auto`` — that is LLM work
-    and is preserved so the re-run starts exactly where a new user would."""
+    Machine work is preserved so the re-run starts exactly where a brand-new
+    user would — and machine work INCLUDES the deep-research proposals: those
+    rows carry ``action=retarget`` + ``new_linkedin_url`` with ``approved=''``
+    and an ``llm_judge_fingerprint`` stamped by the identity judge. The old
+    pasted-URL heuristic misread them as human and cleared them, which forced
+    EVERY restart into a full re-judge of every proposal (the fingerprint
+    cache keys off the intact retarget row). A fingerprinted row keeps its
+    machine proposal; only the human's ``approved`` mark — and a pasted URL
+    with no machine judgment behind it — is cleared."""
     cleared = 0
     for row in rows.values():
         approved = (row.get("approved") or "").strip().lower()
         pasted_url = (row.get("new_linkedin_url") or "").strip()
-        human = approved in {"yes", "no"} or (pasted_url and approved != "auto")
-        if human:
+        fingerprint = (row.get("llm_judge_fingerprint") or "").strip()
+        human = approved in {"yes", "no"} or (
+            pasted_url and not fingerprint and approved != "auto")
+        if not human:
+            continue
+        row["approved"] = ""
+        if not fingerprint:
             row["action"] = ""
-            row["approved"] = ""
             row["new_linkedin_url"] = ""
-            cleared += 1
+        cleared += 1
     return cleared
 
 
