@@ -7,6 +7,10 @@ the recall net, never the decision. Pipeline:
      name-similarity gate produce candidate pairs cheaply -- so we never LLM every
      record that merely shares a common surname, only genuinely ambiguous
      same/similar-name pairs.
+  1.5 A deterministic gate merges the can't-miss pairs in CODE (identical normalized
+     name + a shared non-owner phone/email) — identity equality that strong never
+     rides on model attention. Every other pair goes to the judge WITH a computed
+     SHARED IDENTIFIERS section, so a normalized phone match can't hide in formatting.
   2. A high-reasoning LLM judge decides SAME / DIFFERENT per pair by weighing ALL
      evidence HOLISTICALLY — identity (name/nickname, employer, school, location,
      emails), the role each plays in my life, content & behavior (e.g. forwarding
@@ -57,6 +61,7 @@ from packs.ingestion.primitives.deep_context.common import (
     load_env,
     normalize_name,
     now_iso,
+    phone_digits,
     write_json,
 )
 
@@ -86,7 +91,14 @@ JUDGE_SYSTEM = (
     "the conversation, not on the contact's own record. It is strong same-person evidence ONLY if "
     "it is plausibly THIS person's own alias — e.g. a near-1:1 thread where they wrote from it, or "
     "it matches their name. If it looks like a co-participant in a GROUP thread (several different "
-    "people/addresses), do NOT treat merely sharing it as proof they are the same person.\n\n"
+    "people/addresses), do NOT treat merely sharing it as proof they are the same person.\n"
+    "- SHARED PHONE NUMBER: when the prompt carries a SHARED IDENTIFIERS section listing a phone "
+    "on BOTH records, the numbers are literally identical after code normalization — never "
+    "re-derive or doubt that equality. A personal number belongs to one human: treat the pair as "
+    "the same person with confidence ~0.99 even when role, employer, or era differ — people "
+    "change careers and keep their number. Hold back ONLY when the evidence says the number is a "
+    "shared line rather than personal: a front desk, main office, support/booking line, or a "
+    "family landline used by several people.\n\n"
     "A shared or similar NAME ALONE is not enough — but a similar name PLUS aligned "
     "role/identity/behavior is strong. Set same_person=true only when the COMBINED evidence "
     "supports it; otherwise false."
@@ -217,6 +229,7 @@ def _profile(facts_path: Path) -> dict[str, Any]:
 def load_people(index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_dir: Path) -> list[dict[str, Any]]:
     by_phone = index.get("by_phone", {})
     owner_emails = _owner_emails(dossier_dir.parent)
+    owner_phones = _owner_phones(dossier_dir.parent)
     people: list[dict[str, Any]] = []
     for slug, info in index.get("slugs", {}).items():
         path = dossier_dir / f"{slug}.md"
@@ -234,6 +247,11 @@ def load_people(index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_d
         # identity). Whether a shared message-email actually means SAME PERSON (their own alias) vs
         # a co-CC'd third party in a group thread is the LLM judge's call, not the gate's.
         extra_emails = sorted(identifier_emails(profile.get("identifiers") or []) - set(emails) - owner_emails)
+        record_phones = [d for d, slugs in by_phone.items() if slug in slugs]
+        # Phones the synthesis found in the MESSAGES (signatures, "text me at ..."), minus the
+        # record's own and the owner's — same widening role as extra_emails, phone edition.
+        extra_phones = sorted(identifier_phones(profile.get("identifiers") or [])
+                              - set(record_phones) - owner_phones)
         people.append({
             "slug": slug,
             "person_id": pid,
@@ -241,7 +259,8 @@ def load_people(index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_d
             "name_key": normalize_name(meta.get("name") or info.get("name") or ""),
             "emails": emails,
             "extra_emails": extra_emails,
-            "phone_digits": [d for d, slugs in by_phone.items() if slug in slugs],
+            "phone_digits": record_phones,
+            "extra_phones": extra_phones,
             "profile": profile,
             "from_me": _sample(msgs, "from_me"),
             "from_them": _sample(msgs, "from_them"),
@@ -258,18 +277,59 @@ def _looks_like_email(value: str) -> bool:
 
 
 def identifier_emails(identifiers: list[str]) -> set[str]:
-    """Email addresses the synthesis pulled out of the CONVERSATION (facts.identifiers). URLs,
-    phones, and handles are dropped — only full emails, and only for FULL-address matching (never
-    local-parts), so a linking address a contact used in messages can still pair them with a record
-    that has it registered. Phones are deliberately NOT mined here: a number in a signature is more
-    often a third party's than an alias, and the email path already covers the real cases."""
+    """Email addresses the synthesis pulled out of the CONVERSATION (facts.identifiers). URLs and
+    handles are dropped — only full emails, and only for FULL-address matching (never local-parts),
+    so a linking address a contact used in messages can still pair them with a record that has it
+    registered."""
     return {s.lower() for s in (str(i).strip() for i in identifiers or []) if _looks_like_email(s)}
+
+
+def identifier_phones(identifiers: list[str]) -> set[str]:
+    """Phone numbers the synthesis pulled out of the CONVERSATION (facts.identifiers), as
+    comparable digit keys. Only phone-shaped strings count — emails and anything domain-like are
+    skipped — and normalization is pure code (phone_digits), so a signature's
+    '(m)/(c) 914-555-0466' meets a record's '+19145550466' as the same key. Whether a shared
+    number is the person's own line or a shared/company one stays the judge's call for
+    different-name pairs; identical-name pairs merge deterministically (slam_dunk_verdict)."""
+    out: set[str] = set()
+    for raw in identifiers or []:
+        s = str(raw).strip()
+        if not s or "@" in s or re.search(r"[a-z]{2,}\.[a-z]{2,}", s.lower()):
+            continue
+        digits = phone_digits(s)
+        if 7 <= len(digits) <= 15:
+            out.add(digits)
+    return out
 
 
 def _owner_emails(base: Path) -> set[str]:
     """The mailbox owner's own addresses — excluded from identifier matching because the owner
     appears in nearly every thread, so their address is noise, not a same-person signal."""
     return {e.strip().lower() for e in (_read_json(base / "owner.json").get("emails") or []) if e.strip()}
+
+
+def _owner_phones(base: Path) -> set[str]:
+    """The owner's own numbers (owner.json `phones`, when present) — excluded exactly like
+    owner emails: a number the owner uses can surface in anyone's thread without being identity."""
+    return {phone_digits(p) for p in (_read_json(base / "owner.json").get("phones") or []) if phone_digits(p)}
+
+
+def all_emails(p: dict[str, Any]) -> set[str]:
+    """Record emails + message-discovered ones (owner already excluded at load)."""
+    return set(p["emails"]) | set(p.get("extra_emails") or [])
+
+
+def all_phones(p: dict[str, Any]) -> set[str]:
+    """Record phone digit keys + message-discovered ones (owner already excluded at load)."""
+    return set(p["phone_digits"]) | set(p.get("extra_phones") or [])
+
+
+def fmt_phone(digits: str) -> str:
+    """One display shape per normalized key, so the judge sees identical strings on both sides
+    ('9145550466' -> '+1 (914) 555-0466'; non-US keys keep their full digits)."""
+    if len(digits) == 10:
+        return f"+1 ({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    return f"+{digits}"
 
 
 # --- blocking + recall gate -------------------------------------------------
@@ -314,9 +374,11 @@ def generate_pairs(people: list[dict[str, Any]]) -> set[tuple[int, int]]:
     for idx, p in enumerate(people):
         # Full-address keys include message-discovered `extra_emails`; local-part keys do NOT
         # (a shared first-name local-part is not evidence two people are the same).
-        keys = {f"email:{e}" for e in set(p["emails"]) | set(p.get("extra_emails") or [])}
+        # Phone keys include message-discovered `extra_phones` — a signature number must be able
+        # to pair a record with the same number registered, whatever the names look like.
+        keys = {f"email:{e}" for e in all_emails(p)}
         keys |= {f"local:{lp}" for lp in email_localparts(p["emails"])}
-        keys |= {f"phone:{d}" for d in p["phone_digits"]}
+        keys |= {f"phone:{d}" for d in all_phones(p)}
         keys |= {f"nm:{k}" for k in blocking_name_keys(p["name_key"])}
         for key in keys:
             buckets.setdefault(key, []).append(idx)
@@ -330,11 +392,9 @@ def generate_pairs(people: list[dict[str, Any]]) -> set[tuple[int, int]]:
     gated: set[tuple[int, int]] = set()
     for a, b in cand:
         pa, pb = people[a], people[b]
-        full_a = set(pa["emails"]) | set(pa.get("extra_emails") or [])
-        full_b = set(pb["emails"]) | set(pb.get("extra_emails") or [])
-        if (full_a & full_b
+        if (all_emails(pa) & all_emails(pb)
                 or email_localparts(pa["emails"]) & email_localparts(pb["emails"])
-                or set(pa["phone_digits"]) & set(pb["phone_digits"])
+                or all_phones(pa) & all_phones(pb)
                 or jaro_winkler(pa["name_key"], pb["name_key"]) >= GATE_NAME_SIM):
             gated.add((a, b))
     return gated
@@ -367,8 +427,50 @@ def _render_side(label: str, p: dict[str, Any]) -> str:
             f"{facts_block}\nMessages:\n{me}\n{them}")
 
 
+def shared_identifier_note(pa: dict[str, Any], pb: dict[str, Any]) -> str:
+    """Computed identifier overlap for the judge prompt. The normalization already happened in
+    code (phone_digits / lowercased emails), so the judge is TOLD the values are identical —
+    a match can never hide behind '(914) 555-0466' vs '+19145550466' formatting again."""
+    def phone_prov(p: dict[str, Any], d: str) -> str:
+        return "contact record" if d in set(p["phone_digits"]) else "seen in messages"
+
+    def email_prov(p: dict[str, Any], e: str) -> str:
+        return "contact record" if e in set(p["emails"]) else "seen in messages"
+
+    lines = [f"- phone {fmt_phone(d)} is in BOTH records "
+             f"(A: {phone_prov(pa, d)}; B: {phone_prov(pb, d)})"
+             for d in sorted(all_phones(pa) & all_phones(pb))]
+    lines += [f"- email {e} is in BOTH records "
+              f"(A: {email_prov(pa, e)}; B: {email_prov(pb, e)})"
+              for e in sorted(all_emails(pa) & all_emails(pb))]
+    if not lines:
+        return ""
+    return ("SHARED IDENTIFIERS (computed by code from normalized values — literally identical "
+            "on both sides; formatting differences were already resolved):\n" + "\n".join(lines))
+
+
 def judge_prompt(pa: dict[str, Any], pb: dict[str, Any]) -> str:
-    return f"{_render_side('A', pa)}\n\n{_render_side('B', pb)}\n\nAre A and B the same person?"
+    shared = shared_identifier_note(pa, pb)
+    shared_block = f"\n\n{shared}" if shared else ""
+    return f"{_render_side('A', pa)}\n\n{_render_side('B', pb)}{shared_block}\n\nAre A and B the same person?"
+
+
+def slam_dunk_verdict(pa: dict[str, Any], pb: dict[str, Any]) -> dict[str, Any] | None:
+    """CODE-decided merge for the can't-miss case: identical normalized name PLUS a shared
+    non-owner identifier (phone or full email). Equality this strong must never ride on model
+    attention — a judge once kept two same-name records apart at 0.77 while both carried the
+    same mobile number, reasoning from career drift. Different-name pairs sharing an identifier
+    (couples, front desks, role inboxes) still go to the judge."""
+    if not pa["name_key"] or pa["name_key"] != pb["name_key"]:
+        return None
+    phones = sorted(all_phones(pa) & all_phones(pb))
+    emails = sorted(all_emails(pa) & all_emails(pb))
+    if not phones and not emails:
+        return None
+    shared = ", ".join([fmt_phone(d) for d in phones] + emails)
+    return {"same_person": True, "confidence": 0.99,
+            "tone_toward_a": "", "tone_toward_b": "", "tone_consistent": True,
+            "reason": f"deterministic: identical name + shared {shared}"}
 
 
 async def judge_pair(client: Any, pa: dict[str, Any], pb: dict[str, Any], *, model: str,
@@ -423,9 +525,7 @@ def inject_section(path: Path, body: str) -> None:
 
 def deterministic_verdict(pa: dict[str, Any], pb: dict[str, Any]) -> dict[str, Any]:
     """Offline/tests fallback (--no-llm): shared contact or near-exact name."""
-    full_a = set(pa["emails"]) | set(pa.get("extra_emails") or [])
-    full_b = set(pb["emails"]) | set(pb.get("extra_emails") or [])
-    shared = bool(full_a & full_b) or bool(set(pa["phone_digits"]) & set(pb["phone_digits"]))
+    shared = bool(all_emails(pa) & all_emails(pb)) or bool(all_phones(pa) & all_phones(pb))
     nsim = jaro_winkler(pa["name_key"], pb["name_key"])
     same = shared or nsim >= 0.97
     return {"same_person": same, "confidence": 0.95 if shared else round(nsim, 2),
@@ -440,7 +540,7 @@ def _person_sig(p: dict[str, Any]) -> str:
     return "\x1f".join([
         p.get("name_key", ""),
         "|".join(sorted(set(p.get("emails") or []) | set(p.get("extra_emails") or []))),
-        "|".join(sorted(p.get("phone_digits") or [])),
+        "|".join(sorted(all_phones(p))),
         prof.get("relationship", ""), prof.get("title", ""),
         "|".join(sorted(prof.get("employers") or [])),
         prof.get("school", ""), prof.get("location", ""),
@@ -543,13 +643,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     people = load_people(index, dossier_dir, Path(args.raw_dir), Path(args.facts_dir))
     pairs = sorted(generate_pairs(people))
 
+    # Deterministic gate first: identical name + shared identifier merges in code — free, and
+    # immune to cache staleness and judge attention alike.
+    slam: list[tuple[int, int, dict[str, Any]]] = []
+    rest: list[tuple[int, int]] = []
+    for a, b in pairs:
+        verdict = slam_dunk_verdict(people[a], people[b])
+        if verdict:
+            slam.append((a, b, verdict))
+        else:
+            rest.append((a, b))
+
     # Incremental cache: reuse verdicts from the prior merge-verdicts.csv for unchanged pairs, so a
     # rerun only spends on NEW or changed pairs. --refresh ignores the cache and re-judges all.
     cache_path = Path(args.out_csv).with_name("merge-verdicts.csv")
     refresh = getattr(args, "refresh", False)
     cache = {} if refresh else load_cached_verdicts(cache_path)
     legacy = {} if refresh else load_legacy_verdicts(cache_path, people)
-    reused, to_judge = split_cached_pairs(pairs, people, cache, legacy)
+    reused, to_judge = split_cached_pairs(rest, people, cache, legacy)
     adopted = len({frozenset({people[a]["slug"], people[b]["slug"]}) for a, b, _s, _v in reused} & set(legacy))
 
     if getattr(args, "dry_run", False):
@@ -558,6 +669,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return {
             "source": "cluster_merge_candidates", "status": "dry_run",
             "people": len(people), "candidate_pairs": len(pairs),
+            "pairs_deterministic": len(slam),
             "cached_reused": len(reused), "legacy_adopted": adopted,
             "candidate_pairs_to_judge": len(to_judge),
             "estimated_cost_usd_low": round(len(to_judge) * per_lo, 2),
@@ -566,7 +678,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
         }
 
-    verdicts: list[dict[str, Any]] = [{"a": a, "b": b, "sig": sig, **v} for a, b, sig, v in reused]
+    verdicts: list[dict[str, Any]] = [
+        {"a": a, "b": b, "sig": pair_sig(people[a], people[b]), **v} for a, b, v in slam
+    ] + [{"a": a, "b": b, "sig": sig, **v} for a, b, sig, v in reused]
     usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     use_llm = not getattr(args, "no_llm", False)
 
@@ -639,6 +753,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "judge": "llm" if use_llm else "deterministic",
         "people": len(people),
         "pairs_total": len(pairs),
+        "pairs_deterministic": len(slam),  # merged in code (identical name + shared identifier)
         "pairs_judged": len(to_judge),   # actually sent to the judge this run (rest reused from cache)
         "pairs_reused": len(reused),
         "pairs_legacy_adopted": adopted,  # reused from a pre-sig file by name match (upgraded in place)
