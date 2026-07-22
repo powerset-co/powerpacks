@@ -19,7 +19,6 @@ import platform
 import queue
 import re
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -572,7 +571,6 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     output: list[str] = []
     opened = False
     connected = False
-    interrupted_bootstrap_sync = False
     started = time.time()
 
     lines: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -587,7 +585,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     stderr_thread.start()
 
     def handle_line(source: str, text: str) -> None:
-        nonlocal opened, connected, interrupted_bootstrap_sync
+        nonlocal opened, connected
         output.append(text)
         event = None
         if source == "stderr" and text.startswith("{"):
@@ -606,9 +604,6 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                 emit_status("Refreshed WhatsApp QR page.")
             elif event_name == "connected":
                 connected = True
-                if not interrupted_bootstrap_sync:
-                    proc.send_signal(signal.SIGINT)
-                    interrupted_bootstrap_sync = True
             return
         stdout_payload = wa_qr_payload(text) if source == "stdout" else None
         if stdout_payload:
@@ -648,22 +643,27 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
             "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-whatsapp.",
             "command": command_text(cmd),
         })
-    if returncode != 0 and not connected:
-        raise PrimitiveBlocked({
-            "status": "blocked_user_action",
-            "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-whatsapp.",
-            "command": command_text(cmd),
-            "qr_page": str(DEFAULT_QR_HTML),
-            "qr_png": str(DEFAULT_QR_PNG),
-            "detail": joined[-2000:],
-        })
+    if returncode != 0:
+        if not connected:
+            raise PrimitiveBlocked({
+                "status": "blocked_user_action",
+                "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-whatsapp.",
+                "command": command_text(cmd),
+                "qr_page": str(DEFAULT_QR_HTML),
+                "qr_png": str(DEFAULT_QR_PNG),
+                "detail": joined[-2000:],
+            })
+        raise PrimitiveFailed(
+            "WhatsApp connected, but its initial history sync did not finish. "
+            "Rerun $import-whatsapp to try again."
+        )
     return {
         "command": command_text(cmd),
         "returncode": returncode,
         "qr_page": str(DEFAULT_QR_HTML),
         "qr_png": str(DEFAULT_QR_PNG),
         "connected_event": connected,
-        "auth_bootstrap_sync_interrupted": interrupted_bootstrap_sync,
+        "auth_bootstrap_sync_completed": connected and returncode == 0,
     }
 
 

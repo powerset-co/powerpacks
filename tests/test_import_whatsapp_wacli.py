@@ -198,15 +198,19 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(ctx.exception.payload["install_command"], "brew install qrencode")
         self.assertIn("qrencode is required", ctx.exception.payload["message"])
 
-    def test_auth_interrupts_wacli_bootstrap_sync_after_connected_event(self) -> None:
+    def test_auth_waits_for_wacli_bootstrap_sync_after_connected_event(self) -> None:
         class FakeProc:
             def __init__(self) -> None:
                 self.stdout = io.StringIO("2@qr-payload\n")
                 self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
                 self.returncode = None
                 self.signals: list[int] = []
+                self.poll_calls = 0
 
             def poll(self):
+                self.poll_calls += 1
+                if self.poll_calls > 1:
+                    self.returncode = 0
                 return self.returncode
 
             def send_signal(self, sig: int) -> None:
@@ -227,9 +231,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 mock.patch.object(mod, "update_qr_page") as update_qr_page:
             result = mod.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
 
-        self.assertEqual(fake.signals, [mod.signal.SIGINT])
+        self.assertEqual(fake.signals, [])
         self.assertTrue(result["connected_event"])
-        self.assertTrue(result["auth_bootstrap_sync_interrupted"])
+        self.assertTrue(result["auth_bootstrap_sync_completed"])
         self.assertIn("--events", result["command"])
         update_qr_page.assert_called()
 
@@ -239,8 +243,12 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 self.stdout = io.StringIO("2@qr-payload\n")
                 self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
                 self.returncode = None
+                self.poll_calls = 0
 
             def poll(self):
+                self.poll_calls += 1
+                if self.poll_calls > 1:
+                    self.returncode = 0
                 return self.returncode
 
             def send_signal(self, sig: int) -> None:
@@ -261,6 +269,33 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             mod.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s", open_qr_page=False)
 
         self.assertFalse(update_qr_page.call_args.kwargs["open_page"])
+
+    def test_auth_fails_when_bootstrap_exits_nonzero_after_connected(self) -> None:
+        class FakeProc:
+            def __init__(self) -> None:
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
+                self.returncode = None
+                self.poll_calls = 0
+
+            def poll(self):
+                self.poll_calls += 1
+                if self.poll_calls > 1:
+                    self.returncode = 1
+                return self.returncode
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+            def wait(self) -> int:
+                return self.returncode if self.returncode is not None else 1
+
+        with mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
+                mock.patch.object(mod.subprocess, "Popen", return_value=FakeProc()), \
+                self.assertRaises(mod.PrimitiveFailed) as ctx:
+            mod.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
+
+        self.assertIn("initial history sync did not finish", str(ctx.exception))
 
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:
