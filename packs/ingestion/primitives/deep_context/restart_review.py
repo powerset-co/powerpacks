@@ -13,10 +13,12 @@ the top without re-spending anything:
 - synthetic-people.csv ``approved`` cells are reset to pending (they mirror
   human worth clicks and are re-derived / re-clicked for free).
 
-Everything else resets itself: the next ``bin/deep-context review`` launch
-writes worth back to ``awaiting_user``, which clears the completed-stage ladder
-and the Enrich Continue handoff; the enrichment selection sha then mismatches,
-so the flow re-previews and re-runs FROM CACHE (paid Parallel results are
+The restart also resets the review manifest's completed-stage ladder (stage
+back to ``worth``, nothing completed — which also clears the Enrich Continue
+handoff). The ladder ONLY ever moves forward during a flow, so this explicit
+restart is the single sanctioned backward move and owns the reset. The
+enrichment selection sha then mismatches, so the flow re-previews and re-runs
+FROM CACHE (paid Parallel results are
 reused). Machine columns (``llm_worth`` / reject columns), facts, dossiers,
 verdicts, deep-research artifacts, and profile caches are untouched — the
 machine's work survives; only the human's answers are cleared. This is the
@@ -37,7 +39,10 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.common import LINKEDIN_OVERRIDES_CSV
+from packs.ingestion.primitives.deep_context.common import (
+    LINKEDIN_OVERRIDES_CSV,
+    REVIEW_MANIFEST,
+)
 from packs.ingestion.primitives.deep_context.review_store import (
     load_override_rows,
     write_override_rows,
@@ -84,6 +89,27 @@ def clear_human_identity_decisions(rows: dict[str, dict[str, str]]) -> int:
     return cleared
 
 
+def reset_review_manifest(path: Path, *, apply: bool) -> dict[str, str]:
+    """Reset the completed-stage ladder: stage back to worth, nothing completed.
+
+    During a flow the ladder only moves forward (awaiting_user writes never
+    demote it), so the explicit restart is the ONLY place it rewinds. Clearing
+    ``completed_stages`` also clears the Enrich Continue handoff ("enrich" is
+    recorded there)."""
+    if not path.exists():
+        return {"status": "missing"}
+    if not apply:
+        return {"status": "would_reset"}
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        manifest = {}
+    manifest.update({"stage": "worth", "status": "awaiting_user",
+                     "completed_stages": []})
+    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return {"status": "reset"}
+
+
 def clear_synthetic_approvals(path: Path, *, apply: bool) -> dict[str, int | str]:
     """Reset synthetic-people.csv ``approved`` to pending. Returns counts."""
     if not path.exists():
@@ -109,6 +135,7 @@ def main() -> int:
         description="Clear HUMAN review decisions; keep all machine (LLM) work")
     parser.add_argument("--review", type=Path, default=LINKEDIN_OVERRIDES_CSV)
     parser.add_argument("--synthetic-people", type=Path, default=SYNTHETIC_PEOPLE_CSV)
+    parser.add_argument("--manifest", type=Path, default=REVIEW_MANIFEST)
     parser.add_argument("--apply", action="store_true",
                         help="write the cleared files (default is a dry-run "
                              "report); current files are copied to .bkup-* first")
@@ -130,12 +157,14 @@ def main() -> int:
             write_override_rows(args.review, rows)
         payload["synthetic"] = clear_synthetic_approvals(
             args.synthetic_people, apply=True)
+        payload["manifest"] = reset_review_manifest(args.manifest, apply=True)
         payload["status"] = "applied"
         payload["next"] = ("rerun `bin/deep-context review --fresh` — the queue "
                            "re-opens with the machine verdicts intact")
     else:
         payload["synthetic"] = clear_synthetic_approvals(
             args.synthetic_people, apply=False)
+        payload["manifest"] = reset_review_manifest(args.manifest, apply=False)
         payload["status"] = "dry_run"
         payload["next"] = "pass --apply to clear (files are backed up first)"
 

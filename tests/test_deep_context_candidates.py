@@ -38,6 +38,7 @@ from packs.ingestion.primitives.deep_context import (
     reconcile_deep_research as dresearch,
     reconcile_linkedin as reconcile,
     reconcile_review_web as web,
+    restart_review as restart,
     review_store,
     synthesize_person_context as synth,
     worth_view,
@@ -2504,7 +2505,7 @@ class TestStagedReviewUI(unittest.TestCase):
         })
         self.assertFalse(web.is_effective_no(parent))
 
-    def test_manifest_completion_requires_zero_pending_and_rejects_stale_counts(self):
+    def test_manifest_completion_requires_zero_pending_and_is_durable(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             path = base / "review" / "manifest.json"
@@ -2521,8 +2522,88 @@ class TestStagedReviewUI(unittest.TestCase):
                 review_path=base / "review.csv", synthetic_path=base / "synthetic.csv")
             self.assertEqual((manifest["stage"], manifest["status"]), ("worth", "completed"))
             self.assertEqual(manifest["counts"]["pending"], 0)
+            self.assertIn("worth", manifest["completed_stages"])
             self.assertTrue(web.phase_is_completed("worth", accepted, path))
-            self.assertFalse(web.phase_is_completed("worth", pending, path))
+            # Feed-forward: completion is DURABLE — machine maybes appearing
+            # later never reopen the gate (they surface in the Review tab).
+            self.assertTrue(web.phase_is_completed("worth", pending, path))
+
+    def test_feed_forward_completed_worth_survives_awaiting_user_and_relaunch(self):
+        # awaiting_user writes (a later worth click, a server relaunch with
+        # launched=True) record status but never demote the completed ladder.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            path = base / "review" / "manifest.json"
+            done_parent = self._candidate_parent("yes", "user")
+            done_parent["candidates"][0]["worth"] = done_parent["worth"]
+            accepted = web.review_progress([done_parent])
+            pending = web.review_progress([done_parent, self._candidate_parent()])
+            web.write_review_manifest("worth", "completed", accepted, path=path,
+                                      review_path=base / "review.csv",
+                                      synthetic_path=base / "synthetic.csv")
+            for launched in (False, True):
+                manifest = web.write_review_manifest(
+                    "worth", "awaiting_user", pending, path=path,
+                    review_path=base / "review.csv",
+                    synthetic_path=base / "synthetic.csv", launched=launched)
+                self.assertIn("worth", manifest["completed_stages"])
+                self.assertTrue(web.phase_is_completed("worth", pending, path))
+
+    def test_feed_forward_next_action_never_regresses_to_review_people(self):
+        # New machine maybes after worth completion: the workflow keeps moving
+        # (enrichment is next), it does not send the user back to worth.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review_manifest = base / "review" / "manifest.json"
+            enrichment_manifest = base / "research" / "manifest.json"
+            done_parent = self._candidate_parent("yes", "user")
+            done_parent["candidates"][0]["worth"] = done_parent["worth"]
+            accepted = web.review_progress([done_parent])
+            web.write_review_manifest("worth", "completed", accepted,
+                                      path=review_manifest,
+                                      review_path=base / "review.csv",
+                                      synthetic_path=base / "synthetic.csv")
+            snapshot = [done_parent, self._candidate_parent()]  # a new maybe
+            status = web.workflow_status_from_parents(
+                snapshot, manifest_path=review_manifest,
+                enrichment_manifest_path=enrichment_manifest)
+            self.assertNotEqual(status["next_action"], "review_people")
+            self.assertEqual(
+                web.browser_stage_for_next_action(status["next_action"]), "enrich")
+
+    def test_feed_forward_enrich_screen_only_blocks_before_completion(self):
+        pending = web.review_progress(
+            [self._candidate_parent(), self._candidate_parent("yes", "user")])
+        enrichment = {"state": web.STATE_FREE_PENDING}
+        blocked = web.render_enrichment(enrichment, pending, worth_complete=False)
+        self.assertIn("Review in progress", blocked)
+        forward = web.render_enrichment(enrichment, pending, worth_complete=True)
+        self.assertNotIn("Review in progress", forward)
+
+    def test_restart_owns_the_ladder_reset(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            path = base / "review" / "manifest.json"
+            done_parent = self._candidate_parent("yes", "user")
+            done_parent["candidates"][0]["worth"] = done_parent["worth"]
+            accepted = web.review_progress([done_parent])
+            web.write_review_manifest("worth", "completed", accepted, path=path,
+                                      review_path=base / "review.csv",
+                                      synthetic_path=base / "synthetic.csv")
+            self.assertEqual(restart.reset_review_manifest(path, apply=False),
+                             {"status": "would_reset"})
+            self.assertTrue(web.phase_is_completed("worth", accepted, path))  # dry-run untouched
+            self.assertEqual(restart.reset_review_manifest(path, apply=True),
+                             {"status": "reset"})
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual((manifest["stage"], manifest["status"],
+                              manifest["completed_stages"]),
+                             ("worth", "awaiting_user", []))
+            self.assertFalse(web.phase_is_completed("worth", accepted, path))
+            self.assertFalse(web.enrichment_handoff_completed(path))
+            missing = base / "no-such" / "manifest.json"
+            self.assertEqual(restart.reset_review_manifest(missing, apply=True),
+                             {"status": "missing"})
 
     def test_manifest_launch_is_fresh_and_custom_filename_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:
