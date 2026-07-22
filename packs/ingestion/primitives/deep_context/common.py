@@ -63,9 +63,44 @@ GMAIL_CHANNEL = "gmail_msgvault"
 IMESSAGE_CHANNEL = "imessage"
 WHATSAPP_CHANNEL = "whatsapp"
 
+# Stable inputs consumed by synthesis. Collection timestamps and the stored
+# fingerprint itself are deliberately excluded so an unchanged local source is
+# a cache hit across repeated runs.
+_BUNDLE_EVIDENCE_FIELDS = (
+    "person_id",
+    "full_name",
+    "emails",
+    "phones",
+    "source_channels",
+    "groups",
+    "thread_participants",
+    "messages",
+    "messages_available",
+    "capped",
+    "collection_policy",
+)
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def bundle_evidence_fingerprint(bundle: dict[str, Any]) -> str:
+    """Hash exactly the bounded evidence a dossier synthesis consumes.
+
+    The hash stays inside the existing raw/facts outputs; it is cache metadata,
+    not a new ledger. Including normalized message content means newly synced,
+    edited, deleted, or newly backfilled older messages all invalidate the
+    affected person, while ``collected_at`` never causes false refreshes.
+    """
+    evidence = {field: bundle.get(field) for field in _BUNDLE_EVIDENCE_FIELDS}
+    payload = json.dumps(
+        evidence,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def load_env() -> None:

@@ -268,12 +268,13 @@ class TestCandidateBundlesInheritDownstream(unittest.TestCase):
             base = Path(d)
             raw, facts, dossiers = base / "raw", base / "facts", base / "dossiers"
             raw.mkdir(), facts.mkdir()
-            common.write_json(raw / f"{self.PID}.json", {
+            bundle = {
                 "person_id": self.PID, "full_name": "Cass Doe", "emails": ["cass@x.com"],
                 "phones": [], "source_channels": ["gmail_msgvault"],
                 "messages": [{"at": "2026-01-01T00:00:00Z", "channel": "gmail",
                               "direction": "from_them", "text": "hi"}],
-            })
+            }
+            common.write_json(raw / f"{self.PID}.json", bundle)
             pending = synth.pending_target_paths(raw, facts, force=False, person_id=self.PID)
             self.assertEqual([p.stem for p in pending], [self.PID])           # stem == person_id
             (facts / f"{self.PID}.jsonl").write_text(json.dumps({
@@ -282,6 +283,7 @@ class TestCandidateBundlesInheritDownstream(unittest.TestCase):
                           "topics": [], "identifiers": [], "notable_events": [],
                           "aliases": [], "shared_context": [],
                           "network_worth": {"decision": "yes", "reason": "real correspondent"}},
+                "input_evidence_fingerprint": common.bundle_evidence_fingerprint(bundle),
             }) + "\n", encoding="utf-8")
             self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id=""), [])
             compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
@@ -1013,25 +1015,58 @@ class TestNetworkWorth(unittest.TestCase):
             raw, facts = base / "raw", base / "facts"
             raw.mkdir()
             facts.mkdir()
-            for pid in ("yes-person", "maybe-person", "blank-person", "human-person"):
-                (raw / f"{pid}.json").write_text(json.dumps({"person_id": pid}), encoding="utf-8")
-            (facts / "yes-person.jsonl").write_text(_facts_record("yes", "stable") + "\n",
-                                                     encoding="utf-8")
-            (facts / "maybe-person.jsonl").write_text(_facts_record("maybe", "uncertain") + "\n",
-                                                       encoding="utf-8")
-            review_rows = {"human-person": {
-                "public_identifier": "human-person",
-                "person_id": "human-person",
-                "network_worth": "no",
-            }}
+            fingerprints = {}
+            for pid in (
+                "yes-person",
+                "maybe-person",
+                "blank-person",
+                "human-person",
+                "changed-human",
+            ):
+                bundle = {"person_id": pid, "messages": [{"text": pid}]}
+                common.write_json(raw / f"{pid}.json", bundle)
+                fingerprints[pid] = common.bundle_evidence_fingerprint(bundle)
+
+            def record(decision: str, reason: str, fingerprint: str) -> str:
+                value = json.loads(_facts_record(decision, reason))
+                value["input_evidence_fingerprint"] = fingerprint
+                return json.dumps(value)
+
+            (facts / "yes-person.jsonl").write_text(
+                record("yes", "stable", fingerprints["yes-person"]) + "\n",
+                encoding="utf-8",
+            )
+            (facts / "maybe-person.jsonl").write_text(
+                record("maybe", "uncertain", fingerprints["maybe-person"]) + "\n",
+                encoding="utf-8",
+            )
+            (facts / "human-person.jsonl").write_text(
+                record("yes", "old machine read", fingerprints["human-person"]) + "\n",
+                encoding="utf-8",
+            )
+            (facts / "changed-human.jsonl").write_text(
+                record("yes", "stale machine read", "old-fingerprint") + "\n",
+                encoding="utf-8",
+            )
+            review_rows = {
+                pid: {
+                    "public_identifier": pid,
+                    "person_id": pid,
+                    "network_worth": "no",
+                }
+                for pid in ("human-person", "changed-human")
+            }
             normal = synth.pending_target_paths(
                 raw, facts, force=False, person_id="", review_rows=review_rows)
-            self.assertEqual([path.stem for path in normal], ["blank-person", "maybe-person"])
+            self.assertEqual(
+                [path.stem for path in normal],
+                ["blank-person", "changed-human", "maybe-person"],
+            )
             rejudge = synth.pending_target_paths(
                 raw, facts, force=False, rejudge=True, person_id="", review_rows=review_rows)
             self.assertEqual(
                 [path.stem for path in rejudge],
-                ["blank-person", "human-person", "maybe-person", "yes-person"],
+                ["blank-person", "changed-human", "human-person", "maybe-person", "yes-person"],
             )
 
     def test_channel_policy_splits_email_phone_and_mixed_without_linkedin(self):
@@ -1528,6 +1563,16 @@ class TestLlmWorthColumns(unittest.TestCase):
             row = review_store.load_override_rows(review)[pid]
             self.assertEqual(normal["skipped_human"], 1)
             self.assertEqual((row["network_worth"], row["llm_worth"]), ("yes", "maybe"))
+
+            review_store.mirror_facts_worth(
+                review,
+                facts,
+                include_human_person_ids={pid},
+            )
+            row = review_store.load_override_rows(review)[pid]
+            self.assertEqual(row["network_worth"], "yes")
+            self.assertEqual((row["llm_worth"], row["llm_worth_reason"]),
+                             ("no", "new machine read"))
 
             review_store.mirror_facts_worth(review, facts, include_human_rows=True)
             row = review_store.load_override_rows(review)[pid]

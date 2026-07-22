@@ -40,6 +40,7 @@ from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     RAW_DIR,
     Person,
+    bundle_evidence_fingerprint,
     emit,
     load_people,
     now_iso,
@@ -75,6 +76,56 @@ def _bundle_matches_policy(bundle: dict[str, Any], args: argparse.Namespace) -> 
             or policy.get("max_group_size") == args.max_group_size
         )
     )
+
+
+def _wacli_readable(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return bool(con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'"
+            ).fetchone())
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+
+
+def _bundle_sources(bundle: dict[str, Any]) -> set[str]:
+    channels = {
+        str(message.get("channel") or "").strip().lower()
+        for message in bundle.get("messages") or []
+        if isinstance(message, dict)
+    }
+    used: set[str] = set()
+    if "gmail" in channels or bundle.get("thread_participants"):
+        used.add("gmail")
+    if channels & {"imessage", "imessage_group"} or bundle.get("groups"):
+        used.add("imessage")
+    if "whatsapp" in channels:
+        used.add("whatsapp")
+    return used
+
+
+def _unavailable_existing_sources(
+    bundle: dict[str, Any],
+    *,
+    msgvault_available: bool,
+    imessage_available: bool,
+    wacli_available: bool,
+) -> list[str]:
+    available = {
+        source
+        for source, ready in (
+            ("gmail", msgvault_available),
+            ("imessage", imessage_available),
+            ("whatsapp", wacli_available),
+        )
+        if ready
+    }
+    return sorted(_bundle_sources(bundle) - available)
 
 
 def _validate_people_csv(path: Path) -> None:
@@ -182,9 +233,13 @@ def collect_one(
         whatsapp = sources.read_whatsapp(person, wacli_db, cap=deep_cap)
         dm_chat.extend(sources.read_imessage(person, chat_db, cap=deep_cap))
         dm_chat.extend(whatsapp)
-        # Reuse the WhatsApp pull for the honest total instead of re-querying it.
-        # (len(whatsapp) is post-cap; a count_whatsapp_dms() is a clean follow-up.)
-        true_chat_total = sources.count_imessage_dms(person, chat_db) + len(whatsapp)
+        # Counts remain uncapped even when the body sample is full. In particular,
+        # an older WhatsApp backfill beyond ``deep_cap`` must still invalidate the
+        # person's evidence fingerprint and surface the deeper available total.
+        true_chat_total = (
+            sources.count_imessage_dms(person, chat_db)
+            + sources.count_whatsapp_dms(person, wacli_db)
+        )
         if include_groups:
             group_chat = sources.read_imessage_group_messages(
                 person, chat_db, max_group_size=max_group_size, cap=deep_cap)
@@ -242,6 +297,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             file=sys.stderr, flush=True,
         )
 
+    wacli_available = _wacli_readable(wacli_db)
+
     if not args.dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -256,17 +313,31 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     with_context = 0
     capped = 0
     skipped_existing = 0
+    refreshed_existing = 0
+    retained_source_unavailable = 0
     channel_counts = {"gmail": 0, "imessage": 0, "whatsapp": 0}
     total_messages = 0
     try:
         for person in selected_people(args, people_csv):
             people_total += 1
             bundle_path = out_dir / f"{person.person_id}.json"
-            if bundle_path.exists() and not args.force and not args.dry_run:
-                existing = _load_bundle(bundle_path)
-                if _bundle_matches_policy(existing, args):
-                    skipped_existing += 1
+            existing = _load_bundle(bundle_path) if bundle_path.exists() else {}
+            if existing:
+                unavailable = _unavailable_existing_sources(
+                    existing,
+                    msgvault_available=msgvault_con is not None,
+                    imessage_available=bool(chat_probe["exists"] and chat_probe["readable"]),
+                    wacli_available=wacli_available,
+                )
+                if unavailable:
+                    retained_source_unavailable += 1
                     with_context += 1
+                    print(
+                        f"[collect] WARNING: retaining {person.person_id} because prior "
+                        f"source(s) are unavailable: {', '.join(unavailable)}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     continue
             messages, available = collect_one(
                 person,
@@ -286,14 +357,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                     bundle_path.unlink(missing_ok=True)
                 continue
             with_context += 1
-            total_messages += len(messages)
-            if available > len(messages):
-                capped += 1
-            for msg in messages:
-                channel_counts[msg["channel"]] = channel_counts.get(msg["channel"], 0) + 1
-            if args.dry_run:
-                continue
-            write_json(bundle_path, {
+            candidate = {
                 "person_id": person.person_id,
                 "full_name": person.full_name,
                 "emails": person.emails,
@@ -310,7 +374,27 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                     "max_group_size": args.max_group_size if args.include_groups else 0,
                 },
                 "collected_at": now_iso(),
-            })
+            }
+            candidate["evidence_fingerprint"] = bundle_evidence_fingerprint(candidate)
+            unchanged = (
+                bool(existing)
+                and not args.force
+                and _bundle_matches_policy(existing, args)
+                and bundle_evidence_fingerprint(existing) == candidate["evidence_fingerprint"]
+            )
+            if unchanged and not args.dry_run:
+                skipped_existing += 1
+                continue
+            total_messages += len(messages)
+            if available > len(messages):
+                capped += 1
+            for msg in messages:
+                channel_counts[msg["channel"]] = channel_counts.get(msg["channel"], 0) + 1
+            if args.dry_run:
+                continue
+            if existing:
+                refreshed_existing += 1
+            write_json(bundle_path, candidate)
             if with_context % 25 == 0:
                 print(f"[collect] {with_context} bundles written", file=sys.stderr, flush=True)
     finally:
@@ -329,6 +413,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "people_total": people_total,
         "people_with_context": with_context,
         "people_skipped_existing": skipped_existing,
+        "people_refreshed_existing": refreshed_existing,
+        "people_retained_source_unavailable": retained_source_unavailable,
         "total_messages_sampled": total_messages,
         "people_capped": capped,
         "channel_message_counts": channel_counts,
@@ -342,7 +428,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "msgvault_available": msgvault_con is not None or msgvault_db.exists(),
         "chat_db_available": chat_db.exists(),
         "chat_db_probe": chat_probe,
-        "wacli_available": wacli_db.exists(),
+        "wacli_available": wacli_available,
         "out_dir": str(out_dir),
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "updated_at": now_iso(),

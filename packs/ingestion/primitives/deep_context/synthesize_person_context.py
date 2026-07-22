@@ -44,11 +44,13 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
     LINKEDIN_OVERRIDES_CSV,
     RAW_DIR,
+    bundle_evidence_fingerprint,
     emit,
     load_env,
     load_owner,
     now_iso,
     owner_background_block,
+    read_jsonl,
     write_json,
 )
 from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
@@ -376,6 +378,7 @@ async def synthesize_person(
     return {
         "person_id": person.get("person_id"),
         "facts": profile,
+        "input_evidence_fingerprint": bundle_evidence_fingerprint(person),
         "usage": usage_total,
         "batches_used": batches_used,
         "batches_total": len(batches),
@@ -433,10 +436,11 @@ def pending_target_paths(
     Streaming relies on this: we hold only the path list (cheap), then load bundle
     bodies one chunk at a time. The 'has messages' check is deferred to load time.
 
-    Normal runs are monotonic: keep terminal machine Yes/No and human Yes/No,
-    while retrying missing/Maybe verdicts. ``rejudge`` deliberately ignores both
-    caches and evaluates every dossier; the review writer still preserves the
-    human-owned column."""
+    Normal runs are monotonic only while their raw evidence is unchanged: keep
+    terminal machine Yes/No and human Yes/No, while retrying missing/Maybe
+    verdicts. A changed raw fingerprint always re-synthesizes that person.
+    ``rejudge`` deliberately ignores both caches and evaluates every dossier;
+    the review writer still preserves the human-owned column."""
     paths: list[Path] = []
     rows = review_rows or {}
     for path in sorted(raw_dir.glob("*.json")):
@@ -445,12 +449,24 @@ def pending_target_paths(
         pid = path.stem
         if person_id and pid != person_id:
             continue
-        if not force and not rejudge:
-            if has_human_worth(rows, pid):
-                continue
-            existing = llm_network_worth(pid, facts_dir).get("decision", "")
-            if existing in {"yes", "no"}:
-                continue
+        if force or rejudge:
+            paths.append(path)
+            continue
+        bundle = _load_bundle(path)
+        current_fingerprint = bundle_evidence_fingerprint(bundle)
+        facts_path = facts_dir / f"{pid}.jsonl"
+        fact_records = list(read_jsonl(facts_path))
+        prior_fingerprint = str(
+            (fact_records[-1] if fact_records else {}).get("input_evidence_fingerprint") or ""
+        )
+        if current_fingerprint != prior_fingerprint:
+            paths.append(path)
+            continue
+        if has_human_worth(rows, pid):
+            continue
+        existing = llm_network_worth(pid, facts_dir).get("decision", "")
+        if existing in {"yes", "no"}:
+            continue
         paths.append(path)
     return paths
 
@@ -490,6 +506,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         person_id=args.person,
         review_rows=review_rows,
     )
+    processed_person_ids = {path.stem for path in paths}
 
     def make_batches(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         newest = sorted(messages, key=lambda m: m.get("at") or "", reverse=True)
@@ -534,6 +551,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             review_path,
             facts_dir,
             include_human_rows=bool(args.rejudge),
+            include_human_person_ids=processed_person_ids,
         )
         manifest = {
             "source": "synthesize_person_context",
@@ -577,6 +595,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         rec = {
             "chunk_index": 0,
             "facts": result["facts"],
+            "input_evidence_fingerprint": result["input_evidence_fingerprint"],
             "usage": result["usage"],
             "batches_used": result["batches_used"],
             "batches_total": result["batches_total"],
@@ -624,6 +643,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         review_path,
         facts_dir,
         include_human_rows=bool(args.rejudge),
+        include_human_person_ids=processed_person_ids,
     )
     billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
     manifest = {
