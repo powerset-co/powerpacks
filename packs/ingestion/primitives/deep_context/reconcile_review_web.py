@@ -1648,10 +1648,11 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
             and existing.get("stage") in {"worth", "enrich", "linkedin"}):
         completed.add(str(existing["stage"]))
     if status == "awaiting_user":
-        completed.discard(stage)
-        if stage == "worth":
-            completed.discard("enrich")
-            completed.discard("linkedin")
+        # awaiting_user records status for display but NEVER demotes
+        # completed_stages: the flow only moves forward, so a server relaunch
+        # or later machine maybes cannot reopen a finished stage. Clearing the
+        # ladder is the restart primitive's explicit job.
+        pass
     else:
         # Worth must precede LinkedIn, but enrichment does NOT block it: the
         # LinkedIn stage is reviewable (and completable) even when enrichment is
@@ -1726,7 +1727,12 @@ def phase_is_completed(stage: str, progress: dict[str, int], path: Path = REVIEW
     manifest = read_review_manifest(path)
     counts = phase_counts(progress, stage)
     completed = set(manifest.get("completed_stages") or [])
-    if stage in completed and manifest.get("stage") != stage:
+    if stage in completed:
+        # The ladder only moves FORWARD: once a stage is recorded completed,
+        # later machine work (new maybes from a re-judge or fresh synthesis)
+        # never reopens the gate — new items soft-surface in that stage's
+        # Review tab instead of yanking the user backward. The one sanctioned
+        # backward move is the explicit restart, which clears completed_stages.
         return True
     return (manifest.get("stage") == stage
             and manifest.get("status") == "completed"
@@ -2612,7 +2618,8 @@ def _phase_view(params: dict[str, list[str]], progress: dict[str, int], manifest
     return requested if requested in {"worth", "enrich", "linkedin", "done"} else "worth"
 
 
-def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> str:
+def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int],
+                      *, worth_complete: bool = False) -> str:
     """Render one derived enrichment state (see derive_enrichment_state) as HTML.
     Purely presentational — the state rules live in the derive function alone."""
     state = str(enrichment.get("state") or STATE_FREE_PENDING)
@@ -2630,7 +2637,10 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int]) -> s
            aria-label='Preparing enrichment'>
         <div class='enrich-progress-fill'></div>
       </div>"""
-    if progress["worth_pending"]:
+    if progress["worth_pending"] and not worth_complete:
+        # Blocks only an UNCOMPLETED worth stage. Once worth was completed,
+        # later machine maybes never block enrichment — they soft-surface in
+        # the Review tab (feed-forward).
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>1</div>"
                 "<h2>Review in progress</h2>"
                 f"<p>{progress['worth_pending']} decisions left · {progress['lookup_ready']} currently yes</p>"
@@ -2898,7 +2908,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
             enrichment_state = derive_enrichment_state(
                 selection, verdicts_path=verdicts_path, review_path=review_path,
                 facts_dir=facts_dir, manifest_path=enrichment_manifest_path)
-        content = render_enrichment(enrichment_state, progress)
+        content = render_enrichment(enrichment_state, progress,
+                                    worth_complete=bool(worth_complete))
     elif view == "linkedin":
         content = linkedin_review_body(
             parents, progress, enrichment_complete=bool(enrichment_complete),
@@ -3414,9 +3425,14 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                              or (enrichment_state["state"] == STATE_NEEDS_APPROVAL
                                  and not enrichment_state.get("approvable")
                                  and not enrichment_state.get("approval_current")))
-                if run_jobs and free_work and not review_progress(parents)["worth_pending"]:
+                progress_now = review_progress(parents)
+                if run_jobs and free_work and (
+                        progress_now["worth_pending"] == 0
+                        or phase_is_completed("worth", progress_now, manifest_path)):
                     # Render keeps the derived free_pending/needs_approval screen
                     # ("Preparing…"); the next poll derives running + heartbeat.
+                    # Feed-forward: a completed worth stage keeps the free job
+                    # eligible even when later machine maybes exist.
                     start_free_enrichment_job()
             self.send_bytes(page_html(parents, params, review_path, parents_dir=parents_dir,
                                       dossier_dir=dossier_dir, manifest_path=manifest_path,
@@ -3869,7 +3885,10 @@ def workflow_status_from_parents(
     approved_budget = (float((enrichment.get("approval") or {}).get("approved_budget_usd") or 0)
                        if approval_current else 0.0)
 
-    if progress["worth_pending"] or not worth_complete:
+    # Feed-forward: only an UNCOMPLETED worth stage asks for people review.
+    # Machine-created pending after completion surfaces in the Review tab and
+    # never regresses the stage (the browser navigates off this value).
+    if not worth_complete:
         next_action = "review_people"
     elif enrich_status in {"not_started", "stale"}:
         next_action = "preview_enrichment"

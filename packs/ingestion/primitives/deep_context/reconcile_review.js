@@ -996,6 +996,7 @@ let reviewStateToken = document.body.dataset.stateToken || "";
 // navigation (the free-work job's manifest writes rotate the state token in
 // exactly that window, and a reload tears down the JS before it can leave).
 let completingStage = false;
+let lastServerStage = "";
 const statusPollMs = 1000;
 const observesExternalUpdates = document.body.dataset.externalUpdates === "true";
 
@@ -1016,7 +1017,19 @@ async function pollFileState() {
     const state = await response.json();
     const isStagePreview = document.body.dataset.preview === "true";
     const preserveDraft = hasIdentityDraft();
-    if (!isStagePreview && state.stage && state.stage !== currentStage) {
+    // Feed-forward: auto-navigation only ever moves FORWARD through the
+    // stages, and only on a transition OBSERVED while this page was open (a
+    // live handoff). A stage difference that already existed at page load
+    // means the user deliberately opened this page (e.g. revisiting the worth
+    // Review tab while the flow sits at enrich) — never yank them off it; the
+    // token reload below still refreshes the page they chose to stay on.
+    const stageOrder = ["worth", "enrich", "linkedin", "done"];
+    const movesForward =
+      stageOrder.indexOf(state.stage) > stageOrder.indexOf(currentStage);
+    const observedTransition = Boolean(lastServerStage) && state.stage !== lastServerStage;
+    lastServerStage = state.stage || lastServerStage;
+    if (!isStagePreview && state.stage && state.stage !== currentStage
+        && movesForward && observedTransition) {
       if (preserveDraft) return;
       window.location.replace(`/?stage=${encodeURIComponent(state.stage)}`);
       return;
