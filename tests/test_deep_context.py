@@ -183,11 +183,24 @@ class TestRestartReview(unittest.TestCase):
             "machine-auto": {"public_identifier": "machine-auto",
                              "action": "detach", "approved": "auto",
                              "new_linkedin_url": ""},
+            # A deep-research proposal the identity judge stamped: machine
+            # work — restart must NOT clear it, or every restart forces a
+            # full re-judge (the fingerprint cache keys off the intact row).
+            "machine-proposal": {"public_identifier": "machine-proposal",
+                                 "action": "retarget", "approved": "",
+                                 "new_linkedin_url": "https://linkedin.com/in/cy-ex",
+                                 "llm_judge_fingerprint": "sha-cy"},
+            # The same proposal after a human approved it: only the human's
+            # mark clears; the judged machine proposal survives.
+            "human-approved-proposal": {"public_identifier": "human-approved-proposal",
+                                        "action": "retarget", "approved": "yes",
+                                        "new_linkedin_url": "https://linkedin.com/in/di-ex",
+                                        "llm_judge_fingerprint": "sha-di"},
             "untouched": {"public_identifier": "untouched",
                           "action": "", "approved": "", "new_linkedin_url": ""},
         }
         cleared = restart_review.clear_human_identity_decisions(rows)
-        self.assertEqual(cleared, 3)
+        self.assertEqual(cleared, 4)
         for key in ("human-keep", "human-fix", "human-pasted-unapproved"):
             self.assertEqual(
                 (rows[key]["action"], rows[key]["approved"], rows[key]["new_linkedin_url"]),
@@ -195,6 +208,16 @@ class TestRestartReview(unittest.TestCase):
         # LLM auto-verify/auto-detach work survives, exactly as a new user sees it
         self.assertEqual(rows["machine-auto"]["action"], "detach")
         self.assertEqual(rows["machine-auto"]["approved"], "auto")
+        # The judged machine proposal is untouched...
+        self.assertEqual(rows["machine-proposal"]["action"], "retarget")
+        self.assertEqual(rows["machine-proposal"]["new_linkedin_url"],
+                         "https://linkedin.com/in/cy-ex")
+        # ...and a human-approved one loses only the human's mark.
+        self.assertEqual(
+            (rows["human-approved-proposal"]["action"],
+             rows["human-approved-proposal"]["approved"],
+             rows["human-approved-proposal"]["new_linkedin_url"]),
+            ("retarget", "", "https://linkedin.com/in/di-ex"))
 
     def test_restart_clears_human_worth_and_keeps_machine_verdicts(self):
         with tempfile.TemporaryDirectory() as d:
