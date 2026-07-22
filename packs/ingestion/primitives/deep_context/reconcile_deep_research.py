@@ -446,9 +446,13 @@ def _research_unverified(profile: dict[str, Any]) -> bool:
     return any(marker in blob for marker in _UNVERIFIED_MARKERS)
 
 
-# The retarget identity judge runs at high reasoning effort — heavier per call than
-# profile summaries — so its default fan-out never exceeds this, even on tier 5.
-DEFAULT_JUDGE_CONCURRENCY = 32
+# The retarget identity judge defaults to medium reasoning effort (still
+# overridable via --reasoning-effort). Fan-out is latency-bound, not
+# TPM-bound: measured on real data, 32 lanes at high effort moved ~32
+# verdicts/min at roughly 2-3% of the tier-5 TPM budget, so the cap is our
+# own choice. 128 keeps a healthy margin; the usage-tier profile still caps
+# below it on smaller tiers (tier_4 -> 96, tier_1 -> 16).
+DEFAULT_JUDGE_CONCURRENCY = 128
 
 
 def judge_concurrency() -> int:
@@ -480,7 +484,7 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
                                   overrides_csv: Path, *,
                                   facts_dir: Path | None = None, raw_dir: Path | None = None,
                                   use_llm: bool = False, owner_block: str = "",
-                                  model: str = "", effort: str = "high",
+                                  model: str = "", effort: str = "medium",
                                   confirm_threshold: float = DEFAULT_CONFIRM,
                                   timeout: int = 120, max_retries: int = 6,
                                   heartbeat: Callable[[int, int], None] | None = None) -> dict[str, Any]:
@@ -729,7 +733,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             facts_dir=Path(args.facts_dir), raw_dir=Path(args.raw_dir),
             use_llm=use_llm, owner_block=owner_block,
             model=getattr(args, "model", "") or "",
-            effort=getattr(args, "reasoning_effort", "high") or "high",
+            effort=getattr(args, "reasoning_effort", "medium") or "medium",
             confirm_threshold=args.confirm_threshold, heartbeat=heartbeat)
 
     if not subset:
@@ -834,7 +838,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-llm", action="store_true",
                    help="Judge proposed retargets deterministically (offline/tests) instead of the LLM")
     p.add_argument("--model", default=DEFAULT_MODEL, help="Model for the proposed-retarget identity judge")
-    p.add_argument("--reasoning-effort", default="high", choices=["minimal", "low", "medium", "high"],
+    p.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"],
                    help="Reasoning effort for the proposed-retarget identity judge")
     return p
 

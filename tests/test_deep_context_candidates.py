@@ -813,7 +813,7 @@ class TestRetiredKeyMigration(unittest.TestCase):
 class TestJudgeAcceptedProfilesStand(unittest.TestCase):
     """A candidate-origin found-LinkedIn the identity judge ACCEPTED neither
     waits in the Check-LinkedIn queue nor blocks application: the judge ran at
-    high reasoning against the dossier and rejections carry llm_reject*, so
+    the full dossier evidence and rejections carry llm_reject*, so
     re-asking a human to confirm every acceptance was decision-theater (569 of
     642 pending checks on real data). Human yes/no stays terminal; real-network
     people (non candidate:* ids) stay human-gated."""

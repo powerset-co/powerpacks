@@ -2320,7 +2320,10 @@ class TestRetargetJudgeFingerprintCache(unittest.TestCase):
     def test_judge_concurrency_defaults_capped_and_env_overridable(self):
         with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_CONCURRENCY": "",
                                           "POWERPACKS_OPENAI_USAGE_TIER": "tier_5"}):
-            self.assertEqual(dresearch.judge_concurrency(), 32)        # capped below tier 5's 256
+            self.assertEqual(dresearch.judge_concurrency(), 128)       # capped below tier 5's 256
+        with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_CONCURRENCY": "",
+                                          "POWERPACKS_OPENAI_USAGE_TIER": "tier_4"}):
+            self.assertEqual(dresearch.judge_concurrency(), 96)        # smaller tiers cap below the default
         with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_CONCURRENCY": "",
                                           "POWERPACKS_OPENAI_USAGE_TIER": "tier_1"}):
             self.assertEqual(dresearch.judge_concurrency(), 16)        # low tiers stay lower
