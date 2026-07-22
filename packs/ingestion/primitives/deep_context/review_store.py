@@ -85,8 +85,8 @@ def _undecided_candidate_retarget(row: dict[str, Any]) -> bool:
 def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
     """A candidate-origin found-LinkedIn the identity judge ACCEPTED and no
     human has overridden: its verdict STANDS — it neither waits in the review
-    queue nor blocks application. The judge ran at high reasoning against the
-    dossier and rejects bad matches via llm_reject*, so re-asking a human to
+    queue nor blocks application. The judge ran against the full dossier
+    evidence and rejects bad matches via llm_reject*, so re-asking a human to
     confirm every acceptance was decision-theater at enrichment scale (569 of
     642 pending checks on real data). A human yes/no is still terminal."""
     return (_undecided_candidate_retarget(row)
