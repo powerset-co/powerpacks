@@ -41,11 +41,12 @@ class GmailCandidatesTests(unittest.TestCase):
             for row in rows:
                 writer.writerow({column: row.get(column, "") for column in self.QUEUE_FIELDS})
 
-    def test_directory_only_default_disables_providers(self) -> None:
+    def test_directory_only_is_the_only_mode(self) -> None:
         args = gmail_import.build_parser().parse_args(["run"])
-        self.assertFalse(args.resolve_legacy)
-        legacy = gmail_import.build_parser().parse_args(["run", "--resolve-legacy"])
-        self.assertTrue(legacy.resolve_legacy)
+        self.assertNotIn("resolve_legacy", vars(args))
+        self.assertNotIn("approve_parallel_spend", vars(args))
+        with self.assertRaises(SystemExit):
+            gmail_import.build_parser().parse_args(["run", "--resolve-legacy"])
 
     def test_queue_row_to_candidate_maps_and_skips(self) -> None:
         row = {

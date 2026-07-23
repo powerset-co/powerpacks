@@ -1,10 +1,13 @@
 <!--
 Changelog:
+- 2026-07-23: Removed the --resolve-legacy / --approve-parallel-spend flags.
+  The import is directory-only, period; stored legacy resolutions migrate into
+  overrides/review.csv via `bin/deep-context migrate-legacy` (the central SOT),
+  and all new resolution/enrichment runs through $deep-context's judged stages.
 - 2026-07-16: Refocused on contact sync only. The import stage is now
   directory-reuse only (free, local): unresolved contacts land in
   import/gmail/candidates.csv, Parallel.ai resolution + RapidAPI hydration
-  move to the $deep-context processing layer (--resolve-legacy is the legacy
-  escape hatch), and Modal indexing is no longer part of $import-gmail (it
+  move to the $deep-context processing layer, and Modal indexing is no longer part of $import-gmail (it
   stays in $setup and in $deep-context's finale).
 -->
 
@@ -29,16 +32,15 @@ agent contract is [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md).
 - **Identity strategy:** local directory only. People resolved by prior imports
   attach immediately; unresolved and cached-negative contacts are written to
   `import/gmail/candidates.csv` for `$deep-context`, which owns Parallel.ai
-  resolution and RapidAPI hydration. `--resolve-legacy` restores the old
-  in-import behavior.
+  resolution and RapidAPI hydration. Stored legacy resolutions are adopted
+  into `overrides/review.csv` by `bin/deep-context migrate-legacy`.
 - **Output:** `.powerpacks/network-import/import/gmail/people.csv` plus
   `import/gmail/candidates.csv`, merged into the shared network by fan-in.
 - **Indexing:** no longer part of `$import-gmail`. The Modal index build stays
   in `$setup` and in `$deep-context`'s finale; new Gmail contacts become
   searchable after one of those runs.
-- **Cloud boundary:** none in the canonical import. Provider calls and the
-  Modal upload happen only in `$deep-context` or behind the `--resolve-legacy`
-  escape hatch.
+- **Cloud boundary:** none in the import, ever. Provider calls and the Modal
+  upload happen only in `$deep-context`.
 
 ## Architecture
 
@@ -59,8 +61,7 @@ flowchart TD
     S --> T["Suggest missing sources<br/>offer $deep-context processing"]
 
     Q -. "identity research, review, indexing" .-> X["$deep-context processing layer<br/>(Parallel.ai + RapidAPI + Modal)"]
-    H -. "--resolve-legacy escape hatch only" .-> Y["Legacy in-import Parallel lookup<br/>+ RapidAPI hydration"]
-    Y -.-> R
+        Y -.-> R
 
     classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
@@ -100,16 +101,16 @@ only:
    candidate once, with cross-channel context, in a judged and user-reviewable
    flow.
 
-### Legacy escape hatch: `--resolve-legacy`
+### Legacy resolutions: migrated, never replayed via flags
 
-`import_contacts_pipeline/gmail.py run --resolve-legacy` restores the old
-in-import behavior: combine unresolved rows across accounts, ask Parallel for
-the best LinkedIn identity (auto-approved below 25 unresolved contacts),
-accept found results with normalized confidence `>= 0.75` (missing or zero
-provider confidence is normalized to `0.90`), and hydrate accepted URLs from
-the local cache or RapidAPI. Parallel's top result is trusted without a second
-identity judge or human review — a key reason resolution moved to
-`$deep-context`. Do not use this flag in the canonical `$import-gmail` flow.
+The old in-import Parallel behavior (per-email lookup, results accepted at
+`>= 0.75` with no identity judge or human review) is REMOVED — there is no
+flag that restores it. Its stored outputs still exist and are handled in
+`$deep-context`: `bin/deep-context migrate-legacy` adopts every
+still-unverified stored link as a pending `retarget` proposal in
+`overrides/review.csv` (the central source of truth the fan-in and the review
+flow already read), where the retarget judge, auto-stand rules, and the
+Check-LinkedIn queue finally audit them.
 
 ## Privacy and provider boundaries
 
@@ -118,8 +119,8 @@ identity judge or human review — a key reason resolution moved to
 | msgvault | Gmail OAuth tokens and a local full-message archive under `~/.msgvault`; the current skill does not request attachment suppression, so supported msgvault builds may download attachments. | Owned by msgvault on the user's machine. Powerpacks does not copy secrets into tracked files or send archive content to identity providers. |
 | Powerpacks metadata reader | Emails, names, sender/recipient roles, IDs, dates, labels, and aggregate counts. | Opens msgvault read-only; excludes bodies, subjects, snippets, raw MIME, and attachments. |
 | Local directory | Contact observations, identity mappings, confidence, and cached negative outcomes. | Local `.powerpacks` artifact reused across imports. |
-| Parallel.ai | Full name, email, an email-domain-derived company guess, and optional context. | Not called by the canonical import — `$deep-context` (or `--resolve-legacy`) owns this boundary. No Gmail body or subject content. |
-| RapidAPI | Accepted LinkedIn URL/public identifier. | Not called by the canonical import — `$deep-context` (or `--resolve-legacy`) owns this boundary. No Gmail content. |
+| Parallel.ai | Full name, email, an email-domain-derived company guess, and optional context. | Not called by the canonical import — `$deep-context` owns this boundary. No Gmail body or subject content. |
+| RapidAPI | Accepted LinkedIn URL/public identifier. | Not called by the canonical import — `$deep-context` owns this boundary. No Gmail content. |
 | Modal | Full merged `people.csv`, including Gmail addresses and interaction metadata. | Not part of `$import-gmail`; the index build happens in `$setup` and in `$deep-context`'s finale. |
 
 After OAuth, the canonical `$import-gmail` run stays on-device: msgvault talks
@@ -163,9 +164,9 @@ history window, discovery passes `--noresume`, rescans that window, and relies o
 msgvault deduplication for already stored messages. Without an explicit window,
 the primitive may infer `--after` from the most recent local message. The
 import manifest records the `gmail-directory-only-v2` contract; an unchanged
-input is a fingerprinted no-op (`--force` reruns anyway). Parallel resolver
-output CSV rows and LinkedIn profile caches are reused only on the
-`--resolve-legacy` path.
+input is a fingerprinted no-op (`--force` reruns anyway). Stored Parallel resolver
+output CSV rows are applied as raw material; their audit lives in
+`overrides/review.csv` after `bin/deep-context migrate-legacy`.
 
 ## Current product gaps
 
@@ -173,10 +174,9 @@ output CSV rows and LinkedIn profile caches are reused only on the
   lands in a companion PR; until then candidates wait in
   `import/gmail/candidates.csv`, and directory-resolved contacts become
   searchable only after the next index rebuild.
-- The `--resolve-legacy` path trusts Parallel's top match without an identity
-  judge or human review, normalizes missing/zero resolver confidence to
-  `0.90`, and hits RapidAPI cache misses without a primitive-owned approval —
-  the main reasons resolution moved to `$deep-context`.
+- Stored legacy resolutions were accepted without an identity judge or human
+  review — run `bin/deep-context migrate-legacy` so they enter the judged
+  review loop.
 - The repo has three distinct surfaces: the harness skill, current local app v3
   endpoints, and legacy `setup_gmail.py`. They share primitives but should not be
   presented as one command contract.
@@ -193,6 +193,6 @@ output CSV rows and LinkedIn profile caches are reused only on the
 | Directory reuse | [`discover_contacts_pipeline/directory.py`](../primitives/discover_contacts_pipeline/directory.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
 | Per-source status | [`status.py`](../primitives/import_contacts_pipeline/status.py) |
-| Parallel resolver (`--resolve-legacy` only) | [`resolve_linkedin_queue.py`](../primitives/resolve_linkedin_queue/resolve_linkedin_queue.py) |
-| Profile hydration (`--resolve-legacy` only) | [`enrich_people.py`](../primitives/enrich_people/enrich_people.py) |
+| Parallel resolver (legacy era; not callable from the import) | [`resolve_linkedin_queue.py`](../primitives/resolve_linkedin_queue/resolve_linkedin_queue.py) |
+| Profile hydration (legacy era; not callable from the import) | [`enrich_people.py`](../primitives/enrich_people/enrich_people.py) |
 | Fan-in | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

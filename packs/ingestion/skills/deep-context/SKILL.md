@@ -213,6 +213,30 @@ with message context before any paid identity lookup. A candidate merged into an
 existing person does not reappear in the People queue or paid lookup; reconcile
 folds its email/phone/channel metadata onto the kept LinkedIn instead.
 
+### 4.6 Migrate stored legacy resolutions (free scan; judged adoption)
+
+Older imports attached web-researched LinkedIn links with no judge and no
+review. Adopt them into the central decisions table (`overrides/review.csv`) so
+this flow finally audits them — the scan is free and a no-op once migrated:
+
+```bash
+bin/deep-context migrate-legacy
+```
+
+If `eligible` is 0, move on. Otherwise apply with judging (the judge reads the
+local profile cache — no profile fetches). The same cost gate as reconcile
+applies: auto-approve under a $25 ceiling using the dry-run's
+`estimated_judge_cost_usd_*`, otherwise ask first:
+
+```bash
+bin/deep-context migrate-legacy --apply --judge
+```
+
+Migrated links behave exactly like deep-research proposals from here on:
+judge-rejected ones surface with reasons, confident verdicts auto-stand, the
+rest queue in Check LinkedIn, and approved rows realize through
+apply-retargets like everything else.
+
 ### 5. People decision gate
 
 Before the UI, preview the attached-LinkedIn judge:

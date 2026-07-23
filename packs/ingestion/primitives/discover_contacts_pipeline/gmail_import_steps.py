@@ -1,11 +1,13 @@
 """Gmail import step functions for the LIVE import chain.
 
-Extracted 2026-07-23 from the retired pre-split orchestrator
-(discover_contacts_pipeline.before_split.py, now deleted): ONLY the functions
-`import_contacts_pipeline/gmail.py` still dispatches (`run_gmail_directory`,
-`run_gmail_linkedin_resolution`, `run_gmail_apply_and_enrich`, `save_ledger`)
-plus `materialize_gmail_merged_people_csv`, with their transitive helpers.
-Loaded via `import_contacts_pipeline.common.load_legacy_discover_module`.
+Extracted 2026-07-23 from the retired pre-split orchestrator (now deleted) and
+narrowed again when the legacy resolve/enrich flags were removed: ONLY
+`run_gmail_directory` and `run_gmail_apply_and_enrich` (which applies STORED
+resolutions — no Parallel calls, no RapidAPI hydration; deep-context owns
+resolution/enrichment, and `bin/deep-context migrate-legacy` adopts the stored
+era into overrides/review.csv), plus `save_ledger` and
+`materialize_gmail_merged_people_csv`, with their transitive helpers. Loaded via
+`import_contacts_pipeline.common.load_legacy_discover_module`.
 """
 from __future__ import annotations
 
@@ -140,13 +142,6 @@ def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
-
-
-def csv_row_count(path: Path) -> int:
-    if not path.exists():
-        return 0
-    _, rows = read_csv_rows(path)
-    return len(rows)
 
 
 def parse_jsonish(value: Any, default: Any) -> Any:
@@ -910,49 +905,6 @@ def combine_gmail_resolution_records(records: list[dict[str, Any]], run_dir: Pat
     return combined
 
 
-def materialize_gmail_provider_resolution_records(output_csv: str, queue_records: list[dict[str, Any]], run_dir: Path) -> list[dict[str, Any]]:
-    """Split a combined provider output into per-account normalized resolution CSVs."""
-    output_path = Path(str(output_csv or ""))
-    if not output_path.exists():
-        return []
-    provider_rows_by_email: dict[str, dict[str, str]] = {}
-    for raw_row in read_csv_rows(output_path)[1]:
-        row = normalize_resolution_row(raw_row)
-        email = resolution_email(row)
-        if email:
-            provider_rows_by_email[email] = row
-    records: list[dict[str, Any]] = []
-    for index, record in enumerate(queue_records):
-        queue_path = Path(str(record.get("queue_csv") or ""))
-        if not queue_path.exists():
-            continue
-        rows: list[dict[str, str]] = []
-        for queue_row in read_csv_rows(queue_path)[1]:
-            email = resolution_email(queue_row)
-            if email and email in provider_rows_by_email:
-                rows.append(provider_rows_by_email[email])
-        if not rows:
-            continue
-        slug = source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}")
-        out_dir = run_dir / f"gmail-linkedin-resolution-{slug}"
-        out_path = out_dir / "linkedin_resolutions.csv"
-        write_csv_rows(out_path, LINKEDIN_RESOLUTION_COLUMNS, rows)
-        found = sum(1 for row in rows if row.get("status") == "found")
-        negative = sum(1 for row in rows if row.get("status") in (RESOLUTION_NEGATIVE_STATUSES | {"not_found"}))
-        records.append({
-            "account_email": record.get("account_email", ""),
-            "resolutions_csv": str(out_path),
-            "people_csv": record.get("people_csv"),
-            "slug": slug,
-            "source": "parallel",
-            "raw_resolutions_csv": str(output_path),
-            "processed": len(rows),
-            "found": found,
-            "not_found": negative,
-        })
-    return records
-
-
 def merge_people_values(current: str, incoming: str) -> str:
     if not current and incoming:
         return incoming
@@ -1166,17 +1118,6 @@ def run_cmd(cmd: list[str], *, timeout: int | None = None) -> tuple[int, dict[st
     return code, parse_last_json("".join(stdout_chunks)), "".join(stderr_chunks)
 
 
-def child_error(payload: dict[str, Any], stderr: str) -> Any:
-    """Prefer structured child failures; stderr is often progress logging."""
-    if payload:
-        for key in ("error", "message", "reason"):
-            value = payload.get(key)
-            if value:
-                return value
-        return payload
-    return stderr
-
-
 def py_cmd(script: str, *args: str) -> list[str]:
     return [sys.executable, script, *args]
 
@@ -1278,95 +1219,6 @@ def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     return True
 
 
-def run_gmail_linkedin_resolution(ledger_path: Path, ledger: dict[str, Any]) -> bool:
-    input_cfg = ledger.get("input", {})
-    provider = "parallel" if input_cfg.get("resolve_gmail_linkedin") else "off"
-    if input_cfg.get("gmail_linkedin_provider") and input_cfg.get("gmail_linkedin_provider") != "off":
-        provider = input_cfg.get("gmail_linkedin_provider")
-    artifacts = ledger.setdefault("artifacts", {})
-    if "gmail_unresolved_linkedin_resolution_queue_csvs" in artifacts:
-        queue_records = artifacts.get("gmail_unresolved_linkedin_resolution_queue_csvs") or []
-    else:
-        queue_records = gmail_queue_records(artifacts)
-    if provider == "off" or not queue_records:
-        mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="provider off or no queue")
-        return True
-    queue_records = ordered_records([record for record in queue_records if isinstance(record, dict) and record.get("queue_csv") and csv_row_count(Path(str(record.get("queue_csv")))) > 0], unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
-    if not queue_records:
-        mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="all Gmail queue rows resolved by directory")
-        return True
-    # Combine all unresolved queues into one file and submit as a single batch
-    combined_csv = artifact_dir_from_ledger(ledger) / "gmail-combined-unresolved-queue.csv"
-    combined_fields: list[str] = []
-    combined_rows: list[dict[str, str]] = []
-    for record in queue_records:
-        queue = record.get("queue_csv")
-        if not queue:
-            continue
-        fields, rows = read_csv_rows(Path(str(queue)))
-        if not combined_fields and fields:
-            combined_fields = fields
-        combined_rows.extend(rows)
-    if not combined_rows:
-        mark_step(ledger, "gmail_linkedin_resolution", "skipped", reason="combined queue is empty")
-        return True
-    write_csv_rows(combined_csv, combined_fields, combined_rows)
-    artifacts["gmail_linkedin_combined_queue_csv"] = str(combined_csv)
-    total_contacts = len(combined_rows)
-    begin_step(ledger_path, ledger, "gmail_linkedin_resolution", f"Resolving {total_contacts} Gmail contacts to LinkedIn in one batch.")
-    child_ledger = artifact_dir_from_ledger(ledger) / "gmail-linkedin-resolution.combined.ledger.json"
-    out_dir = artifact_dir_from_ledger(ledger) / "gmail-linkedin-resolution-combined"
-    cmd = py_cmd(
-        "packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py",
-        "run",
-        "--provider", provider,
-        "--input", str(combined_csv),
-        "--output-dir", str(out_dir),
-        "--ledger", str(child_ledger),
-    )
-    if input_cfg.get("gmail_linkedin_limit") is not None:
-        cmd.extend(["--limit", str(input_cfg["gmail_linkedin_limit"])])
-    if input_cfg.get("approve_parallel_spend"):
-        cmd.append("--approve-spend")
-    code, payload, stderr = run_cmd(cmd)
-    artifacts["gmail_linkedin_resolution_ledger"] = str(child_ledger)
-    artifacts["gmail_linkedin_resolution_ledgers"] = [str(child_ledger)]
-    if code == 20 or payload.get("status") == "blocked_approval":
-        ledger["blocked"] = {"step_id": "gmail_linkedin_resolution", "child_ledger": str(child_ledger), "child": payload}
-        mark_step(ledger, "gmail_linkedin_resolution", "blocked", payload=payload)
-        save_ledger(ledger_path, ledger)
-        emit({"status": "blocked_approval", "step_id": "gmail_linkedin_resolution", "ledger": str(ledger_path), "child": payload})
-        return False
-    if code != 0:
-        mark_step(ledger, "gmail_linkedin_resolution", "failed", error=stderr or payload)
-        ledger["status"] = "failed"
-        save_ledger(ledger_path, ledger)
-        emit({"status": "failed", "step_id": "gmail_linkedin_resolution", "error": stderr or payload})
-        return False
-    if payload.get("output"):
-        combined_output = payload.get("output")
-        artifacts["gmail_linkedin_raw_resolutions_csv"] = combined_output
-        artifacts["gmail_linkedin_combined_resolutions_csv"] = combined_output
-        provider_records = materialize_gmail_provider_resolution_records(combined_output, queue_records, artifact_dir_from_ledger(ledger))
-        if provider_records:
-            artifacts["gmail_linkedin_resolutions_csvs"] = provider_records
-            artifacts["gmail_linkedin_resolutions_by_slug"] = {record.get("slug", ""): record for record in provider_records if record.get("slug")}
-            # Keep the singular key for status/debug callers, but point it at a
-            # normalized per-account file rather than the raw Parallel schema.
-            artifacts["gmail_linkedin_resolutions_csv"] = provider_records[0].get("resolutions_csv")
-        else:
-            artifacts["gmail_linkedin_resolutions_csv"] = combined_output
-            artifacts["gmail_linkedin_resolutions_csvs"] = [{"resolutions_csv": combined_output, "slug": "combined", "source": "parallel_combined"}]
-    if payload.get("prompts_jsonl"):
-        artifacts["gmail_linkedin_harness_prompts_jsonl"] = payload.get("prompts_jsonl")
-        artifacts["gmail_linkedin_harness_prompts_jsonls"] = [payload.get("prompts_jsonl")]
-    if payload.get("instructions"):
-        artifacts["gmail_linkedin_harness_instructions"] = payload.get("instructions")
-    mark_step(ledger, "gmail_linkedin_resolution", "completed", payload=payload)
-    emit_progress(f"Gmail LinkedIn resolution completed: {payload.get('found', 0)} found, {payload.get('not_found', 0)} not found.")
-    return True
-
-
 def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> bool:
     input_cfg = ledger.get("input", {})
     artifacts = ledger.setdefault("artifacts", {})
@@ -1432,41 +1284,6 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
         artifacts.setdefault("gmail_resolved_people_csvs", []).append(resolved_people)
         artifacts["gmail_resolved_people_csv"] = resolved_people
         result = {"account_email": record.get("account_email", ""), "slug": slug, "apply": payload, "people_csv": resolved_people}
-        # enrich_resolved=False: attach resolutions only, no RapidAPI profile
-        # hydration (the deep-context processing layer owns enrichment).
-        if int(payload.get("resolved") or 0) > 0 and input_cfg.get("enrich_resolved", True):
-            emit_progress(f"Enriching {payload.get('resolved')} resolved Gmail LinkedIn profiles for {record.get('account_email') or slug}.")
-            enrich_dir = account_dir / "enrichment"
-            child_ledger = account_dir / "enrich_people.ledger.json"
-            enrich_cmd = py_cmd(
-                "packs/ingestion/primitives/enrich_people/enrich_people.py",
-                "run",
-                "--input", str(resolved_people),
-                "--ledger", str(child_ledger),
-                "--artifact-dir", str(enrich_dir),
-            )
-            code, enrich_payload, stderr = run_cmd(enrich_cmd)
-            artifacts.setdefault("gmail_enrich_people_ledgers", []).append(str(child_ledger))
-            artifacts.setdefault("gmail_enrich_people_ledger", str(child_ledger))
-            result["enrich_ledger"] = str(child_ledger)
-            if code == 20 or enrich_payload.get("status") == "blocked_approval":
-                ledger["blocked"] = {"step_id": "gmail_apply_enrich", "child_ledger": str(child_ledger), "child": enrich_payload, "account_email": record.get("account_email", "")}
-                mark_step(ledger, "gmail_apply_enrich", "blocked", payload=enrich_payload)
-                save_ledger(ledger_path, ledger)
-                emit({"status": "blocked_approval", "step_id": "gmail_apply_enrich", "ledger": str(ledger_path), "child": enrich_payload})
-                return False
-            if code != 0:
-                error = child_error(enrich_payload, stderr)
-                mark_step(ledger, "gmail_apply_enrich", "failed", error=error)
-                ledger["status"] = "failed"
-                save_ledger(ledger_path, ledger)
-                emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": error})
-                return False
-            for key, value in (enrich_payload.get("artifacts") or {}).items():
-                artifacts[f"gmail_{slug}_enriched_{key}"] = value
-            if enrich_payload.get("artifacts", {}).get("people_csv"):
-                resolved_people = enrich_payload["artifacts"]["people_csv"]
-            result["enrich"] = enrich_payload
         final_people_csvs.append(resolved_people)
         artifacts["gmail_people_csv"] = resolved_people
         result["final_people_csv"] = resolved_people
