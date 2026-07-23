@@ -31,11 +31,7 @@ Releasable commit shapes for this repo:
 
 Usually non-releasable unless breaking: `chore: ...`, `ci: ...`, `build: ...`, `test: ...`, `refactor: ...`, `style: ...`.
 
-This repo has two Release Please packages:
-- `.` as Python package `powerpacks`, tagged like `powerpacks-vX.Y.Z`.
-- `app` as Node package `powerpacks-console`, tagged like `powerpacks-console-vX.Y.Z`.
-
-Commits whose changed files are under `app/` can affect the console component; root/package commits affect the `powerpacks` component. A root-only docs/guidance PR should release only `powerpacks`; `powerpacks-console` needs an `app/` change or app-scoped releasable commit to get its own release PR/tag. If one human-facing change should release both components, make sure the merged PR has meaningful changes in both paths and uses a releasable conventional commit.
+This repo has a single Release Please package: `.` as Python package `powerpacks`, tagged like `powerpacks-vX.Y.Z`.
 
 To intentionally cut a Powerpacks minor release such as `0.2.0`, merge a PR with a `feat: ...` commit/message after the release-please setup is on `main` (for example `feat: document Powerpacks 0.2.0 pipeline release`). To intentionally cut a major release, use `feat!: ...` or include a `BREAKING CHANGE:` footer. After that commit lands, wait for the `release-please` workflow to open/update the release PR, review the generated changelog/version bumps, then merge the release PR.
 
@@ -90,10 +86,10 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
   see `infer_msgvault_sync_after` in
   `discover_contacts_pipeline/gmail/sync.py`. Do not build a new resume mechanism on
   top of it.
-- **Orchestrate the existing primitives directly; do not route new flows
-  through `setup/setup.py`.** Chain the existing `discover_contacts_pipeline`
-  and `import_contacts_pipeline/<source>.py` commands. `setup.py` is not the
-  orchestration layer for new pipeline flows.
+- **Orchestrate the discover/import primitives directly.** Chain the existing
+  `discover_contacts_pipeline` and `import_contacts_pipeline/<source>.py`
+  commands. There is no setup orchestrator layer — do not build one for new
+  pipeline flows.
 - **Do not fingerprint the shared `directory.csv`.**
   `.powerpacks/network-import/directory.csv` is a cross-source aggregate, not a
   source-owned output. Treating it as a per-source fingerprint makes restored

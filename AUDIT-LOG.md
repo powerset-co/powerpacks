@@ -42,6 +42,7 @@ Arthur reviews manually, drops comments; each batch = one commit, verdicts poste
 | 11 | setup/enrich fold (sub-agent) | `setup_gmail`, `setup_linkedin_csv`, `msgvault_setup` (+oauth JS companion), `onboarding`, `bootstrap_network_from_exports`, `clean_slate`, `linkedin_mcp_import` → `setup/`; `enrich_people` → `enrich/`; app paths updated; jobs.ts whitelist drops deleted-dispatcher entry |
 | 12 | import-stage fold (sub-agent) | `match_local_candidates` → `import_contacts_pipeline/messages/`; `merge_network_sources` → `import_contacts_pipeline/` (fan-in); references swept (index fan-in py_cmd, SKILL, 7 test files, docs); zero app/ references. DONE |
 | 13 | relic skills + $setup pipeclean (sub-agent) | DELETED 8 skills (`onboard`, `ingestion-onboarding`, `import-gmail-network`, `import-linkedin-network`, `import-twitter-network`, `linkedin-sync-mcp`, `local-msg-vault` alias, `import-whatsapp`) + `bootstrap_network_from_exports` and `linkedin_mcp_import` primitives (+test/READMEs); adapter install lists pruned to live skills ONLY + new `RETIRED_SKILLS` scrub (also purges pre-audit fossils: `enrich-email-markers`, `import-contacts`, `recruit`, `deep-setup`, …); `$setup` SKILL audited command-by-command — **all current, incl. Step-5 `index_contacts_pipeline.py fan-in`** (same canonical merge door $import-gmail/$import-messages use; delegates to `merge_network_sources.py`). KEPT `setup/{onboarding,setup,setup_gmail,setup_linkedin_csv}.py` — console-app engine (jobs.ts/commands.ts/routes), NOT $setup's; $setup calls none of them. discover-contacts SKILL: Arthur's tone edit merged + restore-bundle & approve/continue resume sections deleted |
+| 14 | console app + setup quartet (sub-agent) | Arthur: "we don't care about console app anymore" → DELETED the entire `app/` tree (Vite console + local-api, 107 files), `scripts/run-powerpacks-console.sh`, `bin/launch`, `bin/setup-app`, the `powerpacks-console` skill, `docs/app-self-management-plan.md`, and the console-only setup engine `setup/{onboarding,setup,setup_gmail,setup_linkedin_csv}.py` (+README, `test_ingestion_accounts_onboarding.py`; `test_pipeline_phase_1_3.py` trimmed 928→620 keeping live-module tests). Release Please back to ONE package (config+manifest+AGENTS.md+docs); CI app job deleted; `--from-setup`/`setup-run.json` flag removed from the discover orchestrator (producer died with setup.py); `config/powerpacks-state-paths.json` drops setup ledgers. `setup/` now = msgvault_setup + clean_slate only. Worth-review server unaffected (`deep_context/reconcile_review_web.py`, not app/) |
 
 ## Final target tree (post-batch-12)
 
@@ -56,8 +57,8 @@ packs/ingestion/primitives/
   enrich/                       enrich_people
   deep_context/                 22 modules + build_email_context + deep_research_contacts + migrate_legacy_resolutions
   logbook/                      unchanged
-  setup/                        setup, setup_gmail, setup_linkedin_csv, msgvault_setup, onboarding,
-                                clean_slate   (onboarding/setup* are console-app-only — $setup never calls them)
+  setup/                        msgvault_setup (+google_oauth_browser.js), clean_slate
+                                ($setup's own chain lives in packs/powerset + packs/indexing — see batch 13/14)
 ```
 
 ## Key numbers / state
@@ -72,7 +73,7 @@ packs/ingestion/primitives/
 3. **Run migrate-legacy for real** on the mirror: `--apply` (free) then `--apply --judge` (~$11–54) → auto-stands → Check-LinkedIn queue → apply-retargets admission. This is the BUG-3/BUG-5 remediation.
 4. **BUG-4 decision**: replacement approval surface for message suggestions (deep-context suggestions review or conservative auto-attach).
 5. Proposed-not-built: gmail apply step reads review.csv and skips SOT-rejected links; drop vestigial Powerset Step-0 gates from both import skills; archive dead legacy dirs.
-6. ~~Relic-skill cluster~~ RESOLVED batch 13 — all 8 deleted. Remaining fork in that thread: `setup/{onboarding,setup,setup_gmail,setup_linkedin_csv}.py` survive as the console app's onboarding engine only; killing them means ripping out the app onboarding flow (jobs.ts/commands.ts/routes/onboarding+setup.ts + app/src UI) — Arthur's call.
+6. ~~Relic-skill cluster~~ RESOLVED batch 13 (all 8 skills deleted); ~~console-app fork~~ RESOLVED batch 14 (Arthur: don't care about the console app → app/ + setup quartet deleted, Release Please back to one package).
 7. `gmail_network_import` (1,662 LOC, now `gmail/network_import.py`) deserves its own audit pass.
 8. Fold `HYGIENE.md` + this file into AGENTS.md / delete when the audit closes.
 9. Coordinate with PR #314 (other session: evidence-fingerprint refresh; touches collect/synthesize/sources).

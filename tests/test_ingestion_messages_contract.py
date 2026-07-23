@@ -257,42 +257,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
 
-    def test_app_messages_surface_is_harness_only(self) -> None:
-        source_page = (ROOT / "app/src/local/LocalSourcePage.tsx").read_text()
-        setup_route = (ROOT / "app/local-api/routes/setup.ts").read_text()
-        commands = (ROOT / "app/local-api/lib/commands.ts").read_text()
-        jobs = (ROOT / "app/local-api/jobs.ts").read_text()
-        sources = (ROOT / "app/local-api/lib/sources.ts").read_text()
-
-        self.assertIn("$import-messages", source_page)
-        self.assertNotIn("MessagesSyncPanel", source_page)
-        self.assertIn('runnable: id === "messages" || id === "twitter" ? false', setup_route)
-        self.assertIn("Messages import is harness-only", setup_route)
-
-        forbidden_runtime_paths = (
-            "discover_contacts_pipeline/messages.py",
-            "import_contacts_pipeline/messages/importer.py",
-            "discover_contacts_pipeline/messages/whatsapp_wacli.py",
-            "discover_contacts_pipeline/messages/extract_imessage.py",
-        )
-        for text in (setup_route, commands, jobs):
-            for runtime_path in forbidden_runtime_paths:
-                with self.subTest(runtime_path=runtime_path):
-                    self.assertNotIn(runtime_path, text)
-
-        for probe in ("chat.db", "wacli-login-qr", "messagesLinkStatus"):
-            with self.subTest(probe=probe):
-                self.assertNotIn(probe, sources)
-
-        for relative in (
-            "app/src/local/MessagesSyncPanel.tsx",
-            "app/src/local/LocalMessagesReviewPage.tsx",
-            "app/local-api/routes/messages.ts",
-            "app/local-api/lib/messagesReview.ts",
-        ):
-            with self.subTest(relative=relative):
-                self.assertFalse((ROOT / relative).exists())
-
     def test_whatsapp_discovery_passes_unbounded_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "whatsapp.csv"

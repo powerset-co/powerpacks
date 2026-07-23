@@ -41,13 +41,8 @@ Usually non-releasable commit shapes:
 
 ## Package Mapping
 
-`release-please-config.json` defines two packages:
-
-- `.` as the Python package `powerpacks`
-- `app` as the Node package `powerpacks-console`
-
-Commits touching `app/` can affect the `powerpacks-console` component. Root and
-package commits affect `powerpacks`.
+`release-please-config.json` defines a single package: `.` as the Python
+package `powerpacks`, tagged like `powerpacks-vX.Y.Z`.
 
 ## Forcing A Version
 

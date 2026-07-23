@@ -33,7 +33,7 @@ Changelog: (temporary file — will fold into AGENTS.md; agents MUST read this b
 ## Moves & deletions
 - Verify consumers by REAL imports/invocations (grep code, not doc mentions) before keeping or deleting.
 - Delete dead code together with its tests and listing entries. No legacy flags/modes — migrate stored state to the source of truth (`overrides/review.csv` etc.), then read from it.
-- Moving files: `git mv`, update EVERY reference (skills, tests, docs, bin, adapters, app/, `py_cmd` strings), finish with a zero-stale-reference grep. Tests that `mock.patch` module globals must import the concrete submodule, not a package `__init__` re-export.
+- Moving files: `git mv`, update EVERY reference (skills, tests, docs, bin, adapters, `py_cmd` strings), finish with a zero-stale-reference grep. Tests that `mock.patch` module globals must import the concrete submodule, not a package `__init__` re-export.
 
 ## Output & tests
 - CLIs emit JSON; status reporting is terse one-liners.

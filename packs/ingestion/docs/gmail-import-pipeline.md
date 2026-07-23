@@ -1,5 +1,7 @@
 <!--
 Changelog:
+- 2026-07-23: The powerpacks-console app and its setup_gmail.py engine were
+  deleted; the harness skill is now the only Gmail import surface.
 - 2026-07-23: Removed the --resolve-legacy / --approve-parallel-spend flags.
   The import is directory-only, period; stored legacy resolutions migrate into
   overrides/review.csv via `bin/deep-context migrate-legacy` (the central SOT),
@@ -177,9 +179,9 @@ output CSV rows are applied as raw material; their audit lives in
 - Stored legacy resolutions were accepted without an identity judge or human
   review — run `bin/deep-context migrate-legacy` so they enter the judged
   review loop.
-- The repo has three distinct surfaces: the harness skill, current local app v3
-  endpoints, and legacy `setup_gmail.py`. They share primitives but should not be
-  presented as one command contract.
+- The harness skill (`$import-gmail`) is the single Gmail import surface; the
+  former console app endpoints and their `setup_gmail.py` engine were removed
+  on 2026-07-23.
 
 ## Implementation map
 

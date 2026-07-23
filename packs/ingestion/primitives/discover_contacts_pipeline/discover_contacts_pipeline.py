@@ -21,6 +21,10 @@ Changelog:
     - The pre-sync Gmail API estimation in dry_run_plan was an always-empty
       stub and was removed; gmail_api_estimates stays an empty list for new
       ledgers.
+    - Removed the --from-setup flag and extract_accounts_path_from_setup:
+      the only producer of .powerpacks/setup/setup-run.json was the deleted
+      console setup engine (setup/setup.py). Account state now comes solely
+      from --from-accounts / accounts.json.
 """
 
 from __future__ import annotations
@@ -127,36 +131,8 @@ def gmail_record_has_import_identity(record: dict[str, Any]) -> bool:
     return bool(cfg.get("selected_accounts") or cfg.get("account_emails") or record.get("usernames") or record.get("artifacts"))
 
 
-def extract_accounts_path_from_setup(path: str) -> str:
-    if not path:
-        return ""
-    data = read_json(Path(path), {}) or {}
-    for key in ["accounts", "accounts_path"]:
-        value = data.get(key)
-        if isinstance(value, str):
-            return value
-    handoff = data.get("handoff") if isinstance(data.get("handoff"), dict) else {}
-    for key in ["accounts", "accounts_path"]:
-        value = handoff.get(key)
-        if isinstance(value, str):
-            return value
-    commands = handoff.get("commands") if isinstance(handoff.get("commands"), dict) else {}
-    cmd = str(commands.get("discover_contacts_run") or "")
-    if "--from-accounts" in cmd:
-        parts = cmd.split()
-        try:
-            return parts[parts.index("--from-accounts") + 1]
-        except (ValueError, IndexError):
-            return ""
-    return ""
-
-
 def apply_account_sources(args: argparse.Namespace) -> argparse.Namespace:
     accounts_path = str(getattr(args, "from_accounts", "") or "").strip()
-    if not accounts_path:
-        accounts_path = extract_accounts_path_from_setup(str(getattr(args, "from_setup", "") or "").strip())
-        if accounts_path:
-            setattr(args, "from_accounts", accounts_path)
     channels = account_channels(accounts_path)
     gmail = channels.get("gmail") if isinstance(channels.get("gmail"), dict) else {}
     if gmail and (not account_record_is_linked(gmail) or not gmail_record_has_import_identity(gmail)):
@@ -547,7 +523,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             "include_existing_artifacts": args.include_existing_artifacts,
             "skip_msgvault_sync": args.skip_msgvault_sync,
             "from_accounts": args.from_accounts,
-            "from_setup": args.from_setup,
             "only_sources": unique_strings(getattr(args, "only_source", [])),
             "enrichment_only": bool(getattr(args, "enrichment_only", False)),
             "twitter_handle": getattr(args, "twitter_handle", ""),
@@ -700,8 +675,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
     run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    run.add_argument("--from-accounts", default="", help="Account registry path produced by onboarding; fills source-specific args unless explicit flags override it")
-    run.add_argument("--from-setup", default="", help="Setup ledger/handoff path containing an accounts path")
+    run.add_argument("--from-accounts", default="", help="Account registry path produced by source linking; fills source-specific args unless explicit flags override it")
     run.add_argument("--operator-id", default="local")
     run.add_argument("--linkedin-csv", default="")
     run.add_argument("--linkedin-source-user", default="")

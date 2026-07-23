@@ -6,8 +6,6 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stdout
-from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -46,18 +44,6 @@ import_common = load_module(
 index_contacts = load_module(
     "phase13_index_contacts",
     "packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py",
-)
-setup_mod = load_module(
-    "phase13_setup",
-    "packs/ingestion/primitives/setup/setup.py",
-)
-setup_linkedin_csv = load_module(
-    "phase13_setup_linkedin_csv",
-    "packs/ingestion/primitives/setup/setup_linkedin_csv.py",
-)
-setup_gmail = load_module(
-    "phase13_setup_gmail",
-    "packs/ingestion/primitives/setup/setup_gmail.py",
 )
 openai_usage_tiers = load_module(
     "phase13_openai_usage_tiers",
@@ -199,9 +185,7 @@ class PipelinePhase13Tests(unittest.TestCase):
         )
         with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_USAGE_TIER": "tier_1"}, clear=True):
             cmd = index_contacts.processing_args(args, dry_run=True, allow_paid=False)
-            setup_args = setup_linkedin_csv.args_for_index("arthur")
         self.assertEqual(cmd[cmd.index("--openai-usage-tier") + 1], "tier_1")
-        self.assertEqual(setup_args.openai_usage_tier, "tier_1")
 
     def test_explicit_openai_usage_tier_wins_over_env(self):
         args = SimpleNamespace(
@@ -340,18 +324,6 @@ class PipelinePhase13Tests(unittest.TestCase):
             with mock.patch.object(import_common, "DEFAULT_BASE_DIR", base):
                 self.assertEqual(import_common.linkedin_csv_path(accounts), str(repo_local))
 
-    def test_setup_status_does_not_write_setup_ledger(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            ledger = Path(tmp) / "setup-run.json"
-            ledger.write_text(json.dumps({"status": "old"}), encoding="utf-8")
-            before = ledger.read_text(encoding="utf-8")
-            args = SimpleNamespace(setup_ledger=str(ledger))
-            buf = StringIO()
-            with mock.patch.object(setup_mod, "status_payload", return_value={"setup_ledger": {"status": "new"}}), redirect_stdout(buf):
-                self.assertEqual(setup_mod.run_status(args), 0)
-            self.assertEqual(ledger.read_text(encoding="utf-8"), before)
-            self.assertEqual(json.loads(buf.getvalue()), {"setup_ledger": {"status": "new"}})
-
     def test_write_csv_rows_skips_unchanged_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "rows.csv"
@@ -423,286 +395,6 @@ class PipelinePhase13Tests(unittest.TestCase):
                 })
                 directory.write_text("id\nchanged\n", encoding="utf-8")
                 self.assertIsNotNone(import_common.import_manifest_current("linkedin"))
-
-    def test_setup_linkedin_csv_dry_run_uses_stable_discovered_csv_for_currentness(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            upload_csv = tmp_path / "uploads" / "Connections.csv"
-            stable_csv = tmp_path / "network-import" / "discover" / "linkedin" / "Connections.csv"
-            import_dir = tmp_path / "network-import" / "import"
-            people_csv = tmp_path / "people.csv"
-            accounts = tmp_path / "accounts.json"
-            upload_csv.parent.mkdir(parents=True)
-            stable_csv.parent.mkdir(parents=True)
-            upload_csv.write_text("First Name,Last Name,URL\nAda,Lovelace,https://www.linkedin.com/in/ada\n", encoding="utf-8")
-            stable_csv.write_text(upload_csv.read_text(encoding="utf-8"), encoding="utf-8")
-            people_csv.write_text("id\n1\n", encoding="utf-8")
-            accounts.write_text("{}", encoding="utf-8")
-            import_common.write_manifest("linkedin", {
-                "status": "completed",
-                "input": {"connections_csv": str(stable_csv), "source_user": "arthur"},
-                "outputs": {"people_csv": str(people_csv)},
-                "stats": {"people": 1},
-            }, import_dir=import_dir)
-
-            args = SimpleNamespace(csv=str(upload_csv), source_user="arthur", accounts=str(accounts))
-            with mock.patch.object(setup_linkedin_csv, "DEFAULT_IMPORT_DIR", import_dir), \
-                mock.patch.object(setup_linkedin_csv, "DISCOVER_CONNECTIONS_CSV", stable_csv), \
-                mock.patch.object(setup_linkedin_csv, "read_csv_stats", return_value={"status": "ok", "valid_contacts": 1}):
-                payload = setup_linkedin_csv.dry_run(args)
-
-            self.assertTrue(payload["current_import"])
-            self.assertEqual(payload["manifest_csv"], str(stable_csv))
-
-    def test_setup_linkedin_csv_run_noops_uploaded_csv_after_discovery_stable_match(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            upload_csv = tmp_path / "uploads" / "Connections.csv"
-            stable_csv = tmp_path / "network-import" / "discover" / "linkedin" / "Connections.csv"
-            import_dir = tmp_path / "network-import" / "import"
-            people_csv = tmp_path / "people.csv"
-            duckdb = tmp_path / "local-search.duckdb"
-            accounts = tmp_path / "accounts.json"
-            run_root = tmp_path / "runs" / "setup-linkedin-csv"
-            upload_csv.parent.mkdir(parents=True)
-            stable_csv.parent.mkdir(parents=True)
-            upload_csv.write_text("First Name,Last Name,URL\nAda,Lovelace,https://www.linkedin.com/in/ada\n", encoding="utf-8")
-            stable_csv.write_text(upload_csv.read_text(encoding="utf-8"), encoding="utf-8")
-            people_csv.write_text("id\n1\n", encoding="utf-8")
-            duckdb.write_bytes(b"0" * 2048)
-            accounts.write_text("{}", encoding="utf-8")
-            import_common.write_manifest("linkedin", {
-                "status": "completed",
-                "input": {"connections_csv": str(stable_csv), "source_user": "arthur"},
-                "outputs": {"people_csv": str(people_csv)},
-                "stats": {"people": 1},
-            }, import_dir=import_dir)
-            args = SimpleNamespace(
-                run_id="stable-noop",
-                csv=str(upload_csv),
-                source_user="arthur",
-                accounts=str(accounts),
-                force=False,
-                operator_id="arthur",
-            )
-
-            with mock.patch.object(setup_linkedin_csv, "RUN_ROOT", run_root), \
-                mock.patch.object(setup_linkedin_csv, "DEFAULT_IMPORT_DIR", import_dir), \
-                mock.patch.object(setup_linkedin_csv, "DISCOVER_CONNECTIONS_CSV", stable_csv), \
-                mock.patch.object(setup_linkedin_csv, "read_csv_stats", return_value={"status": "ok", "valid_contacts": 1}), \
-                mock.patch.object(setup_linkedin_csv.linkedin_discovery, "discover", return_value={"status": "completed", "contacts": 1, "source_csv": str(stable_csv)}), \
-                mock.patch.object(setup_linkedin_csv, "run_linkedin_import") as import_mock, \
-                mock.patch.object(setup_linkedin_csv.index_contacts_pipeline, "run_pipeline", return_value=({"status": "ready", "step": "noop", "duckdb": str(duckdb)}, 0)):
-                payload = setup_linkedin_csv.run(args)
-
-            self.assertEqual(payload["status"], "completed")
-            self.assertTrue(payload["import"]["noop"])
-            import_mock.assert_not_called()
-            self.assertTrue((run_root / "status.json").exists())
-
-    def test_setup_linkedin_csv_rejects_invalid_run_id(self):
-        with self.assertRaises(ValueError):
-            setup_linkedin_csv.make_context("../bad")
-
-    def test_setup_linkedin_csv_does_not_complete_when_index_not_ready(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            csv_path = tmp_path / "Connections.csv"
-            accounts = tmp_path / "accounts.json"
-            run_root = tmp_path / "runs" / "setup-linkedin-csv"
-            import_dir = tmp_path / "network-import" / "import"
-            people_csv = tmp_path / "people.csv"
-            csv_path.write_text("First Name,Last Name,URL\nAda,Lovelace,https://www.linkedin.com/in/ada\n", encoding="utf-8")
-            accounts.write_text("{}", encoding="utf-8")
-            people_csv.write_text("id\n1\n", encoding="utf-8")
-            import_payload = {
-                "status": "completed",
-                "noop": True,
-                "input": {"connections_csv": str(csv_path), "source_user": "arthur"},
-                "outputs": {"people_csv": str(people_csv)},
-                "stats": {"people": 1},
-            }
-            args = SimpleNamespace(
-                run_id="not-ready-index",
-                csv=str(csv_path),
-                source_user="arthur",
-                accounts=str(accounts),
-                force=False,
-                operator_id="arthur",
-            )
-            with mock.patch.object(setup_linkedin_csv, "RUN_ROOT", run_root), \
-                mock.patch.object(setup_linkedin_csv, "DEFAULT_IMPORT_DIR", import_dir), \
-                mock.patch.object(setup_linkedin_csv, "read_csv_stats", return_value={"status": "ok", "valid_contacts": 1}), \
-                mock.patch.object(setup_linkedin_csv.linkedin_discovery, "discover", return_value={"status": "completed", "contacts": 1, "source_csv": str(csv_path)}), \
-                mock.patch.object(setup_linkedin_csv, "import_manifest_current", return_value=import_payload), \
-                mock.patch.object(setup_linkedin_csv.index_contacts_pipeline, "run_pipeline", return_value=({"status": "not_ready", "reason": "missing_people_csv"}, 0)):
-                payload = setup_linkedin_csv.run(args)
-
-            self.assertEqual(payload["status"], "failed")
-            self.assertIn("missing_people_csv", payload["error"])
-
-    def test_setup_linkedin_csv_status_payload_reads_single_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run_root = Path(tmp) / "runs" / "setup-linkedin-csv"
-            run_root.mkdir(parents=True)
-            with mock.patch.object(setup_linkedin_csv, "RUN_ROOT", run_root):
-                self.assertEqual(setup_linkedin_csv.status_payload()["status"], "missing")
-                (run_root / "status.json").write_text(json.dumps({"status": "completed", "run_id": "run-1"}), encoding="utf-8")
-                # run_id arg is ignored; the single overwritten file is always read.
-                self.assertEqual(setup_linkedin_csv.status_payload()["status"], "completed")
-                self.assertEqual(setup_linkedin_csv.status_payload("ignored")["status"], "completed")
-
-    def test_setup_linkedin_csv_second_run_overwrites_single_status_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run_root = Path(tmp) / "runs" / "setup-linkedin-csv"
-            with mock.patch.object(setup_linkedin_csv, "RUN_ROOT", run_root):
-                first = setup_linkedin_csv.make_context("run-first")
-                first.event("inspect", "first run inspect", status="completed")
-                status_path = run_root / "status.json"
-                events_path = run_root / "events.jsonl"
-                self.assertEqual(json.loads(status_path.read_text())["run_id"], "run-first")
-                first_events = [line for line in events_path.read_text().splitlines() if line.strip()]
-                self.assertTrue(first_events)
-
-                # Clicking start again reuses the same files, overwriting the prior run.
-                second = setup_linkedin_csv.make_context("run-second")
-                self.assertEqual(second.state_path, status_path)
-                self.assertEqual(second.events_path, events_path)
-                self.assertEqual(json.loads(status_path.read_text())["run_id"], "run-second")
-                # events.jsonl is truncated when the new run starts.
-                self.assertEqual([line for line in events_path.read_text().splitlines() if line.strip()], [])
-                self.assertFalse((run_root / "run-first").exists())
-                self.assertFalse((run_root / "latest.json").exists())
-
-    def test_setup_gmail_rejects_invalid_run_id(self):
-        with self.assertRaises(ValueError):
-            setup_gmail.make_context("../bad")
-
-    def test_resumed_gmail_setup_drops_retired_contact_lookup_stage(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run_root = Path(tmp) / "gmail"
-            run_root.mkdir(parents=True)
-            status_path = run_root / "status.json"
-            status_path.write_text(json.dumps({
-                "schema_version": 1,
-                "vertical": "gmail",
-                "run_id": "legacy-run",
-                "status": "failed",
-                "current_stage": "network_duckdb",
-                "stage_order": [
-                    {"id": "merge_network", "label": "Merge contact sources"},
-                    {"id": "network_duckdb", "label": "Prepare contact lookup database"},
-                    {"id": "search_duckdb", "label": "Update local search database"},
-                ],
-                "stages": {
-                    "merge_network": {"status": "completed"},
-                    "network_duckdb": {"status": "failed"},
-                },
-            }), encoding="utf-8")
-
-            with mock.patch.object(setup_gmail, "RUN_ROOT", run_root):
-                ctx = setup_gmail.make_context(resume=True)
-
-            self.assertEqual(ctx.status["stage_order"], setup_gmail.STAGES)
-            self.assertNotIn("network_duckdb", ctx.status["stages"])
-            self.assertNotIn("current_stage", ctx.status)
-            persisted = json.loads(status_path.read_text(encoding="utf-8"))
-            self.assertEqual(persisted["stage_order"], setup_gmail.STAGES)
-            self.assertNotIn("network_duckdb", persisted["stages"])
-
-    def test_setup_gmail_dry_run_lists_linked_accounts(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            accounts = tmp_path / "accounts.json"
-            accounts.write_text("{}", encoding="utf-8")
-            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="")
-            with mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=["ada@example.com"]), \
-                mock.patch.object(setup_gmail, "import_manifest_current", return_value=None):
-                payload = setup_gmail.dry_run(args)
-            self.assertEqual(payload["status"], "dry_run")
-            self.assertEqual(payload["linked_accounts"], ["ada@example.com"])
-            self.assertFalse(payload["current_import"])
-
-    def test_setup_gmail_dry_run_estimates_parallel_spend(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            accounts = tmp_path / "accounts.json"
-            accounts.write_text("{}", encoding="utf-8")
-            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="")
-            with mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=["ada@example.com"]), \
-                mock.patch.object(setup_gmail, "import_manifest_current", return_value=None), \
-                mock.patch.object(setup_gmail, "_queue_emails", return_value=[f"ada-{idx}@example.com" for idx in range(12)]), \
-                mock.patch.object(setup_gmail, "_directory_emails", return_value=set()):
-                payload = setup_gmail.dry_run(args)
-            estimate = payload["parallel_spend_estimate"]
-            self.assertEqual(estimate["pending_contacts"], 12)
-            self.assertEqual(estimate["cost_per_contact_usd"], 0.05)
-            self.assertEqual(estimate["estimated_usd"], 0.6)
-            self.assertEqual(estimate["processor"], "core2x")
-
-    def test_setup_gmail_run_completes_and_auto_approves_parallel(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            accounts = tmp_path / "accounts.json"
-            duckdb = tmp_path / "local-search.duckdb"
-            people_csv = tmp_path / "people.csv"
-            run_root = tmp_path / "runs" / "setup-gmail"
-            accounts.write_text("{}", encoding="utf-8")
-            duckdb.write_bytes(b"0" * 2048)
-            people_csv.write_text("id\n1\n", encoding="utf-8")
-            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="gmail-happy", approve_spend=True)
-            import_payload = {"status": "completed", "outputs": {"people_csv": str(people_csv)}, "stats": {"people": 1}}
-            with mock.patch.object(setup_gmail, "RUN_ROOT", run_root), \
-                mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=["ada@example.com"]), \
-                mock.patch.object(setup_gmail, "_check_gmail_tokens", return_value=[]), \
-                mock.patch.object(setup_gmail, "estimate_parallel_spend", return_value={"pending_contacts": 12, "estimated_usd": 0.6}), \
-                mock.patch.object(setup_gmail.gmail_discovery, "discover", return_value={"status": "completed", "contacts": 3, "selected_accounts": ["ada@example.com"]}), \
-                mock.patch.object(setup_gmail.gmail_import, "run", return_value=import_payload) as import_mock, \
-                mock.patch.object(setup_gmail.index_contacts_pipeline, "run_pipeline", return_value=({"status": "ready", "duckdb": str(duckdb)}, 0)):
-                payload = setup_gmail.run(args)
-
-            self.assertEqual(payload["status"], "completed")
-            import_mock.assert_called_once()
-            import_ns = import_mock.call_args.args[0]
-            self.assertTrue(import_ns.approve_parallel_spend)
-            self.assertEqual(payload["linked_accounts"], ["ada@example.com"])
-            self.assertTrue((run_root / "status.json").exists())
-
-    def test_setup_gmail_run_fails_when_no_linked_accounts(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            accounts = tmp_path / "accounts.json"
-            run_root = tmp_path / "runs" / "setup-gmail"
-            accounts.write_text("{}", encoding="utf-8")
-            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="gmail-empty")
-            with mock.patch.object(setup_gmail, "RUN_ROOT", run_root), \
-                mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=[]), \
-                mock.patch.object(setup_gmail.gmail_discovery, "discover") as discover_mock:
-                payload = setup_gmail.run(args)
-            self.assertEqual(payload["status"], "failed")
-            self.assertIn("Gmail", payload["error"])
-            discover_mock.assert_not_called()
-
-    def test_setup_gmail_run_does_not_complete_when_index_not_ready(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            accounts = tmp_path / "accounts.json"
-            people_csv = tmp_path / "people.csv"
-            run_root = tmp_path / "runs" / "setup-gmail"
-            accounts.write_text("{}", encoding="utf-8")
-            people_csv.write_text("id\n1\n", encoding="utf-8")
-            args = SimpleNamespace(accounts=str(accounts), operator_id="arthur", run_id="gmail-not-ready", approve_spend=True)
-            import_payload = {"status": "completed", "outputs": {"people_csv": str(people_csv)}, "stats": {"people": 1}}
-            with mock.patch.object(setup_gmail, "RUN_ROOT", run_root), \
-                mock.patch.object(setup_gmail, "linked_gmail_accounts", return_value=["ada@example.com"]), \
-                mock.patch.object(setup_gmail, "_check_gmail_tokens", return_value=[]), \
-                mock.patch.object(setup_gmail, "estimate_parallel_spend", return_value={"pending_contacts": 0, "estimated_usd": 0}), \
-                mock.patch.object(setup_gmail.gmail_discovery, "discover", return_value={"status": "completed", "contacts": 3}), \
-                mock.patch.object(setup_gmail.gmail_import, "run", return_value=import_payload), \
-                mock.patch.object(setup_gmail.index_contacts_pipeline, "run_pipeline", return_value=({"status": "not_ready", "reason": "missing_people_csv"}, 0)):
-                payload = setup_gmail.run(args)
-            self.assertEqual(payload["status"], "failed")
-            self.assertIn("missing_people_csv", payload["error"])
 
     def test_fan_in_excludes_canonical_merged_only_when_all_sources_exist(self):
         with tempfile.TemporaryDirectory() as tmp:

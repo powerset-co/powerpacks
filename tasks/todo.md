@@ -5,6 +5,10 @@ Created: 2026-06-11
 ## Change log
 - 2026-06-11: Initial plan (investigation of app/ + network-search-app + DuckDB schema).
 - 2026-06-11: Phases 1–3 implemented via parallel agent team + launchd daemon + plugin refactor. See Review.
+- 2026-07-23: OBSOLETE — the powerpacks-console app (`app/`) and
+  `scripts/run-powerpacks-console.sh` were deleted from the repo; the console
+  is no longer a supported surface. Console sections below are historical, and
+  all unchecked console items are cancelled.
 
 ## Goal
 Bring `app/` (powerpacks-console) close to network-search-app for two surfaces:
@@ -231,7 +235,7 @@ stage stays on the one shared schema.
 
 - [ ] `$heal-contacts` skill: re-match with approval gate,
       `match_status=confirmed` idempotency.
-- [ ] Console Identity tab (`app/local-api/routes/identity.ts`).
+- ~~Console Identity tab~~ (cancelled 2026-07-23: console app deleted).
 - [ ] Small hardening: regeneration of `contacts.csv` should either preserve
       match columns or mark the review state stale — today the wipe is
       silent (cosmetic locally, but breaks any consumer reading

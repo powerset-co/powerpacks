@@ -31,20 +31,6 @@
       "why": "Source link registry used by setup/import/enrichment."
     },
     {
-      "id": "setup_ledger",
-      "path": ".powerpacks/setup/setup-run.json",
-      "kind": "file",
-      "policy": "report_only",
-      "why": "Setup ledger is a checkpoint/log. Report duplicates, but do not copy automatically unless explicitly requested."
-    },
-    {
-      "id": "discover_setup_ledger",
-      "path": ".powerpacks/network-import/discover/ledger.setup.json",
-      "kind": "file",
-      "policy": "report_only",
-      "why": "Discovery setup ledger is a checkpoint/log. Per-vertical manifests are more authoritative than stale status."
-    },
-    {
       "id": "messages_discovery_manifest",
       "path": ".powerpacks/network-import/discover/messages/manifest.json",
       "kind": "file",
@@ -98,7 +84,7 @@
       "path": ".powerpacks/network-import/import",
       "kind": "directory",
       "policy": "adopt_newer",
-      "why": "Stable per-source import/enrichment manifests and outputs consumed by setup UI."
+      "why": "Stable per-source import/enrichment manifests and outputs consumed by downstream merge/index stages."
     },
     {
       "id": "network_profile_cache",

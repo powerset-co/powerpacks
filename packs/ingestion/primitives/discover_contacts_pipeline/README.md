@@ -27,7 +27,7 @@ agent to a `SKILL.md`, and that skill calls this script.
 
 - LinkedIn CSV: LinkedIn `Connections.csv`, handled by `linkedin/network_import.py`.
 - Gmail: local msgvault SQLite (`~/.msgvault/msgvault.db`), handled by `gmail/network_import.py msgvault`; multiple selected accounts from onboarding are imported into fixed per-account folders under `.powerpacks/network-import/discover/gmail/<account>/`.
-- Setup/account state: `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` fills in LinkedIn CSV/source label, msgvault DB, selected Gmail accounts, and Twitter handle unless explicit CLI flags override them.
+- Account state: `--from-accounts .powerpacks/ingestion/accounts.json` fills in LinkedIn CSV/source label, msgvault DB, selected Gmail accounts, and Twitter handle unless explicit CLI flags override them.
 - Twitter/X: existing `.powerpacks/network-import/discover/twitter/*/people.csv`, produced by `twitter/network_import.py`; include with `--include-existing-artifacts`.
 
 Message artifacts are not generic discovery inputs. `$import-messages` owns
