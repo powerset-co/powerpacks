@@ -88,7 +88,7 @@ class GmailMsgvaultAggregationTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def aggregate(self):
-        rows = gni.aggregate_msgvault_contacts(self.con, "", [])
+        rows = gni.MsgvaultStore(connection=self.con).aggregate_contacts("", [])
         return {r["email"]: r for r in rows}, rows
 
     def test_contact_set_and_counts(self):

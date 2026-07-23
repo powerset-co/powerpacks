@@ -18,18 +18,29 @@ Candidate set fidelity
 ----------------------
 The candidate emails are re-derived exactly the way ``gmail/discover_engine``
 builds its ``linkedin_resolution_queue``: aggregate msgvault metadata
-(``gmail/msgvault_store``), drop automated senders, keep only round-trip
-contacts (both sent AND received), then take the same queue rows. We reuse
-those helpers directly so this stays 1:1 with "the people we would send to
+(``MsgvaultStore.aggregate_contacts``), drop automated senders, keep only
+round-trip contacts (both sent AND received), then take the same queue rows. We
+reuse those helpers directly so this stays 1:1 with "the people we would send to
 Parallel".
+
+Division of labor
+-----------------
+All msgvault SQLite access (connection, schema, the recent-emails-with-bodies
+SQL, the windowed all-contacts stream, owner/account derivation, honest counts)
+lives on ``MsgvaultStore`` in ``gmail/msgvault_store.py``. This module keeps only
+the non-DB logic: HTML/body cleaning, the deterministic identity-signal score,
+near-dup shingle detection, the per-thread email SELECTION
+(``select_emails_from_rows``), the ``recent_emails_for`` fetch+select wrapper,
+the candidate-derivation orchestration, and the CSV/JSONL/manifest writing + CLI.
 
 Privacy note (deliberate, local-only)
 -------------------------------------
 The standard Gmail import path is metadata-only -- it never reads subjects or
 snippets. This primitive INTENTIONALLY reads ``messages.subject`` and
-``messages.snippet`` from the local msgvault DB, purely to build a local review
-artifact. It performs NO network calls, NO LLM calls, and sends nothing
-anywhere. Subjects/snippets never leave the local machine via this primitive.
+``messages.snippet`` (and, in body mode, ``message_bodies.body_text``) from the
+local msgvault DB, purely to build a local review artifact. It performs NO
+network calls, NO LLM calls, and sends nothing anywhere. Subjects/snippets/bodies
+never leave the local machine via this primitive.
 
 Outputs (one fixed directory, overwrite in place -- manifest + outputs only):
   <out-dir>/email_context.jsonl   one JSON record per person (full fidelity)
@@ -37,6 +48,14 @@ Outputs (one fixed directory, overwrite in place -- manifest + outputs only):
   <out-dir>/manifest.json         counts/status/timing
 
 Changelog:
+  2026-07-23 (audit batch 19): folded this module's second msgvault SQLite layer
+    into ``MsgvaultStore`` (gmail/msgvault_store.py). The recent-emails SQL +
+    ``fetch_recent_rows``, ``create_candidate_pid_table``,
+    ``stream_contact_groups``, ``account_emails``, ``owner_identity``, and
+    ``count_messages_for`` now live there as methods; this module does all DB
+    work through a ``MsgvaultStore``. ``recent_emails_for`` and
+    ``derive_candidates`` now take a store instead of a raw connection; the pure
+    selection (``select_emails_from_rows``) and signal/near-dup helpers stay here.
   2026-07-23 (audit batch 17): the retired gmail/network_import.py split;
     ``gni`` now aliases the concrete ``gmail/msgvault_store`` module,
     linkedin_resolution_queue_rows comes from ``gmail/discover_engine``, and
@@ -45,16 +64,15 @@ Changelog:
 import argparse
 import csv
 import html
-import itertools
 import json
 import re
 import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable
 
-# Reuse the exact candidate-derivation + msgvault helpers from the Gmail import
+# Reuse the exact candidate-derivation + msgvault access from the Gmail import
 # primitive, and the canonical role/service-address detector from the Parallel
 # resolution path, so this stays faithful to "who we send to Parallel".
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode.
@@ -102,160 +120,6 @@ _QUOTE_CUT = re.compile(
     r"from:\s.+|sent from my .+|get outlook for .+)\s*$"
 )
 
-# Resolve a contact's participant id(s) up front so the message lookups can use
-# the sender_id / message_recipients.participant_id indexes directly. The old
-# `sender = ? OR EXISTS(recipients…)` shape made SQLite scan every email per
-# contact (idx_messages_type) and run a correlated subquery per row — minutes
-# per all-contact run on a large archive. Credit: Jake Zeller diagnosed this.
-PARTICIPANT_IDS_SQL = "SELECT id FROM participants WHERE LOWER(email_address) = ?"
-
-_RECENT_EMAILS_SELECT = """
-SELECT
-    COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
-    m.conversation_id,
-    LOWER(sp.email_address) AS sender_email,
-    m.subject,
-    m.snippet,
-    mb.body_text
-"""
-# Emails the contact SENT — index-direct on messages.sender_id.
-RECENT_EMAILS_FROM_SENDER_SQL = _RECENT_EMAILS_SELECT + """
-FROM messages m
-LEFT JOIN participants sp ON sp.id = m.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = m.id
-WHERE m.message_type = 'email'
-  AND (m.deleted_at IS NULL OR m.deleted_at = '')
-  AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-  AND m.sender_id = ?1
-ORDER BY at DESC
-LIMIT ?2
-"""
-# Emails the contact RECEIVED — index-direct on message_recipients.participant_id.
-RECENT_EMAILS_TO_RECIPIENT_SQL = _RECENT_EMAILS_SELECT + """
-FROM message_recipients mr
-JOIN messages m ON m.id = mr.message_id
-LEFT JOIN participants sp ON sp.id = m.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = m.id
-WHERE m.message_type = 'email'
-  AND (m.deleted_at IS NULL OR m.deleted_at = '')
-  AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-  AND mr.participant_id = ?1
-ORDER BY at DESC
-LIMIT ?2
-"""
-
-
-def fetch_recent_rows(con: sqlite3.Connection, email: str, fetch_limit: int) -> list[sqlite3.Row]:
-    """Recent sender+recipient messages for a contact, via participant-id indexes.
-
-    Per-contact path, kept for ``recent_emails_for`` and the unit tests. The
-    all-contacts build path uses ``stream_contact_groups`` (one windowed query)
-    instead — see below.
-    """
-    ids = [r["id"] for r in con.execute(PARTICIPANT_IDS_SQL, (email.lower(),)).fetchall()]
-    if not ids:
-        return []
-    rows: list[sqlite3.Row] = []
-    for pid in ids:
-        rows.extend(con.execute(RECENT_EMAILS_FROM_SENDER_SQL, (pid, fetch_limit)).fetchall())
-        rows.extend(con.execute(RECENT_EMAILS_TO_RECIPIENT_SQL, (pid, fetch_limit)).fetchall())
-    rows.sort(key=lambda row: str(row["at"] or ""), reverse=True)
-    return rows[:fetch_limit]
-
-
-# --- All-contacts fast path: one windowed query, streamed contact-by-contact ---
-#
-# The per-contact loop above runs ~2 indexed queries per contact. On a large
-# archive that per-contact overhead dominates wall-clock. Instead we resolve all
-# candidate emails to participant ids once (a temp `cand_pid` table), then run a
-# SINGLE windowed query that takes each contact's most-recent `fetch_limit`
-# messages via ROW_NUMBER() OVER (PARTITION BY contact ORDER BY at DESC).
-#
-# Memory stays low two ways:
-#   1. The window/sort carries only lightweight columns (subject + snippet, no
-#      body blobs); `body_text` is LEFT JOINed only AFTER the rn<=K filter, so
-#      bodies are read for the kept rows only — not for every message in the sort.
-#   2. The result is ORDER BY contact, so we stream the cursor with
-#      itertools.groupby and hold just one contact's ~fetch_limit rows at a time.
-def create_candidate_pid_table(con: sqlite3.Connection, emails: Iterable[str]) -> int:
-    """(Re)build temp tables mapping each candidate email -> participant id(s).
-
-    One O(participants) scan up front, instead of a per-contact id lookup. Returns
-    the number of (email, pid) rows mapped."""
-    con.execute("DROP TABLE IF EXISTS cand_pid")
-    con.execute("DROP TABLE IF EXISTS cand_email")
-    con.execute("CREATE TEMP TABLE cand_email(email TEXT PRIMARY KEY)")
-    con.executemany(
-        "INSERT OR IGNORE INTO cand_email(email) VALUES (?)",
-        [(e.strip().lower(),) for e in emails if e and e.strip()],
-    )
-    con.execute(
-        """
-        CREATE TEMP TABLE cand_pid AS
-        SELECT ce.email AS cemail, p.id AS pid
-        FROM cand_email ce
-        JOIN participants p ON LOWER(p.email_address) = ce.email
-        """
-    )
-    con.execute("CREATE INDEX cand_pid_pid ON cand_pid(pid)")
-    return con.execute("SELECT COUNT(*) AS n FROM cand_pid").fetchone()["n"]
-
-
-# Window on lightweight columns only (subject/snippet); join body_text AFTER the
-# rn<=K filter so the big blobs are read for kept rows only. UNION (not UNION ALL)
-# dedupes a message that matches a contact on both the sender and recipient side.
-WINDOWED_CONTEXT_SQL = """
-WITH assoc AS (
-    SELECT cp.cemail AS cemail, m.id AS mid,
-           COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
-           m.conversation_id AS conversation_id, m.sender_id AS sender_id,
-           m.subject AS subject, m.snippet AS snippet
-    FROM cand_pid cp
-    JOIN messages m ON m.sender_id = cp.pid
-    WHERE m.message_type = 'email'
-      AND (m.deleted_at IS NULL OR m.deleted_at = '')
-      AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-    UNION
-    SELECT cp.cemail, m.id,
-           COALESCE(m.sent_at, m.received_at, m.internal_date),
-           m.conversation_id, m.sender_id, m.subject, m.snippet
-    FROM cand_pid cp
-    JOIN message_recipients mr ON mr.participant_id = cp.pid
-    JOIN messages m ON m.id = mr.message_id
-    WHERE m.message_type = 'email'
-      AND (m.deleted_at IS NULL OR m.deleted_at = '')
-      AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-),
-ranked AS (
-    SELECT assoc.*,
-           ROW_NUMBER() OVER (PARTITION BY cemail ORDER BY at DESC, mid DESC) AS rn
-    FROM assoc
-)
-SELECT r.cemail AS cemail,
-       r.at AS at,
-       r.conversation_id AS conversation_id,
-       LOWER(sp.email_address) AS sender_email,
-       r.subject AS subject,
-       r.snippet AS snippet,
-       mb.body_text AS body_text
-FROM ranked r
-LEFT JOIN participants sp ON sp.id = r.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = r.mid
-WHERE r.rn <= ?
-ORDER BY r.cemail, r.at DESC, r.mid DESC
-"""
-
-
-def stream_contact_groups(
-    con: sqlite3.Connection, fetch_limit: int
-) -> Iterator[tuple[str, list[sqlite3.Row]]]:
-    """Yield ``(contact_email, recent_rows)`` from the windowed query, one contact
-    at a time. Requires ``create_candidate_pid_table`` to have run first. Only one
-    contact's rows are materialized at a time, so memory stays bounded."""
-    cur = con.execute(WINDOWED_CONTEXT_SQL, (fetch_limit,))
-    for cemail, group in itertools.groupby(cur, key=lambda r: r["cemail"]):
-        yield cemail, list(group)
-
 
 def clean_text(value: Any, limit: int | None = None) -> str:
     """Unescape HTML entities, collapse whitespace, optionally truncate."""
@@ -286,7 +150,7 @@ def clean_body(value: Any, head_chars: int, tail_chars: int) -> str:
 # signature block / intro bio contains. Used to pick the best email per thread
 # (no LLM): a message with a phone + title + license outscores a "thanks!".
 _SIGNAL_FEATURES = [
-    (re.compile(r"\+?\d[\d().\-  ]{7,}\d"), 3),                                  # phone number
+    (re.compile(r"\+?\d[\d().\-  ]{7,}\d"), 3),                                  # phone number
     (re.compile(r"https?://|www\.|linkedin\.com/in/|github\.com/|[a-z0-9-]+\.(?:com|io|co|org|net)\b", re.I), 2),  # url / domain
     (re.compile(r"(?<![\w.])@[A-Za-z0-9_]{2,}"), 1),                                 # social handle
     (re.compile(r"\b(?:co-?founder|founder|ceo|cto|coo|cfo|vp|head of|director|principal|"
@@ -328,40 +192,6 @@ def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     return inter / (len(a) + len(b) - inter)
 
 
-def account_emails(con: sqlite3.Connection) -> set[str]:
-    """Lowercased synced account addresses, used to infer message direction.
-
-    msgvault's Gmail sync leaves ``is_from_me`` = 0 for every row, so direction
-    is derived from whether the sender is one of the synced accounts instead.
-    """
-    rows = con.execute("SELECT LOWER(identifier) AS ident FROM sources").fetchall()
-    return {str(r["ident"]).strip() for r in rows if str(r["ident"] or "").strip()}
-
-
-def owner_identity(con: sqlite3.Connection) -> dict[str, Any]:
-    """Who the mailbox owner is, derived entirely from msgvault (no flags needed).
-
-    Emails = every synced ``sources.identifier`` (already what ``account_emails``
-    returns). Name = the most common non-empty ``participants.display_name`` seen
-    for any of those addresses (Gmail leaves ``sources.display_name`` blank, but the
-    owner's name shows up on the participant rows). Used to tell the LLM marker step
-    who 'me' is so it never mints a marker from the owner's own identity."""
-    emails = sorted(account_emails(con))
-    name = ""
-    if emails:
-        placeholders = ",".join("?" for _ in emails)
-        row = con.execute(
-            f"SELECT TRIM(display_name) AS dn, COUNT(*) AS n FROM participants "
-            f"WHERE LOWER(email_address) IN ({placeholders}) "
-            f"AND TRIM(COALESCE(display_name, '')) <> '' "
-            f"GROUP BY TRIM(display_name) ORDER BY n DESC, dn LIMIT 1",
-            emails,
-        ).fetchone()
-        if row:
-            name = str(row["dn"]).strip()
-    return {"name": name, "emails": emails}
-
-
 def select_emails_from_rows(
     rows: Iterable[sqlite3.Row],
     email: str,
@@ -376,7 +206,8 @@ def select_emails_from_rows(
     """Pick a contact's context emails from already-fetched recent ``rows``.
 
     Shared by both fetch paths (per-contact ``recent_emails_for`` and the
-    all-contacts ``stream_contact_groups``) so selection semantics are identical.
+    all-contacts ``MsgvaultStore.stream_contact_groups``) so selection semantics
+    are identical.
 
     Only keep messages whose sender is the contact themselves (``from_role`` =
     "contact" -> their own words) or the account owner (``from_role`` = "me" ->
@@ -452,7 +283,7 @@ def select_emails_from_rows(
 
 
 def recent_emails_for(
-    con: sqlite3.Connection,
+    store: gni.MsgvaultStore,
     email: str,
     per_person: int,
     snippet_chars: int,
@@ -462,9 +293,10 @@ def recent_emails_for(
     tail_chars: int = DEFAULT_TAIL_CHARS,
     max_per_thread: int | None = 1,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Per-contact wrapper: fetch this contact's recent rows then select from them.
+    """Per-contact wrapper: fetch this contact's recent rows via ``store`` then
+    select from them.
 
-    The all-contacts build path uses ``stream_contact_groups`` +
+    The all-contacts build path uses ``store.stream_contact_groups`` +
     ``select_emails_from_rows`` directly; this wrapper preserves the single-contact
     API used by callers and tests."""
     # Breadth mode (max_per_thread == 1) over-fetches 8x so we still see many distinct
@@ -472,7 +304,7 @@ def recent_emails_for(
     # per thread, so a smaller multiple already fills the budget — avoid pulling
     # per_person*8 rows when per_person is large (e.g. the 1600 Gmail vertical).
     mult = FETCH_MULTIPLIER if max_per_thread == 1 else DEPTH_FETCH_MULTIPLIER
-    rows = fetch_recent_rows(con, email, per_person * mult)
+    rows = store.fetch_recent_rows(email, per_person * mult)
     return select_emails_from_rows(
         rows, email, per_person, snippet_chars, accounts,
         source=source, head_chars=head_chars, tail_chars=tail_chars,
@@ -480,41 +312,8 @@ def recent_emails_for(
     )
 
 
-def count_messages_for(con: sqlite3.Connection, email: str, accounts: set[str]) -> int:
-    """True total of the messages ``select_emails_from_rows`` draws from for this contact:
-    messages the contact SENT, plus messages an owner account sent where the contact is a
-    recipient. Mirrors the selector's sender filter (and its not-deleted / email guards)
-    so ``capped`` is honest — it excludes third-party-sent mail the selector always drops,
-    unlike a naive "every message in the contact's threads" count.
-    """
-    contact_ids = [r["id"] for r in con.execute(PARTICIPANT_IDS_SQL, (email.lower(),)).fetchall()]
-    if not contact_ids:
-        return 0
-    owner_ids: list[Any] = []
-    if accounts:
-        oph = ",".join("?" for _ in accounts)
-        owner_ids = [r["id"] for r in con.execute(
-            f"SELECT id FROM participants WHERE LOWER(email_address) IN ({oph})",
-            tuple(sorted(a.lower() for a in accounts))).fetchall()]
-    cph = ",".join("?" for _ in contact_ids)
-    not_deleted = ("AND (m.deleted_at IS NULL OR m.deleted_at = '') "
-                   "AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')")
-    arms = [f"SELECT m.id FROM messages m WHERE m.message_type='email' {not_deleted} "
-            f"AND m.sender_id IN ({cph})"]
-    params: list[Any] = list(contact_ids)
-    if owner_ids:
-        oin = ",".join("?" for _ in owner_ids)
-        arms.append(f"SELECT m.id FROM message_recipients mr JOIN messages m ON m.id = mr.message_id "
-                    f"WHERE m.message_type='email' {not_deleted} "
-                    f"AND mr.participant_id IN ({cph}) AND m.sender_id IN ({oin})")
-        params += list(contact_ids) + list(owner_ids)
-    # UNION (not UNION ALL) dedupes a message matched by both arms.
-    sql = f"SELECT COUNT(*) AS n FROM ({' UNION '.join(arms)})"
-    return int(con.execute(sql, params).fetchone()["n"])
-
-
 def derive_candidates(
-    con: sqlite3.Connection,
+    store: gni.MsgvaultStore,
     account_email: str,
     exclude_labels: Iterable[str] | None,
     include_automated: bool,
@@ -523,7 +322,7 @@ def derive_candidates(
     """Re-derive the Parallel resolution queue exactly like gmail/discover_engine,
     then drop role/service mailboxes (support@, info@, careers@, …) using the same
     detector the Parallel resolution path uses. Returns (queue, role_dropped)."""
-    aggregated = gni.aggregate_msgvault_contacts(con, account_email, exclude_labels)
+    aggregated = store.aggregate_contacts(account_email, exclude_labels)
     non_automated = [r for r in aggregated if include_automated or not r.get("automated_filtered")]
     filtered = [r for r in non_automated if gni.has_round_trip_interaction(r)]
     queue = linkedin_resolution_queue_rows(filtered)
@@ -584,19 +383,17 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
     db_path = Path(args.msgvault_db).expanduser()
     out_dir = Path(args.out_dir)
 
-    con = gni.connect_msgvault(db_path)
-    try:
-        gni.require_msgvault_schema(con)
-        con.row_factory = sqlite3.Row
+    with gni.MsgvaultStore(db_path) as store:
+        store.require_schema()
         exclude_labels = gni.default_excluded_labels(args.include_category_mail)
         queue, role_mailboxes_dropped = derive_candidates(
-            con, args.account_email, exclude_labels, args.include_automated, args.include_role_mailboxes
+            store, args.account_email, exclude_labels, args.include_automated, args.include_role_mailboxes
         )
         if args.limit and args.limit > 0:
             queue = queue[: args.limit]
 
-        accounts = account_emails(con)
-        owner = owner_identity(con)
+        accounts = store.account_emails()
+        owner = store.owner_identity()
 
         # Candidate emails in queue order (deduped), so output ordering is stable.
         emails_in_order: list[str] = []
@@ -613,12 +410,12 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
 
         # One windowed query over all contacts; stream it contact-by-contact so
         # only one contact's rows are in memory at a time.
-        create_candidate_pid_table(con, emails_in_order)
+        store.create_candidate_pid_table(emails_in_order)
         fetch_limit = args.per_person * FETCH_MULTIPLIER
         recent_by_email: dict[str, list[dict[str, Any]]] = {}
         dropped_third_party = 0
         processed = 0
-        for cemail, rows in stream_contact_groups(con, fetch_limit):
+        for cemail, rows in store.stream_contact_groups(fetch_limit):
             if cemail not in entry_by_email:
                 continue
             recent, dropped = select_emails_from_rows(
@@ -655,8 +452,6 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
                 # the new local context we could attach
                 "recent_emails": recent,
             })
-    finally:
-        con.close()
 
     out_dir.mkdir(parents=True, exist_ok=True)
     payload_path = out_dir / "email_context.jsonl"

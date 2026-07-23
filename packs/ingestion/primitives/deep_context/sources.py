@@ -43,20 +43,21 @@ DEFAULT_WACLI_DB = Path(".powerpacks/messages/wacli/wacli.db")
 
 # --- Gmail (msgvault) -------------------------------------------------------
 
-def read_gmail(person: Person, con: sqlite3.Connection, accounts: set[str],
+def read_gmail(person: Person, store: "gni.MsgvaultStore", accounts: set[str],
                cap: int = CHAT_MESSAGE_CAP) -> list[dict[str, Any]]:
     """Recent, signature-aware email bodies for the person — the whole back-and-forth.
 
-    Queries each of the person's emails through ``build_email_context`` and merges the
-    selected entries (the contact's own + owner-directed messages). ``max_per_thread=None``
-    keeps every message in a thread (not just the signal-densest one), so a single rich
-    thread is no longer reduced to one line; the per-person ``cap`` bounds the total."""
+    Queries each of the person's emails through ``build_email_context.recent_emails_for``
+    (backed by ``store``) and merges the selected entries (the contact's own +
+    owner-directed messages). ``max_per_thread=None`` keeps every message in a thread
+    (not just the signal-densest one), so a single rich thread is no longer reduced to
+    one line; the per-person ``cap`` bounds the total."""
     seen: set[tuple[str, str]] = set()
     out: list[dict[str, Any]] = []
     for email in person.emails:
         try:
             entries, _ = bec.recent_emails_for(
-                con, email, cap, bec.DEFAULT_SNIPPET_CHARS, accounts,
+                store, email, cap, bec.DEFAULT_SNIPPET_CHARS, accounts,
                 source="body", max_per_thread=None,
             )
         except sqlite3.Error:
@@ -79,23 +80,24 @@ def read_gmail(person: Person, con: sqlite3.Connection, accounts: set[str],
     return out
 
 
-def count_gmail(person: Person, con: sqlite3.Connection, accounts: set[str]) -> int:
+def count_gmail(person: Person, store: "gni.MsgvaultStore", accounts: set[str]) -> int:
     """True total of the person's poolable Gmail messages (so capping is honest), mirroring
     ``count_imessage_dms``. Counts the same universe ``read_gmail`` draws from — the contact's
     own + owner-directed messages — across all of the person's email addresses."""
     total = 0
     for email in person.emails:
         try:
-            total += bec.count_messages_for(con, email, accounts)
+            total += store.count_messages_for(email, accounts)
         except sqlite3.Error:
             continue
     return total
 
 
-def gmail_thread_participants(person: Person, con: sqlite3.Connection, max_threads: int = 25) -> list[dict[str, Any]]:
+def gmail_thread_participants(person: Person, store: "gni.MsgvaultStore", max_threads: int = 25) -> list[dict[str, Any]]:
     """Per-thread participant rosters (full from/to/cc as ``Name <email>``) for the person's email
     threads. Surfaces co-recipients we'd otherwise drop — shared colleagues, the team, and the
     OWNER's own address CC'd next to a same-named contact (the owner-alias signal)."""
+    con = store.con
     emails = [e.lower() for e in person.emails if e]
     if not emails:
         return []
