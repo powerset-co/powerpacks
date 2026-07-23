@@ -293,7 +293,7 @@ class CoreLayoutTests(unittest.TestCase):
         text = (ROOT / "packs/ingestion/skills/import-messages/SKILL.md").read_text()
         self.assertIn("$import-messages", text)
         self.assertIn("match_local_candidates/match_local_candidates.py match", text)
-        self.assertIn("import_contacts_pipeline/messages.py run", text)
+        self.assertIn("import_contacts_pipeline/messages/importer.py run", text)
         self.assertIn("index_contacts_pipeline.py fan-in", text)
         self.assertIn("import_contacts_pipeline/status.py status", text)
         self.assertIn("candidates.csv", text)

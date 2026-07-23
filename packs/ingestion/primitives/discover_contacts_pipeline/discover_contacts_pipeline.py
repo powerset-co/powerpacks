@@ -73,13 +73,8 @@ commit_people_csv_to_directory = directory.commit_people_csv_to_directory
 gmail_excluded_labels = gmail.gmail_excluded_labels
 gmail_sync_after = gmail.gmail_sync_after
 gmail_sync_query = gmail.gmail_sync_query
-estimate_gmail_accounts_via_api = gmail.estimate_gmail_accounts_via_api
 normalize_label_names = gmail.normalize_label_names
-run_gmail_apply_and_enrich = gmail.run_gmail_apply_and_enrich
-run_gmail_directory = gmail.run_gmail_directory
-run_gmail_linkedin_resolution = gmail.run_gmail_linkedin_resolution
 run_gmail_msgvault = gmail.run_gmail_msgvault
-summarize_gmail_estimates = gmail.summarize_gmail_estimates
 
 def account_channels(path: str) -> dict[str, Any]:
     if not path:
@@ -381,16 +376,8 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     selected_enrichment_sources = selected_sources if enrichment_only else set()
     run_gmail_enrichment = not selected_enrichment_sources or "gmail" in selected_enrichment_sources
     if enrichment_only:
-        if run_gmail_enrichment:
-            if not run_gmail_directory(ledger_path, ledger):
-                return 1
-            save_ledger(ledger_path, ledger)
-            if not run_gmail_linkedin_resolution(ledger_path, ledger):
-                return 20 if ledger.get("blocked") else 1
-            save_ledger(ledger_path, ledger)
-            if not run_gmail_apply_and_enrich(ledger_path, ledger):
-                return 20 if ledger.get("blocked") else 1
-            save_ledger(ledger_path, ledger)
+        # The gmail enrichment steps here were always-True no-op stubs (the real
+        # steps live in the import stage); the stubs and their calls are removed.
         ledger["status"] = "source_enrichment_completed"
         ledger.pop("blocked", None)
         save_ledger(ledger_path, ledger)
@@ -615,7 +602,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
         "linkedin_directory_use_defaults": not bool(getattr(args, "no_default_linkedin_directory_sources", False)),
     }
     gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
-    gmail_estimates = estimate_gmail_accounts_via_api(input_cfg, gmail_emails) if gmail_emails else []
+    gmail_estimates: list = []  # API estimation was an always-empty stub; removed
     enrichment_only = bool(getattr(args, "enrichment_only", False))
     if args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args):
         would_run.append("gmail_msgvault")
@@ -633,7 +620,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
         "would_run_steps": would_run,
         "worker_groups": {"import": source_worker_group(input_cfg)},
         "gmail_api_estimates": gmail_estimates,
-        "gmail_estimate_summary": summarize_gmail_estimates(gmail_estimates) if gmail_estimates else "",
+        "gmail_estimate_summary": "",
         "estimated_paid_calls": "unknown_without_existing_stage_outputs",
         "message": "No existing discover-contacts ledger was found; running would execute the listed stages until any child approval confirmation.",
     }

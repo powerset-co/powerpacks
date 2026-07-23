@@ -88,7 +88,7 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
   incrementality, and dedup mostly already exist. Gmail/msgvault is already
   resumable: compute the latest synced message, pass `--after`, sync, update —
   see `infer_msgvault_sync_after` in
-  `discover_contacts_pipeline/gmail.py`. Do not build a new resume mechanism on
+  `discover_contacts_pipeline/gmail/sync.py`. Do not build a new resume mechanism on
   top of it.
 - **Orchestrate the existing primitives directly; do not route new flows
   through `setup/setup.py`.** Chain the existing `discover_contacts_pipeline`

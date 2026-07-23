@@ -28,7 +28,7 @@ try:
         write_manifest,
     )
 except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
     from packs.ingestion.primitives.discover_contacts_pipeline.common import (
         DEFAULT_BASE_DIR,
         DEFAULT_DIRECTORY_CSV,

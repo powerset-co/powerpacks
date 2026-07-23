@@ -5,7 +5,7 @@
 > [Gmail import pipeline](../../docs/gmail-import-pipeline.md),
 > [Message import pipeline](../../docs/message-import-pipeline.md),
 > and their `SKILL.md` files. The gmail import step functions live in
-> `gmail_import_steps.py` (extracted from the retired before_split orchestrator,
+> `gmail/import_steps.py` (extracted from the retired before_split orchestrator,
 > which has been deleted) and are not exposed by the current CLI.
 
 One local orchestration command for network source discovery inputs.
@@ -18,10 +18,10 @@ agent to a `SKILL.md`, and that skill calls this script.
 
 | User command / skill | This orchestrator role | Source primitive/script |
 | --- | --- | --- |
-| `$import-gmail` | Uses the split Gmail discovery and import handlers | `discover_contacts_pipeline/gmail.py`, `import_contacts_pipeline/gmail.py` |
+| `$import-gmail` | Uses the split Gmail discovery and import handlers | `discover_contacts_pipeline/gmail/sync.py`, `import_contacts_pipeline/gmail/importer.py` |
 | `$discover-contacts` | Calls this script for source discovery only | `linkedin_network_import.py`, `gmail_network_import.py msgvault` |
 | `$import-twitter` | Runs Twitter primitive directly | `twitter_network_import.py` |
-| `$import-messages` | Does not use this generic runner; it exclusively owns iMessage/WhatsApp | `discover_contacts_pipeline/messages.py`, `import_contacts_pipeline/messages.py`, and ingestion message primitives |
+| `$import-messages` | Does not use this generic runner; it exclusively owns iMessage/WhatsApp | `discover_contacts_pipeline/messages/discover.py`, `import_contacts_pipeline/messages/importer.py`, and ingestion message primitives |
 
 ## Inputs
 

@@ -353,7 +353,7 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
             for acct in gmail_accounts:
                 cmds.append(_cmd([
                     "uv", "run", "--project", ".",
-                    "python", "packs/ingestion/primitives/discover_contacts_pipeline/gmail.py",
+                    "python", "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py",
                     "discover", "--account-email", acct, "--fresh",
                 ], "PHASE 2 deep sync"))
             caveats.append(
@@ -363,7 +363,7 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
                 "(promotions/social/forums/updates are excluded by design)."
             )
         else:
-            cmds.append("uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail.py discover --account-email <account-email> --fresh")
+            cmds.append("uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py discover --account-email <account-email> --fresh")
 
     # --- WhatsApp: refresh + scoped backfill (after gmail auth). ----------------
     if "whatsapp" in channels:

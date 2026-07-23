@@ -239,7 +239,7 @@ if [ "${SYNC_YEARS:-3}" = "all" ]; then
 else
   SYNC_AFTER="$(date -v-${SYNC_YEARS:-3}y +%Y-%m-%d 2>/dev/null || date -d "${SYNC_YEARS:-3} years ago" +%Y-%m-%d)"
 fi
-uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail.py discover \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py discover \
   --account-email <first-email> \
   --account-email <second-email> \
   --sync-after "$SYNC_AFTER"
@@ -269,7 +269,7 @@ still-unresolved contact worth researching in
 No Parallel.ai, no RapidAPI, no spend prompt:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail.py run
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail/importer.py run
 ```
 
 Report the manifest's `stats`: people imported and candidates staged. Identity

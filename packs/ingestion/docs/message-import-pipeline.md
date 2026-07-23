@@ -251,11 +251,11 @@ shared `.powerpacks/network-import/import/<source>/people.csv` and
 | --- | --- |
 | Full agent workflow | [`import-messages/SKILL.md`](../skills/import-messages/SKILL.md) |
 | Isolated WhatsApp utility | [`import-whatsapp/SKILL.md`](../skills/import-whatsapp/SKILL.md) |
-| Message discovery | [`messages.py`](../primitives/discover_contacts_pipeline/messages.py) |
+| Message discovery | [`messages.py`](../primitives/discover_contacts_pipeline/messages/discover.py) |
 | iMessage extraction | [`extract_imessage_contacts.py`](../primitives/extract_imessage_contacts/extract_imessage_contacts.py) |
 | wacli extraction | [`import_whatsapp_wacli.py`](../primitives/import_whatsapp_wacli/import_whatsapp_wacli.py) |
 | Local matching | [`match_local_candidates.py`](../primitives/match_local_candidates/match_local_candidates.py) |
-| Contacts-direct import | [`messages.py`](../primitives/import_contacts_pipeline/messages.py) |
+| Contacts-direct import | [`messages.py`](../primitives/import_contacts_pipeline/messages/importer.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
 | Per-source status | [`status.py`](../primitives/import_contacts_pipeline/status.py) |
 | Fan-in | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |
