@@ -23,6 +23,9 @@ discover_gmail = importlib.import_module(
 discover_gmail_sync = importlib.import_module(
     "packs.ingestion.primitives.discover.gmail.sync"
 )
+common_proc = importlib.import_module(
+    "packs.ingestion.primitives.common.proc"
+)
 import_messages = importlib.import_module(
     "packs.ingestion.primitives.imports.messages.importer"
 )
@@ -63,13 +66,13 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         proc.stderr = io.StringIO("")
         proc.wait.return_value = 0
 
-        with mock.patch.object(discover_common.subprocess, "Popen", return_value=proc) as popen:
-            code, payload, stderr = discover_common.run_cmd(["fake-child"])
+        with mock.patch.object(common_proc.subprocess, "Popen", return_value=proc) as popen:
+            code, payload, stderr = common_proc.run_cmd(["fake-child"])
 
         self.assertEqual(code, 0)
         self.assertEqual(payload, {"status": "ok"})
         self.assertEqual(stderr, "")
-        self.assertEqual(popen.call_args.kwargs["stdin"], discover_common.subprocess.DEVNULL)
+        self.assertEqual(popen.call_args.kwargs["stdin"], common_proc.subprocess.DEVNULL)
 
     def test_gmail_sync_after_is_inferred_from_msgvault_last_sync(self) -> None:
         with tempfile.TemporaryDirectory() as td:

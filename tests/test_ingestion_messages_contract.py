@@ -160,7 +160,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
 
         self.assertIn('DEFAULT_MESSAGES_OUTPUT_DIR = DEFAULT_BASE_DIR / "discover" / "messages"', text)
-        self.assertIn('MESSAGES_DIR = Path(".powerpacks/messages")', text)
+        self.assertIn("MESSAGES_DIR = MESSAGES_OUT_DIR", text)
+        self.assertEqual(discover_messages.MESSAGES_DIR, Path(".powerpacks/messages"))
         self.assertIn('manifest_json = DEFAULT_MESSAGES_OUTPUT_DIR / "manifest.json"', text)
         self.assertIn("write_stage_manifest(manifest_json", text)
 
