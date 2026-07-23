@@ -66,37 +66,17 @@ from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
     total_message_count,
 )
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.schemas.message_contacts import (  # noqa: E402
+    CSV_HEADERS,
+    GROUP_SEPARATOR,
+    REQUIRED_INPUT_HEADERS,
+    SCHEMA_DOC,
+    SCHEMA_JSON,
+)
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
-CSV_HEADERS = [
-    "phone",
-    "name",
-    "source",
-    "is_in_group_chats",
-    "group_names",
-    "message_count",
-    "imessage_message_count",
-    "whatsapp_message_count",
-    "last_message",
-    "imessage_last_message",
-    "whatsapp_last_message",
-    "skip",
-    "match_status",
-    "matched_person_id",
-    "matched_name",
-    "matched_linkedin_url",
-    "match_confidence",
-    "match_method",
-    "match_reason",
-]
-REQUIRED_INPUT_HEADERS = {"phone", "name"}
-SCHEMA_DOC = "packs/ingestion/schemas/contacts-csv.md"
-SCHEMA_JSON = "packs/ingestion/schemas/contacts-csv.schema.json"
-
-GROUP_SEPARATOR = " | "
 STATUS_RANK = {"matched": 3, "suggested": 2, "unmatched": 1, "": 0}
-MESSAGE_CHANNELS = ("imessage", "whatsapp")
 
 
 # ---------------------------------------------------------------------------

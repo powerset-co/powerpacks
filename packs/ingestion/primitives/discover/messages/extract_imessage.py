@@ -49,29 +49,8 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.common.contact_fields import canonicalize_phone  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 
-
-CSV_HEADERS = [
-    "phone",
-    "name",
-    "source",
-    "is_in_group_chats",
-    "group_names",
-    "message_count",
-    "imessage_message_count",
-    "whatsapp_message_count",
-    "last_message",
-    "imessage_last_message",
-    "whatsapp_last_message",
-    "skip",
-    "match_status",
-    "matched_person_id",
-    "matched_name",
-    "matched_linkedin_url",
-    "match_confidence",
-    "match_method",
-    "match_reason",
-]
 
 DEFAULT_CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
 DEFAULT_ADDRESSBOOK_GLOB = str(
@@ -86,7 +65,6 @@ DEFAULT_ADDRESSBOOK_GLOB = str(
 DEFAULT_OUT_DIR = MESSAGES_OUT_DIR
 APPLE_EPOCH_OFFSET = 978_307_200
 NS_PER_SEC = 1_000_000_000
-GROUP_SEPARATOR = " | "
 PRIVACY_SETTINGS_URLS = {
     "full-disk-access": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
     "contacts": "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts",

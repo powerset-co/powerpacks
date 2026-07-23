@@ -60,6 +60,7 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
     write_csv_rows,
     write_stage_manifest,
 )
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS  # noqa: E402
 
 
 DEFAULT_MESSAGES_OUTPUT_DIR = DEFAULT_BASE_DIR / "discover" / "messages"
@@ -82,28 +83,6 @@ WHATSAPP_NORMALIZED_JSONL = MESSAGES_DIR / "whatsapp.contacts.normalized.jsonl"
 WHATSAPP_NORMALIZED_MANIFEST = MESSAGES_DIR / "whatsapp.contacts.normalized.jsonl.manifest.json"
 MERGED_CONTACTS = MESSAGES_DIR / "contacts.csv"
 MERGED_CONTACTS_MANIFEST = MESSAGES_DIR / "contacts.csv.manifest.json"
-
-CONTACT_CSV_HEADERS = [
-    "phone",
-    "name",
-    "source",
-    "is_in_group_chats",
-    "group_names",
-    "message_count",
-    "imessage_message_count",
-    "whatsapp_message_count",
-    "last_message",
-    "imessage_last_message",
-    "whatsapp_last_message",
-    "skip",
-    "match_status",
-    "matched_person_id",
-    "matched_name",
-    "matched_linkedin_url",
-    "match_confidence",
-    "match_method",
-    "match_reason",
-]
 
 
 def messages_discovery_inputs(accounts_path: Path) -> dict[str, Any]:
@@ -309,7 +288,7 @@ def _merge_contacts(
         if enabled and path.exists()
     ]
     if not inputs:
-        write_csv_rows(MERGED_CONTACTS, CONTACT_CSV_HEADERS, [])
+        write_csv_rows(MERGED_CONTACTS, CSV_HEADERS, [])
         summary = {
             "primitive": "messages/merge_contacts",
             "status": "ok",
@@ -432,7 +411,7 @@ def discover(
     if MERGED_CONTACTS.exists():
         shutil.copyfile(MERGED_CONTACTS, contacts_csv)
     else:
-        write_csv_rows(contacts_csv, CONTACT_CSV_HEADERS, [])
+        write_csv_rows(contacts_csv, CSV_HEADERS, [])
     _, rows = read_csv_rows(contacts_csv)
     # The pairing fields hoist the non-blocking pre-full-sync nudge to the top
     # level so a fast-path run surfaces it without digging into child.artifacts.

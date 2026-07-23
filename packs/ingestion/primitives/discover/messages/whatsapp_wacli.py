@@ -53,6 +53,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
@@ -106,7 +107,6 @@ WACLI_PINNED_BIN = WACLI_BIN_DIR / "wacli"
 WACLI_VERSION_STAMP = WACLI_BIN_DIR / ".wacli-version"
 QR_REDACTION = "[whatsapp qr payload redacted]"
 STATUS_PREFIX = "[whatsapp-wacli]"
-GROUP_SEPARATOR = " | "
 MIN_PHONE_DIGITS = 7
 MAX_PHONE_DIGITS = 15
 BODY_COLUMN_NAMES = {
@@ -120,28 +120,6 @@ BODY_COLUMN_NAMES = {
     "file_enc_sha256",
     "local_path",
 }
-
-CSV_HEADERS = [
-    "phone",
-    "name",
-    "source",
-    "is_in_group_chats",
-    "group_names",
-    "message_count",
-    "imessage_message_count",
-    "whatsapp_message_count",
-    "last_message",
-    "imessage_last_message",
-    "whatsapp_last_message",
-    "skip",
-    "match_status",
-    "matched_person_id",
-    "matched_name",
-    "matched_linkedin_url",
-    "match_confidence",
-    "match_method",
-    "match_reason",
-]
 
 
 @dataclass

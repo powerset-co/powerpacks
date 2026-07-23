@@ -22,6 +22,9 @@ Changelog:
     EMAIL_EXTRACT_RE (was EMAIL_RE), emails/phones_from_value/_row,
     normalize_name_key, and parse_groups / channel_counts_from_row /
     channel_last_messages_from_row / total_message_count / latest_message.
+  2026-07-23 (contract consolidation): GROUP_SEPARATOR and MESSAGE_CHANNELS now
+    import from packs.ingestion.schemas.message_contacts (the message-contact CSV
+    contract home) instead of being redefined here.
 """
 
 from __future__ import annotations
@@ -37,11 +40,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.schemas.message_contacts import GROUP_SEPARATOR, MESSAGE_CHANNELS  # noqa: E402
 from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 
 EMAIL_EXTRACT_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-GROUP_SEPARATOR = " | "
-MESSAGE_CHANNELS = ("imessage", "whatsapp")
 
 
 def normalize_phone(value: Any) -> str:

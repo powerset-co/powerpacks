@@ -80,35 +80,17 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.schemas.message_contacts import (  # noqa: E402
+    CSV_HEADERS,
+    REQUIRED_INPUT_HEADERS,
+    SCHEMA_DOC,
+    SCHEMA_JSON,
+)
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
-CSV_HEADERS = [
-    "phone",
-    "name",
-    "source",
-    "is_in_group_chats",
-    "group_names",
-    "message_count",
-    "imessage_message_count",
-    "whatsapp_message_count",
-    "last_message",
-    "imessage_last_message",
-    "whatsapp_last_message",
-    "skip",
-    "match_status",
-    "matched_person_id",
-    "matched_name",
-    "matched_linkedin_url",
-    "match_confidence",
-    "match_method",
-    "match_reason",
-]
-REQUIRED_INPUT_HEADERS = {"phone", "name"}
 DEFAULT_LOCAL_PEOPLE = Path(".powerpacks/network-import/merged/people.csv")
 DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
-SCHEMA_DOC = "packs/ingestion/schemas/contacts-csv.md"
-SCHEMA_JSON = "packs/ingestion/schemas/contacts-csv.schema.json"
 
 
 @dataclass

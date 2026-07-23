@@ -42,12 +42,8 @@ from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
+from packs.ingestion.schemas.message_contacts import MESSAGE_CHANNELS  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
-
-
-GROUP_SEPARATOR = " | "
-
-MESSAGE_CHANNELS = ("imessage", "whatsapp")
 
 
 def parse_sources(value: str | None) -> list[str]:

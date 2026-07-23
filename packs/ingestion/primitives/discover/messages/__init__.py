@@ -1,7 +1,7 @@
 """Messages discovery package (module path preserved for import consumers)."""
 
 from packs.ingestion.primitives.discover.messages.discover import (  # noqa: F401
-    CONTACT_CSV_HEADERS,
+    CSV_HEADERS,
     DEFAULT_ACCOUNTS,
     DEFAULT_MESSAGES_OUTPUT_DIR,
     DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
