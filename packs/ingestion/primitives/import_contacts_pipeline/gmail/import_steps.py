@@ -19,6 +19,9 @@ Changelog:
     [discover-contacts] (retired skill) to [gmail-import].
   2026-07-23 (audit batch 17): the apply-resolutions child path retargeted
     from the retired gmail/network_import.py to gmail/discover_engine.py.
+  2026-07-23 (audit batch 18): moved home from discover_contacts_pipeline/gmail/
+    to import_contacts_pipeline/gmail/ — this is import-stage code (placement
+    was a fossil of the before_split extraction).
 """
 from __future__ import annotations
 
