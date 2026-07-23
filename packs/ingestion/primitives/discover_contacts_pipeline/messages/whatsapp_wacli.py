@@ -6,6 +6,11 @@ The export reads only local metadata columns from wacli's SQLite database; it
 never selects message body columns.
 
 Stdlib-only.
+
+Changelog:
+- 2026-07-23: The isolated WhatsApp wrapper skill was retired; user-facing
+  rerun hints now point at $import-messages and the status/User-Agent
+  identifiers name this primitive directly.
 """
 
 from __future__ import annotations
@@ -89,7 +94,7 @@ WACLI_PINNED_BIN = WACLI_BIN_DIR / "wacli"
 # the stale binary.
 WACLI_VERSION_STAMP = WACLI_BIN_DIR / ".wacli-version"
 QR_REDACTION = "[whatsapp qr payload redacted]"
-STATUS_PREFIX = "[import-whatsapp]"
+STATUS_PREFIX = "[whatsapp-wacli]"
 GROUP_SEPARATOR = " | "
 MIN_PHONE_DIGITS = 7
 MAX_PHONE_DIGITS = 15
@@ -325,7 +330,7 @@ def download_file(url: str, dest: Path, *, timeout: int = 120) -> None:
     """Stream a URL to dest via a temp file + atomic replace (GitHub release URLs
     redirect to blob storage; urlopen follows redirects)."""
     tmp = dest.with_name(dest.name + ".download")
-    request = urllib.request.Request(url, headers={"User-Agent": "powerpacks-import-whatsapp"})
+    request = urllib.request.Request(url, headers={"User-Agent": "powerpacks-whatsapp-wacli"})
     with urllib.request.urlopen(request, timeout=timeout) as response, tmp.open("wb") as handle:
         shutil.copyfileobj(response, handle)
     tmp.replace(dest)
@@ -360,7 +365,7 @@ def ensure_wacli_installed(*, install: bool = True) -> dict[str, Any]:
             "status": "blocked_user_action",
             "message": (
                 f"Failed to download the pinned wacli binary from {url}: {exc}. "
-                "Check network access, then rerun $import-whatsapp."
+                "Check network access, then rerun $import-messages."
             ),
             "install_command": f"curl -fsSL {url} -o {WACLI_PINNED_BIN} && chmod +x {WACLI_PINNED_BIN}",
         }) from exc
@@ -521,7 +526,7 @@ def update_qr_page(payload: str, png_path: Path, html_path: Path, *, open_page: 
     if not qrencode:
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "qrencode is required to render the WhatsApp QR page. Install it with `brew install qrencode`, then rerun $import-whatsapp.",
+            "message": "qrencode is required to render the WhatsApp QR page. Install it with `brew install qrencode`, then rerun $import-messages.",
             "install_command": "brew install qrencode",
         })
     png_path.parent.mkdir(parents=True, exist_ok=True)
@@ -556,7 +561,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     if not shutil.which("qrencode"):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "qrencode is required to render the WhatsApp QR page. Install it with `brew install qrencode`, then rerun $import-whatsapp.",
+            "message": "qrencode is required to render the WhatsApp QR page. Install it with `brew install qrencode`, then rerun $import-messages.",
             "install_command": "brew install qrencode",
         })
     emit_status("WhatsApp needs a QR scan.")
@@ -647,13 +652,13 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     if linked_device_blocked(joined):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-whatsapp.",
+            "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-messages.",
             "command": command_text(cmd),
         })
     if returncode != 0 and not connected:
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-whatsapp.",
+            "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
             "command": command_text(cmd),
             "qr_page": str(DEFAULT_QR_HTML),
             "qr_png": str(DEFAULT_QR_PNG),
@@ -729,7 +734,7 @@ def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) ->
     if linked_device_blocked(text):
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-whatsapp.",
+            "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-messages.",
             "command": command_text(cmd),
         })
     if result["returncode"] != 0:
@@ -1605,7 +1610,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             if not status.get("authenticated"):
                 raise PrimitiveBlocked({
                     "status": "blocked_user_action",
-                    "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-whatsapp.",
+                    "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
                     "store": str(store),
                 })
         auth_summary["authenticated_after"] = status.get("authenticated")

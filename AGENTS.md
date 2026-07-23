@@ -329,14 +329,8 @@ Routes:
   first full backfill) and `$import-messages full` (force a full re-backfill),
   forwarded as `--wacli-sync-mode` →
   `packs/ingestion/skills/import-messages/SKILL.md`
-- `$import-whatsapp`, isolated WhatsApp metadata sync/export through wacli; no
-  identity resolution, fan-in, or indexing →
-  `packs/ingestion/skills/import-whatsapp/SKILL.md`
-- `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
+- `$msgvault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
   `packs/ingestion/skills/msgvault/SKILL.md`
-- `$onboard`, `$ingestion-onboarding`, local ingestion onboarding, link/export
-  local network sources →
-  `packs/ingestion/skills/onboard/SKILL.md`
 - `$import-gmail`, Gmail, email, contact sync only: msgvault setup + sync +
   free directory-only import (matched people + a research-candidates pool) +
   fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index

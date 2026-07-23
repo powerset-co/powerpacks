@@ -1,6 +1,6 @@
 ---
 name: msgvault
-description: Set up msgvault for local Gmail archive access, including install/status, browser-assisted Google OAuth Desktop app creation, client_secret config, account auth, and Codex MCP registration. Use for `$msgvault`, `$local-msg-vault`, `msgvault setup`, `msgvault status`, `msgvault add-account`, `msgvault mcp install`, or `powerset create oauth app` when the target is Gmail/msgvault OAuth.
+description: Set up msgvault for local Gmail archive access, including install/status, browser-assisted Google OAuth Desktop app creation, client_secret config, account auth, and Codex MCP registration. Use for `$msgvault`, `msgvault setup`, `msgvault status`, `msgvault add-account`, `msgvault mcp install`, or `powerset create oauth app` when the target is Gmail/msgvault OAuth.
 ---
 
 # msgvault
@@ -28,8 +28,8 @@ From an installed skill bundle, replace `packs/...` with
 
 ## Routing
 
-- `$msgvault`, `$local-msg-vault`, status requests: run `status` and summarize readiness.
-- `$msgvault setup`, `$local-msg-vault setup`, onboarding Gmail archive setup:
+- `$msgvault`, status requests: run `status` and summarize readiness.
+- `$msgvault setup`, onboarding Gmail archive setup:
   run `browser-setup`; include `--email` if the user supplied one. Then run
   `add-account --email <gmail>` when the user is ready to authorize the Gmail
   account.

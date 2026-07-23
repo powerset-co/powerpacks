@@ -1,3 +1,10 @@
+<!--
+Changelog:
+- 2026-07-23: LinkedIn CSV path row now names the surviving surfaces
+  ($discover-contacts / linkedin/network_import.py) after the wrapper-skill
+  cleanup.
+-->
+
 # Data processing handoff: ingestion outputs, schemas, and enrichment boundary
 
 > **Status: historical handoff.** Some skill names and orchestration details below
@@ -37,7 +44,7 @@ primitives so runs are deterministic, ledgered, testable, and resumable.
 | `$discover-contacts` | `packs/ingestion/skills/discover-contacts/SKILL.md` | `discover_contacts_pipeline.py run ...` | Discovery for LinkedIn CSV, Gmail, and optional Twitter artifacts. iMessage/WhatsApp route exclusively to `$import-messages`. |
 | `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter/network_import.py run/approve/continue`; then `$discover-contacts --include-existing-artifacts` | Twitter/X `people.csv`, then merged local network artifacts. |
 | `$import-messages` | `packs/ingestion/skills/import-messages/SKILL.md` | ingestion discovery/match/research/review -> source import -> fan-in -> Modal index | Reviewed iMessage/WhatsApp metadata in merged local network artifacts. |
-| LinkedIn CSV path | `$discover-contacts` or `import-linkedin-network` | `linkedin/network_import.py` -> `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
+| LinkedIn CSV path | `$discover-contacts` (or `linkedin/network_import.py` directly) | `linkedin/network_import.py` -> `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
 
 ## Canonical CSV contracts
 
