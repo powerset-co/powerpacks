@@ -70,15 +70,12 @@ from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # no
 )
 from packs.ingestion.primitives.discover_contacts_pipeline.gmail.msgvault_store import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
-    aggregate_msgvault_contacts,
+    MsgvaultStore,
     classify_email,
-    connect_msgvault,
     default_excluded_labels,
     domain_guess,
     has_round_trip_interaction,
-    list_msgvault_accounts,
     normalize_label_names,
-    require_msgvault_schema,
     split_name,
 )
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
@@ -564,12 +561,9 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
 
 def command_msgvault_accounts(args: argparse.Namespace) -> int:
     """`msgvault-accounts`: list Gmail source accounts in the local archive."""
-    con = connect_msgvault(Path(args.db))
-    try:
-        require_msgvault_schema(con)
-        accounts = list_msgvault_accounts(con)
-    finally:
-        con.close()
+    with MsgvaultStore(Path(args.db)) as store:
+        store.require_schema()
+        accounts = store.list_accounts()
     emit({
         "status": "ok",
         "source": "msgvault",
@@ -590,12 +584,9 @@ def command_msgvault(args: argparse.Namespace) -> int:
     """`msgvault`: aggregate one account's contacts and write the discover
     artifacts for it."""
     excluded_labels = default_excluded_labels(bool(args.include_category_mail), args.exclude_label)
-    con = connect_msgvault(Path(args.db))
-    try:
-        require_msgvault_schema(con)
-        rows = aggregate_msgvault_contacts(con, args.account_email, excluded_labels)
-    finally:
-        con.close()
+    with MsgvaultStore(Path(args.db)) as store:
+        store.require_schema()
+        rows = store.aggregate_contacts(args.account_email, excluded_labels)
     out_dir = gmail_discover_dir(Path(args.output_dir), args.account_email)
     manifest = write_msgvault_artifacts(
         rows,

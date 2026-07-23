@@ -309,26 +309,28 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
     def test_read_gmail_keeps_thread_back_and_forth(self):
         con = self._con()
         self.addCleanup(con.close)
-        accounts = sources.bec.account_emails(con)
-        msgs = sources.read_gmail(self._person(), con, accounts)
+        store = sources.gni.MsgvaultStore(connection=con)
+        accounts = store.account_emails()
+        msgs = sources.read_gmail(self._person(), store, accounts)
         self.assertGreater(len(msgs), 1)            # was 1 (thread collapsed); now the back-and-forth
         self.assertEqual(len(msgs), 4)
 
     def test_collect_one_honest_available_and_capped(self):
         con = self._con()
         self.addCleanup(con.close)
-        accounts = sources.bec.account_emails(con)
+        store = sources.gni.MsgvaultStore(connection=con)
+        accounts = store.account_emails()
         nope = Path("/nonexistent-deepctx")
         # deep_cap below the true total => pool trimmed, but `available` reports the true 4.
         pool, available = collect.collect_one(
-            self._person(), msgvault_con=con, accounts=accounts,
+            self._person(), store=store, accounts=accounts,
             chat_db=nope, wacli_db=nope, deep_cap=2)
         self.assertEqual(available, 4)
         self.assertEqual(len(pool), 2)
         self.assertGreater(available, len(pool))    # capped == True downstream
         # deep_cap above the total => honest, not capped (the Bretton case).
         pool2, available2 = collect.collect_one(
-            self._person(), msgvault_con=con, accounts=accounts,
+            self._person(), store=store, accounts=accounts,
             chat_db=nope, wacli_db=nope, deep_cap=50)
         self.assertEqual(available2, 4)
         self.assertEqual(len(pool2), 4)
@@ -336,7 +338,8 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
     def test_gmail_does_not_starve_chat(self):
         con = self._con()
         self.addCleanup(con.close)
-        accounts = sources.bec.account_emails(con)
+        store = sources.gni.MsgvaultStore(connection=con)
+        accounts = store.account_emails()
         fake_dms = [{"channel": "imessage", "at": "2026-03-01T00:00:00Z",
                      "direction": "from_them", "text": "hey are we still on for friday"}]
         orig = (sources.read_imessage, sources.count_imessage_dms, sources.read_whatsapp)
@@ -345,7 +348,7 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
         sources.read_whatsapp = lambda p, db, cap=0: []
         try:
             pool, _ = collect.collect_one(
-                self._person(phones=["+14155550000"]), msgvault_con=con, accounts=accounts,
+                self._person(phones=["+14155550000"]), store=store, accounts=accounts,
                 chat_db=Path("/nope"), wacli_db=Path("/nope"), deep_cap=2)
         finally:
             sources.read_imessage, sources.count_imessage_dms, sources.read_whatsapp = orig

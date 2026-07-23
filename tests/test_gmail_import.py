@@ -163,7 +163,7 @@ class GmailDiscoverEngineTests(unittest.TestCase):
                 (14, 2, 'from', 'Pat'), (14, 1, 'to', 'Me');
         """)
 
-        rows = msgvault_store.aggregate_msgvault_contacts(con, "me@gmail.com")
+        rows = msgvault_store.MsgvaultStore(connection=con).aggregate_contacts("me@gmail.com")
         by_email = {row["email"]: row for row in rows}
         pat = by_email["pat@example.com"]
 
@@ -211,7 +211,7 @@ class GmailDiscoverEngineTests(unittest.TestCase):
                 (11, 4, 'cc', 'Carol');
         """)
 
-        rows = msgvault_store.aggregate_msgvault_contacts(con, "me@gmail.com")
+        rows = msgvault_store.MsgvaultStore(connection=con).aggregate_contacts("me@gmail.com")
         by_email = {row["email"]: row for row in rows}
 
         self.assertEqual(by_email["alice@example.com"]["total_sent"], 1)

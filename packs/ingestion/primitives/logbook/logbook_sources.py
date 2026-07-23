@@ -23,9 +23,10 @@ Each yielded row is a normalized dict:
 The ``watermark`` is the incremental cursor: ``sync`` re-reads only rows whose
 watermark exceeds the per-channel max recorded last run (filtered in SQL).
 
-Reuses ``deep_context.sources`` wholesale for the msgvault connection
-(``bec``), Apple ``attributedBody`` decoding, the immutable read-only chat.db
-open, and the apple-epoch converter — so identity/timestamp logic never drifts.
+Reuses ``deep_context.sources`` wholesale for Apple ``attributedBody`` decoding,
+the immutable read-only chat.db open, and the apple-epoch converter — so
+identity/timestamp logic never drifts. The candidate-pid temp table is built
+through ``MsgvaultStore`` (``dcs.gni``) on our own read-only msgvault connection.
 """
 from __future__ import annotations
 
@@ -40,8 +41,6 @@ from typing import Any, Iterator
 
 from packs.ingestion.primitives.deep_context import sources as dcs
 from packs.ingestion.primitives.deep_context.common import Person, phone_digits
-
-bec = dcs.bec  # build_email_context module (msgvault connect + candidate-pid helper)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"[ \t]+")
@@ -234,7 +233,7 @@ def open_msgvault(msgvault_db: Path) -> sqlite3.Connection:
 
 def _build_gmail_convs(con: sqlite3.Connection, person: Person) -> int:
     """Build cand_pid + the materialized lb_convs temp table. Returns thread count."""
-    if not person.emails or not bec.create_candidate_pid_table(con, person.emails):
+    if not person.emails or not dcs.gni.MsgvaultStore(connection=con).create_candidate_pid_table(person.emails):
         return 0
     con.execute("DROP TABLE IF EXISTS lb_convs")
     con.execute(_GMAIL_CONVS_SQL)
