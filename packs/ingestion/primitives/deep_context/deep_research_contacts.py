@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""Deep-research a contacts research queue via Parallel.ai. Stdlib-only.
+"""Deep-research a contacts research queue via Parallel.ai.
 
-Drop-in replacement for the legacy research-parallel pipeline,
-re-implemented against the Parallel HTTP API directly so Powerpacks does not
-depend on the `parallel` SDK or pydantic.
+Talks to Parallel through the official `parallel-web` SDK (import name `parallel`,
+hard-pinned in pyproject). The SDK owns transport, retries, and long-poll result
+fetching; `ParallelClient` is a thin adapter that exposes the four task-group
+operations this primitive uses and returns plain dicts in the shapes the rest of
+the module consumes.
+
+Changelog:
+- 2026-07-23: Replaced the hand-rolled stdlib (urllib) Parallel HTTP client with the
+  official `parallel-web` SDK. Public helpers (PROCESSOR_PRICING_USD,
+  filter_already_done, build_input, parallel_to_research_json, …), the CLI surface
+  (estimate/submit/poll/status/run + flags), the output file formats, and the
+  PARALLEL_API_KEY env source are all unchanged; only the HTTP layer moved to the SDK.
 
 Subcommands:
     estimate   Show the queue size + per-processor cost estimate. No network.
@@ -34,21 +43,21 @@ import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.shared.csv_io import CsvIO
-    from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
-except ModuleNotFoundError:  # pragma: no cover - direct script fallback
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.shared.csv_io import CsvIO
-    from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
+from parallel import NotFoundError, Parallel
+
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
+from packs.ingestion.primitives.imports.common import write_manifest  # noqa: E402
 
 
 def load_dotenv(path: Path) -> None:
@@ -246,92 +255,60 @@ def read_json(path: Path) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Parallel HTTP wrapper
+# Parallel task-group wrapper (official `parallel-web` SDK)
 # ---------------------------------------------------------------------------
 
 class ParallelClient:
-    """Minimal stdlib client for the Parallel.ai task-group API."""
+    """Adapter over the official Parallel.ai SDK for the four task-group operations
+    this primitive needs.
+
+    Each method returns a plain dict in the exact shape the rest of the module already
+    consumes (``taskgroup_id``, ``run_ids``, ``status.task_run_status_counts``,
+    ``output.content`` + ``run.metadata``), so swapping the transport touched only this
+    class. The ``--base-url`` / ``--api-key`` / ``--beta-header`` CLI surface is threaded
+    into the SDK client; the beta rides as the ``parallel-beta`` default header on every
+    request, matching the legacy wire behavior."""
 
     def __init__(self, api_key: str, base_url: str = DEFAULT_BASE_URL, beta_header: str = DEFAULT_BETA_HEADER):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
         self.beta_header = beta_header
-
-    def _request(
-        self, method: str, path: str, *,
-        body: Any = None, query: dict[str, Any] | None = None,
-        timeout: int = 60,
-    ) -> tuple[int, Any, str]:
-        url = self.base_url + path
-        if query:
-            cleaned = {k: v for k, v in query.items() if v is not None}
-            if cleaned:
-                url += ("&" if "?" in url else "?") + urllib.parse.urlencode(cleaned)
-        data: bytes | None = None
-        headers = {
-            "x-api-key": self.api_key,
-            "parallel-beta": self.beta_header,
-            "Accept": "application/json",
-        }
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=data, method=method, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-                try:
-                    return resp.status, json.loads(raw.decode("utf-8")) if raw else None, ""
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    return resp.status, None, raw.decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            try:
-                raw = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                raw = ""
-            try:
-                parsed = json.loads(raw) if raw else None
-            except json.JSONDecodeError:
-                parsed = None
-            return exc.code, parsed, raw
-        except urllib.error.URLError as exc:
-            raise ConnectionError(str(exc.reason)) from exc
+        default_headers = {"parallel-beta": beta_header} if beta_header else None
+        self._client = Parallel(api_key=api_key, base_url=base_url, default_headers=default_headers)
 
     # ---- task group + run lifecycle --------------------------------------
 
     def create_group(self, metadata: dict[str, str] | None = None) -> dict[str, Any]:
-        status, body, raw = self._request("POST", "/v1beta/tasks/groups",
-                                          body={"metadata": metadata or {}})
-        if status not in (200, 201) or not isinstance(body, dict):
-            raise RuntimeError(f"create_group failed (HTTP {status}): {raw[:200]}")
-        return body
+        """Create a task group; return ``{"taskgroup_id": <id>}``."""
+        group = self._client.task_group.create(metadata=metadata or {})
+        return {"taskgroup_id": group.task_group_id}
 
     def add_runs(self, group_id: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
-        status, body, raw = self._request(
-            "POST", f"/v1beta/tasks/groups/{group_id}/runs",
-            body={"inputs": inputs},
-        )
-        if status not in (200, 201) or not isinstance(body, dict):
-            raise RuntimeError(f"add_runs failed (HTTP {status}): {raw[:200]}")
-        return body
+        """Submit a batch of run inputs into a group; return ``{"run_ids": [...]}``."""
+        resp = self._client.task_group.add_runs(group_id, inputs=inputs)
+        return {"run_ids": list(resp.run_ids)}
 
     def get_group(self, group_id: str) -> dict[str, Any]:
-        status, body, raw = self._request("GET", f"/v1beta/tasks/groups/{group_id}")
-        if status != 200 or not isinstance(body, dict):
-            raise RuntimeError(f"get_group failed (HTTP {status}): {raw[:200]}")
-        return body
+        """Fetch aggregated group status in the legacy poll-payload shape
+        (``status.is_active`` + ``status.task_run_status_counts`` drive the poll loop)."""
+        group = self._client.task_group.retrieve(group_id)
+        return {"taskgroup_id": group.task_group_id, "status": group.status.model_dump()}
 
     def get_run_result(self, run_id: str, *, api_timeout: int = 60) -> dict[str, Any] | None:
-        status, body, raw = self._request(
-            "GET", f"/v1/tasks/runs/{run_id}/result",
-            query={"beta": "true", "api_timeout": api_timeout},
-            timeout=api_timeout + 10,
-        )
-        if status == 404:
+        """Long-poll a single run's result; ``None`` when the run id is unknown (404).
+
+        ``result()`` blocks server-side up to ``api_timeout``; we give the client read a
+        small margin over that so the long-poll returns before our own read times out."""
+        try:
+            result = self._client.task_run.result(
+                run_id, api_timeout=api_timeout, timeout=api_timeout + 10)
+        except NotFoundError:
             return None
-        if status != 200 or not isinstance(body, dict):
-            raise RuntimeError(f"get_run_result failed for {run_id} (HTTP {status}): {raw[:200]}")
-        return body
+        content = getattr(result.output, "content", None)
+        run = result.run
+        return {
+            "output": {"content": content},
+            "run": {"run_id": run.run_id, "metadata": dict(run.metadata or {}), "status": run.status},
+            "input": {},
+        }
 
 
 # ---------------------------------------------------------------------------

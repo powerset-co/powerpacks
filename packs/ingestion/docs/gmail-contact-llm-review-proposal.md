@@ -31,7 +31,7 @@ WhatsApp contact to a LinkedIn person, then let a human confirm). We should
 | `llm_review_contacts` (LLM judge) | `verify_gmail_resolution` (LLM judge) |
 | `build_research_review_csv` (bucket yes/maybe/no, `network_match_confidence`, `network_match_reason`) | same review-CSV shape, reused |
 | `review_research_web` (local browser review) | a Gmail-specific or shared browser reviewer |
-| `import_contacts_pipeline/messages.py` (decisions → local source `people.csv`) | decisions → gate into Gmail `people.csv` |
+| `imports/messages.py` (decisions → local source `people.csv`) | decisions → gate into Gmail `people.csv` |
 
 ## Where it would slot (`$import-gmail`)
 

@@ -328,7 +328,7 @@ LinkedIn is in and searchable. Check which other sources are imported and
 suggest the missing ones (skip the ones already present):
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/status.py status
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/status.py status
 ```
 
 - `gmail.import.imported: false` → suggest **`$import-gmail`**.

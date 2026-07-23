@@ -76,7 +76,7 @@ from packs.ingestion.primitives.deep_context.common import (
     parse_list,
     slugify,
 )
-from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
+from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
     RESEARCH_CONFIDENCE_FLOOR,
@@ -780,7 +780,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({args.processor}); "
           "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
     persist({**base, "status": STATUS_RUNNING}, STATUS_RUNNING, completed=reused_completed)
-    cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_research_contacts.deep_research_contacts",
+    cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_context.deep_research_contacts",
            "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]
     if manifest_path:
         cmd.extend(["--manifest", str(manifest_path)])

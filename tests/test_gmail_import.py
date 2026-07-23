@@ -12,14 +12,14 @@ from pathlib import Path
 from packs.ingestion.schemas.people_schema import generate_person_id
 from packs.shared.csv_io import CsvIO
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover_engine.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover/gmail/discover_engine.py"
 spec = importlib.util.spec_from_file_location("gmail_import", MODULE_PATH)
 gmail_import = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 sys.modules[spec.name] = gmail_import
 spec.loader.exec_module(gmail_import)
 
-STORE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover_contacts_pipeline/gmail/msgvault_store.py"
+STORE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover/gmail/msgvault_store.py"
 store_spec = importlib.util.spec_from_file_location("gmail_msgvault_store", STORE_PATH)
 msgvault_store = importlib.util.module_from_spec(store_spec)
 assert store_spec.loader is not None

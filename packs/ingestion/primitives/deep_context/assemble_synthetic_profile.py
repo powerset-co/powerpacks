@@ -41,7 +41,7 @@ from packs.ingestion.primitives.deep_context.common import (
     VERDICTS_JSONL,
     now_iso,
 )
-from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
+from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import DR_OUT_DIR, QUEUE_CSV
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED, load_override_rows
 from packs.ingestion.schemas.candidates_schema import candidate_key_for

@@ -75,7 +75,7 @@ from packs.ingestion.primitives.deep_context.common import (
     read_jsonl,
     slugify,
 )
-from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
+from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
     DEFAULT_DETACH,

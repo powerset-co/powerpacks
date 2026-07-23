@@ -32,16 +32,16 @@ def load_module(name: str, relative: str):
 
 
 merge_mod = load_module(
-    "merge_network_sources_interactions", "packs/ingestion/primitives/import_contacts_pipeline/merge_network_sources.py"
+    "merge_network_sources_interactions", "packs/ingestion/primitives/imports/merge_network_sources.py"
 )
 gmail_mod = load_module(
-    "gmail_import_interactions", "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover_engine.py"
+    "gmail_import_interactions", "packs/ingestion/primitives/discover/gmail/discover_engine.py"
 )
 match_mod = load_module(
-    "match_local_candidates_interactions", "packs/ingestion/primitives/import_contacts_pipeline/messages/match_local_candidates.py"
+    "match_local_candidates_interactions", "packs/ingestion/primitives/imports/messages/match_local_candidates.py"
 )
 messages_import_mod = load_module(
-    "import_messages_interactions", "packs/ingestion/primitives/import_contacts_pipeline/messages/importer.py"
+    "import_messages_interactions", "packs/ingestion/primitives/imports/messages/importer.py"
 )
 
 

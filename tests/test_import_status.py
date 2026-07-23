@@ -13,8 +13,8 @@ from contextlib import ExitStack, contextmanager, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.discover_contacts_pipeline.common import write_csv_rows
-from packs.ingestion.primitives.import_contacts_pipeline import status as import_status
+from packs.ingestion.primitives.discover.common import write_csv_rows
+from packs.ingestion.primitives.imports import status as import_status
 
 
 class ImportStatusTests(unittest.TestCase):

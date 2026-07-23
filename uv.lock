@@ -490,6 +490,23 @@ wheels = [
 ]
 
 [[package]]
+name = "parallel-web"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/51/1d/fefb7d976d3ea2ae61b0d9d6d638c9f837cb9fb96532680b148f33f322a1/parallel_web-1.1.0.tar.gz", hash = "sha256:97d6dbe4aa49b8c2c93f71f818d8883bc45bee71928bd945b7f616cecaacec0d", size = 157720 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/ec/276c02247c973b02e254c9daac1844ccd38f385850c50e00ad46548eb5db/parallel_web-1.1.0-py3-none-any.whl", hash = "sha256:598aa5613c1146a3880a41592c343b0b9c0f51cff7c1ea6d10bc586d2df5e2f9", size = 167673 },
+]
+
+[[package]]
 name = "powerpacks"
 version = "0.18.0"
 source = { virtual = "." }
@@ -499,6 +516,7 @@ dependencies = [
     { name = "markdown-it-py" },
     { name = "modal" },
     { name = "openai" },
+    { name = "parallel-web" },
     { name = "psycopg2-binary" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
@@ -521,6 +539,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=4.0" },
     { name = "modal", specifier = ">=1.5.0" },
     { name = "openai", specifier = ">=1.0.0" },
+    { name = "parallel-web", specifier = "==1.1.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.10" },
     { name = "pyarrow", specifier = ">=18.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },

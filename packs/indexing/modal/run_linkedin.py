@@ -2,7 +2,7 @@
 """LinkedIn import sandbox runner: connections.csv -> enriched people.csv.
 
 Hosts the LinkedIn import pipeline
-(discover_contacts_pipeline/linkedin/network_import.py) inside a Modal sandbox:
+(imports/linkedin/network_import.py) inside a Modal sandbox:
 
   parse + convert -> RapidAPI enrichment -> merged people.csv
 
@@ -28,7 +28,7 @@ REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
 from packs.indexing.modal.sandbox_common import now_iso, write_status  # noqa: E402
-from packs.ingestion.primitives.discover_contacts_pipeline.linkedin import network_import as linkedin_import  # noqa: E402
+from packs.ingestion.primitives.imports.linkedin import network_import as linkedin_import  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 WORK = Path("/tmp/linkedin-import")

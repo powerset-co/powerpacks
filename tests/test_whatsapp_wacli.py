@@ -15,7 +15,7 @@ from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIMITIVE = ROOT / "packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py"
+PRIMITIVE = ROOT / "packs/ingestion/primitives/discover/messages/whatsapp_wacli.py"
 
 spec = importlib.util.spec_from_file_location("whatsapp_wacli", PRIMITIVE)
 assert spec and spec.loader

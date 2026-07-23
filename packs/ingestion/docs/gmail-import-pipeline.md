@@ -192,13 +192,13 @@ output CSV rows are applied as raw material; their audit lives in
 | --- | --- |
 | Agent workflow | [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md) |
 | OAuth and account status | [`msgvault_setup.py`](../primitives/setup/msgvault_setup.py) |
-| Sync and stable discovery | [`discover_contacts_pipeline/gmail/sync.py`](../primitives/discover_contacts_pipeline/gmail/discover.py) |
-| Metadata aggregation | [`gmail/msgvault_store.py`](../primitives/discover_contacts_pipeline/gmail/msgvault_store.py) |
-| Per-account artifact emission | [`gmail/discover_engine.py`](../primitives/discover_contacts_pipeline/gmail/discover_engine.py) |
-| Import orchestration | [`import_contacts_pipeline/gmail/importer.py`](../primitives/import_contacts_pipeline/gmail/importer.py) |
-| Directory reuse | [`discover_contacts_pipeline/directory.py`](../primitives/discover_contacts_pipeline/directory.py) |
+| Sync and stable discovery | [`discover/gmail/sync.py`](../primitives/discover/gmail/discover.py) |
+| Metadata aggregation | [`gmail/msgvault_store.py`](../primitives/discover/gmail/msgvault_store.py) |
+| Per-account artifact emission | [`gmail/discover_engine.py`](../primitives/discover/gmail/discover_engine.py) |
+| Import orchestration | [`imports/gmail/importer.py`](../primitives/imports/gmail/importer.py) |
+| Directory reuse | [`discover/directory.py`](../primitives/discover/directory.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
-| Per-source status | [`status.py`](../primitives/import_contacts_pipeline/status.py) |
-| Parallel resolver (legacy era; not callable from the import) | [`gmail/resolve_queue.py`](../primitives/discover_contacts_pipeline/gmail/resolve_queue.py) |
+| Per-source status | [`status.py`](../primitives/imports/status.py) |
+| Parallel resolver (legacy era; not callable from the import) | [`gmail/resolve_queue.py`](../primitives/discover/gmail/resolve_queue.py) |
 | Profile hydration (legacy era; not callable from the import) | [`enrich_people.py`](../primitives/enrich/enrich_people.py) |
 | Fan-in | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

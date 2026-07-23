@@ -33,7 +33,7 @@ DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
 CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
 # The fan-in merge auto-ingests these decision/override files (default paths defined in
-# packs/ingestion/primitives/import_contacts_pipeline/merge_network_sources.py). They must be
+# packs/ingestion/primitives/imports/merge_network_sources.py). They must be
 # fingerprinted so an updated override invalidates the fan-in no-op cache, but they are
 # decisions, not people sources — never pass them as merge --input.
 FAN_IN_OVERRIDE_FILES = [
@@ -189,7 +189,7 @@ def command_text(cmd: list[str]) -> str:
 def merge_command(args: argparse.Namespace, input_paths: list[Path]) -> list[str]:
     cmd = [
         sys.executable,
-        "packs/ingestion/primitives/import_contacts_pipeline/merge_network_sources.py",
+        "packs/ingestion/primitives/imports/merge_network_sources.py",
         "run",
         "--output-dir",
         str(Path(args.artifact_dir) / "merged"),

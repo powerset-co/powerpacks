@@ -114,7 +114,7 @@ Run:
 
 ```bash
 bin/deep-context check
-uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/status.py status
+uv run --project . python packs/ingestion/primitives/imports/status.py status
 ```
 
 Report Gmail/iMessage/WhatsApp readiness, merged people, and candidates per

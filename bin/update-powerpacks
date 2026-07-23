@@ -170,7 +170,7 @@ esac
 # a download/network failure or unsupported platform must not fail the update.
 wacli_refresh="skipped"
 wacli_version="-"
-wacli_primitive="$REPO/packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py"
+wacli_primitive="$REPO/packs/ingestion/primitives/discover/messages/whatsapp_wacli.py"
 if command -v uv >/dev/null 2>&1 && [[ -f "$wacli_primitive" ]]; then
   if wacli_out="$(uv run --project "$REPO" python "$wacli_primitive" ensure-wacli 2>/dev/null)"; then
     # action = "downloaded" (freshly fetched) or "current" (already at the pin)

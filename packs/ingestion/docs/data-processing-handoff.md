@@ -3,7 +3,7 @@ Changelog:
 - 2026-07-23 (audit batch 17): gmail/network_import.py rows retargeted to its
   split successors gmail/msgvault_store.py + gmail/discover_engine.py.
 - 2026-07-23 (audit batch 16): removed the retired $discover-contacts skill and
-  the deleted discover_contacts_pipeline.py orchestrator from the tables; the
+  the deleted discover.py orchestrator from the tables; the
   merge phase is owned by the indexing fan-in.
 - 2026-07-23: LinkedIn CSV path row now named the surviving surfaces after the
   wrapper-skill cleanup.
@@ -138,7 +138,7 @@ vertical owning separate enrichment implementations.
 
 ```bash
 uv run --project . python -m unittest \
-  tests/test_discover_contacts_pipeline.py \
+  tests/test_discover.py \
   tests/test_merge_network_sources.py \
   tests/test_enrich_people.py \
   tests/test_linkedin_import.py \

@@ -16,7 +16,7 @@ profile hydration to `primitives/enrich/`.
 
 Current split:
 
-- `primitives/discover_contacts_pipeline/linkedin/network_import.py`
+- `primitives/imports/linkedin/network_import.py`
   - parses LinkedIn `Connections.csv`
   - writes source-only `connections_for_enrichment.csv` and `source_people.csv`
   - delegates profile enrichment/cache/normalization to `enrich_people`
