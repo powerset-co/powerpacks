@@ -93,8 +93,10 @@ from packs.ingestion.primitives.deep_context.review_store import RESEARCH_CONFIR
 # so the two never drift and stall the flow. Single source of truth lives in review_web. The
 # research-profile view is reused so the judge sees the SAME (name/headline/experience/education)
 # shape the review UI renders — no second profile parser to drift.
-from packs.ingestion.primitives.deep_context.reconcile_review_web import (
+from packs.ingestion.primitives.deep_context.review_web.model import (
     _research_profile_view,
+)
+from packs.ingestion.primitives.deep_context.review_web.workflow import (
     current_worth_selection,
 )
 from packs.ingestion.schemas.people_schema import (

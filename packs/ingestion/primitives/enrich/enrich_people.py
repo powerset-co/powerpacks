@@ -4,6 +4,11 @@
 Self-contained Powerpacks RapidAPI enrichment implementation. No imports from
 the legacy app or hosted search API.
 
+Consumers:
+- Primary whole-pipeline owner: ``discover/linkedin/network_import.py``.
+- Shared-library consumers: deep-context profile hydration/reconciliation
+  primitives and search's ``fetch_person_profile`` primitive.
+
 Input: a shared people schema CSV, usually merge_network_sources output.
 Output: enriched people schema CSV plus raw provider responses.
 
@@ -69,35 +74,23 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-try:
-    from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
-    from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS,
-        extract_public_identifier,
-        generate_person_id as generate_linkedin_person_id,
-        normalize_linkedin_url,
-        normalize_people_row,
-        parse_jsonish,
-        stable_person_id_from_key,
-    )
-    from packs.shared.csv_io import CsvIO
-    from packs.shared.rate_limiter import StartRateLimiter
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
-    from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS,
-        extract_public_identifier,
-        generate_person_id as generate_linkedin_person_id,
-        normalize_linkedin_url,
-        normalize_people_row,
-        parse_jsonish,
-        stable_person_id_from_key,
-    )
-    from packs.shared.csv_io import CsvIO
-    from packs.shared.rate_limiter import StartRateLimiter
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
+from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
+from packs.ingestion.schemas.people_schema import (
+    PEOPLE_SCHEMA_COLUMNS,
+    extract_public_identifier,
+    generate_person_id as generate_linkedin_person_id,
+    normalize_linkedin_url,
+    normalize_people_row,
+    parse_jsonish,
+    stable_person_id_from_key,
+)
+from packs.shared.csv_io import CsvIO
+from packs.shared.rate_limiter import StartRateLimiter
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")

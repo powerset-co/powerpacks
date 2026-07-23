@@ -63,9 +63,11 @@ from packs.ingestion.primitives.deep_context.common import (
     now_iso,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import linkedin_view
-from packs.ingestion.primitives.deep_context.reconcile_review_web import (
+from packs.ingestion.primitives.deep_context.review_web.model import (
     SYNTHETIC_PEOPLE_CSV,
     _all_review_parents,
+)
+from packs.ingestion.primitives.deep_context.review_web.workflow import (
     pending_linkedin_candidates,
 )
 from packs.ingestion.primitives.enrich.enrich_people import (
