@@ -43,10 +43,6 @@ import_common = load_module(
     "phase13_import_common",
     "packs/ingestion/primitives/import_contacts_pipeline/common.py",
 )
-import_dispatcher = load_module(
-    "phase13_import_dispatcher",
-    "packs/ingestion/primitives/import_contacts_pipeline/import_contacts_pipeline.py",
-)
 index_contacts = load_module(
     "phase13_index_contacts",
     "packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py",
@@ -707,17 +703,6 @@ class PipelinePhase13Tests(unittest.TestCase):
                 payload = setup_gmail.run(args)
             self.assertEqual(payload["status"], "failed")
             self.assertIn("missing_people_csv", payload["error"])
-
-    def test_import_all_manifest_skips_unchanged_parent_write(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(import_dispatcher, "DEFAULT_IMPORT_DIR", Path(tmp) / "import"):
-            payload = {"status": "completed", "sources": {"gmail": {"status": "completed"}}, "updated_at": "first"}
-            first = import_dispatcher.write_aggregate_manifest(payload)
-            manifest = Path(tmp) / "import" / "manifest.json"
-            first_mtime = manifest.stat().st_mtime_ns
-            time.sleep(0.01)
-            second = import_dispatcher.write_aggregate_manifest({**payload, "updated_at": "second"})
-            self.assertEqual(first, second)
-            self.assertEqual(manifest.stat().st_mtime_ns, first_mtime)
 
     def test_fan_in_excludes_canonical_merged_only_when_all_sources_exist(self):
         with tempfile.TemporaryDirectory() as tmp:

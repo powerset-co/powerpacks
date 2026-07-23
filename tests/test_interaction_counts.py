@@ -114,7 +114,7 @@ class MessagesWriterTests(unittest.TestCase):
             ),
             Path("contacts.csv"),
         )
-        merged = messages_import_mod.merge_messages_people_candidate(left, right)
+        merged = messages_import_mod.merge_matched_people_rows(left, right)
         self.assertEqual(json.loads(merged["interaction_counts"]), {"imessage": 87, "whatsapp": 9})
         self.assertEqual(merged["last_interaction"], "2026-06-05T00:00:00+00:00")
 
