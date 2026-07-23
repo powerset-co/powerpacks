@@ -17,25 +17,25 @@ user asks for technical details.
 Use this style instead:
 
 ```text
-I found these connected sources:
+I found these connected account sources:
 - Gmail: 2 accounts
 - LinkedIn: Connections.csv
 
-I’m going to discover each source in parallel where possible. Import/enrichment
-and indexing run as separate stages.
+I’m going to discover contacts in each source.
+Importing contacts and enriching them will be in a separate step.
 
-I won’t upload anything automatically. I’ll only stop if I need a browser login,
-a QR/device link, an overwrite approval, or approval for a paid provider step.
+Everything is processed locally. I’ll only stop if I need a browser login,
+a QR/device link, an overwrite approval, or approval for a paid API step.
 ```
 
 For progress updates, report user-visible progress and counts:
 
 ```text
-Gmail discovery is running for 2 accounts. LinkedIn discovery is also running.
+Gmail contact discovery is running for 2 accounts. LinkedIn contact discovery is also running.
 ```
 
 ```text
-Discovery finished. Next run import/enrichment, then indexing.
+Contact discovery finished. Next run import/enrichment, then indexing.
 ```
 
 If a provider/spend step blocks, explain the choice plainly:
@@ -44,17 +44,6 @@ If a provider/spend step blocks, explain the choice plainly:
 I found contacts that need paid LinkedIn/profile enrichment before I can improve
 their profiles. I won’t run that automatically. Do you want me to approve this
 step, skip it for now, or continue with only the local data?
-```
-
-## After Onboarding
-
-If `$onboard` has linked sources, propose the concrete import command and ask
-for one confirmation before long sync/import work:
-
-```text
-Your sources are connected. I can now discover local source contacts. Large
-mailboxes or large networks can take a while. I won’t upload anything
-automatically. Continue?
 ```
 
 After confirmation, run discovery until it completes or reaches a real approval
