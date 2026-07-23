@@ -23,6 +23,8 @@ Changelog:
       deep-context cluster judge decides.
     - Review-era artifacts (people.input.csv, enrichment/) left the stage
       contract; run() deletes leftovers.
+  2026-07-23 (audit batch 21): directory helpers import updated from
+    discover.directory → imports.directory (the module moved to this stage).
 """
 
 from __future__ import annotations
@@ -66,7 +68,7 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
     unique_strings,
     write_csv_rows,
 )
-from packs.ingestion.primitives.discover.directory import (  # noqa: E402
+from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     DIRECTORY_COLUMNS,
     directory_rows_from_people_csv,
     merge_directory_rows,

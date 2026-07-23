@@ -12,7 +12,7 @@ from unittest import mock
 
 from packs.ingestion.primitives.discover.messages import discover as discover_messages
 from packs.ingestion.primitives.discover.common import write_csv_rows
-from packs.ingestion.primitives.discover.directory import DIRECTORY_COLUMNS
+from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
 from packs.ingestion.primitives.imports import messages as import_messages
 from packs.shared.csv_io import CsvIO
 

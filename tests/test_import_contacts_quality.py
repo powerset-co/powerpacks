@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.discover.directory import DIRECTORY_COLUMNS
+from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.ingestion.primitives.imports.gmail import importer as gmail_import
 from packs.ingestion.primitives.imports.gmail import util as gmail_import_util

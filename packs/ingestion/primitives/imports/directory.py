@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
-"""Directory and people.csv helpers for local network discovery.
+"""Cross-source `directory.csv` and people.csv materialization helpers.
+
+Owns the shared, cross-source `directory.csv` aggregate contract
+(`DIRECTORY_COLUMNS`), its email/phone/name normalization and identity keys,
+row merge, and the people.csv → directory commit path. This is import-stage
+code: it has no discover-stage consumers — only `imports/common.py`,
+`imports/messages/importer.py`, and tests import it.
 
 Changelog:
+  2026-07-23 (audit batch 21): relocated discover/directory.py → imports/directory.py.
+    It had zero discover-stage callers; all consumers are import-stage. No
+    functions were split into a vertical: the gmail-named helpers
+    (gmail_account_from_source_key, gmail_directory_source_key) are reached only
+    through the cross-source core (normalized_directory_row /
+    people_directory_source_key), and directory_rows_from_resolutions/_candidates
+    are reached only through the generic build_directory_checkpoint — none are
+    single-vertical, so all stay here. directory.csv is a cross-source aggregate;
+    its schema is not duplicated per vertical.
   2026-07-23 (audit): union_alias_list replaced overwrite semantics for
     all_emails/all_phones — previously the resolved Gmail address was
     discarded when two rows collapsed onto one public_identifier; aliases
