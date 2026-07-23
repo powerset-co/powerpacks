@@ -10,7 +10,9 @@ Changelog:
   chooses account sync from the local store, then automatically deepens recent
   shallow DMs: bootstrap all eligible chats once, then target only chats changed
   by later incremental syncs plus unfinished targets. Fixed outputs live in
-  `.powerpacks/messages/history-depth/`; no LLM or paid provider is involved.
+  `.powerpacks/messages/history-depth/`. Target commands run in batches of ten
+  with a 90-second pause, and pause early after two consecutive response
+  timeouts; no LLM or paid provider is involved.
 - 2026-07-18: Documented first-backfill duration (30 min up to a few hours;
   3 h hard cap, raised from ~2 h) and the never-kill-mid-backfill rule.
 - 2026-07-17: Added smart-default incremental WhatsApp sync. First import full-
@@ -139,10 +141,14 @@ automatic strategy:
 
 The immediate SQLite comparison is more reliable than a saved wall-clock
 timestamp because WhatsApp can return delayed messages carrying older
-timestamps. Target backfills are strictly sequential: native requests and chats
-are delayed, transient errors back off exponentially, and a chat stops after
-two successful no-growth attempts. Fixed progress is resumable from
-`.powerpacks/messages/history-depth/`.
+timestamps. Target backfills are strictly sequential. Each conversation gets
+one command per import run, with delays between native requests and chats.
+Commands run in batches of ten with a visible 90-second pause between batches;
+two consecutive zero-response timeouts end a batch early and take the same
+pause. A real WhatsApp response with zero older rows completes that chat
+immediately. Timeouts and chats that grow but remain shallow stay resumable in
+`.powerpacks/messages/history-depth/` for the next `$import-messages` run.
+The account owner's self-chat is excluded.
 
 The first account sync takes 30 minutes up to a few hours depending on history
 size (hard cap 3 h), and targeted depth can add up to two hours. Heartbeats every

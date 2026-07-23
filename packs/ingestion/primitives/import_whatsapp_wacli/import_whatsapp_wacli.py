@@ -66,17 +66,20 @@ DEFAULT_SYNC_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_SYNC_TIMEOUT", "1080
 DEFAULT_HISTORY_DEPTH_MAX_COUNT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_MAX_COUNT", "20"))
 DEFAULT_HISTORY_DEPTH_COUNT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_COUNT", "500"))
 DEFAULT_HISTORY_DEPTH_REQUESTS = int(os.environ.get("POWERPACKS_WACLI_DEPTH_REQUESTS", "10"))
-DEFAULT_HISTORY_DEPTH_NO_GROWTH_LIMIT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_NO_GROWTH_LIMIT", "2"))
-DEFAULT_HISTORY_DEPTH_TRANSIENT_RETRY_LIMIT = int(
-    os.environ.get("POWERPACKS_WACLI_DEPTH_TRANSIENT_RETRY_LIMIT", "3")
-)
+DEFAULT_HISTORY_DEPTH_NO_GROWTH_LIMIT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_NO_GROWTH_LIMIT", "1"))
 DEFAULT_HISTORY_DEPTH_REQUEST_DELAY = os.environ.get("POWERPACKS_WACLI_DEPTH_REQUEST_DELAY", "10s")
 DEFAULT_HISTORY_DEPTH_CHAT_DELAY = float(os.environ.get("POWERPACKS_WACLI_DEPTH_CHAT_DELAY", "5"))
-DEFAULT_HISTORY_DEPTH_BACKOFF_BASE = float(os.environ.get("POWERPACKS_WACLI_DEPTH_BACKOFF_BASE", "15"))
+DEFAULT_HISTORY_DEPTH_BATCH_SIZE = int(os.environ.get("POWERPACKS_WACLI_DEPTH_BATCH_SIZE", "10"))
+DEFAULT_HISTORY_DEPTH_BATCH_PAUSE_SECONDS = float(
+    os.environ.get("POWERPACKS_WACLI_DEPTH_BATCH_PAUSE_SECONDS", "90")
+)
+DEFAULT_HISTORY_DEPTH_TIMEOUTS_BEFORE_BREAK = int(
+    os.environ.get("POWERPACKS_WACLI_DEPTH_TIMEOUTS_BEFORE_BREAK", "2")
+)
 DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_ATTEMPT_TIMEOUT", "900"))
 DEFAULT_HISTORY_DEPTH_BUDGET_SECONDS = int(os.environ.get("POWERPACKS_WACLI_DEPTH_BUDGET_SECONDS", "6300"))
 DEFAULT_HISTORY_DEPTH_LOOKBACK_YEARS = 3
-HISTORY_DEPTH_POLICY_VERSION = 2
+HISTORY_DEPTH_POLICY_VERSION = 3
 DEFAULT_DEVICE_PLATFORM = os.environ.get("POWERPACKS_WACLI_DEVICE_PLATFORM", "DESKTOP")
 DEFAULT_DEVICE_LABEL = os.environ.get("POWERPACKS_WACLI_DEVICE_LABEL", "Mac OS")
 DEFAULT_FULL_SYNC_DAYS = os.environ.get("POWERPACKS_WACLI_FULL_SYNC_DAYS", "3650")
@@ -176,6 +179,7 @@ class HistoryDepthAttempt:
     error_category: str
     retryable: bool
     after_latest_ts: int = 0
+    messages_received: int = 0
 
 
 class PrimitiveBlocked(Exception):
@@ -429,7 +433,11 @@ def wacli_json(store: Path, args: list[str], *, timeout: int = 300) -> dict[str,
     return payload if isinstance(payload, dict) else {}
 
 
-def auth_status(store: Path) -> dict[str, Any]:
+def auth_status(
+    store: Path,
+    *,
+    include_linked_jid: bool = False,
+) -> dict[str, Any]:
     payload = wacli_json(store, ["auth", "status"], timeout=60)
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
     status = {
@@ -437,6 +445,8 @@ def auth_status(store: Path) -> dict[str, Any]:
         "raw_success": payload.get("success"),
         "error": payload.get("error"),
     }
+    if include_linked_jid:
+        status["linked_jid"] = str(data.get("linked_jid") or "")
     if not status["authenticated"]:
         if DEFAULT_QR_HTML.exists():
             status["qr_page"] = str(DEFAULT_QR_HTML)
@@ -1205,9 +1215,11 @@ def history_depth_targets(
     before_states: dict[str, tuple[int, int]] | None = None,
     bootstrap: bool = False,
     resume_refs: set[str] | None = None,
+    exclude_jids: set[str] | None = None,
 ) -> list[HistoryDepthTarget]:
     previous = before_states or {}
     resumable = resume_refs or set()
+    excluded = exclude_jids or set()
     conn = open_wacli_db(store)
     try:
         visibility = history_depth_visible_predicates(conn)
@@ -1234,6 +1246,8 @@ def history_depth_targets(
         targets: list[HistoryDepthTarget] = []
         for row in rows:
             chat_jid = str(row["chat_jid"])
+            if chat_jid in excluded:
+                continue
             chat_ref = history_chat_ref(chat_jid)
             current_state = (
                 int(row["message_count"]),
@@ -1417,6 +1431,7 @@ def run_history_backfill_attempt(
     data = history_backfill_json_data(result.get("json"))
     requests_sent = result_int(data, "requests_sent")
     responses_seen = result_int(data, "responses_seen")
+    messages_received = result_int(data, "messages_received")
     stderr = str(result.get("stderr") or "")
     if requests_sent == 0:
         requests_sent = len(re.findall(r"Requesting \d+ older messages", stderr))
@@ -1427,6 +1442,16 @@ def run_history_backfill_attempt(
         stderr=stderr,
         requests_sent=requests_sent,
     )
+    if (
+        int(result.get("returncode") or 0) == 0
+        and requests_sent > 0
+        and responses_seen == 0
+    ):
+        # An idle-exit without a protocol response is not proof that the
+        # server has no older history. Keep it resumable and let batch pacing
+        # treat it like the response timeout it effectively was.
+        error_category = "timeout"
+        retryable = True
     return HistoryDepthAttempt(
         returncode=int(result.get("returncode") or 0),
         requests_sent=requests_sent,
@@ -1437,6 +1462,7 @@ def run_history_backfill_attempt(
         error_category=error_category,
         retryable=retryable,
         after_latest_ts=after_latest_ts,
+        messages_received=messages_received,
     )
 
 
@@ -1452,9 +1478,10 @@ def history_depth_summary(
     requests: int,
     request_delay: str,
     no_growth_limit: int,
-    transient_retry_limit: int,
     chat_delay: float,
-    backoff_base: float,
+    batch_size: int,
+    batch_pause_seconds: float,
+    timeouts_before_break: int,
     time_budget_seconds: int,
     bootstrap: bool,
     source_total_messages: int,
@@ -1479,11 +1506,14 @@ def history_depth_summary(
             "requests_per_attempt": requests,
             "request_delay": request_delay,
             "chat_delay_seconds": chat_delay,
-            "backoff_base_seconds": backoff_base,
+            "batch_size": batch_size,
+            "batch_pause_seconds": batch_pause_seconds,
+            "timeouts_before_break": timeouts_before_break,
             "time_budget_seconds": time_budget_seconds,
             "no_growth_limit": no_growth_limit,
-            "transient_retry_limit": transient_retry_limit,
             "sequential": True,
+            "one_command_per_chat_per_run": True,
+            "retry_scope": "next_import",
         },
         "counts": {
             "eligible": len(targets),
@@ -1533,14 +1563,16 @@ def run_history_depth_stage(
     requests: int = DEFAULT_HISTORY_DEPTH_REQUESTS,
     request_delay: str = DEFAULT_HISTORY_DEPTH_REQUEST_DELAY,
     no_growth_limit: int = DEFAULT_HISTORY_DEPTH_NO_GROWTH_LIMIT,
-    transient_retry_limit: int = DEFAULT_HISTORY_DEPTH_TRANSIENT_RETRY_LIMIT,
     chat_delay: float = DEFAULT_HISTORY_DEPTH_CHAT_DELAY,
-    backoff_base: float = DEFAULT_HISTORY_DEPTH_BACKOFF_BASE,
+    batch_size: int = DEFAULT_HISTORY_DEPTH_BATCH_SIZE,
+    batch_pause_seconds: float = DEFAULT_HISTORY_DEPTH_BATCH_PAUSE_SECONDS,
+    timeouts_before_break: int = DEFAULT_HISTORY_DEPTH_TIMEOUTS_BEFORE_BREAK,
     attempt_timeout: int = DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT,
     time_budget_seconds: int = DEFAULT_HISTORY_DEPTH_BUDGET_SECONDS,
     before_states: dict[str, tuple[int, int]] | None = None,
     before_total_messages: int | None = None,
     cold_start: bool = False,
+    exclude_jids: set[str] | None = None,
 ) -> dict[str, Any]:
     if active_since_ts is None:
         active_since_ts = history_depth_cutoff_ts()
@@ -1554,8 +1586,14 @@ def run_history_depth_stage(
         history_chat_ref(chat_jid): state
         for chat_jid, state in current_states.items()
     }
+    excluded_refs = {history_chat_ref(jid) for jid in (exclude_jids or set())}
     for chat_ref, row in rows.items():
         if row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES:
+            continue
+        if chat_ref in excluded_refs:
+            row["outcome"] = "out_of_scope"
+            row["error_category"] = "none"
+            row["updated_at"] = now_iso()
             continue
         current_state = current_by_ref.get(chat_ref)
         if current_state is None:
@@ -1643,6 +1681,7 @@ def run_history_depth_stage(
         before_states=before_states,
         bootstrap=bootstrap,
         resume_refs=resume_refs,
+        exclude_jids=exclude_jids,
     )
     stage_started = time.monotonic()
     write_progress(progress_path, {
@@ -1665,9 +1704,10 @@ def run_history_depth_stage(
             requests=requests,
             request_delay=request_delay,
             no_growth_limit=no_growth_limit,
-            transient_retry_limit=transient_retry_limit,
             chat_delay=chat_delay,
-            backoff_base=backoff_base,
+            batch_size=batch_size,
+            batch_pause_seconds=batch_pause_seconds,
+            timeouts_before_break=timeouts_before_break,
             time_budget_seconds=time_budget_seconds,
             bootstrap=bootstrap,
             source_total_messages=source_total_messages,
@@ -1711,6 +1751,8 @@ def run_history_depth_stage(
     # Persist every selected target before the first network request so budget
     # exhaustion or interruption cannot lose unvisited work.
     summary = persist()
+    batch_attempted = 0
+    consecutive_zero_response_timeouts = 0
     for index, target in enumerate(targets):
         if time_budget_seconds > 0 and time.monotonic() - stage_started >= time_budget_seconds:
             write_progress(progress_path, {"event": "history_depth_budget_exhausted"})
@@ -1724,7 +1766,7 @@ def run_history_depth_stage(
         ):
             continue
 
-        local_transient_failures = 0
+        last_attempt: HistoryDepthAttempt | None = None
         while True:
             if time_budget_seconds > 0 and time.monotonic() - stage_started >= time_budget_seconds:
                 write_progress(progress_path, {"event": "history_depth_budget_exhausted"})
@@ -1737,6 +1779,7 @@ def run_history_depth_stage(
                 request_delay=request_delay,
                 timeout=attempt_timeout,
             )
+            last_attempt = attempt
             row["attempts"] = result_int(row, "attempts") + 1
             row["requests_sent"] = result_int(row, "requests_sent") + attempt.requests_sent
             row["responses_seen"] = result_int(row, "responses_seen") + attempt.responses_seen
@@ -1755,15 +1798,7 @@ def run_history_depth_stage(
                     if attempt.after_count > max_count
                     else "pending"
                 )
-            elif attempt.returncode == 0:
-                row["no_growth_attempts"] = result_int(row, "no_growth_attempts") + 1
-                row["outcome"] = (
-                    "server_zero"
-                    if result_int(row, "no_growth_attempts") >= no_growth_limit
-                    else "pending"
-                )
             elif attempt.retryable:
-                local_transient_failures += 1
                 row["transient_failures"] = result_int(row, "transient_failures") + 1
                 if attempt.target_added > 0:
                     row["no_growth_attempts"] = 0
@@ -1772,6 +1807,19 @@ def run_history_depth_stage(
                     if attempt.after_count > max_count
                     else "pending"
                 )
+            elif (
+                attempt.returncode == 0
+                and attempt.responses_seen > 0
+                and attempt.messages_received == 0
+            ):
+                row["no_growth_attempts"] = result_int(row, "no_growth_attempts") + 1
+                row["outcome"] = (
+                    "server_zero"
+                    if result_int(row, "no_growth_attempts") >= no_growth_limit
+                    else "pending"
+                )
+            elif attempt.returncode == 0:
+                row["outcome"] = "pending"
             else:
                 row["outcome"] = "terminal_error"
 
@@ -1781,28 +1829,60 @@ def run_history_depth_stage(
                 "attempt": result_int(row, "attempts"),
                 "requests_sent": attempt.requests_sent,
                 "responses_seen": attempt.responses_seen,
+                "messages_received": attempt.messages_received,
                 "target_added": attempt.target_added,
                 "unrelated_added": attempt.unrelated_added,
                 "outcome": row["outcome"],
                 "error_category": attempt.error_category,
             })
             summary = persist()
+            # One wacli command already contains up to `requests` native
+            # history requests. Any unfinished work resumes on the next
+            # import, never as an immediate same-chat retry.
+            break
 
-            if row["outcome"] in HISTORY_DEPTH_TERMINAL_OUTCOMES or row["outcome"] == "terminal_error":
-                break
-            if result_int(row, "no_growth_attempts") >= no_growth_limit:
-                break
-            if local_transient_failures >= transient_retry_limit:
-                break
+        if last_attempt is None:
+            continue
+        batch_attempted += 1
+        zero_response_timeout = (
+            last_attempt.error_category == "timeout"
+            and last_attempt.requests_sent > 0
+            and last_attempt.responses_seen == 0
+        )
+        consecutive_zero_response_timeouts = (
+            consecutive_zero_response_timeouts + 1
+            if zero_response_timeout
+            else 0
+        )
+        pause_reason = ""
+        if (
+            timeouts_before_break > 0
+            and consecutive_zero_response_timeouts >= timeouts_before_break
+        ):
+            pause_reason = "consecutive_timeouts"
+        elif batch_size > 0 and batch_attempted >= batch_size:
+            pause_reason = "batch_complete"
 
-            if attempt.retryable:
-                delay = min(120.0, backoff_base * (2 ** max(0, local_transient_failures - 1)))
-            else:
-                delay = chat_delay
-            if delay > 0:
-                time.sleep(delay)
-
-        if index + 1 < len(targets) and chat_delay > 0:
+        if index + 1 < len(targets) and pause_reason and batch_pause_seconds > 0:
+            remaining = len(targets) - index - 1
+            write_progress(progress_path, {
+                "event": "history_depth_batch_paused",
+                "reason": pause_reason,
+                "pause_seconds": batch_pause_seconds,
+                "remaining": remaining,
+            })
+            emit_status(
+                "WhatsApp deeper-history requests paused for "
+                f"{int(batch_pause_seconds)} seconds; {remaining} conversations remain."
+            )
+            time.sleep(batch_pause_seconds)
+            write_progress(progress_path, {
+                "event": "history_depth_batch_resumed",
+                "remaining": remaining,
+            })
+            batch_attempted = 0
+            consecutive_zero_response_timeouts = 0
+        elif index + 1 < len(targets) and chat_delay > 0:
             time.sleep(chat_delay)
 
     write_progress(progress_path, {
@@ -2166,7 +2246,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     store = Path(args.store)
     try:
         wacli_info = ensure_wacli_installed(install=False)
-        status = auth_status(store)
+        status = auth_status(store, include_linked_jid=True)
         doctor = wacli_json(store, ["doctor"], timeout=60)
         stats = store_stats(store)
         emit({
@@ -2375,7 +2455,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 idle_exit=args.idle_exit,
                 open_qr_page=not getattr(args, "no_open_qr_page", False),
             ))
-            status = auth_status(store)
+            status = auth_status(store, include_linked_jid=True)
             if not status.get("authenticated"):
                 raise PrimitiveBlocked({
                     "status": "blocked_user_action",
@@ -2411,12 +2491,19 @@ def cmd_run(args: argparse.Namespace) -> int:
         sync_summary["existing_messages_before_sync"] = before_total_messages
         write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
         emit_status("Deepening recent shallow WhatsApp conversations sequentially.")
+        doctor_data = doctor.get("data") if isinstance(doctor.get("data"), dict) else {}
+        linked_jid = str(
+            status.get("linked_jid")
+            or doctor_data.get("linked_jid")
+            or ""
+        )
         history_depth = run_history_depth_stage(
             store,
             out_dir=manifest.parent / "history-depth",
             before_states=before_states,
             before_total_messages=before_total_messages,
             cold_start=cold_start,
+            exclude_jids={linked_jid} if linked_jid else set(),
         )
         write_progress(
             progress_jsonl,

@@ -14,8 +14,12 @@ pass, it selects every DM with at most 20 stored rows whose actual
 DM's `(COUNT(*), MAX(messages.ts))` immediately before sync and target only
 recent shallow chats that changed, plus unfinished targets from the prior pass.
 Requests run strictly sequentially, with pacing between native requests and
-chats, exponential backoff for transient failures, and a stop after two
-successful no-growth attempts.
+chats. Each conversation gets one command per import run. Commands run in
+batches of ten with a 90-second pause between batches; two consecutive
+zero-response timeouts end a batch early and take the same pause. A clean
+protocol response with zero older rows completes the chat immediately, while
+timeouts and chats that grow but remain shallow remain resumable. The account
+owner's self-chat is excluded.
 
 The manifest keeps one privacy-safe digest of direct-chat counts and latest
 timestamps. If a sync is interrupted before its changed chats are seeded, or a

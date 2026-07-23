@@ -3,7 +3,8 @@ Changelog:
 - 2026-07-23: Made WhatsApp sync and depth automatic: empty stores receive an
   account full sync plus a three-year shallow-DM bootstrap; populated stores
   receive an incremental sync plus targeted backfill only for changed shallow
-  DMs and unfinished prior targets.
+  DMs and unfinished prior targets. Target commands run in sequential batches
+  of ten with 90-second pauses and early pauses after two response timeouts.
 - 2026-07-16: Refocused on contact sync only. Removed the OpenRouter triage,
   research queue, Parallel deep research, LLM-scored review UI, RapidAPI
   enrichment, and Modal index stages from the canonical flow; import is now
@@ -121,12 +122,16 @@ target only recent shallow chats that changed, plus unfinished targets from
 the previous pass. The before/after snapshot is more exact than a wall-clock
 watermark because newly downloaded messages can carry older timestamps.
 
-Targets run strictly one at a time. Each command can issue up to ten requests
-for 500 rows, with a delay between native requests and another delay between
-chats. Transient connection, timeout, and store-lock failures back off
-exponentially; two successful backfill attempts with no target-row growth stop
-that chat. Per-attempt SQLite counts keep target recovery separate from
-unrelated catch-up traffic.
+Targets run strictly one at a time, excluding the account owner's self-chat.
+Each conversation gets one command per import run; that command can issue up to
+ten requests for 500 rows, with a delay between native requests and another
+delay between chats. Commands run in batches of ten with a visible 90-second
+pause between batches. Two consecutive commands that send a real request but
+receive no protocol response end the batch early and take the same pause. A
+clean protocol response with zero older rows completes the chat immediately;
+timeouts and chats that grow but remain shallow stay pending for the next
+`$import-messages` run. Per-attempt SQLite counts keep target recovery separate
+from unrelated catch-up traffic.
 
 The depth stage is resumable from one current `results.csv`; it does not use a
 ledger, run ID, or per-attempt directory. Persisted identifiers are stable
