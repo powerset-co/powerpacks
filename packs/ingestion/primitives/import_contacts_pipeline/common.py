@@ -31,10 +31,14 @@ DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 
 
 def load_legacy_discover_module() -> Any:
-    path = Path(__file__).resolve().parents[1] / "discover_contacts_pipeline" / "discover_contacts_pipeline.before_split.py"
-    spec = importlib.util.spec_from_file_location("_powerpacks_legacy_discover_contacts_pipeline", path)
+    """Load the gmail step functions the live import dispatches (run_gmail_directory /
+    run_gmail_linkedin_resolution / run_gmail_apply_and_enrich / save_ledger). These were
+    extracted from the retired before_split orchestrator into a module holding ONLY the
+    still-dispatched closure; the function keeps its historical name for its callers."""
+    path = Path(__file__).resolve().parents[1] / "discover_contacts_pipeline" / "gmail_import_steps.py"
+    spec = importlib.util.spec_from_file_location("_powerpacks_gmail_import_steps", path)
     if not spec or not spec.loader:
-        raise RuntimeError(f"could not load legacy import helpers: {path}")
+        raise RuntimeError(f"could not load gmail import steps: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

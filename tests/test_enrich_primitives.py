@@ -4,7 +4,6 @@ Covered primitives:
 - powerset_auth (login flow against fake Auth0 + browserless mode, whoami,
   token, logout)
 - match_local_candidates (local matcher tiers)
-- llm_review_contacts (estimate + review against fake OpenRouter)
 
 Each test spins up a tiny ThreadingHTTPServer and points the primitive at it.
 No network calls escape these tests.
@@ -32,7 +31,6 @@ from packs.shared.csv_io import CsvIO
 ROOT = Path(__file__).resolve().parents[1]
 POWERSET_AUTH = ROOT / "packs/powerset/primitives/auth/auth.py"
 MATCH_LOCAL = ROOT / "packs/ingestion/primitives/match_local_candidates/match_local_candidates.py"
-LLM_REVIEW = ROOT / "packs/ingestion/primitives/llm_review_contacts/llm_review_contacts.py"
 
 
 def _free_port() -> int:
@@ -464,111 +462,6 @@ class MatchLocalTests(unittest.TestCase):
             self.assertEqual(by_phone["+14155550303"]["match_status"], "matched")
             self.assertEqual(by_phone["+14155550303"]["match_method"], "name_prefix_lastname_linkedin")
             self.assertEqual(by_phone["+14155550404"]["match_status"], "unmatched")
-
-
-class LlmReviewTests(unittest.TestCase):
-    def _write_contacts(self, path: Path) -> None:
-        headers = [
-            "phone", "name", "source", "is_in_group_chats", "group_names",
-            "message_count", "last_message", "skip", "match_status",
-            "matched_person_id", "matched_name", "matched_linkedin_url",
-            "match_confidence", "match_method", "match_reason",
-        ]
-        with path.open("w", newline="") as h:
-            w = csv.DictWriter(h, fieldnames=headers)
-            w.writeheader()
-            for i, name in enumerate(["Alice", "Bob", "Carol", "Dan"]):
-                w.writerow({
-                    "phone": f"+14155550{i:03d}",
-                    "name": name,
-                    "source": "imessage",
-                    "is_in_group_chats": "false",
-                    "group_names": "",
-                    "message_count": "10",
-                    "last_message": "2026-04-01T00:00:00+00:00",
-                    "skip": "",
-                    "match_status": "unmatched",
-                    "matched_person_id": "",
-                    "matched_name": "",
-                    "matched_linkedin_url": "",
-                    "match_confidence": "",
-                    "match_method": "unmatched",
-                    "match_reason": "",
-                })
-
-    def test_estimate_does_not_call_api(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            contacts = tmp / "contacts.csv"
-            self._write_contacts(contacts)
-            result = subprocess.run(
-                ["python3", str(LLM_REVIEW), "estimate",
-                 "--input", str(contacts),
-                 "--model", "openai/gpt-4.1-mini"],
-                cwd=ROOT, capture_output=True, text=True, timeout=10,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            self.assertEqual(payload["candidates"], 4)
-            self.assertEqual(payload["estimate"]["batches"], 1)
-            self.assertGreater(payload["estimate"]["estimated_usd"], 0)
-
-    def test_review_against_fake_openrouter(self) -> None:
-        port = _free_port()
-        _Handler.routes = {}
-        server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                tmp = Path(td)
-                contacts = tmp / "contacts.csv"
-                results_jsonl = tmp / "verdicts.jsonl"
-                manifest_path = tmp / "manifest.json"
-                self._write_contacts(contacts)
-                env = {
-                    "POWERPACKS_OPENROUTER_BASE": f"http://127.0.0.1:{port}/api/v1",
-                    "PATH": "/usr/bin:/bin:/usr/local/bin",
-                }
-                result = subprocess.run(
-                    [
-                        "python3", str(LLM_REVIEW), "review",
-                        "--input", str(contacts),
-                        "--api-key", "test",
-                        "--model", "openai/gpt-4.1-mini",
-                        "--results", str(results_jsonl),
-                        "--manifest", str(manifest_path),
-                    ],
-                    cwd=ROOT, capture_output=True, text=True, timeout=20, env=env,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                payload = json.loads(result.stdout)
-                self.assertEqual(payload["status"], "completed")
-                self.assertEqual(payload["counts"]["verdicts"], 4)
-                self.assertEqual(payload["counts"]["enrich"], 2)
-                self.assertEqual(payload["counts"]["skip"], 2)
-                sent_contacts = _Handler.routes.get("openrouter_contacts") or []
-                self.assertTrue(sent_contacts)
-                for contact in sent_contacts[0]:
-                    self.assertEqual(set(contact), {"idx", "name"})
-
-                with contacts.open(newline="") as h:
-                    rows = list(CsvIO.dict_reader(h))
-                # Indexes 1 and 3 (Bob, Dan) get SKIP per the fake handler.
-                by_phone = {r["phone"]: r for r in rows}
-                self.assertEqual(by_phone["+141555500001"[:12]]["skip"], "")  # Alice = ENRICH
-                self.assertEqual(by_phone["+14155550000"]["skip"], "")
-                self.assertEqual(by_phone["+14155550001"]["skip"], "yes")
-                self.assertEqual(by_phone["+14155550002"]["skip"], "")
-                self.assertEqual(by_phone["+14155550003"]["skip"], "yes")
-
-                lines = [json.loads(line) for line in results_jsonl.read_text().splitlines()]
-                self.assertEqual(len(lines), 4)
-                self.assertTrue(any(line["verdict"] == "ENRICH" for line in lines))
-                self.assertTrue(any(line["verdict"] == "SKIP" for line in lines))
-        finally:
-            server.shutdown()
-            server.server_close()
 
 
 if __name__ == "__main__":

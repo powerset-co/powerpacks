@@ -4,8 +4,9 @@
 > split source-specific skills and handlers. Start with the
 > [Gmail import pipeline](../../docs/gmail-import-pipeline.md),
 > [Message import pipeline](../../docs/message-import-pipeline.md),
-> and their `SKILL.md` files. Some commands below are retained only in the
-> `before_split` compatibility module and are not exposed by the current CLI.
+> and their `SKILL.md` files. The gmail import step functions live in
+> `gmail_import_steps.py` (extracted from the retired before_split orchestrator,
+> which has been deleted) and are not exposed by the current CLI.
 
 One local orchestration command for network source discovery inputs.
 
