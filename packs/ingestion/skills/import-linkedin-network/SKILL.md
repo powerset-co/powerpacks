@@ -13,7 +13,7 @@ External API enrichment via the shared RapidAPI-only `enrich_people` primitive i
 ## Main loop
 
 ```bash
-uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py run \
   --csv <Connections.csv> \
   --source-user <user-label> \
   --operator-id <operator-id-or-local>
@@ -22,8 +22,8 @@ uv run --project . python packs/ingestion/primitives/linkedin_network_import/lin
 If blocked and the user approves spend:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py approve
-uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py continue
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py approve
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py continue
 ```
 
 ## Output summary

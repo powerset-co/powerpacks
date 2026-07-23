@@ -188,11 +188,11 @@ output CSV rows are applied as raw material; their audit lives in
 | Agent workflow | [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md) |
 | OAuth and account status | [`msgvault_setup.py`](../primitives/msgvault_setup/msgvault_setup.py) |
 | Sync and stable discovery | [`discover_contacts_pipeline/gmail/sync.py`](../primitives/discover_contacts_pipeline/gmail/discover.py) |
-| Metadata aggregation | [`gmail_network_import.py`](../primitives/gmail_network_import/gmail_network_import.py) |
+| Metadata aggregation | [`gmail/network_import.py`](../primitives/discover_contacts_pipeline/gmail/network_import.py) |
 | Import orchestration | [`import_contacts_pipeline/gmail/importer.py`](../primitives/import_contacts_pipeline/gmail/importer.py) |
 | Directory reuse | [`discover_contacts_pipeline/directory.py`](../primitives/discover_contacts_pipeline/directory.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
 | Per-source status | [`status.py`](../primitives/import_contacts_pipeline/status.py) |
-| Parallel resolver (legacy era; not callable from the import) | [`resolve_linkedin_queue.py`](../primitives/resolve_linkedin_queue/resolve_linkedin_queue.py) |
+| Parallel resolver (legacy era; not callable from the import) | [`gmail/resolve_queue.py`](../primitives/discover_contacts_pipeline/gmail/resolve_queue.py) |
 | Profile hydration (legacy era; not callable from the import) | [`enrich_people.py`](../primitives/enrich_people/enrich_people.py) |
 | Fan-in | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

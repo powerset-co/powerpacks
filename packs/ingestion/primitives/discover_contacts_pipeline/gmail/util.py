@@ -150,8 +150,8 @@ def gmail_discovery_merge_plan(existing_manifest: dict[str, Any], selected_accou
     return {"mode": "full_rewrite", "reason": "children_returned_full_recounts"}
 
 
-def gmail_network_import_base_dir(contacts_csv: Path) -> Path:
-    """Return the base dir expected by gmail_network_import.py --output-dir."""
+def network_import_base_dir(contacts_csv: Path) -> Path:
+    """Return the base dir expected by gmail/network_import.py --output-dir."""
     gmail_dir = contacts_csv.parent
     if gmail_dir.name == "gmail" and gmail_dir.parent.name == "discover":
         return gmail_dir.parent.parent

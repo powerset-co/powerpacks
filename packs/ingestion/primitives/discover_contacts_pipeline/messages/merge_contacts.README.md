@@ -1,4 +1,4 @@
-# merge_message_contacts
+# messages/merge_contacts.py
 
 Merge N per-channel message-contact CSVs into a single canonical
 `contacts.csv`. Stdlib-only.
@@ -13,13 +13,13 @@ empty merge.
 
 ```bash
 # Merge iMessage + WhatsApp into one contacts.csv.
-python packs/ingestion/primitives/merge_message_contacts/merge_message_contacts.py merge \
+python packs/ingestion/primitives/discover_contacts_pipeline/messages/merge_contacts.py merge \
   --input .powerpacks/messages/imessage.contacts.csv \
   --input .powerpacks/messages/whatsapp.contacts.csv \
   --output .powerpacks/messages/contacts.csv
 
 # Single input is also valid (lets you alias to contacts.csv before WhatsApp lands).
-python packs/ingestion/primitives/merge_message_contacts/merge_message_contacts.py merge \
+python packs/ingestion/primitives/discover_contacts_pipeline/messages/merge_contacts.py merge \
   --input .powerpacks/messages/imessage.contacts.csv \
   --output .powerpacks/messages/contacts.csv
 ```

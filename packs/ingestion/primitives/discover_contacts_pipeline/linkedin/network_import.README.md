@@ -1,4 +1,4 @@
-# linkedin_network_import
+# linkedin/network_import.py
 
 Powerpacks-local LinkedIn Connections.csv import.
 
@@ -12,7 +12,7 @@ default. No database writes or uploads occur.
 ## Flow
 
 ```bash
-uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py run \
   --csv ~/Downloads/Connections.csv \
   --source-user operator-a \
   --operator-id local
@@ -75,7 +75,7 @@ not retried until `--failure-retry-hours` elapses.
 ## Keys
 
 ```bash
-uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py check-keys
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py check-keys
 ```
 
 Expected env keys for live enrichment:

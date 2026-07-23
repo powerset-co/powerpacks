@@ -13,13 +13,13 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MOD = ROOT / "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
+MOD = ROOT / "packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py"
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("gmail_network_import", MOD)
+    spec = importlib.util.spec_from_file_location("gmail_import", MOD)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["gmail_network_import"] = module  # dataclass introspection needs this
+    sys.modules["gmail_import"] = module  # dataclass introspection needs this
     spec.loader.exec_module(module)
     return module
 

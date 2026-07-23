@@ -87,7 +87,7 @@ function asBoolean(value: unknown): boolean {
 // words is untouched.
 // Some upstream people.csv rows carry machine review metadata instead of a
 // prose summary. The messages-import flow
-// (packs/ingestion/primitives/discover_contacts_pipeline/messages.py,
+// (packs/ingestion/primitives/discover_contacts_pipeline/messages/discover.py,
 // review_row_to_messages_people) writes summary as "; "-joined key=value
 // pairs, e.g.:
 //   messages_total=0; selection=in_network; review_reason=Raw contact review fallback

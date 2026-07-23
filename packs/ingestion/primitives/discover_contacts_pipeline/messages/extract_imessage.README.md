@@ -1,4 +1,4 @@
-# extract_imessage_contacts
+# messages/extract_imessage.py
 
 Extract iMessage/SMS relationship metadata from local macOS SQLite databases.
 
@@ -17,11 +17,11 @@ iMessage history, so it matches the one-step contact import experience.
 Examples:
 
 ```bash
-python packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py check
+python packs/ingestion/primitives/discover_contacts_pipeline/messages/extract_imessage.py check
 
-python packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py open-privacy-settings --target both
+python packs/ingestion/primitives/discover_contacts_pipeline/messages/extract_imessage.py open-privacy-settings --target both
 
-python packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py extract \
+python packs/ingestion/primitives/discover_contacts_pipeline/messages/extract_imessage.py extract \
   --output-csv .powerpacks/messages/imessage.contacts.csv \
   --output-jsonl .powerpacks/messages/imessage.contacts.jsonl
 ```

@@ -34,17 +34,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, generate_person_id, normalize_people_row
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS, generate_person_id, normalize_people_row
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
+    generate_person_id,
+    normalize_people_row,
+)
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "twitter"
-DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "twitter_network_import.ledger.json"
+DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "network_import.ledger.json"
 TWITTER_API_BASE = "https://twitter241.p.rapidapi.com"
 LINKEDIN_API_BASE = "https://professional-network-data.p.rapidapi.com"
 
@@ -602,7 +607,7 @@ class TwitterInput:
 
 def load_ledger(path: Path) -> dict[str, Any]:
     ledger = read_json(path, {}) or {}
-    ledger.setdefault("primitive", "twitter_network_import")
+    ledger.setdefault("primitive", "twitter/network_import")
     ledger.setdefault("version", 1)
     ledger.setdefault("created_at", now_iso())
     ledger.setdefault("updated_at", now_iso())
@@ -658,7 +663,7 @@ def block_for_approval(ledger_path: Path, ledger: dict[str, Any], step_id: str, 
         "approval_type": "external_api_spend",
         "message": message,
         "ledger": str(ledger_path),
-        "continue_command": f"uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py continue --ledger {ledger_path}",
+        "continue_command": f"uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py continue --ledger {ledger_path}",
     })
 
 
@@ -1056,7 +1061,7 @@ def create_ledger(args: argparse.Namespace) -> dict[str, Any]:
         sleep_seconds=args.sleep_seconds,
     )
     ledger = {
-        "primitive": "twitter_network_import",
+        "primitive": "twitter/network_import",
         "version": 1,
         "created_at": now_iso(),
         "updated_at": now_iso(),
@@ -1073,7 +1078,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     ledger = create_ledger(args)
     ledger_path = Path(args.ledger)
     if str(ledger_path) == str(DEFAULT_LEDGER):
-        ledger_path = artifact_dir_from_ledger(ledger) / "twitter_network_import.ledger.json"
+        ledger_path = artifact_dir_from_ledger(ledger) / "network_import.ledger.json"
     ledger["ledger"] = str(ledger_path)
     save_ledger(ledger_path, ledger)
     result = run_pipeline(ledger_path, stop_after=args.stop_after)

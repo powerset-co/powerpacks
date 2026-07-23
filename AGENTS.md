@@ -219,7 +219,7 @@ only; keep that scoped to the msgvault primitives.
     access is not granted, *stop* and ask the user to enable it in System
     Settings before retrying.
   - WhatsApp uses `openclaw/wacli`. Run
-    `uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py status`
+    `uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py status`
     on demand. Installing `wacli`, QR login, and history sync require explicit
     user consent. WAHA/Docker and Powerset upload are not part of this flow.
 - **Indexing pack** (build-local-search-index): local files only. It consumes

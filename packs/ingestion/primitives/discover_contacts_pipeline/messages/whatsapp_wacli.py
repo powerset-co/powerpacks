@@ -31,11 +31,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:  # pragma: no cover - direct script fallback
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 DEFAULT_OUT_DIR = Path(".powerpacks/messages")
@@ -1325,7 +1327,7 @@ def completed_payload(
     pairing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "primitive": "import_whatsapp_wacli",
+        "primitive": "messages/whatsapp_wacli",
         "status": "completed",
         "message": f"Imported {csv_rows} WhatsApp contacts.",
         "completed_at": now_iso(),
@@ -1366,7 +1368,7 @@ def cmd_ensure_wacli(args: argparse.Namespace) -> int:
         already_current = wacli_pinned_current()
         info = ensure_wacli_installed()
         emit({
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "ensure-wacli",
             "status": "ok",
             "action": "current" if already_current else "downloaded",
@@ -1375,11 +1377,11 @@ def cmd_ensure_wacli(args: argparse.Namespace) -> int:
         })
         return 0
     except PrimitiveBlocked as exc:
-        emit({"primitive": "import_whatsapp_wacli", "command": "ensure-wacli", **exc.payload})
+        emit({"primitive": "messages/whatsapp_wacli", "command": "ensure-wacli", **exc.payload})
         return exc.code
     except Exception as exc:
         emit({
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "ensure-wacli",
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",
@@ -1395,7 +1397,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         doctor = wacli_json(store, ["doctor"], timeout=60)
         stats = store_stats(store)
         emit({
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "status",
             "status": "ok",
             "store": str(store),
@@ -1407,11 +1409,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         })
         return 0 if status.get("authenticated") else 1
     except PrimitiveBlocked as exc:
-        emit({"primitive": "import_whatsapp_wacli", "command": "status", **exc.payload})
+        emit({"primitive": "messages/whatsapp_wacli", "command": "status", **exc.payload})
         return exc.code
     except Exception as exc:
         emit({
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "status",
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",
@@ -1438,7 +1440,7 @@ def cmd_logout(args: argparse.Namespace) -> int:
             marker.unlink()
             marker_removed = True
         emit({
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "logout",
             "status": "ok",
             "store": str(store),
@@ -1449,11 +1451,11 @@ def cmd_logout(args: argparse.Namespace) -> int:
         })
         return 0
     except PrimitiveBlocked as exc:
-        emit({"primitive": "import_whatsapp_wacli", "command": "logout", **exc.payload})
+        emit({"primitive": "messages/whatsapp_wacli", "command": "logout", **exc.payload})
         return exc.code
     except Exception as exc:
         emit({
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "logout",
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",
@@ -1490,7 +1492,7 @@ def cmd_auth(args: argparse.Namespace) -> int:
         if pairing.get("state") == "pre_full_sync":
             emit_status(pairing["hint"])
         emit({
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "auth",
             "status": "linked" if linked else "blocked_user_action",
             "pairing": pairing,
@@ -1513,11 +1515,11 @@ def cmd_auth(args: argparse.Namespace) -> int:
         })
         return 0 if linked else 20
     except PrimitiveBlocked as exc:
-        emit({"primitive": "import_whatsapp_wacli", "command": "auth", **exc.payload, "store": str(store)})
+        emit({"primitive": "messages/whatsapp_wacli", "command": "auth", **exc.payload, "store": str(store)})
         return exc.code
     except Exception as exc:
         emit({
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "auth",
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",
@@ -1564,7 +1566,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         return 0
     except Exception as exc:
         payload = {
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "export",
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",
@@ -1675,7 +1677,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 0
     except PrimitiveBlocked as exc:
         payload = {
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "run",
             **exc.payload,
             "store": str(store),
@@ -1692,7 +1694,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         except Exception as status_exc:
             status_after_failure = {"error": f"{type(status_exc).__name__}: {status_exc}"}
         payload = {
-            "primitive": "import_whatsapp_wacli",
+            "primitive": "messages/whatsapp_wacli",
             "command": "run",
             "status": "failed",
             "error": f"{type(exc).__name__}: {exc}",

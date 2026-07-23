@@ -62,7 +62,7 @@ def run(args: argparse.Namespace) -> dict:
     if not csv_path:
         return write_manifest("linkedin", {"status": "skipped", "reason": "no LinkedIn CSV", "artifact_dir": str(import_dir)}, import_dir=DEFAULT_IMPORT_DIR)
     cmd = py_cmd(
-        "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py",
+        "packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py",
         "run",
         "--csv", csv_path,
         "--source-user", source_user,

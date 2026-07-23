@@ -11,11 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:  # pragma: no cover - direct script fallback
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 DEFAULT_OUT_DIR = Path(".powerpacks/messages")
@@ -254,7 +256,7 @@ def cmd_normalize(args: argparse.Namespace) -> None:
 
     manifest = {
         "created_at": now_iso(),
-        "primitive": "normalize_message_contacts",
+        "primitive": "messages/normalize_contacts",
         "input": str(input_path),
         "artifacts": {
             "jsonl": str(out_jsonl),

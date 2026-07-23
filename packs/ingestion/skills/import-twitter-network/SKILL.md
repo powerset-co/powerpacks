@@ -12,7 +12,7 @@ Use this skill when the user asks to import a Twitter/X network into Powerpacks-
 Use the primitive at:
 
 ```bash
-packs/ingestion/primitives/twitter_network_import/twitter_network_import.py
+packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py
 ```
 
 The source crawl is RapidAPI-backed only; do not ask for or use a local Twitter CSV as the production source. All artifacts must remain under `.powerpacks/network-import/discover/twitter/`.
@@ -24,20 +24,20 @@ Pipeline stages: RapidAPI Twitter crawl → local heuristic score → OpenAI MOE
 Start a run:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run --handle <operator_handle> --max-pages <n>
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py run --handle <operator_handle> --max-pages <n>
 ```
 
 The run stops before spend-bearing API calls. After explicit user approval:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py approve
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py continue
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py approve
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py continue
 ```
 
 Check status:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py status
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py status
 ```
 
 ## Guardrails

@@ -10,19 +10,19 @@ from unittest.mock import patch
 
 from packs.shared.csv_io import CsvIO
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py"
-spec = importlib.util.spec_from_file_location("linkedin_network_import", MODULE_PATH)
-linkedin_network_import = importlib.util.module_from_spec(spec)
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py"
+spec = importlib.util.spec_from_file_location("linkedin_import", MODULE_PATH)
+linkedin_import = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
-sys.modules[spec.name] = linkedin_network_import
-spec.loader.exec_module(linkedin_network_import)
+sys.modules[spec.name] = linkedin_import
+spec.loader.exec_module(linkedin_import)
 
 
 class LinkedInNetworkImportTests(unittest.TestCase):
     def invoke(self, argv):
         buf = StringIO()
         with redirect_stdout(buf):
-            code = linkedin_network_import.main(argv)
+            code = linkedin_import.main(argv)
         payload = json.loads(buf.getvalue()) if buf.getvalue().strip() else {}
         return code, payload
 
@@ -73,7 +73,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             ledger = Path(tmp) / "ledger.json"
             cache_dir = Path(tmp) / "profile_cache"
             with patch.dict("os.environ", {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(linkedin_network_import.people_enrichment, "rapidapi_profile", return_value={"status_code": 200, "data": self.cache_entry()["raw_response"], "error": "", "from_cache": False}):
+                with patch.object(linkedin_import.people_enrichment, "rapidapi_profile", return_value={"status_code": 200, "data": self.cache_entry()["raw_response"], "error": "", "from_cache": False}):
                     code, payload = self.invoke([
                         "run",
                         "--csv", str(csv_path),
@@ -110,7 +110,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             cache_dir.mkdir()
             (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
             ledger = Path(tmp) / "ledger.json"
-            with patch.object(linkedin_network_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(linkedin_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),
@@ -157,7 +157,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             discover_dir = out_dir / "discover" / "linkedin"
 
             self.write_connections(csv_path, [("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024")])
-            with patch.object(linkedin_network_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(linkedin_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),
@@ -190,7 +190,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
                 ("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024"),
                 ("Sam", "Example", "sam-example", "sam@example.com", "BetaCo", "Founder", "02 Jan 2024"),
             ])
-            with patch.object(linkedin_network_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(linkedin_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),

@@ -651,7 +651,7 @@ def directory_row_is_prior_negative(row: dict[str, str]) -> bool:
 def _is_resolvable_person(row: dict[str, str]) -> bool:
     """Return True if the queue row looks like a real person worth resolving."""
     try:
-        from packs.ingestion.primitives.resolve_linkedin_queue.resolve_linkedin_queue import (
+        from packs.ingestion.primitives.discover_contacts_pipeline.gmail.resolve_queue import (
             is_generic_or_non_person,
             is_likely_person_name,
         )
@@ -1268,7 +1268,7 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
         account_dir = Path(str(record.get("people_csv") or "")).parent
         resolved_dir = account_dir / "resolved"
         apply_cmd = py_cmd(
-            "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
+            "packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py",
             "apply-resolutions",
             "--people-csv", str(record["people_csv"]),
             "--resolutions-csv", str(record["resolutions_csv"]),

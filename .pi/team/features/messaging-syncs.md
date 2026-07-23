@@ -8,10 +8,10 @@ Own reusable messaging sync powerpacks for iMessage and WhatsApp.
 ```txt
 packs/ingestion/skills/import-messages/
 packs/ingestion/skills/import-whatsapp/
-packs/ingestion/primitives/{discover_contacts_pipeline/messages.py,import_contacts_pipeline/messages.py}
-packs/ingestion/primitives/{extract_imessage_contacts,import_whatsapp_wacli,normalize_message_contacts,merge_message_contacts}/
+packs/ingestion/primitives/{discover_contacts_pipeline/messages/,import_contacts_pipeline/messages/}
+packs/ingestion/primitives/discover_contacts_pipeline/messages/{extract_imessage,whatsapp_wacli,normalize_contacts,merge_contacts}.py
 tests/test_messages_pack.py
-tests/test_import_whatsapp_wacli.py
+tests/test_whatsapp_wacli.py
 tests/test_ingestion_messages_contract.py
 ```
 
@@ -35,7 +35,7 @@ tests/test_ingestion_messages_contract.py
 ```bash
 uv run --project . python -m unittest \
   tests.test_messages_pack \
-  tests.test_import_whatsapp_wacli \
+  tests.test_whatsapp_wacli \
   tests.test_ingestion_messages_contract
 ```
 

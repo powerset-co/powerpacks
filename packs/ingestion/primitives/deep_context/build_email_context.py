@@ -6,7 +6,7 @@ local msgvault SQLite store and write one combined, reviewable payload.
 
 Why this exists
 ---------------
-Today the Parallel lookup (``resolve_linkedin_queue.py``) receives almost no
+Today the Parallel lookup (``gmail/resolve_queue.py``) receives almost no
 context per person -- just ``{full_name, company, email}`` where ``company`` is
 merely guessed from the email domain (and blank for personal domains). That
 thin signal is why a bare name can resolve to the wrong LinkedIn profile. This
@@ -16,7 +16,7 @@ step is wired up.
 
 Candidate set fidelity
 ----------------------
-The candidate emails are re-derived exactly the way ``gmail_network_import``
+The candidate emails are re-derived exactly the way ``gmail/network_import``
 builds its ``linkedin_resolution_queue``: aggregate msgvault metadata, drop
 automated senders, keep only round-trip contacts (both sent AND received), then
 take the same queue rows. We reuse those helpers directly so this stays 1:1
@@ -50,12 +50,15 @@ from typing import Any, Iterable, Iterator
 # Reuse the exact candidate-derivation + msgvault helpers from the Gmail import
 # primitive, and the canonical role/service-address detector from the Parallel
 # resolution path, so this stays faithful to "who we send to Parallel".
-_PRIMITIVES_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PRIMITIVES_DIR / "gmail_network_import"))
-sys.path.insert(0, str(_PRIMITIVES_DIR / "resolve_linkedin_queue"))
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-import gmail_network_import as gni  # noqa: E402
-from resolve_linkedin_queue import is_generic_or_non_person  # noqa: E402
+from packs.ingestion.primitives.discover_contacts_pipeline.gmail import network_import as gni  # noqa: E402
+from packs.ingestion.primitives.discover_contacts_pipeline.gmail.resolve_queue import (  # noqa: E402
+    is_generic_or_non_person,
+)
 
 DEFAULT_OUT_DIR = Path(".powerpacks/network-import/discover/email-context")
 # Emails read per contact (most recent, sender = contact or you). More = richer
@@ -502,7 +505,7 @@ def derive_candidates(
     include_automated: bool,
     include_role_mailboxes: bool,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Re-derive the Parallel resolution queue exactly like gmail_network_import,
+    """Re-derive the Parallel resolution queue exactly like gmail/network_import,
     then drop role/service mailboxes (support@, info@, careers@, …) using the same
     detector the Parallel resolution path uses. Returns (queue, role_dropped)."""
     aggregated = gni.aggregate_msgvault_contacts(con, account_email, exclude_labels)

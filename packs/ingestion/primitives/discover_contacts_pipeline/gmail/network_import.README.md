@@ -1,4 +1,4 @@
-# gmail_network_import
+# gmail/network_import.py
 
 This is the low-level metadata reader. For the current account-to-index product
 flow, lookup sequence, provider boundaries, and review limitation, see the
@@ -22,10 +22,10 @@ After syncing Gmail with [msgvault](https://github.com/wesm/msgvault), import
 email/name interaction metadata from its local SQLite archive:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault-accounts \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py msgvault-accounts \
   --db ~/.msgvault/msgvault.db
 
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py msgvault \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py msgvault \
   --db ~/.msgvault/msgvault.db \
   --account-email me@gmail.com
 ```
@@ -47,18 +47,18 @@ queue and apply the results before shared RapidAPI profile enrichment:
 
 ```bash
 # no spend: prepare harness/manual prompts
-uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/resolve_queue.py run \
   --provider harness \
   --input .powerpacks/network-import/discover/gmail/<account>/linkedin_resolution_queue.csv \
   --output-dir .powerpacks/network-import/discover/gmail/<account>/linkedin-resolution
 
 # spend-bearing: Parallel.ai, requires approval
-uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/resolve_queue.py run \
   --provider parallel \
   --input .powerpacks/network-import/discover/gmail/<account>/linkedin_resolution_queue.csv
 
 # after linkedin_resolutions.csv exists, attach LinkedIn URLs to Gmail people
-uv run --project . python packs/ingestion/primitives/gmail_network_import/gmail_network_import.py apply-resolutions \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py apply-resolutions \
   --people-csv .powerpacks/network-import/discover/gmail/<account>/people.csv \
   --resolutions-csv .powerpacks/network-import/discover/gmail/<account>/linkedin-resolution/linkedin_resolutions.csv
 
@@ -98,7 +98,7 @@ Run artifacts live under `.powerpacks/network-import/discover/gmail/<account>/`:
 - OpenAI domain parse is not needed; the local heuristic derives
   `example.com -> Example` only for the legacy one-person seed.
 - msgvault import itself does not call EnrichLayer/RapidAPI/Parallel/Harmonic.
-- Optional LinkedIn resolution can use `resolve_linkedin_queue.py` in harness or
+- Optional LinkedIn resolution can use `gmail/resolve_queue.py` in harness or
   Parallel mode with approval, then shared `enrich_people.py` handles
   RapidAPI LinkedIn profile hydration for resolved rows.
 - Future Gmail sync should remain msgvault-backed unless explicitly redesigned.

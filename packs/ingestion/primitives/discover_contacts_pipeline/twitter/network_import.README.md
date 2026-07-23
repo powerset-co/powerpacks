@@ -1,4 +1,4 @@
-# twitter_network_import
+# twitter/network_import.py
 
 Powerpacks-local Twitter/X network import orchestrator. This ports the legacy Twitter pipeline into the local `run` / `approve` / `continue` workflow style.
 
@@ -27,21 +27,21 @@ A hidden internal row cap exists for tiny local smoke tests only. Do not use row
 
 ```bash
 # Create a run; stops before the first RapidAPI call.
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py run \
   --handle mytechceoo \
   --max-pages 5
 
 # Approve current blocked spend-bearing step.
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py approve
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py approve
 
 # Continue until completed or the next spend-bearing gate.
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py continue
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py continue
 
 # Show ledger / artifact status.
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py status
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py status
 
 # Check local key presence without printing values.
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py check-keys
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py check-keys
 ```
 
 ## Environment

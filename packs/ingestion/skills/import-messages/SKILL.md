@@ -174,7 +174,7 @@ the same `discover` command to advance:
   wait for confirmation, then re-run discovery:
 
   ```bash
-  cd "$REPO" && uv run --project . python packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py open-privacy-settings
+  cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/extract_imessage.py open-privacy-settings
   ```
 
 - **WhatsApp helper (pinned wacli fork):** downloads automatically when missing
@@ -200,7 +200,7 @@ recent history was pulled), **stop and ask the user before continuing to Step
   a fresh QR (the re-paired session syncs full history):
 
   ```bash
-  cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py logout
+  cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py logout
   ```
 
 - **User says no** → proceed to Step 3 with the contacts already imported; the

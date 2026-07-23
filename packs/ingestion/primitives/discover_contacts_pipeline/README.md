@@ -19,16 +19,16 @@ agent to a `SKILL.md`, and that skill calls this script.
 | User command / skill | This orchestrator role | Source primitive/script |
 | --- | --- | --- |
 | `$import-gmail` | Uses the split Gmail discovery and import handlers | `discover_contacts_pipeline/gmail/sync.py`, `import_contacts_pipeline/gmail/importer.py` |
-| `$discover-contacts` | Calls this script for source discovery only | `linkedin_network_import.py`, `gmail_network_import.py msgvault` |
-| `$import-twitter` | Runs Twitter primitive directly | `twitter_network_import.py` |
+| `$discover-contacts` | Calls this script for source discovery only | `linkedin/network_import.py`, `gmail/network_import.py msgvault` |
+| `$import-twitter` | Runs Twitter primitive directly | `twitter/network_import.py` |
 | `$import-messages` | Does not use this generic runner; it exclusively owns iMessage/WhatsApp | `discover_contacts_pipeline/messages/discover.py`, `import_contacts_pipeline/messages/importer.py`, and ingestion message primitives |
 
 ## Inputs
 
-- LinkedIn CSV: LinkedIn `Connections.csv`, handled by `linkedin_network_import`.
-- Gmail: local msgvault SQLite (`~/.msgvault/msgvault.db`), handled by `gmail_network_import msgvault`; multiple selected accounts from onboarding are imported into fixed per-account folders under `.powerpacks/network-import/discover/gmail/<account>/`.
+- LinkedIn CSV: LinkedIn `Connections.csv`, handled by `linkedin/network_import.py`.
+- Gmail: local msgvault SQLite (`~/.msgvault/msgvault.db`), handled by `gmail/network_import.py msgvault`; multiple selected accounts from onboarding are imported into fixed per-account folders under `.powerpacks/network-import/discover/gmail/<account>/`.
 - Setup/account state: `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` fills in LinkedIn CSV/source label, msgvault DB, selected Gmail accounts, and Twitter handle unless explicit CLI flags override them.
-- Twitter/X: existing `.powerpacks/network-import/discover/twitter/*/people.csv`, produced by `twitter_network_import`; include with `--include-existing-artifacts`.
+- Twitter/X: existing `.powerpacks/network-import/discover/twitter/*/people.csv`, produced by `twitter/network_import.py`; include with `--include-existing-artifacts`.
 
 Message artifacts are not generic discovery inputs. `$import-messages` owns
 iMessage/WhatsApp discovery, review, materialization, fan-in, and indexing.

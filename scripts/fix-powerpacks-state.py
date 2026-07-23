@@ -36,20 +36,20 @@ VERTICAL_STAGE_PATHS = {
     "gmail": {
         "discovery": ".powerpacks/network-import/discover/gmail/manifest.json",
         "import": ".powerpacks/network-import/import/gmail/manifest.json",
-        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail.py discover --accounts .powerpacks/ingestion/accounts.json",
-        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
+        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
+        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
     },
     "linkedin": {
         "discovery": ".powerpacks/network-import/discover/linkedin/manifest.json",
         "import": ".powerpacks/network-import/import/linkedin/manifest.json",
-        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin.py discover --accounts .powerpacks/ingestion/accounts.json",
-        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/linkedin.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
+        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
+        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/linkedin/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
     },
     "messages": {
         "discovery": ".powerpacks/network-import/discover/messages/manifest.json",
         "import": ".powerpacks/network-import/import/messages/manifest.json",
-        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages.py discover --accounts .powerpacks/ingestion/accounts.json",
-        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
+        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
+        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
     },
 }
 
@@ -323,7 +323,7 @@ def wacli_auth_status(canonical: Path, store: Path) -> dict[str, Any]:
         return {"status": "missing", "authenticated": False, "store": str(store)}
     cmd = [
         sys.executable,
-        "packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
+        "packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py",
         "status",
         "--store",
         str(store),

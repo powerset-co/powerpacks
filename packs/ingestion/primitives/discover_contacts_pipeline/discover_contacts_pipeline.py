@@ -207,7 +207,7 @@ def run_linkedin_child(ledger: dict[str, Any], mode: str) -> dict[str, Any]:
     child_ledger = artifact_dir / "linkedin.ledger.json"
     if mode == "run":
         cmd = py_cmd(
-            "packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py",
+            "packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py",
             "run",
             "--csv", input_cfg["linkedin_csv"],
             "--source-user", input_cfg.get("linkedin_source_user") or "local",
@@ -221,7 +221,7 @@ def run_linkedin_child(ledger: dict[str, Any], mode: str) -> dict[str, Any]:
         if input_cfg.get("source_import_only"):
             cmd.append("--convert-only")
     else:
-        cmd = py_cmd("packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py", "continue", "--ledger", str(child_ledger))
+        cmd = py_cmd("packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py", "continue", "--ledger", str(child_ledger))
     code, payload, stderr = run_cmd(cmd)
     return {"id": "linkedin_csv", "source": "linkedin_csv", "child_ledger": str(child_ledger), "command": cmd, "code": code, "payload": payload, "stderr": stderr}
 
@@ -652,7 +652,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
     ledger = load_ledger(ledger_path)
     blocked = ledger.get("blocked") or {}
     if blocked.get("step_id") == "linkedin" and blocked.get("child_ledger"):
-        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py", "approve", "--ledger", blocked["child_ledger"]))
+        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py", "approve", "--ledger", blocked["child_ledger"]))
         if code != 0:
             emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
             return 1
@@ -661,7 +661,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
         emit({"status": "approved", "ledger": str(ledger_path), "child": payload})
         return 0
     if blocked.get("step_id") == "gmail_linkedin_resolution" and blocked.get("child_ledger"):
-        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py", "approve", "--ledger", blocked["child_ledger"]))
+        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/discover_contacts_pipeline/gmail/resolve_queue.py", "approve", "--ledger", blocked["child_ledger"]))
         if code != 0:
             emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
             return 1

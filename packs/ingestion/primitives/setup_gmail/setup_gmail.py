@@ -49,7 +49,7 @@ DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "gmail"
 DISCOVER_CONTACTS_CSV = DISCOVER_DIR / "contacts.csv"
 
 # Gmail enrichment resolves unmatched contacts to LinkedIn via Parallel.ai. The
-# resolution queue uses the core2x processor by default (see resolve_linkedin_queue
+# resolution queue uses the core2x processor by default (see gmail/resolve_queue.py
 # DEFAULT_PROCESSOR), priced at $0.05 per lookup (see PROCESSOR_PRICING_USD in
 # deep_research_contacts). The estimate is simply pending queue rows * per-lookup.
 GMAIL_PARALLEL_PROCESSOR = "core2x"

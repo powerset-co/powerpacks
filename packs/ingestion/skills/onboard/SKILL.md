@@ -7,8 +7,8 @@ description: Walk a user through linking/exporting all local network ingestion s
 
 Onboarding is the top-level Codex-run state machine. Task 2 onboarding is
 **link-only**: it records source links in `.powerpacks/ingestion/accounts.json`
-and must not run `gmail_network_import`, `msgvault sync-full`,
-`linkedin_network_import`, `discover_contacts_pipeline`, Twitter crawls, messages
+and must not run `gmail/network_import.py`, `msgvault sync-full`,
+`linkedin/network_import.py`, `discover_contacts_pipeline`, Twitter crawls, messages
 import/research, or downstream enrichment. Keep human/browser account linking in the main thread,
 then hand long local import/index work to worker sub-agents only after the
 completed handoff and user confirmation.
@@ -89,7 +89,7 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
 The LinkedIn step only validates and records the CSV path/source label; it does
 not run enrichment or imports. Messages onboarding is also link-only: it runs
 the scoped iMessage/Contacts permission check and checks WhatsApp auth/link
-status. If WhatsApp is not linked, run the returned `import_whatsapp_wacli.py
+status. If WhatsApp is not linked, run the returned `whatsapp_wacli.py
 auth` command or rerun with `--skip-messages-whatsapp`; neither path runs
 WhatsApp sync or exports contacts. `--messages-contacts-csv <path>` remains a
 legacy/manual override for recording an existing contacts CSV. Twitter records a

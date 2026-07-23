@@ -19,7 +19,6 @@ WhatsApp groups remain excluded. The iMessage readers decode Apple's
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +26,10 @@ from packs.ingestion.primitives.deep_context.common import Person, phone_digits
 
 # Reuse the Gmail email-context machinery (msgvault connect/schema + the
 # signature-aware body selection) exactly as the marker flow does.
-_PRIMITIVES_DIR = Path(__file__).resolve().parent.parent
-_p = str(_PRIMITIVES_DIR / "gmail_network_import")
-if _p not in sys.path:
-    sys.path.insert(0, _p)
-
-from packs.ingestion.primitives.deep_context import build_email_context as bec  # noqa: E402
-import gmail_network_import as gni  # noqa: E402, F401 - re-exported for collector defaults
+from packs.ingestion.primitives.deep_context import build_email_context as bec
+from packs.ingestion.primitives.discover_contacts_pipeline.gmail import (  # noqa: F401 - re-exported for collector defaults
+    network_import as gni,
+)
 
 # Every channel is its own vertical with the same deep cap: Gmail, iMessage, and
 # WhatsApp each pool up to CHAT_MESSAGE_CAP recent messages, and the incremental

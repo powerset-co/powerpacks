@@ -48,7 +48,7 @@ export function discoverMsgvaultAccounts(dbPath: string): { accounts: string[]; 
   try {
     const result = spawnSync("uv", [
       "run", "--project", ".", "python",
-      "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
+      "packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py",
       "msgvault-accounts",
       "--db", dbPath,
     ], {

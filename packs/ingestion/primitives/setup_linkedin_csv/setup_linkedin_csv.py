@@ -39,7 +39,7 @@ from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa
     sha256_file,
     write_manifest,
 )
-from packs.ingestion.primitives.linkedin_network_import import linkedin_network_import  # noqa: E402
+from packs.ingestion.primitives.discover_contacts_pipeline.linkedin import network_import as linkedin_import  # noqa: E402
 from packs.indexing.primitives.index_contacts_pipeline import index_contacts_pipeline  # noqa: E402
 from packs.ingestion.accounts import load_registry, save_registry  # noqa: E402
 
@@ -236,12 +236,12 @@ def run_linkedin_import(csv_path: Path, source_user: str, operator_id: str, *, f
         sleep_seconds=0.0,
         force_enrich=False,
         convert_only=False,
-        max_workers=linkedin_network_import.people_enrichment.DEFAULT_RAPIDAPI_MAX_WORKERS,
-        max_rpm=linkedin_network_import.people_enrichment.DEFAULT_RAPIDAPI_MAX_RPM,
-        failure_retry_hours=linkedin_network_import.people_enrichment.DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
+        max_workers=linkedin_import.people_enrichment.DEFAULT_RAPIDAPI_MAX_WORKERS,
+        max_rpm=linkedin_import.people_enrichment.DEFAULT_RAPIDAPI_MAX_RPM,
+        failure_retry_hours=linkedin_import.people_enrichment.DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
     )
-    code = linkedin_network_import.command_run(ns)
-    ledger = linkedin_network_import.load_ledger(IMPORT_LEDGER) if IMPORT_LEDGER.exists() else {}
+    code = linkedin_import.command_run(ns)
+    ledger = linkedin_import.load_ledger(IMPORT_LEDGER) if IMPORT_LEDGER.exists() else {}
     return code, ledger
 
 

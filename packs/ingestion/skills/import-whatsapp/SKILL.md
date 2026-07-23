@@ -21,7 +21,7 @@ consent question.
 Run:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py run
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py run
 ```
 
 This flow:

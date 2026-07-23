@@ -423,7 +423,7 @@ def cmd_check(args: argparse.Namespace) -> None:
     chat_db = Path(args.chat_db).expanduser()
     addressbook = check_addressbook(args.addressbook_glob)
     result = {
-        "primitive": "extract_imessage_contacts",
+        "primitive": "messages/extract_imessage",
         "checked_at": now_iso(),
         "chat_db": check_chat_db(chat_db),
         "addressbook": addressbook,
@@ -445,7 +445,7 @@ def cmd_open_privacy_settings(args: argparse.Namespace) -> None:
     targets = ["full-disk-access", "contacts"] if args.target == "both" else [args.target]
     urls = [PRIVACY_SETTINGS_URLS[target] for target in targets]
     result: dict[str, Any] = {
-        "primitive": "extract_imessage_contacts",
+        "primitive": "messages/extract_imessage",
         "command": "open-privacy-settings",
         "platform": sys.platform,
         "targets": targets,
@@ -481,7 +481,7 @@ def failure_manifest(
     return {
         "created_at": started_at,
         "completed_at": now_iso(),
-        "primitive": "extract_imessage_contacts",
+        "primitive": "messages/extract_imessage",
         "status": "failed",
         "error": error,
         "diagnostics": diagnostics,
@@ -543,7 +543,7 @@ def cmd_extract(args: argparse.Namespace) -> None:
             "created_at": started_at,
             "completed_at": now_iso(),
             "elapsed_ms": int((time.time() - started) * 1000),
-            "primitive": "extract_imessage_contacts",
+            "primitive": "messages/extract_imessage",
             "status": "completed",
             "source": {
                 "type": "imessage_chat_db",

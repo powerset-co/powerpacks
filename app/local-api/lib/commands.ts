@@ -175,7 +175,7 @@ export function discoverContactsCommand(operatorId: string, extra: string[] = []
 export function gmailDiscoveryCommand(): string[] {
   return [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/discover_contacts_pipeline/gmail.py",
+    "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py",
     "discover",
     "--accounts", ".powerpacks/ingestion/accounts.json",
   ];
@@ -184,7 +184,7 @@ export function gmailDiscoveryCommand(): string[] {
 export function linkedinDiscoveryCommand(): string[] {
   return [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/discover_contacts_pipeline/linkedin.py",
+    "packs/ingestion/primitives/discover_contacts_pipeline/linkedin/discover.py",
     "discover",
     "--accounts", ".powerpacks/ingestion/accounts.json",
   ];
@@ -195,7 +195,7 @@ export function enrichmentNetworkCommand(operatorId: string, sourceId: string, o
   if (!["gmail", "linkedin"].includes(source)) return [];
   const command = [
     "uv", "run", "--project", ".", "python",
-    `packs/ingestion/primitives/import_contacts_pipeline/${source}.py`,
+    `packs/ingestion/primitives/import_contacts_pipeline/${source}/importer.py`,
     "run",
     "--accounts", ".powerpacks/ingestion/accounts.json",
     "--operator-id", operatorId,
