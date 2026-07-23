@@ -41,6 +41,7 @@ Arthur reviews manually, drops comments; each batch = one commit, verdicts poste
 | 10 | discovery engines fold (sub-agent) + HYGIENE.md | `extract_imessage`, `whatsapp_wacli`, `normalize/merge_contacts` → `messages/`; `network_import` + `resolve_queue` → `gmail/`; linkedin/twitter `network_import` → their verticals; app/local-api + fix-powerpacks-state stale paths fixed (missed by earlier sweeps — **the console app invokes primitives by path**); `HYGIENE.md` added at root (agents read it before editing; folds into AGENTS.md later) |
 | 11 | setup/enrich fold (sub-agent) | `setup_gmail`, `setup_linkedin_csv`, `msgvault_setup` (+oauth JS companion), `onboarding`, `bootstrap_network_from_exports`, `clean_slate`, `linkedin_mcp_import` → `setup/`; `enrich_people` → `enrich/`; app paths updated; jobs.ts whitelist drops deleted-dispatcher entry |
 | 12 | import-stage fold (sub-agent) | `match_local_candidates` → `import_contacts_pipeline/messages/`; `merge_network_sources` → `import_contacts_pipeline/` (fan-in); references swept (index fan-in py_cmd, SKILL, 7 test files, docs); zero app/ references. DONE |
+| 13 | relic skills + $setup pipeclean (sub-agent) | DELETED 8 skills (`onboard`, `ingestion-onboarding`, `import-gmail-network`, `import-linkedin-network`, `import-twitter-network`, `linkedin-sync-mcp`, `local-msg-vault` alias, `import-whatsapp`) + `bootstrap_network_from_exports` and `linkedin_mcp_import` primitives (+test/READMEs); adapter install lists pruned to live skills ONLY + new `RETIRED_SKILLS` scrub (also purges pre-audit fossils: `enrich-email-markers`, `import-contacts`, `recruit`, `deep-setup`, …); `$setup` SKILL audited command-by-command — **all current, incl. Step-5 `index_contacts_pipeline.py fan-in`** (same canonical merge door $import-gmail/$import-messages use; delegates to `merge_network_sources.py`). KEPT `setup/{onboarding,setup,setup_gmail,setup_linkedin_csv}.py` — console-app engine (jobs.ts/commands.ts/routes), NOT $setup's; $setup calls none of them. discover-contacts SKILL: Arthur's tone edit merged + restore-bundle & approve/continue resume sections deleted |
 
 ## Final target tree (post-batch-12)
 
@@ -56,7 +57,7 @@ packs/ingestion/primitives/
   deep_context/                 22 modules + build_email_context + deep_research_contacts + migrate_legacy_resolutions
   logbook/                      unchanged
   setup/                        setup, setup_gmail, setup_linkedin_csv, msgvault_setup, onboarding,
-                                bootstrap_network_from_exports, clean_slate, linkedin_mcp_import
+                                clean_slate   (onboarding/setup* are console-app-only — $setup never calls them)
 ```
 
 ## Key numbers / state
@@ -71,7 +72,7 @@ packs/ingestion/primitives/
 3. **Run migrate-legacy for real** on the mirror: `--apply` (free) then `--apply --judge` (~$11–54) → auto-stands → Check-LinkedIn queue → apply-retargets admission. This is the BUG-3/BUG-5 remediation.
 4. **BUG-4 decision**: replacement approval surface for message suggestions (deep-context suggestions review or conservative auto-attach).
 5. Proposed-not-built: gmail apply step reads review.csv and skips SOT-rejected links; drop vestigial Powerset Step-0 gates from both import skills; archive dead legacy dirs.
-6. Relic-skill cluster undecided: `import-gmail-network`, `import-linkedin-network`, `import-twitter-network`, `linkedin-sync-mcp` (+`linkedin_mcp_import` now in setup/), `ingestion-onboarding`-vs-`onboard` duplication.
+6. ~~Relic-skill cluster~~ RESOLVED batch 13 — all 8 deleted. Remaining fork in that thread: `setup/{onboarding,setup,setup_gmail,setup_linkedin_csv}.py` survive as the console app's onboarding engine only; killing them means ripping out the app onboarding flow (jobs.ts/commands.ts/routes/onboarding+setup.ts + app/src UI) — Arthur's call.
 7. `gmail_network_import` (1,662 LOC, now `gmail/network_import.py`) deserves its own audit pass.
 8. Fold `HYGIENE.md` + this file into AGENTS.md / delete when the audit closes.
 9. Coordinate with PR #314 (other session: evidence-fingerprint refresh; touches collect/synthesize/sources).
