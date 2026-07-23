@@ -77,7 +77,22 @@ def discover(
     which let call sites pass options that were never honored; now a typo or a
     phantom option raises. `accounts_file` is the ONE accounts-state param
     (the old accounts_path alias is gone), and all configuration resolves
-    through resolve_discovery_inputs — one documented precedence, one place."""
+    through resolve_discovery_inputs — one documented precedence, one place.
+
+    DEFAULTS CONVENTION — the `| None = None` params are override SENTINELS,
+    not values: None means "no override given, inherit from the next config
+    layer" (accounts.json state, then discovery.config defaults). Params with
+    no lower layer carry their real default instead:
+      accounts_file=None       -> inherit the configured accounts path
+      selected_accounts=None / account_email=None -> inherit linked accounts
+      msgvault_db=None (or "") -> inherit the configured/state db path
+      sync_query=None          -> inherit the configured query;
+      sync_query=""            -> EXPLICITLY clear it (the one distinction
+                                  callers actually use — see the orchestrator)
+      sync_after/sync_before="" -> plain values: pure run-window overrides
+                                  with no config layer beneath them
+      skip_msgvault_sync/fresh/limit/no_attachments -> run-mode flags, no
+                                  layering, real defaults."""
     # ONE resolution point for configuration (see resolve_discovery_inputs):
     # explicit caller/CLI overrides > accounts.json state > discovery.config
     # defaults. Nothing below this line consults config sources directly.
