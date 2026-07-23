@@ -351,7 +351,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         Path(args.accounts).write_text(json.dumps(accounts_data, indent=2) + "\n")
 
         ctx.event("discover", "Copying and parsing LinkedIn contacts", payload=csv_stats)
-        discovery_payload = linkedin_discovery.discover(accounts_path=Path(args.accounts), connections_csv=csv_path, source_user_label=source_user)
+        discovery_payload = linkedin_discovery.discover(accounts_file=Path(args.accounts), connections_csv=csv_path, source_user_label=source_user)
         if discovery_payload.get("status") != "completed":
             raise RuntimeError(discovery_payload.get("reason") or discovery_payload.get("error") or "LinkedIn discovery did not complete")
         stable_csv_path = Path(str(discovery_payload.get("source_csv") or DISCOVER_CONNECTIONS_CSV))

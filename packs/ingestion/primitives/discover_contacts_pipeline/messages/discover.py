@@ -340,12 +340,13 @@ def _completed_child(artifacts: dict[str, Any], inputs: dict[str, Any]) -> dict[
 
 def discover(
     *,
-    accounts_path: Path = DEFAULT_ACCOUNTS,
+    accounts_file: Path = DEFAULT_ACCOUNTS,
     wacli_max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
     wacli_sync_mode: str = "auto",
     include_imessage: bool | None = None,
     include_whatsapp: bool | None = None,
 ) -> dict[str, Any]:
+    accounts_path = accounts_file  # internal helpers keep the old local name
     inputs = messages_discovery_inputs(accounts_path)
     if include_imessage is not None or include_whatsapp is not None:
         inputs = {
@@ -467,7 +468,7 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.command == "discover":
         payload = discover(
-            accounts_path=args.accounts,
+            accounts_file=args.accounts,
             wacli_max_messages=args.wacli_max_messages,
             wacli_sync_mode=args.wacli_sync_mode,
             include_imessage=args.include_imessage,

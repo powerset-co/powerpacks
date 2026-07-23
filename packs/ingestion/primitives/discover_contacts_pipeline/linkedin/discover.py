@@ -149,12 +149,13 @@ def merge_contacts(existing: list[dict[str, str]], incoming: list[dict[str, str]
 def discover(
     *,
     accounts_file: Path | None = None,
-    accounts_path: Path | None = None,
     connections_csv: str | Path | None = None,
     source_user_label: str | None = None,
-    **_: Any,
 ) -> dict[str, Any]:
-    accounts_file = accounts_file or accounts_path or configured_accounts_path()
+    """Discover LinkedIn Connections.csv contacts. Strict keyword-only —
+    unknown options raise instead of being silently swallowed (the old **_
+    hid never-honored kwargs from the orchestrator)."""
+    accounts_file = accounts_file or configured_accounts_path()
     accounts = read_json(accounts_file, {}) or {}
     source_csv = Path(str(connections_csv)).expanduser() if connections_csv else csv_path(accounts)
     user = str(source_user_label or "").strip() or source_user(accounts)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pathlib import Path
 from typing import Any
 import hashlib
@@ -15,6 +17,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # noqa: E402
+    read_json,
     DEFAULT_BASE_DIR,
     DEFAULT_MSGVAULT_DB,
     GMAIL_INTERACTION_CALCULATION_VERSION,
@@ -22,6 +25,7 @@ from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # no
     parse_jsonish,
 )
 from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (  # noqa: E402
+    accounts_path as configured_accounts_path,
     source_config,
     state_value,
 )
@@ -161,3 +165,48 @@ def inputs(accounts: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class GmailDiscoveryInputs:
+    """THE resolved gmail-discovery configuration — discover() reads this and
+    nothing else. Built only by resolve_discovery_inputs, which owns the one
+    precedence rule for the whole vertical."""
+
+    accounts_file: Path
+    selected_accounts: tuple[str, ...]
+    msgvault_db: str
+    sync_query: str
+
+
+def resolve_discovery_inputs(
+    accounts_file: Path | None,
+    *,
+    selected_accounts: list[str] | None = None,
+    account_email: str | None = None,
+    msgvault_db: str | None = None,
+    sync_query: str | None = None,
+) -> GmailDiscoveryInputs:
+    """The ONE configuration resolution point for gmail discovery.
+
+    Precedence, highest first:
+      1. explicit caller/CLI overrides (the keyword args here)
+      2. persisted linked-source state (.powerpacks/ingestion/accounts.json —
+         the packaged config onboarding writes: selected accounts, msgvault db)
+      3. discovery.config.json defaults (state keys, db default, sync query)
+    Callers never merge config themselves; they pass overrides and read the
+    frozen result."""
+    accounts_file = accounts_file or configured_accounts_path()
+    account_state = read_json(accounts_file, {}) or {}
+    base = inputs(account_state, {})
+    explicit = ordered_unique([*(selected_accounts or []),
+                               *([account_email] if account_email else [])])
+    resolved_accounts = explicit or list(base["selected_accounts"])
+    resolved_db = (str(Path(str(msgvault_db)).expanduser()) if msgvault_db
+                   else base["msgvault_db"])
+    resolved_query = (str(sync_query or "").strip() if sync_query is not None
+                      else base["sync_query"])
+    return GmailDiscoveryInputs(
+        accounts_file=Path(accounts_file),
+        selected_accounts=tuple(resolved_accounts),
+        msgvault_db=resolved_db,
+        sync_query=resolved_query,
+    )
