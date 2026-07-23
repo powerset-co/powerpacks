@@ -225,7 +225,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                 rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(json.loads(rows[0]["interaction_counts"]), {"gmail": 5})
-            self.assertEqual(rows[0]["last_interaction"], "2026-01-03T00:00:00Z")
+            self.assertEqual(rows[0]["last_interaction"], "2026-01-03T00:00:00+00:00")
 
     def test_gmail_account_people_merge_unions_resolved_emails(self) -> None:
         # Multiple work emails that resolve to the SAME LinkedIn person must
