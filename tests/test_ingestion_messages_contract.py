@@ -1,4 +1,5 @@
 import io
+import importlib
 import json
 import os
 import subprocess
@@ -10,15 +11,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.discover.messages import discover as discover_messages
 from packs.ingestion.primitives.discover.common import write_csv_rows
 from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
-from packs.ingestion.primitives.imports import messages as import_messages
 from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
 INGESTION = ROOT / "packs/ingestion"
+discover_messages = importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.discover"
+)
+import_messages = importlib.import_module(
+    "packs.ingestion.primitives.imports.messages.importer"
+)
 
 
 class IngestionMessagesContractTests(unittest.TestCase):

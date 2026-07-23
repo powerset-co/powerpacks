@@ -1,4 +1,5 @@
 import csv
+import importlib
 import io
 import json
 import sqlite3
@@ -13,10 +14,18 @@ sys.path.insert(0, str(ROOT))
 
 from packs.ingestion.primitives.discover import common as discover_common
 from packs.ingestion.primitives.imports import directory as import_directory
-from packs.ingestion.primitives.discover import gmail as discover_gmail
-from packs.ingestion.primitives.imports import messages as import_messages
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.shared.csv_io import CsvIO
+
+discover_gmail = importlib.import_module(
+    "packs.ingestion.primitives.discover.gmail.discover"
+)
+discover_gmail_sync = importlib.import_module(
+    "packs.ingestion.primitives.discover.gmail.sync"
+)
+import_messages = importlib.import_module(
+    "packs.ingestion.primitives.imports.messages.importer"
+)
 
 
 def write_msgvault_db(path: Path) -> None:
@@ -78,9 +87,9 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 calls.append(cmd)
                 return 0, {"status": "completed", "messages_added": 0}, ""
 
-            with mock.patch.object(discover_gmail.shutil, "which", return_value="/usr/bin/msgvault"):
-                with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
-                    payload = discover_gmail.sync_msgvault_account("me@example.com", str(db), "-category:social")
+            with mock.patch.object(discover_gmail_sync.shutil, "which", return_value="/usr/bin/msgvault"):
+                with mock.patch.object(discover_gmail_sync, "run_cmd", side_effect=fake_run_cmd):
+                    payload = discover_gmail_sync.sync_msgvault_account("me@example.com", str(db), "-category:social")
 
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["sync_after"], "2026-05-20")
@@ -100,9 +109,9 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 calls.append(cmd)
                 return 1, {}, expired_error
 
-            with mock.patch.object(discover_gmail.shutil, "which", return_value="/usr/bin/msgvault"):
-                with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
-                    payload = discover_gmail.sync_msgvault_account(
+            with mock.patch.object(discover_gmail_sync.shutil, "which", return_value="/usr/bin/msgvault"):
+                with mock.patch.object(discover_gmail_sync, "run_cmd", side_effect=fake_run_cmd):
+                    payload = discover_gmail_sync.sync_msgvault_account(
                         "me@example.com",
                         str(db),
                         "-category:social",
