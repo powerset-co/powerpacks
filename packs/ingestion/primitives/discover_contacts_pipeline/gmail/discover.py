@@ -51,7 +51,6 @@ from packs.ingestion.primitives.discover_contacts_pipeline.gmail.sync import (  
 def discover(
     *,
     accounts_file: Path | None = None,
-    accounts_path: Path | None = None,
     selected_accounts: list[str] | None = None,
     account_email: str | None = None,
     msgvault_db: str | None = None,
@@ -69,19 +68,24 @@ def discover(
     Keyword-only ON PURPOSE (the `*`): thirteen knobs are unusable positionally.
     STRICT on purpose too — the old `**_` swallowed unknown kwargs silently,
     which let call sites pass options that were never honored; now a typo or a
-    phantom option raises. `accounts_file`/`accounts_path` are aliases (first
-    non-None wins) kept for the two existing caller populations."""
-    cfg = load_config()
-    accounts_file = accounts_file or accounts_path or configured_accounts_path()
-    account_state = read_json(accounts_file, {}) or {}
-    source_inputs = inputs(account_state, cfg)
-    explicit_accounts = ordered_unique([*(selected_accounts or []), *([account_email] if account_email else [])])
-    if explicit_accounts:
-        source_inputs["selected_accounts"] = explicit_accounts
-    if msgvault_db:
-        source_inputs["msgvault_db"] = str(Path(str(msgvault_db)).expanduser())
-    if sync_query is not None:
-        source_inputs["sync_query"] = str(sync_query or "").strip()
+    phantom option raises. `accounts_file` is the ONE accounts-state param
+    (the old accounts_path alias is gone), and all configuration resolves
+    through resolve_discovery_inputs — one documented precedence, one place."""
+    # ONE resolution point for configuration (see resolve_discovery_inputs):
+    # explicit caller/CLI overrides > accounts.json state > discovery.config
+    # defaults. Nothing below this line consults config sources directly.
+    resolved = resolve_discovery_inputs(
+        accounts_file,
+        selected_accounts=selected_accounts,
+        account_email=account_email,
+        msgvault_db=msgvault_db,
+        sync_query=sync_query,
+    )
+    source_inputs = {
+        "selected_accounts": list(resolved.selected_accounts),
+        "msgvault_db": resolved.msgvault_db,
+        "sync_query": resolved.sync_query,
+    }
     contacts_csv = output_path("gmail", "contacts_csv")
     queue_csv = output_path("gmail", "linkedin_resolution_queue_csv")
     manifest_json = output_path("gmail", "manifest_json")
@@ -98,6 +102,12 @@ def discover(
         write_stage_manifest(manifest_json, payload)
         return payload
 
+    # PHASE 1 — per selected account: sync msgvault (unless skipped), then run
+    # the gmail_network_import child, which reads the synced store and emits
+    # this account's contact rows. A child reports its calculation_mode:
+    #   full_recount        -> rows are the account's COMPLETE current truth
+    #   incremental_delta   -> rows are ONLY the new/changed contacts since
+    #                          the last run and must be APPENDED exactly once
     incoming_outputs: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
     child_modes: list[str] = []
@@ -149,6 +159,11 @@ def discover(
         if child_queue and child_queue.is_file():
             _fields, rows = read_csv_rows(child_queue)
             rows_written = len(rows)
+        # Replay-dedup key for the append-only path: YES — incremental children
+        # only ever APPEND to the existing contacts/queue, so replaying the same
+        # child output (rerun, crash-resume) must not append the same rows twice.
+        # The id is a content hash of (account, calculation version, rows); ids
+        # already recorded in the manifest are skipped in PHASE 3 below.
         incremental_input_id = gmail_incremental_input_id(email, rows)
         incoming_outputs.append({
             "account_email": email,
@@ -175,6 +190,11 @@ def discover(
             write_stage_manifest(manifest_json, payload)
             return payload
 
+    # PHASE 2 — decide how to combine child outputs with what is on disk.
+    # full_rewrite: the calculation version or the selected-account set changed,
+    #   or any child did a full recount -> rebuild contacts.csv from scratch.
+    # incremental_update: EVERY child returned a delta -> keep existing rows and
+    #   append only unapplied deltas (dedup via incremental_input_id above).
     existing_manifest = read_json(manifest_json, {}) or {}
     merge_plan = gmail_discovery_merge_plan(existing_manifest, source_inputs["selected_accounts"], child_modes)
     existing: list[dict[str, Any]] = []
@@ -183,6 +203,8 @@ def discover(
     applied_incremental_input_set = set(applied_incremental_inputs)
     skipped_incremental_inputs: list[str] = []
     incremental_outputs = [output for output in incoming_outputs if output.get("calculation_mode") == GMAIL_CALCULATION_INCREMENTAL_DELTA]
+    # Guard: a full rewrite built from delta-only children would DROP every row
+    # the deltas do not restate. Fail loudly instead of silently losing contacts.
     if merge_plan["mode"] != "incremental_update" and incremental_outputs:
         payload = {
             "status": "failed",
@@ -196,6 +218,9 @@ def discover(
         }
         write_json(manifest_json, payload)
         return payload
+    # PHASE 3 — assemble the row set. Incremental: existing rows + each child's
+    # unapplied delta (skipping already-applied incremental_input_ids). Full
+    # rewrite: children's rows only.
     if merge_plan["mode"] == "incremental_update" and contacts_csv.exists():
         _fields, existing = read_csv_rows(contacts_csv)
         for output in incoming_outputs:
@@ -210,6 +235,10 @@ def discover(
     else:
         for output in incoming_outputs:
             incoming.extend(output.get("rows") or [])
+    # PHASE 4 — merge by primary email (counts summed, newest last_interaction,
+    # account lists unioned) and write BOTH stage outputs with the same rows:
+    # contacts.csv is the aggregate; linkedin_resolution_queue.csv is the same
+    # content republished as the import stage's work queue.
     merged = _merge_rows([*existing, *incoming])
     write_csv_rows(contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
     write_csv_rows(queue_csv, GMAIL_DISCOVERY_COLUMNS, merged)
@@ -237,6 +266,23 @@ def discover(
         "children": children,
     }
     return write_stage_manifest(manifest_json, payload)
+
+
+# Moved here from sync.py during the audit split: this step DRIVES discover(),
+# so leaving it in sync.py made `discover` an unbound name there (latent
+# NameError) and would have required a circular import to fix in place.
+def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any], _worker: dict[str, Any]) -> bool:
+    input_cfg = ledger.get("input") or {}
+    payload = discover(
+        accounts_file=Path(str(input_cfg.get("from_accounts") or ".powerpacks/ingestion/accounts.json")),
+        selected_accounts=_as_list(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email") or []),
+        msgvault_db=str(input_cfg.get("msgvault_db") or ""),
+        sync_query=str(input_cfg.get("gmail_sync_query") or ""),
+        skip_msgvault_sync=bool(input_cfg.get("skip_msgvault_sync")),
+    )
+    ledger.setdefault("artifacts", {})["gmail_contacts_csv"] = payload.get("contacts_csv", "")
+    ledger.setdefault("artifacts", {})["gmail_linkedin_resolution_queue_csv"] = payload.get("linkedin_resolution_queue_csv", "")
+    return payload.get("status") in {"completed", "skipped"}
 
 
 def build_parser() -> argparse.ArgumentParser:

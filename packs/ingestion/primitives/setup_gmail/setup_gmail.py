@@ -346,7 +346,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         # --- discover ---
         if "discover" not in done:
             ctx.event("discover", "Discovering Gmail contacts", payload={"linked_accounts": emails})
-            discovery_payload = gmail_discovery.discover(accounts_path=accounts_path, selected_accounts=emails)
+            discovery_payload = gmail_discovery.discover(accounts_file=accounts_path, selected_accounts=emails)
             if discovery_payload.get("status") == "skipped":
                 raise RuntimeError(discovery_payload.get("reason") or "Gmail discovery was skipped")
             if discovery_payload.get("status") != "completed":

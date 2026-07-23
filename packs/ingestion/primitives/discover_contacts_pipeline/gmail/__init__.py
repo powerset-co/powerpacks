@@ -5,6 +5,8 @@ module consumers; file invocations use gmail/discover.py.
 """
 
 from packs.ingestion.primitives.discover_contacts_pipeline.gmail.util import (  # noqa: F401
+    GmailDiscoveryInputs,
+    resolve_discovery_inputs,
     GMAIL_DISCOVERY_COLUMNS,
     DEFAULT_GMAIL_ESTIMATE_MAX_PAGES,
     GMAIL_CALCULATION_FULL_RECOUNT,
@@ -23,7 +25,6 @@ from packs.ingestion.primitives.discover_contacts_pipeline.gmail.sync import (  
     msgvault_reauthorization_required,
     msgvault_reauthorize_command,
     sync_msgvault_account,
-    run_gmail_msgvault,
     normalize_label_names,
     gmail_sync_query,
     gmail_sync_after,
@@ -33,4 +34,5 @@ from packs.ingestion.primitives.discover_contacts_pipeline.gmail.discover import
     build_parser,
     discover,
     main,
+    run_gmail_msgvault,
 )

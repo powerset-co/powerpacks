@@ -317,7 +317,7 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
         # (outputs always went to the configured stage paths). Removed rather
         # than implemented; discover() is strict now, so this cannot recur.
         payload = gmail.discover(
-            accounts_path=accounts_path,
+            accounts_file=accounts_path,
             selected_accounts=gmail_emails,
             msgvault_db=str(input_cfg.get("msgvault_db") or ""),
             sync_query=str(input_cfg.get("gmail_sync_query") or ""),
@@ -342,12 +342,12 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
 
     if "linkedin_csv" in runnable_sources:
         begin_step(ledger_path, ledger, "linkedin", "Discovering LinkedIn Connections.csv contacts.")
+        # AUDIT NOTE (2026-07-23): ledger_path=/output_dir= were silently swallowed
+        # by the old **_ and never honored — removed, and discover() is strict now.
         payload = linkedin.discover(
-            accounts_path=accounts_path,
+            accounts_file=accounts_path,
             connections_csv=str(input_cfg.get("linkedin_csv") or ""),
             source_user_label=str(input_cfg.get("linkedin_source_user") or ""),
-            ledger_path=DEFAULT_BASE_DIR / "linkedin" / "ledger.json",
-            output_dir=DEFAULT_BASE_DIR / "linkedin",
         )
         if payload.get("status") == "failed":
             mark_step(ledger, "linkedin", "failed", payload=payload)
