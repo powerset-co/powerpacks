@@ -20,8 +20,8 @@ from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NORMALIZE = ROOT / "packs/ingestion/primitives/normalize_message_contacts/normalize_message_contacts.py"
-IMESSAGE = ROOT / "packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py"
+NORMALIZE = ROOT / "packs/ingestion/primitives/discover_contacts_pipeline/messages/normalize_contacts.py"
+IMESSAGE = ROOT / "packs/ingestion/primitives/discover_contacts_pipeline/messages/extract_imessage.py"
 
 
 class MessagesPackTests(unittest.TestCase):
@@ -130,7 +130,7 @@ class MessagesPackTests(unittest.TestCase):
             self.assertTrue(rows[0]["skip"])
             self.assertIn("Operators", rows[0]["group_names"])
 
-    def test_extract_imessage_contacts_from_sqlite_fixtures(self) -> None:
+    def test_extract_imessage_from_sqlite_fixtures(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             chat_db = tmp / "chat.db"
@@ -240,7 +240,7 @@ class MessagesPackTests(unittest.TestCase):
             )
             self.assertNotIn("SECRET MESSAGE BODY", emitted)
 
-    def test_extract_imessage_contacts_has_deterministic_order(self) -> None:
+    def test_extract_imessage_has_deterministic_order(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             chat_db = tmp / "chat.db"
@@ -347,7 +347,7 @@ if __name__ == "__main__":
 
 
 class MergeMessageContactsTests(unittest.TestCase):
-    MERGE = ROOT / "packs/ingestion/primitives/merge_message_contacts/merge_message_contacts.py"
+    MERGE = ROOT / "packs/ingestion/primitives/discover_contacts_pipeline/messages/merge_contacts.py"
     HEADERS = [
         "phone",
         "name",

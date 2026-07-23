@@ -19,7 +19,7 @@ fi
 exec "$UV_BIN" run --project . python -m unittest \
   tests.test_core_layout \
   tests.test_ingestion_messages_contract \
-  tests.test_import_whatsapp_wacli \
+  tests.test_whatsapp_wacli \
   tests.test_interaction_counts \
   tests.test_build_research_review_csv_linkedin \
   tests.test_discover_contacts_pipeline \

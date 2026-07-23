@@ -60,7 +60,7 @@ from packs.ingestion.primitives.discover_contacts_pipeline.gmail.util import (  
     _merge_rows,
     gmail_incremental_input_id,
     gmail_discovery_merge_plan,
-    gmail_network_import_base_dir,
+    network_import_base_dir,
     inputs,
 )
 from packs.ingestion.primitives.discover_contacts_pipeline.gmail.sync import (  # noqa: E402
@@ -134,7 +134,7 @@ def discover(
         return write_stage_manifest(manifest_json, payload)
 
     # PHASE 1 — per selected account: sync msgvault (unless skipped), then run
-    # the gmail_network_import child, which reads the synced store and emits
+    # the gmail/network_import.py child, which reads the synced store and emits
     # this account's contact rows. A child reports its calculation_mode:
     #   full_recount        -> rows are the account's COMPLETE current truth
     #   incremental_delta   -> rows are ONLY the new/changed contacts since
@@ -142,7 +142,7 @@ def discover(
     incoming_outputs: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
     child_modes: list[str] = []
-    child_output_base = gmail_network_import_base_dir(contacts_csv)
+    child_output_base = network_import_base_dir(contacts_csv)
     for email in source_inputs["selected_accounts"]:
         account_artifact_dir = child_output_base / "discover" / "gmail" / source_slug(email)
         if skip_msgvault_sync:
@@ -167,7 +167,7 @@ def discover(
             failed = GmailDiscoveryFailed(account_email=email, error=sync)
             return write_stage_manifest(manifest_json, failed)
         cmd = py_cmd(
-            "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
+            "packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py",
             "msgvault",
             "--db",
             source_inputs["msgvault_db"],

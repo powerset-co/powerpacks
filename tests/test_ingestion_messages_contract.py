@@ -30,9 +30,9 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "skills/import-whatsapp/SKILL.md",
             "schemas/contacts-csv.schema.json",
             "schemas/candidates_schema.py",
-            "primitives/extract_imessage_contacts/extract_imessage_contacts.py",
-            "primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
-            "primitives/merge_message_contacts/merge_message_contacts.py",
+            "primitives/discover_contacts_pipeline/messages/extract_imessage.py",
+            "primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py",
+            "primitives/discover_contacts_pipeline/messages/merge_contacts.py",
             "primitives/match_local_candidates/match_local_candidates.py",
             "primitives/deep_context/deep_research_contacts.py",
             "primitives/import_contacts_pipeline/messages/importer.py",
@@ -65,7 +65,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         # Pre-full-sync link is surfaced as an explicit re-link prompt wired to
         # the logout primitive, keyed off the hoisted top-level nudge flag.
         self.assertIn("whatsapp_pairing_state", messages)
-        self.assertIn("import_whatsapp_wacli/import_whatsapp_wacli.py logout", messages)
+        self.assertIn("discover_contacts_pipeline/messages/whatsapp_wacli.py logout", messages)
         self.assertNotIn("discover_contacts_pipeline/gmail/discover.py discover", messages)
 
         # Contact-sync boundary: the import skills never index and never run
@@ -201,8 +201,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
         )
 
         for relative in (
-            "primitives/extract_imessage_contacts/extract_imessage_contacts.py",
-            "primitives/normalize_message_contacts/normalize_message_contacts.py",
+            "primitives/discover_contacts_pipeline/messages/extract_imessage.py",
+            "primitives/discover_contacts_pipeline/messages/normalize_contacts.py",
         ):
             primitive_text = (INGESTION / relative).read_text(encoding="utf-8").lower()
             for token in ("run_id", "run-id", "uuid"):
@@ -274,8 +274,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
         forbidden_runtime_paths = (
             "discover_contacts_pipeline/messages.py",
             "import_contacts_pipeline/messages/importer.py",
-            "import_whatsapp_wacli/import_whatsapp_wacli.py",
-            "extract_imessage_contacts/extract_imessage_contacts.py",
+            "discover_contacts_pipeline/messages/whatsapp_wacli.py",
+            "discover_contacts_pipeline/messages/extract_imessage.py",
         )
         for text in (setup_route, commands, jobs):
             for runtime_path in forbidden_runtime_paths:

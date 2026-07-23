@@ -1,4 +1,4 @@
-# resolve_linkedin_queue
+# gmail/resolve_queue.py
 
 Resolve queued LinkedIn URLs using the shared prompt in `packs/ingestion/prompts/linkedin_resolution.md`.
 
@@ -9,7 +9,7 @@ Modes:
   `blocked_approval`, then an approved rerun submits to Parallel.ai.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/resolve_queue.py run \
   --provider harness \
   --input .powerpacks/network-import/discover/twitter/<handle>/linkedin_resolution_queue.csv
 ```
@@ -17,12 +17,12 @@ uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/reso
 Parallel:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/resolve_queue.py run \
   --provider parallel \
   --input .powerpacks/network-import/discover/twitter/<handle>/linkedin_resolution_queue.csv
 
 # After the user approves the displayed estimate:
-uv run --project . python packs/ingestion/primitives/resolve_linkedin_queue/resolve_linkedin_queue.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/resolve_queue.py run \
   --provider parallel \
   --approve-spend \
   --input .powerpacks/network-import/discover/twitter/<handle>/linkedin_resolution_queue.csv

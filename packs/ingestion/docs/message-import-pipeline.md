@@ -252,8 +252,8 @@ shared `.powerpacks/network-import/import/<source>/people.csv` and
 | Full agent workflow | [`import-messages/SKILL.md`](../skills/import-messages/SKILL.md) |
 | Isolated WhatsApp utility | [`import-whatsapp/SKILL.md`](../skills/import-whatsapp/SKILL.md) |
 | Message discovery | [`messages.py`](../primitives/discover_contacts_pipeline/messages/discover.py) |
-| iMessage extraction | [`extract_imessage_contacts.py`](../primitives/extract_imessage_contacts/extract_imessage_contacts.py) |
-| wacli extraction | [`import_whatsapp_wacli.py`](../primitives/import_whatsapp_wacli/import_whatsapp_wacli.py) |
+| iMessage extraction | [`messages/extract_imessage.py`](../primitives/discover_contacts_pipeline/messages/extract_imessage.py) |
+| wacli extraction | [`messages/whatsapp_wacli.py`](../primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py) |
 | Local matching | [`match_local_candidates.py`](../primitives/match_local_candidates/match_local_candidates.py) |
 | Contacts-direct import | [`messages.py`](../primitives/import_contacts_pipeline/messages/importer.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |

@@ -6,7 +6,7 @@ Stdlib-only. Reads any combination of `imessage.contacts.csv`,
 15-column pack shape, deduplicates by canonicalized phone, and writes one
 unified `contacts.csv`.
 
-Per-phone merge rules (consistent with `normalize_message_contacts`):
+Per-phone merge rules (consistent with `normalize_contacts.py`):
 
 - `name`: first non-empty value across inputs (later inputs do not overwrite
   an existing non-empty name)
@@ -35,11 +35,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-try:
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:  # pragma: no cover - direct script fallback
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 CSV_HEADERS = [
@@ -407,7 +409,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
             by_source[s] = by_source.get(s, 0) + 1
 
     manifest = {
-        "primitive": "merge_message_contacts",
+        "primitive": "messages/merge_contacts",
         "command": "merge",
         "created_at": now_iso(),
         "inputs": per_input_counts,

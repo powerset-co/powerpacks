@@ -13,7 +13,7 @@ from packs.ingestion.primitives.discover_contacts_pipeline.gmail.util import (  
     GMAIL_CALCULATION_INCREMENTAL_DELTA,
     gmail_incremental_input_id,
     gmail_discovery_merge_plan,
-    gmail_network_import_base_dir,
+    network_import_base_dir,
     inputs,
 )
 from packs.ingestion.primitives.discover_contacts_pipeline.gmail.sync import (  # noqa: F401

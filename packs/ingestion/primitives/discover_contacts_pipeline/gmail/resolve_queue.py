@@ -24,11 +24,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/linkedin-resolution/import-run.json")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/linkedin-resolution")
@@ -565,7 +567,7 @@ def run_enrichment(input_csv: Path, output_dir: Path, ledger_path: Path, *, prov
         to_process = to_process[:limit]
 
     ledger: dict[str, Any] = {
-        "primitive": "resolve_linkedin_queue",
+        "primitive": "gmail/resolve_queue",
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "output_dir": str(output_dir),

@@ -25,31 +25,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-try:
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS,
-        generate_person_id as generate_linkedin_person_id,
-        normalize_interaction_timestamp,
-    )
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:  # pragma: no cover - direct script fallback
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS,
-        generate_person_id as generate_linkedin_person_id,
-        normalize_interaction_timestamp,
-    )
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # noqa: E402
+    GMAIL_INTERACTION_CALCULATION_VERSION,
+)
+from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    PEOPLE_SCHEMA_COLUMNS,
+    generate_person_id as generate_linkedin_person_id,
+    normalize_interaction_timestamp,
+)
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/discover/gmail-one/ledger.json")
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 DEFAULT_EXCLUDED_MSGVAULT_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
-try:
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import GMAIL_INTERACTION_CALCULATION_VERSION
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import GMAIL_INTERACTION_CALCULATION_VERSION
 
 PERSONAL_DOMAINS = {
     "gmail.com",
@@ -1285,7 +1280,7 @@ def make_artifacts(contact: OnePersonInput, out_dir: Path) -> dict[str, Any]:
 
 def load_ledger(path: Path) -> dict[str, Any]:
     ledger = read_json(path, {}) or {}
-    ledger.setdefault("primitive", "gmail_network_import")
+    ledger.setdefault("primitive", "gmail/network_import")
     ledger.setdefault("version", 2)
     ledger.setdefault("created_at", now_iso())
     ledger.setdefault("updated_at", now_iso())
@@ -1336,7 +1331,7 @@ def step_prepare_local_workspace(ledger: dict[str, Any]) -> dict[str, Any]:
     artifact_dir = artifact_dir_from_ledger(ledger)
     workspace = {
         "workspace_root": str(artifact_dir),
-        "contract": "powerpacks.gmail_network_import.v1.local_one_person",
+        "contract": "powerpacks.gmail.network_import.v1.local_one_person",
         "multiple_accounts_supported_by": "one run per account_email/account_id, then merge later by email/linkedin/person_id",
         "sync_model": "msgvault local SQLite metadata import is the supported Gmail sync path; this legacy seed does not use OAuth",
     }
@@ -1425,7 +1420,7 @@ def command_run(args: argparse.Namespace) -> int:
             })
             return 0
     ledger = {
-        "primitive": "gmail_network_import",
+        "primitive": "gmail/network_import",
         "version": 2,
         "status": "running",
         "created_at": now_iso(),

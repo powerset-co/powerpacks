@@ -12,19 +12,19 @@ from pathlib import Path
 from packs.ingestion.schemas.people_schema import generate_person_id
 from packs.shared.csv_io import CsvIO
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
-spec = importlib.util.spec_from_file_location("gmail_network_import", MODULE_PATH)
-gmail_network_import = importlib.util.module_from_spec(spec)
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py"
+spec = importlib.util.spec_from_file_location("gmail_import", MODULE_PATH)
+gmail_import = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
-sys.modules[spec.name] = gmail_network_import
-spec.loader.exec_module(gmail_network_import)
+sys.modules[spec.name] = gmail_import
+spec.loader.exec_module(gmail_import)
 
 
 class GmailNetworkImportTests(unittest.TestCase):
     def invoke(self, argv):
         buf = StringIO()
         with redirect_stdout(buf):
-            code = gmail_network_import.main(argv)
+            code = gmail_import.main(argv)
         output = buf.getvalue().strip()
         payload = json.loads(output) if output else {}
         return code, payload
@@ -81,7 +81,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
 
     def test_parse_email_header_port(self):
-        parsed = gmail_network_import.parse_email_header('"Jane Example" <jane@example.com>, john@example.org')
+        parsed = gmail_import.parse_email_header('"Jane Example" <jane@example.com>, john@example.org')
         self.assertEqual(parsed, [("Jane Example", "jane@example.com"), ("", "john@example.org")])
 
     def test_msgvault_import_reads_metadata_without_subjects_or_bodies(self):
@@ -207,7 +207,7 @@ class GmailNetworkImportTests(unittest.TestCase):
                 (14, 2, 'from', 'Pat'), (14, 1, 'to', 'Me');
         """)
 
-        rows = gmail_network_import.aggregate_msgvault_contacts(con, "me@gmail.com")
+        rows = gmail_import.aggregate_msgvault_contacts(con, "me@gmail.com")
         by_email = {row["email"]: row for row in rows}
         pat = by_email["pat@example.com"]
 
@@ -255,7 +255,7 @@ class GmailNetworkImportTests(unittest.TestCase):
                 (11, 4, 'cc', 'Carol');
         """)
 
-        rows = gmail_network_import.aggregate_msgvault_contacts(con, "me@gmail.com")
+        rows = gmail_import.aggregate_msgvault_contacts(con, "me@gmail.com")
         by_email = {row["email"]: row for row in rows}
 
         self.assertEqual(by_email["alice@example.com"]["total_sent"], 1)
@@ -490,9 +490,9 @@ class GmailNetworkImportTests(unittest.TestCase):
             people = Path(tmp) / "people.csv"
             resolutions = Path(tmp) / "linkedin_resolutions.csv"
             with people.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=gmail_network_import.PEOPLE_COLUMNS)
+                writer = csv.DictWriter(handle, fieldnames=gmail_import.PEOPLE_COLUMNS)
                 writer.writeheader()
-                row = {col: "" for col in gmail_network_import.PEOPLE_COLUMNS}
+                row = {col: "" for col in gmail_import.PEOPLE_COLUMNS}
                 row.update({
                     "id": "gmail:abc",
                     "full_name": "Jane Example",
@@ -503,7 +503,7 @@ class GmailNetworkImportTests(unittest.TestCase):
                 })
                 writer.writerow(row)
             with resolutions.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=gmail_network_import.LINKEDIN_RESOLUTION_COLUMNS)
+                writer = csv.DictWriter(handle, fieldnames=gmail_import.LINKEDIN_RESOLUTION_COLUMNS)
                 writer.writeheader()
                 writer.writerow({
                     "handle": "jane@example.com",
@@ -553,7 +553,7 @@ class GmailNetworkImportTests(unittest.TestCase):
             self.assertEqual([row["message_count"] for row in payload["accounts"]], [2, 1])
 
     def test_powerset_gmail_oauth_commands_are_not_exposed(self):
-        parser = gmail_network_import.build_parser()
+        parser = gmail_import.build_parser()
         with redirect_stderr(StringIO()):
             with self.assertRaises(SystemExit):
                 parser.parse_args(["connect", "--no-open"])

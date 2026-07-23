@@ -23,31 +23,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.primitives.enrich_people import enrich_people as people_enrichment
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
-        extract_public_identifier,
-        generate_person_id,
-        normalize_linkedin_url,
-        normalize_people_row,
-    )
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.enrich_people import enrich_people as people_enrichment
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
-        extract_public_identifier,
-        generate_person_id,
-        normalize_linkedin_url,
-        normalize_people_row,
-    )
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.enrich_people import enrich_people as people_enrichment  # noqa: E402
+from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
+    extract_public_identifier,
+    generate_person_id,
+    normalize_linkedin_url,
+    normalize_people_row,
+)
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "linkedin"
-DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "linkedin_network_import.ledger.json"
+DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "network_import.ledger.json"
 DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 
 CONNECTION_COLUMNS = [
@@ -278,7 +272,7 @@ def parse_connections_csv(path: Path, source_user: str, limit: int | None = None
 
 def load_ledger(path: Path) -> dict[str, Any]:
     ledger = read_json(path, {}) or {}
-    ledger.setdefault("primitive", "linkedin_network_import")
+    ledger.setdefault("primitive", "linkedin/network_import")
     ledger.setdefault("version", 2)
     ledger.setdefault("created_at", now_iso())
     ledger.setdefault("updated_at", now_iso())
@@ -340,7 +334,7 @@ def block_for_delegate_approval(ledger_path: Path, ledger: dict[str, Any], block
         "ledger": str(ledger_path),
         "delegate_ledger": str(delegate_ledger),
         "delegate_approval_id": blocked.get("approval_id"),
-        "continue_command": f"uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/linkedin_network_import/linkedin_network_import.py continue --ledger {ledger_path}",
+        "continue_command": f"uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py continue --ledger {ledger_path}",
     })
 
 
@@ -502,7 +496,7 @@ def command_run(args: argparse.Namespace) -> int:
         pass
     reset_delegate_state(run_dir)
     ledger = {
-        "primitive": "linkedin_network_import",
+        "primitive": "linkedin/network_import",
         "version": 2,
         "status": "running",
         "created_at": now_iso(),
@@ -595,7 +589,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    run.add_argument("--force", action="store_true", help="Overwrite an active linkedin_network_import ledger")
+    run.add_argument("--force", action="store_true", help="Overwrite an active LinkedIn network-import ledger")
     run.add_argument("--convert-only", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--force-enrich", action="store_true", help="Re-enrich rows even when source rows look complete")
     run.add_argument("--profile-cache-dir", default=str(DEFAULT_PROFILE_CACHE_DIR))
@@ -630,7 +624,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if getattr(args, "no_rapidapi", False):
-        emit({"status": "error", "error": "linkedin_network_import delegates to RapidAPI-only enrich_people; --no-rapidapi is no longer supported"})
+        emit({"status": "error", "error": "linkedin/network_import delegates to RapidAPI-only enrich_people; --no-rapidapi is no longer supported"})
         return 2
     try:
         return args.func(args)

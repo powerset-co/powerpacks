@@ -1,4 +1,4 @@
-# import_whatsapp_wacli
+# messages/whatsapp_wacli.py
 
 WhatsApp import flow using `openclaw/wacli` instead of WAHA.
 
@@ -17,17 +17,17 @@ WhatsApp sync, and exports a Powerpacks-compatible contacts CSV.
 ## Usage
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py run
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py run
 ```
 
 Check install/auth/store state:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py status
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py status
 ```
 
 Export from an existing store without syncing:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py export
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py export
 ```

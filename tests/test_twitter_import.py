@@ -12,11 +12,11 @@ from packs.shared.csv_io import CsvIO
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = REPO_ROOT / "packs/ingestion/primitives/twitter_network_import/twitter_network_import.py"
+MODULE_PATH = REPO_ROOT / "packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py"
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("twitter_network_import", MODULE_PATH)
+    spec = importlib.util.spec_from_file_location("twitter_import", MODULE_PATH)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules[spec.name] = module

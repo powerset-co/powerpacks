@@ -2,7 +2,7 @@
 """LinkedIn import sandbox runner: connections.csv -> enriched people.csv.
 
 Re-hosts the import half of onboarding-v2 (setup_linkedin_csv /
-linkedin_network_import) inside a Modal sandbox:
+discover_contacts_pipeline/linkedin/network_import.py) inside a Modal sandbox:
 
   parse + convert -> RapidAPI enrichment -> merged people.csv
 
@@ -28,14 +28,14 @@ REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
 from packs.indexing.modal.sandbox_common import now_iso, write_status  # noqa: E402
-from packs.ingestion.primitives.linkedin_network_import import linkedin_network_import  # noqa: E402
+from packs.ingestion.primitives.discover_contacts_pipeline.linkedin import network_import as linkedin_import  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 WORK = Path("/tmp/linkedin-import")
 
 
 def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Namespace:
-    people_enrichment = linkedin_network_import.people_enrichment
+    people_enrichment = linkedin_import.people_enrichment
     return argparse.Namespace(
         csv=args.connections_csv,
         source_user=args.source_user,
@@ -96,17 +96,17 @@ def main() -> int:
     ledger_path = Path(ns.ledger)
 
     write_status(run_vol, status | {"phase": "enrich"})
-    code = linkedin_network_import.command_run(ns)
+    code = linkedin_import.command_run(ns)
     # RapidAPI is always approved on this path: drain the primitive's approval
     # blocks instead of surfacing them.
     approvals = 0
     while code == 20:
         approvals += 1
-        linkedin_network_import.command_approve(argparse.Namespace(ledger=str(ledger_path), approval_id=None))
+        linkedin_import.command_approve(argparse.Namespace(ledger=str(ledger_path), approval_id=None))
         write_status(run_vol, status | {"phase": "enrich", "auto_approvals": approvals})
-        code = linkedin_network_import.command_continue(argparse.Namespace(ledger=str(ledger_path)))
+        code = linkedin_import.command_continue(argparse.Namespace(ledger=str(ledger_path)))
 
-    ledger = linkedin_network_import.load_ledger(ledger_path) if ledger_path.exists() else {}
+    ledger = linkedin_import.load_ledger(ledger_path) if ledger_path.exists() else {}
     if code != 0 or ledger.get("status") != "completed":
         write_status(run_vol, status | {"status": "failed", "phase": "enrich", "exit_code": code, "ledger_status": ledger.get("status"), "finished_at": now_iso()})
         return code or 1

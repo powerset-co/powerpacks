@@ -500,7 +500,7 @@ function startGmailWindowSync(body: Record<string, any>): SetupJob {
   const accounts: string[] = Array.isArray(body.accounts) ? body.accounts.map(String).filter(Boolean) : [];
   const command = [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/discover_contacts_pipeline/gmail.py",
+    "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py",
     "discover", "--fresh", "--no-attachments",
   ];
   for (const account of accounts) command.push("--account-email", account);

@@ -157,7 +157,7 @@ def _extract_imessage(
     include_whatsapp: bool,
 ) -> dict[str, Any] | None:
     check_command = py_cmd(
-        "packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
+        "packs/ingestion/primitives/discover_contacts_pipeline/messages/extract_imessage.py",
         "check",
         "--strict",
     )
@@ -172,7 +172,7 @@ def _extract_imessage(
         )
 
     extract_command = py_cmd(
-        "packs/ingestion/primitives/extract_imessage_contacts/extract_imessage_contacts.py",
+        "packs/ingestion/primitives/discover_contacts_pipeline/messages/extract_imessage.py",
         "extract",
         "--output-csv",
         str(IMESSAGE_CONTACTS),
@@ -196,7 +196,7 @@ def _extract_whatsapp(
     sync_mode: str = "auto",
 ) -> dict[str, Any] | None:
     command = py_cmd(
-        "packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
+        "packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py",
         "run",
         "--output-csv",
         str(WHATSAPP_CONTACTS),
@@ -255,7 +255,7 @@ def _normalize_channel(
         output_jsonl.parent.mkdir(parents=True, exist_ok=True)
         output_jsonl.write_text("", encoding="utf-8")
         summary = {
-            "primitive": "normalize_message_contacts",
+            "primitive": "messages/normalize_contacts",
             "status": "ok",
             "reason": f"missing_input:{input_csv}",
             "output": str(output_jsonl),
@@ -264,7 +264,7 @@ def _normalize_channel(
         write_json(manifest, summary)
         return None
     command = py_cmd(
-        "packs/ingestion/primitives/normalize_message_contacts/normalize_message_contacts.py",
+        "packs/ingestion/primitives/discover_contacts_pipeline/messages/normalize_contacts.py",
         "normalize",
         "--input",
         str(input_csv),
@@ -296,7 +296,7 @@ def _merge_contacts(
     if not inputs:
         write_csv_rows(MERGED_CONTACTS, CONTACT_CSV_HEADERS, [])
         summary = {
-            "primitive": "merge_message_contacts",
+            "primitive": "messages/merge_contacts",
             "status": "ok",
             "reason": "no_channel_contact_exports_found",
             "artifacts": {"contacts_csv": str(MERGED_CONTACTS)},
@@ -307,7 +307,7 @@ def _merge_contacts(
         return None
 
     command = py_cmd(
-        "packs/ingestion/primitives/merge_message_contacts/merge_message_contacts.py",
+        "packs/ingestion/primitives/discover_contacts_pipeline/messages/merge_contacts.py",
         "merge",
     )
     for input_csv in inputs:

@@ -7,14 +7,14 @@ description: Import or smoke-test Twitter/X network artifacts through the RapidA
 
 Use this skill for `$import-twitter` or Twitter/X network import testing.
 
-This is an alias/wrapper around `twitter_network_import`. The production source
+This is an alias/wrapper around `discover_contacts_pipeline/twitter/network_import.py`. The production source
 crawl is RapidAPI-backed and requires approval. Keep artifacts under
 `.powerpacks/network-import/discover/twitter/`.
 
 ## Jake 10-row sanity command
 
 ```bash
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py run \
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py run \
   --handle jake_zeller \
   --max-pages 1 \
   --limit 10 \
@@ -26,8 +26,8 @@ uv run --project . python packs/ingestion/primitives/twitter_network_import/twit
 Then approve/continue as the primitive requests:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py approve
-uv run --project . python packs/ingestion/primitives/twitter_network_import/twitter_network_import.py continue
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py approve
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py continue
 ```
 
 ## Notes
