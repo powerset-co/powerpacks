@@ -16,11 +16,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.primitives.discover_contacts_pipeline import common, directory, gmail, linkedin
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.discover_contacts_pipeline import common, directory, gmail, linkedin
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.discover_contacts_pipeline import common, directory, gmail, linkedin  # noqa: E402
 
 DEFAULT_BASE_DIR = common.DEFAULT_BASE_DIR
 DEFAULT_DISCOVER_DIR = common.DEFAULT_DISCOVER_DIR

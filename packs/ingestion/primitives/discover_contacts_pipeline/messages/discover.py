@@ -13,37 +13,32 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import (
-        DEFAULT_BASE_DIR,
-        account_config,
-        channel_is_linked,
-        emit,
-        now_iso,
-        py_cmd,
-        read_accounts,
-        read_csv_rows,
-        run_cmd,
-        write_csv_rows,
-        write_json,
-        write_stage_manifest,
-    )
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import (
-        DEFAULT_BASE_DIR,
-        account_config,
-        channel_is_linked,
-        emit,
-        now_iso,
-        py_cmd,
-        read_accounts,
-        read_csv_rows,
-        run_cmd,
-        write_csv_rows,
-        write_json,
-        write_stage_manifest,
-    )
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.discover_contacts_pipeline.messages.models import (  # noqa: E402
+    MessagesDiscoveryCompleted,
+    MessagesDiscoveryNotCompleted,
+    MessagesDiscoverySkipped,
+    MessagesPrivacy,
+)
+from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # noqa: E402
+    DEFAULT_BASE_DIR,
+    account_config,
+    channel_is_linked,
+    emit,
+    now_iso,
+    py_cmd,
+    read_accounts,
+    read_csv_rows,
+    run_cmd,
+    write_csv_rows,
+    write_json,
+    write_stage_manifest,
+)
 
 
 DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
@@ -359,15 +354,12 @@ def discover(
     manifest_json = DEFAULT_MESSAGES_OUTPUT_DIR / "manifest.json"
     DEFAULT_MESSAGES_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if not inputs["linked"]:
-        payload = {
-            "status": "skipped",
-            "source": "messages",
-            "reason": "messages_not_linked",
-            "contacts_csv": str(contacts_csv),
-            "updated_at": now_iso(),
-        }
-        write_stage_manifest(manifest_json, payload)
-        return payload
+        payload = MessagesDiscoverySkipped(
+            reason="messages_not_linked",
+            contacts_csv=str(contacts_csv),
+            updated_at=now_iso(),
+        )
+        return write_stage_manifest(manifest_json, payload)
 
     child: dict[str, Any] | None = None
     if inputs["include_imessage"]:
@@ -407,16 +399,14 @@ def discover(
 
     if child is not None:
         status = str(child.get("status") or "failed")
-        result = {
-            "status": status if status in {"blocked_user_action", "blocked_approval"} else "failed",
-            "source": "messages",
-            "error": child.get("error") or child.get("message") or child,
-            "child": child,
-            "contacts_csv": str(contacts_csv),
-            "updated_at": now_iso(),
-        }
-        write_stage_manifest(manifest_json, result)
-        return result
+        blocked = MessagesDiscoveryNotCompleted(
+            status=status if status in {"blocked_user_action", "blocked_approval"} else "failed",
+            error=child.get("error") or child.get("message") or child,
+            child=child,
+            contacts_csv=str(contacts_csv),
+            updated_at=now_iso(),
+        )
+        return write_stage_manifest(manifest_json, blocked)
 
     child = _completed_child(artifacts, inputs)
     if MERGED_CONTACTS.exists():
@@ -424,29 +414,20 @@ def discover(
     else:
         write_csv_rows(contacts_csv, CONTACT_CSV_HEADERS, [])
     _, rows = read_csv_rows(contacts_csv)
-    result = {
-        "status": "completed",
-        "source": "messages",
-        "contacts_csv": str(contacts_csv),
-        "contacts": len(rows),
-        "include_imessage": inputs["include_imessage"],
-        "include_whatsapp": inputs["include_whatsapp"],
-        "privacy": {
-            "message_bodies_read": False,
-            "powerset_sync_ran": False,
-            "llm_review_ran": False,
-            "deep_research_ran": False,
-            "upload_ran": False,
-        },
-        "child": child,
-        "updated_at": now_iso(),
-    }
-    # Hoist the non-blocking pre-full-sync nudge to the top level so a fast-path
-    # run surfaces it without digging into child.artifacts (where it was buried).
-    if artifacts.get("whatsapp_pairing_state"):
-        result["whatsapp_pairing_state"] = artifacts["whatsapp_pairing_state"]
-        result["whatsapp_pairing_notice"] = artifacts.get("whatsapp_pairing_notice", "")
-    result = write_stage_manifest(manifest_json, result)
+    # The pairing fields hoist the non-blocking pre-full-sync nudge to the top
+    # level so a fast-path run surfaces it without digging into child.artifacts.
+    result = write_stage_manifest(manifest_json, MessagesDiscoveryCompleted(
+        contacts_csv=str(contacts_csv),
+        contacts=len(rows),
+        include_imessage=inputs["include_imessage"],
+        include_whatsapp=inputs["include_whatsapp"],
+        privacy=MessagesPrivacy(),
+        child=child,
+        updated_at=now_iso(),
+        whatsapp_pairing_state=artifacts.get("whatsapp_pairing_state") or None,
+        whatsapp_pairing_notice=(artifacts.get("whatsapp_pairing_notice", "")
+                                 if artifacts.get("whatsapp_pairing_state") else None),
+    ))
     return result
 
 

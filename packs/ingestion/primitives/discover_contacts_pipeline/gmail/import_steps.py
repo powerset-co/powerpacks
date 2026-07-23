@@ -21,27 +21,21 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
-try:
-    from packs.ingestion.schemas.people_schema import (
-        LIST_VALUE_COLUMNS,
-        PEOPLE_SCHEMA_COLUMNS,
-        extract_public_identifier,
-        merge_interaction_counts,
-        normalize_linkedin_url,
-        normalize_people_row,
-    )
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import (
-        LIST_VALUE_COLUMNS,
-        PEOPLE_SCHEMA_COLUMNS,
-        extract_public_identifier,
-        merge_interaction_counts,
-        normalize_linkedin_url,
-        normalize_people_row,
-    )
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    LIST_VALUE_COLUMNS,
+    PEOPLE_SCHEMA_COLUMNS,
+    extract_public_identifier,
+    merge_interaction_counts,
+    normalize_linkedin_url,
+    normalize_people_row,
+)
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")

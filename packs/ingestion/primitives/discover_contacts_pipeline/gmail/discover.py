@@ -32,6 +32,13 @@ from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config impo
     load_config,
     output_path,
 )
+from packs.ingestion.primitives.discover_contacts_pipeline.gmail.models import (  # noqa: E402
+    GmailDiscoveryCompleted,
+    GmailDiscoveryFailed,
+    GmailDiscoveryIncrementalMismatch,
+    GmailDiscoverySkipped,
+    GmailPrivacy,
+)
 from packs.ingestion.primitives.discover_contacts_pipeline.gmail.util import (  # noqa: E402
     GMAIL_DISCOVERY_COLUMNS,
     GMAIL_CALCULATION_FULL_RECOUNT,
@@ -92,15 +99,12 @@ def discover(
     contacts_csv.parent.mkdir(parents=True, exist_ok=True)
 
     if not source_inputs["selected_accounts"]:
-        payload = {
-            "status": "skipped",
-            "source": "gmail",
-            "reason": "no_selected_accounts",
-            "contacts_csv": str(contacts_csv),
-            "linkedin_resolution_queue_csv": str(queue_csv),
-        }
-        write_stage_manifest(manifest_json, payload)
-        return payload
+        payload = GmailDiscoverySkipped(
+            reason="no_selected_accounts",
+            contacts_csv=str(contacts_csv),
+            linkedin_resolution_queue_csv=str(queue_csv),
+        )
+        return write_stage_manifest(manifest_json, payload)
 
     # PHASE 1 — per selected account: sync msgvault (unless skipped), then run
     # the gmail_network_import child, which reads the synced store and emits
@@ -133,9 +137,8 @@ def discover(
                 no_attachments=no_attachments,
             )
         if sync["status"] == "failed":
-            payload = {"status": "failed", "source": "gmail", "account_email": email, "error": sync}
-            write_stage_manifest(manifest_json, payload)
-            return payload
+            failed = GmailDiscoveryFailed(account_email=email, error=sync)
+            return write_stage_manifest(manifest_json, failed)
         cmd = py_cmd(
             "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py",
             "msgvault",
@@ -186,9 +189,8 @@ def discover(
             "artifacts": child_artifacts,
         })
         if code != 0:
-            payload = {"status": "failed", "source": "gmail", "account_email": email, "error": stderr or child}
-            write_stage_manifest(manifest_json, payload)
-            return payload
+            failed = GmailDiscoveryFailed(account_email=email, error=stderr or child)
+            return write_stage_manifest(manifest_json, failed)
 
     # PHASE 2 — decide how to combine child outputs with what is on disk.
     # full_rewrite: the calculation version or the selected-account set changed,
@@ -206,18 +208,15 @@ def discover(
     # Guard: a full rewrite built from delta-only children would DROP every row
     # the deltas do not restate. Fail loudly instead of silently losing contacts.
     if merge_plan["mode"] != "incremental_update" and incremental_outputs:
-        payload = {
-            "status": "failed",
-            "source": "gmail",
-            "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
-            "calculation_mode": merge_plan["mode"],
-            "calculation_reason": "full_rewrite_requires_full_recount_children",
-            "selected_accounts": source_inputs["selected_accounts"],
-            "child_calculation_modes": child_modes,
-            "children": children,
-        }
-        write_json(manifest_json, payload)
-        return payload
+        mismatch = GmailDiscoveryIncrementalMismatch(
+            calculation_version=GMAIL_INTERACTION_CALCULATION_VERSION,
+            calculation_mode=merge_plan["mode"],
+            selected_accounts=source_inputs["selected_accounts"],
+            child_calculation_modes=child_modes,
+            children=children,
+        ).to_payload()
+        write_json(manifest_json, mismatch)
+        return mismatch
     # PHASE 3 — assemble the row set. Incremental: existing rows + each child's
     # unapplied delta (skipping already-applied incremental_input_ids). Full
     # rewrite: children's rows only.
@@ -242,30 +241,22 @@ def discover(
     merged = _merge_rows([*existing, *incoming])
     write_csv_rows(contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
     write_csv_rows(queue_csv, GMAIL_DISCOVERY_COLUMNS, merged)
-    payload = {
-        "status": "completed",
-        "source": "gmail",
-        "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
-        "calculation_mode": merge_plan["mode"],
-        "calculation_reason": merge_plan["reason"],
-        "child_calculation_modes": child_modes,
-        "applied_incremental_inputs": applied_incremental_inputs,
-        "skipped_incremental_inputs": skipped_incremental_inputs,
-        "contacts_csv": str(contacts_csv),
-        "linkedin_resolution_queue_csv": str(queue_csv),
-        "contacts": len(merged),
-        "selected_accounts": source_inputs["selected_accounts"],
-        "msgvault_db": source_inputs["msgvault_db"],
-        "updated_at": now_iso(),
-        "privacy": {
-            "message_bodies_read": False,
-            "gmail_sync_ran": not skip_msgvault_sync,
-            "parallel_called": False,
-            "rapidapi_called": False
-        },
-        "children": children,
-    }
-    return write_stage_manifest(manifest_json, payload)
+    return write_stage_manifest(manifest_json, GmailDiscoveryCompleted(
+        calculation_version=GMAIL_INTERACTION_CALCULATION_VERSION,
+        calculation_mode=merge_plan["mode"],
+        calculation_reason=merge_plan["reason"],
+        child_calculation_modes=child_modes,
+        applied_incremental_inputs=applied_incremental_inputs,
+        skipped_incremental_inputs=skipped_incremental_inputs,
+        contacts_csv=str(contacts_csv),
+        linkedin_resolution_queue_csv=str(queue_csv),
+        contacts=len(merged),
+        selected_accounts=source_inputs["selected_accounts"],
+        msgvault_db=source_inputs["msgvault_db"],
+        updated_at=now_iso(),
+        privacy=GmailPrivacy(gmail_sync_ran=not skip_msgvault_sync),
+        children=children,
+    ))
 
 
 # Moved here from sync.py during the audit split: this step DRIVES discover(),
