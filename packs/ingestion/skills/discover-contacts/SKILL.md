@@ -9,8 +9,8 @@ Use this skill for `$discover-contacts` source discovery.
 
 ## User-facing tone
 
-Be clear and calm. The user should hear what is happening in product terms, not
-pipeline jargon. Do not normally say fan-out, fan-in, ledgers, artifacts,
+Be clear, tell the user what is happening in product terms, and not product or
+engineering jargon. Do not normally say fan-out, fan-in, ledgers, artifacts,
 sub-agents, or DuckDB. Use those terms only in internal execution notes or if the
 user asks for technical details.
 
@@ -56,7 +56,7 @@ confirmation. Do not ask again for routine local metadata work.
   The Gmail import worker owns `msgvault sync-full` for each selected account
   before reading the local msgvault DB. Do not run this sync from onboarding.
   Use `--skip-msgvault-sync` only for tests or known pre-synced local DBs.
-- `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` to consume link-only state from `$setup` / `$onboard`.
+- `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` to consume link-only state from `$setup` / the console onboarding flow (`setup/onboarding.py`).
 - `--include-existing-artifacts` is legacy and should not be used for merge.
 
 iMessage and WhatsApp are intentionally outside this generic runner. Route either
@@ -86,32 +86,6 @@ For manual source discovery, run workers with `--only-source`; each source
 writes to its fixed `.powerpacks/network-import/discover/<source>/` folder. Do
 not approve RapidAPI/Parallel/OpenAI spend confirmations inside workers; return
 those confirmations to the main thread.
-
-## Restore Prior Checkpoints
-
-When existing operator export/checkpoint CSVs are available, first generate a
-local restore bundle:
-
-```bash
-uv run --project . python packs/ingestion/primitives/setup/bootstrap_network_from_exports.py generate \
-  --operator-mapping <operator_mapping.json> \
-  --source-dir <existing-export-csv-dir> \
-  --operators <operator-slug> \
-  --linkedin-csv <Connections.csv> \
-  --gmail-account-email <email> \
-  --seed-profile-cache \
-  --force
-```
-
-Then run the command printed in
-`.powerpacks/network-bootstrap/operators/<operator-slug>/outputs/commands.txt`.
-
-Resume after a child approval confirmation:
-
-```bash
-uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py approve
-uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py continue
-```
 
 ## Long Runs
 

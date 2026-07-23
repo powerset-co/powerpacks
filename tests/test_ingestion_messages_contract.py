@@ -27,7 +27,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
         expected = [
             "skills/import-messages/SKILL.md",
-            "skills/import-whatsapp/SKILL.md",
             "schemas/contacts-csv.schema.json",
             "schemas/candidates_schema.py",
             "primitives/discover_contacts_pipeline/messages/extract_imessage.py",
@@ -90,7 +89,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
     def test_installers_source_message_skills_from_ingestion(self) -> None:
         expected = {
             "import-messages": "packs/ingestion/skills/import-messages/SKILL.md",
-            "import-whatsapp": "packs/ingestion/skills/import-whatsapp/SKILL.md",
         }
         for relative in (
             "adapters/codex/install.sh",

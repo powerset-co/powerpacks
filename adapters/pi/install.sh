@@ -11,11 +11,10 @@ PI_HOME="${PI_HOME:-$HOME/.pi/agent}"
 SKILLS_DIR="${1:-$PI_HOME/skills}"
 
 MANAGED_SKILLS=(
-  search search-network search-network-jd search-company search-sql search-contacts build-local-search-index
+  search search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
-  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
-  import-email import-gmail discover-contacts import-twitter
-  import-messages import-imessage import-contacts-review
+  setup msgvault import-gmail discover-contacts import-twitter
+  import-messages
 )
 
 mkdir -p "$SKILLS_DIR"
@@ -87,12 +86,8 @@ install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpa
 install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
-install_skill import-whatsapp "$REPO_ROOT/packs/ingestion/skills/import-whatsapp/SKILL.md"
-install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
-install_skill onboard "$REPO_ROOT/packs/ingestion/skills/onboard/SKILL.md"
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
-install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
 install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
@@ -113,6 +108,6 @@ cat > "$SKILLS_DIR/.powerpacks-install.json" <<EOF
 EOF
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
-printf '  search-network search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
-printf '  setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail discover-contacts import-twitter\n'
+printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
+printf '  setup import-messages msgvault import-gmail discover-contacts import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

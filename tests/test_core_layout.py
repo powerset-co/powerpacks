@@ -33,18 +33,10 @@ class CoreLayoutTests(unittest.TestCase):
                 "deep-context",
                 "discover-contacts",
                 "import-gmail",
-                "import-gmail-network",
-                "import-linkedin-network",
                 "import-messages",
                 "import-twitter",
-                "import-twitter-network",
-                "import-whatsapp",
-                "ingestion-onboarding",
-                "linkedin-sync-mcp",
-                "local-msg-vault",
                 "logbook",
                 "msgvault",
-                "onboard",
                 "setup",
             ],
         )
@@ -96,7 +88,6 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-gmail" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-whatsapp" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "discover-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
@@ -135,7 +126,6 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-whatsapp" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())

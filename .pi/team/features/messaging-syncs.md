@@ -7,7 +7,6 @@ Own reusable messaging sync powerpacks for iMessage and WhatsApp.
 
 ```txt
 packs/ingestion/skills/import-messages/
-packs/ingestion/skills/import-whatsapp/
 packs/ingestion/primitives/{discover_contacts_pipeline/messages/,import_contacts_pipeline/messages/}
 packs/ingestion/primitives/discover_contacts_pipeline/messages/{extract_imessage,whatsapp_wacli,normalize_contacts,merge_contacts}.py
 tests/test_messages_pack.py

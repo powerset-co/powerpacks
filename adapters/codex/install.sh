@@ -7,14 +7,10 @@ SKILLS_DIR="${1:-$CODEX_HOME/skills}"
 BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
-  search search-network search-network-jd search-company search-sql search-contacts build-local-search-index
-  # removed by the 2026-07 $search consolidation — cleaned up so stale installs don't linger
-  search-profile search-highlight extract-search-query recruit
+  search search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks install-powerpacks sales-nav-search build-outbound
-  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
-  # deep-setup was consolidated into deep-context; keep it managed so stale installs are removed
-  import-email import-gmail enrich-email-markers discover-contacts import-twitter deep-context deep-setup logbook
-  import-messages import-imessage import-contacts-review clean-slate
+  setup msgvault import-gmail discover-contacts import-twitter deep-context logbook
+  import-messages clean-slate
 )
 
 mkdir -p "$SKILLS_DIR"
@@ -127,14 +123,9 @@ install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
 install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
-install_skill import-whatsapp "$REPO_ROOT/packs/ingestion/skills/import-whatsapp/SKILL.md"
-install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
-install_skill onboard "$REPO_ROOT/packs/ingestion/skills/onboard/SKILL.md"
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
-install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
-install_skill enrich-email-markers "$REPO_ROOT/packs/ingestion/skills/enrich-email-markers/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
 install_skill clean-slate "$REPO_ROOT/packs/ingestion/skills/clean-slate/SKILL.md"
 install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
@@ -174,4 +165,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context clean-slate logbook discover-contacts import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages msgvault import-gmail deep-context clean-slate logbook discover-contacts import-twitter"

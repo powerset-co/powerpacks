@@ -1,5 +1,8 @@
 <!--
 Changelog:
+- 2026-07-23: Retired the isolated WhatsApp wrapper skill. The isolated
+  WhatsApp sync/export surface is now the whatsapp_wacli.py primitive run
+  directly; $import-messages remains the product flow.
 - 2026-07-16: Refocused on contact sync only. Removed the OpenRouter triage,
   research queue, Parallel deep research, LLM-scored review UI, RapidAPI
   enrichment, and Modal index stages from the canonical flow; import is now
@@ -18,9 +21,11 @@ merges all imported sources, and ends by suggesting missing sources and
 offering `$deep-context` processing. It calls no providers and builds no index.
 
 The canonical executable contract is
-[`import-messages/SKILL.md`](../skills/import-messages/SKILL.md). The smaller
-[`$import-whatsapp`](../skills/import-whatsapp/SKILL.md) skill is an isolated
-wacli sync/export utility and stops before identity resolution or indexing.
+[`import-messages/SKILL.md`](../skills/import-messages/SKILL.md). For an
+isolated wacli sync/export test that stops before identity resolution or
+indexing, run the
+[`whatsapp_wacli.py`](../primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py)
+primitive directly.
 
 ## At a glance
 
@@ -63,8 +68,8 @@ flowchart TD
     S --> T["Suggest missing sources<br/>offer $deep-context processing"]
     Q1 -. "identity research, spam screening,<br/>review, indexing" .-> U["$deep-context processing layer<br/>(separate skill)"]
 
-    W["$import-whatsapp"] -. "isolated utility only" .-> D0["Consent: scan WhatsApp QR<br/>isolated wacli provider sync"]
-    D0 -.-> X["wacli.contacts.csv<br/>isolated skill ends here"]
+    W["whatsapp_wacli.py (direct run)"] -. "isolated utility only" .-> D0["Consent: scan WhatsApp QR<br/>isolated wacli provider sync"]
+    D0 -.-> X["wacli.contacts.csv<br/>isolated utility ends here"]
     classDef gate fill:#fff4d6,stroke:#a66b00,color:#3d2a00,stroke-width:2px;
     classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
@@ -103,8 +108,8 @@ runs the child with `--no-install`; if wacli or the QR renderer is missing, the
 skill surfaces the child's exact Homebrew command and waits for approval before
 running it and retrying discovery. It opens a QR flow when authentication is
 missing, syncs all history by default (`--max-messages 0`), and keeps provider
-state under `.powerpacks/messages/wacli/`. The isolated `$import-whatsapp` skill
-can install wacli directly because invoking that skill is explicit consent.
+state under `.powerpacks/messages/wacli/`. An isolated direct `whatsapp_wacli.py`
+run can install wacli itself because that invocation is explicit consent.
 
 Powerpacks opens the resulting SQLite database read-only, rejects body-column
 identifiers, and selects contact plus aggregate count/date fields. It includes
@@ -205,9 +210,15 @@ Older installs may still contain `.powerpacks/messages/import-run*.json`. Those
 files belong to the retired all-in-one orchestrator; the current split discovery
 stage neither depends on nor extends them and they can be removed.
 
-## Isolated `$import-whatsapp`
+## Isolated WhatsApp sync (`whatsapp_wacli.py` direct run)
 
-Use `$import-whatsapp` for a narrow provider readiness/sync test. It:
+For a narrow provider readiness/sync test, run the primitive directly:
+
+```bash
+uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py status
+```
+
+A direct run:
 
 1. checks or installs wacli after consent;
 2. opens QR authentication when needed;
@@ -250,7 +261,7 @@ shared `.powerpacks/network-import/import/<source>/people.csv` and
 | Concern | Authority |
 | --- | --- |
 | Full agent workflow | [`import-messages/SKILL.md`](../skills/import-messages/SKILL.md) |
-| Isolated WhatsApp utility | [`import-whatsapp/SKILL.md`](../skills/import-whatsapp/SKILL.md) |
+| Isolated WhatsApp utility | [`messages/whatsapp_wacli.py`](../primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py) (direct run) |
 | Message discovery | [`messages.py`](../primitives/discover_contacts_pipeline/messages/discover.py) |
 | iMessage extraction | [`messages/extract_imessage.py`](../primitives/discover_contacts_pipeline/messages/extract_imessage.py) |
 | wacli extraction | [`messages/whatsapp_wacli.py`](../primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py) |
