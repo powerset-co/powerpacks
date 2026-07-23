@@ -17,6 +17,8 @@ Changelog:
       lists now set-union instead.
   2026-07-23 (audit batch 16): renamed the progress prefix from
     [discover-contacts] (retired skill) to [gmail-import].
+  2026-07-23 (audit batch 17): the apply-resolutions child path retargeted
+    from the retired gmail/network_import.py to gmail/discover_engine.py.
 """
 from __future__ import annotations
 
@@ -1270,7 +1272,7 @@ def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> boo
         account_dir = Path(str(record.get("people_csv") or "")).parent
         resolved_dir = account_dir / "resolved"
         apply_cmd = py_cmd(
-            "packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py",
+            "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover_engine.py",
             "apply-resolutions",
             "--people-csv", str(record["people_csv"]),
             "--resolutions-csv", str(record["resolutions_csv"]),

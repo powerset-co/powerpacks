@@ -1,5 +1,8 @@
 <!--
 Changelog:
+- 2026-07-23 (audit batch 17): gmail/network_import.py was split into
+  gmail/msgvault_store.py (msgvault reader/aggregation) and
+  gmail/discover_engine.py (per-account artifact-emission CLI).
 - 2026-07-23: The powerpacks-console app and its setup_gmail.py engine were
   deleted; the harness skill is now the only Gmail import surface.
 - 2026-07-23: Removed the --resolve-legacy / --approve-parallel-spend flags.
@@ -190,7 +193,8 @@ output CSV rows are applied as raw material; their audit lives in
 | Agent workflow | [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md) |
 | OAuth and account status | [`msgvault_setup.py`](../primitives/setup/msgvault_setup.py) |
 | Sync and stable discovery | [`discover_contacts_pipeline/gmail/sync.py`](../primitives/discover_contacts_pipeline/gmail/discover.py) |
-| Metadata aggregation | [`gmail/network_import.py`](../primitives/discover_contacts_pipeline/gmail/network_import.py) |
+| Metadata aggregation | [`gmail/msgvault_store.py`](../primitives/discover_contacts_pipeline/gmail/msgvault_store.py) |
+| Per-account artifact emission | [`gmail/discover_engine.py`](../primitives/discover_contacts_pipeline/gmail/discover_engine.py) |
 | Import orchestration | [`import_contacts_pipeline/gmail/importer.py`](../primitives/import_contacts_pipeline/gmail/importer.py) |
 | Directory reuse | [`discover_contacts_pipeline/directory.py`](../primitives/discover_contacts_pipeline/directory.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
