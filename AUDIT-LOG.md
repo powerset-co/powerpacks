@@ -40,7 +40,7 @@ Arthur reviews manually, drops comments; each batch = one commit, verdicts poste
 | 9 | retire marker chain; moves into deep_context | DELETED: `$enrich-email-markers` skill, `infer_linkedin_markers`, `build_resolution_queue`, `compare_resolution_ab`, `verify_gmail_resolution` (docstring-only "consumer"), `account_registry`, unrouted `linkedin-sync-csv` skill (+tests/routes/lists). MOVED into `deep_context/`: `build_email_context` (sources.py needs it; bare-module hack → package import) and `deep_research_contacts` (Parallel client; only reconcile_deep_research imports it) |
 | 10 | discovery engines fold (sub-agent) + HYGIENE.md | `extract_imessage`, `whatsapp_wacli`, `normalize/merge_contacts` → `messages/`; `network_import` + `resolve_queue` → `gmail/`; linkedin/twitter `network_import` → their verticals; app/local-api + fix-powerpacks-state stale paths fixed (missed by earlier sweeps — **the console app invokes primitives by path**); `HYGIENE.md` added at root (agents read it before editing; folds into AGENTS.md later) |
 | 11 | setup/enrich fold (sub-agent) | `setup_gmail`, `setup_linkedin_csv`, `msgvault_setup` (+oauth JS companion), `onboarding`, `bootstrap_network_from_exports`, `clean_slate`, `linkedin_mcp_import` → `setup/`; `enrich_people` → `enrich/`; app paths updated; jobs.ts whitelist drops deleted-dispatcher entry |
-| 12 | IN FLIGHT (sub-agent running at write time) | `match_local_candidates` → `import_contacts_pipeline/messages/`; `merge_network_sources` → `import_contacts_pipeline/` — commit + final global sweep + PR comment pending |
+| 12 | import-stage fold (sub-agent) | `match_local_candidates` → `import_contacts_pipeline/messages/`; `merge_network_sources` → `import_contacts_pipeline/` (fan-in); references swept (index fan-in py_cmd, SKILL, 7 test files, docs); zero app/ references. DONE |
 
 ## Final target tree (post-batch-12)
 
@@ -67,7 +67,6 @@ packs/ingestion/primitives/
 
 ## Open items (ordered)
 
-1. **Finish batch 12** (agent running) → commit, final zero-stale-ref sweep, PR comment.
 2. **CI/test suite on PR #318 before merge** — the whole audit ran under a no-local-tests instruction; expect fallout in path-listing/contract tests beyond what smokes caught.
 3. **Run migrate-legacy for real** on the mirror: `--apply` (free) then `--apply --judge` (~$11–54) → auto-stands → Check-LinkedIn queue → apply-retargets admission. This is the BUG-3/BUG-5 remediation.
 4. **BUG-4 decision**: replacement approval surface for message suggestions (deep-context suggestions review or conservative auto-attach).

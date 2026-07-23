@@ -42,6 +42,9 @@ Changelog:
   2026-07-23 (audit):
     - The research_review.csv producer (the research-review flow) was retired
       in #315, opening the known gap above.
+    - Moved from primitives/match_local_candidates/ into
+      import_contacts_pipeline/messages/; the duplicated try/except import
+      block became the single repo-root bootstrap stanza.
 """
 
 from __future__ import annotations
@@ -58,11 +61,14 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:  # pragma: no cover - direct script fallback
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so packs.* imports work in module AND script mode
+# (uv run .../match_local_candidates.py); must be in-file because script mode
+# never imports the package __init__.
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 CSV_HEADERS = [

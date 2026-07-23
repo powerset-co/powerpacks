@@ -30,7 +30,7 @@ from packs.shared.csv_io import CsvIO
 
 ROOT = Path(__file__).resolve().parents[1]
 POWERSET_AUTH = ROOT / "packs/powerset/primitives/auth/auth.py"
-MATCH_LOCAL = ROOT / "packs/ingestion/primitives/match_local_candidates/match_local_candidates.py"
+MATCH_LOCAL = ROOT / "packs/ingestion/primitives/import_contacts_pipeline/messages/match_local_candidates.py"
 
 
 def _free_port() -> int:

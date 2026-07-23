@@ -229,7 +229,7 @@ LI=".powerpacks/network-import/import/linkedin/people.csv"
 LOCAL=".powerpacks/messages/_local_people.csv"
 { [ -f "$GM" ] && cat "$GM" || cat "$LI"; } > "$LOCAL" 2>/dev/null
 [ -f "$GM" ] && [ -f "$LI" ] && tail -n +2 "$LI" >> "$LOCAL"
-uv run --project . python packs/ingestion/primitives/match_local_candidates/match_local_candidates.py match \
+uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages/match_local_candidates.py match \
   --contacts .powerpacks/messages/contacts.csv --local-people "$LOCAL"
 ```
 

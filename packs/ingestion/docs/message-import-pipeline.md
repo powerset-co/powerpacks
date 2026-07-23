@@ -254,7 +254,7 @@ shared `.powerpacks/network-import/import/<source>/people.csv` and
 | Message discovery | [`messages.py`](../primitives/discover_contacts_pipeline/messages/discover.py) |
 | iMessage extraction | [`messages/extract_imessage.py`](../primitives/discover_contacts_pipeline/messages/extract_imessage.py) |
 | wacli extraction | [`messages/whatsapp_wacli.py`](../primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py) |
-| Local matching | [`match_local_candidates.py`](../primitives/match_local_candidates/match_local_candidates.py) |
+| Local matching | [`match_local_candidates.py`](../primitives/import_contacts_pipeline/messages/match_local_candidates.py) |
 | Contacts-direct import | [`messages.py`](../primitives/import_contacts_pipeline/messages/importer.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
 | Per-source status | [`status.py`](../primitives/import_contacts_pipeline/status.py) |

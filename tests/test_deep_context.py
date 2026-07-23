@@ -3248,7 +3248,7 @@ class TestSpamDropAtMerge(unittest.TestCase):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "merge_network_sources",
-            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py")
+            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/import_contacts_pipeline/merge_network_sources.py")
         merge = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
         spec.loader.exec_module(merge)
@@ -3275,7 +3275,7 @@ class TestSpamDropAtMerge(unittest.TestCase):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "merge_network_sources",
-            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py")
+            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/import_contacts_pipeline/merge_network_sources.py")
         merge = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
         spec.loader.exec_module(merge)
