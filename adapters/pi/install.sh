@@ -17,8 +17,18 @@ MANAGED_SKILLS=(
   import-messages
 )
 
+# Skills that once shipped but no longer exist in the repo. Scrubbed from the
+# user's skills dir on update so retired routes can't dispatch deleted primitives.
+RETIRED_SKILLS=(
+  search-network search-network-jd search-profile search-highlight extract-search-query recruit
+  deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
+  import-whatsapp ingestion-onboarding onboard local-msg-vault
+  import-gmail-network import-linkedin-network import-twitter-network
+  linkedin-sync-mcp linkedin-sync-csv
+)
+
 mkdir -p "$SKILLS_DIR"
-for skill in "${MANAGED_SKILLS[@]}"; do
+for skill in "${MANAGED_SKILLS[@]}" "${RETIRED_SKILLS[@]}"; do
   rm -rf "$SKILLS_DIR/$skill"
 done
 "$REPO_ROOT/bin/setup-python"
