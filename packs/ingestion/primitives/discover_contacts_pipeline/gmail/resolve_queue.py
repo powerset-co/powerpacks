@@ -1,11 +1,33 @@
 #!/usr/bin/env python3
-"""Resolve queued email→LinkedIn via Parallel.ai.
+"""Resolve queued email→LinkedIn identities (harness prompts or Parallel.ai).
 
-Ported from the legacy step_parallel_enrich flow. Sends
-(full_name, company, email) to Parallel and writes results to a CSV.
+Reads a `linkedin_resolution_queue.csv` and writes `linkedin_resolutions.csv`
+with columns `email, full_name, company, linkedin_url, x_handle, status,
+confidence, reasoning, candidates`, using the shared prompt in
+`packs/ingestion/prompts/linkedin_resolution.md`.
 
-Dedup: reads any existing output CSV to skip already-resolved emails.
-On repeated runs the set of new lookups shrinks to zero.
+Providers (`--provider`):
+- `harness`: no spend; writes `harness_prompts.jsonl` for Codex/Claude/manual
+  resolution.
+- `parallel` (default): spend-bearing; `run` without `--approve-spend` returns
+  `blocked_approval`, and an approved rerun sends (full_name, company, email)
+  to Parallel.ai.
+
+Usage:
+    resolve_queue.py run --provider harness --input .../linkedin_resolution_queue.csv [--output-dir DIR]
+    resolve_queue.py run --provider parallel [--approve-spend] --input ...
+    resolve_queue.py status
+
+Dedup: reads any existing output CSV to skip already-resolved emails, so
+repeated runs shrink the new-lookup set to zero. The CLI has no separate
+`approve`/`continue` subcommand; an interrupted provider task may be
+resubmitted on rerun.
+
+Changelog:
+  2026-07-23 (audit): resolve_queue.README.md sidecar folded into this
+    docstring; dropped its stale output-column list
+    (handle/matched_name/matched_headline/evidence never existed here) and the
+    nonexistent `instructions.md` artifact claim.
 """
 
 from __future__ import annotations

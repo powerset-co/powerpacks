@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """Isolated WhatsApp metadata import through openclaw/wacli.
 
-This flow uses a separate wacli store under `.powerpacks/messages`.
-The export reads only local metadata columns from wacli's SQLite database; it
-never selects message body columns.
+This flow uses a separate wacli store under `.powerpacks/messages/wacli`
+(wacli keeps its own sync state there). The export reads only local metadata
+columns from wacli's SQLite database; it never selects message body columns.
+The exported CSV/JSONL contains only phone, name, source, group metadata,
+direct-chat message counts, and timestamps.
 
 Stdlib-only.
 
+Usage:
+    whatsapp_wacli.py run      # download pinned wacli if needed, authenticate, sync once, export
+    whatsapp_wacli.py status   # show install/auth/store state
+    whatsapp_wacli.py export   # export from an existing store without syncing
+    whatsapp_wacli.py auth | ensure-wacli | logout
+
 Changelog:
+- 2026-07-23: whatsapp_wacli.README.md sidecar folded into this docstring.
 - 2026-07-23: The isolated WhatsApp wrapper skill was retired; user-facing
   rerun hints now point at $import-messages and the status/User-Agent
   identifiers name this primitive directly.

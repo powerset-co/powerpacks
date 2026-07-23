@@ -1,5 +1,9 @@
 # discover_contacts_pipeline
 
+Changelog:
+- 2026-07-23: Added the post-reorg layout section; fixed the stale claim that
+  the CLI dropped `approve`/`continue` (it exposes run/continue/approve/status).
+
 > **Legacy monolithic-orchestrator reference.** Current product flows use the
 > split source-specific skills and handlers. Start with the
 > [Gmail import pipeline](../../docs/gmail-import-pipeline.md),
@@ -9,6 +13,24 @@
 > which has been deleted) and are not exposed by the current CLI.
 
 One local orchestration command for network source discovery inputs.
+
+## Layout
+
+- `discover_contacts_pipeline.py` — the orchestrator CLI
+  (`run` / `continue` / `approve` / `status`).
+- `common.py` — shared discovery-orchestration helpers.
+- `directory.py` — `directory.csv` and `people.csv` materialization helpers.
+- `discovery_config.py` + `discovery.config.json` — static discovery
+  input/output contract.
+- `gmail/` — msgvault sync (`sync.py`), discovery CLI (`discover.py`),
+  metadata reader (`network_import.py`), LinkedIn resolution
+  (`resolve_queue.py`), import step functions (`import_steps.py`).
+- `linkedin/` — Connections.csv discovery (`discover.py`) and import
+  (`network_import.py`).
+- `messages/` — iMessage/WhatsApp metadata discovery (`discover.py`,
+  `extract_imessage.py`, `whatsapp_wacli.py`, `merge_contacts.py`,
+  `normalize_contacts.py`).
+- `twitter/` — Twitter/X import orchestrator (`network_import.py`).
 
 Skills are user-facing handlers; this primitive is the deterministic runtime
 handler they call. In other words: `$import-gmail` / `$discover-contacts` route the
@@ -96,9 +118,9 @@ RapidAPI profile hydration does not require an approval step. It runs when
 `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` is configured and fails clearly when
 neither key is available.
 
-The current split discovery CLI does not expose the old `approve` or `continue`
-commands. Follow the source-specific skill when a child blocks rather than using
-the compatibility examples from this historical document.
+The orchestrator CLI exposes `run`, `continue`, `approve`, and `status`; when a
+child primitive blocks, prefer following the source-specific skill over the
+compatibility examples in this historical document.
 
 Gmail msgvault import and directory application are local-only. Gmail
 email-to-LinkedIn provider resolution

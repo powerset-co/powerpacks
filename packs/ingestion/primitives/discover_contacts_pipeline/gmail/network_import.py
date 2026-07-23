@@ -2,12 +2,44 @@
 """Local Gmail network import from msgvault metadata.
 
 The supported sync path is msgvault's local SQLite archive. This primitive reads
-only msgvault metadata tables and writes Powerpacks-local artifacts. It never
-reads Gmail message bodies, subjects, snippets, raw MIME, or attachments, and it
-does not use Powerset-hosted Gmail OAuth/sync endpoints.
+only msgvault metadata tables (`sources`, `participants`, `messages`,
+`message_recipients`) and writes Powerpacks-local artifacts. It never reads
+Gmail message bodies, subjects, snippets, raw MIME, or attachments, and it does
+not use Powerset-hosted Gmail OAuth/sync endpoints. Product-flow docs:
+`packs/ingestion/docs/gmail-import-pipeline.md`.
 
-The legacy one-person local seed remains for deterministic tests/manual seeds;
-real Gmail imports should use the `msgvault` subcommand.
+Usage:
+    network_import.py msgvault-accounts --db ~/.msgvault/msgvault.db
+    network_import.py msgvault --db ~/.msgvault/msgvault.db --account-email me@gmail.com
+    network_import.py apply-resolutions --people-csv PATH --resolutions-csv PATH
+
+`msgvault` writes to `.powerpacks/network-import/discover/gmail/<account>/`:
+`accounts.csv`, `gmail_threads.csv`, `gmail_contacts_aggregated.csv`,
+`targeted_emails.csv`, `linkedin_resolution_queue.csv`, canonical `people.csv`
+(`source_channels=gmail_msgvault`), and `manifest.json`. Automated/noreply
+addresses are filtered unless `--include-automated`; Gmail category labels
+(Social/Promotions/Forums/Updates) are excluded unless `--include-category-mail`.
+Multiple Gmail accounts are separate msgvault source accounts: list them with
+`msgvault-accounts`, then run `msgvault` once per `--account-email` (the
+orchestrator loops repeated `--gmail-account-email` flags).
+
+The product path is `discover_contacts_pipeline.py run`, which first applies the
+shared `.powerpacks/network-import/directory.csv` checkpoint, runs LinkedIn
+resolution (`gmail/resolve_queue.py`, harness or Parallel mode) only for
+unresolved Gmail rows, and delegates resolved rows to
+`enrich/enrich_people.py` for RapidAPI profile hydration. `apply-resolutions`
+attaches a `linkedin_resolutions.csv` back onto a Gmail `people.csv` for manual
+primitive-level debugging (`--min-confidence` defaults to 0.75).
+
+The legacy one-person local seed (`run` / `continue` / `approve` / `status`)
+remains for deterministic tests/manual seeds; real Gmail imports should use the
+`msgvault` subcommand.
+
+Changelog:
+  2026-07-23 (audit): network_import.README.md sidecar folded into this
+    docstring; dropped its stale resolutions-column list (resolve_queue owns
+    that contract) and its `--gmail-account` flag name (the orchestrator flag
+    is `--gmail-account-email`).
 """
 
 from __future__ import annotations

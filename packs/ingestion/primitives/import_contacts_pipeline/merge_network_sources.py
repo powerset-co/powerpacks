@@ -3,12 +3,30 @@
 
 Dedupe rule:
 1. Merge rows with the same LinkedIn public identifier / URL.
-2. Keep non-LinkedIn rows separate, but emit similar-name review pairs.
+2. Keep non-LinkedIn rows separate, but emit similar-name review pairs in
+   `possible_duplicates_review.csv` (similar names without shared LinkedIn are
+   never auto-merged).
 
-Stdlib-only. Local artifacts only. No uploads or external API calls.
+Stdlib-only. Local artifacts only. No uploads or external API calls. Accepts
+only explicit `--input` paths — it never scans `.powerpacks` for run
+artifacts. Product fan-in should pass reviewed, stable per-source artifacts
+such as `import/gmail/people.csv` and `import/messages/people.csv`; raw
+`messages/contacts.csv` must pass through `$import-messages` review and
+materialization first.
+
+Usage:
+    merge_network_sources.py run \
+        --input .powerpacks/network-import/import/gmail/people.csv \
+        --input .powerpacks/network-import/import/messages/people.csv
+
+Outputs under `.powerpacks/network-import/merged/`: canonical `people.csv`,
+`people_harmonic_all.merged.csv` (temporary compatibility alias),
+`network_contacts.csv`, `possible_duplicates_review.csv`, and
+`merge_manifest.json`.
 
 Changelog:
   2026-07-23 (audit):
+    - merge_network_sources.README.md sidecar folded into this docstring.
     - Moved from primitives/merge_network_sources/ into
       import_contacts_pipeline/; the duplicated try/except import block became
       the single repo-root bootstrap stanza.

@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""Normalize contact-exporter CSV into Powerpacks messages JSONL."""
+"""Normalize a message-contacts CSV into canonical Powerpacks messages JSONL.
+
+Usage:
+    normalize_contacts.py normalize --input .powerpacks/messages/contacts.csv \
+        [--out-jsonl PATH] [--manifest PATH]
+
+Writes the normalized JSONL (default
+`.powerpacks/messages/contacts.normalized.jsonl`) plus a manifest JSON next to
+it with row counts.
+
+Changelog:
+  2026-07-23 (audit): normalize_contacts.README.md sidecar folded into this
+    docstring; dropped the stale contact-exporter naming (the pipeline no
+    longer uses contact-exporter).
+"""
 
 from __future__ import annotations
 

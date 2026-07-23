@@ -1,15 +1,41 @@
 #!/usr/bin/env python3
 """Resumable local Twitter/X network import orchestrator.
 
-Ports the Twitter/X discovery pipeline into Powerpacks-local artifacts:
-- optional RapidAPI Twitter follower crawl -> followers_dump.csv
-- local heuristic score -> candidates.csv
-- optional OpenAI MOE expert evaluation (approval-gated)
-- free parallel LinkedIn URL pre-resolution from bio/website/link aggregators
-- optional parallel RapidAPI LinkedIn validation (approval-gated)
-- canonical people.csv output plus temporary people_harmonic_all.csv alias
+Runs the Twitter/X discovery pipeline into Powerpacks-local artifacts under
+`.powerpacks/network-import/discover/twitter/<handle>/` (no Postgres writes; no
+local CSV input — Twitter source data comes from RapidAPI):
+- `load_or_crawl`: RapidAPI Twitter follower crawl -> `followers_dump.csv`
+- `score_candidates`: local heuristic score -> `candidates.csv`
+- `moe_evaluate`: OpenAI mixture-of-experts triage -> `moe_evaluated.csv`
+- `pre_resolve_linkedin`: free parallel LinkedIn URL extraction from
+  bio/website/link aggregators -> `linkedin_resolved.csv` plus
+  `linkedin_resolution_queue.csv` for candidates needing a later lookup
+- `validate_linkedin`: parallel RapidAPI LinkedIn validation ->
+  `linkedin_validated.csv`
+- `format_people`: canonical `people.csv` plus temporary
+  `people_harmonic_all.csv` compatibility alias
 
-Stdlib-only. No DB writes. No external API calls before approval.
+Raw provider payloads are kept in `raw_twitter_responses/` and
+`raw_linkedin_responses/` for audit/debug.
+
+Stdlib-only. No external API calls before approval: `load_or_crawl`,
+`moe_evaluate`, and `validate_linkedin` are spend-bearing approval gates. The
+hidden `--limit` row cap exists only for tiny local smoke tests.
+
+Usage:
+    network_import.py run --handle myhandle --max-pages 5
+    network_import.py approve      # approve the current blocked spend-bearing step
+    network_import.py continue     # advance until completed or the next gate
+    network_import.py status
+    network_import.py check-keys   # key presence only; never prints values
+
+Env: `RAPIDAPI_TWITTER_KEY` (falls back to `RAPIDAPI_KEY`) for Twitter/X,
+`RAPIDAPI_LINKEDIN_KEY` (falls back to `RAPIDAPI_KEY`) for LinkedIn validation,
+`OPENAI_API_KEY` for MOE evaluation.
+
+Changelog:
+  2026-07-23 (audit): network_import.README.md sidecar folded into this
+    docstring.
 """
 
 from __future__ import annotations
