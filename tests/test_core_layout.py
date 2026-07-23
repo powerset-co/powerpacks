@@ -31,7 +31,6 @@ class CoreLayoutTests(unittest.TestCase):
             [
                 "clean-slate",
                 "deep-context",
-                "discover-contacts",
                 "import-gmail",
                 "import-messages",
                 "import-twitter",
@@ -88,7 +87,6 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-gmail" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "discover-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())

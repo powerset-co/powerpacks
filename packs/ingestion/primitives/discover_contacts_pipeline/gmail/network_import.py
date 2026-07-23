@@ -20,13 +20,13 @@ Usage:
 addresses are filtered unless `--include-automated`; Gmail category labels
 (Social/Promotions/Forums/Updates) are excluded unless `--include-category-mail`.
 Multiple Gmail accounts are separate msgvault source accounts: list them with
-`msgvault-accounts`, then run `msgvault` once per `--account-email` (the
-orchestrator loops repeated `--gmail-account-email` flags).
+`msgvault-accounts`, then run `msgvault` once per `--account-email`
+(`gmail/discover.py` loops the selected accounts).
 
-The product path is `discover_contacts_pipeline.py run`, which first applies the
-shared `.powerpacks/network-import/directory.csv` checkpoint, runs LinkedIn
-resolution (`gmail/resolve_queue.py`, harness or Parallel mode) only for
-unresolved Gmail rows, and delegates resolved rows to
+The product path is `gmail/discover.py discover`, invoked by `$import-gmail`,
+which first applies the shared `.powerpacks/network-import/directory.csv`
+checkpoint, runs LinkedIn resolution (`gmail/resolve_queue.py`, harness or
+Parallel mode) only for unresolved Gmail rows, and delegates resolved rows to
 `enrich/enrich_people.py` for RapidAPI profile hydration. `apply-resolutions`
 attaches a `linkedin_resolutions.csv` back onto a Gmail `people.csv` for manual
 primitive-level debugging (`--min-confidence` defaults to 0.75).
@@ -40,6 +40,9 @@ Changelog:
     docstring; dropped its stale resolutions-column list (resolve_queue owns
     that contract) and its `--gmail-account` flag name (the orchestrator flag
     is `--gmail-account-email`).
+  2026-07-23 (audit batch 16): fixed the stale product-path claim — the
+    retired `discover_contacts_pipeline.py` orchestrator was deleted; the
+    product path is `gmail/discover.py discover` invoked by `$import-gmail`.
 """
 
 from __future__ import annotations

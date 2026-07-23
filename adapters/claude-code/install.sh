@@ -40,7 +40,7 @@ copy_powerpacks_bundle() {
 RETIRED_SKILLS=(
   search-network search-network-jd search-profile search-highlight extract-search-query recruit
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
-  import-whatsapp ingestion-onboarding onboard local-msg-vault
+  import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
   linkedin-sync-mcp linkedin-sync-csv
 )
@@ -89,7 +89,7 @@ install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
 install_skill clean-slate "$REPO_ROOT/packs/ingestion/skills/clean-slate/SKILL.md"
-install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
+install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
@@ -111,5 +111,5 @@ EOF
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks sales-nav-search build-outbound"
-echo "  setup import-messages msgvault import-gmail deep-context clean-slate discover-contacts import-twitter"
+echo "  setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
 echo

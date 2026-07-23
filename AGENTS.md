@@ -86,10 +86,11 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
   see `infer_msgvault_sync_after` in
   `discover_contacts_pipeline/gmail/sync.py`. Do not build a new resume mechanism on
   top of it.
-- **Orchestrate the discover/import primitives directly.** Chain the existing
-  `discover_contacts_pipeline` and `import_contacts_pipeline/<source>.py`
-  commands. There is no setup orchestrator layer — do not build one for new
-  pipeline flows.
+- **Orchestrate the per-source discover/import primitives directly.** Chain the
+  existing `discover_contacts_pipeline/<source>/` and
+  `import_contacts_pipeline/<source>/` commands. There is no orchestrator layer
+  (the generic `discover_contacts_pipeline.py` runner was deleted) — do not
+  build one for new pipeline flows.
 - **Do not fingerprint the shared `directory.csv`.**
   `.powerpacks/network-import/directory.csv` is a cross-source aggregate, not a
   source-owned output. Treating it as a per-source fingerprint makes restored
@@ -350,10 +351,6 @@ Routes:
   `packs/ingestion/skills/logbook/SKILL.md`
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
-- `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
-  msgvault/Twitter source preparation; iMessage/WhatsApp always route to
-  `$import-messages` →
-  `packs/ingestion/skills/discover-contacts/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
 clarifying question only when the same wording could mean multiple surfaces,

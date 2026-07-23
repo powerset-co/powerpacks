@@ -15,6 +15,8 @@ Changelog:
     - union_alias_list stopped alias loss: the resolved Gmail address used to
       be discarded when two rows collapsed onto one public_identifier; alias
       lists now set-union instead.
+  2026-07-23 (audit batch 16): renamed the progress prefix from
+    [discover-contacts] (retired skill) to [gmail-import].
 """
 from __future__ import annotations
 
@@ -120,7 +122,7 @@ def artifact_dir_from_ledger(ledger: dict[str, Any]) -> Path:
 
 
 def emit_progress(message: str) -> None:
-    print(f"[discover-contacts] {message}", file=sys.stderr, flush=True)
+    print(f"[gmail-import] {message}", file=sys.stderr, flush=True)
 
 
 def write_json(path: Path, payload: Any) -> None:

@@ -16,17 +16,6 @@
         "manifest_json": ".powerpacks/network-import/discover/gmail/manifest.json"
       }
     },
-    "linkedin_csv": {
-      "inputs": {
-        "accounts_json": ".powerpacks/ingestion/accounts.json",
-        "connections_csv_state_key": "accounts.linkedin_csv.config.csv_path"
-      },
-      "outputs": {
-        "source_csv": ".powerpacks/network-import/discover/linkedin/Connections.csv",
-        "contacts_csv": ".powerpacks/network-import/discover/linkedin/contacts.csv",
-        "manifest_json": ".powerpacks/network-import/discover/linkedin/manifest.json"
-      }
-    },
     "imessage": {
       "inputs": {
         "chat_db_state_key": "accounts.messages.config.imessage.chat_db"
