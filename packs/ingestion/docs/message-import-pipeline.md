@@ -1,8 +1,9 @@
 <!--
 Changelog:
-- 2026-07-23: Added the explicit-full WhatsApp depth stage: current-year DMs
-  with at most 20 rows receive sequential, paced, target-specific history
-  requests with bounded retry/backoff and fixed resumable outputs.
+- 2026-07-23: Made WhatsApp sync and depth automatic: empty stores receive an
+  account full sync plus a three-year shallow-DM bootstrap; populated stores
+  receive an incremental sync plus targeted backfill only for changed shallow
+  DMs and unfinished prior targets.
 - 2026-07-16: Refocused on contact sync only. Removed the OpenRouter triage,
   research queue, Parallel deep research, LLM-scored review UI, RapidAPI
   enrichment, and Modal index stages from the canonical flow; import is now
@@ -110,20 +111,31 @@ missing, syncs all history by default (`--max-messages 0`), and keeps provider
 state under `.powerpacks/messages/wacli/`. The isolated `$import-whatsapp` skill
 can install wacli directly because invoking that skill is explicit consent.
 
-An explicit `$import-messages full` goes one step further after the account
-sync. Powerpacks selects current-year DMs with at most 20 stored rows from
-actual `MAX(messages.ts)` values and calls wacli's native target backfill.
+There is one automatic strategy, with no `sync` or `full` user mode. An empty
+wacli store receives an unbounded account sync; a populated store receives an
+incremental sync. Every run follows with targeted depth. The first depth pass
+selects all DMs with at most 20 stored rows whose actual `MAX(messages.ts)` is
+within the last three years. Later runs compare each DM's
+`(COUNT(*), MAX(messages.ts))` immediately before and after account sync and
+target only recent shallow chats that changed, plus unfinished targets from
+the previous pass. The before/after snapshot is more exact than a wall-clock
+watermark because newly downloaded messages can carry older timestamps.
+
 Targets run strictly one at a time. Each command can issue up to ten requests
 for 500 rows, with a delay between native requests and another delay between
 chats. Transient connection, timeout, and store-lock failures back off
 exponentially; two successful backfill attempts with no target-row growth stop
-that chat. Before/after SQLite counts keep target recovery separate from
+that chat. Per-attempt SQLite counts keep target recovery separate from
 unrelated catch-up traffic.
 
 The depth stage is resumable from one current `results.csv`; it does not use a
 ledger, run ID, or per-attempt directory. Persisted identifiers are stable
 hashes. Names, phones, JIDs, message IDs, commands, and raw output remain out of
-the stage artifacts.
+the stage artifacts. Its manifest stores one SHA-256 digest of the direct-chat
+`(hashed chat, visible count, latest timestamp)` state. If a sync is interrupted
+before targets are seeded, or a targeted request also returns rows for another
+chat, the next invocation detects the changed digest/count and performs one
+catch-up bootstrap.
 
 Powerpacks opens the resulting SQLite database read-only, rejects body-column
 identifiers, and selects contact plus aggregate count/date fields. It includes

@@ -6,20 +6,16 @@ description: Add iMessage/WhatsApp contacts to your local network. Use for $impo
 <!--
 Created: 2026-06-20
 Changelog:
-- 2026-07-23: Explicit `$import-messages full` now follows the account sync
-  with a resumable, sequential depth pass over current-year WhatsApp DMs with
-  at most 20 stored rows. Native requests and chats are paced, transient errors
-  back off, and two successful no-growth backfill attempts stop a chat. Fixed
-  outputs live in `.powerpacks/messages/history-depth/`; no LLM or paid provider
-  is involved.
+- 2026-07-23: Removed user-facing WhatsApp sync modes. `$import-messages` now
+  chooses account sync from the local store, then automatically deepens recent
+  shallow DMs: bootstrap all eligible chats once, then target only chats changed
+  by later incremental syncs plus unfinished targets. Fixed outputs live in
+  `.powerpacks/messages/history-depth/`; no LLM or paid provider is involved.
 - 2026-07-18: Documented first-backfill duration (30 min up to a few hours;
-  3 h hard cap, raised from ~2 h) and the never-kill-mid-backfill rule with
-  `$import-messages full` recovery.
+  3 h hard cap, raised from ~2 h) and the never-kill-mid-backfill rule.
 - 2026-07-17: Added smart-default incremental WhatsApp sync. First import full-
   backfills; later runs auto-detect the populated wacli store and pull only the
-  delta. New verbs: `$import-messages sync` (explicit incremental) and
-  `$import-messages full` (force a full re-backfill), forwarded as
-  `--wacli-sync-mode` to discovery. iMessage is unchanged (local chat.db read).
+  delta. iMessage is unchanged (local chat.db read).
 - 2026-07-14: Refocused on contact sync only. Dropped the in-skill LLM triage,
   Parallel deep-research, LLM-scored review UI, and the Modal index/validate
   steps — identity research + index building move to the centralized $deep-context
@@ -130,34 +126,30 @@ Ask the user which channels to add: **iMessage**, **WhatsApp**, **both**, or
 **skip**. Record the choice. If the user skips, stop. Source extraction is local
 and the flow never uploads to a Powerset set.
 
-There is *no* sync-window question (unlike Gmail). WhatsApp scope follows the
-**sync mode**, which you pick from how the user invoked the skill:
+There is *no* sync-window or sync-mode question. `$import-messages` owns one
+automatic strategy:
 
-- **first import / plain `$import-messages`** → `auto`. The **first** run
-  asks WhatsApp for the configured full window (currently up to ~10 years) to
-  build the local archive; this account-level request does not guarantee equal
-  depth in every chat. **Every later run auto-detects the populated store and
-  pulls only the delta** (fast). You do not need to ask.
+- **Empty WhatsApp store:** run an unbounded account sync, then target every DM
+  with at most 20 stored rows whose actual latest message is within the last
+  three years.
+- **Populated WhatsApp store:** run an incremental account sync, compare each
+  DM's message count and latest timestamp immediately before and after it, then
+  target only recent shallow chats that changed plus unfinished targets from
+  the previous run.
 
-  **The first backfill takes 30 minutes up to a few hours** depending on
-  history size (hard cap 3 h). The sync prints a heartbeat every ~2 minutes,
-  so quiet stretches between heartbeats are normal — keep waiting on the same
-  process and **never kill or restart it mid-backfill**: an interrupted
-  backfill leaves a partially populated store, and every later `auto` run then
-  goes incremental against it, so history silently stays incomplete. If a
-  backfill was interrupted, recover with `$import-messages full`.
-- **`$import-messages sync`** (or "sync/update/refresh my messages") → the
-  explicit fast incremental path.
-- **`$import-messages full`** (or "re-import everything / full resync") → forces
-  a full account sync, then deepens current-year WhatsApp DMs with at most 20
-  stored rows using target-specific on-demand history requests. The depth pass
-  is strictly sequential: native requests and chats are delayed, transient
-  errors back off exponentially, and a chat stops after two successful
-  no-growth backfill attempts. It can add up to two hours after the normal 3 h
-  sync cap; progress is resumable from the fixed
-  `.powerpacks/messages/history-depth/` outputs.
+The immediate SQLite comparison is more reliable than a saved wall-clock
+timestamp because WhatsApp can return delayed messages carrying older
+timestamps. Target backfills are strictly sequential: native requests and chats
+are delayed, transient errors back off exponentially, and a chat stops after
+two successful no-growth attempts. Fixed progress is resumable from
+`.powerpacks/messages/history-depth/`.
 
-iMessage always does a cheap local `chat.db` read regardless of mode.
+The first account sync takes 30 minutes up to a few hours depending on history
+size (hard cap 3 h), and targeted depth can add up to two hours. Heartbeats every
+~2 minutes are normal; keep waiting on the same process. Rerunning the same
+`$import-messages` command resumes unfinished targeted chats.
+
+iMessage always does a cheap local `chat.db` read.
 
 ### Step 2 — Link & discover message contacts
 
@@ -172,18 +164,20 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_cont
   --include-imessage --include-whatsapp
 ```
 
-Default is smart `auto`. For an explicit verb from Step 1, add the mode flag:
-`--wacli-sync-mode incremental` for **sync**, or `--wacli-sync-mode full` for
-**full**. (Drop `--include-imessage` or `--include-whatsapp` if that channel
-wasn't picked.)
+(Drop `--include-imessage` or `--include-whatsapp` if that channel wasn't
+picked. WhatsApp account sync and per-chat depth are selected automatically.)
 It writes `.powerpacks/messages/contacts.csv` and stages the discovery artifact
 at `.powerpacks/network-import/discover/messages/contacts.csv`, with status and
 counts in that fixed stage directory's `manifest.json`. It does not create a run
-directory or a step ledger. Explicit full WhatsApp runs also overwrite
+directory or a step ledger. WhatsApp runs also overwrite
 `.powerpacks/messages/history-depth/results.csv`, `progress.jsonl`, and
 `manifest.json`; those artifacts store hashed chat references and aggregate
-counters only. It pauses at consent gates; resolve each, then re-run the same
-`discover` command to advance:
+counters only. The manifest also stores one privacy-safe digest of direct-chat
+counts and latest timestamps. That digest makes an interrupted sync—or
+unrelated rows returned during a targeted request—trigger one catch-up scan on
+the next `$import-messages` run without a ledger or raw identifier snapshot. It
+pauses at consent gates; resolve each, then re-run the same `discover` command
+to advance:
 
 - **iMessage Full Disk Access** (`status: blocked_user_action`, step `check_imessage`):
   open the macOS pane, ask the user to enable Full Disk Access for this terminal,

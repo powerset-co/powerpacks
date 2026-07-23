@@ -209,7 +209,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 with self.subTest(relative=relative, token=token):
                     self.assertNotIn(token, primitive_text)
 
-    def test_discover_forwards_wacli_sync_mode(self) -> None:
+    def test_discover_lets_whatsapp_primitive_choose_sync_strategy(self) -> None:
         captured: dict[str, list[str]] = {}
 
         def fake_run_cmd(command, timeout=None):
@@ -224,19 +224,21 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 Path("accounts.json"),
                 0,
                 False,
-                sync_mode="incremental",
             )
 
         self.assertIsNone(result)
         cmd = captured["command"]
-        self.assertIn("--sync-mode", cmd)
-        self.assertEqual(cmd[cmd.index("--sync-mode") + 1], "incremental")
+        self.assertNotIn("--sync-mode", cmd)
         self.assertEqual(
             captured["timeout"],
             discover_messages.DEFAULT_WACLI_SYNC_TIMEOUT
             + discover_messages.DEFAULT_WACLI_DEPTH_TIMEOUT
             + 900,
         )
+
+        parser = discover_messages.build_parser()
+        options = parser.parse_args(["discover", "--include-whatsapp"])
+        self.assertFalse(hasattr(options, "wacli_sync_mode"))
 
     def test_messages_import_is_fixed_output_and_stateless(self) -> None:
         path = INGESTION / "primitives/import_contacts_pipeline/messages.py"

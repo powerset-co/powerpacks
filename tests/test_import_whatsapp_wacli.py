@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -164,29 +165,26 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         incr = mod.effective_max_messages(mod.DEFAULT_INCREMENTAL_BUDGET, 25000)
         self.assertGreater(incr, 25000)  # only the delta beyond existing
 
-        # auto: full on the first run (empty store), incremental once populated.
-        self.assertEqual(mod.resolve_effective_max("auto", 0, 0), 0)
-        self.assertEqual(mod.resolve_effective_max("auto", 0, 25000), incr)
+        # The primitive makes the only decision: full on an empty store,
+        # incremental once populated.
+        self.assertEqual(mod.resolve_effective_max(0, 0), 0)
+        self.assertEqual(mod.resolve_effective_max(0, 25000), incr)
 
-        # full: always a full re-backfill (0 = unlimited), regardless of store.
-        self.assertEqual(mod.resolve_effective_max("full", 0, 0), 0)
-        self.assertEqual(mod.resolve_effective_max("full", 0, 25000), 0)
+        # An explicit positive low-level cap still wins.
+        self.assertEqual(mod.resolve_effective_max(10000, 25000), 26000)
+        self.assertEqual(mod.resolve_effective_max(10000, 0), 10000)
 
-        # incremental: bounded delta even on a fresh store.
-        self.assertEqual(mod.resolve_effective_max("incremental", 0, 25000), incr)
-        self.assertEqual(
-            mod.resolve_effective_max("incremental", 0, 0),
-            mod.effective_max_messages(mod.DEFAULT_INCREMENTAL_BUDGET, 0),
+    def test_cold_bootstrap_default_allows_three_hours(self) -> None:
+        self.assertEqual(mod.DEFAULT_AUTH_TIMEOUT, 10800)
+        self.assertEqual(mod.DEFAULT_SYNC_TIMEOUT, 10800)
+
+    def test_history_depth_cutoff_is_three_calendar_years(self) -> None:
+        leap_day = datetime(2024, 2, 29, 12, tzinfo=timezone.utc)
+        cutoff = datetime.fromtimestamp(
+            mod.history_depth_cutoff_ts(leap_day),
+            timezone.utc,
         )
-
-        # An explicit positive --max-messages wins over the mode.
-        self.assertEqual(mod.resolve_effective_max("full", 10000, 25000), 26000)
-        self.assertEqual(mod.resolve_effective_max("auto", 10000, 0), 10000)
-
-    def test_history_depth_is_full_mode_only(self) -> None:
-        self.assertTrue(mod.history_depth_enabled("full"))
-        self.assertFalse(mod.history_depth_enabled("auto"))
-        self.assertFalse(mod.history_depth_enabled("incremental"))
+        self.assertEqual(cutoff, datetime(2021, 2, 28, 12, tzinfo=timezone.utc))
 
     def test_qr_payloads_are_redacted_from_diagnostics(self) -> None:
         text = 'before\n2@secret-whatsapp-pairing-payload\n{"event":"qr_code","data":{"code":"2@secret"}}\nafter'
@@ -203,15 +201,19 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(ctx.exception.payload["install_command"], "brew install qrencode")
         self.assertIn("qrencode is required", ctx.exception.payload["message"])
 
-    def test_auth_interrupts_wacli_bootstrap_sync_after_connected_event(self) -> None:
+    def test_auth_waits_for_wacli_bootstrap_sync_after_connected_event(self) -> None:
         class FakeProc:
             def __init__(self) -> None:
                 self.stdout = io.StringIO("2@qr-payload\n")
                 self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
                 self.returncode = None
                 self.signals: list[int] = []
+                self.poll_calls = 0
 
             def poll(self):
+                self.poll_calls += 1
+                if self.poll_calls > 1:
+                    self.returncode = 0
                 return self.returncode
 
             def send_signal(self, sig: int) -> None:
@@ -232,9 +234,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 mock.patch.object(mod, "update_qr_page") as update_qr_page:
             result = mod.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
 
-        self.assertEqual(fake.signals, [mod.signal.SIGINT])
+        self.assertEqual(fake.signals, [])
         self.assertTrue(result["connected_event"])
-        self.assertTrue(result["auth_bootstrap_sync_interrupted"])
+        self.assertTrue(result["auth_bootstrap_sync_completed"])
         self.assertIn("--events", result["command"])
         update_qr_page.assert_called()
 
@@ -244,8 +246,12 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 self.stdout = io.StringIO("2@qr-payload\n")
                 self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
                 self.returncode = None
+                self.poll_calls = 0
 
             def poll(self):
+                self.poll_calls += 1
+                if self.poll_calls > 1:
+                    self.returncode = 0
                 return self.returncode
 
             def send_signal(self, sig: int) -> None:
@@ -266,6 +272,33 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             mod.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s", open_qr_page=False)
 
         self.assertFalse(update_qr_page.call_args.kwargs["open_page"])
+
+    def test_auth_fails_when_bootstrap_exits_nonzero_after_connected(self) -> None:
+        class FakeProc:
+            def __init__(self) -> None:
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO('{"event":"connected","ts":1}\n')
+                self.returncode = None
+                self.poll_calls = 0
+
+            def poll(self):
+                self.poll_calls += 1
+                if self.poll_calls > 1:
+                    self.returncode = 1
+                return self.returncode
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+            def wait(self) -> int:
+                return self.returncode if self.returncode is not None else 1
+
+        with mock.patch.object(mod.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
+                mock.patch.object(mod.subprocess, "Popen", return_value=FakeProc()), \
+                self.assertRaises(mod.PrimitiveFailed) as ctx:
+            mod.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s")
+
+        self.assertIn("initial history sync did not finish", str(ctx.exception))
 
     def test_export_reads_metadata_without_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -654,7 +687,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertIn("Failed to download", ctx.exception.payload["message"])
             self.assertFalse(stamp.exists())  # not stamped -> next run retries
 
-    def test_history_depth_targets_use_actual_message_timestamps(self) -> None:
+    def test_history_depth_targets_use_actual_timestamps_and_changed_states(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = Path(td) / "wacli"
             create_wacli_db(store)
@@ -717,8 +750,44 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 store,
                 active_since_ts=1767225600,
                 max_count=20,
+                bootstrap=True,
             )
             self.assertEqual([target.chat_jid for target in targets], ["15550001111@s.whatsapp.net"])
+
+            unchanged = mod.history_depth_targets(
+                store,
+                active_since_ts=1767225600,
+                max_count=20,
+                before_states={
+                    "15550001111@s.whatsapp.net": (1, recent_ts),
+                    "15550002222@s.whatsapp.net": (1, 1700000000),
+                    "15550003333@g.us": (1, recent_ts),
+                },
+            )
+            self.assertEqual(unchanged, [])
+
+            changed = mod.history_depth_targets(
+                store,
+                active_since_ts=1767225600,
+                max_count=20,
+                before_states={"15550001111@s.whatsapp.net": (0, 0)},
+            )
+            self.assertEqual([target.chat_jid for target in changed], ["15550001111@s.whatsapp.net"])
+            self.assertEqual(changed[0].current_latest_ts, recent_ts)
+            self.assertTrue(changed[0].state_changed)
+
+            resumed = mod.history_depth_targets(
+                store,
+                active_since_ts=1767225600,
+                max_count=20,
+                before_states={"15550001111@s.whatsapp.net": (1, recent_ts)},
+                resume_refs={mod.history_chat_ref("15550001111@s.whatsapp.net")},
+            )
+            self.assertEqual([target.chat_jid for target in resumed], ["15550001111@s.whatsapp.net"])
+            self.assertFalse(resumed[0].state_changed)
+
+            states = mod.history_depth_chat_states(store)
+            self.assertEqual(states["15550001111@s.whatsapp.net"], (1, recent_ts))
 
     def test_history_backfill_attempt_uses_throttled_ten_request_command(self) -> None:
         target = mod.HistoryDepthTarget(
@@ -739,7 +808,11 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 "json": {"data": {"requests_sent": 4, "responses_seen": 4}},
             }
 
-        with mock.patch.object(mod, "history_depth_counts", side_effect=[(1, 10), (6, 18)]), \
+        with mock.patch.object(
+                mod,
+                "history_depth_counts",
+                side_effect=[(1, 10, 1768000000), (6, 18, 1768000000)],
+            ), \
                 mock.patch.object(mod, "wacli_bin", return_value="/tmp/wacli"), \
                 mock.patch.object(mod, "run_command", side_effect=fake_run):
             attempt = mod.run_history_backfill_attempt(
@@ -756,7 +829,47 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(attempt.target_added, 5)
         self.assertEqual(attempt.unrelated_added, 3)
         self.assertEqual(attempt.requests_sent, 4)
+        self.assertEqual(attempt.after_latest_ts, 1768000000)
         self.assertEqual(captured["kwargs"]["timeout"], 900)
+
+    def test_history_depth_includes_legacy_unknown_direct_chat(self) -> None:
+        jid = "15550001111@s.whatsapp.net"
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td) / "wacli"
+            create_wacli_db(store)
+            conn = sqlite3.connect(store / "wacli.db")
+            try:
+                conn.execute(
+                    "INSERT INTO chats (jid, kind, name, last_message_ts) VALUES (?, ?, ?, ?)",
+                    (jid, "unknown", "Legacy Direct", 1768000000),
+                )
+                conn.execute(
+                    "INSERT INTO messages "
+                    "(chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, display_text) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        jid,
+                        "Legacy Direct",
+                        "legacy-message",
+                        jid,
+                        "Legacy",
+                        1768000000,
+                        0,
+                        "PRIVATE BODY",
+                        "PRIVATE BODY",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            targets = mod.history_depth_targets(
+                store,
+                active_since_ts=1767225600,
+                bootstrap=True,
+            )
+
+        self.assertEqual([target.chat_jid for target in targets], [jid])
 
     def test_history_depth_two_no_growth_attempts_are_terminal_and_private(self) -> None:
         jid = "15550001111@s.whatsapp.net"
@@ -844,12 +957,15 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         completed = mod.HistoryDepthAttempt(
             0, 1, 1, 2, 0, 6, "none", False
         )
+        zero = mod.HistoryDepthAttempt(
+            0, 1, 1, 0, 0, 6, "none", False
+        )
         with tempfile.TemporaryDirectory() as td, \
                 mock.patch.object(mod, "history_depth_targets", return_value=[target]), \
                 mock.patch.object(
                     mod,
                     "run_history_backfill_attempt",
-                    side_effect=[grew, completed],
+                    side_effect=[grew, completed, zero, zero],
                 ) as run_attempt, \
                 mock.patch.object(mod.time, "sleep") as sleep:
             out_dir = Path(td) / "history-depth"
@@ -862,13 +978,13 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             )
             row = mod.read_history_depth_results(out_dir / "results.csv")[target.chat_ref]
 
-        self.assertEqual(run_attempt.call_count, 2)
+        self.assertEqual(run_attempt.call_count, 4)
         sleep.assert_called_once_with(2)
         self.assertEqual(summary["status"], "completed")
         self.assertEqual(summary["counts"]["target_rows_added"], 5)
         self.assertEqual(summary["counts"]["unrelated_rows_added"], 2)
         self.assertEqual(row["transient_failures"], "1")
-        self.assertEqual(row["outcome"], "recovered")
+        self.assertEqual(row["outcome"], "server_zero")
 
     def test_history_depth_timeout_growth_past_shallow_threshold_is_recovered(self) -> None:
         jid = "15550001111@s.whatsapp.net"
@@ -890,7 +1006,175 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
         run_attempt.assert_called_once()
         self.assertEqual(summary["status"], "completed")
-        self.assertEqual(row["outcome"], "recovered")
+        self.assertEqual(row["outcome"], "completed_threshold")
+
+    def test_history_depth_seeds_all_targets_before_budget_check(self) -> None:
+        targets = [
+            mod.HistoryDepthTarget(
+                f"1555000{suffix}@s.whatsapp.net",
+                mod.history_chat_ref(f"1555000{suffix}@s.whatsapp.net"),
+                "dm",
+                1,
+            )
+            for suffix in ("1111", "2222")
+        ]
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(mod, "history_depth_targets", return_value=targets), \
+                mock.patch.object(mod, "history_depth_total_count", return_value=2), \
+                mock.patch.object(mod.time, "monotonic", side_effect=[0, 2]), \
+                mock.patch.object(mod, "run_history_backfill_attempt") as run_attempt:
+            out_dir = Path(td) / "history-depth"
+            summary = mod.run_history_depth_stage(
+                Path(td) / "wacli",
+                out_dir=out_dir,
+                active_since_ts=1767225600,
+                time_budget_seconds=1,
+            )
+            rows = mod.read_history_depth_results(out_dir / "results.csv")
+
+        run_attempt.assert_not_called()
+        self.assertEqual(set(rows), {target.chat_ref for target in targets})
+        self.assertTrue(all(row["outcome"] == "pending" for row in rows.values()))
+        self.assertEqual(summary["status"], "partial")
+
+    def test_history_depth_recovers_pre_sync_count_drift_from_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "history-depth"
+            out_dir.mkdir(parents=True)
+            mod.write_history_depth_results(out_dir / "results.csv", {})
+            (out_dir / "manifest.json").write_text(
+                json.dumps({
+                    "policy": {"version": mod.HISTORY_DEPTH_POLICY_VERSION},
+                    "counts": {"source_total_messages": 10},
+                    "source": {
+                        "dm_state_sha256": mod.history_depth_state_digest({}),
+                    },
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch.object(mod, "history_depth_targets", return_value=[]) as targets, \
+                    mock.patch.object(mod, "history_depth_total_count", return_value=12):
+                summary = mod.run_history_depth_stage(
+                    Path(td) / "wacli",
+                    out_dir=out_dir,
+                    active_since_ts=1767225600,
+                    before_total_messages=12,
+                    chat_delay=0,
+                )
+
+        self.assertTrue(targets.call_args.kwargs["bootstrap"])
+        self.assertTrue(summary["policy"]["recovered_pre_sync_changes"])
+
+    def test_history_depth_recovers_pre_sync_timestamp_drift_from_manifest(self) -> None:
+        jid = "15550001111@s.whatsapp.net"
+        old_states = {jid: (1, 1768000000)}
+        new_states = {jid: (1, 1769000000)}
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "history-depth"
+            out_dir.mkdir(parents=True)
+            mod.write_history_depth_results(out_dir / "results.csv", {})
+            (out_dir / "manifest.json").write_text(
+                json.dumps({
+                    "policy": {"version": mod.HISTORY_DEPTH_POLICY_VERSION},
+                    "counts": {"source_total_messages": 10},
+                    "source": {
+                        "dm_state_sha256": mod.history_depth_state_digest(old_states),
+                    },
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                    mod,
+                    "history_depth_chat_states",
+                    return_value=new_states,
+                ), mock.patch.object(
+                    mod,
+                    "history_depth_total_count",
+                    return_value=10,
+                ), mock.patch.object(
+                    mod,
+                    "history_depth_targets",
+                    return_value=[],
+                ) as targets:
+                summary = mod.run_history_depth_stage(
+                    Path(td) / "wacli",
+                    out_dir=out_dir,
+                    active_since_ts=1767225600,
+                    before_states=new_states,
+                    before_total_messages=10,
+                    chat_delay=0,
+                )
+
+        self.assertTrue(targets.call_args.kwargs["bootstrap"])
+        self.assertTrue(summary["policy"]["recovered_pre_sync_changes"])
+
+    def test_history_depth_keeps_pre_target_watermark_for_catch_up(self) -> None:
+        jid = "15550001111@s.whatsapp.net"
+        target = mod.HistoryDepthTarget(jid, mod.history_chat_ref(jid), "dm", 1)
+        grew = mod.HistoryDepthAttempt(
+            0, 1, 1, 20, 3, 21, "none", False
+        )
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(mod, "history_depth_targets", return_value=[target]), \
+                mock.patch.object(mod, "history_depth_total_count", return_value=10), \
+                mock.patch.object(mod, "run_history_backfill_attempt", return_value=grew):
+            summary = mod.run_history_depth_stage(
+                Path(td) / "wacli",
+                out_dir=Path(td) / "history-depth",
+                active_since_ts=1767225600,
+                before_total_messages=10,
+                chat_delay=0,
+            )
+
+        self.assertEqual(summary["counts"]["source_total_messages"], 10)
+        self.assertEqual(summary["counts"]["unrelated_rows_added"], 3)
+
+    def test_history_depth_reconciles_pending_target_above_threshold(self) -> None:
+        jid = "15550001111@s.whatsapp.net"
+        chat_ref = mod.history_chat_ref(jid)
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "history-depth"
+            mod.write_history_depth_results(out_dir / "results.csv", {
+                chat_ref: {
+                    "chat_ref": chat_ref,
+                    "kind": "dm",
+                    "initial_count": 1,
+                    "current_count": 1,
+                    "target_rows_added": 0,
+                    "unrelated_rows_added": 0,
+                    "attempts": 0,
+                    "requests_sent": 0,
+                    "responses_seen": 0,
+                    "transient_failures": 0,
+                    "no_growth_attempts": 0,
+                    "outcome": "pending",
+                    "error_category": "none",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+            with mock.patch.object(
+                    mod,
+                    "history_depth_chat_states",
+                    return_value={jid: (21, 1768000000)},
+                ), mock.patch.object(
+                    mod,
+                    "history_depth_total_count",
+                    return_value=21,
+                ), mock.patch.object(
+                    mod,
+                    "history_depth_targets",
+                    return_value=[],
+                ):
+                mod.run_history_depth_stage(
+                    Path(td) / "wacli",
+                    out_dir=out_dir,
+                    active_since_ts=1767225600,
+                    chat_delay=0,
+                )
+            row = mod.read_history_depth_results(out_dir / "results.csv")[chat_ref]
+
+        self.assertEqual(row["current_count"], "21")
+        self.assertEqual(row["outcome"], "completed_threshold")
 
     def test_history_depth_zero_targets_writes_complete_artifact_contract(self) -> None:
         with tempfile.TemporaryDirectory() as td, \
@@ -952,6 +1236,183 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         run_attempt.assert_not_called()
         self.assertEqual(summary["status"], "completed")
 
+    def test_history_depth_timestamp_change_reactivates_terminal_target(self) -> None:
+        jid = "15550001111@s.whatsapp.net"
+        target = mod.HistoryDepthTarget(
+            jid,
+            mod.history_chat_ref(jid),
+            "dm",
+            1,
+            state_changed=True,
+        )
+        zero = mod.HistoryDepthAttempt(
+            0, 1, 1, 0, 0, 1, "none", False
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "history-depth"
+            mod.write_history_depth_results(out_dir / "results.csv", {
+                target.chat_ref: {
+                    "chat_ref": target.chat_ref,
+                    "kind": "dm",
+                    "initial_count": 1,
+                    "current_count": 1,
+                    "target_rows_added": 0,
+                    "unrelated_rows_added": 0,
+                    "attempts": 2,
+                    "requests_sent": 2,
+                    "responses_seen": 2,
+                    "transient_failures": 0,
+                    "no_growth_attempts": 2,
+                    "outcome": "server_zero",
+                    "error_category": "none",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+            with mock.patch.object(
+                    mod,
+                    "history_depth_targets",
+                    return_value=[target],
+                ), mock.patch.object(
+                    mod,
+                    "run_history_backfill_attempt",
+                    return_value=zero,
+                ) as run_attempt:
+                summary = mod.run_history_depth_stage(
+                    Path(td) / "wacli",
+                    out_dir=out_dir,
+                    active_since_ts=1767225600,
+                    no_growth_limit=1,
+                    chat_delay=0,
+                )
+
+        run_attempt.assert_called_once()
+        self.assertEqual(summary["status"], "completed")
+
+    def test_history_depth_digest_recovery_reopens_exact_timestamp_drift(self) -> None:
+        jid = "15550001111@s.whatsapp.net"
+        old_ts = 1768000000
+        new_ts = 1769000000
+        target = mod.HistoryDepthTarget(
+            jid,
+            mod.history_chat_ref(jid),
+            "dm",
+            1,
+            current_latest_ts=new_ts,
+            state_changed=False,
+        )
+        zero = mod.HistoryDepthAttempt(
+            0, 1, 1, 0, 0, 1, "none", False, after_latest_ts=new_ts
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "history-depth"
+            out_dir.mkdir(parents=True)
+            mod.write_history_depth_results(out_dir / "results.csv", {
+                target.chat_ref: {
+                    "chat_ref": target.chat_ref,
+                    "kind": "dm",
+                    "initial_count": 1,
+                    "current_count": 1,
+                    "current_latest_ts": old_ts,
+                    "target_rows_added": 0,
+                    "unrelated_rows_added": 0,
+                    "attempts": 2,
+                    "requests_sent": 2,
+                    "responses_seen": 2,
+                    "transient_failures": 0,
+                    "no_growth_attempts": 2,
+                    "outcome": "server_zero",
+                    "error_category": "none",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+            (out_dir / "manifest.json").write_text(
+                json.dumps({
+                    "policy": {"version": mod.HISTORY_DEPTH_POLICY_VERSION},
+                    "counts": {"source_total_messages": 1},
+                    "source": {
+                        "dm_state_sha256": mod.history_depth_state_digest(
+                            {jid: (1, old_ts)}
+                        ),
+                    },
+                }),
+                encoding="utf-8",
+            )
+            current_states = {jid: (1, new_ts)}
+            with mock.patch.object(
+                    mod,
+                    "history_depth_chat_states",
+                    return_value=current_states,
+                ), mock.patch.object(
+                    mod,
+                    "history_depth_total_count",
+                    return_value=1,
+                ), mock.patch.object(
+                    mod,
+                    "history_depth_targets",
+                    return_value=[target],
+                ) as targets, mock.patch.object(
+                    mod,
+                    "run_history_backfill_attempt",
+                    return_value=zero,
+                ) as run_attempt:
+                mod.run_history_depth_stage(
+                    Path(td) / "wacli",
+                    out_dir=out_dir,
+                    active_since_ts=1767225600,
+                    before_states=current_states,
+                    before_total_messages=1,
+                    no_growth_limit=1,
+                    chat_delay=0,
+                )
+
+        self.assertTrue(targets.call_args.kwargs["bootstrap"])
+        run_attempt.assert_called_once()
+
+    def test_history_depth_migrates_legacy_recovered_row(self) -> None:
+        jid = "15550001111@s.whatsapp.net"
+        target = mod.HistoryDepthTarget(jid, mod.history_chat_ref(jid), "dm", 6)
+        zero = mod.HistoryDepthAttempt(
+            0, 1, 1, 0, 0, 6, "none", False
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "history-depth"
+            mod.write_history_depth_results(out_dir / "results.csv", {
+                target.chat_ref: {
+                    "chat_ref": target.chat_ref,
+                    "kind": "dm",
+                    "initial_count": 1,
+                    "current_count": 6,
+                    "target_rows_added": 5,
+                    "unrelated_rows_added": 0,
+                    "attempts": 1,
+                    "requests_sent": 1,
+                    "responses_seen": 1,
+                    "transient_failures": 0,
+                    "no_growth_attempts": 0,
+                    "outcome": "recovered",
+                    "error_category": "none",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+            with mock.patch.object(
+                    mod,
+                    "history_depth_targets",
+                    return_value=[target],
+                ), mock.patch.object(
+                    mod,
+                    "run_history_backfill_attempt",
+                    return_value=zero,
+                ) as run_attempt:
+                mod.run_history_depth_stage(
+                    Path(td) / "wacli",
+                    out_dir=out_dir,
+                    active_since_ts=1767225600,
+                    no_growth_limit=1,
+                    chat_delay=0,
+                )
+
+        run_attempt.assert_called_once()
+
     def test_history_backfill_error_classification(self) -> None:
         cases = [
             (124, "", 1, ("timeout", True)),
@@ -986,13 +1447,16 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(result["stdout"], "partial output")
         self.assertIn("command timed out after 1s", result["stderr"])
 
-    def test_cmd_run_invokes_history_depth_only_for_full_mode(self) -> None:
+    def test_cmd_run_chooses_sync_and_depth_from_store_state(self) -> None:
         diagnostics = {
             "contacts_with_message_count": 0,
             "contacts_in_groups": 0,
         }
-        for sync_mode, expected_calls in (("full", 1), ("auto", 0), ("incremental", 0)):
-            with self.subTest(sync_mode=sync_mode), tempfile.TemporaryDirectory() as td:
+        for existing_messages, expected_strategy, requested_max in (
+            (0, "cold_full", 100),
+            (10, "incremental", 0),
+        ):
+            with self.subTest(existing_messages=existing_messages), tempfile.TemporaryDirectory() as td:
                 tmp = Path(td)
                 args = type("Args", (), {
                     "store": tmp / "wacli",
@@ -1005,8 +1469,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "auth_timeout": 60,
                     "idle_exit": "5s",
                     "no_open_qr_page": True,
-                    "max_messages": 0,
-                    "sync_mode": sync_mode,
+                    "max_messages": requested_max,
                     "sync_timeout": 60,
                     "group_info_timeout": 60,
                     "group_info_interval": 0,
@@ -1033,14 +1496,22 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     mod,
                     "store_stats",
                     side_effect=[
-                        {"data": {"messages": 10}},
-                        {"data": {"messages": 10}},
+                        {"data": {"messages": existing_messages}},
+                        {"data": {"messages": existing_messages}},
                     ],
+                ), mock.patch.object(
+                    mod,
+                    "history_depth_chat_states",
+                    return_value={"15550001111@s.whatsapp.net": (1, 1768000000)},
+                ), mock.patch.object(
+                    mod,
+                    "history_depth_total_count",
+                    side_effect=[existing_messages, existing_messages],
                 ), mock.patch.object(
                     mod,
                     "run_sync",
                     return_value={"returncode": 0},
-                ), mock.patch.object(
+                ) as sync, mock.patch.object(
                     mod,
                     "run_history_depth_stage",
                     return_value={"status": "completed", "counts": {}},
@@ -1060,9 +1531,26 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     rc = mod.cmd_run(args)
 
                 self.assertEqual(rc, 0)
-                self.assertEqual(depth.call_count, expected_calls)
+                depth.assert_called_once()
+                self.assertEqual(
+                    depth.call_args.kwargs["cold_start"],
+                    existing_messages == 0,
+                )
+                self.assertEqual(
+                    depth.call_args.kwargs["before_states"],
+                    {"15550001111@s.whatsapp.net": (1, 1768000000)},
+                )
+                self.assertEqual(
+                    depth.call_args.kwargs["before_total_messages"],
+                    existing_messages,
+                )
+                effective_max = sync.call_args.kwargs["max_messages"]
+                if existing_messages == 0:
+                    self.assertEqual(effective_max, 0)
+                else:
+                    self.assertGreater(effective_max, existing_messages)
                 payload = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-                self.assertEqual(payload["sync"]["history_depth_enabled"], sync_mode == "full")
+                self.assertEqual(payload["sync"]["strategy"], expected_strategy)
 
 
 if __name__ == "__main__":

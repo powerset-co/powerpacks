@@ -52,9 +52,9 @@ DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES = 0
 # First full backfill scales with history size (~3-year default window):
 # ~30 minutes on small accounts, a few hours on large ones. 3h hard cap.
 DEFAULT_WACLI_SYNC_TIMEOUT = 10800
-# Explicit full imports then run a resumable, sequential shallow-chat depth
-# stage. Give that bounded child work up to two additional hours before the
-# discovery wrapper stops; completed per-chat results remain resumable.
+# Every WhatsApp import can run a resumable, sequential shallow-chat depth
+# stage after the store-aware account sync. Give that bounded child work up to
+# two additional hours; completed per-chat results remain resumable.
 DEFAULT_WACLI_DEPTH_TIMEOUT = 7200
 
 MESSAGES_DIR = Path(".powerpacks/messages")
@@ -197,7 +197,6 @@ def _extract_whatsapp(
     accounts_path: Path,
     max_messages: int,
     include_imessage: bool,
-    sync_mode: str = "auto",
 ) -> dict[str, Any] | None:
     command = py_cmd(
         "packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
@@ -212,8 +211,6 @@ def _extract_whatsapp(
         str(WHATSAPP_PROGRESS_JSONL),
         "--max-messages",
         str(max_messages),
-        "--sync-mode",
-        sync_mode,
         "--max-group-participants",
         "30",
         "--sync-timeout",
@@ -349,7 +346,6 @@ def discover(
     *,
     accounts_path: Path = DEFAULT_ACCOUNTS,
     wacli_max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
-    wacli_sync_mode: str = "auto",
     include_imessage: bool | None = None,
     include_whatsapp: bool | None = None,
 ) -> dict[str, Any]:
@@ -395,7 +391,6 @@ def discover(
             accounts_path,
             wacli_max_messages,
             inputs["include_imessage"],
-            sync_mode=wacli_sync_mode,
         )
         if child is None:
             child = _normalize_channel(
@@ -462,9 +457,6 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("discover", help="Discover message contacts")
     run.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     run.add_argument("--wacli-max-messages", type=int, default=DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES)
-    run.add_argument("--wacli-sync-mode", choices=("auto", "full", "incremental"), default="auto",
-                     help="auto: full WhatsApp backfill on first run, incremental after; "
-                          "full: force a full re-backfill; incremental: only new messages")
     run.add_argument("--include-imessage", action="store_true", default=None)
     run.add_argument("--include-whatsapp", action="store_true", default=None)
     return parser
@@ -476,7 +468,6 @@ def main() -> int:
         payload = discover(
             accounts_path=args.accounts,
             wacli_max_messages=args.wacli_max_messages,
-            wacli_sync_mode=args.wacli_sync_mode,
             include_imessage=args.include_imessage,
             include_whatsapp=args.include_whatsapp,
         )
