@@ -26,7 +26,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "packs/search/primitives/lib"))
-ENRICH_DIR = ROOT / "packs/ingestion/primitives/enrich_people"
+ENRICH_DIR = ROOT / "packs/ingestion/primitives/enrich"
 sys.path.insert(0, str(ENRICH_DIR))
 
 from packs.ingestion.schemas.people_schema import (  # noqa: E402

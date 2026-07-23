@@ -26,7 +26,7 @@ export function setupCommandArgs(operatorId: string, phase: "status" | "next" | 
 export function onboardingV2LinkedInCommand(command: "dry-run" | "run", operatorId: string, options: { csvPath?: string; sourceLabel?: string; force?: boolean } = {}) {
   const args = [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py",
+    "packs/ingestion/primitives/setup/setup_linkedin_csv.py",
     command,
     "--operator-id", operatorId,
     "--accounts", ".powerpacks/ingestion/accounts.json",
@@ -98,7 +98,7 @@ export function gmailLinkCommand(
     const [first, ...rest] = emails;
     automation.push([
       "uv", "run", "--project", ".", "python",
-      "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+      "packs/ingestion/primitives/setup/msgvault_setup.py",
       "browser-setup",
       "--email", first,
       "--project", gmailOauthProjectId(first),
@@ -108,7 +108,7 @@ export function gmailLinkCommand(
     if (rest.length) {
       automation.push([
         "uv", "run", "--project", ".", "python",
-        "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+        "packs/ingestion/primitives/setup/msgvault_setup.py",
         "add-test-users",
         ...rest,
         ...homeArgs,
@@ -116,7 +116,7 @@ export function gmailLinkCommand(
       for (const email of rest) {
         automation.push([
           "uv", "run", "--project", ".", "python",
-          "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+          "packs/ingestion/primitives/setup/msgvault_setup.py",
           "add-account",
           "--email", email,
           ...homeArgs,
@@ -130,7 +130,7 @@ export function gmailLinkCommand(
     if (!opts.skipTestUsers) {
       automation.push([
         "uv", "run", "--project", ".", "python",
-        "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+        "packs/ingestion/primitives/setup/msgvault_setup.py",
         "add-test-users",
         ...emails,
         ...homeArgs,
@@ -142,7 +142,7 @@ export function gmailLinkCommand(
       for (const email of emails) {
         automation.push([
           "uv", "run", "--project", ".", "python",
-          "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+          "packs/ingestion/primitives/setup/msgvault_setup.py",
           "add-account",
           "--email", email,
           ...homeArgs,
@@ -235,7 +235,7 @@ export function onboardingGmailRunCommand(operatorId: string): string[] {
 export function gmailEnrichEstimateCommand(): string[] {
   return [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/setup_gmail/setup_gmail.py",
+    "packs/ingestion/primitives/setup/setup_gmail.py",
     "estimate",
   ];
 }

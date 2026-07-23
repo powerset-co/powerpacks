@@ -14,30 +14,30 @@ enrichment until the completed handoff.
 Start/resume the conversational setup flow:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py run
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --input <user-reply>
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py skip
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py run
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --input <user-reply>
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py skip
 ```
 
 Harnesses should prefer structured `continue --action ...` / `--csv ...` flags
 over free-form replies whenever possible:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action yes
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action no
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action skip
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action done
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --action yes
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --action no
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --action skip
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --action done
 ```
 
 For the LinkedIn CSV handoff, use the `harness_actions` commands returned by the
 primitive, or these equivalent flags:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action scan-linkedin-downloads
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action open-downloads
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action open-linkedin-drop-folder
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --action check-linkedin-drop-folder
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py continue --csv <Connections.csv>
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --action scan-linkedin-downloads
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --action open-downloads
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --action open-linkedin-drop-folder
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --action check-linkedin-drop-folder
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py continue --csv <Connections.csv>
 ```
 
 When a primitive response has `status: needs_agent_action`, Codex must run the
@@ -55,8 +55,8 @@ directly and continue with the user's reply.
 Check/plan without entering the flow:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py check
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py plan
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py check
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py plan
 ```
 
 For guided CLI operation, prefer the idempotent `step` loop. The harness should
@@ -65,7 +65,7 @@ keep calling the same command until it returns `completed`, `needs_input`,
 operator to add/confirm/skip, and rerun `step`.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step
 ```
 
 Gmail is msgvault-backed. The Gmail step should be dead simple for the user:
@@ -77,7 +77,7 @@ for new addresses as pending accounts without starting msgvault sync or marking
 them import-ready; `--skip-source gmail` records an explicit skip.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step \
   --gmail-db ~/.msgvault/msgvault.db \
   --gmail-account me@gmail.com \
   --gmail-account work@example.com
@@ -99,7 +99,7 @@ action.
 LinkedIn CSV remains the primary LinkedIn path:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step \
   --linkedin-csv ~/Downloads/Connections.csv \
   --linkedin-source-user <label>
 ```

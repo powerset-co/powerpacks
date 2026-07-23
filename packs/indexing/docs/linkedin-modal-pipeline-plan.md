@@ -21,7 +21,7 @@ no spend gates on this path.
 
 ## What already exists (reuse, don't rebuild)
 
-- `packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py` —
+- `packs/ingestion/primitives/setup/setup_linkedin_csv.py` —
   the onboarding-v2 end-to-end pipeline: inspect → discover → enrich →
   source_people → merge_network → index_estimate →
   index_records → search_duckdb, with `RunContext.event()` writing atomic

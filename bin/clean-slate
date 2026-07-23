@@ -14,6 +14,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 if [[ -x "$ROOT/.venv/bin/python" ]]; then
-  exec "$ROOT/.venv/bin/python" -m packs.ingestion.primitives.clean_slate.clean_slate "$@"
+  exec "$ROOT/.venv/bin/python" -m packs.ingestion.primitives.setup.clean_slate "$@"
 fi
-exec uv run --project . python -m packs.ingestion.primitives.clean_slate.clean_slate "$@"
+exec uv run --project . python -m packs.ingestion.primitives.setup.clean_slate "$@"

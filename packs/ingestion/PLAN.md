@@ -5,7 +5,7 @@
 `linkedin/network_import` does **not** currently call `enrich_people`.
 
 As of this branch, `linkedin/network_import` is source-specific and delegates
-profile hydration to `primitives/enrich_people/`.
+profile hydration to `primitives/enrich/`.
 
 Current split:
 
@@ -14,7 +14,7 @@ Current split:
   - writes source-only `connections_for_enrichment.csv` and `source_people.csv`
   - delegates profile enrichment/cache/normalization to `enrich_people`
   - exposes canonical `people.csv` from the delegated run
-- `primitives/enrich_people/`
+- `primitives/enrich/`
   - accepts an existing shared people-schema CSV
   - queues rows that already have LinkedIn URLs/public identifiers
   - reads seeded RapidAPI profile cache before any network call

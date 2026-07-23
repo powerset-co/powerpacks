@@ -7,7 +7,7 @@ artifacts without hardcoding the source repository into runtime code.
 ## Generate
 
 ```bash
-uv run --project . python packs/ingestion/primitives/bootstrap_network_from_exports/bootstrap_network_from_exports.py generate \
+uv run --project . python packs/ingestion/primitives/setup/bootstrap_network_from_exports.py generate \
   --operator-mapping ../legacy-app/operator_mapping.json \
   --source-dir ../legacy-app/pipeline_output/unified/contact \
   --operators operator-a,operator-b \

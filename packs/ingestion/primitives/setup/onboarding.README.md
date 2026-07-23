@@ -10,7 +10,7 @@ state where possible, and gives the next action for each missing channel.
 Use the idempotent `step` command for harnesses and agents:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step
 ```
 
 Rerun the same command until it returns one of:
@@ -24,7 +24,7 @@ Gmail uses local msgvault metadata only. There is no hosted Powerset Gmail
 connect flow in onboarding.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step \
   --gmail-db ~/.msgvault/msgvault.db \
   --gmail-all
 ```
@@ -32,7 +32,7 @@ uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py st
 LinkedIn CSV can be provided when available:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step \
   --linkedin-csv ~/Downloads/Connections.csv \
   --linkedin-source-user <label>
 ```
@@ -43,9 +43,9 @@ handoff owns LinkedIn parsing, enrichment, and any spend approval gates.
 Status/planning helpers:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py status
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py check
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py plan
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py status
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py check
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py plan
 ```
 
 Channels:

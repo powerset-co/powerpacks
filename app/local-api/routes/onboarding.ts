@@ -354,7 +354,7 @@ function startOnboardingV2LinkedIn(body: Record<string, any>): SetupJob {
 function onboardingV2GmailCommand(command: "dry-run" | "run", operatorId: string, options: { approveSpend?: boolean; maxEnrich?: number; continueRun?: boolean } = {}) {
   const args = [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/setup_gmail/setup_gmail.py",
+    "packs/ingestion/primitives/setup/setup_gmail.py",
     command,
     "--operator-id", operatorId,
     "--accounts", ".powerpacks/ingestion/accounts.json",
@@ -457,7 +457,7 @@ function listGmailAccounts(): Promise<Record<string, any>> {
 function msgvaultStatus(): Promise<Record<string, any>> {
   const command = [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+    "packs/ingestion/primitives/setup/msgvault_setup.py",
     "status",
   ];
   return new Promise((resolve) => {
@@ -519,7 +519,7 @@ function linkLinkedinCsv(body: Record<string, any>): Promise<Record<string, any>
   if (!csvPath) return Promise.resolve({ status: "failed", error: "csvPath is required" });
   const command = [
     "uv", "run", "--project", ".", "python",
-    "packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py",
+    "packs/ingestion/primitives/setup/setup_linkedin_csv.py",
     "link", "--csv", csvPath,
   ];
   const sourceLabel = String(body.sourceLabel || "").trim();
@@ -541,7 +541,7 @@ function linkLinkedinCsv(body: Record<string, any>): Promise<Record<string, any>
   });
 }
 
-const MSGVAULT_PY = "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py";
+const MSGVAULT_PY = "packs/ingestion/primitives/setup/msgvault_setup.py";
 
 // One-shot vault creation: create the gcloud project + OAuth app via browser
 // automation (NO auto-authorize), then add every email as an OAuth test user.

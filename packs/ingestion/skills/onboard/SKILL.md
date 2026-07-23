@@ -16,8 +16,8 @@ completed handoff and user confirmation.
 Use the onboarding primitive for status/plan checks:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py check
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py plan
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py check
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py plan
 ```
 
 For guided CLI operation, prefer the idempotent `step` loop. Keep calling the
@@ -26,7 +26,7 @@ same command until it returns `completed`, `needs_input`, `waiting`, or
 add/confirm/skip, and rerun `step`.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step
 ```
 
 Gmail is msgvault-backed. The Gmail step should be dead simple for the user:
@@ -45,7 +45,7 @@ starting sync. Multiple discovered source accounts are supported by repeating
 Fresh Gmail start:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step \
   --gmail-add-email me@gmail.com
 ```
 
@@ -58,7 +58,7 @@ not pick a project from the active local `gcloud` state.
 Record discovered Gmail accounts:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step \
   --gmail-db ~/.msgvault/msgvault.db \
   --gmail-account me@gmail.com \
   --gmail-account work@example.com
@@ -81,7 +81,7 @@ test-user or additional add-account commands.
 LinkedIn CSV remains the primary LinkedIn path:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step \
+uv run --project . python packs/ingestion/primitives/setup/onboarding.py step \
   --linkedin-csv ~/Downloads/Connections.csv \
   --linkedin-source-user <label>
 ```

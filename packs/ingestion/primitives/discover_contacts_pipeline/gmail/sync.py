@@ -168,7 +168,7 @@ def msgvault_reauthorization_required(payload: dict[str, Any], stderr: str) -> b
 def msgvault_reauthorize_command(email: str) -> str:
     return (
         "uv run --project . python "
-        "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py "
+        "packs/ingestion/primitives/setup/msgvault_setup.py "
         f"add-account --email {shlex.quote(email)} --force-auth"
     )
 

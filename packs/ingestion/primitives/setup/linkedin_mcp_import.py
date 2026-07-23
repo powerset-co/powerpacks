@@ -56,7 +56,7 @@ def cmd_instructions(args: argparse.Namespace) -> int:
         ],
         "mcp_config": mcp_config(),
         "login_command": "uvx linkedin-scraper-mcp@latest --login",
-        "record_command": f"uv run --project . python packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py mark-linked --username <linkedin-username-or-profile-url>",
+        "record_command": f"uv run --project . python packs/ingestion/primitives/setup/linkedin_mcp_import.py mark-linked --username <linkedin-username-or-profile-url>",
     }
     emit(payload)
     return 0

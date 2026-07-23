@@ -24,7 +24,7 @@ def load_module(name, rel):
 
 
 accounts = load_module("accounts_helper", "packs/ingestion/accounts.py")
-onboarding = load_module("onboarding", "packs/ingestion/primitives/onboarding/onboarding.py")
+onboarding = load_module("onboarding", "packs/ingestion/primitives/setup/onboarding.py")
 
 
 class IngestionAccountsOnboardingTests(unittest.TestCase):

@@ -1012,7 +1012,7 @@ def run_next(args: argparse.Namespace) -> int:
 def onboarding_step_command(args: argparse.Namespace) -> list[str]:
     cmd = [
         sys.executable,
-        'packs/ingestion/primitives/onboarding/onboarding.py',
+        'packs/ingestion/primitives/setup/onboarding.py',
         'step',
         '--accounts',
         args.accounts,

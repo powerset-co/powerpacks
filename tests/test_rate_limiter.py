@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 
 from packs.shared.rate_limiter import StartRateLimiter  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company as rc  # noqa: E402
-from packs.ingestion.primitives.enrich_people import enrich_people as ep  # noqa: E402
+from packs.ingestion.primitives.enrich import enrich_people as ep  # noqa: E402
 
 
 class StartRateLimiterTests(unittest.TestCase):

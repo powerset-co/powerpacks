@@ -13,7 +13,7 @@ from unittest.mock import patch
 from packs.ingestion.schemas.people_schema import generate_person_id
 from packs.shared.csv_io import CsvIO
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/enrich_people/enrich_people.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/enrich/enrich_people.py"
 spec = importlib.util.spec_from_file_location("enrich_people", MODULE_PATH)
 enrich_people = importlib.util.module_from_spec(spec)
 assert spec.loader is not None

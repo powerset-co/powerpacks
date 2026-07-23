@@ -63,7 +63,7 @@ uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/
   --resolutions-csv .powerpacks/network-import/discover/gmail/<account>/linkedin-resolution/linkedin_resolutions.csv
 
 # then hydrate resolved LinkedIn profiles through the shared RapidAPI cache/fetch flow
-uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run \
+uv run --project . python packs/ingestion/primitives/enrich/enrich_people.py run \
   --input .powerpacks/network-import/discover/gmail/<account>/resolved/people.csv
 ```
 

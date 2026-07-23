@@ -3,11 +3,11 @@
 Guided setup for msgvault Gmail OAuth and Codex MCP registration.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py status
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup --email you@gmail.com
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py setup --email you@gmail.com
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py setup --client-secret ~/Downloads/client_secret.json --email you@gmail.com
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app --email you@gmail.com
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py status
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py browser-setup --email you@gmail.com
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py setup --email you@gmail.com
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py setup --client-secret ~/Downloads/client_secret.json --email you@gmail.com
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py create-oauth-app --email you@gmail.com
 ```
 
 The primitive stores secrets only under `~/.msgvault/`, updates

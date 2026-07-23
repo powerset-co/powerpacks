@@ -27,7 +27,7 @@ def load_module(name, rel):
 
 msgvault_setup = load_module(
     "msgvault_setup",
-    "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py",
+    "packs/ingestion/primitives/setup/msgvault_setup.py",
 )
 
 
@@ -274,7 +274,7 @@ class MsgvaultSetupTests(unittest.TestCase):
                     sys.executable,
                     str(
                         ROOT
-                        / "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py"
+                        / "packs/ingestion/primitives/setup/msgvault_setup.py"
                     ),
                     "auth-check",
                     "--home",

@@ -104,7 +104,7 @@ When existing operator export/checkpoint CSVs are available, first generate a
 local restore bundle:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/bootstrap_network_from_exports/bootstrap_network_from_exports.py generate \
+uv run --project . python packs/ingestion/primitives/setup/bootstrap_network_from_exports.py generate \
   --operator-mapping <operator_mapping.json> \
   --source-dir <existing-export-csv-dir> \
   --operators <operator-slug> \

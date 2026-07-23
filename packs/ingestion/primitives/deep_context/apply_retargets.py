@@ -44,7 +44,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     judge_accepted_candidate_retarget,
     write_override_rows,
 )
-from packs.ingestion.primitives.enrich_people.enrich_people import (
+from packs.ingestion.primitives.enrich.enrich_people import (
     merge_provider_profile,
     normalize_rapidapi,
     rapidapi_key,

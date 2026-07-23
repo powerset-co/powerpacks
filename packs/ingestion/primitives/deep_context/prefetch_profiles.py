@@ -68,7 +68,7 @@ from packs.ingestion.primitives.deep_context.reconcile_review_web import (
     _all_review_parents,
     pending_linkedin_candidates,
 )
-from packs.ingestion.primitives.enrich_people.enrich_people import (
+from packs.ingestion.primitives.enrich.enrich_people import (
     profile_cache_path,
     rapidapi_key,
     rapidapi_profile,
