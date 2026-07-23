@@ -32,9 +32,11 @@ DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 
 def load_legacy_discover_module() -> Any:
     """Load the gmail step functions the live import dispatches (run_gmail_directory /
-    run_gmail_linkedin_resolution / run_gmail_apply_and_enrich / save_ledger). These were
-    extracted from the retired before_split orchestrator into a module holding ONLY the
-    still-dispatched closure; the function keeps its historical name for its callers."""
+    run_gmail_apply_and_enrich / save_ledger). These were extracted from the retired
+    before_split orchestrator into a module holding ONLY the still-dispatched closure —
+    no Parallel resolution, no RapidAPI hydration (deep-context owns both; stored legacy
+    resolutions migrate via `bin/deep-context migrate-legacy`). The function keeps its
+    historical name for its callers."""
     path = Path(__file__).resolve().parents[1] / "discover_contacts_pipeline" / "gmail_import_steps.py"
     spec = importlib.util.spec_from_file_location("_powerpacks_gmail_import_steps", path)
     if not spec or not spec.loader:
