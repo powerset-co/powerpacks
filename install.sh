@@ -5,10 +5,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${1:-}"
 
 case "$TARGET" in
-  app)
-    shift
-    exec "$ROOT/bin/setup-app" "$@"
-    ;;
   nanoclaw)
     shift
     exec "$ROOT/adapters/nanoclaw/install.sh" "$@"
@@ -26,7 +22,6 @@ case "$TARGET" in
     exec "$ROOT/adapters/pi/install.sh" "$@"
     ;;
   "")
-    echo "usage: ./install.sh app [--clean] [--dev]" >&2
     echo "usage: ./install.sh codex [skills-dir]" >&2
     echo "       ./install.sh claude-code [skills-dir]" >&2
     echo "       ./install.sh pi [skills-dir]" >&2
@@ -35,7 +30,6 @@ case "$TARGET" in
     ;;
   *)
     echo "error: unknown adapter '$TARGET'" >&2
-    echo "usage: ./install.sh app [--clean] [--dev]" >&2
     echo "usage: ./install.sh codex [skills-dir]" >&2
     echo "       ./install.sh claude-code [skills-dir]" >&2
     echo "       ./install.sh pi [skills-dir]" >&2

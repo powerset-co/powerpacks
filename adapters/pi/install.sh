@@ -48,7 +48,7 @@ copy_powerpacks_bundle() {
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
   mkdir -p "$dest/powerpacks/scripts"
-  for script in run-powerpacks-console.sh build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
+  for script in build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
     cp "$REPO_ROOT/scripts/$script" "$dest/powerpacks/scripts/$script"
     chmod +x "$dest/powerpacks/scripts/$script"
   done

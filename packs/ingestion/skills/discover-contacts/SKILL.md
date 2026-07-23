@@ -56,7 +56,7 @@ confirmation. Do not ask again for routine local metadata work.
   The Gmail import worker owns `msgvault sync-full` for each selected account
   before reading the local msgvault DB. Do not run this sync from onboarding.
   Use `--skip-msgvault-sync` only for tests or known pre-synced local DBs.
-- `--from-accounts .powerpacks/ingestion/accounts.json` or `--from-setup .powerpacks/setup/setup-run.json` to consume link-only state from `$setup` / the console onboarding flow (`setup/onboarding.py`).
+- `--from-accounts .powerpacks/ingestion/accounts.json` to consume link-only account state written by msgvault + LinkedIn source linking.
 - `--include-existing-artifacts` is legacy and should not be used for merge.
 
 iMessage and WhatsApp are intentionally outside this generic runner. Route either

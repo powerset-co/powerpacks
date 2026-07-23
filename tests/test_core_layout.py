@@ -17,7 +17,7 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             powerset_pack,
-            ["fix-powerpacks", "install-powerpacks", "powerpacks-console", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
+            ["fix-powerpacks", "install-powerpacks", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
         )
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
@@ -122,7 +122,6 @@ class CoreLayoutTests(unittest.TestCase):
             bundle = codex_home / "powerpacks"
             self.assertTrue((bundle / "packs").is_dir())
             self.assertTrue((bundle / "pyproject.toml").exists())
-            self.assertTrue((bundle / "scripts" / "run-powerpacks-console.sh").exists())
             self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())

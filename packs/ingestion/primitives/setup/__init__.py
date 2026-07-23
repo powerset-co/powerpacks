@@ -1,1 +1,1 @@
-"""Setup-stage primitives: onboarding, source setup (Gmail/LinkedIn/msgvault), and clean slate."""
+"""Setup-stage primitives: msgvault/Gmail OAuth setup and clean slate."""

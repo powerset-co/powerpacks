@@ -8,6 +8,11 @@
 **Created:** 2026-06-12
 
 **Changelog:**
+- 2026-07-23: The powerpacks-console app (`app/`) and the setup engine it drove
+  (`setup/setup_linkedin_csv.py`, `setup/setup_gmail.py`, `setup/setup.py`,
+  `setup/onboarding.py`) were deleted from the repo. References to them below
+  are implementation history, not live paths; `linkedin_modal_pipeline.py` is
+  the shipped surface.
 - 2026-06-12: Initial plan.
 
 ## Goal

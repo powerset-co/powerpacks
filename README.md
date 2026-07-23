@@ -66,23 +66,6 @@ The install flow runs `bin/setup-python`, which installs `uv` on macOS when
 Homebrew is available, then installs Python project dependencies from
 `pyproject.toml` / `uv.lock`.
 
-For the local Powerpacks Console app, use npm through the repo installer:
-
-```bash
-./install.sh app
-./install.sh app --dev --port 5177
-```
-
-Direct app commands are also supported:
-
-```bash
-cd app
-npm install
-npm run dev
-# Explicit sharing/preview only:
-npm run dev:share
-```
-
 ## Skills
 
 User-facing skill entrypoints, grouped by purpose. Each skill ships its own

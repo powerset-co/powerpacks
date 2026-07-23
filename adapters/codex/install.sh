@@ -49,24 +49,14 @@ install_powerpacks_bundle() {
   # Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$tmp/packs"
-  # The setup product path launches the local Powerpacks Console from the
-  # installed bundle, so users can run $setup from any Codex cwd. Keep setup
-  # sidecars here too: setup/index runs from this installed bundle and expects
+  # Setup sidecars run from this installed bundle: setup/index expects
   # scripts/build-local-duckdb-shim.py to materialize restored bootstrap records
   # into .powerpacks/search-index/local-search.duckdb.
   mkdir -p "$tmp/scripts"
-  for script in run-powerpacks-console.sh build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
+  for script in build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
     cp "$REPO_ROOT/scripts/$script" "$tmp/scripts/$script"
     chmod +x "$tmp/scripts/$script"
   done
-  mkdir -p "$tmp/app"
-  for file in README.md components.json index.html package-lock.json package.json postcss.config.js tailwind.config.ts tsconfig.app.json tsconfig.json tsconfig.node.json vite.config.ts; do
-    if [[ -f "$REPO_ROOT/app/$file" ]]; then
-      cp "$REPO_ROOT/app/$file" "$tmp/app/$file"
-    fi
-  done
-  cp -R "$REPO_ROOT/app/public" "$tmp/app/public"
-  cp -R "$REPO_ROOT/app/src" "$tmp/app/src"
   # Keep only the top-level skill entrypoint; avoid nested skill duplication
   # from copied packs during discovery.
   find "$tmp/packs" -type f -path "*/SKILL.md" -delete
@@ -81,8 +71,6 @@ $REPO_ROOT/adapters/codex/install.sh
 \`\`\`
 
 Installed Powerpacks skills link their local \`powerpacks/\` directory here.
-The bundle includes the local setup console app and launcher so \`\$setup\` can
-run from any Codex working directory.
 EOF
 
   if [[ -d "$BUNDLE_DIR/.powerpacks" ]]; then

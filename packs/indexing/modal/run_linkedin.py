@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """LinkedIn import sandbox runner: connections.csv -> enriched people.csv.
 
-Re-hosts the import half of onboarding-v2 (setup_linkedin_csv /
-discover_contacts_pipeline/linkedin/network_import.py) inside a Modal sandbox:
+Hosts the LinkedIn import pipeline
+(discover_contacts_pipeline/linkedin/network_import.py) inside a Modal sandbox:
 
   parse + convert -> RapidAPI enrichment -> merged people.csv
 

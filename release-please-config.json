@@ -12,10 +12,6 @@
           "jsonpath": "$.package[?(@.name.value=='powerpacks')].version"
         }
       ]
-    },
-    "app": {
-      "release-type": "node",
-      "package-name": "powerpacks-console"
     }
   },
   "include-component-in-tag": true
