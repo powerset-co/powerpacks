@@ -7,7 +7,7 @@ resolutions — no Parallel calls, no RapidAPI hydration; deep-context owns
 resolution/enrichment, and `bin/deep-context migrate-legacy` adopts the stored
 era into overrides/review.csv), plus `save_ledger` and
 `materialize_gmail_merged_people_csv`, with their transitive helpers. Loaded via
-`import_contacts_pipeline.common.load_legacy_discover_module`.
+`import_contacts_pipeline.common.load_gmail_import_steps`.
 """
 from __future__ import annotations
 

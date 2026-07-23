@@ -8,6 +8,7 @@ import csv
 import hashlib
 import shutil
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,13 +31,46 @@ DEFAULT_IMPORT_DIR = DEFAULT_BASE_DIR / "import"
 DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 
 
-def load_legacy_discover_module() -> Any:
+@dataclass
+class GmailImportLedger:
+    """Typed constructor for the gmail import's `ledger.json`.
+
+    The ledger is JSON run-state shared with the dynamically loaded step
+    functions (gmail_import_steps.py), which mutate it as a plain dict
+    (`steps` / `artifacts` / `status`) and persist it via `save_ledger` — so
+    this class owns the SHAPE at construction time and `to_dict()` hands over
+    the mutable runtime form the steps expect."""
+
+    artifact_dir: str
+    input: dict[str, Any]
+    artifacts: dict[str, Any]
+    primitive: str = "import_contacts_gmail"
+    source: str = "gmail"
+    status: str = "running"
+    steps: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        now = now_iso()
+        return {
+            "primitive": self.primitive,
+            "source": self.source,
+            "status": self.status,
+            "created_at": now,
+            "updated_at": now,
+            "artifact_dir": self.artifact_dir,
+            "input": dict(self.input),
+            "steps": dict(self.steps),
+            "artifacts": dict(self.artifacts),
+        }
+
+
+def load_gmail_import_steps() -> Any:
     """Load the gmail step functions the live import dispatches (run_gmail_directory /
-    run_gmail_apply_and_enrich / save_ledger). These were extracted from the retired
-    before_split orchestrator into a module holding ONLY the still-dispatched closure —
-    no Parallel resolution, no RapidAPI hydration (deep-context owns both; stored legacy
-    resolutions migrate via `bin/deep-context migrate-legacy`). The function keeps its
-    historical name for its callers."""
+    run_gmail_apply_and_enrich / save_ledger) from gmail_import_steps.py — the closure
+    extracted from the retired before_split orchestrator. No Parallel resolution, no
+    RapidAPI hydration (deep-context owns both; stored legacy resolutions migrate via
+    `bin/deep-context migrate-legacy`). File-loaded rather than imported because the
+    module name contains a dot-free path outside the package tree it came from."""
     path = Path(__file__).resolve().parents[1] / "discover_contacts_pipeline" / "gmail_import_steps.py"
     spec = importlib.util.spec_from_file_location("_powerpacks_gmail_import_steps", path)
     if not spec or not spec.loader:
