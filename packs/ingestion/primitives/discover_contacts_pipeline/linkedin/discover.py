@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Discover LinkedIn contacts from a local Connections.csv export."""
+"""Discover LinkedIn contacts from a local Connections.csv export.
+
+Changelog:
+  2026-07-23 (audit): discover() dropped its ``**_`` catch-all, which silently
+    swallowed never-honored kwargs from the orchestrator; unknown keyword
+    options now raise.
+"""
 
 from __future__ import annotations
 
@@ -139,9 +145,8 @@ def discover(
     connections_csv: str | Path | None = None,
     source_user_label: str | None = None,
 ) -> dict[str, Any]:
-    """Discover LinkedIn Connections.csv contacts. Strict keyword-only —
-    unknown options raise instead of being silently swallowed (the old **_
-    hid never-honored kwargs from the orchestrator)."""
+    """Discover LinkedIn Connections.csv contacts. Strict keyword-only:
+    unknown options raise."""
     accounts_file = accounts_file or configured_accounts_path()
     accounts = read_json(accounts_file, {}) or {}
     source_csv = Path(str(connections_csv)).expanduser() if connections_csv else csv_path(accounts)

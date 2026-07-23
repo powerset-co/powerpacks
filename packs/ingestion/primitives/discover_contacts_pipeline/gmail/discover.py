@@ -1,4 +1,17 @@
-"""Gmail contact discovery CLI: sync msgvault, aggregate contacts, build queues."""
+"""Gmail contact discovery CLI: sync msgvault, aggregate contacts, build queues.
+
+Changelog:
+  2026-07-23 (audit):
+    - discover() became strictly keyword-only: the old `**_` catch-all
+      swallowed unknown kwargs silently, so call sites could pass options that
+      were never honored; a typo or phantom option now raises TypeError.
+    - The old `accounts_path` alias parameter was removed; `accounts_file` is
+      the single accounts-state parameter.
+    - run_gmail_msgvault moved here from sync.py during the audit split: it
+      drives discover(), so leaving it in sync.py made `discover` an unbound
+      name there (latent NameError) and fixing it in place would have required
+      a circular import.
+"""
 
 from __future__ import annotations
 
@@ -72,12 +85,11 @@ def discover(
     """Discover Gmail contacts: sync msgvault per selected account, aggregate
     contacts, build the resolution queue, write the stage manifest.
 
-    Keyword-only ON PURPOSE (the `*`): thirteen knobs are unusable positionally.
-    STRICT on purpose too — the old `**_` swallowed unknown kwargs silently,
-    which let call sites pass options that were never honored; now a typo or a
-    phantom option raises. `accounts_file` is the ONE accounts-state param
-    (the old accounts_path alias is gone), and all configuration resolves
-    through resolve_discovery_inputs — one documented precedence, one place.
+    Keyword-only ON PURPOSE (the `*`): thirteen knobs are unusable positionally,
+    and unknown options raise TypeError. `accounts_file` is the ONE
+    accounts-state param, and all configuration resolves through
+    resolve_discovery_inputs — one documented precedence (explicit overrides >
+    accounts.json state > discovery.config defaults), one place.
 
     DEFAULTS CONVENTION — the `| None = None` params are override SENTINELS,
     not values: None means "no override given, inherit from the next config
@@ -274,9 +286,6 @@ def discover(
     ))
 
 
-# Moved here from sync.py during the audit split: this step DRIVES discover(),
-# so leaving it in sync.py made `discover` an unbound name there (latent
-# NameError) and would have required a circular import to fix in place.
 def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any], _worker: dict[str, Any]) -> bool:
     input_cfg = ledger.get("input") or {}
     payload = discover(
@@ -325,3 +334,5 @@ def main() -> int:
     return 1 if payload.get("status") == "failed" else 0
 
 
+if __name__ == "__main__":
+    raise SystemExit(main())

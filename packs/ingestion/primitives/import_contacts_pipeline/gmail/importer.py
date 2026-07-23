@@ -8,6 +8,13 @@ layer, which owns ALL resolution and enrichment: stored legacy resolutions
 migrate into overrides/review.csv via `bin/deep-context migrate-legacy` (the
 central source of truth the fan-in and the review flow read); new lookups run
 through deep-context's judged, budget-gated stages.
+
+Changelog:
+  2026-07-23 (audit):
+    - One upfront repo-root path bootstrap replaced the duplicated try/except
+      import block.
+    - Exit 20 / blocked_approval removed with the spend paths; nothing in this
+      import can block on approval.
 """
 
 from __future__ import annotations
@@ -18,9 +25,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Make `packs.*` importable whether this file runs as a module or as a script
-# (uv run .../gmail.py). One upfront path bootstrap replaces the old duplicated
-# try/except import block.
+# Repo-root bootstrap so packs.* imports work in module AND script mode
+# (uv run .../importer.py); must be in-file because script-mode never imports
+# the package __init__.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -179,11 +186,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """Exit 0 on success/skip, 1 on failure. (Exit 20 / blocked_approval is
-    gone with the spend paths — nothing in this import can block on approval.)"""
+    """Exit 0 on success/skip, 1 on failure."""
     args = build_parser().parse_args()
     payload = run(args)
     emit(payload)
     return 1 if payload.get("status") == "failed" else 0
 
 
+if __name__ == "__main__":
+    raise SystemExit(main())

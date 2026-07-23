@@ -8,6 +8,11 @@ layer, which owns ALL resolution and enrichment: stored legacy resolutions
 migrate into overrides/review.csv via `bin/deep-context migrate-legacy` (the
 central source of truth the fan-in and the review flow read); new lookups run
 through deep-context's judged, budget-gated stages.
+
+Changelog:
+  2026-07-23 (audit):
+    - One upfront repo-root path bootstrap replaced the duplicated try/except
+      import block.
 """
 
 from __future__ import annotations
@@ -18,9 +23,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Make `packs.*` importable whether this file runs as a module or as a script
-# (uv run .../gmail.py). One upfront path bootstrap replaces the old duplicated
-# try/except import block.
+# Repo-root bootstrap so packs.* imports work in module AND script mode
+# (uv run .../util.py); must be in-file because script-mode never imports
+# the package __init__.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -32,28 +37,10 @@ from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
 )
 from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # noqa: E402
     DEFAULT_BASE_DIR,
-    DEFAULT_DIRECTORY_CSV,
-    emit,
     read_csv_rows,
-    read_accounts,
     read_json,
     source_slug,
     write_csv_rows,
-    write_json,
-)
-from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa: E402
-    DEFAULT_ACCOUNTS,
-    DEFAULT_IMPORT_DIR,
-    DEFAULT_PROFILE_CACHE_DIR,
-    GmailImportLedger,
-    copy_people_csv,
-    csv_count,
-    directory_source_account_quality,
-    import_manifest_current,
-    linked_gmail_accounts,
-    load_gmail_import_steps,
-    normalize_directory_source_accounts,
-    write_manifest,
 )
 
 def _child_artifacts(child: dict[str, Any]) -> dict[str, Any]:

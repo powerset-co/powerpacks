@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Directory and people.csv helpers for local network discovery."""
+"""Directory and people.csv helpers for local network discovery.
+
+Changelog:
+  2026-07-23 (audit): union_alias_list replaced overwrite semantics for
+    all_emails/all_phones — previously the resolved Gmail address was
+    discarded when two rows collapsed onto one public_identifier; aliases
+    now accumulate as an order-preserving set union.
+"""
 
 from __future__ import annotations
 
@@ -720,9 +727,8 @@ def merge_jsonish_lists(current: str, incoming: str) -> str:
 def union_alias_list(current: str, incoming: str, primary_current: str = "", primary_incoming: str = "") -> str:
     """Set-union an all_emails/all_phones column, preserving first-seen order.
 
-    Distinct work emails that resolve to the same LinkedIn person must accumulate
-    here rather than overwrite each other (the resolved Gmail address used to be
-    discarded when two rows collapsed onto one public_identifier). The matching
+    Distinct work emails that resolve to the same LinkedIn person accumulate
+    here rather than overwriting each other. The matching
     primary_email/primary_phone values are folded in so a single-email row that
     only populated primary_* still contributes its address to the union.
     """

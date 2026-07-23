@@ -1,13 +1,20 @@
 """Gmail import step functions for the LIVE import chain.
 
-Extracted 2026-07-23 from the retired pre-split orchestrator (now deleted) and
-narrowed again when the legacy resolve/enrich flags were removed: ONLY
-`run_gmail_directory` and `run_gmail_apply_and_enrich` (which applies STORED
-resolutions — no Parallel calls, no RapidAPI hydration; deep-context owns
-resolution/enrichment, and `bin/deep-context migrate-legacy` adopts the stored
-era into overrides/review.csv), plus `save_ledger` and
+Contains ONLY `run_gmail_directory` and `run_gmail_apply_and_enrich` (which
+applies STORED resolutions — no Parallel calls, no RapidAPI hydration;
+deep-context owns resolution/enrichment, and `bin/deep-context migrate-legacy`
+adopts the stored era into overrides/review.csv), plus `save_ledger` and
 `materialize_gmail_merged_people_csv`, with their transitive helpers. Loaded via
 `import_contacts_pipeline.common.load_gmail_import_steps`.
+
+Changelog:
+  2026-07-23 (audit):
+    - Extracted from the retired pre-split orchestrator (now deleted).
+    - Narrowed to the surviving steps when the legacy resolve/enrich flags
+      were removed.
+    - union_alias_list stopped alias loss: the resolved Gmail address used to
+      be discarded when two rows collapsed onto one public_identifier; alias
+      lists now set-union instead.
 """
 from __future__ import annotations
 
@@ -928,11 +935,11 @@ def merge_jsonish_lists(current: str, incoming: str) -> str:
 def union_alias_list(current: str, incoming: str, primary_current: str = "", primary_incoming: str = "") -> str:
     """Set-union an all_emails/all_phones column, preserving first-seen order.
 
-    Distinct work emails that resolve to the same LinkedIn person must accumulate
-    here rather than overwrite each other (the resolved Gmail address used to be
-    discarded when two rows collapsed onto one public_identifier). The matching
-    primary_email/primary_phone values are folded in so a single-email row that
-    only populated primary_* still contributes its address to the union.
+    Distinct work emails that resolve to the same LinkedIn person accumulate
+    here rather than overwrite each other when rows collapse onto one
+    public_identifier. The matching primary_email/primary_phone values are
+    folded in so a single-email row that only populated primary_* still
+    contributes its address to the union.
     """
     seen: list[str] = []
     for value in (primary_current, primary_incoming):

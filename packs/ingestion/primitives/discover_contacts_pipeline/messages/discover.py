@@ -3,6 +3,11 @@
 
 This module owns only local metadata discovery. Review, LinkedIn profile
 materialization, and enrichment live in import_contacts_pipeline/messages/importer.py.
+
+Changelog:
+  2026-07-23 (audit): discover()'s accounts parameter was renamed from
+    accounts_path to accounts_file; internal helpers still take accounts_path,
+    bridged by a local alias inside discover().
 """
 
 from __future__ import annotations
@@ -341,7 +346,7 @@ def discover(
     include_imessage: bool | None = None,
     include_whatsapp: bool | None = None,
 ) -> dict[str, Any]:
-    accounts_path = accounts_file  # internal helpers keep the old local name
+    accounts_path = accounts_file  # local alias matching helper signatures
     inputs = messages_discovery_inputs(accounts_path)
     if include_imessage is not None or include_whatsapp is not None:
         inputs = {
