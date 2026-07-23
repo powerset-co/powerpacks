@@ -52,7 +52,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import re
 import sys
@@ -65,14 +64,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    DEFAULT_BASE_DIR,
     GMAIL_INTERACTION_CALCULATION_VERSION,
-    emit,
-    now_iso,
-    read_json,
     source_slug,
-    write_json,
 )
 from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
@@ -153,11 +149,6 @@ TARGETED_COLUMNS = [
 ]
 ACCOUNT_COLUMNS = ["account_id", "account_email", "provider", "source", "added_at"]
 PEOPLE_COLUMNS = list(PEOPLE_SCHEMA_COLUMNS)
-
-
-def short_hash(value: str, length: int = 10) -> str:
-    """Return the first `length` hex chars of the value's SHA-256."""
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
 def extract_public_identifier(linkedin_url: str) -> str:

@@ -69,10 +69,8 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
 
 # Repo-root bootstrap so packs.* imports work in module AND script mode
 # (uv run .../match_local_candidates.py); must be in-file because script mode
@@ -81,6 +79,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
@@ -126,19 +125,6 @@ class Candidate:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def emit(value: Any) -> None:
-    print(json.dumps(value, indent=2, sort_keys=True))
-
-
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
 
 def normalize_name(raw: str | None) -> str:
     s = re.sub(r"[^a-z0-9 ]+", " ", (raw or "").strip().lower())

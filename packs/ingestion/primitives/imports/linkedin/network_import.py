@@ -48,7 +48,6 @@ import io
 import json
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -66,12 +65,12 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     normalize_linkedin_url,
     normalize_people_row,
 )
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_PROFILE_CACHE_DIR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "linkedin"
 DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "network_import.ledger.json"
-DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 
 CONNECTION_COLUMNS = [
     "person_id",
@@ -111,28 +110,6 @@ class PipelineBlocked(Exception):
 
 class PipelineFailed(Exception):
     pass
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def read_json(path: Path, default: Any = None) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
-
-
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def discover_output_dir(output_dir: Path) -> Path:

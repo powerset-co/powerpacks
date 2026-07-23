@@ -1,10 +1,8 @@
 {
-  "schema_version": 1,
   "accounts_json": ".powerpacks/ingestion/accounts.json",
   "sources": {
     "gmail": {
       "inputs": {
-        "accounts_json": ".powerpacks/ingestion/accounts.json",
         "msgvault_db_default": "~/.msgvault/msgvault.db",
         "msgvault_db_state_key": "accounts.gmail.config.msgvault_db",
         "selected_accounts_state_key": "accounts.gmail.config.selected_accounts",
@@ -14,35 +12,6 @@
         "contacts_csv": ".powerpacks/network-import/discover/gmail/contacts.csv",
         "linkedin_resolution_queue_csv": ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv",
         "manifest_json": ".powerpacks/network-import/discover/gmail/manifest.json"
-      }
-    },
-    "imessage": {
-      "inputs": {
-        "chat_db_state_key": "accounts.messages.config.imessage.chat_db"
-      },
-      "outputs": {
-        "contacts_csv": ".powerpacks/messages/imessage.contacts.csv",
-        "manifest_json": ".powerpacks/messages/imessage.manifest.json"
-      }
-    },
-    "whatsapp": {
-      "inputs": {
-        "store_state_key": "accounts.messages.config.whatsapp.store",
-        "max_messages": 0
-      },
-      "outputs": {
-        "contacts_csv": ".powerpacks/messages/whatsapp.contacts.csv",
-        "manifest_json": ".powerpacks/messages/whatsapp.contacts.csv.manifest.json"
-      }
-    },
-    "messages": {
-      "inputs": {
-        "imessage_contacts_csv": ".powerpacks/messages/imessage.contacts.csv",
-        "whatsapp_contacts_csv": ".powerpacks/messages/whatsapp.contacts.csv"
-      },
-      "outputs": {
-        "contacts_csv": ".powerpacks/network-import/discover/messages/contacts.csv",
-        "manifest_json": ".powerpacks/network-import/discover/messages/manifest.json"
       }
     }
   }

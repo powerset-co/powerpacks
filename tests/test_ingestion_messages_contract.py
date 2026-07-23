@@ -178,28 +178,23 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 self.assertNotIn(token, text)
 
         self.assertEqual(discover_messages.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES, 0)
+        # The message output paths are owned by the discover-messages primitive
+        # now, not discovery.config.json — its imessage/whatsapp/messages source
+        # blocks were pruned (only the gmail block + top-level accounts_json are
+        # consumed). The top-level config keys the primitives still read stay.
         config = json.loads(
             (INGESTION / "primitives/discover/discovery.config.json").read_text()
         )
-        self.assertEqual(config["sources"]["whatsapp"]["inputs"]["max_messages"], 0)
+        self.assertEqual(config["accounts_json"], ".powerpacks/ingestion/accounts.json")
+        self.assertNotIn("imessage", config["sources"])
+        self.assertNotIn("whatsapp", config["sources"])
+        self.assertNotIn("messages", config["sources"])
+        self.assertEqual(str(discover_messages.IMESSAGE_CONTACTS), ".powerpacks/messages/imessage.contacts.csv")
+        self.assertEqual(str(discover_messages.IMESSAGE_MANIFEST), ".powerpacks/messages/imessage.manifest.json")
+        self.assertEqual(str(discover_messages.WHATSAPP_CONTACTS), ".powerpacks/messages/whatsapp.contacts.csv")
+        self.assertEqual(str(discover_messages.WHATSAPP_MANIFEST), ".powerpacks/messages/whatsapp.contacts.csv.manifest.json")
         self.assertEqual(
-            config["sources"]["imessage"]["outputs"]["contacts_csv"],
-            ".powerpacks/messages/imessage.contacts.csv",
-        )
-        self.assertEqual(
-            config["sources"]["imessage"]["outputs"]["manifest_json"],
-            ".powerpacks/messages/imessage.manifest.json",
-        )
-        self.assertEqual(
-            config["sources"]["whatsapp"]["outputs"]["contacts_csv"],
-            ".powerpacks/messages/whatsapp.contacts.csv",
-        )
-        self.assertEqual(
-            config["sources"]["whatsapp"]["outputs"]["manifest_json"],
-            ".powerpacks/messages/whatsapp.contacts.csv.manifest.json",
-        )
-        self.assertEqual(
-            config["sources"]["messages"]["outputs"]["contacts_csv"],
+            str(discover_messages.DEFAULT_MESSAGES_OUTPUT_DIR / "contacts.csv"),
             ".powerpacks/network-import/discover/messages/contacts.csv",
         )
 

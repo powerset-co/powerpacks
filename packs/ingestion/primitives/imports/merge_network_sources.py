@@ -40,12 +40,10 @@ from __future__ import annotations
 import argparse
 import csv
 import difflib
-import hashlib
 import json
 import re
 import shutil
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +64,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     extract_public_identifier,
 )
 from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, short_hash  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
@@ -117,16 +116,6 @@ MAX_SOURCE_ARTIFACTS_PER_ROW = 12
 MAX_SOURCE_ARTIFACT_TEXT = 4096
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def sha(value: str, n: int = 12) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:n]
 
 
 def normalize_name(value: str) -> str:
@@ -460,8 +449,8 @@ def stable_source_key(row: dict[str, str]) -> str:
     name = normalize_name(row_name(row))
     channel = ",".join(row_source_channels(row))
     if name:
-        return f"name:{sha(channel + ':' + name, 16)}"
-    return f"row:{sha(json.dumps({col: row.get(col, '') for col in PEOPLE_SCHEMA_COLUMNS if col != 'source_artifacts'}, sort_keys=True), 16)}"
+        return f"name:{short_hash(channel + ':' + name, 16)}"
+    return f"row:{short_hash(json.dumps({col: row.get(col, '') for col in PEOPLE_SCHEMA_COLUMNS if col != 'source_artifacts'}, sort_keys=True), 16)}"
 
 
 def source_label(path: Path) -> str:
@@ -482,7 +471,7 @@ def message_row_to_people(row: dict[str, str], path: Path) -> dict[str, str]:
     full_name = row.get("matched_name") or row.get("name") or ""
     parts = full_name.split(" ", 1)
     people = {
-        "id": row.get("matched_person_id") or f"message:{sha((row.get('phone') or '') + full_name)}",
+        "id": row.get("matched_person_id") or f"message:{short_hash((row.get('phone') or '') + full_name)}",
         "linkedin_url": linkedin,
         "public_identifier": extract_public_identifier(linkedin),
         "first_name": parts[0] if parts else "",
@@ -583,7 +572,7 @@ def network_company_rows(people_rows: list[dict[str, Any]]) -> list[dict[str, An
             continue
         key = company_urn or f"name:{normalize_company_key(company_name)}"
         rec = companies.setdefault(key, {
-            "company_id": f"company:{sha(key, 16)}",
+            "company_id": f"company:{short_hash(key, 16)}",
             "company_key": key,
             "company_name": company_name,
             "company_urn": company_urn,
@@ -701,7 +690,7 @@ def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
     merged["merged_row_count"] = len(rows)
     merged["needs_review"] = "false"
     if not merged.get("id"):
-        merged["id"] = f"merged:{sha(key + row_name(merged))}"
+        merged["id"] = f"merged:{short_hash(key + row_name(merged))}"
     return merged
 
 
@@ -791,7 +780,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "needs_review": "false",
         })
         if not normalized.get("id"):
-            normalized["id"] = f"merged:{sha(normalized['merge_key'])}"
+            normalized["id"] = f"merged:{short_hash(normalized['merge_key'])}"
         merged_rows.append(normalized)
         source_rows.extend(source_fact_rows(normalized, [normalized]))
     # Re-apply the durable self-heal override BEFORE the LinkedIn keep-filter: a `detach`

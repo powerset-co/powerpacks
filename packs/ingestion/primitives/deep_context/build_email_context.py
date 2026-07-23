@@ -81,11 +81,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    emit,
-    now_iso,
-    write_json,
-)
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.discover.gmail import msgvault_store as gni  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.discover_engine import (  # noqa: E402
     linkedin_resolution_queue_rows,

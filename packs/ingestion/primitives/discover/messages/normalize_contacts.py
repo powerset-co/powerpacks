@@ -19,9 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,57 +29,23 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
+    canonicalize_phone,
+    channel_counts_from_row,
+    channel_last_messages_from_row,
+    latest_message,
+    parse_bool,
+    parse_float,
+    parse_groups,
+    parse_int,
+    total_message_count,
+)
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
-DEFAULT_OUT_DIR = Path(".powerpacks/messages")
 GROUP_SEPARATOR = " | "
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def canonicalize_phone(raw: str) -> str:
-    value = (raw or "").strip()
-    digits = re.sub(r"[^\d]", "", value)
-    if len(digits) < 7:
-        return ""
-    if value.startswith("+"):
-        return f"+{digits}"
-    if len(digits) == 10:
-        return f"+1{digits}"
-    if len(digits) == 11 and digits.startswith("1"):
-        return f"+{digits}"
-    if len(digits) <= 15:
-        return f"+{digits}"
-    return digits
-
-
-def parse_bool(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "y"}
-
-
-def parse_int(value: str | None) -> int | None:
-    text = (value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = int(float(text))
-    except ValueError:
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def parse_float(value: str | None) -> float | None:
-    text = (value or "").strip()
-    if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
 
 MESSAGE_CHANNELS = ("imessage", "whatsapp")
 
@@ -93,43 +57,6 @@ def parse_sources(value: str | None) -> list[str]:
         if source in set(MESSAGE_CHANNELS) and source not in sources:
             sources.append(source)
     return sources
-
-
-def channel_counts_from_row(row: dict[str, str], sources: list[str], legacy_count: int | None) -> dict[str, int | None]:
-    counts = {channel: parse_int(row.get(f"{channel}_message_count")) for channel in MESSAGE_CHANNELS}
-    if legacy_count is not None and len(sources) == 1 and sources[0] in MESSAGE_CHANNELS and counts.get(sources[0]) is None:
-        counts[sources[0]] = legacy_count
-    return counts
-
-
-def channel_last_messages_from_row(row: dict[str, str], sources: list[str], legacy_last: str | None) -> dict[str, str | None]:
-    values = {channel: (row.get(f"{channel}_last_message") or "").strip() or None for channel in MESSAGE_CHANNELS}
-    if legacy_last and len(sources) == 1 and sources[0] in MESSAGE_CHANNELS and values.get(sources[0]) is None:
-        values[sources[0]] = legacy_last
-    return values
-
-
-def total_message_count(contact: dict[str, Any]) -> int | None:
-    counts = [value for value in (contact.get("channel_counts") or {}).values() if value is not None]
-    if counts:
-        return sum(int(value) for value in counts)
-    return contact.get("legacy_message_count")
-
-
-def latest_message(contact: dict[str, Any]) -> str | None:
-    values = [value for value in (contact.get("channel_last_messages") or {}).values() if value]
-    if contact.get("legacy_last_message"):
-        values.append(contact["legacy_last_message"])
-    return max(values, default=None)
-
-
-def parse_groups(value: str | None) -> list[str]:
-    groups = []
-    for part in (value or "").split(GROUP_SEPARATOR):
-        group = re.sub(r"\s+", " ", part.strip())
-        if group and group not in groups:
-            groups.append(group)
-    return groups
 
 
 def normalize_row(row: dict[str, str]) -> dict[str, Any] | None:
@@ -248,17 +175,12 @@ def read_contacts(path: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
     return contacts, counts
 
 
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
 def cmd_normalize(args: argparse.Namespace) -> None:
     input_path = Path(args.input)
     out_jsonl = (
         Path(args.out_jsonl)
         if args.out_jsonl
-        else DEFAULT_OUT_DIR / "contacts.normalized.jsonl"
+        else MESSAGES_OUT_DIR / "contacts.normalized.jsonl"
     )
     manifest_path = Path(args.manifest) if args.manifest else out_jsonl.with_suffix(out_jsonl.suffix + ".manifest.json")
 

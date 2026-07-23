@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Shared helpers for the per-source discovery/import primitives.
+"""Discover-stage helpers: CSV I/O, account state, and stage manifests.
+
+Holds only the things unique to the discover stage — the fingerprinted LF CSV
+reader/writer, the linked-account state accessors (superset variant that reads
+both `accounts` and `channels` groups), the artifact/manifest fingerprint
+helpers, and the typed `StagePayload` + `write_stage_manifest` contract. The
+cross-vertical json/proc/paths/contact-field helpers live in
+`packs.ingestion.primitives.common`.
 
 Changelog:
   2026-07-23 (audit batch 16): deleted the orchestrator-only ledger/step
-    machinery (DEFAULT_LEDGER, load/save_ledger, mark_step, begin_step,
-    check_artifact_paths, child_error, artifact_dir helpers, csv upsert
-    helpers, sha, truthy_env) after `discover.py` was
-    removed; renamed the progress prefix from [discover-contacts] (retired
-    skill) to [discover].
+    machinery after `discover.py` was removed; renamed the progress prefix from
+    [discover-contacts] to [discover].
+  2026-07-23 (audit consolidation): moved the cross-vertical helpers out — now_iso
+    / emit / read_json / write_json / parse_last_json / unique_strings /
+    sha256_file to common.jsonio, run_cmd / py_cmd / emit_progress to common.proc,
+    DEFAULT_BASE_DIR / DEFAULT_DIRECTORY_CSV / DEFAULT_MSGVAULT_DB to common.paths,
+    and deleted the local parse_jsonish (callers import it from
+    schemas/people_schema). This module keeps only discover-stage code.
 """
 
 from __future__ import annotations
@@ -15,22 +25,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 import csv
-import hashlib
-import json
-import os
+import io
 import re
-import subprocess
 import sys
-import threading
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
-DEFAULT_DIRECTORY_CSV = DEFAULT_BASE_DIR / "directory.csv"
-DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
-DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
-GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -38,36 +37,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.jsonio import now_iso, read_json, sha256_file, write_json  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def emit_progress(message: str) -> None:
-    print(f"[discover] {message}", file=sys.stderr, flush=True)
-
-
-def read_json(path: Path, default: Any = None) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
-
-
-def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
 
 
 def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    """Read a CSV into `(fieldnames, rows)`, tolerating BOMs and bad bytes."""
     with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
         reader = CsvIO.dict_reader(handle)
         fields = list(reader.fieldnames or [])
@@ -76,9 +53,8 @@ def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+    """Write rows with LF line endings, skipping the write when bytes are unchanged."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    import io
-
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
     writer.writeheader()
@@ -94,22 +70,13 @@ def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]
     path.write_bytes(content)
 
 
-def parse_jsonish(value: Any, default: Any) -> Any:
-    if value in (None, ""):
-        return default
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(str(value))
-    except Exception:
-        return default
-
-
 def read_accounts(path: Path) -> dict[str, Any]:
+    """Read the packaged accounts.json state, `{}` when missing/invalid."""
     return read_json(path, {}) or {}
 
 
 def account_channel(accounts: dict[str, Any], name: str) -> dict[str, Any]:
+    """Return a channel's record, checking both the `accounts` and `channels` groups."""
     for key in ("accounts", "channels"):
         group = accounts.get(key)
         if isinstance(group, dict) and isinstance(group.get(name), dict):
@@ -118,12 +85,14 @@ def account_channel(accounts: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def account_config(accounts: dict[str, Any], name: str) -> dict[str, Any]:
+    """Return a channel's `config` sub-dict, `{}` when absent."""
     channel = account_channel(accounts, name)
     cfg = channel.get("config")
     return cfg if isinstance(cfg, dict) else {}
 
 
 def channel_is_linked(accounts: dict[str, Any], name: str) -> bool:
+    """True when a channel is linked (status == linked, or linked flag without skip)."""
     channel = account_channel(accounts, name)
     status = str(channel.get("status") or "").strip().lower()
     if status == "linked":
@@ -132,6 +101,7 @@ def channel_is_linked(accounts: dict[str, Any], name: str) -> bool:
 
 
 def ordered_unique(values: list[Any]) -> list[str]:
+    """Order-preserving de-dup of a list into stripped, non-empty strings."""
     out: list[str] = []
     for value in values:
         text = str(value or "").strip()
@@ -141,6 +111,7 @@ def ordered_unique(values: list[Any]) -> list[str]:
 
 
 def collect_artifact_paths(value: Any) -> list[str]:
+    """Recursively collect `.powerpacks/`-relative or absolute path strings from a payload."""
     paths: list[str] = []
     if isinstance(value, dict):
         for item in value.values():
@@ -155,15 +126,8 @@ def collect_artifact_paths(value: Any) -> list[str]:
     return paths
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Size/mtime/sha256 fingerprint of a file, reusing `existing` when unchanged."""
     path = Path(str(path_text or ""))
     if not path_text or not path.exists() or not path.is_file():
         return {"path": str(path_text or ""), "exists": False}
@@ -182,6 +146,7 @@ def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None)
 
 
 def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Fingerprint a stage manifest's input and output artifact paths."""
     existing = existing or {}
     existing_inputs = existing.get("input_artifacts") if isinstance(existing.get("input_artifacts"), dict) else {}
     existing_outputs = existing.get("output_artifacts") if isinstance(existing.get("output_artifacts"), dict) else {}
@@ -236,104 +201,7 @@ def write_stage_manifest(path: Path, payload: "dict[str, Any] | StagePayload") -
     return payload
 
 
-def unique_strings(values: Any) -> list[str]:
-    if values is None:
-        return []
-    if isinstance(values, str):
-        raw = [values]
-    elif isinstance(values, list):
-        raw = values
-    else:
-        raw = [values]
-    out: list[str] = []
-    for value in raw:
-        text = str(value or "").strip()
-        if text and text not in out:
-            out.append(text)
-    return out
-
-
 def source_slug(value: str) -> str:
+    """Filesystem-safe slug for a source label (`source` when empty)."""
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "").strip().lower()).strip("-._")
     return slug or "source"
-
-
-def parse_last_json(stdout: str) -> dict[str, Any]:
-    text = (stdout or "").strip()
-    if not text:
-        return {}
-    decoder = json.JSONDecoder()
-    idx = 0
-    last: dict[str, Any] = {}
-    while idx < len(text):
-        while idx < len(text) and text[idx].isspace():
-            idx += 1
-        if idx >= len(text):
-            break
-        try:
-            value, end = decoder.raw_decode(text, idx)
-        except json.JSONDecodeError:
-            break
-        if isinstance(value, dict):
-            last = value
-        idx = end
-    return last
-
-
-def run_cmd(cmd: list[str], *, timeout: int | None = None) -> tuple[int, dict[str, Any], str]:
-    effective_timeout = DEFAULT_CHILD_TIMEOUT_SECONDS if timeout is None else timeout
-    proc = subprocess.Popen(
-        cmd,
-        cwd=Path(__file__).resolve().parents[4],
-        # Discovery primitives are automation-only. Inheriting a terminal here
-        # lets tools such as msgvault start an implicit browser OAuth flow and
-        # wait for a hidden callback until the six-hour child timeout. Explicit
-        # authorization belongs to the setup primitive and its consent gate.
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    stdout_chunks: list[str] = []
-    stderr_chunks: list[str] = []
-
-    def read_stdout() -> None:
-        if proc.stdout is None:
-            return
-        for line in proc.stdout:
-            stdout_chunks.append(line)
-
-    def read_stderr() -> None:
-        if proc.stderr is None:
-            return
-        for line in proc.stderr:
-            stderr_chunks.append(line)
-            sys.stderr.write(line)
-            sys.stderr.flush()
-
-    threads = [
-        threading.Thread(target=read_stdout, daemon=True),
-        threading.Thread(target=read_stderr, daemon=True),
-    ]
-    for thread in threads:
-        thread.start()
-    try:
-        code = proc.wait(timeout=effective_timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        code = proc.wait()
-        timeout_message = f"child command timed out after {effective_timeout} seconds: {' '.join(cmd)}"
-        stderr_chunks.append(timeout_message + "\n")
-        emit_progress(timeout_message)
-    for thread in threads:
-        thread.join(timeout=1)
-    payload = parse_last_json("".join(stdout_chunks))
-    stderr = "".join(stderr_chunks)
-    for stream in (proc.stdout, proc.stderr):
-        if stream is not None:
-            stream.close()
-    return code, payload, stderr
-
-
-def py_cmd(script: str, *args: str) -> list[str]:
-    return [sys.executable, script, *args]

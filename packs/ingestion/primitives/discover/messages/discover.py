@@ -45,30 +45,30 @@ from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
     MessagesDiscoverySkipped,
     MessagesPrivacy,
 )
-from packs.ingestion.primitives.discover.common import (  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import (  # noqa: E402
+    DEFAULT_ACCOUNTS,
     DEFAULT_BASE_DIR,
+    MESSAGES_OUT_DIR,
+)
+from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
+from packs.ingestion.primitives.discover.common import (  # noqa: E402
     account_config,
     channel_is_linked,
-    emit,
-    now_iso,
-    py_cmd,
     read_accounts,
     read_csv_rows,
-    run_cmd,
     write_csv_rows,
-    write_json,
     write_stage_manifest,
 )
 
 
-DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
 DEFAULT_MESSAGES_OUTPUT_DIR = DEFAULT_BASE_DIR / "discover" / "messages"
 DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES = 0
 # First full backfill scales with history size (~3-year default window):
 # ~30 minutes on small accounts, a few hours on large ones. 3h hard cap.
 DEFAULT_WACLI_SYNC_TIMEOUT = 10800
 
-MESSAGES_DIR = Path(".powerpacks/messages")
+MESSAGES_DIR = MESSAGES_OUT_DIR
 IMESSAGE_CONTACTS = MESSAGES_DIR / "imessage.contacts.csv"
 IMESSAGE_RAW_JSONL = MESSAGES_DIR / "imessage.contacts.raw.jsonl"
 IMESSAGE_MANIFEST = MESSAGES_DIR / "imessage.manifest.json"

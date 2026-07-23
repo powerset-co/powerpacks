@@ -43,10 +43,8 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -56,6 +54,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
+    canonicalize_phone,
+    channel_counts_from_row,
+    channel_last_messages_from_row,
+    latest_message,
+    parse_bool,
+    parse_float,
+    parse_groups,
+    parse_int,
+    total_message_count,
+)
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
@@ -93,19 +103,6 @@ MESSAGE_CHANNELS = ("imessage", "whatsapp")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def emit(value: Any) -> None:
-    print(json.dumps(value, indent=2, sort_keys=True))
-
-
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
 def schema_error(path: Path, fieldnames: list[str] | None) -> str:
     fields = ",".join(fieldnames or []) or "<none>"
     header = ",".join(CSV_HEADERS)
@@ -125,47 +122,6 @@ def validate_input_headers(path: Path, fieldnames: list[str] | None) -> None:
         raise SystemExit(schema_error(path, fieldnames))
 
 
-def canonicalize_phone(raw: str) -> str:
-    value = (raw or "").strip()
-    digits = re.sub(r"[^\d]", "", value)
-    if len(digits) < 7:
-        return ""
-    if value.startswith("+"):
-        return f"+{digits}"
-    if len(digits) == 10:
-        return f"+1{digits}"
-    if len(digits) == 11 and digits.startswith("1"):
-        return f"+{digits}"
-    if len(digits) <= 15:
-        return f"+{digits}"
-    return digits
-
-
-def parse_bool(value: Any) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
-
-
-def parse_int(value: Any) -> int | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = int(float(text))
-    except ValueError:
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def parse_float(value: Any) -> float | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
-
 def parse_sources(value: str | None) -> list[str]:
     sources: list[str] = []
     for part in (value or "").split(","):
@@ -173,45 +129,6 @@ def parse_sources(value: str | None) -> list[str]:
         if token and token not in sources:
             sources.append(token)
     return sources
-
-
-def channel_counts_from_row(row: dict[str, str], sources: list[str], legacy_count: int | None) -> dict[str, int | None]:
-    counts = {channel: parse_int(row.get(f"{channel}_message_count")) for channel in MESSAGE_CHANNELS}
-    # Transitional support for old per-channel CSVs: a single-source row's
-    # legacy message_count belongs to that source.
-    if legacy_count is not None and len(sources) == 1 and sources[0] in MESSAGE_CHANNELS and counts.get(sources[0]) is None:
-        counts[sources[0]] = legacy_count
-    return counts
-
-
-def channel_last_messages_from_row(row: dict[str, str], sources: list[str], legacy_last: str | None) -> dict[str, str | None]:
-    values = {channel: (row.get(f"{channel}_last_message") or "").strip() or None for channel in MESSAGE_CHANNELS}
-    if legacy_last and len(sources) == 1 and sources[0] in MESSAGE_CHANNELS and values.get(sources[0]) is None:
-        values[sources[0]] = legacy_last
-    return values
-
-
-def total_message_count(record: dict[str, Any]) -> int | None:
-    counts = [value for value in (record.get("channel_counts") or {}).values() if value is not None]
-    if counts:
-        return sum(int(value) for value in counts)
-    return record.get("legacy_message_count")
-
-
-def latest_message(record: dict[str, Any]) -> str | None:
-    values = [value for value in (record.get("channel_last_messages") or {}).values() if value]
-    if record.get("legacy_last_message"):
-        values.append(record["legacy_last_message"])
-    return max(values, default=None)
-
-
-def parse_groups(value: str | None) -> list[str]:
-    groups: list[str] = []
-    for part in (value or "").split(GROUP_SEPARATOR):
-        cleaned = re.sub(r"\s+", " ", part.strip())
-        if cleaned and cleaned not in groups:
-            groups.append(cleaned)
-    return groups
 
 
 def serialize_sources(sources: Iterable[str]) -> str:

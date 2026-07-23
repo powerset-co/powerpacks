@@ -51,10 +51,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
-DEFAULT_OUT_DIR = Path(".powerpacks/messages")
+DEFAULT_OUT_DIR = MESSAGES_OUT_DIR
 DEFAULT_STORE = DEFAULT_OUT_DIR / "wacli"
 DEFAULT_OUTPUT_CSV = DEFAULT_OUT_DIR / "wacli.contacts.csv"
 DEFAULT_OUTPUT_JSONL = DEFAULT_OUT_DIR / "wacli.contacts.jsonl"
@@ -164,21 +166,8 @@ class PrimitiveFailed(Exception):
     pass
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
-
-
 def emit_status(message: str) -> None:
     print(f"{STATUS_PREFIX} {message}", file=sys.stderr, flush=True)
-
-
-def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def write_progress(path: Path | None, payload: dict[str, Any]) -> None:

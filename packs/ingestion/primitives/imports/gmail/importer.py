@@ -37,7 +37,6 @@ Changelog:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -54,21 +53,17 @@ from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
     candidate_key_for,
     normalize_candidate_row,
 )
-from packs.ingestion.primitives.discover.common import (  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import (  # noqa: E402
+    DEFAULT_ACCOUNTS,
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
-    emit,
-    read_csv_rows,
-    read_accounts,
-    read_json,
-    source_slug,
-    write_csv_rows,
-    write_json,
-)
-from packs.ingestion.primitives.imports.common import (  # noqa: E402
-    DEFAULT_ACCOUNTS,
     DEFAULT_IMPORT_DIR,
     DEFAULT_PROFILE_CACHE_DIR,
+    source_import_dir,
+)
+from packs.ingestion.primitives.discover.common import read_accounts  # noqa: E402
+from packs.ingestion.primitives.imports.common import (  # noqa: E402
     GmailImportLedger,
     copy_people_csv,
     csv_count,
@@ -104,7 +99,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return current
     accounts = read_accounts(args.accounts)
     steps_mod = load_gmail_import_steps()
-    import_dir = DEFAULT_IMPORT_DIR / "gmail"
+    import_dir = source_import_dir("gmail")
     ledger_path = import_dir / "ledger.json"
     emails = linked_gmail_accounts(accounts)
     ledger = GmailImportLedger(

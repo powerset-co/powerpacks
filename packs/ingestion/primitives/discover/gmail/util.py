@@ -24,14 +24,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_MSGVAULT_DB  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    read_json,
-    DEFAULT_BASE_DIR,
-    DEFAULT_MSGVAULT_DB,
     GMAIL_INTERACTION_CALCULATION_VERSION,
     ordered_unique,
-    parse_jsonish,
 )
+from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
     accounts_path as configured_accounts_path,
     source_config,

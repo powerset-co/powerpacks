@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import hashlib
 import json
 import os
 import re
@@ -58,7 +57,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +66,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
     generate_person_id,
@@ -75,7 +75,6 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "twitter"
 DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "network_import.ledger.json"
 TWITTER_API_BASE = "https://twitter241.p.rapidapi.com"
@@ -141,34 +140,8 @@ class PipelineFailed(Exception):
     pass
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def source_slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "").strip().lower()).strip("-._") or "source"
-
-
-def emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def read_json(path: Path, default: Any = None) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
-
-
-def sha(value: str, length: int = 12) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
 def generate_linkedin_id(public_identifier: str) -> str:

@@ -40,6 +40,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.common.contact_fields import canonicalize_phone  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
+
 
 CSV_HEADERS = [
     "phone",
@@ -73,7 +83,7 @@ DEFAULT_ADDRESSBOOK_GLOB = str(
     / "*"
     / "AddressBook-v22.abcddb"
 )
-DEFAULT_OUT_DIR = Path(".powerpacks/messages")
+DEFAULT_OUT_DIR = MESSAGES_OUT_DIR
 APPLE_EPOCH_OFFSET = 978_307_200
 NS_PER_SEC = 1_000_000_000
 GROUP_SEPARATOR = " | "
@@ -92,31 +102,6 @@ class Contact:
     group_names: list[str] | None = None
     message_count: int | None = None
     last_message: str | None = None
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def canonicalize_phone(raw: str) -> str:
-    value = (raw or "").strip()
-    digits = re.sub(r"[^\d]", "", value)
-    if len(digits) < 7:
-        return ""
-    if value.startswith("+"):
-        return f"+{digits}"
-    if len(digits) == 10:
-        return f"+1{digits}"
-    if len(digits) == 11 and digits.startswith("1"):
-        return f"+{digits}"
-    if len(digits) <= 15:
-        return f"+{digits}"
-    return digits
 
 
 def lookup_key(raw: str) -> str:

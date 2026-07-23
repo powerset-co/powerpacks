@@ -23,6 +23,13 @@ Changelog:
     all_emails/all_phones — previously the resolved Gmail address was
     discarded when two rows collapsed onto one public_identifier; aliases
     now accumulate as an order-preserving set union.
+  2026-07-23 (audit consolidation): the email/phone/name field helpers
+    (normalize_phone, emails/phones_from_value/_row, normalize_name_key) now come
+    from common.contact_fields; parse_jsonish from schemas/people_schema;
+    now_iso/unique_strings from common.jsonio; DEFAULT_DIRECTORY_CSV from
+    common.paths. gmail_directory_source_key adopted the canonical three-arg
+    recipe (no-email rows key off the msgvault source id; account defaults
+    `unknown`; two-arg callers unaffected).
 """
 
 from __future__ import annotations
@@ -49,19 +56,21 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     merge_interaction_counts,
     normalize_linkedin_url,
     normalize_people_row,
-)
-
-from packs.ingestion.primitives.discover.common import (
-    DEFAULT_BASE_DIR,
-    DEFAULT_DIRECTORY_CSV,
-    now_iso,
     parse_jsonish,
-    read_csv_rows,
-    unique_strings,
-    write_csv_rows,
 )
 
-EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
+    emails_from_row,
+    emails_from_value,
+    normalize_name_key,
+    normalize_phone,
+    phones_from_row,
+    phones_from_value,
+)
+from packs.ingestion.primitives.common.jsonio import now_iso, unique_strings  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV  # noqa: E402
+from packs.ingestion.primitives.discover.common import read_csv_rows, write_csv_rows  # noqa: E402
+
 DIRECTORY_COLUMNS = [
     "source",
     "source_key",
@@ -97,81 +106,11 @@ LINKEDIN_URL_COLUMNS = [
 ]
 HIGH_CONFIDENCE_URL_COLUMNS = {"confirmed_linkedin_url", "human_confirmed_linkedin", "final_linkedin_url"}
 
-def parse_jsonish(value: Any, default: Any) -> Any:
-    if value in (None, ""):
-        return default
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(str(value))
-    except Exception:
-        return default
-
-
-def emails_from_value(value: Any) -> list[str]:
-    parsed = parse_jsonish(value, None)
-    found: list[str] = []
-    if isinstance(parsed, list):
-        for item in parsed:
-            found.extend(emails_from_value(item))
-    elif isinstance(parsed, dict):
-        for item in parsed.values():
-            found.extend(emails_from_value(item))
-    else:
-        found.extend(match.group(0).lower() for match in EMAIL_RE.finditer(str(value or "")))
-    return sorted(set(found))
-
-
-def emails_from_row(row: dict[str, str]) -> list[str]:
-    emails: list[str] = []
-    for key in ("primary_email", "email", "handle", "all_emails", "emails"):
-        emails.extend(emails_from_value(row.get(key, "")))
-    return sorted(set(emails))
-
-
-def normalize_phone(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    plus = text.startswith("+")
-    digits = re.sub(r"\D+", "", text)
-    if len(digits) < 7:
-        return ""
-    return f"+{digits}" if plus else digits
-
-
-def phones_from_value(value: Any) -> list[str]:
-    parsed = parse_jsonish(value, None)
-    found: list[str] = []
-    if isinstance(parsed, list):
-        for item in parsed:
-            found.extend(phones_from_value(item))
-    elif isinstance(parsed, dict):
-        for item in parsed.values():
-            found.extend(phones_from_value(item))
-    else:
-        phone = normalize_phone(value)
-        if phone:
-            found.append(phone)
-    return sorted(set(found))
-
-
-def phones_from_row(row: dict[str, str]) -> list[str]:
-    phones: list[str] = []
-    for key in ("primary_phone", "phone", "phone_e164", "all_phones", "phones"):
-        phones.extend(phones_from_value(row.get(key, "")))
-    return sorted(set(phones))
-
-
 def directory_name(row: dict[str, str]) -> str:
     full = row.get("display_name") or row.get("full_name") or row.get("matched_name") or row.get("name") or row.get("harmonic_full_name") or ""
     if full:
         return full.strip()
     return f"{row.get('first_name', '').strip()} {row.get('last_name', '').strip()}".strip()
-
-
-def normalize_name_key(value: str) -> str:
-    return re.sub(r"\s+", " ", (value or "").strip().lower())
 
 
 def choose_linkedin_url(row: dict[str, str]) -> tuple[str, str]:
@@ -264,10 +203,17 @@ def gmail_account_from_source_key(source_key: str) -> str:
     return parts[1].strip().lower()
 
 
-def gmail_directory_source_key(account: str, email: str) -> str:
-    account_key = (account or "").strip().lower()
-    email_key = (email or "").strip().lower()
-    return f"gmail:{account_key}:email:{email_key}"
+def gmail_directory_source_key(account_email: str, email: str, fallback_id: str = "") -> str:
+    """Directory source key for a Gmail contact.
+
+    With an email: `gmail:{account}:email:{email}`. Without one, key off the
+    stable msgvault source id: `gmail:{account}:source:{id}`. Account defaults to
+    `unknown`. `fallback_id` is optional so the two-arg (email-present) callers
+    keep working unchanged."""
+    account = (account_email or "unknown").strip().lower()
+    if email:
+        return f"gmail:{account}:email:{email.strip().lower()}"
+    return f"gmail:{account}:source:{fallback_id.strip().lower()}"
 
 
 def normalized_directory_row(row: dict[str, Any], *, source_artifact: str = "", source: str = "", updated_at: str = "") -> dict[str, str]:

@@ -35,10 +35,10 @@ from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
     candidate_key_for,
     normalize_candidate_row,
 )
+from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    DEFAULT_BASE_DIR,
     read_csv_rows,
-    read_json,
     source_slug,
     write_csv_rows,
 )

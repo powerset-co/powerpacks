@@ -48,18 +48,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
+from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
-    emit,
-    now_iso,
     ordered_unique,
-    py_cmd,
     read_csv_rows,
-    read_json,
-    run_cmd,
     source_slug,
     write_csv_rows,
-    write_json,
     write_stage_manifest,
 )
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402

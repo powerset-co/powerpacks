@@ -69,13 +69,17 @@ from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
     candidate_key_for,
     normalize_candidate_row,
 )
-from packs.ingestion.primitives.discover.common import (  # noqa: E402
+from packs.ingestion.primitives.common.contact_fields import phones_from_value  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, unique_strings  # noqa: E402
+from packs.ingestion.primitives.common.paths import (  # noqa: E402
+    DEFAULT_ACCOUNTS,
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
-    emit,
-    read_csv_rows,
+    DEFAULT_IMPORT_DIR,
+)
+from packs.ingestion.primitives.discover.common import (  # noqa: E402
     read_accounts,
-    unique_strings,
+    read_csv_rows,
     write_csv_rows,
 )
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
@@ -83,11 +87,8 @@ from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     directory_rows_from_people_csv,
     merge_directory_rows,
     normalized_directory_row,
-    phones_from_value,
 )
 from packs.ingestion.primitives.imports.common import (  # noqa: E402
-    DEFAULT_ACCOUNTS,
-    DEFAULT_IMPORT_DIR,
     csv_count,
     directory_row_matches_source,
     directory_source_account_quality,

@@ -13,36 +13,42 @@ Changelog:
     convert+enrich engine now lives at imports/linkedin/network_import.py.
   2026-07-23 (audit batch 21): directory helpers import updated from
     discover.directory → imports.directory (the module moved to this stage).
+  2026-07-23 (audit consolidation): cross-vertical helpers now come from
+    packs.ingestion.primitives.common — now_iso/read_json/write_json/
+    unique_strings/sha256_file from common.jsonio, and DEFAULT_BASE_DIR/
+    DEFAULT_DIRECTORY_CSV/DEFAULT_IMPORT_DIR from common.paths (kept as module
+    globals so the existing mock.patch.object(import_common, ...) test hooks
+    still bind). DEFAULT_ACCOUNTS/DEFAULT_PROFILE_CACHE_DIR moved to common.paths
+    (their consumers import them from there directly).
 """
 
 from __future__ import annotations
 
 import importlib.util
 import csv
-import hashlib
 import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.discover.common import (
-    DEFAULT_BASE_DIR,
-    DEFAULT_DIRECTORY_CSV,
+from packs.ingestion.primitives.common.jsonio import (
     now_iso,
     read_json,
+    sha256_file,
     unique_strings,
     write_json,
+)
+from packs.ingestion.primitives.common.paths import (
+    DEFAULT_BASE_DIR,
+    DEFAULT_DIRECTORY_CSV,
+    DEFAULT_IMPORT_DIR,
 )
 from packs.ingestion.primitives.imports.directory import (
     DIRECTORY_COLUMNS,
     normalized_directory_row,
 )
 from packs.shared.csv_io import CsvIO
-
-DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
-DEFAULT_IMPORT_DIR = DEFAULT_BASE_DIR / "import"
-DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 
 
 @dataclass
@@ -134,14 +140,6 @@ def linkedin_source_user(accounts: dict[str, Any]) -> str:
     if isinstance(channel.get("usernames"), list) and channel["usernames"]:
         return str(channel["usernames"][0])
     return "local"
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:

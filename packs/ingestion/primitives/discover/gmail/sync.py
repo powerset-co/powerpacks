@@ -27,12 +27,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    DEFAULT_MSGVAULT_DB,
-    emit_progress,
-    ordered_unique,
-    run_cmd,
-)
+from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB  # noqa: E402
+from packs.ingestion.primitives.common.proc import emit_progress, run_cmd  # noqa: E402
+from packs.ingestion.primitives.discover.common import ordered_unique  # noqa: E402
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
     source_config,
 )

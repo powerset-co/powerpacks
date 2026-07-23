@@ -64,7 +64,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import hashlib
 import json
 import os
 import sys
@@ -91,11 +90,13 @@ from packs.ingestion.schemas.people_schema import (
     parse_jsonish,
     stable_person_id_from_key,
 )
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash, write_json
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR
+from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress
 from packs.shared.csv_io import CsvIO
 from packs.shared.rate_limiter import StartRateLimiter
 
 DEFAULT_LEDGER = Path(".powerpacks/network-import/enrichment/import-run.json")
-DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 RAPIDAPI_BASE_URL = "https://professional-network-data.p.rapidapi.com"
 DEFAULT_RAPIDAPI_MAX_WORKERS = int(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_WORKERS", "64"))
 DEFAULT_RAPIDAPI_MAX_RPM = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_RPM", "300"))
@@ -153,10 +154,6 @@ def load_dotenv(path: Path, keys: set[str] | None = None) -> None:
 load_dotenv(Path(__file__).resolve().parents[4] / ".env", {"RAPIDAPI_LINKEDIN_KEY", "RAPIDAPI_KEY"})
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def parse_iso(value: str) -> datetime | None:
     if not value:
         return None
@@ -166,30 +163,9 @@ def parse_iso(value: str) -> datetime | None:
         return None
 
 
-def emit(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
-
-
 def emit_progress(message: str) -> None:
-    print(f"[enrich-people] {message}", file=sys.stderr, flush=True)
-
-
-def sha(value: str, length: int = 12) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
-
-
-def read_json(path: Path, default: Any = None) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
-
-
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    """Write one progress line to stderr, tagged for the enrich-people chain."""
+    _emit_progress(message, "[enrich-people]")
 
 
 def split_name(full_name: str) -> tuple[str, str]:
@@ -892,7 +868,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
         out = enriched_by_index[index]
         raw_payload = raw_by_index[index]
         public_identifier = out.get("public_identifier") or extract_public_identifier(out.get("linkedin_url") or "")
-        write_json(raw_dir / f"{public_identifier or sha(out.get('linkedin_url') or out.get('id',''))}.json", raw_payload)
+        write_json(raw_dir / f"{public_identifier or short_hash(out.get('linkedin_url') or out.get('id',''))}.json", raw_payload)
         enriched.append(out)
     out_path = artifact_dir_from_ledger(ledger) / "provider_enriched.csv"
     CsvIO.write_dict_rows(out_path, PROVIDER_COLUMNS, enriched)
@@ -916,7 +892,7 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
     original_rows = [normalize_people_row(row) for row in CsvIO.read_dict_rows(Path(ledger["input"]["input_csv"]))]
     by_key: dict[str, dict[str, Any]] = {}
     for row in original_rows:
-        key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or sha(json.dumps(row, sort_keys=True))
+        key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or short_hash(json.dumps(row, sort_keys=True))
         by_key[key] = row
     provider_path = Path(ledger["artifacts"].get("provider_enriched_csv") or ledger["artifacts"].get("linkedin_enrichment_queue_csv"))
     enriched_rows = CsvIO.read_dict_rows(provider_path) if provider_path and provider_path.exists() else []
@@ -926,7 +902,7 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
         public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
         rapid = normalize_rapidapi(rapid_raw, public_identifier, row.get("linkedin_url", ""), company_lookup)
         merged = merge_provider_profile(row, rapid, rapid_raw)
-        key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or sha(json.dumps(row, sort_keys=True))
+        key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or short_hash(json.dumps(row, sort_keys=True))
         by_key[key] = merged
     output = artifact_dir_from_ledger(ledger) / "people.csv"
     unfiltered_rows = list(by_key.values())

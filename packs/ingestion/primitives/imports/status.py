@@ -16,31 +16,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.primitives.discover.common import (
-        DEFAULT_BASE_DIR,
-        emit,
-        now_iso,
-        read_json,
-    )
-    from packs.ingestion.primitives.imports.common import (
-        DEFAULT_IMPORT_DIR,
-        csv_count,
-        import_manifest_current,
-    )
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.discover.common import (
-        DEFAULT_BASE_DIR,
-        emit,
-        now_iso,
-        read_json,
-    )
-    from packs.ingestion.primitives.imports.common import (
-        DEFAULT_IMPORT_DIR,
-        csv_count,
-        import_manifest_current,
-    )
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_IMPORT_DIR  # noqa: E402
+from packs.ingestion.primitives.imports.common import (  # noqa: E402
+    csv_count,
+    import_manifest_current,
+)
 
 
 FAN_IN_SOURCES = ["gmail", "linkedin", "messages"]
