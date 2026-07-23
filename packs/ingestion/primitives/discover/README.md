@@ -1,6 +1,10 @@
 # discover
 
 Changelog:
+- 2026-07-23 (audit batch 21): `directory.py` moved out to the import stage at
+  `imports/directory.py` — it managed the cross-source `directory.csv` aggregate
+  and had zero discover-stage consumers (only import-stage modules and tests use
+  it).
 - 2026-07-23 (audit batch 20A): package renamed `discover_contacts_pipeline` →
   `discover`. The LinkedIn convert+enrich engine (`network_import.py`) moved out
   to the import stage at `imports/linkedin/`, so `linkedin/` is no longer part of
@@ -24,7 +28,6 @@ directly by file path.
 
 - `common.py` — shared helpers (CSV/JSON IO, accounts state, stage manifests,
   child-process runner).
-- `directory.py` — `directory.csv` and `people.csv` materialization helpers.
 - `discovery_config.py` + `discovery.config.json` — static discovery
   input/output contract for the gmail and messages sources.
 - `gmail/` — msgvault sync (`sync.py`), discovery CLI (`discover.py`),

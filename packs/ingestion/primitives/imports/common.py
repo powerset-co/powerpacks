@@ -11,6 +11,8 @@ Changelog:
     `imports` (Python reserved-word `import` could not be a package name). The
     dead local linkedin/importer.py was deleted and the Modal linkedin
     convert+enrich engine now lives at imports/linkedin/network_import.py.
+  2026-07-23 (audit batch 21): directory helpers import updated from
+    discover.directory → imports.directory (the module moved to this stage).
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from packs.ingestion.primitives.discover.common import (
     unique_strings,
     write_json,
 )
-from packs.ingestion.primitives.discover.directory import (
+from packs.ingestion.primitives.imports.directory import (
     DIRECTORY_COLUMNS,
     normalized_directory_row,
 )

@@ -196,7 +196,7 @@ output CSV rows are applied as raw material; their audit lives in
 | Metadata aggregation | [`gmail/msgvault_store.py`](../primitives/discover/gmail/msgvault_store.py) |
 | Per-account artifact emission | [`gmail/discover_engine.py`](../primitives/discover/gmail/discover_engine.py) |
 | Import orchestration | [`imports/gmail/importer.py`](../primitives/imports/gmail/importer.py) |
-| Directory reuse | [`discover/directory.py`](../primitives/discover/directory.py) |
+| Directory reuse | [`imports/directory.py`](../primitives/imports/directory.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
 | Per-source status | [`status.py`](../primitives/imports/status.py) |
 | Parallel resolver (legacy era; not callable from the import) | [`gmail/resolve_queue.py`](../primitives/discover/gmail/resolve_queue.py) |

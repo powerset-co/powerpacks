@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from packs.ingestion.primitives.discover import common as discover_common
-from packs.ingestion.primitives.discover import directory as discover_directory
+from packs.ingestion.primitives.imports import directory as import_directory
 from packs.ingestion.primitives.discover import gmail as discover_gmail
 from packs.ingestion.primitives.imports import messages as import_messages
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
@@ -551,7 +551,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 }],
             )
             artifacts: dict[str, object] = {}
-            checkpoint = discover_directory.commit_people_csv_to_directory(
+            checkpoint = import_directory.commit_people_csv_to_directory(
                 {"linkedin_directory_csv": str(directory)},
                 artifacts,
                 str(people),
