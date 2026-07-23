@@ -23,6 +23,7 @@ from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     FACTS_DIR,
     RAW_DIR,
+    bundle_evidence_fingerprint,
     emit,
     read_jsonl,
     now_iso,
@@ -56,6 +57,8 @@ def collect_rows(raw_dir: Path, facts_dir: Path) -> list[dict[str, Any]]:
         rec = recs[-1]
         fa = rec.get("facts") or {}
         bundle = raw.get(f.stem, {})
+        current_fingerprint = bundle_evidence_fingerprint(bundle)
+        synthesized_fingerprint = str(rec.get("input_evidence_fingerprint") or "")
         rows.append({
             "person_id": f.stem,
             "name": fa.get("canonical_name") or bundle.get("full_name") or "?",
@@ -74,6 +77,7 @@ def collect_rows(raw_dir: Path, facts_dir: Path) -> list[dict[str, Any]]:
             "capped": rec.get("messages_available", 0) > rec.get("messages_used", 0),
             "stop_reason": rec.get("stop_reason", ""),
             "error": bool(rec.get("error")),
+            "stale_evidence": current_fingerprint != synthesized_fingerprint,
         })
     return rows
 
@@ -103,6 +107,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     empty_rel = [r for r in rows if not r["has_rel"]]
     errored = [r for r in rows if r["error"]]
+    stale_evidence = [r for r in rows if r["stale_evidence"]]
 
     # Composite completeness: relationship + employer + topic-bearing + confident.
     score = round(100 * statistics.mean(
@@ -136,6 +141,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                                       "hint": "raise --deep-cap to grok more of these"},
             "empty_relationship": {"count": len(empty_rel), "examples": brief(empty_rel)},
             "errors": {"count": len(errored), "examples": brief(errored)},
+            "stale_evidence": {
+                "count": len(stale_evidence),
+                "examples": brief(stale_evidence),
+                "hint": "run the normal dry/synthesize/compose stages to refresh changed evidence",
+            },
         },
         "updated_at": now_iso(),
     }

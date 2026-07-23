@@ -161,18 +161,26 @@ def mirror_facts_worth(
     facts_dir: Path,
     *,
     include_human_rows: bool = False,
+    include_human_person_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Mirror every facts worth verdict into review.csv.
 
     Normal synthesis leaves rows with a human Yes/No completely untouched.
-    ``$deep-context rejudge`` sets ``include_human_rows`` so the refreshed
-    machine opinion is visible beside the sticky human decision; the human
-    ``network_worth`` cell itself is always preserved.
+    ``$deep-context rejudge`` sets ``include_human_rows`` for every person.
+    Normal source-change refreshes pass only the people synthesized in that run
+    through ``include_human_person_ids`` so their refreshed machine opinion is
+    visible beside the sticky human decision. The human ``network_worth`` cell
+    itself is always preserved.
     """
     # Local import avoids making the basic CSV contract depend on dossier parsing.
     from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
 
     rows = load_override_rows(review_path)
+    included_human_ids = {
+        str(person_id or "").strip().lower()
+        for person_id in (include_human_person_ids or set())
+        if str(person_id or "").strip()
+    }
     synced_people = synced_rows = skipped_human = without_worth = cleared_legacy_spam = 0
 
     for facts_path in sorted(facts_dir.glob("*.jsonl")):
@@ -184,9 +192,13 @@ def mirror_facts_worth(
             continue
 
         keys = row_keys_for_person(rows, person_id)
-        if not include_human_rows and any(
-            (rows[key].get("network_worth") or "").strip().lower() in HUMAN_WORTH_VALUES
-            for key in keys
+        if (
+            not include_human_rows
+            and person_id.lower() not in included_human_ids
+            and any(
+                (rows[key].get("network_worth") or "").strip().lower() in HUMAN_WORTH_VALUES
+                for key in keys
+            )
         ):
             skipped_human += 1
             continue

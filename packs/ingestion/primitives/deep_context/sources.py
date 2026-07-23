@@ -428,6 +428,19 @@ def _table_columns(con: sqlite3.Connection, table: str) -> set[str]:
         return set()
 
 
+def _whatsapp_dm_jids(person: Person) -> list[str]:
+    """All DM JID spellings that can represent the person's phone numbers."""
+    wanted: set[str] = set()
+    for phone in person.phones:
+        key = phone_digits(phone)
+        if not key:
+            continue
+        wanted.add(key)
+        if len(key) == 10:
+            wanted.add(f"1{key}")
+    return [f"{digits}@s.whatsapp.net" for digits in sorted(wanted)]
+
+
 def read_whatsapp(person: Person, wacli_db: Path = DEFAULT_WACLI_DB, cap: int = CHAT_MESSAGE_CAP) -> list[dict[str, Any]]:
     """Recent DM bodies for the person from the wacli store (groups never read).
 
@@ -453,16 +466,10 @@ def read_whatsapp(person: Person, wacli_db: Path = DEFAULT_WACLI_DB, cap: int = 
         # but phone_digits() strips a leading US 1 for comparison — so a US number's
         # JID would never match the stripped key. Match BOTH forms: the stripped key
         # and, for 10-digit (US-shaped) keys, the "1"-prefixed E.164 form.
-        wanted: set[str] = set()
-        for p in person.phones:
-            key = phone_digits(p)
-            if not key:
-                continue
-            wanted.add(key)
-            if len(key) == 10:
-                wanted.add(f"1{key}")
         # DM chat jids look like "<digits>@s.whatsapp.net"; groups end in @g.us.
-        jids = [f"{d}@s.whatsapp.net" for d in wanted]
+        jids = _whatsapp_dm_jids(person)
+        if not jids:
+            return []
         placeholders = ",".join("?" for _ in jids)
         select = [f"{text_col} AS text"]
         select.append((f"{ts_col} AS ts") if ts_col else "NULL AS ts")
@@ -491,6 +498,47 @@ def read_whatsapp(person: Person, wacli_db: Path = DEFAULT_WACLI_DB, cap: int = 
             "text": text,
         })
     return out
+
+
+def count_whatsapp_dms(
+    person: Person,
+    wacli_db: Path = DEFAULT_WACLI_DB,
+) -> int:
+    """Uncapped poolable WhatsApp DM count for freshness and depth reporting.
+
+    The collector samples only the newest ``deep_cap`` bodies. This independent
+    total still changes when an older backfill lands outside that sample, which
+    invalidates the bundle without loading the extra bodies into memory.
+    """
+    if not person.phones or not wacli_db.exists():
+        return 0
+    try:
+        con = sqlite3.connect(f"file:{wacli_db}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return 0
+    con.row_factory = sqlite3.Row
+    try:
+        cols = _table_columns(con, "messages")
+        if not cols or "chat_jid" not in cols:
+            return 0
+        text_col = "text" if "text" in cols else ("display_text" if "display_text" in cols else None)
+        if not text_col:
+            return 0
+        jids = _whatsapp_dm_jids(person)
+        if not jids:
+            return 0
+        placeholders = ",".join("?" for _ in jids)
+        return int(con.execute(
+            f"SELECT COUNT(*) FROM messages "
+            f"WHERE chat_jid IN ({placeholders}) "
+            f"AND chat_jid NOT LIKE '%@g.us' "
+            f"AND TRIM(COALESCE({text_col}, '')) <> ''",
+            tuple(jids),
+        ).fetchone()[0])
+    except sqlite3.Error:
+        return 0
+    finally:
+        con.close()
 
 
 # --- timestamp helpers (lazy import keeps message-source support optional) --

@@ -149,8 +149,8 @@ button and cannot be blocked by the Done page.
 | Stage | What it does | Main result |
 | --- | --- | --- |
 | Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON and `owner.json` |
-| Collection | Reads Gmail and message bodies into bounded per-person bundles. Candidates are included in full processing. The default depth is `--deep-cap 1600`; small iMessage groups are optional. | `raw/<person_id>.json` and `raw/manifest.json` |
-| Synthesis | Sends bounded message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, and is mirrored into `review.csv`. Normal reruns rejudge missing/Maybe verdicts. | `facts/<person_id>.jsonl`, `overrides/review.csv` |
+| Collection | Reads Gmail and message bodies into bounded per-person bundles. Candidates are included in full processing. The default depth is `--deep-cap 1600`; small iMessage groups are optional. Every normal run compares a stable evidence fingerprint, reuses unchanged bundles, and refreshes only people whose sampled messages or context changed. Existing evidence is retained if one of its source databases is temporarily unavailable. | `raw/<person_id>.json` and `raw/manifest.json` |
+| Synthesis | Sends bounded message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, and is mirrored into `review.csv`. Normal reruns process missing/Maybe verdicts and fingerprint-changed bundles; changed people are fully re-synthesized so corrected/deleted evidence cannot leave duplicated stale facts. Human worth remains sticky while its adjacent machine opinion refreshes. | `facts/<person_id>.jsonl`, `overrides/review.csv` |
 | Composition | Deterministically renders facts into Markdown dossiers and name/email/phone lookup indexes. | `dossiers/*.md`, `index.json`, `index.md` |
 | Duplicate resolution | Generates plausible same-person pairs, judges them with OpenAI, and builds transitive canonical parents. A candidate merged into an existing person contributes its contact metadata and skips standalone review/research. | Merge audit CSVs and `parents/*.md` |
 | Reconcile | Before the browser opens, compares message-derived dossiers with attached LinkedIn profiles for identity only. It may verify, detach, or request human review; it never reads or writes worth. | `reconcile/verdicts.jsonl`, identity fields in `overrides/review.csv` |
@@ -315,7 +315,9 @@ response without a follow-up poll.
 
 This gives repeatability without a ledger:
 
-- Per-person collection, synthesis, and completed research can be reused.
+- Per-person collection and synthesis are reused only while their evidence
+  fingerprints match; newly synced or backfilled messages refresh the affected
+  dossier on the normal staged path. Completed research can still be reused.
 - Current queues and manifests are overwritten in place.
 - A repeated review cannot silently skip enrichment because an older lookup
   completed.

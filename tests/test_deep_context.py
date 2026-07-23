@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context import (
     restart_review,
     sources,
     synthesize_person_context as synth,
+    validate_dossiers as validate,
 )
 from packs.ingestion.primitives.deep_context.review_store import (
     load_override_rows as load_rows,
@@ -58,6 +59,23 @@ class TestCommon(unittest.TestCase):
         self.assertEqual(common.parse_list('["a@x.com", "b@x.com"]'), ["a@x.com", "b@x.com"])
         self.assertEqual(common.parse_list("solo@x.com"), ["solo@x.com"])
         self.assertEqual(common.parse_list(""), [])
+
+    def test_bundle_evidence_fingerprint_ignores_collection_metadata(self):
+        bundle = {
+            "person_id": "p1",
+            "messages": [{"channel": "whatsapp", "at": "2026-01-01", "text": "hello"}],
+            "messages_available": 1,
+            "collection_policy": {"deep_cap": 10, "include_groups": True, "max_group_size": 12},
+            "collected_at": "2026-01-01T00:00:00Z",
+        }
+        first = common.bundle_evidence_fingerprint(bundle)
+        bundle["collected_at"] = "2026-07-22T00:00:00Z"
+        bundle["evidence_fingerprint"] = "stale-cache-value"
+        self.assertEqual(common.bundle_evidence_fingerprint(bundle), first)
+        bundle["messages"].append(
+            {"channel": "whatsapp", "at": "2026-01-02", "text": "new evidence"}
+        )
+        self.assertNotEqual(common.bundle_evidence_fingerprint(bundle), first)
 
     def test_load_people_filters_and_parses(self):
         with tempfile.TemporaryDirectory() as d:
@@ -380,6 +398,142 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
             self.assertEqual(manifest["privacy"]["group_source"], "imessage")
             self.assertEqual(manifest["privacy"]["max_group_size"], 12)
 
+    def test_default_collection_refreshes_only_changed_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw = base / "raw"
+            people = base / "people.csv"
+            people.write_text(
+                "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n"
+                "p1,Jordan Bravo,,,+14155550000,,imessage\n",
+                encoding="utf-8",
+            )
+            chat_db = base / "chat.db"
+            con = sqlite3.connect(chat_db)
+            con.executescript("CREATE TABLE message (ROWID INTEGER); CREATE TABLE handle (ROWID INTEGER);")
+            con.close()
+            args = _ns(
+                out_dir=raw,
+                chat_db=chat_db,
+                wacli_db=base / "missing-wacli.db",
+                people_csv=people,
+                msgvault_db=base / "missing-msgvault.db",
+                dry_run=False,
+                limit=0,
+                person="",
+                force=False,
+                deep_cap=10,
+                include_groups=True,
+                include_candidates=False,
+                max_group_size=12,
+            )
+            first_message = {
+                "channel": "imessage",
+                "at": "2026-01-01T00:00:00Z",
+                "direction": "from_them",
+                "subject": "",
+                "text": "hello",
+            }
+            with (
+                mock.patch.object(collect, "collect_one", return_value=([first_message], 1)),
+                mock.patch.object(sources, "read_imessage_groups", return_value=[]),
+            ):
+                first = collect.build(args)
+                unchanged = collect.build(args)
+
+            bundle_path = raw / "p1.json"
+            original = json.loads(bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual(first["people_refreshed_existing"], 0)
+            self.assertEqual(unchanged["people_skipped_existing"], 1)
+
+            second_message = {
+                **first_message,
+                "at": "2026-01-02T00:00:00Z",
+                "text": "new evidence",
+            }
+            with (
+                mock.patch.object(
+                    collect,
+                    "collect_one",
+                    return_value=([first_message, second_message], 2),
+                ),
+                mock.patch.object(sources, "read_imessage_groups", return_value=[]),
+            ):
+                refreshed = collect.build(args)
+
+            updated = json.loads(bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual(refreshed["people_refreshed_existing"], 1)
+            self.assertEqual(len(updated["messages"]), 2)
+            self.assertNotEqual(updated["evidence_fingerprint"], original["evidence_fingerprint"])
+
+            chat_db.unlink()
+            args.force = True
+            with mock.patch.object(collect, "collect_one") as collect_mock:
+                retained = collect.build(args)
+            collect_mock.assert_not_called()
+            self.assertEqual(retained["people_retained_source_unavailable"], 1)
+            self.assertEqual(
+                json.loads(bundle_path.read_text(encoding="utf-8"))["evidence_fingerprint"],
+                updated["evidence_fingerprint"],
+            )
+
+    def test_older_whatsapp_backfill_beyond_sample_refreshes_bundle(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw = base / "raw"
+            people = base / "people.csv"
+            people.write_text(
+                "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n"
+                "p1,Jordan Bravo,,,+14155550000,,whatsapp\n",
+                encoding="utf-8",
+            )
+            wacli_db = base / "wacli.db"
+            con = sqlite3.connect(wacli_db)
+            con.execute(
+                "CREATE TABLE messages (chat_jid TEXT, text TEXT, ts INTEGER, from_me INTEGER)"
+            )
+            con.executemany(
+                "INSERT INTO messages VALUES (?,?,?,?)",
+                [
+                    ("14155550000@s.whatsapp.net", "newest", 200, 0),
+                    ("14155550000@s.whatsapp.net", "older", 100, 1),
+                ],
+            )
+            con.commit()
+            args = _ns(
+                out_dir=raw,
+                chat_db=base / "missing-chat.db",
+                wacli_db=wacli_db,
+                people_csv=people,
+                msgvault_db=base / "missing-msgvault.db",
+                dry_run=False,
+                limit=0,
+                person="",
+                force=False,
+                deep_cap=1,
+                include_groups=True,
+                include_candidates=False,
+                max_group_size=12,
+            )
+            collect.build(args)
+            bundle_path = raw / "p1.json"
+            before = json.loads(bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual([message["text"] for message in before["messages"]], ["newest"])
+            self.assertEqual(before["messages_available"], 2)
+
+            con.execute(
+                "INSERT INTO messages VALUES (?,?,?,?)",
+                ("14155550000@s.whatsapp.net", "backfilled oldest", 50, 0),
+            )
+            con.commit()
+            con.close()
+            refreshed = collect.build(args)
+            after = json.loads(bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual([message["text"] for message in after["messages"]], ["newest"])
+            self.assertEqual(after["messages_available"], 3)
+            self.assertNotEqual(after["evidence_fingerprint"], before["evidence_fingerprint"])
+            self.assertEqual(refreshed["people_refreshed_existing"], 1)
+
     def test_default_collection_rebuilds_retained_group_bundles(self):
         from unittest import mock
 
@@ -451,7 +605,11 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
                 collect,
                 "collect_one",
                 return_value=([opted_in_message], 1),
-            ) as collect_mock:
+            ) as collect_mock, mock.patch.object(
+                collect,
+                "_unavailable_existing_sources",
+                return_value=[],
+            ):
                 opted_in_manifest = collect.build(_ns(
                     out_dir=raw,
                     chat_db=base / "missing-chat.db",
@@ -572,6 +730,29 @@ class TestSynthesize(unittest.TestCase):
         c = dict(b, topics=["x", "y"])
         self.assertTrue(synth.fact_keys(c) - synth.fact_keys(a))
 
+    def test_validator_flags_raw_facts_fingerprint_mismatch(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw, facts = base / "raw", base / "facts"
+            raw.mkdir()
+            facts.mkdir()
+            bundle = {
+                "person_id": "p1",
+                "full_name": "Jordan Bravo",
+                "messages": [{"channel": "whatsapp", "at": "2026-01-01", "text": "hello"}],
+            }
+            common.write_json(raw / "p1.json", bundle)
+            record = {
+                "facts": {"canonical_name": "Jordan Bravo"},
+                "input_evidence_fingerprint": "old-fingerprint",
+            }
+            (facts / "p1.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+            self.assertTrue(validate.collect_rows(raw, facts)[0]["stale_evidence"])
+
+            record["input_evidence_fingerprint"] = common.bundle_evidence_fingerprint(bundle)
+            (facts / "p1.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+            self.assertFalse(validate.collect_rows(raw, facts)[0]["stale_evidence"])
+
 
 class TestMergeFacts(unittest.TestCase):
     def test_merges_employers_and_picks_confident_scalars(self):
@@ -631,6 +812,7 @@ class TestIncrementalSynthesis(unittest.TestCase):
         res = self._run([0.5, 0.9], static_facts=False, nbatches=5)
         self.assertEqual(res["stop_reason"], "confident")
         self.assertEqual(res["batches_used"], 2)
+        self.assertEqual(len(res["input_evidence_fingerprint"]), 64)
 
     def test_stops_when_saturated(self):
         res = self._run([0.5, 0.5, 0.5, 0.5], static_facts=True, nbatches=5)
