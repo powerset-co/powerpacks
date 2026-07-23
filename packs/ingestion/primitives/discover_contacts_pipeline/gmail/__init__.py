@@ -1,6 +1,6 @@
 """Gmail discovery package: util (parsers), sync (msgvault sync), discover
 (CLI), msgvault_store (msgvault reader/aggregation library), discover_engine
-(per-account artifact-emission child), resolve_queue, import_steps.
+(per-account artifact-emission child), resolve_queue.
 
 The package name preserves `from ...discover_contacts_pipeline import gmail` for
 module consumers; file invocations use gmail/discover.py. msgvault_store and

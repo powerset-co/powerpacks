@@ -24,7 +24,8 @@ Multiple Gmail accounts are separate msgvault source accounts: list them with
 
 `apply-resolutions` attaches a `linkedin_resolutions.csv` back onto a Gmail
 `people.csv` (`--min-confidence` defaults to 0.75); the live caller is the
-import chain's `gmail_apply_and_enrich` step (`gmail/import_steps.py`), which
+import chain's `gmail_apply_and_enrich` step
+(`import_contacts_pipeline/gmail/import_steps.py`), which
 applies STORED resolutions only.
 
 Changelog:

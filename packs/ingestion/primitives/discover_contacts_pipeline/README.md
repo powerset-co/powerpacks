@@ -26,7 +26,8 @@ directly by file path.
 - `gmail/` — msgvault sync (`sync.py`), discovery CLI (`discover.py`),
   msgvault reader/aggregation library (`msgvault_store.py`), per-account
   artifact-emission child (`discover_engine.py`), LinkedIn resolution
-  (`resolve_queue.py`), import step functions (`import_steps.py`).
+  (`resolve_queue.py`). The gmail import step functions live in
+  `import_contacts_pipeline/gmail/import_steps.py` (import stage, not here).
 - `linkedin/` — Connections.csv import + enrichment (`network_import.py`),
   run locally or inside the Modal sandbox via
   `packs/indexing/modal/run_linkedin.py`.
