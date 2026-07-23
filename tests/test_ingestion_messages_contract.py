@@ -214,6 +214,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
         def fake_run_cmd(command, timeout=None):
             captured["command"] = command
+            captured["timeout"] = timeout
             return (0, {}, "")
 
         with mock.patch.object(discover_messages, "run_cmd", fake_run_cmd):
@@ -230,6 +231,12 @@ class IngestionMessagesContractTests(unittest.TestCase):
         cmd = captured["command"]
         self.assertIn("--sync-mode", cmd)
         self.assertEqual(cmd[cmd.index("--sync-mode") + 1], "incremental")
+        self.assertEqual(
+            captured["timeout"],
+            discover_messages.DEFAULT_WACLI_SYNC_TIMEOUT
+            + discover_messages.DEFAULT_WACLI_DEPTH_TIMEOUT
+            + 900,
+        )
 
     def test_messages_import_is_fixed_output_and_stateless(self) -> None:
         path = INGESTION / "primitives/import_contacts_pipeline/messages.py"

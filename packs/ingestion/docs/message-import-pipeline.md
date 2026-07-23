@@ -1,5 +1,8 @@
 <!--
 Changelog:
+- 2026-07-23: Added the explicit-full WhatsApp depth stage: current-year DMs
+  with at most 20 rows receive sequential, paced, target-specific history
+  requests with bounded retry/backoff and fixed resumable outputs.
 - 2026-07-16: Refocused on contact sync only. Removed the OpenRouter triage,
   research queue, Parallel deep research, LLM-scored review UI, RapidAPI
   enrichment, and Modal index stages from the canonical flow; import is now
@@ -25,7 +28,8 @@ wacli sync/export utility and stops before identity resolution or indexing.
 ## At a glance
 
 - **No body reads:** Powerpacks selects phone/name, message counts, dates, and
-  group metadata. It does not select or send message bodies in this workflow.
+  group metadata. It does not select or send message bodies in this workflow;
+  wacli necessarily decrypts and persists history returned locally by WhatsApp.
 - **Two source paths:** iMessage uses read-only macOS SQLite access; WhatsApp uses
   a local wacli provider store and QR authorization.
 - **Identity path:** local Gmail/LinkedIn match only. Matched contacts attach
@@ -106,6 +110,21 @@ missing, syncs all history by default (`--max-messages 0`), and keeps provider
 state under `.powerpacks/messages/wacli/`. The isolated `$import-whatsapp` skill
 can install wacli directly because invoking that skill is explicit consent.
 
+An explicit `$import-messages full` goes one step further after the account
+sync. Powerpacks selects current-year DMs with at most 20 stored rows from
+actual `MAX(messages.ts)` values and calls wacli's native target backfill.
+Targets run strictly one at a time. Each command can issue up to ten requests
+for 500 rows, with a delay between native requests and another delay between
+chats. Transient connection, timeout, and store-lock failures back off
+exponentially; two successful backfill attempts with no target-row growth stop
+that chat. Before/after SQLite counts keep target recovery separate from
+unrelated catch-up traffic.
+
+The depth stage is resumable from one current `results.csv`; it does not use a
+ledger, run ID, or per-attempt directory. Persisted identifiers are stable
+hashes. Names, phones, JIDs, message IDs, commands, and raw output remain out of
+the stage artifacts.
+
 Powerpacks opens the resulting SQLite database read-only, rejects body-column
 identifiers, and selects contact plus aggregate count/date fields. It includes
 direct chats and current participants of groups up to the configured size (30 by
@@ -169,6 +188,10 @@ approval gates there.
 |-- whatsapp.contacts.csv
 |-- contacts.csv
 |-- contacts.csv.match.manifest.json
+|-- history-depth/
+|   |-- results.csv
+|   |-- progress.jsonl
+|   `-- manifest.json
 `-- wacli/
 
 .powerpacks/network-import/

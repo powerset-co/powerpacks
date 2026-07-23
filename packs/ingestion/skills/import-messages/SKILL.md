@@ -6,6 +6,12 @@ description: Add iMessage/WhatsApp contacts to your local network. Use for $impo
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-23: Explicit `$import-messages full` now follows the account sync
+  with a resumable, sequential depth pass over current-year WhatsApp DMs with
+  at most 20 stored rows. Native requests and chats are paced, transient errors
+  back off, and two successful no-growth backfill attempts stop a chat. Fixed
+  outputs live in `.powerpacks/messages/history-depth/`; no LLM or paid provider
+  is involved.
 - 2026-07-18: Documented first-backfill duration (30 min up to a few hours;
   3 h hard cap, raised from ~2 h) and the never-kill-mid-backfill rule with
   `$import-messages full` recovery.
@@ -128,9 +134,10 @@ There is *no* sync-window question (unlike Gmail). WhatsApp scope follows the
 **sync mode**, which you pick from how the user invoked the skill:
 
 - **first import / plain `$import-messages`** → `auto`. The **first** run
-  full-backfills all WhatsApp history (default window ~3 years) to build the
-  local archive; **every later run auto-detects the populated store and pulls
-  only the delta** (fast). You do not need to ask.
+  asks WhatsApp for the configured full window (currently up to ~10 years) to
+  build the local archive; this account-level request does not guarantee equal
+  depth in every chat. **Every later run auto-detects the populated store and
+  pulls only the delta** (fast). You do not need to ask.
 
   **The first backfill takes 30 minutes up to a few hours** depending on
   history size (hard cap 3 h). The sync prints a heartbeat every ~2 minutes,
@@ -142,7 +149,13 @@ There is *no* sync-window question (unlike Gmail). WhatsApp scope follows the
 - **`$import-messages sync`** (or "sync/update/refresh my messages") → the
   explicit fast incremental path.
 - **`$import-messages full`** (or "re-import everything / full resync") → forces
-  a full re-backfill.
+  a full account sync, then deepens current-year WhatsApp DMs with at most 20
+  stored rows using target-specific on-demand history requests. The depth pass
+  is strictly sequential: native requests and chats are delayed, transient
+  errors back off exponentially, and a chat stops after two successful
+  no-growth backfill attempts. It can add up to two hours after the normal 3 h
+  sync cap; progress is resumable from the fixed
+  `.powerpacks/messages/history-depth/` outputs.
 
 iMessage always does a cheap local `chat.db` read regardless of mode.
 
@@ -166,8 +179,11 @@ wasn't picked.)
 It writes `.powerpacks/messages/contacts.csv` and stages the discovery artifact
 at `.powerpacks/network-import/discover/messages/contacts.csv`, with status and
 counts in that fixed stage directory's `manifest.json`. It does not create a run
-directory or a step ledger. It pauses at consent gates; resolve each, then re-run
-the same `discover` command to advance:
+directory or a step ledger. Explicit full WhatsApp runs also overwrite
+`.powerpacks/messages/history-depth/results.csv`, `progress.jsonl`, and
+`manifest.json`; those artifacts store hashed chat references and aggregate
+counters only. It pauses at consent gates; resolve each, then re-run the same
+`discover` command to advance:
 
 - **iMessage Full Disk Access** (`status: blocked_user_action`, step `check_imessage`):
   open the macOS pane, ask the user to enable Full Disk Access for this terminal,

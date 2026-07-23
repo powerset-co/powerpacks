@@ -52,6 +52,10 @@ DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES = 0
 # First full backfill scales with history size (~3-year default window):
 # ~30 minutes on small accounts, a few hours on large ones. 3h hard cap.
 DEFAULT_WACLI_SYNC_TIMEOUT = 10800
+# Explicit full imports then run a resumable, sequential shallow-chat depth
+# stage. Give that bounded child work up to two additional hours before the
+# discovery wrapper stops; completed per-chat results remain resumable.
+DEFAULT_WACLI_DEPTH_TIMEOUT = 7200
 
 MESSAGES_DIR = Path(".powerpacks/messages")
 IMESSAGE_CONTACTS = MESSAGES_DIR / "imessage.contacts.csv"
@@ -215,7 +219,10 @@ def _extract_whatsapp(
         "--sync-timeout",
         str(DEFAULT_WACLI_SYNC_TIMEOUT),
     )
-    code, payload, stderr = run_cmd(command, timeout=DEFAULT_WACLI_SYNC_TIMEOUT + 900)
+    code, payload, stderr = run_cmd(
+        command,
+        timeout=DEFAULT_WACLI_SYNC_TIMEOUT + DEFAULT_WACLI_DEPTH_TIMEOUT + 900,
+    )
     if code != 0 and payload.get("status") == "blocked_user_action":
         return _blocked_child(
             message=str(payload.get("message") or "WhatsApp needs a QR scan."),

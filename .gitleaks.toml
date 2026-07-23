@@ -27,3 +27,15 @@ paths = [
 regexes = [
   '''POWERPACKS_AUTH0_CLIENT_ID", "U7p09NWeJ0jy9M4GiaWa4cz0YVCdDVBl''',
 ]
+
+[[allowlists]]
+description = "Pinned synthetic legacy message-contact id used by migration tests"
+targetRules = ["linkedin-client-secret"]
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''tests/test_deep_context_candidates\.py''',
+]
+regexes = [
+  '''LEGACY = "message-linkedin:dd82e371f95be72b"''',
+]
