@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Shared helpers for import/enrich contact stages."""
+"""Shared helpers for import/enrich contact stages.
+
+Changelog:
+  2026-07-23 (audit):
+    - load_gmail_import_steps: the gmail step functions live in discover
+      gmail/import_steps.py, extracted from the retired before_split
+      orchestrator.
+"""
 
 from __future__ import annotations
 
@@ -66,11 +73,10 @@ class GmailImportLedger:
 
 def load_gmail_import_steps() -> Any:
     """Load the gmail step functions the live import dispatches (run_gmail_directory /
-    run_gmail_apply_and_enrich / save_ledger) from discover gmail/import_steps.py — the closure
-    extracted from the retired before_split orchestrator. No Parallel resolution, no
-    RapidAPI hydration (deep-context owns both; stored legacy resolutions migrate via
-    `bin/deep-context migrate-legacy`). File-loaded rather than imported because the
-    module name contains a dot-free path outside the package tree it came from."""
+    run_gmail_apply_and_enrich / save_ledger) from discover gmail/import_steps.py.
+    No Parallel resolution, no RapidAPI hydration (deep-context owns both; stored
+    legacy resolutions migrate via `bin/deep-context migrate-legacy`). File-loaded
+    rather than package-imported because the file lives outside this package's tree."""
     path = Path(__file__).resolve().parents[1] / "discover_contacts_pipeline" / "gmail" / "import_steps.py"
     spec = importlib.util.spec_from_file_location("_powerpacks_gmail_import_steps", path)
     if not spec or not spec.loader:

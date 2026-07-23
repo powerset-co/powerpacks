@@ -6,6 +6,21 @@ The source-specific discovery work lives in sibling modules:
 - directory.py for directory.csv and people.csv materialization helpers
 
 Fan-in/merge/indexing is owned by packs/indexing/primitives/index_contacts_pipeline.
+
+Changelog:
+  2026-07-23 (audit):
+    - The gmail.discover() call dropped ledger_path=, output_dir=, and
+      operator_id=: discover() never declared them and its old ``**_``
+      swallowed them silently, so those output redirects were never honored.
+      Removed rather than implemented.
+    - The linkedin.discover() call dropped ledger_path=/output_dir= for the
+      same reason; both discover() functions are now strict keyword-only.
+    - The enrichment-only path's gmail enrichment steps were always-True
+      no-op stubs (the real steps live in the import stage); the stubs and
+      their calls were removed.
+    - The pre-sync Gmail API estimation in dry_run_plan was an always-empty
+      stub and was removed; gmail_api_estimates stays an empty list for new
+      ledgers.
 """
 
 from __future__ import annotations
@@ -313,11 +328,8 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
     if "gmail" in runnable_sources:
         begin_step(ledger_path, ledger, "gmail_msgvault", "Discovering Gmail contacts from existing msgvault metadata.")
         gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
-        # AUDIT NOTE (2026-07-23): this call used to also pass ledger_path=,
-        # output_dir=, and operator_id= — discover() never declared them and its
-        # old **_ swallowed them silently, so those redirects were NEVER honored
-        # (outputs always went to the configured stage paths). Removed rather
-        # than implemented; discover() is strict now, so this cannot recur.
+        # gmail.discover() is strict keyword-only: unknown kwargs raise.
+        # Outputs always go to the configured stage paths.
         payload = gmail.discover(
             accounts_file=accounts_path,
             selected_accounts=gmail_emails,
@@ -344,8 +356,7 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
 
     if "linkedin_csv" in runnable_sources:
         begin_step(ledger_path, ledger, "linkedin", "Discovering LinkedIn Connections.csv contacts.")
-        # AUDIT NOTE (2026-07-23): ledger_path=/output_dir= were silently swallowed
-        # by the old **_ and never honored — removed, and discover() is strict now.
+        # linkedin.discover() is strict keyword-only: unknown kwargs raise.
         payload = linkedin.discover(
             accounts_file=accounts_path,
             connections_csv=str(input_cfg.get("linkedin_csv") or ""),
@@ -380,8 +391,7 @@ def run_pipeline(ledger_path: Path, *, resume: bool = False) -> int:
     selected_enrichment_sources = selected_sources if enrichment_only else set()
     run_gmail_enrichment = not selected_enrichment_sources or "gmail" in selected_enrichment_sources
     if enrichment_only:
-        # The gmail enrichment steps here were always-True no-op stubs (the real
-        # steps live in the import stage); the stubs and their calls are removed.
+        # Gmail enrichment runs in the import stage, not here.
         ledger["status"] = "source_enrichment_completed"
         ledger.pop("blocked", None)
         save_ledger(ledger_path, ledger)
@@ -606,7 +616,7 @@ def dry_run_plan(args: argparse.Namespace, ledger_path: Path, artifact_dir: Path
         "linkedin_directory_use_defaults": not bool(getattr(args, "no_default_linkedin_directory_sources", False)),
     }
     gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
-    gmail_estimates: list = []  # API estimation was an always-empty stub; removed
+    gmail_estimates: list = []  # no pre-sync Gmail API estimation is performed
     enrichment_only = bool(getattr(args, "enrichment_only", False))
     if args.gmail_account_email or unique_strings(getattr(args, "gmail_account_emails", [])) or resolve_msgvault_db(args):
         would_run.append("gmail_msgvault")

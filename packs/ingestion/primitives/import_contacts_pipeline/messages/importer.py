@@ -10,6 +10,19 @@ two stage outputs, with no LLM, no research queue, and no enrichment call:
   deterministic "worth researching" floor (real phone, plausibly-real saved
   name, message-count minimum). Identity resolution happens later in the
   deep-context processing layer with cross-channel context.
+
+Changelog:
+  2026-07-23 (audit):
+    - One upfront repo-root path bootstrap replaced the duplicated try/except
+      import block.
+    - Matched contacts take the durable pub-derived person id on first sight;
+      the ephemeral message-linkedin:* keys (which stranded facts/review rows
+      when a later run re-keyed them) are retired except as the no-pub
+      fallback.
+    - Suggested matches are no longer auto-attached by the review gate; the
+      deep-context cluster judge decides.
+    - Review-era artifacts (people.input.csv, enrichment/) left the stage
+      contract; run() deletes leftovers.
 """
 
 from __future__ import annotations
@@ -21,11 +34,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Make `packs.*` importable whether this file runs as a module or as a script
-# (uv run .../messages.py). One upfront path bootstrap replaces the old
-# duplicated try/except import block. (This cannot live in the package
-# __init__: script-mode execution never imports the package, so the path fix
-# must run in-file before the first `packs.*` import.)
+# Repo-root bootstrap so packs.* imports work in module AND script mode
+# (uv run .../importer.py); must be in-file because script-mode never imports
+# the package __init__.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -106,10 +117,9 @@ def contact_row_to_messages_people(
     interaction_counts = contact_interaction_counts(row)
     people = {
         # The durable directory id is a pure function of the pub, so a matched
-        # contact gets its FINAL key on first sight — never an ephemeral one a
-        # later run silently re-keys (that stranded facts/review rows under
-        # retired message-linkedin:* ids). The legacy recipe remains only for
-        # a match whose URL yields no pub, where no durable key exists to take.
+        # contact gets its FINAL key on first sight. The legacy recipe applies
+        # only for a match whose URL yields no pub, where no durable key
+        # exists to take.
         "id": (row.get("matched_person_id") or "").strip()
         or (generate_person_id(public_identifier) if public_identifier
             else legacy_message_linkedin_id(public_identifier, linkedin_url)),
@@ -288,8 +298,8 @@ def selected_contacts_people(
                 selection_counts["matched"] = selection_counts.get("matched", 0) + 1
             continue
         if match_status == "suggested":
-            # Never auto-attach a suggestion (that was the review gate);
-            # the deep-context cluster judge decides. Recorded in evidence.
+            # Never auto-attach a suggestion; the deep-context cluster judge
+            # decides. Recorded in evidence.
             skip("suggested_not_attached")
         reason = contact_floor_reason(
             row,
@@ -506,7 +516,7 @@ def run(args: argparse.Namespace) -> dict:
         include_group_only=include_group_only,
     )
     import_dir.mkdir(parents=True, exist_ok=True)
-    # Legacy review-era artifacts: no longer part of this stage's contract.
+    # Review-era artifacts are not part of this stage's contract; delete leftovers.
     legacy_input = import_dir / "people.input.csv"
     if legacy_input.exists():
         legacy_input.unlink()

@@ -1,4 +1,11 @@
-"""msgvault sync for Gmail discovery: last-sync inference and account sync."""
+"""msgvault sync for Gmail discovery: last-sync inference and account sync.
+
+Changelog:
+  2026-07-23 (audit):
+    - Split out of the former single-file gmail.py.
+    - run_gmail_msgvault moved out to gmail/discover.py: it drives discover(),
+      which is not importable here without a circular import.
+"""
 
 from __future__ import annotations
 

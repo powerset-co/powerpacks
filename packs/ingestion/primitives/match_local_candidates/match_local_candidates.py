@@ -27,16 +27,21 @@ user reviewed without approving are left untouched by tier 0; contacts that
 were never reviewed get at most `suggested`, which requires human approval
 before import.
 
-KNOWN GAP (2026-07-23 audit): the approvals input (`research_review.csv`) has
-no living producer — its writer was the retired research-review flow — so on
-a fresh install the tier-0 gate can never pass and every identifier match
-demotes to `suggested`. The replacement approval surface belongs to
-$deep-context (suggestions review / conservative auto-attach); until it
-exists, matched-people attachment effectively requires that legacy file.
+Known gap: the approvals input (`research_review.csv`) has no living
+producer, so on a fresh install the tier-0 gate can never pass and every
+identifier match demotes to `suggested`. The replacement approval surface
+belongs to $deep-context (suggestions review / conservative auto-attach);
+until it exists, matched-people attachment effectively requires that legacy
+file.
 
 Updates the message-contacts CSV in place with the
 `match_status / matched_person_id / matched_name / matched_linkedin_url /
 match_confidence / match_method / match_reason` columns.
+
+Changelog:
+  2026-07-23 (audit):
+    - The research_review.csv producer (the research-review flow) was retired
+      in #315, opening the known gap above.
 """
 
 from __future__ import annotations

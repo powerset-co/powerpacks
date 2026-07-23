@@ -1,5 +1,11 @@
 """Typed stage-manifest payloads for gmail discovery — the ONLY shapes
-gmail/discover.py may emit. New fields are added here, never invented inline."""
+gmail/discover.py may emit. New fields are added here, never invented inline.
+
+Changelog:
+  2026-07-23 (audit):
+    - Payloads discover.py previously assembled as inline dicts became these
+      typed dataclasses.
+"""
 
 from __future__ import annotations
 

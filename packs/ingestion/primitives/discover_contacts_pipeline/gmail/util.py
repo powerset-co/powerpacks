@@ -1,4 +1,9 @@
-"""Gmail discovery utilities: tolerant parsers, row merge, incremental plan."""
+"""Gmail discovery utilities: tolerant parsers, row merge, incremental plan.
+
+Changelog:
+  2026-07-23 (audit):
+    - Helpers split out of the former single-file gmail.py.
+"""
 
 from __future__ import annotations
 
