@@ -24,7 +24,6 @@ def load_module(name, rel):
 
 
 accounts = load_module("accounts_helper", "packs/ingestion/accounts.py")
-account_registry = load_module("account_registry", "packs/ingestion/primitives/account_registry/account_registry.py")
 onboarding = load_module("onboarding", "packs/ingestion/primitives/onboarding/onboarding.py")
 
 
@@ -36,20 +35,6 @@ class IngestionAccountsOnboardingTests(unittest.TestCase):
         payload = json.loads(buf.getvalue()) if buf.getvalue().strip() else {}
         return code, payload
 
-    def test_account_registry_init_and_mark(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "accounts.json"
-            code, payload = self.invoke(account_registry, ["init", "--path", str(path)])
-            self.assertEqual(code, 0)
-            self.assertTrue(path.exists())
-            self.assertEqual(payload["status"], "initialized")
-            code, payload = self.invoke(account_registry, [
-                "mark", "--path", str(path), "--channel", "twitter", "--username", "alice", "--success",
-            ])
-            self.assertEqual(code, 0)
-            registry = accounts.load_registry(path)
-            self.assertTrue(registry["accounts"]["twitter"]["linked"])
-            self.assertEqual(registry["accounts"]["twitter"]["usernames"], ["alice"])
 
     def test_onboarding_plan_uses_registry(self):
         with tempfile.TemporaryDirectory() as tmp:

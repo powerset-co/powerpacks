@@ -342,9 +342,6 @@ Routes:
   fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index
   build in-skill — processing/identity resolution/indexing is `$deep-context` →
   `packs/ingestion/skills/import-gmail/SKILL.md`
-- `$enrich-email-markers`, gmail LLM enrichment, mine email bodies for LinkedIn
-  markers, preview the context/markers we'd send to an LLM →
-  `packs/ingestion/skills/enrich-email-markers/SKILL.md`
 - `$deep-context`, process/resolve/enrich imported contacts, build deep context,
   per-person dossier from message bodies (Gmail + iMessage/WhatsApp DMs),
   "context/dossier on a person", "who is <phone/name> in my messages", find

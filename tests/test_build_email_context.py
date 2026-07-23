@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/build_email_context/build_email_context.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/deep_context/build_email_context.py"
 spec = importlib.util.spec_from_file_location("build_email_context", MODULE_PATH)
 build_email_context = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
