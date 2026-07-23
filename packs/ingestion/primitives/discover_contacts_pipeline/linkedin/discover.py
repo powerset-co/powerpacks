@@ -9,51 +9,38 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import (
-        emit,
-        now_iso,
-        read_csv_rows,
-        read_json,
-        sha256_file,
-        write_csv_rows,
-        write_stage_manifest,
-    )
-    from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
-        accounts_path as configured_accounts_path,
-        output_path,
-        source_config,
-        state_value,
-    )
-    from packs.ingestion.schemas.people_schema import (
-        extract_public_identifier,
-        generate_person_id,
-        normalize_linkedin_url,
-    )
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import (
-        emit,
-        now_iso,
-        read_csv_rows,
-        read_json,
-        sha256_file,
-        write_csv_rows,
-        write_stage_manifest,
-    )
-    from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (
-        accounts_path as configured_accounts_path,
-        output_path,
-        source_config,
-        state_value,
-    )
-    from packs.ingestion.schemas.people_schema import (
-        extract_public_identifier,
-        generate_person_id,
-        normalize_linkedin_url,
-    )
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # noqa: E402
+    emit,
+    now_iso,
+    read_csv_rows,
+    read_json,
+    sha256_file,
+    write_csv_rows,
+    write_stage_manifest,
+)
+from packs.ingestion.primitives.discover_contacts_pipeline.linkedin.models import (  # noqa: E402
+    LinkedinDiscoveryCompleted,
+    LinkedinDiscoverySkipped,
+    LinkedinPrivacy,
+)
+from packs.ingestion.primitives.discover_contacts_pipeline.discovery_config import (  # noqa: E402
+    accounts_path as configured_accounts_path,
+    output_path,
+    source_config,
+    state_value,
+)
+from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    extract_public_identifier,
+    generate_person_id,
+    normalize_linkedin_url,
+)
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 LINKEDIN_DISCOVERY_COLUMNS = [
     "person_id",
@@ -164,15 +151,12 @@ def discover(
     manifest_json = output_path("linkedin_csv", "manifest_json")
 
     if not source_csv.exists():
-        payload = {
-            "status": "skipped",
-            "source": "linkedin_csv",
-            "reason": "connections_csv_not_found",
-            "connections_csv": str(source_csv),
-            "contacts_csv": str(contacts_csv),
-        }
-        write_stage_manifest(manifest_json, payload)
-        return payload
+        payload = LinkedinDiscoverySkipped(
+            reason="connections_csv_not_found",
+            connections_csv=str(source_csv),
+            contacts_csv=str(contacts_csv),
+        )
+        return write_stage_manifest(manifest_json, payload)
 
     contacts_csv.parent.mkdir(parents=True, exist_ok=True)
     if source_csv.resolve() != source_out.resolve():
@@ -187,22 +171,15 @@ def discover(
         _fields, existing = read_csv_rows(contacts_csv)
     merged = merge_contacts(existing, incoming)
     write_csv_rows(contacts_csv, LINKEDIN_DISCOVERY_COLUMNS, merged)
-    payload = {
-        "status": "completed",
-        "source": "linkedin_csv",
-        "source_csv": str(source_out),
-        "contacts_csv": str(contacts_csv),
-        "contacts": len(merged),
-        "source_user": user,
-        "updated_at": now_iso(),
-        "stats": stats,
-        "privacy": {
-            "rapidapi_called": False,
-            "parallel_called": False,
-            "upload_ran": False,
-        },
-    }
-    return write_stage_manifest(manifest_json, payload)
+    return write_stage_manifest(manifest_json, LinkedinDiscoveryCompleted(
+        source_csv=str(source_out),
+        contacts_csv=str(contacts_csv),
+        contacts=len(merged),
+        source_user=user,
+        updated_at=now_iso(),
+        stats=stats,
+        privacy=LinkedinPrivacy(),
+    ))
 
 
 def build_parser() -> argparse.ArgumentParser:

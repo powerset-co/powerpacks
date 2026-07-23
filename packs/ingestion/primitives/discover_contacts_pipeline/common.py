@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+
 import argparse
 import csv
 import hashlib
@@ -25,11 +27,13 @@ DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
 DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
 GMAIL_INTERACTION_CALCULATION_VERSION = "msgvault-interactions-v2"
 
-try:
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 def now_iso() -> str:
@@ -269,6 +273,18 @@ def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | No
     }
 
 
+@dataclass
+class StagePayload:
+    """Base for the TYPED per-vertical stage-manifest payloads (see each
+    vertical's models.py). A payload is a dataclass, not an ad-hoc dict, so a
+    stage cannot invent fields on the fly; `to_payload()` is what
+    write_stage_manifest consumes (None-valued optionals are dropped so
+    optional fields do not add empty keys)."""
+
+    def to_payload(self) -> dict[str, Any]:
+        return {k: v for k, v in asdict(self).items() if v is not None}
+
+
 def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
     """Return the whole manifest payload without volatile timestamp fields."""
     signature = dict(payload)
@@ -277,7 +293,13 @@ def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
     return signature
 
 
-def write_stage_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+def write_stage_manifest(path: Path, payload: "dict[str, Any] | StagePayload") -> dict[str, Any]:
+    """Write one stage's manifest (fingerprinted, no-op when unchanged).
+
+    Accepts the vertical's typed StagePayload (preferred — see
+    <vertical>/models.py) or its dict form."""
+    if isinstance(payload, StagePayload):
+        payload = payload.to_payload()
     existing = read_json(path, {}) or {}
     payload = dict(payload)
     payload["fingerprints"] = payload.get("fingerprints") or manifest_fingerprints(payload, existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else None)

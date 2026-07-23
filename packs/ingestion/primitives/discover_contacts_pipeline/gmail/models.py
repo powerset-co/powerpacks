@@ -1,0 +1,73 @@
+"""Typed stage-manifest payloads for gmail discovery — the ONLY shapes
+gmail/discover.py may emit. New fields are added here, never invented inline."""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.discover_contacts_pipeline.common import StagePayload  # noqa: E402
+
+
+@dataclass
+class GmailPrivacy:
+    message_bodies_read: bool = False
+    gmail_sync_ran: bool = False
+    parallel_called: bool = False
+    rapidapi_called: bool = False
+
+
+@dataclass
+class GmailDiscoverySkipped(StagePayload):
+    reason: str = ""
+    contacts_csv: str = ""
+    linkedin_resolution_queue_csv: str = ""
+    status: str = "skipped"
+    source: str = "gmail"
+
+
+@dataclass
+class GmailDiscoveryFailed(StagePayload):
+    account_email: str = ""
+    error: Any = None
+    status: str = "failed"
+    source: str = "gmail"
+
+
+@dataclass
+class GmailDiscoveryIncrementalMismatch(StagePayload):
+    """A full rewrite built from delta-only children would drop rows — loud failure."""
+    calculation_version: str = ""
+    calculation_mode: str = ""
+    calculation_reason: str = "full_rewrite_requires_full_recount_children"
+    selected_accounts: list[str] = field(default_factory=list)
+    child_calculation_modes: list[str] = field(default_factory=list)
+    children: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "failed"
+    source: str = "gmail"
+
+
+@dataclass
+class GmailDiscoveryCompleted(StagePayload):
+    calculation_version: str = ""
+    calculation_mode: str = ""
+    calculation_reason: str = ""
+    child_calculation_modes: list[str] = field(default_factory=list)
+    applied_incremental_inputs: list[str] = field(default_factory=list)
+    skipped_incremental_inputs: list[str] = field(default_factory=list)
+    contacts_csv: str = ""
+    linkedin_resolution_queue_csv: str = ""
+    contacts: int = 0
+    selected_accounts: list[str] = field(default_factory=list)
+    msgvault_db: str = ""
+    updated_at: str = ""
+    privacy: GmailPrivacy = field(default_factory=GmailPrivacy)
+    children: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "completed"
+    source: str = "gmail"
