@@ -26,11 +26,11 @@ def load_module(name: str, rel: str):
 
 discover_common = load_module(
     "phase13_discover_common",
-    "packs/ingestion/primitives/discover_contacts_pipeline/common.py",
+    "packs/ingestion/primitives/discover/common.py",
 )
 import_common = load_module(
     "phase13_import_common",
-    "packs/ingestion/primitives/import_contacts_pipeline/common.py",
+    "packs/ingestion/primitives/imports/common.py",
 )
 index_contacts = load_module(
     "phase13_index_contacts",

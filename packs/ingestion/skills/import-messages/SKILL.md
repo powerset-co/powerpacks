@@ -155,7 +155,7 @@ Contacts.app row with a phone number, even when no message exists. Pass only the
 channels chosen in Step 1:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/discover.py discover \
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover/messages/discover.py discover \
   --include-imessage --include-whatsapp
 ```
 
@@ -174,7 +174,7 @@ the same `discover` command to advance:
   wait for confirmation, then re-run discovery:
 
   ```bash
-  cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/extract_imessage.py open-privacy-settings
+  cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover/messages/extract_imessage.py open-privacy-settings
   ```
 
 - **WhatsApp helper (pinned wacli fork):** downloads automatically when missing
@@ -200,7 +200,7 @@ recent history was pulled), **stop and ask the user before continuing to Step
   a fresh QR (the re-paired session syncs full history):
 
   ```bash
-  cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py logout
+  cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover/messages/whatsapp_wacli.py logout
   ```
 
 - **User says no** → proceed to Step 3 with the contacts already imported; the
@@ -229,7 +229,7 @@ LI=".powerpacks/network-import/import/linkedin/people.csv"
 LOCAL=".powerpacks/messages/_local_people.csv"
 { [ -f "$GM" ] && cat "$GM" || cat "$LI"; } > "$LOCAL" 2>/dev/null
 [ -f "$GM" ] && [ -f "$LI" ] && tail -n +2 "$LI" >> "$LOCAL"
-uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages/match_local_candidates.py match \
+uv run --project . python packs/ingestion/primitives/imports/messages/match_local_candidates.py match \
   --contacts .powerpacks/messages/contacts.csv --local-people "$LOCAL"
 ```
 
@@ -250,7 +250,7 @@ are excluded by default. `suggested` matches are never auto-attached — they go
 to candidates with the suggestion recorded.
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages/importer.py run
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/messages/importer.py run
 ```
 
 If it blocks with an import-confirmation (exit 20), show the user the counts
@@ -282,7 +282,7 @@ Check which sources are imported and suggest the missing ones (skip the ones
 already present):
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/status.py status
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/status.py status
 ```
 
 - `gmail.import.imported: false` → suggest **`$import-gmail`** (email contacts

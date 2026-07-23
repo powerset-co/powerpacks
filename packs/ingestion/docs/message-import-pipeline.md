@@ -24,7 +24,7 @@ The canonical executable contract is
 [`import-messages/SKILL.md`](../skills/import-messages/SKILL.md). For an
 isolated wacli sync/export test that stops before identity resolution or
 indexing, run the
-[`whatsapp_wacli.py`](../primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py)
+[`whatsapp_wacli.py`](../primitives/discover/messages/whatsapp_wacli.py)
 primitive directly.
 
 ## At a glance
@@ -215,7 +215,7 @@ stage neither depends on nor extends them and they can be removed.
 For a narrow provider readiness/sync test, run the primitive directly:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py status
+uv run --project . python packs/ingestion/primitives/discover/messages/whatsapp_wacli.py status
 ```
 
 A direct run:
@@ -261,12 +261,12 @@ shared `.powerpacks/network-import/import/<source>/people.csv` and
 | Concern | Authority |
 | --- | --- |
 | Full agent workflow | [`import-messages/SKILL.md`](../skills/import-messages/SKILL.md) |
-| Isolated WhatsApp utility | [`messages/whatsapp_wacli.py`](../primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py) (direct run) |
-| Message discovery | [`messages.py`](../primitives/discover_contacts_pipeline/messages/discover.py) |
-| iMessage extraction | [`messages/extract_imessage.py`](../primitives/discover_contacts_pipeline/messages/extract_imessage.py) |
-| wacli extraction | [`messages/whatsapp_wacli.py`](../primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py) |
-| Local matching | [`match_local_candidates.py`](../primitives/import_contacts_pipeline/messages/match_local_candidates.py) |
-| Contacts-direct import | [`messages.py`](../primitives/import_contacts_pipeline/messages/importer.py) |
+| Isolated WhatsApp utility | [`messages/whatsapp_wacli.py`](../primitives/discover/messages/whatsapp_wacli.py) (direct run) |
+| Message discovery | [`messages.py`](../primitives/discover/messages/discover.py) |
+| iMessage extraction | [`messages/extract_imessage.py`](../primitives/discover/messages/extract_imessage.py) |
+| wacli extraction | [`messages/whatsapp_wacli.py`](../primitives/discover/messages/whatsapp_wacli.py) |
+| Local matching | [`match_local_candidates.py`](../primitives/imports/messages/match_local_candidates.py) |
+| Contacts-direct import | [`messages.py`](../primitives/imports/messages/importer.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
-| Per-source status | [`status.py`](../primitives/import_contacts_pipeline/status.py) |
+| Per-source status | [`status.py`](../primitives/imports/status.py) |
 | Fan-in | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

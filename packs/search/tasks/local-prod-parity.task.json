@@ -93,7 +93,7 @@
         "local": {
           "repo": "powerpacks",
           "paths": [
-            "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py",
+            "packs/ingestion/primitives/discover/gmail/discover.py",
             "scripts/build-local-duckdb-shim.py"
           ],
           "symbols": [
@@ -136,7 +136,7 @@
         "local": {
           "repo": "powerpacks",
           "paths": [
-            "packs/ingestion/primitives/import_contacts_pipeline/gmail/importer.py",
+            "packs/ingestion/primitives/imports/gmail/importer.py",
             "packs/indexing/tasks/build-local-search-index.task.json"
           ],
           "symbols": [
@@ -180,7 +180,7 @@
         "local": {
           "repo": "powerpacks",
           "paths": [
-            "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py"
+            "packs/ingestion/primitives/discover/gmail/discover.py"
           ],
           "symbols": []
         },

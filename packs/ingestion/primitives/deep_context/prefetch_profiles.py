@@ -76,7 +76,7 @@ from packs.ingestion.primitives.enrich.enrich_people import (
     read_usable_cached_profile,
     write_json,
 )
-from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
+from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 STAGE = "profile-prefetch"

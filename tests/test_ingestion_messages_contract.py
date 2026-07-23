@@ -10,10 +10,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.discover_contacts_pipeline.messages import discover as discover_messages
-from packs.ingestion.primitives.discover_contacts_pipeline.common import write_csv_rows
-from packs.ingestion.primitives.discover_contacts_pipeline.directory import DIRECTORY_COLUMNS
-from packs.ingestion.primitives.import_contacts_pipeline import messages as import_messages
+from packs.ingestion.primitives.discover.messages import discover as discover_messages
+from packs.ingestion.primitives.discover.common import write_csv_rows
+from packs.ingestion.primitives.discover.directory import DIRECTORY_COLUMNS
+from packs.ingestion.primitives.imports import messages as import_messages
 from packs.shared.csv_io import CsvIO
 
 
@@ -29,13 +29,13 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "skills/import-messages/SKILL.md",
             "schemas/contacts-csv.schema.json",
             "schemas/candidates_schema.py",
-            "primitives/discover_contacts_pipeline/messages/extract_imessage.py",
-            "primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py",
-            "primitives/discover_contacts_pipeline/messages/merge_contacts.py",
-            "primitives/import_contacts_pipeline/messages/match_local_candidates.py",
+            "primitives/discover/messages/extract_imessage.py",
+            "primitives/discover/messages/whatsapp_wacli.py",
+            "primitives/discover/messages/merge_contacts.py",
+            "primitives/imports/messages/match_local_candidates.py",
             "primitives/deep_context/deep_research_contacts.py",
-            "primitives/import_contacts_pipeline/messages/importer.py",
-            "primitives/import_contacts_pipeline/status.py",
+            "primitives/imports/messages/importer.py",
+            "primitives/imports/status.py",
         ]
         for relative in expected:
             with self.subTest(relative=relative):
@@ -48,24 +48,24 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
         self.assertIn("LinkedIn-only", setup)
         self.assertIn("linkedin_modal_pipeline.py import-linkedin", setup)
-        self.assertNotIn("discover_contacts_pipeline/messages/discover.py discover", setup)
-        self.assertNotIn("discover_contacts_pipeline/gmail/discover.py discover", setup)
-        self.assertIn("import_contacts_pipeline/status.py status", setup)
+        self.assertNotIn("discover/messages/discover.py discover", setup)
+        self.assertNotIn("discover/gmail/discover.py discover", setup)
+        self.assertIn("imports/status.py status", setup)
 
-        self.assertIn("discover_contacts_pipeline/gmail/discover.py discover", gmail)
-        self.assertIn("import_contacts_pipeline/gmail/importer.py run", gmail)
-        self.assertNotIn("discover_contacts_pipeline/messages/discover.py discover", gmail)
-        self.assertIn("import_contacts_pipeline/status.py status", gmail)
+        self.assertIn("discover/gmail/discover.py discover", gmail)
+        self.assertIn("imports/gmail/importer.py run", gmail)
+        self.assertNotIn("discover/messages/discover.py discover", gmail)
+        self.assertIn("imports/status.py status", gmail)
 
         self.assertIn("$import-messages", messages)
-        self.assertIn("import_contacts_pipeline/messages/importer.py run", messages)
+        self.assertIn("imports/messages/importer.py run", messages)
         self.assertIn("index_contacts_pipeline.py fan-in", messages)
-        self.assertIn("import_contacts_pipeline/status.py status", messages)
+        self.assertIn("imports/status.py status", messages)
         # Pre-full-sync link is surfaced as an explicit re-link prompt wired to
         # the logout primitive, keyed off the hoisted top-level nudge flag.
         self.assertIn("whatsapp_pairing_state", messages)
-        self.assertIn("discover_contacts_pipeline/messages/whatsapp_wacli.py logout", messages)
-        self.assertNotIn("discover_contacts_pipeline/gmail/discover.py discover", messages)
+        self.assertIn("discover/messages/whatsapp_wacli.py logout", messages)
+        self.assertNotIn("discover/gmail/discover.py discover", messages)
 
         # Contact-sync boundary: the import skills never index and never run
         # the retired in-skill research/review flow — $deep-context owns both.
@@ -131,8 +131,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
     def test_canonical_messages_route_has_no_powerset_or_upload_surface(self) -> None:
         canonical_files = [
             INGESTION / "skills/import-messages/SKILL.md",
-            INGESTION / "primitives/discover_contacts_pipeline/messages/discover.py",
-            INGESTION / "primitives/import_contacts_pipeline/messages/importer.py",
+            INGESTION / "primitives/discover/messages/discover.py",
+            INGESTION / "primitives/imports/messages/importer.py",
         ]
         forbidden = [
             "--include-powerset-candidates",
@@ -151,7 +151,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
 
     def test_messages_discovery_uses_fixed_outputs_and_one_stage_manifest(self) -> None:
-        path = INGESTION / "primitives/discover_contacts_pipeline/messages/discover.py"
+        path = INGESTION / "primitives/discover/messages/discover.py"
         text = path.read_text(encoding="utf-8")
 
         self.assertIn('DEFAULT_MESSAGES_OUTPUT_DIR = DEFAULT_BASE_DIR / "discover" / "messages"', text)
@@ -174,7 +174,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
         self.assertEqual(discover_messages.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES, 0)
         config = json.loads(
-            (INGESTION / "primitives/discover_contacts_pipeline/discovery.config.json").read_text()
+            (INGESTION / "primitives/discover/discovery.config.json").read_text()
         )
         self.assertEqual(config["sources"]["whatsapp"]["inputs"]["max_messages"], 0)
         self.assertEqual(
@@ -199,8 +199,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
         )
 
         for relative in (
-            "primitives/discover_contacts_pipeline/messages/extract_imessage.py",
-            "primitives/discover_contacts_pipeline/messages/normalize_contacts.py",
+            "primitives/discover/messages/extract_imessage.py",
+            "primitives/discover/messages/normalize_contacts.py",
         ):
             primitive_text = (INGESTION / relative).read_text(encoding="utf-8").lower()
             for token in ("run_id", "run-id", "uuid"):
@@ -230,7 +230,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--sync-mode") + 1], "incremental")
 
     def test_messages_import_is_fixed_output_and_stateless(self) -> None:
-        path = INGESTION / "primitives/import_contacts_pipeline/messages/importer.py"
+        path = INGESTION / "primitives/imports/messages/importer.py"
         text = path.read_text(encoding="utf-8").lower()
         for token in (
             "ledger",

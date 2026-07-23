@@ -33,7 +33,7 @@ Changelog: (temporary file — will fold into AGENTS.md; agents MUST read this b
   whole — never a single file.
 
 ## Structure
-- Primitives match pipeline stages: `discover_contacts_pipeline/`, `import_contacts_pipeline/`, `enrich/`, `deep_context/`, `logbook/`, `setup/` — with per-vertical subpackages (`gmail/`, `messages/`, `linkedin/`, `twitter/`) and a vertical-local `util.py`. No flat primitive dumps, no huge files.
+- Primitives match pipeline stages: `discover/`, `imports/`, `enrich/`, `deep_context/`, `logbook/`, `setup/` — with per-vertical subpackages (`gmail/`, `messages/`, `linkedin/`, `twitter/`) and a vertical-local `util.py`. No flat primitive dumps, no huge files.
 - Every CLI entry file keeps its `if __name__ == "__main__"` guard (file-path invocation is how skills run them — a missing guard is a silent no-op).
 - Large automation drivers (browser flows, gcloud orchestration, …) decompose
   into a clearly-named subpackage (e.g. `setup/automations/`) of ~200–300-line

@@ -3,16 +3,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.discover_contacts_pipeline.directory import DIRECTORY_COLUMNS
+from packs.ingestion.primitives.discover.directory import DIRECTORY_COLUMNS
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
-from packs.ingestion.primitives.import_contacts_pipeline.gmail import importer as gmail_import
-from packs.ingestion.primitives.import_contacts_pipeline.gmail import util as gmail_import_util
-from packs.ingestion.primitives.import_contacts_pipeline.common import load_gmail_import_steps
-from packs.ingestion.primitives.import_contacts_pipeline.linkedin import importer as linkedin_import
-from packs.ingestion.primitives.import_contacts_pipeline.common import (
+from packs.ingestion.primitives.imports.gmail import importer as gmail_import
+from packs.ingestion.primitives.imports.gmail import util as gmail_import_util
+from packs.ingestion.primitives.imports.common import load_gmail_import_steps
+from packs.ingestion.primitives.imports.common import (
     directory_source_account_quality,
     normalize_directory_source_accounts,
 )
@@ -340,50 +338,6 @@ class ImportContactsQualityTests(unittest.TestCase):
             with directory.open(newline="", encoding="utf-8") as handle:
                 rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["source_account"], "imessage,whatsapp")
-
-    def test_linkedin_direct_import_commits_people_to_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            accounts = tmp / "accounts.json"
-            source_csv = tmp / "Connections.csv"
-            source_csv.write_text("First Name,Last Name,URL\nAda,Lovelace,https://www.linkedin.com/in/ada\n", encoding="utf-8")
-            accounts.write_text(json.dumps({
-                "accounts": {
-                    "linkedin_csv": {
-                        "config": {
-                            "csv_path": str(source_csv),
-                            "source_label": "arthur",
-                        }
-                    }
-                }
-            }), encoding="utf-8")
-            child_people = tmp / "child_people.csv"
-            with child_people.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=PEOPLE_SCHEMA_COLUMNS)
-                writer.writeheader()
-                writer.writerow({
-                    "id": "person-ada",
-                    "public_identifier": "ada",
-                    "linkedin_url": "https://www.linkedin.com/in/ada",
-                    "full_name": "Ada Lovelace",
-                    "source_channels": "linkedin_csv",
-                })
-            directory = tmp / "directory.csv"
-            import_dir = tmp / "import"
-
-            with mock.patch.object(linkedin_import, "DEFAULT_DIRECTORY_CSV", directory), \
-                mock.patch.object(linkedin_import, "DEFAULT_IMPORT_DIR", import_dir), \
-                mock.patch.object(linkedin_import, "run_cmd", return_value=(0, {"status": "completed", "artifacts": {"people_csv": str(child_people)}}, "")):
-                payload = linkedin_import.run(SimpleNamespace(accounts=accounts, operator_id="operator-1"))
-
-            self.assertEqual(payload["status"], "completed")
-            self.assertEqual(payload["directory_checkpoint"]["confirmed_rows"], 1)
-            with directory.open(newline="", encoding="utf-8") as handle:
-                rows = list(CsvIO.dict_reader(handle))
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["source"], "linkedin_csv")
-            self.assertEqual(rows[0]["source_account"], "arthur")
-            self.assertEqual(rows[0]["linkedin_url"], "https://www.linkedin.com/in/ada")
 
 
 if __name__ == "__main__":

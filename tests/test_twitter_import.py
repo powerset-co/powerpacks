@@ -12,7 +12,7 @@ from packs.shared.csv_io import CsvIO
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = REPO_ROOT / "packs/ingestion/primitives/discover_contacts_pipeline/twitter/network_import.py"
+MODULE_PATH = REPO_ROOT / "packs/ingestion/primitives/discover/twitter/network_import.py"
 
 
 def load_module():

@@ -43,7 +43,7 @@ from packs.ingestion.primitives.deep_context import (
     synthesize_person_context as synth,
     worth_view,
 )
-from packs.ingestion.primitives.import_contacts_pipeline import messages as msgimport
+from packs.ingestion.primitives.imports import messages as msgimport
 from packs.ingestion.schemas import people_schema as schema
 from packs.ingestion.schemas.candidates_schema import (
     CANDIDATES_SCHEMA_COLUMNS,

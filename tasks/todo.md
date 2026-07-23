@@ -170,7 +170,7 @@ stage stays on the one shared schema.
       `JSON_OBJECT_COLUMNS`. Normalize gmail's `YYYY-MM-DD HH:MM:SS+00:00`
       and messages' ISO-T timestamps to one format.
 - [x] **Messages writer**
-      (`discover_contacts_pipeline/messages.py::review_row_to_messages_people`):
+      (`discover/messages.py::review_row_to_messages_people`):
       populate both columns from the review row's per-channel counts and
       last-message timestamps; drop the `messages_total=...` summary freetext
       hack (keep `selection=` reason). Channel-wise max in

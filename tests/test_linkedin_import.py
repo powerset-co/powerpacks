@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from packs.shared.csv_io import CsvIO
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover_contacts_pipeline/linkedin/network_import.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/imports/linkedin/network_import.py"
 spec = importlib.util.spec_from_file_location("linkedin_import", MODULE_PATH)
 linkedin_import = importlib.util.module_from_spec(spec)
 assert spec.loader is not None

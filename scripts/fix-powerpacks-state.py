@@ -18,6 +18,10 @@ Changelog:
     live $setup path (linkedin_modal_pipeline.py import-linkedin); the
     standalone linkedin/discover.py CLI was deleted with the retired
     discover-contacts orchestrator.
+  2026-07-23 (audit batch 20A): discover_contacts_pipeline/import_contacts_pipeline
+    packages renamed to discover/imports; linkedin import_command now points at the
+    live Modal import-linkedin path (the dead local imports/linkedin/importer.py was
+    deleted).
 """
 from __future__ import annotations
 
@@ -42,20 +46,20 @@ VERTICAL_STAGE_PATHS = {
     "gmail": {
         "discovery": ".powerpacks/network-import/discover/gmail/manifest.json",
         "import": ".powerpacks/network-import/import/gmail/manifest.json",
-        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
-        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
+        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover/gmail/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
+        "import_command": "uv run --project . python packs/ingestion/primitives/imports/gmail/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
     },
     "linkedin": {
         "discovery": ".powerpacks/network-import/discover/linkedin/manifest.json",
         "import": ".powerpacks/network-import/import/linkedin/manifest.json",
         "discovery_command": "uv run --env-file .env --project . python packs/indexing/modal/linkedin_modal_pipeline.py import-linkedin --csv .powerpacks/network-import/discover/linkedin/Connections.csv",
-        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/linkedin/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
+        "import_command": "uv run --env-file .env --project . python packs/indexing/modal/linkedin_modal_pipeline.py import-linkedin --csv .powerpacks/network-import/discover/linkedin/Connections.csv",
     },
     "messages": {
         "discovery": ".powerpacks/network-import/discover/messages/manifest.json",
         "import": ".powerpacks/network-import/import/messages/manifest.json",
-        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
-        "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
+        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover/messages/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
+        "import_command": "uv run --project . python packs/ingestion/primitives/imports/messages/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
     },
 }
 
@@ -329,7 +333,7 @@ def wacli_auth_status(canonical: Path, store: Path) -> dict[str, Any]:
         return {"status": "missing", "authenticated": False, "store": str(store)}
     cmd = [
         sys.executable,
-        "packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py",
+        "packs/ingestion/primitives/discover/messages/whatsapp_wacli.py",
         "status",
         "--store",
         str(store),

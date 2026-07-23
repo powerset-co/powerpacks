@@ -74,7 +74,7 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
   Reruns are idempotent because the output path is stable, not because of an id.
 - **Manifest + outputs only.** The durable artifacts a stage produces are its
   output CSV/JSONL files and `manifest.json` (use the existing
-  `write_manifest` in `import_contacts_pipeline/common.py`). Counts, status,
+  `write_manifest` in `imports/common.py`). Counts, status,
   timestamps, and timing go in the manifest — not a separate state store.
 - **Progress goes in a file, like LinkedIn.** For user-facing progress, write
   human-readable progress into the stage's manifest/output directory and let the
@@ -84,12 +84,12 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
   incrementality, and dedup mostly already exist. Gmail/msgvault is already
   resumable: compute the latest synced message, pass `--after`, sync, update —
   see `infer_msgvault_sync_after` in
-  `discover_contacts_pipeline/gmail/sync.py`. Do not build a new resume mechanism on
+  `discover/gmail/sync.py`. Do not build a new resume mechanism on
   top of it.
 - **Orchestrate the per-source discover/import primitives directly.** Chain the
-  existing `discover_contacts_pipeline/<source>/` and
-  `import_contacts_pipeline/<source>/` commands. There is no orchestrator layer
-  (the generic `discover_contacts_pipeline.py` runner was deleted) — do not
+  existing `discover/<source>/` and
+  `imports/<source>/` commands. There is no orchestrator layer
+  (the generic `discover.py` runner was deleted) — do not
   build one for new pipeline flows.
 - **Do not fingerprint the shared `directory.csv`.**
   `.powerpacks/network-import/directory.csv` is a cross-source aggregate, not a
@@ -216,7 +216,7 @@ only; keep that scoped to the msgvault primitives.
     access is not granted, *stop* and ask the user to enable it in System
     Settings before retrying.
   - WhatsApp uses `openclaw/wacli`. Run
-    `uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/whatsapp_wacli.py status`
+    `uv run --project . python packs/ingestion/primitives/discover/messages/whatsapp_wacli.py status`
     on demand. Installing `wacli`, QR login, and history sync require explicit
     user consent. WAHA/Docker and Powerset upload are not part of this flow.
 - **Indexing pack** (build-local-search-index): local files only. It consumes
