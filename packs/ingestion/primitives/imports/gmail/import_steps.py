@@ -8,6 +8,12 @@ adopts the stored era into overrides/review.csv), plus `save_ledger` and
 `imports.common.load_gmail_import_steps`.
 
 Changelog:
+  2026-07-23 (audit): dropped three self-contained CSV/column copies —
+    LINKEDIN_RESOLUTION_COLUMNS now imports from
+    `schemas/gmail_artifacts.py`, `read_csv_rows` from
+    `discover/common.py` (byte-identical), and the local `write_csv_rows`
+    (default CRLF, no fingerprint) is now `CsvIO.write_dict_rows`; `import csv`
+    dropped with it.
   2026-07-23 (audit):
     - Extracted from the retired pre-split orchestrator (now deleted).
     - Narrowed to the surviving steps when the legacy resolve/enrich flags
@@ -25,7 +31,6 @@ Changelog:
 """
 from __future__ import annotations
 
-import csv
 import json
 import os
 import re
@@ -41,10 +46,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.discover.common import read_csv_rows  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: E402
     is_generic_or_non_person,
     is_likely_person_name,
 )
+from packs.ingestion.schemas.gmail_artifacts import LINKEDIN_RESOLUTION_COLUMNS  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     LIST_VALUE_COLUMNS,
     PEOPLE_SCHEMA_COLUMNS,
@@ -93,9 +100,6 @@ DIRECTORY_COLUMNS = [
 ]
 
 
-LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
-
-
 RESOLUTION_FOUND_STATUSES = {"found", "completed", "success"}
 
 
@@ -137,23 +141,6 @@ def emit_progress(message: str) -> None:
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def read_csv_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        reader = CsvIO.dict_reader(handle)
-        fields = list(reader.fieldnames or [])
-        rows = [{str(key): value or "" for key, value in row.items() if key is not None} for row in reader]
-    return fields, rows
-
-
-def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
 def parse_jsonish(value: Any, default: Any) -> Any:
@@ -512,7 +499,7 @@ def build_directory_checkpoint(input_cfg: dict[str, Any], artifacts: dict[str, A
         else:
             imported_rows.extend(directory_rows_from_candidates(path))
     merged = merge_directory_rows(imported_rows, existing)
-    write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
+    CsvIO.write_dict_rows(directory_csv, DIRECTORY_COLUMNS, merged)
     return {
         "directory_csv": str(directory_csv),
         "existing_rows": len(existing),
@@ -690,9 +677,9 @@ def apply_directory_to_gmail_queue(record: dict[str, Any], directory_csv: Path, 
     resolutions_csv = output_dir / "directory_linkedin_resolutions.csv"
     unresolved_csv = output_dir / "unresolved_linkedin_resolution_queue.csv"
     cached_negative_csv = output_dir / "cached_negative_linkedin_resolution_queue.csv"
-    write_csv_rows(resolutions_csv, LINKEDIN_RESOLUTION_COLUMNS, resolved)
-    write_csv_rows(unresolved_csv, fields, unresolved)
-    write_csv_rows(cached_negative_csv, fields, cached_negative)
+    CsvIO.write_dict_rows(resolutions_csv, LINKEDIN_RESOLUTION_COLUMNS, resolved)
+    CsvIO.write_dict_rows(unresolved_csv, fields, unresolved)
+    CsvIO.write_dict_rows(cached_negative_csv, fields, cached_negative)
     result = dict(record)
     result.update({
         "directory_csv": str(directory_csv),
@@ -780,7 +767,7 @@ def commit_directory_rows(directory_csv: Path, rows: list[dict[str, str]]) -> di
             if normalized:
                 existing[normalized["source_key"]] = normalized
     merged = merge_directory_rows(rows, existing)
-    write_csv_rows(directory_csv, DIRECTORY_COLUMNS, merged)
+    CsvIO.write_dict_rows(directory_csv, DIRECTORY_COLUMNS, merged)
     return {"directory_csv": str(directory_csv), "existing_rows": len(existing), "imported_rows": len(rows), "rows": len(merged)}
 
 
@@ -898,7 +885,7 @@ def combine_gmail_resolution_records(records: list[dict[str, Any]], run_dir: Pat
             continue
         out_dir = run_dir / f"gmail-combined-resolutions-{slug}"
         out_path = out_dir / "linkedin_resolutions.csv"
-        write_csv_rows(out_path, LINKEDIN_RESOLUTION_COLUMNS, rows)
+        CsvIO.write_dict_rows(out_path, LINKEDIN_RESOLUTION_COLUMNS, rows)
         combined.append({
             "account_email": group.get("account_email", ""),
             "slug": slug,
@@ -1014,7 +1001,7 @@ def materialize_source_merged_people_csv(input_csvs: list[str], output_csv: Path
     rows = [merged[key] for key in sorted(merged)]
     if not rows:
         return {"status": "skipped", "people_csv": str(output_csv), "rows": 0, "input_csvs": input_csvs}
-    write_csv_rows(output_csv, PEOPLE_SCHEMA_COLUMNS, rows)
+    CsvIO.write_dict_rows(output_csv, PEOPLE_SCHEMA_COLUMNS, rows)
     return {"status": "completed", "people_csv": str(output_csv), "rows": len(rows), "input_csvs": input_csvs}
 
 

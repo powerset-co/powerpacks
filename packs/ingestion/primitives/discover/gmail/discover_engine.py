@@ -29,6 +29,12 @@ import chain's `gmail_apply_and_enrich` step
 applies STORED resolutions only.
 
 Changelog:
+  2026-07-23 (audit): LINKEDIN_RESOLUTION_QUEUE_COLUMNS and
+    LINKEDIN_RESOLUTION_COLUMNS now come from the shared
+    `schemas/gmail_artifacts.py` (they were byte-identical copies across the
+    discover and import stages). The local `read_csv` helper was dropped for
+    the shared `CsvIO.read_dict_rows`; `write_csv` stays local (strict
+    extrasaction guard — see its docstring).
   2026-07-23 (audit batch 17): split out of the retired
     `gmail/network_import.py` monolith — this module keeps artifact emission
     plus the argparse entry; the msgvault reader/aggregation moved to
@@ -77,6 +83,10 @@ from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: 
     has_round_trip_interaction,
     normalize_label_names,
     split_name,
+)
+from packs.ingestion.schemas.gmail_artifacts import (  # noqa: E402
+    LINKEDIN_RESOLUTION_COLUMNS,
+    LINKEDIN_RESOLUTION_QUEUE_COLUMNS,
 )
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS,
@@ -141,23 +151,6 @@ TARGETED_COLUMNS = [
     "sample_subjects",
     "sample_calendar_titles",
 ]
-LINKEDIN_RESOLUTION_QUEUE_COLUMNS = [
-    "handle",
-    "id",
-    "account_emails",
-    "source_ids",
-    "display_name",
-    "full_name",
-    "primary_email",
-    "company_guess",
-    "primary_email_type",
-    "total_messages",
-    "thread_count",
-    "last_interaction",
-    "source",
-    "source_channels",
-]
-LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
 ACCOUNT_COLUMNS = ["account_id", "account_email", "provider", "source", "added_at"]
 PEOPLE_COLUMNS = list(PEOPLE_SCHEMA_COLUMNS)
 
@@ -194,14 +187,14 @@ def normalize_linkedin_url(value: str) -> str:
     return f"https://www.linkedin.com/in/{public_id}" if public_id else url
 
 
-def read_csv(path: Path) -> list[dict[str, str]]:
-    """Read a CSV into dict rows (BOM-tolerant)."""
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(CsvIO.dict_reader(handle))
-
-
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
-    """Write dict rows to a CSV, creating parent directories."""
+    """Write dict rows to a CSV, creating parent directories.
+
+    Kept local (NOT CsvIO.write_dict_rows): this writer leaves ``extrasaction``
+    at the stdlib default ``"raise"`` and passes rows straight to
+    ``writerows`` — a loud-failure guard against a row carrying a key outside
+    ``fieldnames``. Every caller here builds exact-schema rows, so the bytes
+    match write_dict_rows, but the strict extra-key check is intentional."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -242,7 +235,7 @@ def merge_csv_row(fieldnames: list[str], existing: dict[str, Any], incoming: dic
 def upsert_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]], key_fields: list[str]) -> dict[str, int]:
     """Merge incoming rows into an existing CSV by key, preserving rows the
     incoming set does not restate; returns upsert counters."""
-    existing_rows = read_csv(path) if path.exists() else []
+    existing_rows = CsvIO.read_dict_rows(path) if path.exists() else []
     keyed: dict[tuple[str, ...], dict[str, Any]] = {}
     keyless_existing: list[dict[str, Any]] = []
     for row in existing_rows:
@@ -338,7 +331,7 @@ def linkedin_resolution_queue_rows(rows: list[dict[str, Any]]) -> list[dict[str,
 def load_resolution_map(path: Path, min_confidence: float) -> dict[str, dict[str, str]]:
     """Load found resolutions at/above min_confidence, keyed by handle."""
     resolutions: dict[str, dict[str, str]] = {}
-    for row in read_csv(path):
+    for row in CsvIO.read_dict_rows(path):
         status = (row.get("status") or "").strip().lower()
         linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
         try:
@@ -357,7 +350,7 @@ def load_resolution_map(path: Path, min_confidence: float) -> dict[str, dict[str
 def apply_linkedin_resolutions_to_people(people_csv: Path, resolutions_csv: Path, output_dir: Path, *, min_confidence: float = 0.75) -> dict[str, Any]:
     """Attach stored LinkedIn resolutions onto a Gmail people.csv, rewriting
     matched rows to LinkedIn identity (id/public_identifier/linkedin_url)."""
-    people_rows = read_csv(people_csv)
+    people_rows = CsvIO.read_dict_rows(people_csv)
     resolutions = load_resolution_map(resolutions_csv, min_confidence)
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / "people.csv"

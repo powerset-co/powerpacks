@@ -31,6 +31,10 @@ ledger `artifacts` map; `people_csv` is the canonical interface):
 `enrich_people.ledger.json`.
 
 Changelog:
+  2026-07-23 (audit): dropped the local byte-identical write_csv for the
+    shared CsvIO.write_dict_rows (read_csv_rows stays local — its empty-on-
+    missing + normalization behavior differs from CsvIO.read_dict_rows);
+    `import csv` dropped with it.
   2026-07-23 (audit): network_import.README.md sidecar folded into this
     docstring; fixed the stale claim that RapidAPI calls are approval-gated
     (missing keys fail the run — nothing blocks on approval).
@@ -40,7 +44,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import csv
 import io
 import json
 import sys
@@ -153,15 +156,6 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
         return [{str(key): value or "" for key, value in row.items() if key is not None} for row in CsvIO.dict_reader(handle)]
 
 
-def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k, "") for k in fieldnames})
-
-
 def row_key(row: dict[str, Any], preferred: list[str]) -> str:
     for field in preferred:
         value = str(row.get(field) or "").strip().lower()
@@ -190,7 +184,7 @@ def upsert_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]], pr
         else:
             by_key[key] = normalized
             ordered.append(normalized)
-    write_csv(path, fieldnames, ordered)
+    CsvIO.write_dict_rows(path, fieldnames, ordered)
     return ordered
 
 

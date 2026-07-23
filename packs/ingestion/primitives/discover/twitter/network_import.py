@@ -34,6 +34,9 @@ Env: `RAPIDAPI_TWITTER_KEY` (falls back to `RAPIDAPI_KEY`) for Twitter/X,
 `OPENAI_API_KEY` for MOE evaluation.
 
 Changelog:
+  2026-07-23 (audit): dropped the local byte-identical read_csv/write_csv for
+    the shared CsvIO.read_dict_rows / CsvIO.write_dict_rows; `import csv`
+    dropped with them.
   2026-07-23 (audit): network_import.README.md sidecar folded into this
     docstring.
 """
@@ -42,7 +45,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import csv
 import hashlib
 import json
 import os
@@ -176,20 +178,6 @@ def generate_linkedin_id(public_identifier: str) -> str:
 def generate_synthetic_id(handle: str) -> str:
     import uuid
     return str(uuid.uuid5(uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890"), f"twitter:{handle.lower().strip()}"))
-
-
-def read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(CsvIO.dict_reader(handle))
-
-
-def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: row.get(key, "") for key in fieldnames})
 
 
 def http_json(method: str, url: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None, timeout: int = 60) -> tuple[int, dict[str, Any] | None, str]:
@@ -737,7 +725,7 @@ def step_load_or_crawl(ledger: dict[str, Any]) -> dict[str, Any]:
         if not cursor or cursor == "0" or not users:
             break
         time.sleep(float(inp.get("sleep_seconds") or 0.0))
-    write_csv(out, FOLLOWERS_COLUMNS, rows)
+    CsvIO.write_dict_rows(out, FOLLOWERS_COLUMNS, rows)
     ledger["artifacts"]["followers_dump_csv"] = str(out)
     ledger["artifacts"]["raw_twitter_responses_dir"] = str(raw_dir)
     return {"rows": len(rows), "output_file": str(out)}
@@ -745,7 +733,7 @@ def step_load_or_crawl(ledger: dict[str, Any]) -> dict[str, Any]:
 
 def step_score_candidates(ledger: dict[str, Any]) -> dict[str, Any]:
     inp = ledger["input"]
-    rows = read_csv(Path(ledger["artifacts"]["followers_dump_csv"]))
+    rows = CsvIO.read_dict_rows(Path(ledger["artifacts"]["followers_dump_csv"]))
     out_rows: list[dict[str, Any]] = []
     for r in rows:
         score = score_row(r)
@@ -761,14 +749,14 @@ def step_score_candidates(ledger: dict[str, Any]) -> dict[str, Any]:
         out_rows.append(row)
     out_rows.sort(key=lambda x: int(x.get("enrichment_score") or 0), reverse=True)
     out = artifact_dir_from_ledger(ledger) / "candidates.csv"
-    write_csv(out, CANDIDATE_COLUMNS, out_rows)
+    CsvIO.write_dict_rows(out, CANDIDATE_COLUMNS, out_rows)
     ledger["artifacts"]["candidates_csv"] = str(out)
     return {"rows": len(out_rows), "output_file": str(out)}
 
 
 def step_moe_evaluate(ledger: dict[str, Any]) -> dict[str, Any]:
     inp = ledger["input"]
-    rows = read_csv(Path(ledger["artifacts"]["candidates_csv"]))
+    rows = CsvIO.read_dict_rows(Path(ledger["artifacts"]["candidates_csv"]))
     out = artifact_dir_from_ledger(ledger) / "moe_evaluated.csv"
     if inp.get("skip_moe"):
         out_rows = []
@@ -785,7 +773,7 @@ def step_moe_evaluate(ledger: dict[str, Any]) -> dict[str, Any]:
                 "moe_raw": "",
             })
             out_rows.append(r)
-        write_csv(out, MOE_COLUMNS, out_rows)
+        CsvIO.write_dict_rows(out, MOE_COLUMNS, out_rows)
         ledger["artifacts"]["moe_evaluated_csv"] = str(out)
         return {"rows": len(out_rows), "skipped": True, "output_file": str(out)}
 
@@ -817,7 +805,7 @@ def step_moe_evaluate(ledger: dict[str, Any]) -> dict[str, Any]:
         merged = dict(row)
         merged.update(agg)
         out_rows.append(merged)
-    write_csv(out, MOE_COLUMNS, out_rows)
+    CsvIO.write_dict_rows(out, MOE_COLUMNS, out_rows)
     write_json(artifact_dir_from_ledger(ledger) / "moe_usage.json", raw_usage)
     ledger["artifacts"]["moe_evaluated_csv"] = str(out)
     ledger["artifacts"]["moe_usage_json"] = str(artifact_dir_from_ledger(ledger) / "moe_usage.json")
@@ -831,7 +819,7 @@ def step_pre_resolve_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
     inp = ledger["input"]
     verdicts = {v.strip() for v in str(inp.get("verdicts") or "enrich,maybe").split(",") if v.strip()}
     src = Path(ledger["artifacts"].get("moe_evaluated_csv") or ledger["artifacts"]["candidates_csv"])
-    rows = read_csv(src)
+    rows = CsvIO.read_dict_rows(src)
     output: list[dict[str, Any]] = []
     pre_count = 0
     aggregator_jobs: list[tuple[int, str]] = []
@@ -860,8 +848,8 @@ def step_pre_resolve_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
     out = artifact_dir_from_ledger(ledger) / "linkedin_resolved.csv"
     queue = artifact_dir_from_ledger(ledger) / "linkedin_resolution_queue.csv"
     unresolved = [r for r in output if not r.get("linkedin_url")]
-    write_csv(out, MOE_COLUMNS, output)
-    write_csv(queue, MOE_COLUMNS, unresolved)
+    CsvIO.write_dict_rows(out, MOE_COLUMNS, output)
+    CsvIO.write_dict_rows(queue, MOE_COLUMNS, unresolved)
     ledger["artifacts"]["linkedin_resolved_csv"] = str(out)
     ledger["artifacts"]["linkedin_resolution_queue_csv"] = str(queue)
     needs_resolution = len(unresolved)
@@ -872,7 +860,7 @@ def step_validate_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
     key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
     if not key:
         raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
-    rows = read_csv(Path(ledger["artifacts"]["linkedin_resolved_csv"]))
+    rows = CsvIO.read_dict_rows(Path(ledger["artifacts"]["linkedin_resolved_csv"]))
     raw_dir = artifact_dir_from_ledger(ledger) / "raw_linkedin_responses"
     raw_dir.mkdir(parents=True, exist_ok=True)
     out_rows: list[dict[str, Any]] = [dict(row) for row in rows]
@@ -890,7 +878,7 @@ def step_validate_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
         status = row.get("linkedin_validation_status") or row.get("linkedin_status") or "no_url"
         stats[status] = stats.get(status, 0) + 1
     out = artifact_dir_from_ledger(ledger) / "linkedin_validated.csv"
-    write_csv(out, VALIDATED_COLUMNS, out_rows)
+    CsvIO.write_dict_rows(out, VALIDATED_COLUMNS, out_rows)
     ledger["artifacts"]["linkedin_validated_csv"] = str(out)
     ledger["artifacts"]["raw_linkedin_responses_dir"] = str(raw_dir)
     return {"rows": len(out_rows), "stats": stats, "workers": workers, "output_file": str(out)}
@@ -907,7 +895,7 @@ def load_rapidapi_json(row: dict[str, Any]) -> dict[str, Any] | None:
 
 def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
     src = Path(ledger["artifacts"].get("linkedin_validated_csv") or ledger["artifacts"].get("linkedin_resolved_csv"))
-    rows = read_csv(src)
+    rows = CsvIO.read_dict_rows(src)
     source_artifacts = [
         value for key, value in sorted(ledger.get("artifacts", {}).items())
         if key.endswith("_csv") and value
@@ -977,7 +965,7 @@ def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
         })
     out = artifact_dir_from_ledger(ledger) / "people.csv"
     legacy = artifact_dir_from_ledger(ledger) / "people_harmonic_all.csv"
-    write_csv(out, PEOPLE_COLUMNS, people)
+    CsvIO.write_dict_rows(out, PEOPLE_COLUMNS, people)
     shutil.copyfile(out, legacy)
     ledger["artifacts"]["people_csv"] = str(out)
     ledger["artifacts"]["people_harmonic_all_csv"] = str(legacy)
@@ -998,7 +986,7 @@ def validation_would_call_api(ledger: dict[str, Any]) -> bool:
     artifact = ledger.get("artifacts", {}).get("linkedin_resolved_csv")
     if not artifact or not Path(artifact).exists():
         return True
-    for row in read_csv(Path(artifact)):
+    for row in CsvIO.read_dict_rows(Path(artifact)):
         if row.get("linkedin_url") and row.get("linkedin_status") in {"found", "found_pre_resolved"}:
             return True
     return False
@@ -1010,7 +998,7 @@ def moe_would_call_api(ledger: dict[str, Any]) -> bool:
     artifact = ledger.get("artifacts", {}).get("candidates_csv")
     if not artifact or not Path(artifact).exists():
         return True
-    return bool(read_csv(Path(artifact)))
+    return bool(CsvIO.read_dict_rows(Path(artifact)))
 
 
 def step_requires_approval(ledger: dict[str, Any], step_id: str) -> bool:

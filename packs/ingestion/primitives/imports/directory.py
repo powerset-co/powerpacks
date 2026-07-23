@@ -8,6 +8,8 @@ code: it has no discover-stage consumers — only `imports/common.py`,
 `imports/messages/importer.py`, and tests import it.
 
 Changelog:
+  2026-07-23 (audit): LINKEDIN_RESOLUTION_COLUMNS now comes from the shared
+    `schemas/gmail_artifacts.py` instead of a local byte-identical copy.
   2026-07-23 (audit batch 21): relocated discover/directory.py → imports/directory.py.
     It had zero discover-stage callers; all consumers are import-stage. No
     functions were split into a vertical: the gmail-named helpers
@@ -38,6 +40,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.schemas.gmail_artifacts import LINKEDIN_RESOLUTION_COLUMNS  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     LIST_VALUE_COLUMNS,
     PEOPLE_SCHEMA_COLUMNS,
@@ -79,7 +82,6 @@ DIRECTORY_COLUMNS = [
     "source_artifact",
     "updated_at",
 ]
-LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
 RESOLUTION_FOUND_STATUSES = {"found", "completed", "success"}
 RESOLUTION_NEGATIVE_STATUSES = {"not_found", "not-found", "missing", "failed", "error"}
 LINKEDIN_URL_COLUMNS = [

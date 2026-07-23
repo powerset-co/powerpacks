@@ -53,6 +53,9 @@ Company identity: work experiences preserve `rapidapi_company_id`,
 `current_company_urn` is a legacy shared-schema field not populated here.
 
 Changelog:
+  2026-07-23 (audit): dropped the local byte-identical read_csv/write_csv for
+    the shared CsvIO.read_dict_rows / CsvIO.write_dict_rows; `import csv`
+    dropped with them.
   2026-07-23 (audit): enrich_people.README.md sidecar folded into this
     docstring; fixed its stale worker default (10 -> 64).
 """
@@ -61,7 +64,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import csv
 import hashlib
 import json
 import os
@@ -188,20 +190,6 @@ def read_json(path: Path, default: Any = None) -> Any:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(CsvIO.dict_reader(handle))
-
-
-def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({col: row.get(col, "") for col in fieldnames})
 
 
 def split_name(full_name: str) -> tuple[str, str]:
@@ -597,7 +585,7 @@ def classify_rapidapi_cache_status(
 def count_rapidapi_cache_misses(cache_misses_csv: Path) -> int:
     if not cache_misses_csv.exists():
         return 0
-    return len(read_csv(cache_misses_csv))
+    return len(CsvIO.read_dict_rows(cache_misses_csv))
 
 
 def load_ledger(path: Path) -> dict[str, Any]:
@@ -663,7 +651,7 @@ def block_for_approval(ledger_path: Path, ledger: dict[str, Any], step_id: str, 
 
 
 def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
-    rows = [normalize_people_row(row) for row in read_csv(Path(ledger["input"]["input_csv"]))]
+    rows = [normalize_people_row(row) for row in CsvIO.read_dict_rows(Path(ledger["input"]["input_csv"]))]
     limit = ledger["input"].get("limit")
     if limit:
         rows = rows[: int(limit)]
@@ -727,12 +715,12 @@ def step_prepare_queue(ledger: dict[str, Any]) -> dict[str, Any]:
     recent_failures_path = run_dir / "rapidapi_recent_failures.csv"
     unresolved_path = run_dir / "needs_resolution_queue.csv"
     skipped_path = run_dir / "skipped_enrichment.csv"
-    write_csv(queue_path, QUEUE_COLUMNS, queue)
-    write_csv(cache_hits_path, CACHE_COLUMNS, cache_hits)
-    write_csv(cache_misses_path, CACHE_COLUMNS, cache_misses)
-    write_csv(recent_failures_path, RECENT_FAILURE_COLUMNS, recent_failures)
-    write_csv(unresolved_path, QUEUE_COLUMNS, unresolved)
-    write_csv(skipped_path, QUEUE_COLUMNS, skipped)
+    CsvIO.write_dict_rows(queue_path, QUEUE_COLUMNS, queue)
+    CsvIO.write_dict_rows(cache_hits_path, CACHE_COLUMNS, cache_hits)
+    CsvIO.write_dict_rows(cache_misses_path, CACHE_COLUMNS, cache_misses)
+    CsvIO.write_dict_rows(recent_failures_path, RECENT_FAILURE_COLUMNS, recent_failures)
+    CsvIO.write_dict_rows(unresolved_path, QUEUE_COLUMNS, unresolved)
+    CsvIO.write_dict_rows(skipped_path, QUEUE_COLUMNS, skipped)
     ledger["artifacts"].update({
         "linkedin_enrichment_queue_csv": str(queue_path),
         "rapidapi_cache_hits_csv": str(cache_hits_path),
@@ -769,12 +757,12 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
     miss_path = Path(miss_path_text) if miss_path_text else None
     rows = []
     if hit_path and hit_path.is_file():
-        rows.extend(read_csv(hit_path))
+        rows.extend(CsvIO.read_dict_rows(hit_path))
     if miss_path and miss_path.is_file():
-        rows.extend(read_csv(miss_path))
+        rows.extend(CsvIO.read_dict_rows(miss_path))
     if not rows:
         out_path = artifact_dir_from_ledger(ledger) / "provider_enriched.csv"
-        write_csv(out_path, PROVIDER_COLUMNS, [])
+        CsvIO.write_dict_rows(out_path, PROVIDER_COLUMNS, [])
         ledger["artifacts"]["provider_enriched_csv"] = str(out_path)
         emit_progress("No LinkedIn enrichment work needed.")
         return {"processed": 0, "cached": 0, "fetched": 0, "output_file": str(out_path), "providers": {"rapidapi": False}}
@@ -907,7 +895,7 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
         write_json(raw_dir / f"{public_identifier or sha(out.get('linkedin_url') or out.get('id',''))}.json", raw_payload)
         enriched.append(out)
     out_path = artifact_dir_from_ledger(ledger) / "provider_enriched.csv"
-    write_csv(out_path, PROVIDER_COLUMNS, enriched)
+    CsvIO.write_dict_rows(out_path, PROVIDER_COLUMNS, enriched)
     ledger["artifacts"].update({"provider_enriched_csv": str(out_path), "raw_provider_responses_dir": str(raw_dir)})
     emit_progress(f"LinkedIn profile enrichment finished: {len(enriched)} profiles processed.")
     return {
@@ -925,13 +913,13 @@ def step_enrich_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
 
 
 def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
-    original_rows = [normalize_people_row(row) for row in read_csv(Path(ledger["input"]["input_csv"]))]
+    original_rows = [normalize_people_row(row) for row in CsvIO.read_dict_rows(Path(ledger["input"]["input_csv"]))]
     by_key: dict[str, dict[str, Any]] = {}
     for row in original_rows:
         key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or sha(json.dumps(row, sort_keys=True))
         by_key[key] = row
     provider_path = Path(ledger["artifacts"].get("provider_enriched_csv") or ledger["artifacts"].get("linkedin_enrichment_queue_csv"))
-    enriched_rows = read_csv(provider_path) if provider_path and provider_path.exists() else []
+    enriched_rows = CsvIO.read_dict_rows(provider_path) if provider_path and provider_path.exists() else []
     company_lookup = build_company_identity_lookup([Path(p) for p in ledger["input"].get("company_corpus_jsonl", [])])
     for row in enriched_rows:
         rapid_raw = json.loads(row["rapidapi_response_enriched"]) if row.get("rapidapi_response_enriched") else (json.loads(row["rapidapi_response"]) if row.get("rapidapi_response") else None)
@@ -943,7 +931,7 @@ def step_merge_people(ledger: dict[str, Any]) -> dict[str, Any]:
     output = artifact_dir_from_ledger(ledger) / "people.csv"
     unfiltered_rows = list(by_key.values())
     rows = [row for row in unfiltered_rows if confirmed_people_row(row)]
-    write_csv(output, PEOPLE_SCHEMA_COLUMNS, rows)
+    CsvIO.write_dict_rows(output, PEOPLE_SCHEMA_COLUMNS, rows)
     ledger["artifacts"]["people_csv"] = str(output)
     filtered_rows = len(unfiltered_rows) - len(rows)
     emit_progress(f"Wrote people.csv with {len(rows)} confirmed rows.")

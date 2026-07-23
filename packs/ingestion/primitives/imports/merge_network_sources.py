@@ -26,6 +26,9 @@ Outputs under `.powerpacks/network-import/merged/`: canonical `people.csv`,
 
 Changelog:
   2026-07-23 (audit):
+    - Dropped the local byte-identical read_csv/write_csv for the shared
+      CsvIO.read_dict_rows / CsvIO.write_dict_rows (csv still used for an
+      inline DictReader).
     - merge_network_sources.README.md sidecar folded into this docstring.
     - Moved from primitives/merge_network_sources/ into
       imports/; the duplicated try/except import block became
@@ -120,20 +123,6 @@ def now_iso() -> str:
 
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return list(CsvIO.dict_reader(handle))
-
-
-def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({col: row.get(col, "") for col in fieldnames})
 
 
 def sha(value: str, n: int = 12) -> str:
@@ -513,7 +502,7 @@ def message_row_to_people(row: dict[str, str], path: Path) -> dict[str, str]:
 
 
 def load_people_file(path: Path) -> list[dict[str, str]]:
-    rows = read_csv(path)
+    rows = CsvIO.read_dict_rows(path)
     label = source_label(path)
     out: list[dict[str, str]] = []
     for row in rows:
@@ -827,13 +816,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     network_contact_sources_path = output_dir / "network_contact_sources.csv"
     network_companies_path = output_dir / "network_companies.csv"
     manifest = output_dir / "merge_manifest.json"
-    write_csv(output, MERGED_COLUMNS, merged_rows)
+    CsvIO.write_dict_rows(output, MERGED_COLUMNS, merged_rows)
     shutil.copyfile(output, legacy_output)
-    write_csv(review_path, REVIEW_COLUMNS, review)
-    write_csv(network_contacts_path, NETWORK_CONTACT_COLUMNS, [network_contact_row(row) for row in merged_rows])
-    write_csv(network_contact_sources_path, NETWORK_CONTACT_SOURCE_COLUMNS, source_rows)
+    CsvIO.write_dict_rows(review_path, REVIEW_COLUMNS, review)
+    CsvIO.write_dict_rows(network_contacts_path, NETWORK_CONTACT_COLUMNS, [network_contact_row(row) for row in merged_rows])
+    CsvIO.write_dict_rows(network_contact_sources_path, NETWORK_CONTACT_SOURCE_COLUMNS, source_rows)
     company_rows = network_company_rows(merged_rows)
-    write_csv(network_companies_path, NETWORK_COMPANY_COLUMNS, company_rows)
+    CsvIO.write_dict_rows(network_companies_path, NETWORK_COMPANY_COLUMNS, company_rows)
     manifest_payload = {
         "created_at": now_iso(),
         "inputs": per_file,

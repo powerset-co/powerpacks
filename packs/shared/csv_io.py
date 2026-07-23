@@ -17,11 +17,22 @@ Drop-in usage (mirrors the stdlib signatures exactly)::
             ...
 
     rows = list(CsvIO.reader(handle))
+
+Whole-file convenience wrappers live here too: :meth:`CsvIO.read_dict_rows` and
+:meth:`CsvIO.write_dict_rows` are the canonical replacements for the many
+per-module ``read_csv``/``write_csv`` copies (utf-8-sig read, utf-8
+extrasaction-ignore write, default CRLF, no fingerprint). The fingerprinted
+LF writer that skips unchanged rewrites stays in ``discover/common.py``.
+
+Changelog:
+  2026-07-23 (audit): added read_dict_rows / write_dict_rows so the ingestion
+    stages stop each defining a byte-identical local read_csv/write_csv.
 """
 from __future__ import annotations
 
 import csv
 import sys
+from pathlib import Path
 from typing import Any
 
 
@@ -67,6 +78,41 @@ class CsvIO:
     def writer(cls, f: Any, *args: Any, **kwargs: Any):
         """Drop-in for ``csv.writer``."""
         return csv.writer(f, *args, **kwargs)
+
+    @classmethod
+    def read_dict_rows(cls, path: Path) -> list[dict[str, Any]]:
+        """Read a whole CSV file into a list of dict rows.
+
+        Canonical replacement for the per-module ``read_csv(path)`` copies.
+        Opens ``path`` with ``newline=""``, ``encoding="utf-8-sig"``
+        (BOM-tolerant) and ``errors="replace"``, applies the process-wide
+        field-size guard, and returns ``list(csv.DictReader(...))`` verbatim —
+        a short row keeps ``DictReader``'s ``None`` key and any ``None`` values
+        (no normalization). For the (fields, normalized-rows) tuple shape use
+        ``discover/common.py:read_csv_rows`` instead."""
+        cls.ensure_field_limit()
+        with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+            return list(csv.DictReader(handle))
+
+    @classmethod
+    def write_dict_rows(cls, path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
+        r"""Write dict rows to a CSV file — byte-for-byte like the per-module
+        ``write_csv(path, fieldnames, rows)`` copies it replaces.
+
+        Creates parent directories, opens ``path`` with ``newline=""`` and
+        ``encoding="utf-8"``, then writes a header row plus one row per input
+        through ``csv.DictWriter(extrasaction="ignore")`` using the stdlib
+        DEFAULT ``\r\n`` line terminator. Every row is projected onto exactly
+        ``fieldnames`` (``{field: row.get(field, "")}``) so extra keys are
+        dropped and missing keys become empty strings. Always rewrites — there
+        is NO fingerprint/no-op guard; for the fingerprinted ``\n`` writer that
+        skips unchanged rewrites use ``discover/common.py:write_csv_rows``."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
 # Raise the limit at import time too, so merely importing this module protects
