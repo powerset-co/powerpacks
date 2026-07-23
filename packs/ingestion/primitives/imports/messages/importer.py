@@ -16,8 +16,8 @@ outputs, with no LLM, no research queue, and no enrichment call:
   evidence, never auto-attached — the deep-context cluster judge decides.
   Identity resolution happens later in deep-context with cross-channel context.
 
-Known gap: the tier-0 approval gate reads `research_review.csv`, which has had
-no producer since #315 retired the research-review flow, so on a fresh install
+Known gap: the tier-0 approval gate reads a retired review CSV that has had no
+producer since #315 retired the research-review flow, so on a fresh install
 every identifier match demotes to `suggested` until deep-context ships the
 replacement approval surface.
 
