@@ -199,6 +199,5 @@ output CSV rows are applied as raw material; their audit lives in
 | Directory reuse | [`imports/directory.py`](../primitives/imports/directory.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
 | Per-source status | [`status.py`](../primitives/imports/status.py) |
-| Parallel resolver (legacy era; not callable from the import) | [`gmail/resolve_queue.py`](../primitives/discover/gmail/resolve_queue.py) |
 | Profile hydration (legacy era; not callable from the import) | [`enrich_people.py`](../primitives/enrich/enrich_people.py) |
 | Fan-in | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

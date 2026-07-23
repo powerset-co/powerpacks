@@ -33,7 +33,7 @@ directly by file path.
 - `gmail/` — msgvault sync (`sync.py`), discovery CLI (`discover.py`),
   msgvault reader/aggregation library (`msgvault_store.py`), per-account
   artifact-emission child (`discover_engine.py`), LinkedIn resolution
-  (`resolve_queue.py`). The gmail import step functions live in
+  The gmail import step functions live in
   `imports/gmail/import_steps.py` (import stage, not here).
 - `messages/` — iMessage/WhatsApp metadata discovery (`discover.py`,
   `extract_imessage.py`, `whatsapp_wacli.py`, `merge_contacts.py`,

@@ -126,13 +126,14 @@ enrichment primitive for rows that already have LinkedIn identity.
 | Shared people enrichment | LinkedIn profile enrichment for rows with `linkedin_url` / `public_identifier` | `enrich_people.py` | Approval-gated for RapidAPI cache misses. |
 | Twitter/X import | Twitter follower crawl | `twitter/network_import.py` step `load_or_crawl` | Approval-gated. |
 | Twitter/X import | LinkedIn validation/enrichment for pre-resolved LinkedIn URLs | `twitter/network_import.py` step `validate_linkedin` | Approval-gated. |
-| Gmail/msgvault | Optional email/name/company-guess -> LinkedIn URL resolution; no profile hydration inside msgvault import | `gmail/discover_engine.py msgvault` emits `linkedin_resolution_queue.csv`; `gmail/resolve_queue.py` runs harness or approval-gated Parallel; `gmail/discover_engine.py apply-resolutions` attaches URLs | msgvault import local-only; Parallel resolution spend-gated; RapidAPI only later through `enrich_people.py`. |
+| Gmail/msgvault | No lookups inside the import; `gmail/discover_engine.py msgvault` emits `linkedin_resolution_queue.csv` and `gmail/discover_engine.py apply-resolutions` attaches already-STORED resolutions | new LinkedIn resolution/research is owned by `$deep-context` (`deep_context/deep_research_contacts.py` + the identity judge) | msgvault import local-only; all resolution spend lives behind deep-context gates; RapidAPI only later through `enrich_people.py`. |
 | Messages/iMessage/WhatsApp | None in local import today | ingestion message primitives | Local metadata/review only unless later resolver/enrichment is explicitly added. |
 
-Target direction: source verticals should emit canonical `people.csv` or
-resolution queues, then share `gmail/resolve_queue.py` for LinkedIn URL
-resolution and `enrich_people.py` for LinkedIn profile hydration instead of each
-vertical owning separate enrichment implementations.
+Target direction: source verticals emit canonical `people.csv` or resolution
+queues; LinkedIn URL resolution/research is owned by `$deep-context`
+(`deep_context/deep_research_contacts.py` + the identity judge), and
+`enrich_people.py` owns LinkedIn profile hydration — no vertical owns its own
+enrichment implementation.
 
 ## Regression checks
 
