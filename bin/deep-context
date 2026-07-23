@@ -40,6 +40,9 @@ usage: bin/deep-context <command> [args]
   parents      build canonical parent dossiers (free)
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
+  migrate-legacy  turn stored legacy Parallel resolutions into pending retarget
+               proposals for the normal judge/review loop (default dry run;
+               --apply writes; --apply --judge also judges from cache, spends OpenAI)
   review       open the staged people / LinkedIn decision UI (local, free)
   review-status  read manifests/CSVs and print the exact next workflow action
                (--wait [--timeout N] blocks until the next action is the agent's)
@@ -139,6 +142,12 @@ case "$cmd" in
     # Phase 3: verify each parent against its attached LinkedIn (self-heal).
     # Use `reconcile --dry-run` for a free cost estimate first.
     "${PY[@]}" "$PKG.reconcile_linkedin" "$@"
+    ;;
+  migrate-legacy)
+    # Adopt stored legacy Parallel resolutions as PENDING retarget proposals so the
+    # normal judge / auto-stand / Check-LinkedIn loop finally audits them.
+    # Default dry run; --apply writes; --apply --judge spends OpenAI (cache profiles only).
+    "${PY[@]}" "$PKG.migrate_legacy_resolutions" "$@"
     ;;
   assemble-synthetic)
     # Free, local: build synthetic people-rows from EXISTING deep-research artifacts
