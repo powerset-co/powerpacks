@@ -1,5 +1,23 @@
 """Gmail contact discovery CLI: sync msgvault, aggregate contacts, build queues.
 
+What it does (discover()):
+  1. Resolve config ONCE (resolve_discovery_inputs): CLI/caller overrides >
+     accounts.json state > discovery.config defaults. No selected accounts ->
+     skipped manifest.
+  2. Per selected account -> msgvault sync (skippable), then spawn the
+     gmail/discover_engine.py child. Sync window = --sync-after, else the resume
+     marker from infer_msgvault_sync_after (sync.py); an explicit window adds
+     --noresume. Failed sync/child -> failed manifest, stop.
+  3. Each child reports calculation_mode: full_recount (its rows ARE the
+     account's whole truth) | incremental_delta (only new rows, appended once,
+     deduped by incremental_input_id).
+  4. gmail_discovery_merge_plan picks full_rewrite (calc-version/account-set
+     change, or any full_recount -> rebuild contacts.csv from child rows) vs
+     incremental_update (keep existing rows + append unapplied deltas). A
+     full_rewrite fed only deltas fails loudly (it would drop rows). Merge rows
+     by primary email -> write contacts.csv + linkedin_resolution_queue.csv
+     (same rows) + a typed stage manifest.
+
 Changelog:
   2026-07-23 (audit):
     - discover() became strictly keyword-only: the old `**_` catch-all

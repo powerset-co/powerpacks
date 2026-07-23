@@ -4,6 +4,21 @@
 This module owns only local metadata discovery. Review, LinkedIn profile
 materialization, and enrichment live in imports/messages/importer.py.
 
+What it does (discover()):
+  Resolve channels (messages_discovery_inputs from accounts.json, or explicit
+  --include-imessage/--include-whatsapp). Not linked -> skipped manifest. Then a
+  sequential child chain, stopping at the first blocked/failed child:
+    - iMessage: extract_imessage.py check (Full Disk Access gate) -> extract
+      chat.db + AddressBook metadata -> imessage.contacts.csv -> normalize.
+    - WhatsApp: whatsapp_wacli.py run (fetch pinned wacli, auth, sync, export
+      local metadata) -> whatsapp.contacts.csv -> normalize. Missing QR ->
+      blocked_user_action.
+    - merge_contacts.py unions the enabled per-channel CSVs by canonical phone
+      -> .powerpacks/messages/contacts.csv.
+  Copy the merged CSV to discover/messages/contacts.csv and write a typed
+  manifest (contact count, channels, privacy=bodies-never-read, WhatsApp
+  pre-full-sync nudge). Metadata only: no bodies, no research, no upload.
+
 Changelog:
   2026-07-23 (audit): discover()'s accounts parameter was renamed from
     accounts_path to accounts_file; internal helpers still take accounts_path,

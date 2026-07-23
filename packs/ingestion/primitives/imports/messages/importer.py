@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """Import matched Messages contacts + research candidates (contacts-direct).
 
-Reads the match-annotated `.powerpacks/messages/contacts.csv` and materializes
-two stage outputs, with no LLM, no research queue, and no enrichment call:
+Consumes the match-annotated `.powerpacks/messages/contacts.csv` — the upstream
+`match_local_candidates.py match` step tiers each contact against the local
+people catalog (unique phone/email, or unique exact name, or same-last-name
+unique first-name-prefix / high-fuzzy -> `matched`; ambiguous or
+first-name-only -> `suggested`; else `unmatched`) — and materializes two
+outputs, with no LLM, no research queue, and no enrichment call:
 
-- `import/messages/people.csv` — contacts MATCHED to an existing network
-  person (message activity attaches to that person at fan-in).
-- `import/messages/candidates.csv` — unmatched contacts passing a
-  deterministic "worth researching" floor (real phone, plausibly-real saved
-  name, message-count minimum). Identity resolution happens later in the
-  deep-context processing layer with cross-channel context.
+- `import/messages/people.csv` — `matched` contacts, keyed to the existing
+  network person (message activity attaches to that person at fan-in).
+- `import/messages/candidates.csv` — `unmatched` + `suggested` contacts passing
+  the deterministic "worth researching" floor (real phone, plausibly-real saved
+  name, message-count minimum). A `suggested` match is PARKED here in candidate
+  evidence, never auto-attached — the deep-context cluster judge decides.
+  Identity resolution happens later in deep-context with cross-channel context.
+
+Known gap: the tier-0 approval gate reads `research_review.csv`, which has had
+no producer since #315 retired the research-review flow, so on a fresh install
+every identifier match demotes to `suggested` until deep-context ships the
+replacement approval surface.
 
 Changelog:
   2026-07-23 (audit):

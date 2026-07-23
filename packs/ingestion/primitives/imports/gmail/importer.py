@@ -9,6 +9,23 @@ migrate into overrides/review.csv via `bin/deep-context migrate-legacy` (the
 central source of truth the fan-in and the review flow read); new lookups run
 through deep-context's judged, budget-gated stages.
 
+What it does (run()):
+  1. No-op if the import manifest is current (unless --force); read accounts;
+     collect the discovery queues into a GmailImportLedger. No queue -> skipped.
+  2. Dispatch two ledger-backed steps via load_gmail_import_steps:
+       - run_gmail_directory: apply the shared directory.csv to each account's
+         resolution queue -> resolved / unresolved / cached-negative lanes, and
+         commit the Gmail observations + directory resolutions into directory.csv.
+       - run_gmail_apply_and_enrich: attach STORED resolutions only (directory +
+         explicit; no Parallel/RapidAPI) onto each account people.csv via
+         discover_engine apply-resolutions, then materialize one merged Gmail
+         people.csv.
+  3. Split the population: copy_people_csv -> import/gmail/people.csv (matched
+     people), write_gmail_candidates -> import/gmail/candidates.csv (the
+     still-unresolved research pool). Directory source-account quality gate ->
+     typed manifest.
+  Exit 0 completed/skipped, 1 failed. No approval gate: nothing here spends.
+
 Changelog:
   2026-07-23 (audit):
     - One upfront repo-root path bootstrap replaced the duplicated try/except

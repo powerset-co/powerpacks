@@ -1,0 +1,67 @@
+# imports
+
+Created: 2026-07-23
+Changelog:
+- 2026-07-23 (audit batch 23): created — gist-style functionality map (mermaid
+  data-flow + a per-file role/reads/writes table) for the import stage.
+
+Per-source import primitives. Each source's importer consumes the discover-stage
+artifacts, applies the shared identity `directory.csv` (and any STORED
+resolutions), and materializes a stable per-source `people.csv` plus a
+`candidates.csv` research lane. `merge_network_sources.py` fans the per-source
+`people.csv` files into one canonical `merged/people.csv`. Skills invoke each
+importer directly by file path; there is no orchestrator.
+
+## Data flow
+
+```mermaid
+flowchart LR
+  GDISC["discover/gmail/*<br/>(queues + people.csv)"]
+  MDISC[".powerpacks/messages/contacts.csv<br/>(match-annotated)"]
+  LCSV["LinkedIn Connections.csv"]
+
+  GDISC --> GIMP["gmail/importer.py<br/>import_steps.py · util.py"]
+  MDISC --> MIMP["messages/importer.py<br/>match_local_candidates.py · util.py"]
+  LCSV --> LIMP["linkedin/network_import.py<br/>(Modal-hosted convert + enrich)"]
+
+  DIR[("directory.csv<br/>shared identity aggregate")]
+  GIMP --> DIR
+  MIMP --> DIR
+  DIR -. stored resolutions .-> GIMP
+
+  GIMP --> GP["import/gmail/<br/>people.csv + candidates.csv"]
+  MIMP --> MP["import/messages/<br/>people.csv + candidates.csv"]
+  LIMP --> LP["discover/linkedin/people.csv"]
+
+  GP --> FANIN["merge_network_sources.py"]
+  MP --> FANIN
+  LP --> FANIN
+  FANIN --> MERGED["merged/people.csv<br/>possible_duplicates_review.csv"]
+```
+
+## Files
+
+| File | Role | Reads | Writes |
+| --- | --- | --- | --- |
+| [`gmail/importer.py`](gmail/importer.py) | Import entry (directory-only): build the ledger, dispatch the two step functions, split matched people vs candidates, quality-gate, typed manifest | `discover/gmail/*` queues, `directory.csv`, `accounts.json` | `import/gmail/people.csv`, `candidates.csv`, `ledger.json`, `manifest.json`, `directory.csv` |
+| [`gmail/import_steps.py`](gmail/import_steps.py) | The dynamically-loaded step functions — `run_gmail_directory` (apply directory, split resolved/unresolved/cached-negative) and `run_gmail_apply_and_enrich` (attach STORED resolutions, materialize merged people.csv) — plus `save_ledger` + directory helpers | gmail queues, `directory.csv`, per-account `people.csv` | per-account resolved CSVs, `directory.csv`, merged Gmail `people.gmail.csv` |
+| [`gmail/util.py`](gmail/util.py) | Discovery-artifact collection (`gmail_artifacts_from_discovery`) + candidate writing (`write_gmail_candidates`) | `discover/gmail/manifest.json` + per-account artifacts | `import/gmail/candidates.csv` |
+| [`messages/importer.py`](messages/importer.py) | Import entry (contacts-direct): route `matched`→people, `unmatched`/`suggested`→candidates (floor-tested), replace the directory messages slice; `--confirm-import` approval gate | `.powerpacks/messages/contacts.csv` (match-annotated), match manifest | `import/messages/people.csv`, `candidates.csv`, `directory.csv`, `manifest.json` |
+| [`messages/util.py`](messages/util.py) | Messages-vertical tolerant field parsers + the deterministic "worth researching" candidate floor + interaction/last-message readers | — | — (pure helpers) |
+| [`messages/match_local_candidates.py`](messages/match_local_candidates.py) | Tiered local matcher (phone/email exact → exact name → same-last-name prefix/fuzzy tiers); annotates `contacts.csv` in place with `match_status`; tier-0 gated by `research_review.csv` approvals (no live producer — see importer Known gap) | `contacts.csv`, `merged/people.csv` (+ optional `--candidates`), `research_review.csv` | `contacts.csv` (in place), `*.match.manifest.json` |
+| [`linkedin/network_import.py`](linkedin/network_import.py) | LinkedIn `Connections.csv` import — the Modal-hosted convert+enrich exception; parses to the people schema, delegates enrichment to `enrich/enrich_people.py` (RapidAPI) | `Connections.csv`, profile cache, RapidAPI | `discover/linkedin/people.csv` + enrichment artifacts + ledger |
+| [`directory.py`](directory.py) | Cross-source `directory.csv` contract: `DIRECTORY_COLUMNS`, email/phone/name identity keys, row merge, `people.csv → directory` commit | `directory.csv`, per-source `people.csv` | `directory.csv` (via callers) |
+| [`merge_network_sources.py`](merge_network_sources.py) | Fan-in: merge/dedupe explicit per-source `people.csv` by LinkedIn public id; similar names without shared LinkedIn go to a review file, never auto-merged | `--input` per-source `people.csv` files | `merged/people.csv`, `network_contacts.csv`, `possible_duplicates_review.csv`, `merge_manifest.json` |
+| [`common.py`](common.py) | Shared import helpers: import-manifest read/write (`write_manifest`, `import_manifest_current`), `GmailImportLedger`, `load_gmail_import_steps`, `copy_people_csv`, directory source-account quality checks | import manifests | `import/<source>/manifest.json` |
+| [`status.py`](status.py) | Read-only per-source import status: discovery ran? import completed/current? row counts + merged summary — the presence check skills use to suggest missing sources | discover + import manifests, `merged/people.csv` | — (always exits 0) |
+
+## Stage contract
+
+**Free and deterministic.** Imports apply the already-computed identity
+`directory.csv` and any STORED resolutions; they do **no** new LinkedIn
+resolution, LLM, or paid enrichment — all of that lives in `deep_context/`. The
+one exception is `linkedin/network_import.py`, which runs Connections.csv
+convert+enrich inside the Modal sandbox for `$setup`. Each importer overwrites a
+fixed `import/<source>/` directory (idempotent by path, no run ids/ledgers of
+its own beyond the gmail step ledger), and `directory.csv` is the reusable
+cross-source checkpoint — never fingerprinted as a per-source output.
