@@ -25,6 +25,9 @@ Consumers: `gmail/discover_engine.py` (the discovery CLI child),
 re-derivation), and `logbook/logbook_sources.py` (candidate-pid temp table).
 
 Changelog:
+  2026-07-23 (audit batch 22): absorbed is_likely_person_name /
+    is_generic_or_non_person (+ their keyword sets) from the retired legacy
+    resolver gmail/resolve_queue.py; deep-context owns LinkedIn resolution now.
   2026-07-23 (audit batch 19): folded the second msgvault SQLite layer
     (`deep_context/build_email_context.py`) into this module. Introduced
     `MsgvaultStore` as the single access point; the former connection-bound
@@ -918,3 +921,86 @@ class MsgvaultStore:
         # UNION (not UNION ALL) dedupes a message matched by both arms.
         sql = f"SELECT COUNT(*) AS n FROM ({' UNION '.join(arms)})"
         return int(con.execute(sql, params).fetchone()["n"])
+
+
+# --- Person-vs-role classification (moved from the retired resolve_queue.py) ---
+
+GENERIC_PREFIXES = {
+    "noreply", "no-reply", "no_reply",
+    "donotreply", "do-not-reply", "do_not_reply",
+    "info", "contact", "support", "help", "hello",
+    "sales", "marketing", "hr", "careers", "jobs",
+    "admin", "administrator", "webmaster", "postmaster",
+    "office", "team", "staff", "general",
+    "billing", "invoices", "payments", "accounts", "accounting",
+    "newsletter", "news", "updates", "notifications",
+    "feedback", "enquiries", "inquiries",
+    "service", "customerservice", "care", "dispatch",
+    "concierge", "reservation", "reservations", "booking", "bookings",
+    "rsvp", "registration", "club", "member", "members", "membership", "memberservices",
+    "optical", "photos", "equity", "futures",
+    "launch", "eat", "pbx", "alumni", "masters", "csi",
+    "studentinfo", "fintechsupport", "casasupport",
+}
+
+GENERIC_KEYWORDS = {
+    "support", "service", "noreply", "reply", "taskforce",
+    "insurance", "verification", "recognition",
+}
+
+BUSINESS_NAME_KEYWORDS = {
+    "llc", "inc", "corp", "ltd", "team", "services", "service",
+    "spa", "optometry", "electronics", "insurance", "association",
+    "department", "office", "institute", "run", "discount", "massages",
+    "management", "concierge", "dispatch", "accounting", "task force",
+    "hawaii", "waikiki", "aruba", "support", "delivery",
+    "wines", "coffee", "mason", "security", "motors",
+}
+
+def is_likely_person_name(name: str) -> bool:
+    """Return True if the name looks like a real person (first + last)."""
+    if not name:
+        return False
+    clean = re.sub(r'\s*\([^)]*\)', '', name).strip()  # strip parentheticals like (LinkedIn Supplier)
+    clean = re.sub(r'^["\']|["\']$', '', clean).strip()
+    words = clean.split()
+    if len(words) < 2:
+        return False
+    if any(kw in clean.lower() for kw in BUSINESS_NAME_KEYWORDS):
+        return False
+    if '&' in clean:
+        return False
+    # All-caps or all-lower single tokens that aren't name-like
+    if clean == clean.upper() and len(words) <= 2:
+        return False
+    return True
+
+
+def is_generic_or_non_person(email: str) -> bool:
+    """Return True if the email looks like a role/service address, not a person."""
+    if not email or "@" not in email:
+        return True
+    local = email.split("@")[0].lower().strip()
+    # Strip plus-addressing
+    local = local.split("+")[0]
+    # Exact prefix match
+    if local in GENERIC_PREFIXES:
+        return True
+    # First segment match (e.g. customer.service@, no-reply@, info-mhi@)
+    base = re.split(r'[.\-_]', local)[0]
+    if base in GENERIC_PREFIXES:
+        return True
+    # Contains generic keyword anywhere
+    for kw in GENERIC_KEYWORDS:
+        if kw in local:
+            return True
+    # Phone-number-like local parts
+    if re.match(r'^\d{7,}$', local):
+        return True
+    # Single character local parts
+    if len(local) <= 1:
+        return True
+    # Local part is just digits (e.g. 2relaxinparadise is fine but pure digits aren't)
+    if re.match(r'^\d+$', local):
+        return True
+    return False

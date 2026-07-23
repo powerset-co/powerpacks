@@ -6,10 +6,11 @@ local msgvault SQLite store and write one combined, reviewable payload.
 
 Why this exists
 ---------------
-Today the Parallel lookup (``gmail/resolve_queue.py``) receives almost no
-context per person -- just ``{full_name, company, email}`` where ``company`` is
-merely guessed from the email domain (and blank for personal domains). That
-thin signal is why a bare name can resolve to the wrong LinkedIn profile. This
+The legacy per-email Parallel lookup (retired ``gmail/resolve_queue.py``)
+received almost no context per person -- just ``{full_name, company, email}``
+where ``company`` was merely guessed from the email domain (and blank for
+personal domains). That thin signal is why a bare name could resolve to the
+wrong LinkedIn profile. This
 primitive assembles the local-only context we *could* attach (what threads this
 person actually appears in) so a human can review it BEFORE any LLM/Parallel
 step is wired up.
@@ -89,7 +90,7 @@ from packs.ingestion.primitives.discover.gmail import msgvault_store as gni  # n
 from packs.ingestion.primitives.discover.gmail.discover_engine import (  # noqa: E402
     linkedin_resolution_queue_rows,
 )
-from packs.ingestion.primitives.discover.gmail.resolve_queue import (  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: E402
     is_generic_or_non_person,
 )
 

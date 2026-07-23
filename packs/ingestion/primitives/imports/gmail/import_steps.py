@@ -41,6 +41,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: E402
+    is_generic_or_non_person,
+    is_likely_person_name,
+)
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     LIST_VALUE_COLUMNS,
     PEOPLE_SCHEMA_COLUMNS,
@@ -657,13 +661,6 @@ def directory_row_is_prior_negative(row: dict[str, str]) -> bool:
 
 def _is_resolvable_person(row: dict[str, str]) -> bool:
     """Return True if the queue row looks like a real person worth resolving."""
-    try:
-        from packs.ingestion.primitives.discover.gmail.resolve_queue import (
-            is_generic_or_non_person,
-            is_likely_person_name,
-        )
-    except ImportError:
-        return True
     email = (row.get("primary_email") or row.get("email") or row.get("handle") or "").strip()
     name = (row.get("display_name") or row.get("full_name") or "").strip()
     if not email or not name:
