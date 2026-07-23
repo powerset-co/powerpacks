@@ -17,8 +17,20 @@ Tiers (highest precedence first):
 7. Fuzzy ratio ≥ 0.80 → suggested
 8. Otherwise unmatched
 
-Candidates come from the local merged people CSV (`--local-people`) by default.
-Callers may deliberately union an additional catalog with `--candidates`.
+Candidates come from the local merged people CSV (`--local-people`) by default;
+the canonical `$import-messages` flow supplies already-imported Gmail and
+LinkedIn `people.csv` rows through it, and no external candidate catalog is
+loaded otherwise. Callers may deliberately union an additional catalog with
+`--candidates`.
+
+Usage:
+    match_local_candidates.py match \
+        --contacts .powerpacks/messages/contacts.csv \
+        --local-people .powerpacks/messages/_local_people.csv \
+        [--candidates PATH] [--review PATH] [--manifest PATH]
+
+A manifest JSON is written next to the contacts CSV with
+`stats: {total, matched, suggested, unmatched}`.
 
 Approval gate: identifier matches never expand the user's approved set on
 their own. `matched` from tier 0 is only emitted for contacts the user
@@ -40,6 +52,7 @@ match_confidence / match_method / match_reason` columns.
 
 Changelog:
   2026-07-23 (audit):
+    - match_local_candidates.README.md sidecar folded into this docstring.
     - The research_review.csv producer (the research-review flow) was retired
       in #315, opening the known gap above.
     - Moved from primitives/match_local_candidates/ into

@@ -3,11 +3,37 @@
 
 This primitive is source-specific only: it parses LinkedIn's Connections.csv into
 Powerpacks' shared people schema, then delegates LinkedIn profile enrichment to
-`packs/ingestion/primitives/enrich`. Provider calls, cache handling,
-normalization, and final `people.csv` writing live in that shared primitive.
+`packs/ingestion/primitives/enrich/enrich_people.py`. Provider calls, cache
+handling, normalization, and final `people.csv` writing live in that shared
+primitive; enrichment is RapidAPI-only (no Harmonic).
 
-Stdlib-only. Local artifacts only. External RapidAPI calls are approval-gated by
-`enrich_people`; seeded profile-cache hits complete without keys or approval.
+Stdlib-only; local artifacts only, under
+`.powerpacks/network-import/discover/linkedin/` by default. Usable
+profile-cache entries hydrate without keys or approval; cache misses fetch
+immediately when `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` is set, and fail
+with a missing-key error otherwise (there is no approval step). Cache
+format/seeding is documented in `enrich_people.py` (default cache dir
+`.powerpacks/network-import/profile_cache_v2`; override with
+`--profile-cache-dir`). Cache hits count into `cache_hit_count`, misses into
+`paid_call_count`.
+
+Usage:
+    network_import.py run --csv ~/Downloads/Connections.csv --source-user LABEL [--operator-id local]
+    network_import.py continue | approve | status | check-keys
+
+`run` converts the CSV locally, then enriches. Artifacts (paths exposed in the
+ledger `artifacts` map; `people_csv` is the canonical interface):
+`connections_for_enrichment.csv`, `source_people.csv`,
+`linkedin_enrichment_queue.csv`, `rapidapi_cache_hits.csv`,
+`rapidapi_cache_misses.csv`, `rapidapi_recent_failures.csv`,
+`needs_resolution_queue.csv`, `skipped_enrichment.csv`,
+`provider_enriched.csv`, `raw_provider_responses/`, `people.csv`, and
+`enrich_people.ledger.json`.
+
+Changelog:
+  2026-07-23 (audit): network_import.README.md sidecar folded into this
+    docstring; fixed the stale claim that RapidAPI calls are approval-gated
+    (missing keys fail the run — nothing blocks on approval).
 """
 
 from __future__ import annotations

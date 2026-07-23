@@ -26,9 +26,19 @@ Changelog: (temporary file — will fold into AGENTS.md; agents MUST read this b
 ## Typed payloads
 - Stage manifests / ledgers are dataclasses (per-vertical `models.py`, or a shared dataclass for shared shapes) — never ad-hoc dicts. A stage cannot invent fields inline.
 
+## Docs & READMEs
+- NO per-file `<name>.README.md` sidecars. A module's usage/docs live in its own
+  module docstring (behavior + CLI usage, present tense, terse).
+- At most ONE `README.md` per directory, and it describes the directory as a
+  whole — never a single file.
+
 ## Structure
 - Primitives match pipeline stages: `discover_contacts_pipeline/`, `import_contacts_pipeline/`, `enrich/`, `deep_context/`, `logbook/`, `setup/` — with per-vertical subpackages (`gmail/`, `messages/`, `linkedin/`, `twitter/`) and a vertical-local `util.py`. No flat primitive dumps, no huge files.
 - Every CLI entry file keeps its `if __name__ == "__main__"` guard (file-path invocation is how skills run them — a missing guard is a silent no-op).
+- Large automation drivers (browser flows, gcloud orchestration, …) decompose
+  into a clearly-named subpackage (e.g. `setup/automations/`) of ~200–300-line
+  single-concern modules; the original CLI path stays as a thin
+  argparse+dispatch entry so skill commands don't change.
 
 ## Moves & deletions
 - Verify consumers by REAL imports/invocations (grep code, not doc mentions) before keeping or deleting.

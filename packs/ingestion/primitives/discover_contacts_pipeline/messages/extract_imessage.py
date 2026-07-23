@@ -1,9 +1,27 @@
 #!/usr/bin/env python3
 """Extract iMessage contact metadata with Python stdlib only.
 
-The primitive reads local SQLite databases in read-only mode and exports only:
-phone, name, source, group flags/names, message counts, and last-message time.
-It does not select message text/body columns.
+Reads `~/Library/Messages/chat.db` and local AddressBook SQLite databases in
+read-only mode (no Homebrew, no pip dependencies, no message content reads) and
+exports only: phone, name, source, group flags/names, message counts, and
+last-message time. It does not select message text/body columns. The default
+export includes Contacts.app phone rows even without iMessage history
+(`--message-handles-only` restricts to handles seen in message history).
+
+Usage:
+    extract_imessage.py check
+    extract_imessage.py open-privacy-settings --target both
+    extract_imessage.py extract [--output-csv PATH] [--output-jsonl PATH] [--manifest PATH]
+
+`open-privacy-settings` is macOS-only: `--target full-disk-access` for
+Messages `chat.db` access, `--target contacts` for AddressBook name matching,
+or `--target both`. If permissions or schema assumptions fail, `extract`
+writes a manifest with diagnostics so the harness can continue and an agent
+can patch the primitive.
+
+Changelog:
+  2026-07-23 (audit): extract_imessage.README.md sidecar folded into this
+    docstring.
 """
 
 from __future__ import annotations

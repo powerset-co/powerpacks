@@ -6,6 +6,17 @@ Stdlib-only. Reads any combination of `imessage.contacts.csv`,
 15-column pack shape, deduplicates by canonicalized phone, and writes one
 unified `contacts.csv`.
 
+Usage:
+    merge_contacts.py merge --input A.csv [--input B.csv ...] --output contacts.csv [--manifest PATH]
+
+Minimal accepted input columns are `phone,name` (schema reference:
+`packs/ingestion/schemas/contacts-csv.md`). Inputs with legacy headers such as
+`phone_e164`, `display_name`, or `total_messages` fail fast with the schema
+path instead of silently writing an empty merge. Output is sorted by
+`(message_count desc, last_message desc, phone)`; a manifest JSON written next
+to it records per-input row counts, the cross-channel (multi-source) phone
+count, and a `by_source` histogram.
+
 Per-phone merge rules (consistent with `normalize_contacts.py`):
 
 - `name`: first non-empty value across inputs (later inputs do not overwrite
@@ -22,6 +33,10 @@ Per-phone merge rules (consistent with `normalize_contacts.py`):
 - `skip`: logical OR
 - `match_*`: keep the highest-confidence match block. Tie-breaker: prefer the
   one whose `match_status` is matched > suggested > unmatched > empty.
+
+Changelog:
+  2026-07-23 (audit): merge_contacts.README.md sidecar folded into this
+    docstring.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified local people enrichment flow.
+"""Unified local people enrichment flow (RapidAPI-only).
 
 Self-contained Powerpacks RapidAPI enrichment implementation. No imports from
 the legacy app or hosted search API.
@@ -8,8 +8,48 @@ Input: a shared people schema CSV, usually merge_network_sources output.
 Output: enriched people schema CSV plus raw provider responses.
 
 RapidAPI LinkedIn hydration runs directly when RAPIDAPI_LINKEDIN_KEY or
-RAPIDAPI_KEY is present. Missing keys fail clearly instead of opening an
-approval step.
+RAPIDAPI_KEY is present (checked in that order). Missing keys fail clearly
+instead of opening an approval step.
+
+Steps:
+1. `prepare_queue`: routes rows with LinkedIn URLs/public identifiers and
+   profile gaps to `linkedin_enrichment_queue.csv`, splits them by the local
+   profile cache into `rapidapi_cache_hits.csv`, `rapidapi_cache_misses.csv`,
+   and `rapidapi_recent_failures.csv`; rows without LinkedIn go to
+   `needs_resolution_queue.csv`, complete-looking rows to
+   `skipped_enrichment.csv`.
+2. `enrich_linkedin`: fetches cache misses, hydrates hits + fetches into
+   `provider_enriched.csv`, saves raw payloads to `raw_provider_responses/`.
+3. `merge_people`: merges profile data back into the input rows and writes
+   canonical `people.csv`.
+
+Usage:
+    enrich_people.py run --input .powerpacks/network-import/merged/people.csv
+    enrich_people.py continue | approve | status | check-keys
+
+Options: `--profile-cache-dir` (default
+`.powerpacks/network-import/profile_cache_v2`), `--refresh-cache` (force
+RapidAPI calls despite cache entries), `--company-corpus-jsonl` (repeatable;
+company metadata by RapidAPI company ID or LinkedIn company slug),
+`--max-workers`/`--max-rpm` (defaults 64 workers / 300 RPM, env-overridable),
+`--failure-retry-hours` (skip recently failed lookups; default 24h), `--force`
+(re-enrich complete-looking rows), hidden `--limit` for tiny smoke tests only.
+
+Cache seeding: a cache file per sanitized LinkedIn public identifier, e.g.
+`profile_cache_v2/jane-example.json` containing `fetched_at`,
+`public_identifier`, `linkedin_url`, `raw_response`, and
+`normalized_profile: {"success": true}`. Usable entries enrich without
+RAPIDAPI_* keys. Failed lookups are cached with `last_checked_at` and retried
+only after the TTL.
+
+Company identity: work experiences preserve `rapidapi_company_id`,
+`company_public_identifier`, `company_linkedin_url`, and `company_key`
+(`rapidapi:{id}` preferred over `linkedin_company:{slug}`).
+`current_company_urn` is a legacy shared-schema field not populated here.
+
+Changelog:
+  2026-07-23 (audit): enrich_people.README.md sidecar folded into this
+    docstring; fixed its stale worker default (10 -> 64).
 """
 
 from __future__ import annotations
