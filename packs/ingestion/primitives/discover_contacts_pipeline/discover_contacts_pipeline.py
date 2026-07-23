@@ -311,15 +311,17 @@ def run_source_import_workers(ledger_path: Path, ledger: dict[str, Any], *, resu
     if "gmail" in runnable_sources:
         begin_step(ledger_path, ledger, "gmail_msgvault", "Discovering Gmail contacts from existing msgvault metadata.")
         gmail_emails = unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email"))
+        # AUDIT NOTE (2026-07-23): this call used to also pass ledger_path=,
+        # output_dir=, and operator_id= — discover() never declared them and its
+        # old **_ swallowed them silently, so those redirects were NEVER honored
+        # (outputs always went to the configured stage paths). Removed rather
+        # than implemented; discover() is strict now, so this cannot recur.
         payload = gmail.discover(
             accounts_path=accounts_path,
             selected_accounts=gmail_emails,
             msgvault_db=str(input_cfg.get("msgvault_db") or ""),
             sync_query=str(input_cfg.get("gmail_sync_query") or ""),
             skip_msgvault_sync=bool(input_cfg.get("skip_msgvault_sync")),
-            ledger_path=DEFAULT_BASE_DIR / "gmail" / "ledger.json",
-            output_dir=DEFAULT_BASE_DIR / "gmail",
-            operator_id=str(input_cfg.get("operator_id") or "local"),
         )
         if payload.get("status") == "failed":
             mark_step(ledger, "gmail_msgvault", "failed", payload=payload)

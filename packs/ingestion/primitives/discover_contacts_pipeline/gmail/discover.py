@@ -62,8 +62,15 @@ def discover(
     fresh: bool = False,
     limit: int = 0,
     no_attachments: bool = False,
-    **_: Any,
 ) -> dict[str, Any]:
+    """Discover Gmail contacts: sync msgvault per selected account, aggregate
+    contacts, build the resolution queue, write the stage manifest.
+
+    Keyword-only ON PURPOSE (the `*`): thirteen knobs are unusable positionally.
+    STRICT on purpose too — the old `**_` swallowed unknown kwargs silently,
+    which let call sites pass options that were never honored; now a typo or a
+    phantom option raises. `accounts_file`/`accounts_path` are aliases (first
+    non-None wins) kept for the two existing caller populations."""
     cfg = load_config()
     accounts_file = accounts_file or accounts_path or configured_accounts_path()
     account_state = read_json(accounts_file, {}) or {}
