@@ -16,11 +16,12 @@ step is wired up.
 
 Candidate set fidelity
 ----------------------
-The candidate emails are re-derived exactly the way ``gmail/network_import``
-builds its ``linkedin_resolution_queue``: aggregate msgvault metadata, drop
-automated senders, keep only round-trip contacts (both sent AND received), then
-take the same queue rows. We reuse those helpers directly so this stays 1:1
-with "the people we would send to Parallel".
+The candidate emails are re-derived exactly the way ``gmail/discover_engine``
+builds its ``linkedin_resolution_queue``: aggregate msgvault metadata
+(``gmail/msgvault_store``), drop automated senders, keep only round-trip
+contacts (both sent AND received), then take the same queue rows. We reuse
+those helpers directly so this stays 1:1 with "the people we would send to
+Parallel".
 
 Privacy note (deliberate, local-only)
 -------------------------------------
@@ -34,6 +35,12 @@ Outputs (one fixed directory, overwrite in place -- manifest + outputs only):
   <out-dir>/email_context.jsonl   one JSON record per person (full fidelity)
   <out-dir>/email_context.csv     flat, one row per person (easy spreadsheet review)
   <out-dir>/manifest.json         counts/status/timing
+
+Changelog:
+  2026-07-23 (audit batch 17): the retired gmail/network_import.py split;
+    ``gni`` now aliases the concrete ``gmail/msgvault_store`` module,
+    linkedin_resolution_queue_rows comes from ``gmail/discover_engine``, and
+    emit/now_iso/write_json come from the discover stage's ``common``.
 """
 import argparse
 import csv
@@ -55,7 +62,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.discover_contacts_pipeline.gmail import network_import as gni  # noqa: E402
+from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # noqa: E402
+    emit,
+    now_iso,
+    write_json,
+)
+from packs.ingestion.primitives.discover_contacts_pipeline.gmail import msgvault_store as gni  # noqa: E402
+from packs.ingestion.primitives.discover_contacts_pipeline.gmail.discover_engine import (  # noqa: E402
+    linkedin_resolution_queue_rows,
+)
 from packs.ingestion.primitives.discover_contacts_pipeline.gmail.resolve_queue import (  # noqa: E402
     is_generic_or_non_person,
 )
@@ -505,13 +520,13 @@ def derive_candidates(
     include_automated: bool,
     include_role_mailboxes: bool,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Re-derive the Parallel resolution queue exactly like gmail/network_import,
+    """Re-derive the Parallel resolution queue exactly like gmail/discover_engine,
     then drop role/service mailboxes (support@, info@, careers@, …) using the same
     detector the Parallel resolution path uses. Returns (queue, role_dropped)."""
     aggregated = gni.aggregate_msgvault_contacts(con, account_email, exclude_labels)
     non_automated = [r for r in aggregated if include_automated or not r.get("automated_filtered")]
     filtered = [r for r in non_automated if gni.has_round_trip_interaction(r)]
-    queue = gni.linkedin_resolution_queue_rows(filtered)
+    queue = linkedin_resolution_queue_rows(filtered)
     if include_role_mailboxes:
         return queue, 0
     kept = []
@@ -674,7 +689,7 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
         "output": str(payload_path),
         "output_csv": str(csv_path),
         "elapsed_ms": elapsed_ms,
-        "updated_at": gni.now_iso(),
+        "updated_at": now_iso(),
         "privacy": {
             "reads_subjects_snippets": True,
             "network_called": False,
@@ -683,7 +698,7 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     manifest_path = out_dir / "manifest.json"
-    gni.write_json(manifest_path, manifest)
+    write_json(manifest_path, manifest)
     manifest["manifest"] = str(manifest_path)
     return manifest
 
@@ -708,7 +723,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     manifest = build_context(args)
-    gni.emit(manifest)
+    emit(manifest)
     return 0
 
 

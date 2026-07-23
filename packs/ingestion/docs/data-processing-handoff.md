@@ -1,5 +1,7 @@
 <!--
 Changelog:
+- 2026-07-23 (audit batch 17): gmail/network_import.py rows retargeted to its
+  split successors gmail/msgvault_store.py + gmail/discover_engine.py.
 - 2026-07-23 (audit batch 16): removed the retired $discover-contacts skill and
   the deleted discover_contacts_pipeline.py orchestrator from the tables; the
   merge phase is owned by the indexing fan-in.
@@ -30,7 +32,7 @@ account linking / local source setup
 | Phase | Owner surface | Current scripts | Notes |
 | --- | --- | --- | --- |
 | Account linking / local source setup | source-specific onboarding | msgvault CLI, LinkedIn export UI, `$import-messages`, Twitter RapidAPI key checks | Establish source access; avoid provider/API work unless explicitly approved. |
-| Ingestion/source import | ingestion skills + primitives | `gmail/network_import.py msgvault`, `linkedin/network_import.py`, `twitter/network_import.py`, messages primitives | Produces source-local normalized `people.csv` or message contacts artifacts. |
+| Ingestion/source import | ingestion skills + primitives | `gmail/discover_engine.py msgvault`, `linkedin/network_import.py`, `twitter/network_import.py`, messages primitives | Produces source-local normalized `people.csv` or message contacts artifacts. |
 | Enrichment / resolution | data processing + source-specific gates | `enrich_people.py`, Twitter `pre_resolve_linkedin`/`validate_linkedin`, future resolver queues | RapidAPI LinkedIn profile enrichment is centralized in `enrich_people` for LinkedIn-identified rows; Twitter still has source-specific validation. |
 | Merge | indexing fan-in | `merge_network_sources.py` (via `index_contacts_pipeline.py`) | Produces merged CSV contracts and contact/source provenance. |
 | Processing / indexing / search | data processing / indexing/search packs | indexing primitives consume merged artifacts | Should consume canonical CSVs/views, not source-specific raw dumps. |
@@ -124,7 +126,7 @@ enrichment primitive for rows that already have LinkedIn identity.
 | Shared people enrichment | LinkedIn profile enrichment for rows with `linkedin_url` / `public_identifier` | `enrich_people.py` | Approval-gated for RapidAPI cache misses. |
 | Twitter/X import | Twitter follower crawl | `twitter/network_import.py` step `load_or_crawl` | Approval-gated. |
 | Twitter/X import | LinkedIn validation/enrichment for pre-resolved LinkedIn URLs | `twitter/network_import.py` step `validate_linkedin` | Approval-gated. |
-| Gmail/msgvault | Optional email/name/company-guess -> LinkedIn URL resolution; no profile hydration inside msgvault import | `gmail/network_import.py msgvault` emits `linkedin_resolution_queue.csv`; `gmail/resolve_queue.py` runs harness or approval-gated Parallel; `gmail/network_import.py apply-resolutions` attaches URLs | msgvault import local-only; Parallel resolution spend-gated; RapidAPI only later through `enrich_people.py`. |
+| Gmail/msgvault | Optional email/name/company-guess -> LinkedIn URL resolution; no profile hydration inside msgvault import | `gmail/discover_engine.py msgvault` emits `linkedin_resolution_queue.csv`; `gmail/resolve_queue.py` runs harness or approval-gated Parallel; `gmail/discover_engine.py apply-resolutions` attaches URLs | msgvault import local-only; Parallel resolution spend-gated; RapidAPI only later through `enrich_people.py`. |
 | Messages/iMessage/WhatsApp | None in local import today | ingestion message primitives | Local metadata/review only unless later resolver/enrichment is explicitly added. |
 
 Target direction: source verticals should emit canonical `people.csv` or

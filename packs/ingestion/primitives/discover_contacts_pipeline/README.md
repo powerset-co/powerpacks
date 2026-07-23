@@ -1,6 +1,10 @@
 # discover_contacts_pipeline
 
 Changelog:
+- 2026-07-23 (audit batch 17): gmail/network_import.py retired — split into
+  gmail/msgvault_store.py (msgvault reader/aggregation) and
+  gmail/discover_engine.py (per-account artifact-emission CLI); the one-person
+  seed cluster and its gmail-one ledger died with it.
 - 2026-07-23 (audit batch 16): deleted the legacy monolithic orchestrator
   (`discover_contacts_pipeline.py`) and the `$discover-contacts` skill; the
   LinkedIn discovery CLI (`linkedin/discover.py`) and its models went with
@@ -20,7 +24,8 @@ directly by file path.
 - `discovery_config.py` + `discovery.config.json` — static discovery
   input/output contract for the gmail and messages sources.
 - `gmail/` — msgvault sync (`sync.py`), discovery CLI (`discover.py`),
-  metadata reader (`network_import.py`), LinkedIn resolution
+  msgvault reader/aggregation library (`msgvault_store.py`), per-account
+  artifact-emission child (`discover_engine.py`), LinkedIn resolution
   (`resolve_queue.py`), import step functions (`import_steps.py`).
 - `linkedin/` — Connections.csv import + enrichment (`network_import.py`),
   run locally or inside the Modal sandbox via

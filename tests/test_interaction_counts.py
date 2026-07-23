@@ -35,7 +35,7 @@ merge_mod = load_module(
     "merge_network_sources_interactions", "packs/ingestion/primitives/import_contacts_pipeline/merge_network_sources.py"
 )
 gmail_mod = load_module(
-    "gmail_import_interactions", "packs/ingestion/primitives/discover_contacts_pipeline/gmail/network_import.py"
+    "gmail_import_interactions", "packs/ingestion/primitives/discover_contacts_pipeline/gmail/discover_engine.py"
 )
 match_mod = load_module(
     "match_local_candidates_interactions", "packs/ingestion/primitives/import_contacts_pipeline/messages/match_local_candidates.py"
