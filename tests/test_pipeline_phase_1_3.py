@@ -53,11 +53,11 @@ setup_mod = load_module(
 )
 setup_linkedin_csv = load_module(
     "phase13_setup_linkedin_csv",
-    "packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py",
+    "packs/ingestion/primitives/setup/setup_linkedin_csv.py",
 )
 setup_gmail = load_module(
     "phase13_setup_gmail",
-    "packs/ingestion/primitives/setup_gmail/setup_gmail.py",
+    "packs/ingestion/primitives/setup/setup_gmail.py",
 )
 openai_usage_tiers = load_module(
     "phase13_openai_usage_tiers",
@@ -69,7 +69,7 @@ build_processing = load_module(
 )
 enrich_people = load_module(
     "phase13_enrich_people",
-    "packs/ingestion/primitives/enrich_people/enrich_people.py",
+    "packs/ingestion/primitives/enrich/enrich_people.py",
 )
 
 

@@ -135,7 +135,7 @@ If `whoami` fails or keys are missing, tell the user to run **`$setup`** first (
 Safe, local. Drives the next two steps:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py status
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py status
 ```
 
 The JSON reports `gcloud`, `config.oauth_configured`, `database.exists`, and
@@ -166,7 +166,7 @@ Only if Step 1 showed OAuth not configured. One-time browser setup for the
 the Google OAuth Desktop app, inits the db, authorizes the primary account**:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup \
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py browser-setup \
   --email <primary-gmail> --add-account --init-db
 ```
 
@@ -180,7 +180,7 @@ Re-run `msgvault_setup.py status` after Step 3, because a fresh
 requested account in one command** before syncing anything:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py auth-check \
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py auth-check \
   --email <first-email> \
   --email <second-email>
 ```
@@ -203,14 +203,14 @@ them sequentially. After approval, run the normal grant for every missing
 account:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <email>
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email <email>
 ```
 
 For every expired/revoked account, use `--force-auth` (OAuth only; it downloads
 no mail and preserves already archived messages):
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <email> --force-auth
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email <email> --force-auth
 ```
 
 After all grants complete, rerun the **same all-account `auth-check`**. Do not

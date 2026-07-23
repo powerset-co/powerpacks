@@ -13,14 +13,14 @@ asks to create a Google OAuth app for msgvault.
 Run from the Powerpacks repo root:
 
 ```bash
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py status
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup --email <gmail>
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py setup --email <gmail>
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py setup --client-secret <client_secret.json> --email <gmail>
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app --email <gmail>
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-test-users <gmail>
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <gmail>
-uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py mcp-install
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py status
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py browser-setup --email <gmail>
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py setup --email <gmail>
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py setup --client-secret <client_secret.json> --email <gmail>
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py create-oauth-app --email <gmail>
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-test-users <gmail>
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email <gmail>
+uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py mcp-install
 ```
 
 From an installed skill bundle, replace `packs/...` with

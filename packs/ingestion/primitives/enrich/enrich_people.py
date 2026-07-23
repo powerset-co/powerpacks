@@ -625,7 +625,7 @@ def block_for_approval(ledger_path: Path, ledger: dict[str, Any], step_id: str, 
         "approval_type": "external_api_spend",
         "message": message,
         "ledger": str(ledger_path),
-        "continue_command": f"uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py continue --ledger {ledger_path}",
+        "continue_command": f"uv run --project . python packs/ingestion/primitives/enrich/enrich_people.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/enrich/enrich_people.py continue --ledger {ledger_path}",
     })
 
 

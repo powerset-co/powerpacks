@@ -11,9 +11,9 @@ Connection export is WIP upstream, so this is currently not a full connection
 sync replacement for the CSV flow.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py instructions
+uv run --project . python packs/ingestion/primitives/setup/linkedin_mcp_import.py instructions
 uvx linkedin-scraper-mcp@latest --login
-uv run --project . python packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py mark-linked --username <profile-url-or-username>
+uv run --project . python packs/ingestion/primitives/setup/linkedin_mcp_import.py mark-linked --username <profile-url-or-username>
 ```
 
 Known upstream tools include `get_my_profile`, `get_person_profile`,

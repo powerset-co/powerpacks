@@ -16,9 +16,9 @@ This is WIP for connection export, so do not represent it as equivalent to CSV i
 Use it for setup, authenticated profile/search tools, and future connection export once upstream exposes it.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py instructions
+uv run --project . python packs/ingestion/primitives/setup/linkedin_mcp_import.py instructions
 uvx linkedin-scraper-mcp@latest --login
-uv run --project . python packs/ingestion/primitives/linkedin_mcp_import/linkedin_mcp_import.py mark-linked --username <profile-url-or-username>
+uv run --project . python packs/ingestion/primitives/setup/linkedin_mcp_import.py mark-linked --username <profile-url-or-username>
 ```
 
 Do not store LinkedIn credentials or cookies in Powerpacks.

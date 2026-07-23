@@ -10,7 +10,7 @@ from pathlib import Path
 
 from packs.shared.csv_io import CsvIO
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/bootstrap_network_from_exports/bootstrap_network_from_exports.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/setup/bootstrap_network_from_exports.py"
 spec = importlib.util.spec_from_file_location("bootstrap_network_from_exports", MODULE_PATH)
 bootstrap_network_from_exports = importlib.util.module_from_spec(spec)
 assert spec.loader is not None

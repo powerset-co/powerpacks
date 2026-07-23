@@ -4,7 +4,7 @@ Powerpacks-local LinkedIn Connections.csv import.
 
 This primitive is now source-specific: it parses LinkedIn's `Connections.csv`
 export into Powerpacks' shared people schema, then delegates LinkedIn profile
-enrichment to `packs/ingestion/primitives/enrich_people`.
+enrichment to `packs/ingestion/primitives/enrich`.
 
 All artifacts stay under `.powerpacks/network-import/discover/linkedin/` by
 default. No database writes or uploads occur.

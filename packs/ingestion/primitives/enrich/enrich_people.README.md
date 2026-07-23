@@ -28,7 +28,7 @@ The primitive is self-contained in Powerpacks. It does not import
 ## Commands
 
 ```bash
-uv run --project . python packs/ingestion/primitives/enrich_people/enrich_people.py run \
+uv run --project . python packs/ingestion/primitives/enrich/enrich_people.py run \
   --input .powerpacks/network-import/merged/people.csv
 ```
 

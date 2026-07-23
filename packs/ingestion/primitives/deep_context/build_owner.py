@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context.common import (
     load_env,
     now_iso,
 )
-from packs.ingestion.primitives.enrich_people.enrich_people import (
+from packs.ingestion.primitives.enrich.enrich_people import (
     profile_cache_path,
     rapidapi_key,
     rapidapi_profile,

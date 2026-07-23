@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.clean_slate import clean_slate
+from packs.ingestion.primitives.setup import clean_slate
 
 
 def build_state(root: Path) -> None:

@@ -3,7 +3,7 @@
 
 This primitive is source-specific only: it parses LinkedIn's Connections.csv into
 Powerpacks' shared people schema, then delegates LinkedIn profile enrichment to
-`packs/ingestion/primitives/enrich_people`. Provider calls, cache handling,
+`packs/ingestion/primitives/enrich`. Provider calls, cache handling,
 normalization, and final `people.csv` writing live in that shared primitive.
 
 Stdlib-only. Local artifacts only. External RapidAPI calls are approval-gated by
@@ -29,7 +29,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.enrich_people import enrich_people as people_enrichment  # noqa: E402
+from packs.ingestion.primitives.enrich import enrich_people as people_enrichment  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
     extract_public_identifier,

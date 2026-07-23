@@ -670,7 +670,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
         emit({"status": "approved", "ledger": str(ledger_path), "child": payload})
         return 0
     if blocked.get("step_id") == "gmail_apply_enrich" and blocked.get("child_ledger"):
-        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/enrich_people/enrich_people.py", "approve", "--ledger", blocked["child_ledger"]))
+        code, payload, stderr = run_cmd(py_cmd("packs/ingestion/primitives/enrich/enrich_people.py", "approve", "--ledger", blocked["child_ledger"]))
         if code != 0:
             emit({"status": "failed", "step_id": "approve", "error": stderr or payload})
             return 1

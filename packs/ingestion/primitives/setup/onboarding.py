@@ -125,7 +125,7 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "skipped": acct.get("gmail", {}).get("skipped", False),
             "what_it_needs": "Local msgvault SQLite archive with Gmail metadata, usually ~/.msgvault/msgvault.db.",
             "next_action": "Link local msgvault.db and choose one or more Gmail source accounts. No Gmail network import runs during onboarding.",
-            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step --gmail-db ~/.msgvault/msgvault.db",
+            "command": "uv run --project . python packs/ingestion/primitives/setup/onboarding.py step --gmail-db ~/.msgvault/msgvault.db",
         },
         "linkedin_csv": {
             "channel": "linkedin_csv",
@@ -133,7 +133,7 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "skipped": acct.get("linkedin_csv", {}).get("skipped", False),
             "what_it_needs": "LinkedIn Connections.csv export from LinkedIn settings.",
             "next_action": "Export Connections.csv, then record it with onboarding --linkedin-csv <path> --linkedin-source-user <label>.",
-            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step --linkedin-csv <Connections.csv> --linkedin-source-user <label>",
+            "command": "uv run --project . python packs/ingestion/primitives/setup/onboarding.py step --linkedin-csv <Connections.csv> --linkedin-source-user <label>",
         },
         "messages": {
             "channel": "messages",
@@ -141,7 +141,7 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "skipped": acct.get("messages", {}).get("skipped", False),
             "what_it_needs": "iMessage/Contacts permission readiness and optional WhatsApp device link status.",
             "next_action": "Run the scoped Messages readiness check; link WhatsApp with QR if desired. No message import, WhatsApp sync, research, or upload runs during onboarding.",
-            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step",
+            "command": "uv run --project . python packs/ingestion/primitives/setup/onboarding.py step",
         },
         "twitter": {
             "channel": "twitter",
@@ -149,7 +149,7 @@ def build_steps(registry: dict[str, Any]) -> list[dict[str, Any]]:
             "skipped": acct.get("twitter", {}).get("skipped", False),
             "what_it_needs": "Operator Twitter/X handle.",
             "next_action": "Record handle with onboarding --twitter-handle <handle>. No crawl runs during onboarding.",
-            "command": "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step --twitter-handle <handle>",
+            "command": "uv run --project . python packs/ingestion/primitives/setup/onboarding.py step --twitter-handle <handle>",
         },
     }
     return [steps_by_channel[channel] for channel in ONBOARDING_SOURCE_ORDER]
@@ -183,7 +183,7 @@ def shell_join(parts: list[str]) -> str:
 def onboarding_step_command(args: argparse.Namespace, *, placeholders: bool = False, authorized_emails: list[str] | None = None) -> str:
     cmd = [
         "uv", "run", "--project", ".", "python",
-        "packs/ingestion/primitives/onboarding/onboarding.py", "step",
+        "packs/ingestion/primitives/setup/onboarding.py", "step",
         "--accounts", args.accounts,
         "--gmail-db", args.gmail_db,
         "--gmail-output-dir", args.gmail_output_dir,
@@ -243,7 +243,7 @@ def onboarding_handoff(args: argparse.Namespace, registry: dict[str, Any]) -> di
 
 
 def msgvault_setup_py() -> str:
-    return "packs/ingestion/primitives/msgvault_setup/msgvault_setup.py"
+    return "packs/ingestion/primitives/setup/msgvault_setup.py"
 
 
 def msgvault_home_from_args(args: argparse.Namespace) -> Path:

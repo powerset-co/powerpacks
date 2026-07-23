@@ -123,10 +123,9 @@ export function startSetupJob(action: string, command: string[], timeoutMs = 6 *
 function whitelistedShellCommand(command: string): boolean {
   const trimmed = command.trim();
   return [
-    "uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py ",
-    "uv run --project . python packs/ingestion/primitives/onboarding/onboarding.py step",
+    "uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py ",
+    "uv run --project . python packs/ingestion/primitives/setup/onboarding.py step",
     "uv run --project . python packs/ingestion/primitives/setup/setup.py ",
-    "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/import_contacts_pipeline.py ",
   ].some((prefix) => trimmed.startsWith(prefix));
 }
 
