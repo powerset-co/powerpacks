@@ -11,7 +11,7 @@ Local cross-source merge/dedupe for network imports.
 - Similar names without shared LinkedIn are **not merged**; they are flagged in `possible_duplicates_review.csv`.
 
 ```bash
-uv run --project . python packs/ingestion/primitives/merge_network_sources/merge_network_sources.py run \
+uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/merge_network_sources.py run \
   --input .powerpacks/network-import/import/gmail/people.csv \
   --input .powerpacks/network-import/import/messages/people.csv
 ```

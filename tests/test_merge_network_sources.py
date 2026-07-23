@@ -11,7 +11,7 @@ from pathlib import Path
 
 from packs.shared.csv_io import CsvIO
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/import_contacts_pipeline/merge_network_sources.py"
 spec = importlib.util.spec_from_file_location("merge_network_sources", MODULE_PATH)
 merge_network_sources = importlib.util.module_from_spec(spec)
 assert spec.loader is not None

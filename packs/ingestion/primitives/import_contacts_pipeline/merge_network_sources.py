@@ -6,6 +6,12 @@ Dedupe rule:
 2. Keep non-LinkedIn rows separate, but emit similar-name review pairs.
 
 Stdlib-only. Local artifacts only. No uploads or external API calls.
+
+Changelog:
+  2026-07-23 (audit):
+    - Moved from primitives/merge_network_sources/ into
+      import_contacts_pipeline/; the duplicated try/except import block became
+      the single repo-root bootstrap stanza.
 """
 
 from __future__ import annotations
@@ -22,31 +28,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.schemas.people_schema import (
-        LIST_VALUE_COLUMNS,
-        PEOPLE_SCHEMA_COLUMNS,
-        latest_interaction,
-        merge_interaction_counts,
-        normalize_people_row,
-        stable_linkedin_key,
-        extract_public_identifier,
-    )
-    from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import (
-        LIST_VALUE_COLUMNS,
-        PEOPLE_SCHEMA_COLUMNS,
-        latest_interaction,
-        merge_interaction_counts,
-        normalize_people_row,
-        stable_linkedin_key,
-        extract_public_identifier,
-    )
-    from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
-    from packs.shared.csv_io import CsvIO
+# Repo-root bootstrap so packs.* imports work in module AND script mode
+# (uv run .../merge_network_sources.py); must be in-file because script mode
+# never imports the package __init__.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    LIST_VALUE_COLUMNS,
+    PEOPLE_SCHEMA_COLUMNS,
+    latest_interaction,
+    merge_interaction_counts,
+    normalize_people_row,
+    stable_linkedin_key,
+    extract_public_identifier,
+)
+from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
 # Durable self-heal override written by $deep-context reconcile, re-applied every merge.

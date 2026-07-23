@@ -8,7 +8,7 @@ loaded by default. Stdlib-only.
 ## Usage
 
 ```bash
-python packs/ingestion/primitives/match_local_candidates/match_local_candidates.py match \
+python packs/ingestion/primitives/import_contacts_pipeline/messages/match_local_candidates.py match \
   --contacts .powerpacks/messages/contacts.csv \
   --local-people .powerpacks/messages/_local_people.csv
 ```

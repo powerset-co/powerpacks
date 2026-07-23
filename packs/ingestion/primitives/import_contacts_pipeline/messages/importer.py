@@ -473,7 +473,7 @@ def run(args: argparse.Namespace) -> dict:
             "message": (
                 "Match contacts against your network before import (or pass "
                 "--allow-unmatched). Run: uv run --project . python packs/ingestion/"
-                f"primitives/match_local_candidates/match_local_candidates.py match "
+                f"primitives/import_contacts_pipeline/messages/match_local_candidates.py match "
                 f"--contacts {contacts_csv}"
             ),
             "input": manifest_input,
