@@ -538,7 +538,7 @@ class MergeMessageContactsTests(unittest.TestCase):
 
 
 class DeepResearchContactsTests(unittest.TestCase):
-    DR = ROOT / "packs/ingestion/primitives/deep_research_contacts/deep_research_contacts.py"
+    DR = ROOT / "packs/ingestion/primitives/deep_context/deep_research_contacts.py"
 
     def _fake_parallel_server(self, port: int):
         """Spin up an in-process server that mimics the Parallel.ai task-group API."""

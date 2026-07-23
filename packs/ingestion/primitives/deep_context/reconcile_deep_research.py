@@ -102,7 +102,7 @@ from packs.ingestion.schemas.people_schema import (
     normalize_linkedin_url,
 )
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
-from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import (
+from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     PROCESSOR_PRICING_USD,
     filter_already_done,
 )
