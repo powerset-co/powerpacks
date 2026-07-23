@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Import discovered Gmail contacts (directory-only by default).
+"""Import discovered Gmail contacts (directory-only — the only mode).
 
-Default mode is free and local: apply the shared identity directory to the
-discovered Gmail queues, materialize `import/gmail/people.csv`, and write the
-still-unresolved contacts to `import/gmail/candidates.csv` for the deep-context
-processing layer, which owns ALL resolution and enrichment: stored legacy
-resolutions migrate into overrides/review.csv via `bin/deep-context
-migrate-legacy` (the central source of truth the fan-in and the review flow
-read); new lookups run through deep-context's judged, budget-gated stages.
+Free and local: apply the shared identity directory to the discovered Gmail
+queues, materialize `import/gmail/people.csv`, and write the still-unresolved
+contacts to `import/gmail/candidates.csv` for the deep-context processing
+layer, which owns ALL resolution and enrichment: stored legacy resolutions
+migrate into overrides/review.csv via `bin/deep-context migrate-legacy` (the
+central source of truth the fan-in and the review flow read); new lookups run
+through deep-context's judged, budget-gated stages.
 """
 
 from __future__ import annotations
@@ -18,76 +18,52 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.schemas.candidates_schema import (
-        CANDIDATES_SCHEMA_COLUMNS,
-        candidate_key_for,
-        normalize_candidate_row,
-    )
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import (
-        DEFAULT_BASE_DIR,
-        DEFAULT_DIRECTORY_CSV,
-        emit,
-        now_iso,
-        read_csv_rows,
-        read_accounts,
-        read_json,
-        source_slug,
-        write_csv_rows,
-        write_json,
-    )
-    from packs.ingestion.primitives.import_contacts_pipeline.common import (
-        DEFAULT_ACCOUNTS,
-        DEFAULT_IMPORT_DIR,
-        DEFAULT_PROFILE_CACHE_DIR,
-        copy_people_csv,
-        csv_count,
-        directory_source_account_quality,
-        import_manifest_current,
-        linked_gmail_accounts,
-        load_legacy_discover_module,
-        normalize_directory_source_accounts,
-        write_manifest,
-    )
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.candidates_schema import (
-        CANDIDATES_SCHEMA_COLUMNS,
-        candidate_key_for,
-        normalize_candidate_row,
-    )
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import (
-        DEFAULT_BASE_DIR,
-        DEFAULT_DIRECTORY_CSV,
-        emit,
-        now_iso,
-        read_csv_rows,
-        read_accounts,
-        read_json,
-        source_slug,
-        write_csv_rows,
-        write_json,
-    )
-    from packs.ingestion.primitives.import_contacts_pipeline.common import (
-        DEFAULT_ACCOUNTS,
-        DEFAULT_IMPORT_DIR,
-        DEFAULT_PROFILE_CACHE_DIR,
-        copy_people_csv,
-        csv_count,
-        directory_source_account_quality,
-        import_manifest_current,
-        linked_gmail_accounts,
-        load_legacy_discover_module,
-        normalize_directory_source_accounts,
-        write_manifest,
-    )
+# Make `packs.*` importable whether this file runs as a module or as a script
+# (uv run .../gmail.py). One upfront path bootstrap replaces the old duplicated
+# try/except import block.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
+    CANDIDATES_SCHEMA_COLUMNS,
+    candidate_key_for,
+    normalize_candidate_row,
+)
+from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # noqa: E402
+    DEFAULT_BASE_DIR,
+    DEFAULT_DIRECTORY_CSV,
+    emit,
+    read_csv_rows,
+    read_accounts,
+    read_json,
+    source_slug,
+    write_csv_rows,
+    write_json,
+)
+from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa: E402
+    DEFAULT_ACCOUNTS,
+    DEFAULT_IMPORT_DIR,
+    DEFAULT_PROFILE_CACHE_DIR,
+    GmailImportLedger,
+    copy_people_csv,
+    csv_count,
+    directory_source_account_quality,
+    import_manifest_current,
+    linked_gmail_accounts,
+    load_gmail_import_steps,
+    normalize_directory_source_accounts,
+    write_manifest,
+)
 
-GMAIL_PARALLEL_AUTO_APPROVE_UNDER = 25
 GMAIL_IMPORT_CONTRACT = "gmail-directory-only-v2"
 
 
 def _child_artifacts(child: dict[str, Any]) -> dict[str, Any]:
+    """Flatten one discovery-manifest child into a single artifacts dict.
+
+    Precedence (last wins): payload.artifacts < child.artifacts < the two
+    top-level convenience keys (people_csv / linkedin_resolution_queue_csv)."""
     artifacts: dict[str, Any] = {}
     payload = child.get("payload") if isinstance(child.get("payload"), dict) else {}
     payload_artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
@@ -102,6 +78,8 @@ def _child_artifacts(child: dict[str, Any]) -> dict[str, Any]:
 
 
 def _valid_gmail_people_csv(path_text: Any) -> bool:
+    """True when the path is a readable people CSV in the gmail-discovery
+    schema (has `primary_email` + `interaction_counts` columns)."""
     path = Path(str(path_text or ""))
     if not path.exists() or not path.is_file():
         return False
@@ -113,6 +91,12 @@ def _valid_gmail_people_csv(path_text: Any) -> bool:
 
 
 def gmail_artifacts_from_discovery() -> dict[str, Any]:
+    """Collect the import's inputs from the gmail DISCOVERY manifest.
+
+    Reads only `.powerpacks/network-import/discover/gmail/manifest.json` (plus
+    existence checks on the files it names) and returns per-account queue and
+    people records; children with an invalid/missing people CSV are reported
+    under `gmail_invalid_discovery_records` instead of being silently dropped."""
     manifest = read_json(DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json", {}) or {}
     artifacts: dict[str, Any] = {}
     contacts_csv = str(manifest.get("contacts_csv") or DEFAULT_BASE_DIR / "discover" / "gmail" / "contacts.csv")
@@ -159,6 +143,9 @@ def gmail_artifacts_from_discovery() -> dict[str, Any]:
 
 
 def queue_row_to_candidate(row: dict[str, str], *, cached_negative: bool) -> dict[str, str] | None:
+    """Map one unresolved queue row to a candidates-schema row (None = no
+    usable email). `cached_negative` marks contacts a prior resolution already
+    answered "no LinkedIn found" for, so deep-context can deprioritize them."""
     primary_email = (row.get("primary_email") or "").strip().lower()
     if not primary_email or "@" not in primary_email:
         return None
@@ -230,6 +217,12 @@ def write_gmail_candidates(artifacts: dict[str, Any], import_dir: Path) -> dict[
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """The whole import: fingerprint no-op check -> ledger -> the two step
+    functions (directory match, then apply + people materialization) ->
+    candidates + directory quality checks -> the import manifest.
+
+    A step failure ends the run with status `failed` (steps report their own
+    error in the ledger); there is no approval gate — nothing here spends."""
     expected_input = {
         "pipeline_contract": GMAIL_IMPORT_CONTRACT,
         "mode": "directory-only",
@@ -238,18 +231,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if current and not getattr(args, "force", False):
         return current
     accounts = read_accounts(args.accounts)
-    legacy = load_legacy_discover_module()
+    steps_mod = load_gmail_import_steps()
     import_dir = DEFAULT_IMPORT_DIR / "gmail"
     ledger_path = import_dir / "ledger.json"
     emails = linked_gmail_accounts(accounts)
-    ledger = {
-        "primitive": "import_contacts_gmail",
-        "source": "gmail",
-        "status": "running",
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "artifact_dir": str(import_dir),
-        "input": {
+    ledger = GmailImportLedger(
+        artifact_dir=str(import_dir),
+        input={
             "operator_id": args.operator_id,
             "from_accounts": str(args.accounts),
             "gmail_account_emails": emails,
@@ -259,9 +247,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "linkedin_directory_csv": str(DEFAULT_DIRECTORY_CSV),
             "profile_cache_dir": str(DEFAULT_PROFILE_CACHE_DIR),
         },
-        "steps": {},
-        "artifacts": gmail_artifacts_from_discovery(),
-    }
+        artifacts=gmail_artifacts_from_discovery(),
+    ).to_dict()
     if not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csvs"):
         reason = "no Gmail discovery queue"
         status = "skipped"
@@ -275,20 +262,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         }, import_dir=DEFAULT_IMPORT_DIR)
     write_json(ledger_path, ledger)
     for func_name in ("run_gmail_directory", "run_gmail_apply_and_enrich"):
-        ok = getattr(legacy, func_name)(ledger_path, ledger)
+        ok = getattr(steps_mod, func_name)(ledger_path, ledger)
         if not ok:
-            status = "blocked_approval" if ledger.get("blocked") else "failed"
             return write_manifest("gmail", {
-                "status": status,
+                "status": "failed",
                 "ledger": str(ledger_path),
                 "artifact_dir": str(import_dir),
-                "blocked": ledger.get("blocked"),
                 "steps": ledger.get("steps", {}),
                 "artifacts": ledger.get("artifacts", {}),
             }, import_dir=DEFAULT_IMPORT_DIR)
-        legacy.save_ledger(ledger_path, ledger)
+        steps_mod.save_ledger(ledger_path, ledger)
     ledger["status"] = "completed"
-    legacy.save_ledger(ledger_path, ledger)
+    steps_mod.save_ledger(ledger_path, ledger)
     people_csv = copy_people_csv("gmail", str(ledger.get("artifacts", {}).get("gmail_merged_people_csv") or ledger.get("artifacts", {}).get("gmail_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
     candidates = write_gmail_candidates(ledger.get("artifacts", {}), import_dir)
     directory_normalization = normalize_directory_source_accounts("gmail")
@@ -306,7 +291,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "directory_normalization": directory_normalization,
             "directory_quality": directory_quality,
             "steps": ledger.get("steps", {}),
-            "auto_approvals": ledger.get("auto_approvals", []),
             "artifacts": ledger.get("artifacts", {}),
         }, import_dir=DEFAULT_IMPORT_DIR)
     return write_manifest("gmail", {
@@ -330,7 +314,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "candidates": candidates,
         "steps": ledger.get("steps", {}),
-        "auto_approvals": ledger.get("auto_approvals", []),
         "directory_normalization": directory_normalization,
         "directory_quality": directory_quality,
         "artifacts": ledger.get("artifacts", {}),
@@ -338,7 +321,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Import discovered Gmail contacts (directory-only by default)")
+    """CLI: one `run` command; `--force` bypasses the manifest no-op skip."""
+    parser = argparse.ArgumentParser(description="Import discovered Gmail contacts (directory-only)")
     parser.add_argument("command", choices=["run"])
     parser.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     parser.add_argument("--operator-id", default="local")
@@ -347,10 +331,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """Exit 0 on success/skip, 1 on failure. (Exit 20 / blocked_approval is
+    gone with the spend paths — nothing in this import can block on approval.)"""
     args = build_parser().parse_args()
     payload = run(args)
     emit(payload)
-    return 20 if payload.get("status") == "blocked_approval" else 1 if payload.get("status") == "failed" else 0
+    return 1 if payload.get("status") == "failed" else 0
 
 
 if __name__ == "__main__":

@@ -217,7 +217,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                         "last_interaction": last_interaction,
                     })
 
-            legacy = gmail_import.load_legacy_discover_module()
+            legacy = gmail_import.load_gmail_import_steps()
             result = legacy.materialize_gmail_merged_people_csv([str(one), str(two)], out)
 
             self.assertEqual(result["status"], "completed")
@@ -256,7 +256,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                         "source_channels": "gmail_msgvault",
                     })
 
-            legacy = gmail_import.load_legacy_discover_module()
+            legacy = gmail_import.load_gmail_import_steps()
             result = legacy.materialize_gmail_merged_people_csv([str(one), str(two), str(three)], out)
 
             self.assertEqual(result["status"], "completed")
