@@ -1,13 +1,11 @@
-"""Linkedin discovery package (module path preserved for import consumers)."""
+"""LinkedIn ingestion package: Connections.csv import + enrichment (network_import.py).
 
-from packs.ingestion.primitives.discover_contacts_pipeline.linkedin.discover import (  # noqa: F401
-    LINKEDIN_DISCOVERY_COLUMNS,
-    build_parser,
-    csv_path,
-    discover,
-    linkedin_export_header,
-    main,
-    merge_contacts,
-    parse_connections_csv,
-    source_user,
-)
+Consumers import the submodule directly
+(`from ...discover_contacts_pipeline.linkedin import network_import`); skills
+invoke it by file path. The standalone discovery CLI (`discover.py`) and its
+models were deleted with the retired discover-contacts orchestrator.
+
+Changelog:
+  2026-07-23 (audit batch 16): dropped the discover.py re-exports; the module
+    and its only consumers (the orchestrator and its tests) were deleted.
+"""

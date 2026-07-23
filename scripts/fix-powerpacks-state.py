@@ -12,6 +12,12 @@ authenticated wacli store, and scrub an unauthenticated canonical wacli store so
 the user can reauth cleanly. Use --dry-run to inspect the plan without changes.
 Use --quarantine-legacy-state only after review; it renames legacy .powerpacks
 directories instead of deleting them.
+
+Changelog:
+  2026-07-23 (audit batch 16): linkedin discovery_command now points at the
+    live $setup path (linkedin_modal_pipeline.py import-linkedin); the
+    standalone linkedin/discover.py CLI was deleted with the retired
+    discover-contacts orchestrator.
 """
 from __future__ import annotations
 
@@ -42,7 +48,7 @@ VERTICAL_STAGE_PATHS = {
     "linkedin": {
         "discovery": ".powerpacks/network-import/discover/linkedin/manifest.json",
         "import": ".powerpacks/network-import/import/linkedin/manifest.json",
-        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/linkedin/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
+        "discovery_command": "uv run --env-file .env --project . python packs/indexing/modal/linkedin_modal_pipeline.py import-linkedin --csv .powerpacks/network-import/discover/linkedin/Connections.csv",
         "import_command": "uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/linkedin/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
     },
     "messages": {

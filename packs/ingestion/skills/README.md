@@ -16,7 +16,6 @@ architecture and current-versus-historical document status.
 | `$import-messages` | [`import-messages`](import-messages/SKILL.md) | iMessage/WhatsApp metadata import, identity review, fan-in, and index rebuild. | [Message import pipeline](../docs/message-import-pipeline.md) |
 | `$deep-context` | [`deep-context`](deep-context/SKILL.md) | Message-body dossiers, duplicate grouping, LinkedIn self-heal, and reviewed overrides. | [Deep-context pipeline](../docs/deep-context-pipeline.md) |
 | `$import-twitter` | [`import-twitter`](import-twitter/SKILL.md) | Twitter/X network import and LinkedIn validation. | Skill is the current guide. |
-| `$discover-contacts` | [`discover-contacts`](discover-contacts/SKILL.md) | Lower-level multi-source discovery/orchestration. | Skill and primitive docs. |
 
 `$import-email` and `$import-contacts` are retired names. Use `$import-gmail` and
 [`$import-messages`](import-messages/SKILL.md).

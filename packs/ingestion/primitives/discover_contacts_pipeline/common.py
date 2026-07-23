@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Shared helpers for local network discovery orchestration."""
+"""Shared helpers for the per-source discovery/import primitives.
+
+Changelog:
+  2026-07-23 (audit batch 16): deleted the orchestrator-only ledger/step
+    machinery (DEFAULT_LEDGER, load/save_ledger, mark_step, begin_step,
+    check_artifact_paths, child_error, artifact_dir helpers, csv upsert
+    helpers, sha, truthy_env) after `discover_contacts_pipeline.py` was
+    removed; renamed the progress prefix from [discover-contacts] (retired
+    skill) to [discover].
+"""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-import argparse
 import csv
 import hashlib
 import json
@@ -19,9 +27,6 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
-DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover"
-DEFAULT_FINAL_DIR = DEFAULT_BASE_DIR / "final"
-DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "ledger.json"
 DEFAULT_DIRECTORY_CSV = DEFAULT_BASE_DIR / "directory.csv"
 DEFAULT_MSGVAULT_DB = Path.home() / ".msgvault" / "msgvault.db"
 DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CHILD_TIMEOUT_SECONDS", str(6 * 60 * 60)))
@@ -44,28 +49,8 @@ def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def discover_source_dir(source: str) -> Path:
-    if source == "linkedin_csv":
-        return DEFAULT_DISCOVER_DIR / "linkedin"
-    return DEFAULT_DISCOVER_DIR / source
-
-
-def default_artifact_dir(args: argparse.Namespace, selected_sources: set[str]) -> Path:
-    if getattr(args, "enrichment_only", False) and selected_sources and len(selected_sources) == 1:
-        source = next(iter(selected_sources))
-        return discover_source_dir(source)
-    if getattr(args, "only_source", "") and selected_sources and len(selected_sources) == 1:
-        source = next(iter(selected_sources))
-        return discover_source_dir(source)
-    return DEFAULT_FINAL_DIR
-
-
-def artifact_dir_from_ledger(ledger: dict[str, Any]) -> Path:
-    return Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
-
-
 def emit_progress(message: str) -> None:
-    print(f"[discover-contacts] {message}", file=sys.stderr, flush=True)
+    print(f"[discover] {message}", file=sys.stderr, flush=True)
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -107,61 +92,6 @@ def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]
         except OSError:
             pass
     path.write_bytes(content)
-
-
-def csv_key(row: dict[str, Any], fields: list[str]) -> tuple[str, ...] | None:
-    key = tuple(str(row.get(field) or "").strip().lower() for field in fields)
-    return key if any(key) else None
-
-
-def upsert_csv_rows(path: Path, fieldnames: list[str], incoming: list[dict[str, Any]], key_fields: list[str]) -> dict[str, int]:
-    existing_fields: list[str] = []
-    existing_rows: list[dict[str, str]] = []
-    if path.exists():
-        existing_fields, existing_rows = read_csv_rows(path)
-    fields = list(dict.fromkeys([*fieldnames, *existing_fields]))
-    keyed: dict[tuple[str, ...], dict[str, Any]] = {}
-    keyless: list[dict[str, Any]] = []
-    for row in existing_rows:
-        key = csv_key(row, key_fields)
-        if key is None:
-            keyless.append(dict(row))
-        else:
-            keyed[key] = dict(row)
-    inserted = 0
-    updated = 0
-    for row in incoming:
-        key = csv_key(row, key_fields)
-        if key is None:
-            keyless.append(dict(row))
-            inserted += 1
-            continue
-        previous = keyed.get(key)
-        if previous is None:
-            keyed[key] = dict(row)
-            inserted += 1
-        else:
-            merged = dict(previous)
-            changed = False
-            for field, value in row.items():
-                text = str(value or "")
-                if text and text != str(merged.get(field) or ""):
-                    merged[field] = text
-                    changed = True
-            keyed[key] = merged
-            if changed:
-                updated += 1
-    rows = [keyed[key] for key in sorted(keyed)]
-    rows.extend(keyless)
-    write_csv_rows(path, fields, rows)
-    return {"inserted": inserted, "updated": updated, "written": len(rows), "preserved_existing": len(existing_rows)}
-
-
-def csv_row_count(path: Path) -> int:
-    if not path.exists():
-        return 0
-    _, rows = read_csv_rows(path)
-    return len(rows)
 
 
 def parse_jsonish(value: Any, default: Any) -> Any:
@@ -208,10 +138,6 @@ def ordered_unique(values: list[Any]) -> list[str]:
         if text and text not in out:
             out.append(text)
     return out
-
-
-def sha(value: str, length: int = 12) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
 def collect_artifact_paths(value: Any) -> list[str]:
@@ -310,22 +236,6 @@ def write_stage_manifest(path: Path, payload: "dict[str, Any] | StagePayload") -
     return payload
 
 
-def check_artifact_paths(ledger: dict[str, Any]) -> dict[str, Any]:
-    seen: set[str] = set()
-    existing = 0
-    missing: list[str] = []
-    for path_text in collect_artifact_paths({"artifacts": ledger.get("artifacts", {}), "steps": ledger.get("steps", {})}):
-        if path_text in seen:
-            continue
-        seen.add(path_text)
-        path = Path(path_text)
-        if path.exists():
-            existing += 1
-        else:
-            missing.append(path_text)
-    return {"checked": len(seen), "existing": existing, "missing": missing[:50], "missing_count": len(missing)}
-
-
 def unique_strings(values: Any) -> list[str]:
     if values is None:
         return []
@@ -346,10 +256,6 @@ def unique_strings(values: Any) -> list[str]:
 def source_slug(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "").strip().lower()).strip("-._")
     return slug or "source"
-
-
-def truthy_env(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def parse_last_json(stdout: str) -> dict[str, Any]:
@@ -429,48 +335,5 @@ def run_cmd(cmd: list[str], *, timeout: int | None = None) -> tuple[int, dict[st
     return code, payload, stderr
 
 
-def child_error(payload: dict[str, Any], stderr: str) -> Any:
-    """Prefer structured child failures; stderr is often progress logging."""
-    if payload:
-        for key in ("error", "message", "reason"):
-            value = payload.get(key)
-            if value:
-                return value
-        return payload
-    return stderr
-
-
 def py_cmd(script: str, *args: str) -> list[str]:
     return [sys.executable, script, *args]
-
-
-def load_ledger(path: Path) -> dict[str, Any]:
-    ledger = read_json(path, {}) or {}
-    ledger.setdefault("primitive", "discover_contacts_pipeline")
-    ledger.setdefault("version", 1)
-    ledger.setdefault("created_at", now_iso())
-    ledger.setdefault("updated_at", now_iso())
-    ledger.setdefault("steps", {})
-    ledger.setdefault("artifacts", {})
-    return ledger
-
-
-def save_ledger(path: Path, ledger: dict[str, Any]) -> None:
-    ledger["updated_at"] = now_iso()
-    write_json(path, ledger)
-
-
-def mark_step(ledger: dict[str, Any], step: str, status: str, **extra: Any) -> None:
-    rec = ledger.setdefault("steps", {}).setdefault(step, {"id": step})
-    if status == "running" and "started_at" not in rec:
-        rec["started_at"] = now_iso()
-    if status in {"completed", "failed", "blocked", "skipped"}:
-        rec["finished_at"] = now_iso()
-    rec["status"] = status
-    rec.update({k: v for k, v in extra.items() if v is not None})
-
-
-def begin_step(ledger_path: Path, ledger: dict[str, Any], step: str, message: str) -> None:
-    mark_step(ledger, step, "running")
-    save_ledger(ledger_path, ledger)
-    emit_progress(message)

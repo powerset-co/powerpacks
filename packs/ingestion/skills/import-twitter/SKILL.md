@@ -37,4 +37,6 @@ uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/
 - RapidAPI LinkedIn validation uses `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` and requires approval.
 - Final output should include `people.csv`; summarize as `x/10 linkedins` plus counts, not raw rows.
 
-After Twitter finishes, run `$discover-contacts --include-existing-artifacts` to merge it into local network contacts before rebuilding the local search index.
+After Twitter finishes, rebuild the merged network and local index with the
+indexing fan-in:
+`uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py run --operator-id <operator-id>`.

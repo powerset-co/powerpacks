@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -25,17 +24,9 @@ def load_module(name: str, rel: str):
     return module
 
 
-discover_pipeline = load_module(
-    "phase13_discover_contacts_pipeline",
-    "packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py",
-)
 discover_common = load_module(
     "phase13_discover_common",
     "packs/ingestion/primitives/discover_contacts_pipeline/common.py",
-)
-linkedin_discovery = load_module(
-    "phase13_linkedin_discovery",
-    "packs/ingestion/primitives/discover_contacts_pipeline/linkedin/discover.py",
 )
 import_common = load_module(
     "phase13_import_common",
@@ -60,87 +51,6 @@ enrich_people = load_module(
 
 
 class PipelinePhase13Tests(unittest.TestCase):
-    def test_discover_contacts_direct_cli_emits_dry_run_json(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            csv_path = tmp_path / "Connections.csv"
-            csv_path.write_text(
-                "notes\nFirst Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
-                "Ada,Lovelace,https://www.linkedin.com/in/ada,ada@example.com,Analytical Engines,Founder,2024-01-01\n",
-                encoding="utf-8",
-            )
-            db_path = tmp_path / "msgvault.metadata.db"
-            db_path.write_bytes(b"not-sqlite-needed-for-dry-run")
-            ledger = tmp_path / "ledger.json"
-            script = ROOT / "packs/ingestion/primitives/discover_contacts_pipeline/discover_contacts_pipeline.py"
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(script),
-                    "run",
-                    "--dry-run",
-                    "--operator-id",
-                    "test",
-                    "--ledger",
-                    str(ledger),
-                    "--linkedin-csv",
-                    str(csv_path),
-                    "--linkedin-source-user",
-                    "test-user",
-                    "--msgvault-db",
-                    str(db_path),
-                    "--gmail-account-email",
-                    "me@example.com",
-                    "--skip-msgvault-sync",
-                    "--gmail-linkedin-provider",
-                    "off",
-                ],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["status"], "dry_run")
-        self.assertIn("gmail_msgvault", payload["would_run_steps"])
-        self.assertIn("linkedin", payload["would_run_steps"])
-        gmail_job = next(job for job in payload["worker_groups"]["import"]["jobs"] if job["source"] == "gmail")
-        self.assertTrue(gmail_job["skip_msgvault_sync"])
-
-    def test_source_workers_receive_explicit_repo_local_inputs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            ledger_path = Path(tmp) / "discover-ledger.json"
-            ledger = {
-                "input": {
-                    "operator_id": "arthur",
-                    "from_accounts": str(Path(tmp) / "accounts.json"),
-                    "gmail_account_email": "operator@example.com",
-                    "msgvault_db": ".powerpacks/msgvault/operator-example-com/msgvault.metadata.db",
-                    "skip_msgvault_sync": True,
-                    "linkedin_csv": ".powerpacks/network-import/discover/linkedin/Connections.csv",
-                    "linkedin_source_user": "arthur",
-                },
-                "steps": {},
-                "artifacts": {},
-            }
-
-            def fake_gmail(**kwargs):
-                self.assertEqual(kwargs["msgvault_db"], ".powerpacks/msgvault/operator-example-com/msgvault.metadata.db")
-                self.assertEqual(kwargs["selected_accounts"], ["operator@example.com"])
-                self.assertTrue(kwargs["skip_msgvault_sync"])
-                return {"status": "completed", "contacts_csv": "gmail.csv", "linkedin_resolution_queue_csv": "queue.csv"}
-
-            def fake_linkedin(**kwargs):
-                self.assertEqual(kwargs["connections_csv"], ".powerpacks/network-import/discover/linkedin/Connections.csv")
-                self.assertEqual(kwargs["source_user_label"], "arthur")
-                return {"status": "completed", "artifacts": {}, "contacts_csv": "linkedin.csv"}
-
-            with mock.patch.object(discover_pipeline.gmail, "discover", side_effect=fake_gmail), \
-                mock.patch.object(discover_pipeline.linkedin, "discover", side_effect=fake_linkedin):
-                ok = discover_pipeline.run_source_import_workers(ledger_path, ledger)
-        self.assertTrue(ok)
-
     def test_csv_count_empty_path_is_zero_not_current_directory(self):
         self.assertEqual(import_common.csv_count(""), 0)
 
@@ -455,36 +365,6 @@ class PipelinePhase13Tests(unittest.TestCase):
             self.assertIn("fingerprints", first)
             self.assertEqual(second["updated_at"], first["updated_at"])
             self.assertEqual(manifest.stat().st_mtime_ns, first_mtime)
-
-    def test_linkedin_discovery_accepts_repo_local_stable_connections_csv(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            source_csv = tmp_path / "Connections.csv"
-            source_csv.write_text(
-                "notes\nFirst Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
-                "Ada,Lovelace,https://www.linkedin.com/in/ada,ada@example.com,Analytical Engines,Founder,2024-01-01\n",
-                encoding="utf-8",
-            )
-            contacts_csv = tmp_path / "contacts.csv"
-            manifest_json = tmp_path / "manifest.json"
-
-            def fake_output_path(_source, name):
-                return {
-                    "source_csv": source_csv,
-                    "contacts_csv": contacts_csv,
-                    "manifest_json": manifest_json,
-                }[name]
-
-            with mock.patch.object(linkedin_discovery, "output_path", side_effect=fake_output_path):
-                payload = linkedin_discovery.discover(
-                    accounts_file=tmp_path / "accounts.json",
-                    connections_csv=source_csv,
-                    source_user_label="arthur",
-                )
-            self.assertEqual(payload["status"], "completed")
-            self.assertEqual(payload["source_csv"], str(source_csv))
-            self.assertTrue(contacts_csv.exists())
-            self.assertTrue(manifest_json.exists())
 
     def test_index_run_noops_when_processing_dry_run_reports_complete_restored_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:

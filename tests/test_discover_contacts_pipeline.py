@@ -13,7 +13,6 @@ sys.path.insert(0, str(ROOT))
 
 from packs.ingestion.primitives.discover_contacts_pipeline import common as discover_common
 from packs.ingestion.primitives.discover_contacts_pipeline import directory as discover_directory
-from packs.ingestion.primitives.discover_contacts_pipeline import discover_contacts_pipeline
 from packs.ingestion.primitives.discover_contacts_pipeline import gmail as discover_gmail
 from packs.ingestion.primitives.import_contacts_pipeline import messages as import_messages
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
@@ -62,77 +61,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         self.assertEqual(payload, {"status": "ok"})
         self.assertEqual(stderr, "")
         self.assertEqual(popen.call_args.kwargs["stdin"], discover_common.subprocess.DEVNULL)
-
-    def test_from_accounts_populates_linked_sources(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            db = tmp / "msgvault.db"
-            linkedin = tmp / "Connections.csv"
-            linkedin.write_text("First Name,Last Name,URL\n", encoding="utf-8")
-            accounts = tmp / "accounts.json"
-            accounts.write_text(json.dumps({
-                "version": 2,
-                "accounts": {
-                    "gmail": {
-                        "linked": True,
-                        "usernames": ["old@example.com"],
-                        "config": {"msgvault_db": str(db), "selected_accounts": ["me@example.com", "work@example.com"]},
-                    },
-                    "linkedin_csv": {
-                        "linked": True,
-                        "usernames": ["me"],
-                        "config": {"csv_path": str(linkedin), "source_label": "me"},
-                    },
-                    "twitter": {"skipped": True, "usernames": ["stale"]},
-                },
-            }), encoding="utf-8")
-
-            args = discover_contacts_pipeline.build_parser().parse_args(["run", "--from-accounts", str(accounts), "--dry-run"])
-            args = discover_contacts_pipeline.apply_account_sources(args)
-
-            self.assertEqual(args.msgvault_db, str(db))
-            self.assertEqual(args.gmail_account_emails, ["me@example.com", "work@example.com"])
-            self.assertEqual(args.linkedin_csv, str(linkedin))
-            self.assertEqual(args.linkedin_source_user, "me")
-            self.assertEqual(args.twitter_handle, "")
-
-    def test_pending_gmail_accounts_are_not_discover_ready_until_linked(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            accounts = tmp / "accounts.json"
-            accounts.write_text(json.dumps({
-                "version": 2,
-                "accounts": {
-                    "gmail": {
-                        "skipped": False,
-                        "usernames": [],
-                        "artifacts": [],
-                        "config": {
-                            "msgvault_db": str(tmp / "msgvault.db"),
-                            "pending_accounts": ["pending@example.com"],
-                            "selected_accounts": [],
-                            "account_emails": [],
-                        },
-                    }
-                },
-            }), encoding="utf-8")
-
-            args = discover_contacts_pipeline.build_parser().parse_args(["run", "--from-accounts", str(accounts), "--dry-run"])
-            args = discover_contacts_pipeline.apply_account_sources(args)
-            self.assertEqual(args.gmail_account_emails, [])
-            self.assertEqual(args.msgvault_db, "")
-
-            data = json.loads(accounts.read_text(encoding="utf-8"))
-            data["accounts"]["gmail"]["linked"] = True
-            data["accounts"]["gmail"]["usernames"] = ["pending@example.com"]
-            data["accounts"]["gmail"]["config"]["selected_accounts"] = ["pending@example.com"]
-            data["accounts"]["gmail"]["config"]["pending_accounts"] = []
-            accounts.write_text(json.dumps(data), encoding="utf-8")
-
-            args = discover_contacts_pipeline.build_parser().parse_args(["run", "--from-accounts", str(accounts), "--dry-run"])
-            args = discover_contacts_pipeline.apply_account_sources(args)
-            self.assertEqual(args.gmail_account_emails, ["pending@example.com"])
-            self.assertEqual(args.msgvault_db, str(tmp / "msgvault.db"))
 
     def test_gmail_sync_after_is_inferred_from_msgvault_last_sync(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -568,35 +496,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["contacts"], 0)
             self.assertTrue(paths[("gmail", "linkedin_resolution_queue_csv")].exists())
 
-    def test_source_workers_discover_sources_only_without_fan_in_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            ledger_path = tmp / "ledger.json"
-            accounts = tmp / "accounts.json"
-            accounts.write_text(json.dumps({"accounts": {}}), encoding="utf-8")
-            ledger = {
-                "artifact_dir": str(tmp / "run"),
-                "input": {
-                    "from_accounts": str(accounts),
-                    "gmail_account_emails": ["me@example.com"],
-                    "linkedin_csv": str(tmp / "Connections.csv"),
-                    "linkedin_source_user": "me",
-                },
-                "steps": {},
-                "artifacts": {},
-            }
-
-            with mock.patch.object(discover_contacts_pipeline.gmail, "discover", return_value={"status": "completed", "contacts_csv": "gmail_contacts.csv", "linkedin_resolution_queue_csv": "gmail_queue.csv"}):
-                with mock.patch.object(discover_contacts_pipeline.linkedin, "discover", return_value={"status": "completed", "contacts_csv": "linkedin_contacts.csv"}):
-                    ok = discover_contacts_pipeline.run_source_import_workers(ledger_path, ledger)
-
-            self.assertTrue(ok)
-            self.assertEqual(ledger["steps"]["source_imports"]["status"], "completed")
-            self.assertEqual(ledger["artifacts"]["gmail_contacts_csv"], "gmail_contacts.csv")
-            self.assertEqual(ledger["artifacts"]["linkedin_contacts_csv"], "linkedin_contacts.csv")
-            self.assertNotIn("merged_people_csv", ledger["artifacts"])
-            self.assertNotIn("duckdb", ledger["artifacts"])
-
     def test_messages_contacts_direct_selects_matched_and_candidates(self) -> None:
         # The review-CSV materializer is gone: import is contacts-direct.
         # Matched rows become people rows; floor-passing unmatched rows become
@@ -666,35 +565,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(rows[0]["source_account"], "me@example.com")
             self.assertEqual(rows[0]["status"], "found")
             self.assertEqual(rows[0]["public_identifier"], "linked-in")
-
-    def test_source_refresh_preserves_unselected_source_state_without_fan_in_reset(self) -> None:
-        existing = {
-            "steps": {
-                "gmail_msgvault": {"status": "completed"},
-                "linkedin": {"status": "completed"},
-                "messages": {"status": "completed"},
-            },
-            "source_imports": {
-                "gmail_msgvault:me-example.com": {"status": "completed"},
-                "linkedin": {"status": "completed"},
-            },
-            "artifacts": {
-                "gmail_contacts_csv": "gmail.csv",
-                "linkedin_contacts_csv": "linkedin.csv",
-                "messages_contacts_csv": "messages.csv",
-                "merged_people_csv": "merged.csv",
-            },
-        }
-
-        preserved = discover_contacts_pipeline.preserved_state_for_source_refresh(existing, {"gmail"})
-
-        self.assertNotIn("gmail_msgvault", preserved["steps"])
-        self.assertNotIn("gmail_contacts_csv", preserved["artifacts"])
-        self.assertEqual(preserved["steps"]["linkedin"]["status"], "completed")
-        self.assertEqual(preserved["steps"]["messages"]["status"], "completed")
-        self.assertEqual(preserved["artifacts"]["linkedin_contacts_csv"], "linkedin.csv")
-        self.assertEqual(preserved["artifacts"]["messages_contacts_csv"], "messages.csv")
-        self.assertEqual(preserved["artifacts"]["merged_people_csv"], "merged.csv")
 
 
 if __name__ == "__main__":

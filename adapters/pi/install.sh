@@ -13,7 +13,7 @@ SKILLS_DIR="${1:-$PI_HOME/skills}"
 MANAGED_SKILLS=(
   search search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
-  setup msgvault import-gmail discover-contacts import-twitter
+  setup msgvault import-gmail import-twitter
   import-messages
 )
 
@@ -22,7 +22,7 @@ MANAGED_SKILLS=(
 RETIRED_SKILLS=(
   search-network search-network-jd search-profile search-highlight extract-search-query recruit
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
-  import-whatsapp ingestion-onboarding onboard local-msg-vault
+  import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
   linkedin-sync-mcp linkedin-sync-csv
 )
@@ -99,7 +99,6 @@ install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
-install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
@@ -119,5 +118,5 @@ EOF
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
 printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
-printf '  setup import-messages msgvault import-gmail discover-contacts import-twitter\n'
+printf '  setup import-messages msgvault import-gmail import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'
