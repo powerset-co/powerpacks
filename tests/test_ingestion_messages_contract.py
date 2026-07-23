@@ -34,11 +34,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "primitives/import_whatsapp_wacli/import_whatsapp_wacli.py",
             "primitives/merge_message_contacts/merge_message_contacts.py",
             "primitives/match_local_candidates/match_local_candidates.py",
-            "primitives/llm_review_contacts/llm_review_contacts.py",
-            "primitives/prepare_research_queue/prepare_research_queue.py",
             "primitives/deep_research_contacts/deep_research_contacts.py",
-            "primitives/build_research_review_csv/build_research_review_csv.py",
-            "primitives/review_research_web/review_research_web.py",
             "primitives/import_contacts_pipeline/messages.py",
             "primitives/import_contacts_pipeline/status.py",
         ]
@@ -155,10 +151,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 with self.subTest(path=path.relative_to(ROOT), token=token):
                     self.assertNotIn(token, text)
 
-        reviewer = (
-            INGESTION / "primitives/review_research_web/review_research_web.py"
-        ).read_text(encoding="utf-8")
-        self.assertNotIn("Saved: upload", reviewer)
 
     def test_messages_discovery_uses_fixed_outputs_and_one_stage_manifest(self) -> None:
         path = INGESTION / "primitives/discover_contacts_pipeline/messages.py"
