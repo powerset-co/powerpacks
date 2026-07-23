@@ -187,9 +187,9 @@ output CSV rows are applied as raw material; their audit lives in
 | --- | --- |
 | Agent workflow | [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md) |
 | OAuth and account status | [`msgvault_setup.py`](../primitives/msgvault_setup/msgvault_setup.py) |
-| Sync and stable discovery | [`discover_contacts_pipeline/gmail.py`](../primitives/discover_contacts_pipeline/gmail.py) |
+| Sync and stable discovery | [`discover_contacts_pipeline/gmail/sync.py`](../primitives/discover_contacts_pipeline/gmail/discover.py) |
 | Metadata aggregation | [`gmail_network_import.py`](../primitives/gmail_network_import/gmail_network_import.py) |
-| Import orchestration | [`import_contacts_pipeline/gmail.py`](../primitives/import_contacts_pipeline/gmail.py) |
+| Import orchestration | [`import_contacts_pipeline/gmail/importer.py`](../primitives/import_contacts_pipeline/gmail/importer.py) |
 | Directory reuse | [`discover_contacts_pipeline/directory.py`](../primitives/discover_contacts_pipeline/directory.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
 | Per-source status | [`status.py`](../primitives/import_contacts_pipeline/status.py) |

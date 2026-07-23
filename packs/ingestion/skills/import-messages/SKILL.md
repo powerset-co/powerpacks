@@ -155,7 +155,7 @@ Contacts.app row with a phone number, even when no message exists. Pass only the
 channels chosen in Step 1:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages.py discover \
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/messages/discover.py discover \
   --include-imessage --include-whatsapp
 ```
 
@@ -250,7 +250,7 @@ are excluded by default. `suggested` matches are never auto-attached — they go
 to candidates with the suggestion recorded.
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages.py run
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/messages/importer.py run
 ```
 
 If it blocks with an import-confirmation (exit 20), show the user the counts

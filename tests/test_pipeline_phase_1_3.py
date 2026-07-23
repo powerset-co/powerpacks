@@ -37,7 +37,7 @@ discover_common = load_module(
 )
 linkedin_discovery = load_module(
     "phase13_linkedin_discovery",
-    "packs/ingestion/primitives/discover_contacts_pipeline/linkedin.py",
+    "packs/ingestion/primitives/discover_contacts_pipeline/linkedin/discover.py",
 )
 import_common = load_module(
     "phase13_import_common",

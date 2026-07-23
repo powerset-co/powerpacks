@@ -41,7 +41,7 @@ match_mod = load_module(
     "match_local_candidates_interactions", "packs/ingestion/primitives/match_local_candidates/match_local_candidates.py"
 )
 messages_import_mod = load_module(
-    "import_messages_interactions", "packs/ingestion/primitives/import_contacts_pipeline/messages.py"
+    "import_messages_interactions", "packs/ingestion/primitives/import_contacts_pipeline/messages/importer.py"
 )
 
 

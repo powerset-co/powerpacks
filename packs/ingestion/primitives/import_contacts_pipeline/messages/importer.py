@@ -26,7 +26,7 @@ from typing import Any
 # duplicated try/except import block. (This cannot live in the package
 # __init__: script-mode execution never imports the package, so the path fix
 # must run in-file before the first `packs.*` import.)
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -72,14 +72,12 @@ from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa
     normalize_directory_source_accounts,
     write_manifest,
 )
-from packs.ingestion.primitives.import_contacts_pipeline.util.floor import (  # noqa: E402
+from packs.ingestion.primitives.import_contacts_pipeline.messages.util import (  # noqa: E402
     DEFAULT_MIN_MESSAGE_COUNT,
     contact_floor_reason,
     contact_interaction_counts,
     contact_last_interaction,
     messages_source_channels,
-)
-from packs.ingestion.primitives.import_contacts_pipeline.util.parsing import (  # noqa: E402
     normalize_bool,
     parse_int_field,
     split_full_name,
@@ -452,7 +450,7 @@ def run(args: argparse.Namespace) -> dict:
             "message": (
                 f"Discover Messages contacts before import: {contacts_csv}. "
                 "Run: uv run --project . python packs/ingestion/primitives/"
-                "discover_contacts_pipeline/messages.py discover"
+                "discover_contacts_pipeline/messages/discover.py discover"
             ),
             "input": manifest_input,
             "outputs": {},

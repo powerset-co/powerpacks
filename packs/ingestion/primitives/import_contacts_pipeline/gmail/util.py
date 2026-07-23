@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import discovered Gmail contacts (directory-only — the only mode).
+"""Gmail import helpers: discovery-artifact collection and candidate writing.
 
 Free and local: apply the shared identity directory to the discovered Gmail
 queues, materialize `import/gmail/people.csv`, and write the still-unresolved
@@ -21,7 +21,7 @@ from typing import Any
 # Make `packs.*` importable whether this file runs as a module or as a script
 # (uv run .../gmail.py). One upfront path bootstrap replaces the old duplicated
 # try/except import block.
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -55,9 +55,6 @@ from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa
     normalize_directory_source_accounts,
     write_manifest,
 )
-
-GMAIL_IMPORT_CONTRACT = "gmail-directory-only-v2"
-
 
 def _child_artifacts(child: dict[str, Any]) -> dict[str, Any]:
     """Flatten one discovery-manifest child into a single artifacts dict.
@@ -216,128 +213,3 @@ def write_gmail_candidates(artifacts: dict[str, Any], import_dir: Path) -> dict[
     }
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    """The whole import: fingerprint no-op check -> ledger -> the two step
-    functions (directory match, then apply + people materialization) ->
-    candidates + directory quality checks -> the import manifest.
-
-    A step failure ends the run with status `failed` (steps report their own
-    error in the ledger); there is no approval gate — nothing here spends."""
-    expected_input = {
-        "pipeline_contract": GMAIL_IMPORT_CONTRACT,
-        "mode": "directory-only",
-    }
-    current = import_manifest_current("gmail", expected_input, import_dir=DEFAULT_IMPORT_DIR)
-    if current and not getattr(args, "force", False):
-        return current
-    accounts = read_accounts(args.accounts)
-    steps_mod = load_gmail_import_steps()
-    import_dir = DEFAULT_IMPORT_DIR / "gmail"
-    ledger_path = import_dir / "ledger.json"
-    emails = linked_gmail_accounts(accounts)
-    ledger = GmailImportLedger(
-        artifact_dir=str(import_dir),
-        input={
-            "operator_id": args.operator_id,
-            "from_accounts": str(args.accounts),
-            "gmail_account_emails": emails,
-            # Directory-only, always: this import applies the directory and any
-            # STORED resolutions; resolution + enrichment live in deep-context
-            # (migrate-legacy for the stored era, judged lookups for new people).
-            "linkedin_directory_csv": str(DEFAULT_DIRECTORY_CSV),
-            "profile_cache_dir": str(DEFAULT_PROFILE_CACHE_DIR),
-        },
-        artifacts=gmail_artifacts_from_discovery(),
-    ).to_dict()
-    if not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csvs"):
-        reason = "no Gmail discovery queue"
-        status = "skipped"
-        if ledger["artifacts"].get("gmail_linkedin_resolution_queue_csv") or ledger["artifacts"].get("gmail_invalid_discovery_records"):
-            reason = "gmail_discovery_missing_per_account_people_csv"
-        return write_manifest("gmail", {
-            "status": status,
-            "reason": reason,
-            "artifact_dir": str(import_dir),
-            "artifacts": ledger.get("artifacts", {}),
-        }, import_dir=DEFAULT_IMPORT_DIR)
-    write_json(ledger_path, ledger)
-    for func_name in ("run_gmail_directory", "run_gmail_apply_and_enrich"):
-        ok = getattr(steps_mod, func_name)(ledger_path, ledger)
-        if not ok:
-            return write_manifest("gmail", {
-                "status": "failed",
-                "ledger": str(ledger_path),
-                "artifact_dir": str(import_dir),
-                "steps": ledger.get("steps", {}),
-                "artifacts": ledger.get("artifacts", {}),
-            }, import_dir=DEFAULT_IMPORT_DIR)
-        steps_mod.save_ledger(ledger_path, ledger)
-    ledger["status"] = "completed"
-    steps_mod.save_ledger(ledger_path, ledger)
-    people_csv = copy_people_csv("gmail", str(ledger.get("artifacts", {}).get("gmail_merged_people_csv") or ledger.get("artifacts", {}).get("gmail_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
-    candidates = write_gmail_candidates(ledger.get("artifacts", {}), import_dir)
-    directory_normalization = normalize_directory_source_accounts("gmail")
-    directory_quality = directory_source_account_quality("gmail")
-    if directory_quality["status"] != "ok":
-        return write_manifest("gmail", {
-            "status": "failed",
-            "reason": "directory_source_account_quality_failed",
-            "ledger": str(ledger_path),
-            "artifact_dir": str(import_dir),
-            "outputs": {
-                "people_csv": people_csv,
-                "directory_csv": str(DEFAULT_DIRECTORY_CSV),
-            },
-            "directory_normalization": directory_normalization,
-            "directory_quality": directory_quality,
-            "steps": ledger.get("steps", {}),
-            "artifacts": ledger.get("artifacts", {}),
-        }, import_dir=DEFAULT_IMPORT_DIR)
-    return write_manifest("gmail", {
-        "status": "completed",
-        "ledger": str(ledger_path),
-        "artifact_dir": str(import_dir),
-        "input": {
-            **expected_input,
-            "discovery_manifest": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json"),
-            "contacts_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "contacts.csv"),
-            "linkedin_resolution_queue_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "linkedin_resolution_queue.csv"),
-        },
-        "outputs": {
-            "people_csv": people_csv,
-            "candidates_csv": candidates["candidates_csv"],
-            "directory_csv": str(DEFAULT_DIRECTORY_CSV),
-        },
-        "stats": {
-            "people": csv_count(people_csv),
-            "candidates": candidates["candidates"],
-        },
-        "candidates": candidates,
-        "steps": ledger.get("steps", {}),
-        "directory_normalization": directory_normalization,
-        "directory_quality": directory_quality,
-        "artifacts": ledger.get("artifacts", {}),
-    }, import_dir=DEFAULT_IMPORT_DIR)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """CLI: one `run` command; `--force` bypasses the manifest no-op skip."""
-    parser = argparse.ArgumentParser(description="Import discovered Gmail contacts (directory-only)")
-    parser.add_argument("command", choices=["run"])
-    parser.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
-    parser.add_argument("--operator-id", default="local")
-    parser.add_argument("--force", action="store_true", help="Re-run even if the import manifest is current (no no-op skip)")
-    return parser
-
-
-def main() -> int:
-    """Exit 0 on success/skip, 1 on failure. (Exit 20 / blocked_approval is
-    gone with the spend paths — nothing in this import can block on approval.)"""
-    args = build_parser().parse_args()
-    payload = run(args)
-    emit(payload)
-    return 1 if payload.get("status") == "failed" else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

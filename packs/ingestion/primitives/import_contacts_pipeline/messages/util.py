@@ -1,21 +1,56 @@
-"""The deterministic "worth researching" candidate floor + contact readers.
+"""Messages-vertical utilities: tolerant field parsers + the deterministic
+"worth researching" candidate floor and message-contact field readers.
 
-The floor is the historical pre-LLM eligibility ruleset (real phone,
-plausibly-real saved name, message-count minimum) — the contract that decides
-which UNMATCHED message contacts become deep-context research candidates.
-The readers map a match-annotated contacts.csv row's channel/count/last-seen
-columns into the shapes the people/candidates schemas want."""
+CSV cells arrive as arbitrary user/state text; these never raise — they map
+unparseable input to a neutral value (None / 0 / "") so row processing stays
+total."""
 
 from __future__ import annotations
 
-import re
+from typing import Any
 
-from packs.ingestion.schemas.people_schema import latest_interaction
-from packs.ingestion.primitives.import_contacts_pipeline.util.parsing import (
-    normalize_bool,
-    normalize_phoneish,
-    parse_int_field,
-)
+TRUTHY = {"1", "true", "yes", "y", "on"}
+FALSY = {"0", "false", "no", "n", "off"}
+
+
+def normalize_bool(value: Any) -> bool | None:
+    """Tri-state bool: True/False for recognized tokens, None for anything else."""
+    raw = str(value or "").strip().lower()
+    if raw in TRUTHY:
+        return True
+    if raw in FALSY:
+        return False
+    return None
+
+
+def parse_int_field(value: Any) -> int:
+    """Int from a CSV cell ('42', '42.0', '' -> 42, 42, 0); never raises."""
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(float(text))
+    except ValueError:
+        return 0
+
+
+def split_full_name(full_name: str) -> tuple[str, str]:
+    """(first, rest) on the first whitespace; ('', '') for an empty name."""
+    parts = (full_name or "").strip().split(None, 1)
+    if not parts:
+        return "", ""
+    return parts[0], parts[1] if len(parts) > 1 else ""
+
+
+def normalize_phoneish(value: str) -> str:
+    """Digits only — the comparable core of a phone-shaped string."""
+    return "".join(ch for ch in value or "" if ch.isdigit())
+
+
+import re  # noqa: E402
+
+from packs.ingestion.schemas.people_schema import latest_interaction  # noqa: E402
+
 
 DEFAULT_MIN_MESSAGE_COUNT = 1
 # Group-appearance-only contacts below this volume are low-signal noise

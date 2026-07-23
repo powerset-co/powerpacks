@@ -2,7 +2,7 @@
 """Discover iMessage and WhatsApp contact metadata.
 
 This module owns only local metadata discovery. Review, LinkedIn profile
-materialization, and enrichment live in import_contacts_pipeline/messages.py.
+materialization, and enrichment live in import_contacts_pipeline/messages/importer.py.
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ def _blocked_child(
 ) -> dict[str, Any]:
     command = (
         "uv run --project . python "
-        "packs/ingestion/primitives/discover_contacts_pipeline/messages.py discover "
+        "packs/ingestion/primitives/discover_contacts_pipeline/messages/discover.py discover "
         f"--accounts {accounts_path}"
     )
     if include_imessage:
