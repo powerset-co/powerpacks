@@ -84,6 +84,7 @@ from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
     gmail_discovery_merge_plan,
     discover_engine_base_dir,
     inputs,
+    resolve_discovery_inputs,
 )
 from packs.ingestion.primitives.discover.gmail.sync import (  # noqa: E402
     sync_msgvault_account,
