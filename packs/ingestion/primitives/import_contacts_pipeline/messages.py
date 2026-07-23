@@ -16,270 +16,79 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS,
-        extract_public_identifier,
-        generate_person_id,
-        latest_interaction,
-        legacy_message_linkedin_id,
-        merge_interaction_counts,
-        normalize_linkedin_url,
-        normalize_people_row,
-        parse_jsonish,
-    )
-    from packs.ingestion.schemas.candidates_schema import (
-        CANDIDATES_SCHEMA_COLUMNS,
-        candidate_key_for,
-        normalize_candidate_row,
-    )
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import (
-        DEFAULT_BASE_DIR,
-        DEFAULT_DIRECTORY_CSV,
-        emit,
-        read_csv_rows,
-        read_accounts,
-        sha,
-        unique_strings,
-        write_csv_rows,
-    )
-    from packs.ingestion.primitives.discover_contacts_pipeline.directory import (
-        DIRECTORY_COLUMNS,
-        directory_rows_from_people_csv,
-        merge_directory_rows,
-        normalized_directory_row,
-        people_directory_source_key,
-        phones_from_value,
-    )
-    from packs.ingestion.primitives.import_contacts_pipeline.common import (
-        DEFAULT_ACCOUNTS,
-        DEFAULT_IMPORT_DIR,
-        csv_count,
-        directory_row_matches_source,
-        directory_source_account_quality,
-        import_manifest_current,
-        normalize_directory_source_accounts,
-        write_manifest,
-    )
-    from packs.shared.csv_io import CsvIO
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS,
-        extract_public_identifier,
-        generate_person_id,
-        latest_interaction,
-        legacy_message_linkedin_id,
-        merge_interaction_counts,
-        normalize_linkedin_url,
-        normalize_people_row,
-        parse_jsonish,
-    )
-    from packs.ingestion.schemas.candidates_schema import (
-        CANDIDATES_SCHEMA_COLUMNS,
-        candidate_key_for,
-        normalize_candidate_row,
-    )
-    from packs.ingestion.primitives.discover_contacts_pipeline.common import (
-        DEFAULT_BASE_DIR,
-        DEFAULT_DIRECTORY_CSV,
-        emit,
-        read_csv_rows,
-        read_accounts,
-        sha,
-        unique_strings,
-        write_csv_rows,
-    )
-    from packs.ingestion.primitives.discover_contacts_pipeline.directory import (
-        DIRECTORY_COLUMNS,
-        directory_rows_from_people_csv,
-        merge_directory_rows,
-        normalized_directory_row,
-        people_directory_source_key,
-        phones_from_value,
-    )
-    from packs.ingestion.primitives.import_contacts_pipeline.common import (
-        DEFAULT_ACCOUNTS,
-        DEFAULT_IMPORT_DIR,
-        csv_count,
-        directory_row_matches_source,
-        directory_source_account_quality,
-        import_manifest_current,
-        normalize_directory_source_accounts,
-        write_manifest,
-    )
-    from packs.shared.csv_io import CsvIO
+# Make `packs.*` importable whether this file runs as a module or as a script
+# (uv run .../messages.py). One upfront path bootstrap replaces the old
+# duplicated try/except import block. (This cannot live in the package
+# __init__: script-mode execution never imports the package, so the path fix
+# must run in-file before the first `packs.*` import.)
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    PEOPLE_SCHEMA_COLUMNS,
+    extract_public_identifier,
+    generate_person_id,
+    latest_interaction,
+    legacy_message_linkedin_id,
+    merge_interaction_counts,
+    normalize_linkedin_url,
+    normalize_people_row,
+    parse_jsonish,
+)
+from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
+    CANDIDATES_SCHEMA_COLUMNS,
+    candidate_key_for,
+    normalize_candidate_row,
+)
+from packs.ingestion.primitives.discover_contacts_pipeline.common import (  # noqa: E402
+    DEFAULT_BASE_DIR,
+    DEFAULT_DIRECTORY_CSV,
+    emit,
+    read_csv_rows,
+    read_accounts,
+    unique_strings,
+    write_csv_rows,
+)
+from packs.ingestion.primitives.discover_contacts_pipeline.directory import (  # noqa: E402
+    DIRECTORY_COLUMNS,
+    directory_rows_from_people_csv,
+    merge_directory_rows,
+    normalized_directory_row,
+    phones_from_value,
+)
+from packs.ingestion.primitives.import_contacts_pipeline.common import (  # noqa: E402
+    DEFAULT_ACCOUNTS,
+    DEFAULT_IMPORT_DIR,
+    csv_count,
+    directory_row_matches_source,
+    directory_source_account_quality,
+    import_manifest_current,
+    normalize_directory_source_accounts,
+    write_manifest,
+)
+from packs.ingestion.primitives.import_contacts_pipeline.util.floor import (  # noqa: E402
+    DEFAULT_MIN_MESSAGE_COUNT,
+    contact_floor_reason,
+    contact_interaction_counts,
+    contact_last_interaction,
+    messages_source_channels,
+)
+from packs.ingestion.primitives.import_contacts_pipeline.util.parsing import (  # noqa: E402
+    normalize_bool,
+    parse_int_field,
+    split_full_name,
+)
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
-TRUTHY = {"1", "true", "yes", "y", "on"}
-FALSY = {"0", "false", "no", "n", "off"}
 MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v6"
 WORKING_CONTACTS_CSV = Path(".powerpacks/messages/contacts.csv")
 MATCH_MANIFEST_JSON = Path(".powerpacks/messages/contacts.csv.match.manifest.json")
-DEFAULT_MIN_MESSAGE_COUNT = 1
-# Group-appearance-only contacts below this volume are low-signal noise
-# (someone from a group thread, not a relationship) unless opted in. A positive
-# WhatsApp direct-chat count is explicit relationship evidence and bypasses it.
-GROUP_ONLY_MIN_MESSAGES = 10
-
-# Deterministic "worth researching" floor: the historical pre-LLM eligibility
-# ruleset from the retired queue-preparer primitive, copied rather than
-# imported because that primitive is orphaned from the runtime path and this
-# floor is now THIS stage's contract.
-MIN_NAME_TOKENS = 2
-MIN_TOKEN_LEN = 2
-MIN_TOTAL_ALPHA = 5
-BLOCKED_LAST_NAME_TOKENS = {"hinge", "raya", "tinder", "bumble"}
-NAME_CLEAN_RE = re.compile(r"[^A-Za-zÀ-ÿ'’\-\s]")
-MULTISPACE_RE = re.compile(r"\s+")
-MIN_PHONE_DIGITS = 10
-MAX_PHONE_DIGITS = 15
-
-
-def normalize_bool(value: Any) -> bool | None:
-    raw = str(value or "").strip().lower()
-    if raw in TRUTHY:
-        return True
-    if raw in FALSY:
-        return False
-    return None
-
-
-def parse_int_field(value: Any) -> int:
-    text = str(value or "").strip()
-    if not text:
-        return 0
-    try:
-        return int(float(text))
-    except ValueError:
-        return 0
-
-
-def split_full_name(full_name: str) -> tuple[str, str]:
-    parts = (full_name or "").strip().split(None, 1)
-    if not parts:
-        return "", ""
-    return parts[0], parts[1] if len(parts) > 1 else ""
-
-
-def normalize_name(name: str) -> str:
-    cleaned = NAME_CLEAN_RE.sub(" ", name or "")
-    return MULTISPACE_RE.sub(" ", cleaned).strip()
-
-
-def normalize_last_name_tokens(name: str) -> set[str]:
-    cleaned = normalize_name(name).lower()
-    parts = cleaned.split()
-    if len(parts) < 2:
-        return set()
-    return {token for token in parts[1:] if token}
-
-
-def normalize_phoneish(value: str) -> str:
-    return "".join(ch for ch in value or "" if ch.isdigit())
-
-
-def has_searchable_name(name: str) -> bool:
-    cleaned = normalize_name(name)
-    if not cleaned:
-        return False
-    tokens = [t for t in cleaned.split(" ") if len(t) >= MIN_TOKEN_LEN]
-    if len(tokens) < MIN_NAME_TOKENS:
-        return False
-    alpha = sum(1 for ch in cleaned if ch.isalpha())
-    return alpha >= MIN_TOTAL_ALPHA
-
-
-def bad_name_reason(name: str, phone: str = "") -> str:
-    phone_digits = normalize_phoneish(phone)
-    raw_name_digits = normalize_phoneish(name)
-    if phone_digits and raw_name_digits and phone_digits.endswith(raw_name_digits):
-        return "name_is_phone"
-    cleaned = normalize_name(name)
-    if not cleaned:
-        return "no_name"
-    if normalize_last_name_tokens(cleaned) & BLOCKED_LAST_NAME_TOKENS:
-        return "blocked_name_token"
-    if not has_searchable_name(cleaned):
-        return "bad_name"
-    return ""
-
-
-def has_whatsapp_direct_messages(row: dict[str, str]) -> bool:
-    """Whether discovery found a real WhatsApp direct-message thread."""
-    return parse_int_field(row.get("whatsapp_message_count")) > 0
-
-
-def contact_floor_reason(
-    row: dict[str, str],
-    *,
-    min_message_count: int,
-    include_group_only: bool,
-) -> str:
-    """First failing floor reason for an unmatched contact ("" = passes)."""
-    phone = (row.get("phone") or "").strip()
-    if "@" in phone:
-        return "email_handle"
-    digits = normalize_phoneish(phone)
-    if not (MIN_PHONE_DIGITS <= len(digits) <= MAX_PHONE_DIGITS):
-        return "short_code_or_invalid_phone"
-    if normalize_bool(row.get("skip", "")) is True:
-        return "skip_flag"
-    name_reason = bad_name_reason(row.get("name") or "", phone)
-    if name_reason:
-        return name_reason
-    message_count = parse_int_field(row.get("message_count"))
-    if message_count < min_message_count:
-        return "below_min_messages"
-    if (
-        not include_group_only
-        and normalize_bool(row.get("is_in_group_chats", "")) is True
-        and not has_whatsapp_direct_messages(row)
-        and message_count < GROUP_ONLY_MIN_MESSAGES
-    ):
-        return "group_only_low_signal"
-    return ""
-
-
-def messages_source_channels(row: dict[str, str]) -> list[str]:
-    channels: list[str] = []
-    raw = str(row.get("source") or row.get("message_source") or "").strip().lower()
-    for token in re.split(r"[,|+/;\s]+", raw):
-        if token in {"imessage", "whatsapp"} and token not in channels:
-            channels.append(token)
-    for key, channel in (
-        ("imessage_message_count", "imessage"),
-        ("whatsapp_message_count", "whatsapp"),
-    ):
-        if parse_int_field(row.get(key)) > 0 and channel not in channels:
-            channels.append(channel)
-    return channels or ["messages"]
-
-
-def contact_interaction_counts(row: dict[str, str]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for count_key, channel in (
-        ("imessage_message_count", "imessage"),
-        ("whatsapp_message_count", "whatsapp"),
-    ):
-        count = parse_int_field(row.get(count_key))
-        if count > 0:
-            counts[channel] = count
-    return counts
-
-
-def contact_last_interaction(row: dict[str, str]) -> str:
-    return latest_interaction(
-        row.get("imessage_last_message"),
-        row.get("whatsapp_last_message"),
-        row.get("last_message"),
-    )
 
 
 def contact_row_to_messages_people(
@@ -377,10 +186,14 @@ def contact_row_to_candidate(
     return normalize_candidate_row(candidate)
 
 
-def merge_messages_people_candidate(
+def merge_matched_people_rows(
     existing: dict[str, str],
     incoming: dict[str, str],
 ) -> dict[str, str]:
+    """Union two people rows for the SAME matched person (several contact rows
+    resolved to one network person, e.g. two phones): first non-empty value per
+    identity field, union of phones/channels/superseded ids, summed interaction
+    counts, latest activity wins."""
     merged = dict(existing)
     for key in (
         "primary_phone",
@@ -465,15 +278,15 @@ def selected_contacts_people(
         match_status = (row.get("match_status") or "").strip().lower()
         matched_person_id = (row.get("matched_person_id") or "").strip()
         if match_status == "matched" and matched_person_id:
-            candidate = contact_row_to_messages_people(row, contacts_csv)
-            key = candidate.get("public_identifier") or candidate.get("id", "")
+            person = contact_row_to_messages_people(row, contacts_csv)
+            key = person.get("public_identifier") or person.get("id", "")
             if key in people_by_key:
                 skip("duplicate_matched_person")
-                people_by_key[key] = merge_messages_people_candidate(
-                    people_by_key[key], candidate
+                people_by_key[key] = merge_matched_people_rows(
+                    people_by_key[key], person
                 )
             else:
-                people_by_key[key] = candidate
+                people_by_key[key] = person
                 selection_counts["matched"] = selection_counts.get("matched", 0) + 1
             continue
         if match_status == "suggested":
@@ -512,37 +325,8 @@ def selected_contacts_people(
     return summary, people_rows, candidate_rows
 
 
-def directory_source_keys(path: Path) -> set[str]:
-    if not path.exists():
-        return set()
-    keys: set[str] = set()
-    for row in read_csv_rows(path)[1]:
-        normalized = normalized_directory_row(row, source="directory")
-        if normalized.get("source_key"):
-            keys.add(normalized["source_key"])
-    return keys
-
-
-def messages_people_directory_keys(rows: list[dict[str, str]]) -> set[str]:
-    keys: set[str] = set()
-    for row in rows:
-        public_identifier = row.get("public_identifier") or extract_public_identifier(
-            row.get("linkedin_url") or ""
-        )
-        if not public_identifier:
-            continue
-        key = people_directory_source_key(
-            row,
-            "messages",
-            row.get("source_channels") or "messages",
-            public_identifier,
-        )
-        if key:
-            keys.add(key)
-    return keys
-
-
 def existing_csv_column(path: Path, column: str) -> set[str]:
+    """Non-empty values of one column in an existing CSV (empty set if absent)."""
     if not path.exists():
         return set()
     return {
@@ -559,6 +343,8 @@ def messages_import_diff(
     min_message_count: int = DEFAULT_MIN_MESSAGE_COUNT,
     include_group_only: bool = False,
 ) -> dict[str, Any]:
+    """What a run WOULD write vs the existing outputs — powers the
+    --confirm-import approval prompt (new people/candidates counts)."""
     materialized, people_rows, candidate_rows = selected_contacts_people(
         contacts_csv,
         min_message_count=min_message_count,
@@ -599,6 +385,9 @@ def replace_messages_directory_rows(
     people_csv: Path,
     directory_csv: Path | None = None,
 ) -> dict[str, Any]:
+    """Replace the messages-sourced rows of the shared directory.csv with rows
+    derived from this run (other sources retained verbatim) — the import owns
+    exactly its own slice of the directory."""
     directory_csv = directory_csv or DEFAULT_DIRECTORY_CSV
     retained: dict[str, dict[str, str]] = {}
     existing_rows = read_csv_rows(directory_csv)[1] if directory_csv.exists() else []
@@ -626,6 +415,10 @@ def replace_messages_directory_rows(
 
 
 def run(args: argparse.Namespace) -> dict:
+    """The whole import: schema/fingerprint no-op checks -> prerequisite gates
+    (contacts discovered; matched unless --allow-unmatched) -> the
+    --confirm-import approval when the diff adds rows -> materialize
+    people.csv + candidates.csv -> replace the directory messages slice."""
     import_dir = DEFAULT_IMPORT_DIR / "messages"
     people_csv_path = import_dir / "people.csv"
     schema_stale = people_csv_schema_stale(people_csv_path)
@@ -753,6 +546,8 @@ def run(args: argparse.Namespace) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """CLI: one run command; floor knobs + the two explicit consent flags
+    (--confirm-import, --allow-unmatched)."""
     parser = argparse.ArgumentParser(
         description="Import matched Messages contacts + research candidates"
     )
@@ -776,6 +571,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """Exit 0 success/no-op, 1 failure, 20 blocked on the --confirm-import
+    approval (unlike gmail, this import HAS a real approval: adding rows to
+    the network needs an explicit yes)."""
     args = build_parser().parse_args()
     payload = run(args)
     emit(payload)
