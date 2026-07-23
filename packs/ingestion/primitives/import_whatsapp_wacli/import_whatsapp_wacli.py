@@ -1751,6 +1751,16 @@ def run_history_depth_stage(
     # Persist every selected target before the first network request so budget
     # exhaustion or interruption cannot lose unvisited work.
     summary = persist()
+
+    def target_needs_attempt(candidate: HistoryDepthTarget) -> bool:
+        candidate_row = rows.get(candidate.chat_ref)
+        if candidate_row is None:
+            return True
+        return not (
+            candidate_row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES
+            and result_int(candidate_row, "current_count") == candidate.current_count
+        )
+
     batch_attempted = 0
     consecutive_zero_response_timeouts = 0
     for index, target in enumerate(targets):
@@ -1760,10 +1770,7 @@ def run_history_depth_stage(
         row = rows.get(target.chat_ref)
         if row is None:
             raise PrimitiveFailed("history depth target was not seeded")
-        if (
-            row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES
-            and result_int(row, "current_count") == target.current_count
-        ):
+        if not target_needs_attempt(target):
             continue
 
         last_attempt: HistoryDepthAttempt | None = None
@@ -1863,8 +1870,12 @@ def run_history_depth_stage(
         elif batch_size > 0 and batch_attempted >= batch_size:
             pause_reason = "batch_complete"
 
-        if index + 1 < len(targets) and pause_reason and batch_pause_seconds > 0:
-            remaining = len(targets) - index - 1
+        remaining = sum(
+            1
+            for candidate in targets[index + 1:]
+            if target_needs_attempt(candidate)
+        )
+        if remaining > 0 and pause_reason and batch_pause_seconds > 0:
             write_progress(progress_path, {
                 "event": "history_depth_batch_paused",
                 "reason": pause_reason,
@@ -1882,7 +1893,7 @@ def run_history_depth_stage(
             })
             batch_attempted = 0
             consecutive_zero_response_timeouts = 0
-        elif index + 1 < len(targets) and chat_delay > 0:
+        elif remaining > 0 and chat_delay > 0:
             time.sleep(chat_delay)
 
     write_progress(progress_path, {
