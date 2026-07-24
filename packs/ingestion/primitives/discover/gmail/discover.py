@@ -1,10 +1,15 @@
 """Gmail contact discovery CLI: sync msgvault, aggregate contacts, build queues.
 
-Shape (discover()):
-  Resolve config ONCE (resolve_discovery_inputs: CLI/caller overrides >
-  accounts.json state > discovery.config defaults) into source_inputs, then hand
-  off to GmailDiscovery, which owns the run: the fixed output dir, the per-account
-  channels, the merge plan, and the final typed stage manifest.
+Shape (GmailDiscovery(...).run()):
+  GmailDiscovery is the whole thing: its constructor resolves config ONCE
+  (resolve_discovery_inputs: explicit --account-email/--msgvault-db/--sync-query
+  overrides > discovery.config defaults) and owns the run — the fixed output dir,
+  the per-account channels, the merge plan, and the final typed stage manifest.
+  main() constructs it and calls run(); there is no wrapper function.
+
+  Account selection is the repeatable --account-email list ONLY: it IS the
+  selection, with no accounts.json fallback. An empty list means no accounts
+  selected -> the skipped/empty manifest path.
 
   Each selected account is a GmailAccountChannel that owns its fixed per-account
   output dir (gmail_discover_dir) and its sync -> engine-child chain:
@@ -29,13 +34,20 @@ Shape (discover()):
   linkedin_resolution_queue.csv (same rows) + a typed stage manifest (models.py).
 
 Changelog:
+  2026-07-23 (account-email selection): account selection collapsed to the single
+    repeatable --account-email list. The discover() wrapper, the --accounts flag,
+    and the accounts_file/selected_accounts parameters are gone; the accounts.json
+    account-resolution read was removed (resolve_discovery_inputs no longer reads
+    it). GmailDiscovery.__init__ now resolves config itself from account_emails/
+    msgvault_db/sync_query and main() constructs GmailDiscovery(...).run() directly.
+    The manifest's selected_accounts field was renamed account_emails and the
+    skip reason no_selected_accounts -> no_account_emails.
   2026-07-23 (oop): the monolithic 4-phase discover() body — the per-account
     sync/child loop over ad-hoc dicts and the frozen EngineChild dataclass — was
     replaced by GmailAccountChannel (one per selected account: owns its output
     dir, sync step, and engine-child spawn; records its contribution in
     self.artifacts) and a GmailDiscovery store (owns the output dir, the channel
-    loop, the merge plan, and the manifest). discover() is now a thin wrapper:
-    resolve inputs -> GmailDiscovery(...).run(). CLI signature, fixed output
+    loop, the merge plan, and the manifest). CLI signature, fixed output
     paths, and the typed manifest payloads (models.py) are unchanged.
   2026-07-23 (audit): the isinstance/defensive-path ladder over the child payload
     is gone: run_cmd always returns a dict and the child is our own discover_engine
@@ -155,7 +167,7 @@ class GmailAccountChannel:
         self.timing: dict[str, Any] = {}
 
     # Path accessors are computed from the module-level gmail_discover_dir at call
-    # time so the child does not choose its own output — discover() reads these.
+    # time so the child does not choose its own output — the store reads these.
     @property
     def discover_dir(self) -> Path:
         """The child's fixed per-account output directory."""
@@ -279,13 +291,15 @@ class GmailAccountChannel:
 
 
 class GmailDiscovery:
-    """Store/orchestrator for one Gmail discovery run. discover() resolves config
-    once and passes source_inputs; this owns everything else: the fixed output dir
-    (the one mkdir), the per-account channels, the run loop (stop at the first
-    failed channel), the merge plan, and the typed stage manifest. Holds all
+    """Store/orchestrator for one Gmail discovery run. The constructor resolves
+    config ONCE (resolve_discovery_inputs) and owns everything else: the fixed
+    output dir (the one mkdir), the per-account channels, the run loop (stop at the
+    first failed channel), the merge plan, and the typed stage manifest. Holds all
     filesystem side effects so the channels only sync + spawn + read their rows.
 
-      full_rewrite       calc version or selected-account set changed, or any
+    Account selection is account_emails ONLY (the resolved --account-email list);
+    an empty list yields the skipped manifest. Merge modes:
+      full_rewrite       calc version or the account-email set changed, or any
                          child did a full recount -> rebuild contacts.csv from
                          child rows.
       incremental_update EVERY child returned a delta -> keep existing rows and
@@ -296,7 +310,9 @@ class GmailDiscovery:
     def __init__(
         self,
         *,
-        source_inputs: dict[str, Any],
+        account_emails: list[str] | None = None,
+        msgvault_db: str | None = None,
+        sync_query: str | None = None,
         skip_msgvault_sync: bool = False,
         sync_after: str = "",
         sync_before: str = "",
@@ -304,7 +320,14 @@ class GmailDiscovery:
         limit: int = 0,
         no_attachments: bool = False,
     ) -> None:
-        self.source_inputs = source_inputs
+        # ONE resolution point for configuration (see resolve_discovery_inputs):
+        # explicit overrides > discovery.config defaults. account_emails IS the
+        # selection (no accounts.json fallback). Nothing below consults config.
+        self.inputs = resolve_discovery_inputs(
+            account_emails=account_emails,
+            msgvault_db=msgvault_db,
+            sync_query=sync_query,
+        )
         self.skip_msgvault_sync = skip_msgvault_sync
         # Read output_path at call time (not import) so tests can patch the module
         # global and the store honors it.
@@ -317,8 +340,8 @@ class GmailDiscovery:
             GmailAccountChannel(
                 account_email=email,
                 output_base=child_output_base,
-                msgvault_db=source_inputs["msgvault_db"],
-                sync_query=source_inputs["sync_query"],
+                msgvault_db=self.inputs.msgvault_db,
+                sync_query=self.inputs.sync_query,
                 skip_msgvault_sync=skip_msgvault_sync,
                 sync_after=sync_after,
                 sync_before=sync_before,
@@ -326,18 +349,19 @@ class GmailDiscovery:
                 limit=limit,
                 no_attachments=no_attachments,
             )
-            for email in source_inputs["selected_accounts"]
+            for email in self.inputs.account_emails
         ]
 
     def run(self) -> dict[str, Any]:
         started_at = now_iso()
         started = time.monotonic()
-        if not self.source_inputs["selected_accounts"]:
+        account_emails = list(self.inputs.account_emails)
+        if not account_emails:
             return write_stage_manifest(self.manifest_json, GmailDiscoverySkipped(
                 started_at=started_at,
                 duration_seconds=round(time.monotonic() - started, 3),
                 accounts_timing=[],
-                reason="no_selected_accounts",
+                reason="no_account_emails",
                 contacts_csv=str(self.contacts_csv),
                 linkedin_resolution_queue_csv=str(self.queue_csv),
             ))
@@ -358,7 +382,7 @@ class GmailDiscovery:
         # PHASE 2 — decide how to combine child outputs with what is on disk.
         existing_manifest = read_json(self.manifest_json, {}) or {}
         merge_plan = gmail_discovery_merge_plan(
-            existing_manifest, self.source_inputs["selected_accounts"], child_modes)
+            existing_manifest, account_emails, child_modes)
         existing: list[dict[str, Any]] = []
         incoming: list[dict[str, Any]] = []
         applied_incremental_inputs = _as_list(existing_manifest.get("applied_incremental_inputs"))
@@ -377,7 +401,7 @@ class GmailDiscovery:
                 accounts_timing=[channel.timing for channel in self.channels],
                 calculation_version=GMAIL_INTERACTION_CALCULATION_VERSION,
                 calculation_mode=merge_plan["mode"],
-                selected_accounts=self.source_inputs["selected_accounts"],
+                account_emails=account_emails,
                 child_calculation_modes=child_modes,
                 children=children,
             ).to_payload()
@@ -422,83 +446,20 @@ class GmailDiscovery:
             contacts_csv=str(self.contacts_csv),
             linkedin_resolution_queue_csv=str(self.queue_csv),
             contacts=len(merged),
-            selected_accounts=self.source_inputs["selected_accounts"],
-            msgvault_db=self.source_inputs["msgvault_db"],
+            account_emails=account_emails,
+            msgvault_db=self.inputs.msgvault_db,
             updated_at=now_iso(),
             privacy=GmailPrivacy(gmail_sync_ran=not self.skip_msgvault_sync),
             children=children,
         ))
 
 
-def discover(
-    *,
-    accounts_file: Path | None = None,
-    selected_accounts: list[str] | None = None,
-    account_email: str | None = None,
-    msgvault_db: str | None = None,
-    sync_query: str | None = None,
-    skip_msgvault_sync: bool = False,
-    sync_after: str = "",
-    sync_before: str = "",
-    fresh: bool = False,
-    limit: int = 0,
-    no_attachments: bool = False,
-) -> dict[str, Any]:
-    """Discover Gmail contacts: sync msgvault per selected account, aggregate
-    contacts, build the resolution queue, write the stage manifest. A thin wrapper
-    — it resolves config ONCE, then GmailDiscovery(...).run() owns the run.
-
-    Keyword-only ON PURPOSE (the `*`): eleven knobs are unusable positionally,
-    and unknown options raise TypeError. `accounts_file` is the ONE
-    accounts-state param, and all configuration resolves through
-    resolve_discovery_inputs — one documented precedence (explicit overrides >
-    accounts.json state > discovery.config defaults), one place.
-
-    DEFAULTS CONVENTION — the `| None = None` params are override SENTINELS,
-    not values: None means "no override given, inherit from the next config
-    layer" (accounts.json state, then discovery.config defaults). Params with
-    no lower layer carry their real default instead:
-      accounts_file=None       -> inherit the configured accounts path
-      selected_accounts=None / account_email=None -> inherit linked accounts
-      msgvault_db=None (or "") -> inherit the configured/state db path
-      sync_query=None          -> inherit the configured query;
-      sync_query=""            -> EXPLICITLY clear it (the one distinction
-                                  callers actually use — see the orchestrator)
-      sync_after/sync_before="" -> plain values: pure run-window overrides
-                                  with no config layer beneath them
-      skip_msgvault_sync/fresh/limit/no_attachments -> run-mode flags, no
-                                  layering, real defaults."""
-    # ONE resolution point for configuration (see resolve_discovery_inputs):
-    # explicit caller/CLI overrides > accounts.json state > discovery.config
-    # defaults. Nothing below this line consults config sources directly.
-    resolved = resolve_discovery_inputs(
-        accounts_file,
-        selected_accounts=selected_accounts,
-        account_email=account_email,
-        msgvault_db=msgvault_db,
-        sync_query=sync_query,
-    )
-    source_inputs = {
-        "selected_accounts": list(resolved.selected_accounts),
-        "msgvault_db": resolved.msgvault_db,
-        "sync_query": resolved.sync_query,
-    }
-    return GmailDiscovery(
-        source_inputs=source_inputs,
-        skip_msgvault_sync=skip_msgvault_sync,
-        sync_after=sync_after,
-        sync_before=sync_before,
-        fresh=fresh,
-        limit=limit,
-        no_attachments=no_attachments,
-    ).run()
-
-
 def build_parser() -> argparse.ArgumentParser:
+    """The CLI surface: the `discover` subcommand. Account selection is the
+    repeatable --account-email list ONLY (no --accounts file)."""
     parser = argparse.ArgumentParser(description="Discover Gmail contacts from existing msgvault metadata")
     parser.add_argument("command", choices=["discover"])
-    parser.add_argument("--accounts", type=Path, default=None)
-    parser.add_argument("--account-email", action="append", default=[], help="Account email to sync (repeatable); default: all linked")
+    parser.add_argument("--account-email", action="append", default=[], help="Account email to sync (repeatable); the list IS the selection")
     parser.add_argument("--msgvault-db", default="")
     parser.add_argument("--sync-query", default=None)
     parser.add_argument("--skip-msgvault-sync", action="store_true")
@@ -511,10 +472,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """CLI dispatch: construct GmailDiscovery from the parsed args, run it, emit
+    the payload, and map a failed status to exit code 1."""
     args = build_parser().parse_args()
-    payload = discover(
-        accounts_file=args.accounts,
-        selected_accounts=args.account_email or None,
+    payload = GmailDiscovery(
+        account_emails=args.account_email or None,
         msgvault_db=args.msgvault_db,
         sync_query=args.sync_query,
         skip_msgvault_sync=args.skip_msgvault_sync,
@@ -523,7 +485,7 @@ def main() -> int:
         fresh=args.fresh,
         limit=args.limit,
         no_attachments=args.no_attachments,
-    )
+    ).run()
     emit(payload)
     return 1 if payload.get("status") == "failed" else 0
 

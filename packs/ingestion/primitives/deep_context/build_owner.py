@@ -26,12 +26,11 @@ from packs.ingestion.primitives.deep_context.common import (
     load_env,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.enrich.enrich_people import (
+from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
-    rapidapi_key,
-    rapidapi_profile,
     read_usable_cached_profile,
 )
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 

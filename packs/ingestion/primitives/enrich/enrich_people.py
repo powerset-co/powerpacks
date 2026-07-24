@@ -4,10 +4,22 @@
 Self-contained Powerpacks RapidAPI enrichment implementation. No imports from
 the legacy app or hosted search API.
 
+This file is the orchestrator + CLI only. The stage is decomposed into sibling
+modules, one concern each — import from the defining module, not through here:
+
+- `models.py` — EnrichConfig/build_config, EnrichManifest, the stage CSV
+  columns, PipelineFailed.
+- `rapidapi_client.py` — RapidAPI key/env handling, http_json, retry/backoff,
+  the cache-aware `rapidapi_profile` fetch, DEFAULT_RAPIDAPI_* knobs.
+- `profile_cache.py` — profile-cache slugs/paths/reads, failure TTL,
+  cache-status classification, and the cache seeding format documentation.
+- `profile_transforms.py` — pure row transforms: route_row, normalize_rapidapi,
+  merge_provider_profile, confirmed_people_row.
+
 Consumers:
-- Primary whole-pipeline owner: ``discover/linkedin/network_import.py``.
-- Shared-library consumers: deep-context profile hydration/reconciliation
-  primitives and search's ``fetch_person_profile`` primitive.
+- Primary whole-pipeline owner: ``imports/linkedin/network_import.py``.
+- Shared-library consumers (deep-context profile hydration/reconciliation,
+  search's ``fetch_person_profile``) import the sibling modules directly.
 
 Input: a shared people schema CSV, usually merge_network_sources output.
 Output: enriched people schema CSV plus raw provider responses.
@@ -55,19 +67,15 @@ company metadata by RapidAPI company ID or LinkedIn company slug),
 `--approve-spend` (authorize paid RapidAPI fetches for cache misses), `--force`
 (re-enrich complete-looking rows), hidden `--limit` for tiny smoke tests only.
 
-Cache seeding: a cache file per sanitized LinkedIn public identifier, e.g.
-`profile_cache_v2/jane-example.json` containing `fetched_at`,
-`public_identifier`, `linkedin_url`, `raw_response`, and
-`normalized_profile: {"success": true}`. Usable entries enrich without
-RAPIDAPI_* keys. Failed lookups are cached with `last_checked_at` and retried
-only after the TTL.
-
-Company identity: work experiences preserve `rapidapi_company_id`,
-`company_public_identifier`, `company_linkedin_url`, and `company_key`
-(`rapidapi:{id}` preferred over `linkedin_company:{slug}`).
-`current_company_urn` is a legacy shared-schema field not populated here.
+Cache seeding format is documented in `profile_cache.py`. Company identity
+field behavior is documented in `profile_transforms.py`.
 
 Changelog:
+  2026-07-23 (audit decomposition): split the module into models.py /
+    rapidapi_client.py / profile_cache.py / profile_transforms.py, keeping only
+    the EnrichPeople orchestrator, its progress knobs, and the CLI here. The
+    dead `split_name` was deleted; `cached_profile_from_row` lost its two
+    unused parameters. Behavior, CSV bytes, and the CLI are unchanged.
   2026-07-23 (audit class-sharing): the spend-gate exit code + CLI-emit helpers
     moved to common/gates.py — EXIT_NEEDS_APPROVAL (NEEDS_APPROVAL_CODE is now an
     alias of it), exit_code_for_status, and manifest_emit_payload are imported
@@ -100,11 +108,6 @@ import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -112,30 +115,51 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.schemas.company_identity import build_company_identity_lookup, rapidapi_experience_to_powerpacks
-from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
-from packs.ingestion.schemas.people_schema import (
+from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL, exit_code_for_status, manifest_emit_payload  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
+from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress  # noqa: E402
+from packs.ingestion.primitives.enrich.models import (  # noqa: E402
+    CACHE_COLUMNS,
+    EnrichConfig,
+    EnrichManifest,
+    PROVIDER_COLUMNS,
+    PipelineFailed,
+    QUEUE_COLUMNS,
+    RECENT_FAILURE_COLUMNS,
+    build_config,
+)
+from packs.ingestion.primitives.enrich.profile_cache import (  # noqa: E402
+    cached_profile_from_row,
+    classify_rapidapi_cache_status,
+    profile_cache_index,
+    profile_cache_path,
+    read_usable_cached_profile,
+)
+from packs.ingestion.primitives.enrich.profile_transforms import (  # noqa: E402
+    confirmed_people_row,
+    merge_provider_profile,
+    normalize_rapidapi,
+    route_row,
+)
+from packs.ingestion.primitives.enrich.rapidapi_client import (  # noqa: E402
+    DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
+    DEFAULT_RAPIDAPI_MAX_RPM,
+    DEFAULT_RAPIDAPI_MAX_WORKERS,
+    rapidapi_key,
+    rapidapi_profile,
+)
+from packs.ingestion.schemas.company_identity import build_company_identity_lookup  # noqa: E402
+from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
+from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS,
     extract_public_identifier,
-    generate_person_id as generate_linkedin_person_id,
     normalize_linkedin_url,
     normalize_people_row,
-    parse_jsonish,
-    stable_person_id_from_key,
 )
-from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL, exit_code_for_status, manifest_emit_payload
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash, write_json
-from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR
-from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress
-from packs.shared.csv_io import CsvIO
-from packs.shared.rate_limiter import StartRateLimiter
+from packs.shared.csv_io import CsvIO  # noqa: E402
+from packs.shared.rate_limiter import StartRateLimiter  # noqa: E402
 
-RAPIDAPI_BASE_URL = "https://professional-network-data.p.rapidapi.com"
-DEFAULT_RAPIDAPI_MAX_WORKERS = int(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_WORKERS", "64"))
-DEFAULT_RAPIDAPI_MAX_RPM = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MAX_RPM", "300"))
-DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_FAILURE_RETRY_HOURS", "24"))
-DEFAULT_RAPIDAPI_RETRY_ATTEMPTS = int(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_RETRY_ATTEMPTS", "3"))
-DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_RETRY_BACKOFF_SECONDS", "1.0"))
 DEFAULT_PROGRESS_INTERVAL_SECONDS = float(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_SECONDS", "60"))
 DEFAULT_PROGRESS_INTERVAL_ROWS = int(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_ROWS", "100"))
 # `run` exit code when paid RapidAPI cache-miss fetches are gated behind
@@ -143,560 +167,10 @@ DEFAULT_PROGRESS_INTERVAL_ROWS = int(os.environ.get("POWERPACKS_RAPIDAPI_PROGRES
 # kept here as a module alias for the name callers/tests already reach for.
 NEEDS_APPROVAL_CODE = EXIT_NEEDS_APPROVAL
 
-QUEUE_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["enrichment_route", "enrichment_reason"]
-CACHE_COLUMNS = QUEUE_COLUMNS + ["cache_status", "cache_path", "cache_reason"]
-RECENT_FAILURE_COLUMNS = CACHE_COLUMNS + ["last_checked_at", "retry_after", "rapidapi_status_code", "rapidapi_error"]
-PROVIDER_COLUMNS = QUEUE_COLUMNS + [
-    "rapidapi_status_code",
-    "rapidapi_error",
-    "rapidapi_attempts",
-    "rapidapi_retry_outcome",
-    "rapidapi_response_enriched",
-    "rapidapi_from_cache",
-    "provider_enriched_at",
-]
-
-
-class PipelineFailed(Exception):
-    """A hard, non-recoverable step failure (bad input, missing key for paid work)."""
-
-
-def load_dotenv(path: Path, keys: set[str] | None = None) -> None:
-    """Load simple KEY=VALUE entries without overriding the shell env."""
-    if not path.exists():
-        return
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        key = key.strip()
-        if not key or key in os.environ or (keys is not None and key not in keys):
-            continue
-        os.environ[key] = value.strip().strip('"').strip("'")
-
-
-load_dotenv(Path(__file__).resolve().parents[4] / ".env", {"RAPIDAPI_LINKEDIN_KEY", "RAPIDAPI_KEY"})
-
-
-def parse_iso(value: str) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
 
 def emit_progress(message: str) -> None:
     """Write one progress line to stderr, tagged for the enrich-people chain."""
     _emit_progress(message, "[enrich-people]")
-
-
-def split_name(full_name: str) -> tuple[str, str]:
-    parts = (full_name or "").strip().split()
-    if not parts:
-        return "", ""
-    return parts[0], " ".join(parts[1:])
-
-
-def generate_person_id(public_identifier: str, fallback: str = "") -> str:
-    if public_identifier:
-        return generate_linkedin_person_id(public_identifier)
-    return stable_person_id_from_key(f"person:{fallback}")
-
-
-def count_items(value: Any) -> int:
-    if isinstance(value, list):
-        return len(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-            return len(parsed) if isinstance(parsed, list) else 0
-        except json.JSONDecodeError:
-            return 0
-    return 0
-
-
-def profile_richness(experiences: Any, education: Any) -> int:
-    return count_items(experiences) + count_items(education)
-
-
-def _explicit_current_value(exp: dict[str, Any]) -> bool | None:
-    for key in ("is_current_position", "is_current", "current"):
-        if key not in exp:
-            continue
-        value = exp.get(key)
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"true", "1", "yes", "y"}:
-                return True
-            if lowered in {"false", "0", "no", "n"}:
-                return False
-    return None
-
-
-def current_position(experiences: list[dict[str, Any]]) -> tuple[str, str, str]:
-    first_exp: dict[str, Any] | None = None
-    for exp in experiences or []:
-        if not isinstance(exp, dict):
-            continue
-        first_exp = first_exp or exp
-        explicit_current = _explicit_current_value(exp)
-        if explicit_current is True or (explicit_current is None and not (exp.get("ends_at") or exp.get("end_date"))):
-            return (
-                str(exp.get("title") or exp.get("position") or ""),
-                str(exp.get("company_name") or exp.get("company") or exp.get("organization") or ""),
-                "",
-            )
-    if first_exp:
-        return (
-            str(first_exp.get("title") or first_exp.get("position") or ""),
-            str(first_exp.get("company_name") or first_exp.get("company") or first_exp.get("organization") or ""),
-            "",
-        )
-    return "", "", ""
-
-
-def http_json(method: str, url: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None, timeout: int = 60) -> tuple[int, dict[str, Any] | None, str]:
-    if params:
-        url = url + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, method=method, headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            return response.status, json.loads(raw) if raw else None, ""
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            data = json.loads(raw) if raw else None
-        except json.JSONDecodeError:
-            data = None
-        return exc.code, data, raw[:1000]
-    except Exception as exc:
-        return 0, None, str(exc)
-
-
-def rapidapi_key() -> str:
-    return os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
-
-
-def safe_cache_slug(public_identifier: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in public_identifier.lower().strip())
-    return cleaned.strip("._")
-
-
-def legacy_byte_cache_slug(public_identifier: str) -> str:
-    parts: list[str] = []
-    for ch in public_identifier.lower().strip():
-        if ch.isascii() and (ch.isalnum() or ch in {"-", "_", "."}):
-            parts.append(ch)
-        elif ch.isascii():
-            parts.append("_")
-        else:
-            parts.extend(f"_{byte:02x}" for byte in ch.encode("utf-8"))
-    return "".join(parts).strip("._")
-
-
-def cache_slug_candidates(public_identifier: str) -> list[str]:
-    values = [
-        public_identifier,
-        urllib.parse.unquote(public_identifier or ""),
-    ]
-    slugs: list[str] = []
-    for value in values:
-        for slug in (value.lower().strip(), safe_cache_slug(value), legacy_byte_cache_slug(value)):
-            if slug and slug not in slugs:
-                slugs.append(slug)
-    return slugs
-
-
-def profile_cache_index(cache_dir: Path | str | None) -> set[str]:
-    if not cache_dir:
-        return set()
-    root = Path(cache_dir)
-    if not root.exists() or not root.is_dir():
-        return set()
-    return {path.stem for path in root.glob("*.json") if path.name != "_metadata.json"}
-
-
-def profile_cache_path(cache_dir: Path | str | None, public_identifier: str) -> Path | None:
-    slug = cache_slug_candidates(public_identifier)[0] if public_identifier else ""
-    if not cache_dir or not slug:
-        return None
-    return Path(cache_dir) / f"{slug}.json"
-
-
-def indexed_profile_cache_path(cache_dir: Path | str | None, public_identifier: str, cache_index: set[str] | None) -> Path | None:
-    if not cache_dir:
-        return None
-    if cache_index is not None:
-        for slug in cache_slug_candidates(public_identifier):
-            if slug in cache_index:
-                return Path(cache_dir) / f"{slug}.json"
-        return profile_cache_path(cache_dir, public_identifier)
-    return profile_cache_path(cache_dir, public_identifier)
-
-
-def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None:
-    if not cache_path or not cache_path.exists():
-        return None
-    cached = read_json(cache_path, None)
-    if not isinstance(cached, dict):
-        return None
-    normalized = cached.get("normalized_profile")
-    raw = cached.get("raw_response")
-    if isinstance(normalized, dict) and normalized.get("success") is True and isinstance(raw, dict):
-        return cached
-    normalized = normalize_linkedin_profile(cached)
-    if normalized.get("success") is True:
-        return {
-            "fetched_at": cached.get("fetched_at") or cached.get("last_checked_at") or "",
-            "last_checked_at": cached.get("last_checked_at") or cached.get("fetched_at") or "",
-            "public_identifier": cached.get("public_identifier") or normalized.get("public_identifier") or cache_path.stem,
-            "linkedin_url": cached.get("linkedin_url") or normalized.get("linkedin_url") or "",
-            "raw_response": cached,
-            "normalized_profile": normalized,
-        }
-    return None
-
-
-def recent_cached_failure(cache_path: Path | None, retry_hours: float) -> dict[str, Any] | None:
-    if not cache_path or not cache_path.exists() or retry_hours <= 0:
-        return None
-    cached = read_json(cache_path, None)
-    if not isinstance(cached, dict):
-        return None
-    normalized = cached.get("normalized_profile")
-    if not isinstance(normalized, dict) or normalized.get("success") is not False:
-        return None
-    checked_at = parse_iso(str(cached.get("last_checked_at") or cached.get("fetched_at") or ""))
-    if checked_at is None:
-        return None
-    retry_after = checked_at + timedelta(hours=retry_hours)
-    if datetime.now(timezone.utc) >= retry_after:
-        return None
-    result = dict(cached)
-    result["retry_after"] = retry_after.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    return result
-
-
-def rapidapi_profile(
-    public_identifier: str,
-    linkedin_url: str,
-    api_key: str,
-    *,
-    cache_dir: Path | str | None = None,
-    refresh_cache: bool = False,
-    wait_for_attempt: Callable[[], None] | None = None,
-) -> dict[str, Any]:
-    cache_path = profile_cache_path(cache_dir, public_identifier)
-    if not refresh_cache:
-        cached = read_usable_cached_profile(cache_path)
-        if cached:
-            return {
-                "status_code": 200,
-                "data": cached.get("raw_response"),
-                "error": "",
-                "from_cache": True,
-                "normalized_profile": cached.get("normalized_profile"),
-            }
-
-    attempts = max(1, DEFAULT_RAPIDAPI_RETRY_ATTEMPTS)
-    status = 0
-    data: dict[str, Any] | None = None
-    error = ""
-    for attempt in range(1, attempts + 1):
-        if wait_for_attempt:
-            wait_for_attempt()
-        status, data, error = http_json(
-            "GET",
-            f"{RAPIDAPI_BASE_URL}/get-profile-data-by-url",
-            headers={"x-rapidapi-host": "professional-network-data.p.rapidapi.com", "x-rapidapi-key": api_key},
-            params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
-            timeout=90,
-        )
-        if status not in {0, 429, 500, 502, 503, 504} or attempt == attempts:
-            break
-        sleep_for = DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
-        time.sleep(sleep_for)
-    normalized = normalize_linkedin_profile(data if isinstance(data, dict) else {})
-    if cache_path and status == 200 and isinstance(data, dict) and normalized.get("success") is True:
-        write_json(cache_path, {
-            "fetched_at": now_iso(),
-            "last_checked_at": now_iso(),
-            "public_identifier": public_identifier,
-            "linkedin_url": linkedin_url,
-            "raw_response": data,
-            "normalized_profile": normalized,
-            "attempts": attempt,
-        })
-    elif cache_path:
-        checked_at = now_iso()
-        write_json(cache_path, {
-            "fetched_at": checked_at,
-            "last_checked_at": checked_at,
-            "public_identifier": public_identifier,
-            "linkedin_url": linkedin_url,
-            "raw_response": data if isinstance(data, dict) else {},
-            "normalized_profile": normalized,
-            "status_code": status,
-            "error": error or normalized.get("error") or "",
-            "attempts": attempt,
-        })
-    return {"status_code": status, "data": data, "error": error, "from_cache": False, "normalized_profile": normalized, "attempts": attempt}
-
-
-def normalize_rapidapi(
-    data: dict[str, Any] | None,
-    public_identifier: str,
-    linkedin_url: str,
-    company_lookup: dict[str, dict[str, str]] | None = None,
-) -> dict[str, Any]:
-    if not isinstance(data, dict):
-        return {}
-    profile = normalize_linkedin_profile(data)
-    if profile.get("success") is not True:
-        return {}
-
-    experiences = [rapidapi_experience_to_powerpacks(exp, company_lookup) for exp in profile.get("experiences", []) if isinstance(exp, dict)]
-    title, company, _legacy = current_position(experiences)
-    profile_public_id = profile.get("public_identifier") or public_identifier
-    profile_url = profile.get("linkedin_url") or linkedin_url or (f"https://www.linkedin.com/in/{profile_public_id}" if profile_public_id else "")
-    return {
-        "public_identifier": profile_public_id,
-        "linkedin_url": normalize_linkedin_url(profile_url),
-        "first_name": profile.get("first_name") or "",
-        "last_name": profile.get("last_name") or "",
-        "full_name": profile.get("full_name") or "",
-        "headline": profile.get("headline") or "",
-        "summary": profile.get("summary") or "",
-        "city": profile.get("city") or "",
-        "state": profile.get("state") or "",
-        "country": profile.get("country") or "",
-        "location_raw": profile.get("location_str") or "",
-        "profile_picture_url": profile.get("profile_pic_url") or "",
-        "work_experiences": experiences,
-        "education": profile.get("education") if isinstance(profile.get("education"), list) else [],
-        "current_title": title,
-        "current_company": company,
-    }
-
-
-def row_has_profile_gaps(row: dict[str, str]) -> bool:
-    if not row.get("full_name") and not (row.get("first_name") and row.get("last_name")):
-        return True
-    if not row.get("headline"):
-        return True
-    if not row.get("current_company") and not row.get("current_title"):
-        return True
-    if profile_richness(row.get("work_experiences"), row.get("education")) == 0:
-        return True
-    return False
-
-
-def route_row(row: dict[str, str], force: bool = False) -> tuple[str, str]:
-    linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or "")
-    public_identifier = row.get("public_identifier") or extract_public_identifier(linkedin_url)
-    if linkedin_url or public_identifier:
-        if force or row_has_profile_gaps(row):
-            return "linkedin_provider", "linkedin identifier present and profile has gaps"
-        return "skip_complete", "linkedin identifier present and profile appears complete"
-    if row.get("primary_email") or row.get("primary_phone") or row.get("twitter_handle") or row.get("full_name"):
-        return "needs_resolution", "no linkedin identifier; needs resolution/research before provider enrichment"
-    return "skip_no_identifier", "no usable identifier"
-
-
-def merge_provider_profile(base: dict[str, Any], rapid: dict[str, Any], rapid_raw: dict[str, Any] | None) -> dict[str, Any]:
-    base = normalize_people_row(base)
-    public_identifier = base.get("public_identifier") or rapid.get("public_identifier") or extract_public_identifier(base.get("linkedin_url") or rapid.get("linkedin_url") or "")
-    row: dict[str, Any] = dict(base)
-    row["id"] = row.get("id") or generate_person_id(public_identifier, row.get("full_name") or row.get("primary_email") or row.get("primary_phone") or "")
-    row["public_identifier"] = public_identifier
-
-    if rapid:
-        for key in [
-            "linkedin_url", "first_name", "last_name", "full_name", "headline", "summary",
-            "city", "state", "country", "location_raw", "profile_picture_url",
-            "current_title", "current_company",
-        ]:
-            value = rapid.get(key)
-            if value not in (None, ""):
-                row[key] = value
-        row["linkedin_url"] = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
-        if not row.get("full_name"):
-            row["full_name"] = f"{row.get('first_name','')} {row.get('last_name','')}".strip()
-        row["work_experiences"] = json.dumps(rapid.get("work_experiences") or parse_jsonish(row.get("work_experiences"), []))
-        row["education"] = json.dumps(rapid.get("education") or parse_jsonish(row.get("education"), []))
-        row["enriched_at"] = now_iso()
-        row["enrichment_provider"] = "rapidapi"
-        if rapid_raw:
-            row["rapidapi_response"] = json.dumps(rapid_raw)
-    else:
-        row["linkedin_url"] = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
-        row["enrichment_provider"] = row.get("enrichment_provider") or "existing_only"
-    return normalize_people_row(row)
-
-
-def cached_profile_from_row(row: dict[str, Any], public_identifier: str, linkedin_url: str) -> dict[str, Any] | None:
-    for col in ("rapidapi_response_enriched", "rapidapi_response"):
-        parsed = parse_jsonish(row.get(col), None)
-        if isinstance(parsed, dict) and normalize_linkedin_profile(parsed).get("success") is True:
-            return parsed
-    return None
-
-
-def confirmed_people_row(row: dict[str, Any]) -> bool:
-    linkedin_url = normalize_linkedin_url(str(row.get("linkedin_url") or ""))
-    public_identifier = str(row.get("public_identifier") or extract_public_identifier(linkedin_url) or "").strip()
-    if not linkedin_url or not public_identifier:
-        return False
-    raw = parse_jsonish(row.get("rapidapi_response"), None)
-    return isinstance(raw, dict) and normalize_linkedin_profile(raw).get("success") is True
-
-
-def classify_rapidapi_cache_status(
-    row: dict[str, str],
-    profile_cache_dir: Path,
-    refresh_cache: bool,
-    retry_hours: float,
-    cache_index: set[str] | None = None,
-) -> tuple[str, str, Path | None, dict[str, Any] | None]:
-    public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
-    cache_path = indexed_profile_cache_path(profile_cache_dir, public_identifier, cache_index)
-    if refresh_cache:
-        return "miss", "refresh requested", cache_path, None
-    if cached_profile_from_row(row, public_identifier, row.get("linkedin_url") or "") is not None:
-        return "hit", "input rapidapi_response", cache_path, None
-    cached_file_exists = bool(cache_path and cache_path.exists())
-    if cache_index is not None:
-        cached_file_exists = any(slug in cache_index for slug in cache_slug_candidates(public_identifier))
-    if cached_file_exists and read_usable_cached_profile(cache_path):
-        return "hit", "profile cache", cache_path, None
-    recent_failure = recent_cached_failure(cache_path, retry_hours)
-    if recent_failure:
-        return "recent_failure", "recent provider failure", cache_path, recent_failure
-    if cached_file_exists:
-        return "miss", "cache entry unusable", cache_path, None
-    return "miss", "no usable cache", cache_path, None
-
-
-def count_rapidapi_cache_misses(cache_misses_csv: Path) -> int:
-    if not cache_misses_csv.exists():
-        return 0
-    return len(CsvIO.read_dict_rows(cache_misses_csv))
-
-
-@dataclass(frozen=True)
-class EnrichConfig:
-    """Frozen, keyword-only config for one enrichment run. `build_config`
-    resolves the inherit-sentinel (`None`) throughput knobs to their defaults so
-    every field here is concrete."""
-
-    input_csv: Path
-    artifact_dir: Path
-    profile_cache_dir: Path
-    limit: int | None = None
-    force: bool = False
-    refresh_cache: bool = False
-    company_corpus_jsonl: tuple[str, ...] = ()
-    sleep_seconds: float = 0.0
-    max_workers: int = DEFAULT_RAPIDAPI_MAX_WORKERS
-    max_rpm: float = DEFAULT_RAPIDAPI_MAX_RPM
-    failure_retry_hours: float = DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS
-    approve_spend: bool = False
-
-    def manifest_input(self) -> dict[str, Any]:
-        """The `input` block recorded in the manifest (what this run was asked to do)."""
-        return {
-            "input_csv": str(self.input_csv),
-            "limit": self.limit,
-            "force": self.force,
-            "profile_cache_dir": str(self.profile_cache_dir),
-            "refresh_cache": self.refresh_cache,
-            "company_corpus_jsonl": [str(p) for p in self.company_corpus_jsonl],
-            "sleep_seconds": self.sleep_seconds,
-            "max_workers": self.max_workers,
-            "max_rpm": self.max_rpm,
-            "failure_retry_hours": self.failure_retry_hours,
-            "approve_spend": self.approve_spend,
-        }
-
-
-def build_config(
-    *,
-    input_csv: str | Path,
-    artifact_dir: str | Path,
-    profile_cache_dir: str | Path,
-    limit: int | None = None,
-    force: bool = False,
-    refresh_cache: bool = False,
-    company_corpus_jsonl: list[str] | tuple[str, ...] | None = None,
-    sleep_seconds: float | None = None,
-    max_workers: int | None = None,
-    max_rpm: float | None = None,
-    failure_retry_hours: float | None = None,
-    approve_spend: bool = False,
-) -> EnrichConfig:
-    """Build a frozen EnrichConfig, resolving `None` throughput knobs (the
-    inherit sentinel that in-process callers like linkedin/network_import pass)
-    to their module defaults."""
-    return EnrichConfig(
-        input_csv=Path(input_csv),
-        artifact_dir=Path(artifact_dir),
-        profile_cache_dir=Path(profile_cache_dir),
-        limit=limit,
-        force=force,
-        refresh_cache=refresh_cache,
-        company_corpus_jsonl=tuple(str(p) for p in (company_corpus_jsonl or [])),
-        sleep_seconds=float(sleep_seconds) if sleep_seconds else 0.0,
-        max_workers=int(max_workers) if max_workers else DEFAULT_RAPIDAPI_MAX_WORKERS,
-        max_rpm=float(max_rpm) if max_rpm is not None else DEFAULT_RAPIDAPI_MAX_RPM,
-        failure_retry_hours=float(failure_retry_hours) if failure_retry_hours is not None else DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
-        approve_spend=approve_spend,
-    )
-
-
-@dataclass
-class EnrichManifest:
-    """Typed constructor for the enrichment stage `manifest.json` — the entire
-    durable state contract (status + per-step timing + counts + artifact paths).
-    No ledger, no run id: the artifact dir is fixed so reruns overwrite here."""
-
-    status: str
-    artifact_dir: str
-    input: dict[str, Any]
-    counts: dict[str, Any] = field(default_factory=dict)
-    artifacts: dict[str, Any] = field(default_factory=dict)
-    steps: dict[str, Any] = field(default_factory=dict)
-    needs_approval: dict[str, Any] | None = None
-    error: str | None = None
-    started_at: str = ""
-    updated_at: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "primitive": "enrich_people",
-            "status": self.status,
-            "artifact_dir": self.artifact_dir,
-            "input": self.input,
-            "counts": self.counts,
-            "artifacts": self.artifacts,
-            "steps": self.steps,
-            "started_at": self.started_at,
-            "updated_at": self.updated_at or now_iso(),
-        }
-        if self.needs_approval is not None:
-            payload["needs_approval"] = self.needs_approval
-        if self.error is not None:
-            payload["error"] = self.error
-        return payload
 
 
 class EnrichPeople:
@@ -928,7 +402,7 @@ class EnrichPeople:
                 public_identifier = extract_public_identifier(linkedin_url)
             is_cache_hit = row.get("cache_status") == "hit"
             if is_cache_hit:
-                cached_payload = cached_profile_from_row(row, public_identifier, linkedin_url)
+                cached_payload = cached_profile_from_row(row)
                 normalized = normalize_linkedin_profile(cached_payload) if cached_payload else None
                 if cached_payload and normalized and normalized.get("success") is True:
                     rapid = {"status_code": 200, "data": cached_payload, "error": "", "from_cache": True, "normalized_profile": normalized, "attempts": 1}

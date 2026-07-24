@@ -21,6 +21,16 @@ INGESTION = ROOT / "packs/ingestion"
 discover_messages = importlib.import_module(
     "packs.ingestion.primitives.discover.messages.discover"
 )
+# The channel classes and their owned path constants live in channels/; module
+# globals patched below (run_cmd, IMESSAGE_*/WHATSAPP_*, wacli timeouts) must be
+# patched on the concrete channel module the channel reads them from, not on the
+# discover module.
+i_message_channel = importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.channels.i_message_channel"
+)
+whats_app_channel = importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.channels.whats_app_channel"
+)
 import_messages = importlib.import_module(
     "packs.ingestion.primitives.imports.messages.importer"
 )
@@ -159,7 +169,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         path = INGESTION / "primitives/discover/messages/discover.py"
         text = path.read_text(encoding="utf-8")
 
-        self.assertIn('DEFAULT_MESSAGES_OUTPUT_DIR = DEFAULT_BASE_DIR / "discover" / "messages"', text)
+        self.assertIn('DEFAULT_MESSAGES_OUTPUT_DIR = discover_source_dir("messages")', text)
         self.assertIn("MESSAGES_DIR = MESSAGES_OUT_DIR", text)
         self.assertEqual(discover_messages.MESSAGES_DIR, Path(".powerpacks/messages"))
         self.assertIn('self.manifest_json = self.out_dir / "manifest.json"', text)
@@ -190,10 +200,10 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertNotIn("imessage", config["sources"])
         self.assertNotIn("whatsapp", config["sources"])
         self.assertNotIn("messages", config["sources"])
-        self.assertEqual(str(discover_messages.IMESSAGE_CONTACTS), ".powerpacks/messages/imessage.contacts.csv")
-        self.assertEqual(str(discover_messages.IMESSAGE_MANIFEST), ".powerpacks/messages/imessage.manifest.json")
-        self.assertEqual(str(discover_messages.WHATSAPP_CONTACTS), ".powerpacks/messages/whatsapp.contacts.csv")
-        self.assertEqual(str(discover_messages.WHATSAPP_MANIFEST), ".powerpacks/messages/whatsapp.contacts.csv.manifest.json")
+        self.assertEqual(str(i_message_channel.IMESSAGE_CONTACTS), ".powerpacks/messages/imessage.contacts.csv")
+        self.assertEqual(str(i_message_channel.IMESSAGE_MANIFEST), ".powerpacks/messages/imessage.manifest.json")
+        self.assertEqual(str(whats_app_channel.WHATSAPP_CONTACTS), ".powerpacks/messages/whatsapp.contacts.csv")
+        self.assertEqual(str(whats_app_channel.WHATSAPP_MANIFEST), ".powerpacks/messages/whatsapp.contacts.csv.manifest.json")
         self.assertEqual(
             str(discover_messages.DEFAULT_MESSAGES_OUTPUT_DIR / "contacts.csv"),
             ".powerpacks/network-import/discover/messages/contacts.csv",
@@ -216,8 +226,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
             captured["timeout"] = timeout
             return (0, {}, "")
 
-        with mock.patch.object(discover_messages, "run_cmd", fake_run_cmd):
-            channel = discover_messages.WhatsAppChannel(
+        with mock.patch.object(whats_app_channel, "run_cmd", fake_run_cmd):
+            channel = whats_app_channel.WhatsAppChannel(
                 accounts_path=Path("accounts.json"),
                 other_enabled=False,
                 max_messages=0,
@@ -229,8 +239,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertNotIn("--sync-mode", cmd)
         self.assertEqual(
             captured["timeout"],
-            discover_messages.DEFAULT_WACLI_SYNC_TIMEOUT
-            + discover_messages.DEFAULT_WACLI_DEPTH_TIMEOUT
+            whats_app_channel.DEFAULT_WACLI_SYNC_TIMEOUT
+            + whats_app_channel.DEFAULT_WACLI_DEPTH_TIMEOUT
             + 900,
         )
 
@@ -269,12 +279,12 @@ class IngestionMessagesContractTests(unittest.TestCase):
     def test_whatsapp_discovery_passes_unbounded_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "whatsapp.csv"
-            with mock.patch.object(discover_messages, "WHATSAPP_CONTACTS", missing), \
-                    mock.patch.object(discover_messages, "run_cmd", return_value=(0, {"status": "completed"}, "")) as run_cmd:
-                result = discover_messages.WhatsAppChannel(
+            with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
+                    mock.patch.object(whats_app_channel, "run_cmd", return_value=(0, {"status": "completed"}, "")) as run_cmd:
+                result = whats_app_channel.WhatsAppChannel(
                     accounts_path=Path(td) / "accounts.json",
                     other_enabled=False,
-                    max_messages=discover_messages.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
+                    max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
                 ).extract()
         self.assertIsNone(result)
         command = run_cmd.call_args.args[0]
@@ -290,12 +300,12 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 "pairing": {"state": "pre_full_sync",
                             "hint": "Re-link to pull years more history."},
             }
-            with mock.patch.object(discover_messages, "WHATSAPP_CONTACTS", missing), \
-                    mock.patch.object(discover_messages, "run_cmd", return_value=(0, payload, "")):
-                channel = discover_messages.WhatsAppChannel(
+            with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
+                    mock.patch.object(whats_app_channel, "run_cmd", return_value=(0, payload, "")):
+                channel = whats_app_channel.WhatsAppChannel(
                     accounts_path=Path(td) / "accounts.json",
                     other_enabled=False,
-                    max_messages=discover_messages.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
+                    max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
                 )
                 result = channel.extract()
         self.assertIsNone(result)
@@ -314,12 +324,12 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 self.artifacts["whatsapp_pairing_notice"] = "Re-link to pull years more history."
                 return None
 
-            with mock.patch.object(discover_messages, "DEFAULT_MESSAGES_OUTPUT_DIR", out), \
-                    mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
+            with mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
                     mock.patch.object(discover_messages.WhatsAppChannel, "extract", fake_extract), \
                     mock.patch.object(discover_messages.MessageChannel, "normalize", lambda self: None), \
                     mock.patch.object(discover_messages.MessagesDiscovery, "_merge", lambda self: None):
-                result = discover_messages.discover(include_imessage=False, include_whatsapp=True)
+                result = discover_messages.MessagesDiscovery(
+                    include_imessage=False, include_whatsapp=True, out_dir=out).run()
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["whatsapp_pairing_state"], "pre_full_sync")
         self.assertIn("Re-link", result["whatsapp_pairing_notice"])
@@ -333,23 +343,23 @@ class IngestionMessagesContractTests(unittest.TestCase):
             imessage.write_text("phone,name\n+14155550101,Old iMessage\n", encoding="utf-8")
             whatsapp.write_text("phone,name\n+14155550102,Old WhatsApp\n", encoding="utf-8")
 
-            with mock.patch.object(discover_messages, "IMESSAGE_CONTACTS", imessage), \
-                    mock.patch.object(discover_messages, "run_cmd", side_effect=[
+            with mock.patch.object(i_message_channel, "IMESSAGE_CONTACTS", imessage), \
+                    mock.patch.object(i_message_channel, "run_cmd", side_effect=[
                         (0, {"status": "ok"}, ""),
                         (0, {"status": "completed"}, ""),
                     ]) as imessage_run:
-                result = discover_messages.IMessageChannel(
+                result = i_message_channel.IMessageChannel(
                     accounts_path=root / "accounts.json", other_enabled=False).extract()
             self.assertIsNone(result)
             self.assertEqual(imessage_run.call_count, 2)
             self.assertIn("extract", imessage_run.call_args_list[1].args[0])
 
-            with mock.patch.object(discover_messages, "WHATSAPP_CONTACTS", whatsapp), \
-                    mock.patch.object(discover_messages, "run_cmd", return_value=(0, {"status": "completed"}, "")) as whatsapp_run:
-                result = discover_messages.WhatsAppChannel(
+            with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", whatsapp), \
+                    mock.patch.object(whats_app_channel, "run_cmd", return_value=(0, {"status": "completed"}, "")) as whatsapp_run:
+                result = whats_app_channel.WhatsAppChannel(
                     accounts_path=root / "accounts.json",
                     other_enabled=False,
-                    max_messages=discover_messages.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
+                    max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
                 ).extract()
             self.assertIsNone(result)
             self.assertEqual(whatsapp_run.call_count, 1)
@@ -364,15 +374,13 @@ class IngestionMessagesContractTests(unittest.TestCase):
             manifest = root / "contacts.manifest.json"
             imessage.write_text("phone,name\n+14155550101,Jane\n", encoding="utf-8")
             whatsapp.write_text("phone,name\n+14155550102,John\n", encoding="utf-8")
-            with mock.patch.object(discover_messages, "IMESSAGE_CONTACTS", imessage), \
-                    mock.patch.object(discover_messages, "WHATSAPP_CONTACTS", whatsapp), \
+            with mock.patch.object(i_message_channel, "IMESSAGE_CONTACTS", imessage), \
+                    mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", whatsapp), \
                     mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
                     mock.patch.object(discover_messages, "MERGED_CONTACTS_MANIFEST", manifest), \
                     mock.patch.object(discover_messages, "run_cmd", return_value=(0, {"status": "ok"}, "")) as run_cmd:
                 result = discover_messages.MessagesDiscovery(
-                    inputs={"linked": True, "include_imessage": True, "include_whatsapp": False},
-                    accounts_path=root / "accounts.json",
-                    out_dir=root,
+                    include_imessage=True, include_whatsapp=False, out_dir=root,
                 )._merge()
 
         self.assertIsNone(result)
@@ -386,8 +394,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
             imessage = root / "imessage.csv"
             merged = root / "contacts.csv"
             manifest = root / "contacts.manifest.json"
-            with mock.patch.object(discover_messages, "IMESSAGE_CONTACTS", imessage), \
-                    mock.patch.object(discover_messages, "WHATSAPP_CONTACTS", root / "missing.csv"), \
+            with mock.patch.object(i_message_channel, "IMESSAGE_CONTACTS", imessage), \
+                    mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", root / "missing.csv"), \
                     mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
                     mock.patch.object(discover_messages, "MERGED_CONTACTS_MANIFEST", manifest):
                 imessage.write_text(
@@ -395,8 +403,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 self.assertIsNone(discover_messages.MessagesDiscovery(
-                    inputs={"linked": True, "include_imessage": True, "include_whatsapp": False},
-                    accounts_path=root / "accounts.json", out_dir=root,
+                    include_imessage=True, include_whatsapp=False, out_dir=root,
                 )._merge())
                 self.assertIn("Old Name", merged.read_text(encoding="utf-8"))
 
@@ -405,8 +412,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 self.assertIsNone(discover_messages.MessagesDiscovery(
-                    inputs={"linked": True, "include_imessage": True, "include_whatsapp": False},
-                    accounts_path=root / "accounts.json", out_dir=root,
+                    include_imessage=True, include_whatsapp=False, out_dir=root,
                 )._merge())
                 merged_text = merged.read_text(encoding="utf-8")
                 self.assertIn("Fresh Name", merged_text)
@@ -421,8 +427,10 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "failed": 1,
         }
         for status, expected in cases.items():
+            fake_store = mock.Mock()
+            fake_store.run.return_value = {"status": status}
             with self.subTest(status=status), \
-                    mock.patch.object(discover_messages, "discover", return_value={"status": status}), \
+                    mock.patch.object(discover_messages, "MessagesDiscovery", return_value=fake_store), \
                     mock.patch.object(sys, "argv", ["messages.py", "discover"]), \
                     redirect_stdout(io.StringIO()):
                 self.assertEqual(discover_messages.main(), expected)

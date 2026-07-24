@@ -9,7 +9,8 @@ Lookup order (cheapest first):
 
 Output is a compact, source-agnostic profile summary $search deep mode
 uses to derive traits and build one similar-person candidate search. The
-RapidAPI path reuses enrich_people's fetch + cache handling, so a paid fetch
+RapidAPI path reuses the ingestion enrich pack's fetch + cache handling
+(`enrich/rapidapi_client.py` + `enrich/profile_cache.py`), so a paid fetch
 seeds the same cache used by ingestion.
 """
 
@@ -26,9 +27,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "packs/search/primitives/lib"))
-ENRICH_DIR = ROOT / "packs/ingestion/primitives/enrich"
-sys.path.insert(0, str(ENRICH_DIR))
 
+from packs.ingestion.primitives.enrich.profile_cache import (  # noqa: E402
+    profile_cache_path,
+    read_usable_cached_profile,
+)
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     extract_public_identifier,
     normalize_linkedin_url,
@@ -150,10 +154,8 @@ def summary_from_hydrated(profile: dict[str, Any], *, source: str) -> dict[str, 
 
 
 def lookup_profile_cache(public_identifier: str, cache_dir: Path) -> dict[str, Any] | None:
-    import enrich_people  # noqa: PLC0415
-
-    cache_path = enrich_people.profile_cache_path(cache_dir, public_identifier)
-    cached = enrich_people.read_usable_cached_profile(cache_path)
+    cache_path = profile_cache_path(cache_dir, public_identifier)
+    cached = read_usable_cached_profile(cache_path)
     if not cached:
         return None
     normalized = cached.get("normalized_profile") or {}
@@ -253,15 +255,10 @@ def lookup_postgres(public_identifier: str) -> dict[str, Any] | None:
 
 
 def fetch_rapidapi(public_identifier: str, linkedin_url: str, cache_dir: Path) -> tuple[dict[str, Any] | None, str]:
-    import enrich_people  # noqa: PLC0415
-
-    api_key = (
-        os.environ.get("RAPIDAPI_LINKEDIN_KEY", "").strip()
-        or os.environ.get("RAPIDAPI_KEY", "").strip()
-    )
+    api_key = rapidapi_key()
     if not api_key:
         return None, "RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set"
-    result = enrich_people.rapidapi_profile(
+    result = rapidapi_profile(
         public_identifier,
         linkedin_url,
         api_key,

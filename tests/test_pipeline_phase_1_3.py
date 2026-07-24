@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.indexing.lib.artifact_io import write_parquet_rows
+from packs.ingestion.primitives.enrich import profile_cache, rapidapi_client
 from packs.shared.csv_io import CsvIO
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,8 +122,8 @@ class PipelinePhase13Tests(unittest.TestCase):
         self.assertEqual(index_contacts.selected_openai_usage_tier(index_args)["tier"], "tier_1")
 
     def test_rapidapi_defaults_use_authorized_throughput(self):
-        self.assertEqual(enrich_people.DEFAULT_RAPIDAPI_MAX_WORKERS, 64)
-        self.assertEqual(enrich_people.DEFAULT_RAPIDAPI_MAX_RPM, 300)
+        self.assertEqual(rapidapi_client.DEFAULT_RAPIDAPI_MAX_WORKERS, 64)
+        self.assertEqual(rapidapi_client.DEFAULT_RAPIDAPI_MAX_RPM, 300)
 
     def test_rapidapi_profile_retries_429_then_succeeds(self):
         payload = {
@@ -132,12 +133,12 @@ class PipelinePhase13Tests(unittest.TestCase):
             "experiences": [{"title": "Founder", "company_name": "Analytical Engines"}],
         }
         with tempfile.TemporaryDirectory() as tmp, \
-            mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 3), \
-            mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 1.0), \
-            mock.patch.object(enrich_people, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (200, payload, "")]) as http_json, \
-            mock.patch.object(enrich_people.time, "sleep") as sleep:
+            mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 3), \
+            mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 1.0), \
+            mock.patch.object(rapidapi_client, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (200, payload, "")]) as http_json, \
+            mock.patch.object(rapidapi_client.time, "sleep") as sleep:
             wait = mock.Mock()
-            result = enrich_people.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True, wait_for_attempt=wait)
+            result = rapidapi_client.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True, wait_for_attempt=wait)
             cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
         self.assertEqual(result["status_code"], 200)
         self.assertEqual(result["attempts"], 2)
@@ -148,11 +149,11 @@ class PipelinePhase13Tests(unittest.TestCase):
 
     def test_rapidapi_profile_records_final_retry_failure(self):
         with tempfile.TemporaryDirectory() as tmp, \
-            mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 2), \
-            mock.patch.object(enrich_people, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 0.5), \
-            mock.patch.object(enrich_people, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (429, {"message": "Too many requests"}, "")]) as http_json, \
-            mock.patch.object(enrich_people.time, "sleep") as sleep:
-            result = enrich_people.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True)
+            mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 2), \
+            mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 0.5), \
+            mock.patch.object(rapidapi_client, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (429, {"message": "Too many requests"}, "")]) as http_json, \
+            mock.patch.object(rapidapi_client.time, "sleep") as sleep:
+            result = rapidapi_client.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True)
             cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
         self.assertEqual(result["status_code"], 429)
         self.assertEqual(result["attempts"], 2)
@@ -212,7 +213,7 @@ class PipelinePhase13Tests(unittest.TestCase):
                 "last_checked_at": enrich_people.now_iso(),
                 "normalized_profile": {"success": False, "error": "rate limited"},
             }), encoding="utf-8")
-            status, reason, path, failure = enrich_people.classify_rapidapi_cache_status(
+            status, reason, path, failure = profile_cache.classify_rapidapi_cache_status(
                 {"public_identifier": "ada", "linkedin_url": "https://www.linkedin.com/in/ada"},
                 cache_dir,
                 refresh_cache=False,

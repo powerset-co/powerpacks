@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Local name matcher between message contacts and an explicit people catalog.
 
-Stdlib-only port of `contact_exporter.matching.apply_local_name_matching`.
+Fuzzy scoring uses `difflib.SequenceMatcher` (stdlib); the tier thresholds below
+are tuned to its ratio, so don't swap the scorer without re-tuning them.
 
 Tiers (highest precedence first):
 

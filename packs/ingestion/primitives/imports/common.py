@@ -2,11 +2,14 @@
 """Shared helpers for import/enrich contact stages.
 
 Changelog:
+  2026-07-23 (steps split): removed `load_gmail_import_steps` — the
+    `importlib.util.spec_from_file_location` fossil that file-loaded
+    gmail/import_steps.py as a synthetic module. `GmailImport` now lives in
+    gmail/importer.py and its steps in gmail/steps/; consumers import them
+    directly (normal package imports). The `importlib.util` / `sys` imports went
+    with it.
   2026-07-24: removed the Gmail step-ledger constructor; imports persist only
     their output files and manifest.json.
-  2026-07-23 (audit):
-    - load_gmail_import_steps: gmail step functions extracted from the retired
-      before_split orchestrator into gmail/import_steps.py.
   2026-07-23 (audit batch 18): import_steps.py moved home — from the discover
     package into this package's gmail/ vertical (it is import-stage code).
   2026-07-23 (audit batch 20A): package renamed `import_contacts_pipeline` →
@@ -26,10 +29,8 @@ Changelog:
 
 from __future__ import annotations
 
-import importlib.util
 import csv
 import shutil
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -50,24 +51,6 @@ from packs.ingestion.primitives.imports.directory import (
     normalized_directory_row,
 )
 from packs.shared.csv_io import CsvIO
-
-
-def load_gmail_import_steps() -> Any:
-    """Load the gmail import module the live import dispatches from this package's
-    gmail/import_steps.py, and return it (the caller getattrs the `GmailImport`
-    orchestrator off it — plus `materialize_gmail_merged_people_csv`, re-exported
-    for tests). No Parallel resolution, no RapidAPI hydration (deep-context owns
-    both; stored legacy resolutions migrate via `bin/deep-context migrate-legacy`).
-    File-loaded to keep the step module's exact loader semantics (no package
-    __init__ side effects at load time)."""
-    path = Path(__file__).resolve().parent / "gmail" / "import_steps.py"
-    spec = importlib.util.spec_from_file_location("_powerpacks_gmail_import_steps", path)
-    if not spec or not spec.loader:
-        raise RuntimeError(f"could not load gmail import steps: {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def account_channel(accounts: dict[str, Any], name: str) -> dict[str, Any]:

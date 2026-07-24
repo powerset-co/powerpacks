@@ -18,7 +18,6 @@ from packs.ingestion.primitives.discover.gmail.util import (  # noqa: F401
     gmail_incremental_input_id,
     gmail_discovery_merge_plan,
     discover_engine_base_dir,
-    inputs,
 )
 from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: F401
     MSGVAULT_REAUTH_ERROR_MARKERS,
@@ -36,6 +35,5 @@ from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: F
 )
 from packs.ingestion.primitives.discover.gmail.discover import (  # noqa: F401
     build_parser,
-    discover,
     main,
 )

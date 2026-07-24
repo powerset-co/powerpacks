@@ -5,6 +5,9 @@ Changelog:
   2026-07-23 (audit):
     - Payloads discover.py previously assembled as inline dicts became these
       typed dataclasses.
+  2026-07-23 (account-email selection): the selected_accounts field on
+    GmailDiscoveryIncrementalMismatch and GmailDiscoveryCompleted was renamed
+    account_emails, matching the single --account-email selection surface.
 """
 
 from __future__ import annotations
@@ -61,7 +64,7 @@ class GmailDiscoveryIncrementalMismatch(StagePayload):
     calculation_version: str = ""
     calculation_mode: str = ""
     calculation_reason: str = "full_rewrite_requires_full_recount_children"
-    selected_accounts: list[str] = field(default_factory=list)
+    account_emails: list[str] = field(default_factory=list)
     child_calculation_modes: list[str] = field(default_factory=list)
     children: list[dict[str, Any]] = field(default_factory=list)
     status: str = "failed"
@@ -82,7 +85,7 @@ class GmailDiscoveryCompleted(StagePayload):
     contacts_csv: str = ""
     linkedin_resolution_queue_csv: str = ""
     contacts: int = 0
-    selected_accounts: list[str] = field(default_factory=list)
+    account_emails: list[str] = field(default_factory=list)
     msgvault_db: str = ""
     updated_at: str = ""
     privacy: GmailPrivacy = field(default_factory=GmailPrivacy)

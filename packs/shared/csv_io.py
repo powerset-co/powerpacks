@@ -32,10 +32,17 @@ Changelog:
     _upsert_key/_project_row/_merge_row), absorbed from
     discover/gmail/discover_engine.py's local write_csv/csv_key/normalize_csv_row/
     merge_csv_row/upsert_csv. Byte output unchanged for current callers.
+  2026-07-23 (audit class-sharing): added the priority-key upsert family
+    (read_dict_rows_normalized + _priority_key + upsert_dict_rows_priority),
+    absorbed from linkedin/network_import.py's local read_csv_rows/row_key/
+    upsert_csv. Distinct from upsert_dict_rows: keyed by the FIRST non-empty
+    preferred field instead of the composite of all key fields, and preserves
+    existing row order instead of re-sorting. Byte output unchanged.
 """
 from __future__ import annotations
 
 import csv
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -136,6 +143,59 @@ class CsvIO:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
+
+    @classmethod
+    def read_dict_rows_normalized(cls, path: Path) -> list[dict[str, str]]:
+        """Read a CSV into normalized dict rows: a missing file returns ``[]``,
+        the short-row ``None`` key is dropped, and ``None`` values become ``""``.
+        The lenient counterpart to :meth:`read_dict_rows` for upsert-style
+        callers that re-read their own prior output."""
+        if not path.exists():
+            return []
+        with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+            return [{str(key): value or "" for key, value in row.items() if key is not None} for row in cls.dict_reader(handle)]
+
+    @classmethod
+    def _priority_key(cls, row: dict[str, Any], preferred: list[str]) -> str:
+        """The FIRST non-empty preferred field as ``field:value`` (lowercased);
+        falls back to the sorted whole-row JSON so keyless rows never collide."""
+        for field in preferred:
+            value = str(row.get(field) or "").strip().lower()
+            if value:
+                return f"{field}:{value}"
+        return json.dumps({k: str(row.get(k, "") or "") for k in sorted(row)}, sort_keys=True)
+
+    @classmethod
+    def upsert_dict_rows_priority(cls, path: Path, fieldnames: list[str], rows: list[dict[str, Any]], preferred_keys: list[str]) -> list[dict[str, Any]]:
+        """Merge ``rows`` into the CSV at ``path`` keyed by :meth:`_priority_key`
+        over ``preferred_keys``, preserving existing row order and appending new
+        rows; non-empty incoming values overwrite. Returns the merged rows.
+
+        Contrast with :meth:`upsert_dict_rows`, which keys on the composite of
+        ALL key fields and re-sorts output — this variant treats the preferred
+        fields as identity fallbacks (public_identifier beats linkedin_url beats
+        email) so restated rows with newly-filled fields still match."""
+        ordered: list[dict[str, Any]] = []
+        by_key: dict[str, dict[str, Any]] = {}
+        for existing in cls.read_dict_rows_normalized(path):
+            key = cls._priority_key(existing, preferred_keys)
+            by_key[key] = existing
+            ordered.append(existing)
+        for row in rows:
+            key = cls._priority_key(row, preferred_keys)
+            normalized = {field: row.get(field, "") for field in fieldnames}
+            if key in by_key:
+                target = by_key[key]
+                for field, value in normalized.items():
+                    if value != "":
+                        target[field] = value
+                    else:
+                        target.setdefault(field, "")
+            else:
+                by_key[key] = normalized
+                ordered.append(normalized)
+        cls.write_dict_rows(path, fieldnames, ordered)
+        return ordered
 
     @classmethod
     def _upsert_key(cls, row: dict[str, Any], fields: list[str]) -> tuple[str, ...] | None:

@@ -47,12 +47,11 @@ from packs.ingestion.primitives.deep_context.review_store import (
     judge_accepted_candidate_retarget,
     write_override_rows,
 )
-from packs.ingestion.primitives.enrich.enrich_people import (
+from packs.ingestion.primitives.enrich.profile_transforms import (
     merge_provider_profile,
     normalize_rapidapi,
-    rapidapi_key,
-    rapidapi_profile,
 )
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
 from packs.ingestion.schemas.people_schema import (
     PEOPLE_SCHEMA_COLUMNS,
     extract_public_identifier,

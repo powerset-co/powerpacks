@@ -14,7 +14,11 @@ discover/import primitives.
 - `DEFAULT_PROFILE_CACHE_DIR` — the LinkedIn profile enrichment cache.
 - `DEFAULT_MSGVAULT_DB` — the local msgvault SQLite db, honoring `$MSGVAULT_HOME`.
 - `MESSAGES_OUT_DIR` — `.powerpacks/messages`, the iMessage/WhatsApp scratch dir.
-- `source_import_dir(source)` — a source's import output dir under the import root.
+- `source_import_dir(source)` / `discover_source_dir(source)` — a source's import
+  or discover output dir under the respective root.
+- `resolve_discover_source_dir(output_dir, source)` — normalize a user-supplied
+  `--output-dir` (base dir, discover root, or already-resolved source dir) to
+  the source's fixed discover dir.
 - `gmail_discover_dir(base_dir, account_email)` — the fixed per-account Gmail
   discover output dir (`<base>/discover/gmail/<account-slug>`).
 
@@ -28,6 +32,10 @@ Changelog:
   2026-07-23 (audit): absorbed `gmail_discover_dir` from
     discover/gmail/discover_engine.py so the discover CLI and the gmail
     discover orchestrator build the child output path from one shared builder.
+  2026-07-23 (audit class-sharing): absorbed `resolve_discover_source_dir` from
+    linkedin/network_import.py's local `discover_output_dir` (generalized over
+    `source`) so the import CLI and the Modal sandbox runner normalize
+    `--output-dir` through one shared builder.
 """
 
 from __future__ import annotations
@@ -57,6 +65,26 @@ MESSAGES_OUT_DIR = Path(".powerpacks/messages")
 def source_import_dir(source: str) -> Path:
     """Return `<import root>/<source>`, a source's fixed import output directory."""
     return DEFAULT_IMPORT_DIR / source
+
+
+def discover_source_dir(source: str) -> Path:
+    """Return `<discover root>/<source>`, a source's fixed discover output directory
+    (symmetric with source_import_dir; use this instead of re-deriving the path)."""
+    return DEFAULT_DISCOVER_DIR / source
+
+
+def resolve_discover_source_dir(output_dir: Path, source: str) -> Path:
+    """Normalize a user-supplied `--output-dir` to `<source>`'s fixed discover dir.
+
+    Accepts the network-import base dir (returns `<dir>/discover/<source>`), the
+    discover root itself (returns `<dir>/<source>`), or an already-resolved
+    `<...>/discover/<source>` / `<...>/import/<source>` dir (returned unchanged),
+    so callers can pass any of the three without re-deriving the layout."""
+    if output_dir.name == source and output_dir.parent.name in {"discover", "import"}:
+        return output_dir
+    if output_dir.name == "discover":
+        return output_dir / source
+    return output_dir / "discover" / source
 
 
 def gmail_discover_dir(base_dir: Path, account_email: str = "") -> Path:

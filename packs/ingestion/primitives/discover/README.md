@@ -2,6 +2,12 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-07-23 (oop): `gmail/discover.py` dropped the thin `discover()` wrapper —
+  callers now construct `GmailDiscovery(...).run()` directly — and account
+  selection is `--account-email` (repeatable) only: the
+  `--accounts`/`accounts_file`/`selected_accounts` alternatives are gone, so the
+  entry no longer reads `accounts.json` (Reads = `discovery.config.json` + prior
+  `manifest.json`). Table updated; other files unchanged.
 - 2026-07-23 (audit): `twitter/network_import.py` migrated from the resumable
   ledger step-machine (`run/approve/continue/status` + `network_import.ledger.json`)
   to a manifest-only single-`run` orchestrator (`TwitterDiscovery`): resume is by
@@ -64,7 +70,7 @@ flowchart LR
 
 | File | Role | Reads | Writes |
 | --- | --- | --- | --- |
-| [`gmail/discover.py`](gmail/discover.py) | CLI entry: `discover()` resolves config then runs `GmailDiscovery` (store) over one `GmailAccountChannel` per account — per-account msgvault sync → spawn engine → read fixed queue → merge plan → typed manifest | `accounts.json`, `discovery.config.json`, prior `discover/gmail/manifest.json` | `discover/gmail/contacts.csv`, `linkedin_resolution_queue.csv`, `manifest.json` |
+| [`gmail/discover.py`](gmail/discover.py) | CLI entry: constructs `GmailDiscovery(...).run()` (no `discover()` wrapper) over one `GmailAccountChannel` per `--account-email` — per-account msgvault sync → spawn engine → read fixed queue → merge plan → typed manifest | `discovery.config.json`, prior `discover/gmail/manifest.json` | `discover/gmail/contacts.csv`, `linkedin_resolution_queue.csv`, `manifest.json` |
 | [`gmail/util.py`](gmail/util.py) | Tolerant parsers, row merge (`_merge_rows`), incremental merge plan (`gmail_discovery_merge_plan`), column/const defs | prior `manifest.json` (applied-inputs state) | — (pure helpers) |
 | [`gmail/models.py`](gmail/models.py) | Typed stage-manifest dataclasses — the only payload shapes `discover.py` may emit | — | — |
 | [`gmail/msgvault/store.py`](gmail/msgvault/store.py) | Canonical read-only access layer over the msgvault archive (`MsgvaultStore` + its SQL): metadata aggregation for discovery, plus body reads reserved for deep-context/logbook | msgvault SQLite (read-only) | — |

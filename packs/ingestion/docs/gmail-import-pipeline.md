@@ -1,5 +1,10 @@
 <!--
 Changelog:
+- 2026-07-23: Gmail discovery account selection is `--account-email` (repeatable)
+  only — the `--accounts`/accounts-file path and the `discover()` wrapper were
+  dropped from the primitive (callers construct `GmailDiscovery(...).run()`).
+  Corrected the Bounded-sync stage row path `gmail.py discover` →
+  `gmail/discover.py discover`.
 - 2026-07-23 (audit): gmail/msgvault_store.py split into the gmail/msgvault/
   package (store.py = MsgvaultStore + SQL, util.py = pure helpers) and
   gmail/sync.py moved to gmail/msgvault/sync.py; the component table now links
@@ -86,7 +91,7 @@ flowchart TD
 | --- | --- | --- |
 | Account choice | The user selects every Gmail address and a history window. Default is three years; a wider window needs confirmation. | Selection is explicit rather than inferred. |
 | OAuth and authorization | msgvault's desktop OAuth app is created if missing. Every selected address absent from `status.accounts` is authorized, including the primary account. | Existing OAuth configuration does not imply a new account is authorized. |
-| Bounded sync | All selected accounts are passed to one `gmail.py discover` invocation with repeated `--account-email` flags and one `--sync-after`. | Separate per-account calls can rewrite the stable manifest and lose earlier accounts from the following import. |
+| Bounded sync | All selected accounts are passed to one `gmail/discover.py discover` invocation with repeated `--account-email` flags and one `--sync-after`. | Separate per-account calls can rewrite the stable manifest and lose earlier accounts from the following import. |
 | Metadata extraction | msgvault first synchronizes messages into its local full-message archive. Powerpacks opens that SQLite database read-only and selects participants, direction, message/conversation IDs, timestamps, labels, counts, and display names. | Powerpacks does not select body, subject, MIME, or attachment content, although msgvault's local store contains message bodies and may contain attachments. |
 | Filtering | Automated/service addresses and contacts without bidirectional interaction are removed. Default category labels are also removed when both msgvault label tables exist. | The queue favors actual person-to-person relationships; missing label tables weaken category filtering rather than failing closed. |
 | Directory lookup | Gmail observations update the reusable local directory. Exact email, phone, or unambiguous unique-name mappings at confidence `>= 0.75` are reused; cached negative outcomes are not retried. | Known people attach immediately with no provider call. |

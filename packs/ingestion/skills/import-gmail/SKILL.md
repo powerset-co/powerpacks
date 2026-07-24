@@ -6,6 +6,11 @@ description: Add Gmail contacts to your local network. Use for $import-gmail. Se
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-23: Gmail discovery selects accounts only via repeated `--account-email`.
+  The primitive dropped its `--accounts`/accounts-file alternative and the
+  `discover()` wrapper (callers now construct `GmailDiscovery(...).run()`);
+  Step 5 already passes one `--account-email` per account plus one `--sync-after`,
+  so its command is unchanged. Fixed the guardrail path `gmail.py` → `gmail/discover.py`.
 - 2026-07-15: Added an all-account OAuth health preflight before sync. The
   workflow now collects every missing/expired account in one pass, asks once
   before authorizing that set, rechecks all selected accounts, and starts no
@@ -78,7 +83,7 @@ paths and rely on the primitives — don't pre-delete or invent folders.
   bug if you hit one). Plain shell for `cp`/`test`/`wc`/`cat` is fine; no glue
   scripts.
 - **Never call `msgvault` (or `msgvault sync-full`) directly.** Gmail syncing
-  happens *only* through Step 5's `gmail.py discover --sync-after "$SYNC_AFTER"`.
+  happens *only* through Step 5's `gmail/discover.py discover --sync-after "$SYNC_AFTER"`.
   A bare `msgvault sync-full <email>` has no date bound and pulls the entire
   mailbox, ignoring the chosen window. **Re-authorizing a lapsed token is
   `msgvault_setup.py add-account --force-auth` (OAuth only, no sync) — see Step 4;

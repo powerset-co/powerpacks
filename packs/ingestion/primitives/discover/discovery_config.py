@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Static discovery input/output contract."""
+"""Static discovery input/output contract.
+
+Changelog:
+  2026-07-23 (account-email selection): gmail discovery stopped reading
+    accounts.json for account selection, so the accounts_path() and state_value()
+    accessors (which served only that read) were removed. The top-level
+    accounts_json config key is kept (it is part of the config contract asserted
+    by the messages contract test). Remaining accessors — load_config,
+    source_config, config_path, output_path — still back the msgvault_db/sync_query
+    defaults and the gmail output paths.
+"""
 
 from __future__ import annotations
 
@@ -33,23 +43,3 @@ def config_path(source: str, section: str, key: str, path: Path = CONFIG_PATH) -
 
 def output_path(source: str, key: str, path: Path = CONFIG_PATH) -> Path:
     return config_path(source, "outputs", key, path)
-
-
-def accounts_path(path: Path = CONFIG_PATH) -> Path:
-    cfg = load_config(path)
-    return Path(str(cfg.get("accounts_json") or ".powerpacks/ingestion/accounts.json"))
-
-
-def state_value(data: dict[str, Any], key: str, default: Any = None) -> Any:
-    cur: Any = data
-    for part in key.split("."):
-        if isinstance(cur, dict):
-            cur = cur.get(part)
-        elif isinstance(cur, list) and part.isdigit():
-            idx = int(part)
-            cur = cur[idx] if 0 <= idx < len(cur) else None
-        else:
-            return default
-        if cur is None:
-            return default
-    return cur

@@ -30,6 +30,12 @@ REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
 from packs.indexing.modal.sandbox_common import now_iso, write_status  # noqa: E402
+from packs.ingestion.primitives.common.paths import resolve_discover_source_dir  # noqa: E402
+from packs.ingestion.primitives.enrich.rapidapi_client import (  # noqa: E402
+    DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
+    DEFAULT_RAPIDAPI_MAX_RPM,
+    DEFAULT_RAPIDAPI_MAX_WORKERS,
+)
 from packs.ingestion.primitives.imports.linkedin import network_import as linkedin_import  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -37,7 +43,6 @@ WORK = Path("/tmp/linkedin-import")
 
 
 def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Namespace:
-    people_enrichment = linkedin_import.people_enrichment
     return argparse.Namespace(
         csv=args.connections_csv,
         source_user=args.source_user,
@@ -54,9 +59,9 @@ def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Name
         sleep_seconds=0.0,
         force_enrich=False,
         convert_only=False,
-        max_workers=people_enrichment.DEFAULT_RAPIDAPI_MAX_WORKERS,
-        max_rpm=people_enrichment.DEFAULT_RAPIDAPI_MAX_RPM,
-        failure_retry_hours=people_enrichment.DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
+        max_workers=DEFAULT_RAPIDAPI_MAX_WORKERS,
+        max_rpm=DEFAULT_RAPIDAPI_MAX_RPM,
+        failure_retry_hours=DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
     )
 
 
@@ -97,7 +102,7 @@ def main() -> int:
     ns = import_namespace(args, cache_dir)
     # The import stage overwrites one manifest.json in its fixed discover dir;
     # that manifest (not a ledger) is the source of truth for status + artifacts.
-    manifest_path = linkedin_import.discover_output_dir(Path(ns.output_dir)) / "manifest.json"
+    manifest_path = resolve_discover_source_dir(Path(ns.output_dir), "linkedin") / "manifest.json"
 
     write_status(run_vol, status | {"phase": "enrich"})
     # RapidAPI is always approved on this path (approve_spend=True), so the single

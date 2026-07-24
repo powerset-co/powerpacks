@@ -8,6 +8,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from packs.ingestion.primitives.enrich import rapidapi_client
 from packs.shared.csv_io import CsvIO
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/imports/linkedin/network_import.py"
@@ -108,7 +109,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             cache_dir = Path(tmp) / "profile_cache"
             with patch.dict("os.environ", {"RAPIDAPI_KEY": "r"}, clear=True):
                 # A cache miss must NOT fetch without approval: assert no network.
-                with patch.object(linkedin_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+                with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
                     code, payload = self.invoke([
                         "run",
                         "--csv", str(csv_path),
@@ -134,7 +135,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             cache_dir.mkdir()
             (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
             # No --approve-spend and no key: a seeded cache hit must never need approval.
-            with patch.object(linkedin_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),
@@ -181,7 +182,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             manifest_path = discover_dir / "manifest.json"
 
             self.write_connections(csv_path, [("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024")])
-            with patch.object(linkedin_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),
@@ -212,7 +213,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
                 ("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024"),
                 ("Sam", "Example", "sam-example", "sam@example.com", "BetaCo", "Founder", "02 Jan 2024"),
             ])
-            with patch.object(linkedin_import.people_enrichment, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),

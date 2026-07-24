@@ -10,6 +10,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from packs.ingestion.primitives.enrich import profile_cache, profile_transforms, rapidapi_client
 from packs.ingestion.schemas.people_schema import generate_person_id
 from packs.shared.csv_io import CsvIO
 
@@ -119,7 +120,7 @@ class EnrichPeopleTests(unittest.TestCase):
             cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
                 # A cache miss must NOT fetch without approval: assert no network.
-                with patch.object(enrich_people, "http_json", side_effect=AssertionError("network called")):
+                with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir)])
             self.assertEqual(code, enrich_people.NEEDS_APPROVAL_CODE)
             self.assertEqual(payload["status"], "needs_approval")
@@ -180,7 +181,7 @@ class EnrichPeopleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
             self.write_people(people, rapidapi_response=self.profile())
-            with patch.object(enrich_people, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out")])
             self.assertEqual(code, 0)
             self.assertEqual(payload["counts"]["paid_call_count"], 0)
@@ -238,7 +239,7 @@ class EnrichPeopleTests(unittest.TestCase):
             cache_dir = Path(tmp) / "cache"
             cache_dir.mkdir()
             (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
-            with patch.object(enrich_people, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
                     "--profile-cache-dir", str(cache_dir),
@@ -297,7 +298,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 self.assertEqual(payload["counts"]["queue_count"], 2)
                 self.assertEqual(payload["counts"]["cache_hit_count"], 1)
                 self.assertEqual(payload["counts"]["paid_call_count"], 1)
-                self.assertEqual(enrich_people.count_rapidapi_cache_misses(Path(payload["artifacts"]["rapidapi_cache_misses_csv"])), 1)
+                self.assertEqual(profile_cache.count_rapidapi_cache_misses(Path(payload["artifacts"]["rapidapi_cache_misses_csv"])), 1)
             self.assertEqual(code, 0)
             self.assertEqual(mocked.call_count, 1)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
@@ -346,7 +347,7 @@ class EnrichPeopleTests(unittest.TestCase):
 
     def test_failed_profile_is_cached_with_last_checked_at(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(enrich_people, "http_json", return_value=(200, {"success": False, "message": "not found"}, "")):
+            with patch.object(rapidapi_client, "http_json", return_value=(200, {"success": False, "message": "not found"}, "")):
                 result = enrich_people.rapidapi_profile("jane-example", "https://www.linkedin.com/in/jane-example", "key", cache_dir=Path(tmp))
             cached = json.loads((Path(tmp) / "jane-example.json").read_text(encoding="utf-8"))
             self.assertIn("last_checked_at", cached)
@@ -369,7 +370,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 "status_code": 404,
                 "error": "not found",
             }), encoding="utf-8")
-            with patch.object(enrich_people, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
                     "--profile-cache-dir", str(cache_dir),
@@ -406,7 +407,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["recent_failure_count"], 0)
 
     def test_current_position_respects_explicit_false(self):
-        title, company, legacy = enrich_people.current_position([
+        title, company, legacy = profile_transforms.current_position([
             {"title": "Old", "company": "OldCo", "is_current_position": False},
             {"title": "Current", "company": "NewCo", "ends_at": None},
         ])

@@ -6,6 +6,14 @@ Changelog:
   2026-07-23 (audit batch 17): network_import_base_dir renamed to
     discover_engine_base_dir (the child it feeds was renamed
     network_import.py -> discover_engine.py).
+  2026-07-23 (account-email selection): resolve_discovery_inputs no longer reads
+    accounts.json — the account selection IS the caller's account_emails list
+    (empty means no accounts selected). Dropped the inputs()/accounts.json state
+    reader, GmailDiscoveryInputs.accounts_file, and the selected_accounts field
+    (renamed account_emails). Precedence is now explicit override >
+    discovery.config default for msgvault_db and sync_query. _same_selected_accounts
+    -> _same_account_emails and the merge-plan reason selected_accounts_changed ->
+    account_emails_changed.
 """
 
 from __future__ import annotations
@@ -24,7 +32,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_MSGVAULT_DB  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
@@ -32,9 +39,7 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
 )
 from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
-    accounts_path as configured_accounts_path,
     source_config,
-    state_value,
 )
 
 
@@ -138,15 +143,15 @@ def gmail_incremental_input_id(account_email: str, rows: list[dict[str, Any]]) -
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _same_selected_accounts(left: Any, right: list[str]) -> bool:
+def _same_account_emails(left: Any, right: list[str]) -> bool:
     return sorted(_as_list(left)) == sorted(_as_list(right))
 
 
-def gmail_discovery_merge_plan(existing_manifest: dict[str, Any], selected_accounts: list[str], child_modes: list[str]) -> dict[str, str]:
+def gmail_discovery_merge_plan(existing_manifest: dict[str, Any], account_emails: list[str], child_modes: list[str]) -> dict[str, str]:
     if existing_manifest.get("calculation_version") != GMAIL_INTERACTION_CALCULATION_VERSION:
         return {"mode": "full_rewrite", "reason": "calculation_version_changed"}
-    if not _same_selected_accounts(existing_manifest.get("selected_accounts"), selected_accounts):
-        return {"mode": "full_rewrite", "reason": "selected_accounts_changed"}
+    if not _same_account_emails(existing_manifest.get("account_emails"), account_emails):
+        return {"mode": "full_rewrite", "reason": "account_emails_changed"}
     if child_modes and all(mode == GMAIL_CALCULATION_INCREMENTAL_DELTA for mode in child_modes):
         return {"mode": "incremental_update", "reason": "children_returned_incremental_deltas"}
     return {"mode": "full_rewrite", "reason": "children_returned_full_recounts"}
@@ -160,60 +165,41 @@ def discover_engine_base_dir(contacts_csv: Path) -> Path:
     return DEFAULT_BASE_DIR
 
 
-def inputs(accounts: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    gmail_cfg = source_config("gmail")
-    input_cfg = gmail_cfg["inputs"]
-    selected = state_value(accounts, input_cfg["selected_accounts_state_key"], [])
-    msgvault_db = state_value(accounts, input_cfg["msgvault_db_state_key"], "") or input_cfg.get("msgvault_db_default") or str(DEFAULT_MSGVAULT_DB)
-    return {
-        "selected_accounts": _as_list(selected),
-        "msgvault_db": str(Path(str(msgvault_db)).expanduser()),
-        "sync_query": str(input_cfg.get("sync_query") or "").strip(),
-    }
-
-
 @dataclass(frozen=True)
 class GmailDiscoveryInputs:
-    """THE resolved gmail-discovery configuration — discover() reads this and
+    """THE resolved gmail-discovery configuration — GmailDiscovery reads this and
     nothing else. Built only by resolve_discovery_inputs, which owns the one
-    precedence rule for the whole vertical."""
+    precedence rule for the whole vertical. account_emails IS the selection
+    (empty tuple = no accounts selected); there is no accounts.json fallback."""
 
-    accounts_file: Path
-    selected_accounts: tuple[str, ...]
+    account_emails: tuple[str, ...]
     msgvault_db: str
     sync_query: str
 
 
 def resolve_discovery_inputs(
-    accounts_file: Path | None,
     *,
-    selected_accounts: list[str] | None = None,
-    account_email: str | None = None,
+    account_emails: list[str] | None = None,
     msgvault_db: str | None = None,
     sync_query: str | None = None,
 ) -> GmailDiscoveryInputs:
     """The ONE configuration resolution point for gmail discovery.
 
     Precedence, highest first:
-      1. explicit caller/CLI overrides (the keyword args here)
-      2. persisted linked-source state (.powerpacks/ingestion/accounts.json —
-         the packaged config onboarding writes: selected accounts, msgvault db)
-      3. discovery.config.json defaults (state keys, db default, sync query)
-    Callers never merge config themselves; they pass overrides and read the
-    frozen result."""
-    accounts_file = accounts_file or configured_accounts_path()
-    account_state = read_json(accounts_file, {}) or {}
-    base = inputs(account_state, {})
-    explicit = ordered_unique([*(selected_accounts or []),
-                               *([account_email] if account_email else [])])
-    resolved_accounts = explicit or list(base["selected_accounts"])
-    resolved_db = (str(Path(str(msgvault_db)).expanduser()) if msgvault_db
-                   else base["msgvault_db"])
+      1. explicit caller/CLI override (the keyword args here)
+      2. discovery.config.json defaults (msgvault db default, sync query)
+    The account_emails list IS the selection — there is no accounts.json fallback,
+    so an empty/None list resolves to no accounts selected. Only msgvault_db and
+    sync_query have a config-default layer beneath the explicit override; callers
+    never merge config themselves — they pass overrides and read the frozen result."""
+    input_cfg = source_config("gmail")["inputs"]
+    resolved_accounts = ordered_unique(account_emails or [])
+    config_db = str(input_cfg.get("msgvault_db_default") or DEFAULT_MSGVAULT_DB)
+    resolved_db = str(Path(str(msgvault_db) if msgvault_db else config_db).expanduser())
     resolved_query = (str(sync_query or "").strip() if sync_query is not None
-                      else base["sync_query"])
+                      else str(input_cfg.get("sync_query") or "").strip())
     return GmailDiscoveryInputs(
-        accounts_file=Path(accounts_file),
-        selected_accounts=tuple(resolved_accounts),
+        account_emails=tuple(resolved_accounts),
         msgvault_db=resolved_db,
         sync_query=resolved_query,
     )

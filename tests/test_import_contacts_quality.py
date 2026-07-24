@@ -5,11 +5,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
+from packs.ingestion.primitives.imports.directory import (
+    DIRECTORY_COLUMNS,
+    materialize_gmail_merged_people_csv,
+)
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.ingestion.primitives.imports.gmail import importer as gmail_import
 from packs.ingestion.primitives.imports.gmail import util as gmail_import_util
-from packs.ingestion.primitives.imports.common import load_gmail_import_steps
 from packs.ingestion.primitives.imports.common import (
     directory_source_account_quality,
     normalize_directory_source_accounts,
@@ -197,13 +199,12 @@ class ImportContactsQualityTests(unittest.TestCase):
             import_dir = import_root / "gmail"
             import_dir.mkdir(parents=True)
             (import_dir / "ledger.json").write_text('{"status": "completed"}', encoding="utf-8")
-            steps = load_gmail_import_steps()
             args = gmail_import.build_parser().parse_args(["run", "--accounts", str(accounts)])
 
-            with mock.patch.object(steps, "DEFAULT_IMPORT_DIR", import_root):
-                with mock.patch.object(steps, "source_import_dir", return_value=import_dir):
-                    with mock.patch.object(steps, "gmail_artifacts_from_discovery", return_value={}):
-                        payload = steps.GmailImport(
+            with mock.patch.object(gmail_import, "DEFAULT_IMPORT_DIR", import_root):
+                with mock.patch.object(gmail_import, "source_import_dir", return_value=import_dir):
+                    with mock.patch.object(gmail_import, "gmail_artifacts_from_discovery", return_value={}):
+                        payload = gmail_import.GmailImport(
                             args=args,
                             contract=gmail_import.GMAIL_IMPORT_CONTRACT,
                         ).run()
@@ -242,8 +243,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                         "last_interaction": last_interaction,
                     })
 
-            legacy = load_gmail_import_steps()
-            result = legacy.materialize_gmail_merged_people_csv([str(one), str(two)], out)
+            result = materialize_gmail_merged_people_csv([str(one), str(two)], out)
 
             self.assertEqual(result["status"], "completed")
             with out.open(newline="", encoding="utf-8") as handle:
@@ -281,8 +281,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                         "source_channels": "gmail_msgvault",
                     })
 
-            legacy = load_gmail_import_steps()
-            result = legacy.materialize_gmail_merged_people_csv([str(one), str(two), str(three)], out)
+            result = materialize_gmail_merged_people_csv([str(one), str(two), str(three)], out)
 
             self.assertEqual(result["status"], "completed")
             with out.open(newline="", encoding="utf-8") as handle:

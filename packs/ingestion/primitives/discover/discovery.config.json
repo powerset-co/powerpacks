@@ -4,8 +4,6 @@
     "gmail": {
       "inputs": {
         "msgvault_db_default": "~/.msgvault/msgvault.db",
-        "msgvault_db_state_key": "accounts.gmail.config.msgvault_db",
-        "selected_accounts_state_key": "accounts.gmail.config.selected_accounts",
         "sync_query": "-category:social -category:promotions -category:forums -category:updates"
       },
       "outputs": {

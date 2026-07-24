@@ -1,5 +1,10 @@
 <!--
 Changelog:
+- 2026-07-23: Gmail discovery account selection is `--account-email` (repeatable)
+  only; the `--accounts`/accounts-file alternative and the `discover()` wrapper
+  were dropped from the primitive (callers construct `GmailDiscovery(...).run()`).
+  Fixed the `$import-gmail` runtime-row path `gmail.py discover` →
+  `gmail/discover.py discover --account-email ...`.
 - 2026-07-23 (audit): linkedin/network_import.py + enrich/enrich_people.py migrated
   to manifest-only; both are now a single idempotent `run` writing one
   manifest.json (the per-primitive ledger runners, the `continue`/`approve`
@@ -57,7 +62,7 @@ primitives so runs are deterministic, ledgered, testable, and resumable.
 
 | User command / skill | Skill file | Runtime script(s) | Result |
 | --- | --- | --- | --- |
-| `$import-gmail` | `packs/ingestion/skills/import-gmail/SKILL.md` | bounded `gmail.py discover` -> directory/Parallel/RapidAPI import -> fan-in -> Modal index | msgvault Gmail metadata imported into the local network and search index. |
+| `$import-gmail` | `packs/ingestion/skills/import-gmail/SKILL.md` | bounded `gmail/discover.py discover --account-email ...` -> directory/Parallel/RapidAPI import -> fan-in -> Modal index | msgvault Gmail metadata imported into the local network and search index. |
 | `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter/network_import.py run` (spend gated by `--approve-spend`); then the indexing fan-in | Twitter/X `people.csv`, then merged local network artifacts. |
 | `$import-messages` | `packs/ingestion/skills/import-messages/SKILL.md` | ingestion discovery/match/research/review -> source import -> fan-in -> Modal index | Reviewed iMessage/WhatsApp metadata in merged local network artifacts. |
 | LinkedIn CSV path | `$setup` (or `linkedin/network_import.py` directly) | `linkedin/network_import.py run` (spend gated by `--approve-spend`) delegating to `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |

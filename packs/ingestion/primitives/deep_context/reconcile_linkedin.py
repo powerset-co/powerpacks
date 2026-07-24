@@ -95,7 +95,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     row_keys_for_person,
     write_override_rows,
 )
-from packs.ingestion.primitives.enrich.enrich_people import (
+from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
     read_usable_cached_profile,
 )

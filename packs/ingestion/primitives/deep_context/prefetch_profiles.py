@@ -64,7 +64,7 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     load_env,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.jsonio import now_iso, read_json, write_json
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import linkedin_view
 from packs.ingestion.primitives.deep_context.review_web.model import (
     SYNTHETIC_PEOPLE_CSV,
@@ -73,14 +73,11 @@ from packs.ingestion.primitives.deep_context.review_web.model import (
 from packs.ingestion.primitives.deep_context.review_web.workflow import (
     pending_linkedin_candidates,
 )
-from packs.ingestion.primitives.enrich.enrich_people import (
+from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
-    rapidapi_key,
-    rapidapi_profile,
-    read_json,
     read_usable_cached_profile,
-    write_json,
 )
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 

@@ -18,8 +18,8 @@ approval (cache hits never spend). Cache misses need paid RapidAPI fetches:
 without `--approve-spend` the run stops at a `needs_approval` manifest (miss
 count + credit estimate, clean nonzero exit) BEFORE any fetch; with the flag it
 fetches when `RAPIDAPI_LINKEDIN_KEY`/`RAPIDAPI_KEY` is set and fails clearly
-otherwise. Cache format/seeding is documented in `enrich_people.py` (default
-cache dir `.powerpacks/network-import/profile_cache_v2`; override with
+otherwise. Cache format/seeding is documented in `enrich/profile_cache.py`
+(default cache dir `.powerpacks/network-import/profile_cache_v2`; override with
 `--profile-cache-dir`). Cache hits count into `cache_hit_count`, misses into
 `paid_call_count`.
 
@@ -36,6 +36,14 @@ manifest `artifacts` map; `people_csv` is the canonical interface):
 `provider_enriched.csv`, `raw_provider_responses/`, and `people.csv`.
 
 Changelog:
+  2026-07-23 (audit decomposition): the local discover_output_dir moved to
+    common/paths.py as `resolve_discover_source_dir(output_dir, "linkedin")`
+    (generalized over source), and the local read_csv_rows/row_key/upsert_csv
+    trio moved to packs/shared/csv_io.py as the priority-key upsert family
+    (`CsvIO.upsert_dict_rows_priority` + `read_dict_rows_normalized`). The
+    enrichment delegate is now imported from its decomposed homes
+    (models.build_config/EnrichManifest, rapidapi_client DEFAULT_* knobs);
+    enrich_people keeps the EnrichPeople orchestrator + CLI.
   2026-07-23 (audit class-sharing): the spend-gate exit code + CLI-emit helpers
     moved to common/gates.py — NEEDS_APPROVAL_CODE is an alias of
     EXIT_NEEDS_APPROVAL, and exit_code_for_status / manifest_emit_payload import
@@ -74,6 +82,12 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.enrich import enrich_people as people_enrichment  # noqa: E402
+from packs.ingestion.primitives.enrich.models import EnrichManifest, build_config  # noqa: E402
+from packs.ingestion.primitives.enrich.rapidapi_client import (  # noqa: E402
+    DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
+    DEFAULT_RAPIDAPI_MAX_RPM,
+    DEFAULT_RAPIDAPI_MAX_WORKERS,
+)
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
     extract_public_identifier,
@@ -83,7 +97,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
 )
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL, exit_code_for_status, manifest_emit_payload  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
-from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_PROFILE_CACHE_DIR  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_PROFILE_CACHE_DIR, resolve_discover_source_dir  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 CONNECTION_COLUMNS = [
@@ -106,53 +120,6 @@ NEEDS_APPROVAL_CODE = EXIT_NEEDS_APPROVAL
 
 class PipelineFailed(Exception):
     """A hard, non-recoverable step failure (e.g. the Connections.csv is missing)."""
-
-
-def discover_output_dir(output_dir: Path) -> Path:
-    if output_dir.name == "linkedin" and output_dir.parent.name in {"discover", "import"}:
-        return output_dir
-    if output_dir.name == "discover":
-        return output_dir / "linkedin"
-    return output_dir / "discover" / "linkedin"
-
-
-def read_csv_rows(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        return []
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return [{str(key): value or "" for key, value in row.items() if key is not None} for row in CsvIO.dict_reader(handle)]
-
-
-def row_key(row: dict[str, Any], preferred: list[str]) -> str:
-    for field in preferred:
-        value = str(row.get(field) or "").strip().lower()
-        if value:
-            return f"{field}:{value}"
-    return json.dumps({k: str(row.get(k, "") or "") for k in sorted(row)}, sort_keys=True)
-
-
-def upsert_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]], preferred_keys: list[str]) -> list[dict[str, Any]]:
-    ordered: list[dict[str, Any]] = []
-    by_key: dict[str, dict[str, Any]] = {}
-    for existing in read_csv_rows(path):
-        key = row_key(existing, preferred_keys)
-        by_key[key] = existing
-        ordered.append(existing)
-    for row in rows:
-        key = row_key(row, preferred_keys)
-        normalized = {field: row.get(field, "") for field in fieldnames}
-        if key in by_key:
-            target = by_key[key]
-            for field, value in normalized.items():
-                if value != "":
-                    target[field] = value
-                else:
-                    target.setdefault(field, "")
-        else:
-            by_key[key] = normalized
-            ordered.append(normalized)
-    CsvIO.write_dict_rows(path, fieldnames, ordered)
-    return ordered
 
 
 @dataclass
@@ -260,7 +227,7 @@ def parse_connections_csv(path: Path, source_user: str, limit: int | None = None
 @dataclass(frozen=True)
 class LinkedInImportConfig:
     """Frozen, keyword-only config for one LinkedIn import run. The throughput
-    knobs stay `None`-able inherit sentinels; enrich_people.build_config resolves
+    knobs stay `None`-able inherit sentinels; enrich/models.build_config resolves
     them to defaults inside the delegated enrichment run."""
 
     csv: Path
@@ -404,13 +371,13 @@ class LinkedInImport:
         people_rows = [conn.people_row(inp) for conn in connections]
         connections_out = self.run_dir / "connections_for_enrichment.csv"
         people_out = self.run_dir / "source_people.csv"
-        merged_connections = upsert_csv(
+        merged_connections = CsvIO.upsert_dict_rows_priority(
             connections_out,
             CONNECTION_COLUMNS,
             connection_rows,
             ["public_identifier", "linkedin_url", "linkedin_email", "person_id"],
         )
-        merged_people = upsert_csv(
+        merged_people = CsvIO.upsert_dict_rows_priority(
             people_out,
             PEOPLE_COLUMNS,
             people_rows,
@@ -428,14 +395,14 @@ class LinkedInImport:
             "source_people_total": len(merged_people),
         }
 
-    def enrich(self) -> people_enrichment.EnrichManifest:
+    def enrich(self) -> EnrichManifest:
         """Delegate RapidAPI enrichment to enrich_people, in-process, against the
         SAME discover dir. Returns the delegate's typed manifest (whose status
         carries needs_approval / failed straight up to this stage)."""
         source_people = self.artifacts.get("source_people_csv")
         if not source_people:
             raise PipelineFailed("convert step did not produce source_people_csv")
-        cfg = people_enrichment.build_config(
+        cfg = build_config(
             input_csv=source_people,
             artifact_dir=self.run_dir,
             profile_cache_dir=self.cfg.profile_cache_dir,
@@ -453,7 +420,7 @@ class LinkedInImport:
 
 
 def command_run(args: argparse.Namespace) -> int:
-    run_dir = discover_output_dir(Path(args.output_dir))
+    run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
     cfg = LinkedInImportConfig(
         csv=Path(args.csv),
         source_user=args.source_user,
@@ -477,7 +444,7 @@ def command_run(args: argparse.Namespace) -> int:
 
 
 def command_status(args: argparse.Namespace) -> int:
-    run_dir = discover_output_dir(Path(args.output_dir))
+    run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
     manifest = read_json(run_dir / "manifest.json", {}) or {}
     emit({
         "status": manifest.get("status", "unknown"),
@@ -510,9 +477,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when cache entries exist")
     run.add_argument("--company-corpus-jsonl", action="append", default=[])
     run.add_argument("--sleep-seconds", type=float, default=0.0)
-    run.add_argument("--max-workers", type=int, default=people_enrichment.DEFAULT_RAPIDAPI_MAX_WORKERS)
-    run.add_argument("--max-rpm", type=float, default=people_enrichment.DEFAULT_RAPIDAPI_MAX_RPM)
-    run.add_argument("--failure-retry-hours", type=float, default=people_enrichment.DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
+    run.add_argument("--max-workers", type=int, default=DEFAULT_RAPIDAPI_MAX_WORKERS)
+    run.add_argument("--max-rpm", type=float, default=DEFAULT_RAPIDAPI_MAX_RPM)
+    run.add_argument("--failure-retry-hours", type=float, default=DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
     run.add_argument("--no-harmonic", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--no-rapidapi", action="store_true", help=argparse.SUPPRESS)
     run.set_defaults(func=command_run)
