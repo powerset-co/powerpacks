@@ -206,9 +206,7 @@ class TwitterNetworkImportTests(unittest.TestCase):
                     self.assertEqual(self.call_main([*rerun, "--approve-spend"]), 0)
                     manifest = self.manifest(tmp)
                 statuses = manifest["steps"]
-                owner_index = [step.name for step in self.mod.STEPS].index(owner)
-                for step in self.mod.STEPS[owner_index:]:
-                    self.assertEqual(statuses[step.name]["status"], "completed")
+                self.assertEqual(statuses[owner]["status"], "completed")
 
     def test_changed_moe_model_and_experts_require_new_approval(self):
         with tempfile.TemporaryDirectory() as tmp, \
@@ -279,6 +277,98 @@ class TwitterNetworkImportTests(unittest.TestCase):
                 for step in self.manifest(tmp)["steps"].values()
             ))
 
+    def test_adopts_completed_pre_signature_manifest_without_provider_rerun(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), self.fake_providers():
+            args = ["run", "--handle", "operator", "--min-score", "0", "--limit", "1", "--skip-moe"]
+            self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
+            manifest = self.manifest(tmp)
+            manifest.pop("step_signatures")
+            for step in manifest["steps"].values():
+                step.pop("signature", None)
+            self.mod.write_json(Path(tmp) / "operator" / "manifest.json", manifest)
+
+            with patch.object(self.mod, "twitter_get_user") as get_user:
+                self.assertEqual(self.call_main(args), 0)
+                get_user.assert_not_called()
+            upgraded = self.manifest(tmp)
+            self.assertEqual(set(upgraded["step_signatures"]), {step.name for step in self.mod.STEPS})
+            self.assertTrue(all("outputs" in signature for signature in upgraded["step_signatures"].values()))
+            self.assertTrue(all(step["status"] == "cached" for step in upgraded["steps"].values()))
+
+    def test_adopts_completed_inline_signature_manifest_without_provider_rerun(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), self.fake_providers():
+            args = ["run", "--handle", "operator", "--min-score", "0", "--limit", "1", "--skip-moe"]
+            self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
+            manifest = self.manifest(tmp)
+            manifest.pop("step_signatures")
+            for step in manifest["steps"].values():
+                step["signature"].pop("outputs")
+            self.mod.write_json(Path(tmp) / "operator" / "manifest.json", manifest)
+
+            with patch.object(self.mod, "twitter_get_user") as get_user:
+                self.assertEqual(self.call_main(args), 0)
+                get_user.assert_not_called()
+            upgraded = self.manifest(tmp)
+            self.assertTrue(all("outputs" in signature for signature in upgraded["step_signatures"].values()))
+            self.assertTrue(all(step["status"] == "cached" for step in upgraded["steps"].values()))
+
+    def test_reverted_free_score_rerun_reuses_valid_moe(self):
+        followers = [
+            {
+                "handle": "zero", "display_name": "Zero Signal", "bio": "", "follower_count": 0,
+                "following_count": 1, "verified": False, "location": "", "website_url": "",
+                "twitter_user_id": "1",
+            },
+            {
+                "handle": "site", "display_name": "Site Signal", "bio": "", "follower_count": 0,
+                "following_count": 1, "verified": False, "location": "", "website_url": "https://example.com",
+                "twitter_user_id": "2",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp, patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), \
+             self.fake_providers(), patch.object(self.mod, "twitter_followers_page", return_value=(followers, "", {}, 200, "")):
+            config_a = [
+                "run", "--handle", "operator", "--min-score", "0",
+                "--moe-model", "model-a", "--moe-experts", "deep_tech",
+            ]
+            self.assertEqual(self.call_main([*config_a, "--approve-spend"]), 0)
+            config_b = [
+                "run", "--handle", "operator", "--min-score", "1",
+                "--moe-model", "model-a", "--moe-experts", "deep_tech",
+            ]
+            self.assertEqual(self.call_main(config_b), 20)
+            self.assertEqual(self.manifest(tmp)["needs_approval"]["step"], "moe_evaluate")
+
+            with patch.object(self.mod, "evaluate_expert_batch") as evaluate:
+                self.assertEqual(self.call_main(config_a), 0)
+                evaluate.assert_not_called()
+            manifest = self.manifest(tmp)
+            self.assertEqual(manifest["steps"]["score_candidates"]["status"], "completed")
+            self.assertEqual(manifest["steps"]["moe_evaluate"]["status"], "cached")
+
+    def test_source_label_is_written_and_source_only_change_invalidates_crawl(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), self.fake_providers():
+            args = [
+                "run", "--handle", "operator", "--source", "source alpha",
+                "--min-score", "0", "--limit", "1", "--skip-moe",
+            ]
+            self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
+            followers = CsvIO.read_dict_rows(Path(tmp) / "operator" / "followers_dump.csv")
+            self.assertEqual(followers[0]["source"], "source alpha")
+
+            changed = [
+                "run", "--handle", "operator", "--source", "source beta",
+                "--min-score", "0", "--limit", "1", "--skip-moe",
+            ]
+            self.assertEqual(self.call_main(changed), 20)
+            self.assertEqual(self.manifest(tmp)["needs_approval"]["step"], "load_or_crawl")
+            self.assertEqual(self.call_main([*changed, "--approve-spend"]), 0)
+            followers = CsvIO.read_dict_rows(Path(tmp) / "operator" / "followers_dump.csv")
+            self.assertEqual(followers[0]["source"], "source beta")
+
     def test_missing_companion_outputs_rerun_owner_and_downstream(self):
         cases = [
             ("linkedin_resolution_queue.csv", True, "pre_resolve_linkedin", False),
@@ -301,9 +391,7 @@ class TwitterNetworkImportTests(unittest.TestCase):
                     self.assertEqual(manifest["needs_approval"]["step"], owner)
                     self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
                     manifest = self.manifest(tmp)
-                owner_index = [step.name for step in self.mod.STEPS].index(owner)
-                for step in self.mod.STEPS[owner_index:]:
-                    self.assertEqual(manifest["steps"][step.name]["status"], "completed")
+                self.assertEqual(manifest["steps"][owner]["status"], "completed")
                 self.assertTrue((Path(tmp) / "operator" / filename).exists())
 
     def test_truncated_companion_outputs_rerun_owner_and_downstream(self):
@@ -331,9 +419,7 @@ class TwitterNetworkImportTests(unittest.TestCase):
                     self.assertEqual(manifest["needs_approval"]["step"], owner)
                     self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
                     manifest = self.manifest(tmp)
-                owner_index = [step.name for step in self.mod.STEPS].index(owner)
-                for step in self.mod.STEPS[owner_index:]:
-                    self.assertEqual(manifest["steps"][step.name]["status"], "completed")
+                self.assertEqual(manifest["steps"][owner]["status"], "completed")
                 self.assertEqual(companion.read_bytes(), original)
 
 

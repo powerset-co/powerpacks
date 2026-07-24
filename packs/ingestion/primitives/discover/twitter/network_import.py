@@ -23,8 +23,9 @@ State model (manifest-only, no ledger):
   overwrites in place, with exactly one `manifest.json` recording per-step status,
   counts, timing, and config/input signature. Resume comes from the ARTIFACTS and
   their manifest signatures, not a step ledger: a step is skipped only when every
-  required output exists and its relevant config and input contents still match.
-  Invalidating one step reruns it and every downstream step.
+  required output exists and its relevant config and input/output contents still
+  match. Downstream steps are independently reused when their exact signatures
+  remain valid.
 
 Spend gates: `load_or_crawl` (RapidAPI Twitter), `moe_evaluate` (OpenAI), and
 `validate_linkedin` (RapidAPI LinkedIn) are spend-bearing. They run only with
@@ -749,7 +750,7 @@ def step_load_or_crawl(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
                 "website_url": u["website_url"],
                 "twitter_user_id": u["twitter_user_id"],
                 "first_seen_at": now_iso(),
-                "source": handle,
+                "source": cfg.source,
             })
             if cfg.limit and len(rows) >= int(cfg.limit):
                 break
@@ -1050,6 +1051,39 @@ def _is_fresh(outputs: list[Path], signature: dict[str, Any], previous_signature
     return bool(outputs) and all(path.is_file() for path in outputs) and previous_signature == signature
 
 
+def _can_adopt_signature(
+    spec: StepSpec,
+    cfg: TwitterInput,
+    out_dir: Path,
+    previous: dict[str, Any],
+    previous_step: dict[str, Any],
+    inline_signature: dict[str, Any] | None,
+    current_signature: dict[str, Any],
+) -> bool:
+    """Safely upgrade a completed legacy step to the current signature contract."""
+    if previous.get("status") != "completed" or previous_step.get("status") not in {"completed", "cached"}:
+        return False
+    if any(not (out_dir / name).is_file() for name in (*spec.inputs, *_step_outputs(spec, cfg))):
+        return False
+    expected_config = current_signature["config"]
+    if inline_signature is not None:
+        if inline_signature.get("config") != expected_config:
+            return False
+        if inline_signature.get("inputs") != current_signature["inputs"]:
+            return False
+    else:
+        previous_input = previous.get("input")
+        if not isinstance(previous_input, dict):
+            return False
+        if any(name not in previous_input or previous_input[name] != value for name, value in expected_config.items()):
+            return False
+    if spec.name == "load_or_crawl":
+        rows = CsvIO.read_dict_rows(out_dir / FOLLOWERS_DUMP)
+        if any(row.get("source") != cfg.source for row in rows):
+            return False
+    return True
+
+
 def moe_would_call_api(cfg: TwitterInput, out_dir: Path) -> bool:
     """True when the MOE step would actually spend (not --skip-moe and candidates exist)."""
     if cfg.skip_moe:
@@ -1079,7 +1113,7 @@ class TwitterDiscovery:
     ``manifest.json`` (per-step status/counts/timing + artifact fingerprints).
     Resume comes from the artifacts and their per-step manifest signatures, not a
     ledger: a step is skipped only when all outputs and its config/input signature
-    match, and invalidation cascades downstream. Spend
+    match; each downstream step is reassessed against its exact signature. Spend
     steps (crawl, MOE, LinkedIn validate) require ``--approve-spend``; without it
     ``run`` stops at the first spend step that would call an API and returns a
     ``needs_approval`` payload naming the step + estimated calls."""
@@ -1098,21 +1132,21 @@ class TwitterDiscovery:
         previous_steps = previous.get("steps") if isinstance(previous.get("steps"), dict) else {}
         stored_signatures = previous.get("step_signatures") if isinstance(previous.get("step_signatures"), dict) else {}
         self.step_signatures = dict(stored_signatures)
-        if not self.step_signatures:
-            self.step_signatures = {
-                name: step["signature"]
-                for name, step in previous_steps.items()
-                if isinstance(step, dict) and isinstance(step.get("signature"), dict)
-            }
         previous_input = previous.get("input") if isinstance(previous.get("input"), dict) else None
         self.represented_input = dict(previous_input) if previous_input is not None else asdict(self.cfg)
         steps: dict[str, Any] = {}
-        downstream_invalidated = False
         for spec in STEPS:
             outputs = [self.dir / name for name in _step_outputs(spec, self.cfg)]
             signature = _step_signature(spec, self.cfg, self.dir)
+            previous_step = previous_steps.get(spec.name) if isinstance(previous_steps.get(spec.name), dict) else {}
             previous_signature = self.step_signatures.get(spec.name)
-            if not downstream_invalidated and isinstance(previous_signature, dict) and _is_fresh(outputs, signature, previous_signature):
+            fresh = isinstance(previous_signature, dict) and _is_fresh(outputs, signature, previous_signature)
+            if not fresh and not self.step_signatures.get(spec.name):
+                inline_signature = previous_step.get("signature") if isinstance(previous_step.get("signature"), dict) else None
+                fresh = _can_adopt_signature(
+                    spec, self.cfg, self.dir, previous, previous_step, inline_signature, signature,
+                )
+            if fresh:
                 steps[spec.name] = {
                     "status": "cached",
                     "output_file": str(outputs[0]),
@@ -1121,7 +1155,6 @@ class TwitterDiscovery:
                 self.step_signatures[spec.name] = signature
                 self._record_config(spec)
                 continue
-            downstream_invalidated = True
             if spec.spend and not self.approve_spend and self._would_call_api(spec.name):
                 return self._needs_approval(spec, steps)
             started = time.time()
