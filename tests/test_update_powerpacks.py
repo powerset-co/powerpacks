@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -253,6 +254,49 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             self.assertEqual((checkout / ".env").read_text(encoding="utf-8"), "KEEP_ENV=yes\n")
 
 
+class ReferencedPathTests(unittest.TestCase):
+    """Every repo path a shell entry point names must actually be in the repo.
+
+    The updater once pointed at a wacli primitive that two renames had moved.
+    Nothing failed: the guard around it is `[[ -f ... ]]`, so the step silently
+    became a no-op and the update looked healthy for months.
+    """
+
+    # Rendered by bin/agent-bootstrap into an ignored file, so it is legitimately
+    # absent from a clean checkout.
+    GENERATED = {".codex/AGENTS.md"}
+
+    def test_repo_anchored_paths_exist(self) -> None:
+        sources = sorted((ROOT / "bin").iterdir())
+        sources += [ROOT / f"adapters/{h}/install.sh" for h in ("codex", "claude-code", "pi")]
+
+        pattern = re.compile(r"\$\{?(?:REPO|REPO_ROOT)\}?/([A-Za-z0-9_./-]+)")
+        referenced: dict[str, str] = {}
+        for source in sources:
+            if not source.is_file():
+                continue
+            for match in pattern.finditer(source.read_text(encoding="utf-8", errors="ignore")):
+                referenced.setdefault(match.group(1).rstrip("/"), source.name)
+
+        self.assertGreater(len(referenced), 20, "path scan found suspiciously little")
+
+        missing = []
+        for path, source in sorted(referenced.items()):
+            if path in self.GENERATED:
+                continue
+            tracked = subprocess.run(
+                ["git", "ls-files", "--", path],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if not tracked:
+                missing.append(f"{source} references missing repo path: {path}")
+
+        self.assertEqual(missing, [], "\n".join(missing))
+
+
 class ReleaseChannelTests(unittest.TestCase):
     """bin/powerpacks-channel decides which ref a release channel names."""
 
@@ -347,6 +391,97 @@ class ReleaseChannelTests(unittest.TestCase):
             # The branch name is the channel memory: a later run with no
             # environment at all stays on rc instead of falling back to stable.
             self.assertEqual(self._resolve(repo)["channel"], "rc")
+
+    def test_stale_launcher_hands_off_to_the_shipped_updater(self) -> None:
+        """A harness-installed launcher older than the release must not finish the run.
+
+        Everything after the checkout (skill install, pinned-binary refresh)
+        depends on the tree's layout, so the release's own updater has to be the
+        one that runs it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            remote = root / "remote.git"
+            publisher = root / "publisher"
+            checkout = root / "checkout"
+            home = root / "home"
+            handoff_record = root / "handoff.txt"
+
+            real_updater = UPDATE_SCRIPT.read_text(encoding="utf-8")
+            # The released copy differs from the installed launcher by one line,
+            # which appends a marker whenever THAT copy is the one executing.
+            shipped_updater = real_updater.replace(
+                "set -euo pipefail",
+                'set -euo pipefail\nprintf "handoff\\n" >> "$POWERPACKS_TEST_HANDOFF_RECORD"',
+                1,
+            )
+
+            run("git", "init", "--bare", remote, cwd=root)
+            run("git", "init", "-b", "main", publisher, cwd=root)
+            run("git", "config", "user.email", "test@example.com", cwd=publisher)
+            run("git", "config", "user.name", "Powerpacks Test", cwd=publisher)
+            write(publisher / ".gitignore", ".powerpacks/\n.env\n")
+            write(publisher / "packs/.keep", "")
+            write(publisher / "pyproject.toml", "[project]\nname='fixture'\nversion='0'\n")
+            write(publisher / ".release-please-manifest.json", '{".": "1.0.0"}\n')
+            write(publisher / "bin/update-powerpacks", shipped_updater, executable=True)
+            write(publisher / "bin/powerpacks-channel", CHANNEL_SCRIPT.read_text(encoding="utf-8"), executable=True)
+            write(publisher / "bin/powerpacks-install-stamp", STAMP_SCRIPT.read_text(encoding="utf-8"), executable=True)
+            write(
+                publisher / "bin/sync-agent-files.sh",
+                '#!/usr/bin/env bash\nset -euo pipefail\n',
+                executable=True,
+            )
+            write(
+                publisher / "install.sh",
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'skills_dir="${2:-$HOME/.codex/skills}"\nmkdir -p "$skills_dir"\n',
+                executable=True,
+            )
+            run("git", "add", ".", cwd=publisher)
+            run("git", "commit", "-m", "initial", cwd=publisher)
+            run("git", "tag", "powerpacks-v1.0.0", cwd=publisher)
+            run("git", "remote", "add", "origin", remote, cwd=publisher)
+            run("git", "push", "-u", "origin", "main", cwd=publisher)
+            run("git", "push", "--tags", "origin", cwd=publisher)
+            run("git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main", cwd=root)
+            run("git", "clone", remote, checkout, cwd=root)
+
+            # The launcher the harness installed is the UNMARKED copy, standing in
+            # for a version installed before the release.
+            installed_launcher = home / ".codex/skills/update-powerpacks/update-powerpacks"
+            write(installed_launcher, real_updater, executable=True)
+            write(
+                home / ".codex/skills/.powerpacks-install.json",
+                json.dumps({"repo_root": str(checkout)}) + "\n",
+            )
+
+            env = os.environ | {
+                "HOME": str(home),
+                "POWERPACKS_TEST_HANDOFF_RECORD": str(handoff_record),
+            }
+            proc = run(installed_launcher, "codex", cwd=root, env=env)
+
+            # Exactly one marker: the shipped updater ran, and only once.
+            self.assertEqual(
+                handoff_record.read_text(encoding="utf-8").count("handoff"),
+                1,
+                "expected exactly one handoff to the shipped updater",
+            )
+            self.assertIn("handing off to the updater shipped with", proc.stderr)
+            self.assertIn("status=ok", proc.stdout)
+            self.assertIn("ref=powerpacks-v1.0.0", proc.stdout)
+
+            # Second run: launcher and release now match, so no handoff happens.
+            handoff_record.unlink()
+            write(installed_launcher, shipped_updater, executable=True)
+            proc2 = run(installed_launcher, "codex", cwd=root, env=env)
+            self.assertEqual(
+                handoff_record.read_text(encoding="utf-8").count("handoff"),
+                1,
+                "a matching launcher must run once, not hand off to itself",
+            )
+            self.assertNotIn("handing off", proc2.stderr)
 
     def test_unknown_channel_fails_loudly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
