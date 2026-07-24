@@ -102,7 +102,7 @@ class IndexingScaffoldTests(unittest.TestCase):
             proc = subprocess.run(
                 [
                     sys.executable,
-                    str(ROOT / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py"),
+                    str(ROOT / "packs/ingestion/primitives/imports/merge_network_sources.py"),
                     "run",
                     "--output-dir",
                     str(base / ".powerpacks/network-import/merged"),

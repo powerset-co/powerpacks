@@ -1,20 +1,30 @@
+<!--
+Changelog:
+- 2026-07-23 (audit): the Gmail reader moved to the gmail/msgvault/ package;
+  the boundary row now names gmail/discover_engine (emission) over
+  gmail/msgvault/store (reader).
+- 2026-07-23 (audit batch 17): gmail/network_import was split; the Gmail
+  boundary row now names gmail/discover_engine (emission) +
+  gmail/msgvault_store (reader).
+-->
+
 # Ingestion architecture plan
 
 ## Current answer
 
-`linkedin_network_import` does **not** currently call `enrich_people`.
+`linkedin/network_import` does **not** currently call `enrich_people`.
 
-As of this branch, `linkedin_network_import` is source-specific and delegates
-profile hydration to `primitives/enrich_people/`.
+As of this branch, `linkedin/network_import` is source-specific and delegates
+profile hydration to `primitives/enrich/`.
 
 Current split:
 
-- `primitives/linkedin_network_import/`
+- `primitives/imports/linkedin/network_import.py`
   - parses LinkedIn `Connections.csv`
   - writes source-only `connections_for_enrichment.csv` and `source_people.csv`
   - delegates profile enrichment/cache/normalization to `enrich_people`
   - exposes canonical `people.csv` from the delegated run
-- `primitives/enrich_people/`
+- `primitives/enrich/`
   - accepts an existing shared people-schema CSV
   - queues rows that already have LinkedIn URLs/public identifiers
   - reads seeded RapidAPI profile cache before any network call
@@ -76,7 +86,7 @@ provider.
 - [x] RapidAPI LinkedIn provider calls exist in shared enrichment.
 - [x] RapidAPI Twitter/X source crawl exists.
 - [x] Provider calls are approval-gated.
-- [x] `linkedin_network_import` delegates provider enrichment to `enrich_people` or shared library code.
+- [x] `linkedin/network_import` delegates provider enrichment to `enrich_people` or shared library code.
 - [ ] Twitter/Gmail/messages/future verticals all feed a shared LinkedIn enrichment queue/contract.
 - [x] Canonical output artifact is `people.csv` across ingestion primitives touched so far.
 - [x] Legacy `people_harmonic_all*.csv` naming is documented as compatibility-only for touched primitives.
@@ -108,8 +118,8 @@ Outputs:
 
 ### 2. Extract provider logic out of source importers
 
-Refactor duplicate functions from `linkedin_network_import` and `enrich_people`
-into a reusable implementation, or make `linkedin_network_import` produce an
+Refactor duplicate functions from `linkedin/network_import` and `enrich_people`
+into a reusable implementation, or make `linkedin/network_import` produce an
 input CSV and invoke/delegate to `enrich_people`.
 
 Shared pieces centralized or being centralized:
@@ -128,9 +138,9 @@ to reintroduce it behind the same queue/cache/approval interface.
 
 Keep source importers focused on source-specific collection/parsing:
 
-- `linkedin_network_import`: parse `Connections.csv` into normalized people rows; do not own provider/cache/merge logic.
-- `twitter_network_import`: crawl Twitter/X and resolve/validate LinkedIn; avoid becoming another independent people enrichment implementation.
-- `gmail_network_import` / messages-derived flows: emit local people rows or resolution queues, then use shared enrichment.
+- `linkedin/network_import`: parse `Connections.csv` into normalized people rows; do not own provider/cache/merge logic.
+- `twitter/network_import`: crawl Twitter/X and resolve/validate LinkedIn; avoid becoming another independent people enrichment implementation.
+- `gmail/extract_gmail` (over `gmail/msgvault/store`) / messages-derived flows: emit local people rows or resolution queues, then use shared enrichment.
 
 ### 4. Rename canonical artifacts to `people.csv`
 
@@ -148,7 +158,7 @@ Add/adjust tests for:
 
 - `enrich_people` approval gate before live provider calls.
 - provider/cache behavior using seeded RapidAPI cache and mocked network calls.
-- `linkedin_network_import` producing source-normalized rows and delegating to shared enrichment.
+- `linkedin/network_import` producing source-normalized rows and delegating to shared enrichment.
 - `merge_network_sources` merging only explicit `--input` paths; no filesystem discovery.
 - no external calls in tests; all provider calls mocked.
 

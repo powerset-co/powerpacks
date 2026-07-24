@@ -31,11 +31,7 @@ Releasable commit shapes for this repo:
 
 Usually non-releasable unless breaking: `chore: ...`, `ci: ...`, `build: ...`, `test: ...`, `refactor: ...`, `style: ...`.
 
-This repo has two Release Please packages:
-- `.` as Python package `powerpacks`, tagged like `powerpacks-vX.Y.Z`.
-- `app` as Node package `powerpacks-console`, tagged like `powerpacks-console-vX.Y.Z`.
-
-Commits whose changed files are under `app/` can affect the console component; root/package commits affect the `powerpacks` component. A root-only docs/guidance PR should release only `powerpacks`; `powerpacks-console` needs an `app/` change or app-scoped releasable commit to get its own release PR/tag. If one human-facing change should release both components, make sure the merged PR has meaningful changes in both paths and uses a releasable conventional commit.
+This repo has a single Release Please package: `.` as Python package `powerpacks`, tagged like `powerpacks-vX.Y.Z`.
 
 To intentionally cut a Powerpacks minor release such as `0.2.0`, merge a PR with a `feat: ...` commit/message after the release-please setup is on `main` (for example `feat: document Powerpacks 0.2.0 pipeline release`). To intentionally cut a major release, use `feat!: ...` or include a `BREAKING CHANGE:` footer. After that commit lands, wait for the `release-please` workflow to open/update the release PR, review the generated changelog/version bumps, then merge the release PR.
 
@@ -78,7 +74,7 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
   Reruns are idempotent because the output path is stable, not because of an id.
 - **Manifest + outputs only.** The durable artifacts a stage produces are its
   output CSV/JSONL files and `manifest.json` (use the existing
-  `write_manifest` in `import_contacts_pipeline/common.py`). Counts, status,
+  `write_manifest` in `imports/common.py`). Counts, status,
   timestamps, and timing go in the manifest — not a separate state store.
 - **Progress goes in a file, like LinkedIn.** For user-facing progress, write
   human-readable progress into the stage's manifest/output directory and let the
@@ -88,12 +84,13 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
   incrementality, and dedup mostly already exist. Gmail/msgvault is already
   resumable: compute the latest synced message, pass `--after`, sync, update —
   see `infer_msgvault_sync_after` in
-  `discover_contacts_pipeline/gmail.py`. Do not build a new resume mechanism on
+  `discover/gmail/msgvault/sync.py`. Do not build a new resume mechanism on
   top of it.
-- **Orchestrate the existing primitives directly; do not route new flows
-  through `setup/setup.py`.** Chain the existing `discover_contacts_pipeline`
-  and `import_contacts_pipeline/<source>.py` commands. `setup.py` is not the
-  orchestration layer for new pipeline flows.
+- **Orchestrate the per-source discover/import primitives directly.** Chain the
+  existing `discover/<source>/` and
+  `imports/<source>/` commands. There is no orchestrator layer
+  (the generic `discover.py` runner was deleted) — do not
+  build one for new pipeline flows.
 - **Do not fingerprint the shared `directory.csv`.**
   `.powerpacks/network-import/directory.csv` is a cross-source aggregate, not a
   source-owned output. Treating it as a per-source fingerprint makes restored
@@ -102,6 +99,134 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
 When in doubt, do the smaller thing: fewer files, fewer concepts, one
 directory, one manifest. If you think a change genuinely needs more machinery
 than this, stop and ask the user before building it.
+
+---
+
+## Development ground rules
+
+Distilled from the 2026-07 ingestion audit (absorbs the former root
+`HYGIENE.md`). These are how code in this repo is written, moved, and deleted.
+The examples are ingestion-flavored but the rules apply repo-wide.
+
+### Structure — primitives match stages, one concern per file
+
+- Pipeline packages mirror the stages: `discover/`, `imports/`, `enrich/`,
+  `deep_context/`, `logbook/`, `setup/`, with per-vertical subpackages
+  (`gmail/`, `messages/`, `linkedin/`, `twitter/`) and a vertical-local
+  `util.py`. No flat primitive dumps. A file that belongs to another stage is
+  misfiled even if it works — move it (`imports/gmail/import_steps.py` and
+  `imports/directory.py` were both discover-stage squatters once).
+- Naming is symmetric across verticals: `extract_<source>.py` reads a raw local
+  store into contacts (`extract_imessage`, `extract_whatsapp`, `extract_gmail`);
+  the external-binary lifecycle client is a separate module
+  (`whatsapp_wacli.py` for the wacli binary, `gmail/msgvault/sync.py` for the
+  msgvault binary). Reader and binary-client never share a file.
+- Large drivers decompose into a clearly-named subpackage of ~200–300-line
+  single-concern modules (`setup/automations/`, `gmail/msgvault/`,
+  `imports/gmail/steps/`, `discover/messages/channels/`); the original CLI path
+  stays a thin entry so skill commands never change.
+
+### The orchestrator pattern (channel + store)
+
+- A **channel/step class** owns its fixed output paths (plain instance
+  attributes set in `__init__` — never `@property` stubs or call-time constant
+  reads added "so tests can patch") and its step chain, recording contributions
+  on `self.artifacts`. A **store/orchestrator class** owns the output dir (one
+  mkdir), the run loop (stop at first blocked/failed payload), and the typed
+  stage manifest. Copy this *shape* per vertical; do NOT extract a base class
+  unless method bodies are genuinely identical — a base that owns a 3-line loop
+  is ceremony.
+- **Construct-and-run.** The class constructor resolves its own config; callers
+  do `GmailDiscovery(account_emails=[...]).run()`. No `discover()`/`resolve()`
+  wrapper functions around a class you can init.
+- **CLI = thin argparse over the same class.** `main()` parses, constructs,
+  calls the method inline, `emit(payload)`, maps status → exit code. No
+  `cmd_*(args)` dispatcher functions, no `set_defaults(func=...)` indirection.
+  Every CLI entry keeps its `if __name__ == "__main__"` guard (skills invoke by
+  file path; a missing guard is a silent no-op).
+
+### In-process, never self-subprocess
+
+- **Never `run_cmd(py_cmd("<our own .py>"))`.** Our primitives are classes;
+  callers in the same repo import and call them, branching on the returned
+  payload's `status` — not on a subprocess exit code through a JSON pipe.
+- Subprocess is only for genuinely external things: the `msgvault` and `wacli`
+  binaries, `gcloud`, `qrencode`, macOS `open`, and Modal re-hosting.
+
+### Explicit inputs — no hidden registries
+
+- Selection and configuration are explicit CLI/caller arguments: gmail is a
+  repeatable `--account-email`, messages is `--include-imessage`/
+  `--include-whatsapp`. No state-file fallbacks. The `accounts.json` registry
+  died because nothing wrote most of it and nothing read the rest — if a config
+  layer has no writer or no reader, delete it; do not defend it with defaults.
+- One config door per primitive: a single resolver returning a frozen dataclass
+  with documented precedence (explicit override > config default). `| None`
+  params are inherit-sentinels only where a lower layer actually exists.
+- Spend gates are explicit flags, not state machines: `--approve-spend`, and a
+  `needs_approval` payload + exit 20 (`common/gates.py`) emitted BEFORE any
+  paid call. Resume comes from artifacts on disk (fixed paths, mtimes,
+  fingerprints), never from `approve`/`continue` ledger runners.
+
+### One home per concept
+
+- Generic helpers live once: `primitives/common/{jsonio,proc,paths,
+  contact_fields,gates,manifests}.py`; cross-stage contracts in
+  `packs/ingestion/schemas/`; CSV IO on `packs.shared.csv_io.CsvIO`. Before
+  writing a helper or a column list, grep for it — this repo once carried
+  `now_iso` ×11, `write_json` ×10, and a 33-function byte-identical fork.
+- Never leave compatibility shims or package-`__init__` re-export layers after
+  a move; update every call site (skills, tests, docs, bin, adapters,
+  `py_cmd`-style path strings) and finish with a zero-stale-reference grep.
+- Deliberately divergent variants are PINNED and documented at the definition:
+  the non-percent-decoding LinkedIn-id pair in `extract_gmail`, the
+  source-tuned `normalize_name` match keys, the fingerprinted-LF vs plain
+  writers, `bundle_evidence_fingerprint` (its serialization is a paid-cache
+  key — changing it silently re-bills every dossier). Don't "unify" them; say
+  why they diverge where they live.
+
+### Moving & deleting
+
+- Verify consumers by REAL imports/invocations (grep code, not doc mentions)
+  before keeping or deleting anything. Then delete dead code together with its
+  tests, doc rows, skill routes, adapter list entries, and config keys — a
+  retired skill also goes into every adapter's `RETIRED_SKILLS` scrub list.
+- Prefer wholesale deletion over surgical preservation of surfaces nobody uses
+  (the console app went as one cut). Git history is the archive; `.bkup` is for
+  data files only, never code.
+
+### Docstrings, docs, comments
+
+- Module docstrings state CURRENT behavior, present tense, with a terse
+  what-this-actually-does flow block for stage entries. Change history lives in
+  a dated module-top `Changelog:` block — never in function docstrings, never
+  as inline "we changed X" comments.
+- No `<file>.README.md` sidecars. At most one `README.md` per directory,
+  describing the directory: a mermaid data-flow plus a per-file
+  role/reads/writes table.
+- CLIs emit JSON; progress is terse one-line stderr with a stable prefix.
+
+### Tests
+
+- Patch the concrete module/class where the thing is DEFINED, never a
+  re-export. Never add prod indirection to make patching easier — tests pass
+  explicit params (`out_dir=...`) instead.
+- Fixtures are obviously-synthetic (`Jordan Bravo`, `casey@example.com`,
+  `+15550100`); never real contact PII, in code or in git history.
+- After a structural refactor, lock behavior with a REAL run: execute the
+  actual skill flow against real local data (a worktree gives you a free
+  cold-start environment) and diff the outputs against the previous run —
+  byte-identical, or every delta explained. Fast iteration is compile +
+  targeted suites; full CI gates the merge.
+
+### Working the repo
+
+- Fan mechanical work out to sub-agents with disjoint file ownership; each
+  agent reads this section first; the parent verifies the combined tree,
+  runs the affected suites, and commits. Serialize agents whose scopes touch
+  the same files.
+- Conventional commits; `BREAKING CHANGE:` when a CLI/contract changes. Write
+  the subject as what changed, not which internal batch produced it.
 
 ---
 
@@ -219,7 +344,7 @@ only; keep that scoped to the msgvault primitives.
     access is not granted, *stop* and ask the user to enable it in System
     Settings before retrying.
   - WhatsApp uses `openclaw/wacli`. Run
-    `uv run --project . python packs/ingestion/primitives/import_whatsapp_wacli/import_whatsapp_wacli.py status`
+    `uv run --project . python packs/ingestion/primitives/discover/messages/whatsapp_wacli.py status`
     on demand. Installing `wacli`, QR login, and history sync require explicit
     user consent. WAHA/Docker and Powerset upload are not part of this flow.
 - **Indexing pack** (build-local-search-index): local files only. It consumes
@@ -324,27 +449,18 @@ Routes:
   research-candidates pool → fan-in merge → suggest/process tail); no LLM,
   research, review, or index build in-skill — processing/identity
   resolution/indexing is `$deep-context`; local
-  only, never uploads to Powerset. Sub-verbs: `$import-messages sync` (fast
-  incremental WhatsApp pull; the default `auto` is already incremental after the
-  first full backfill) and `$import-messages full` (force a full re-backfill),
-  forwarded as `--wacli-sync-mode` →
+  only, never uploads to Powerset. WhatsApp strategy is automatic: empty stores
+  get an account full sync plus a three-year shallow-DM depth bootstrap;
+  populated stores get an incremental sync plus targeted depth only for changed
+  recent shallow DMs and unfinished prior targets →
   `packs/ingestion/skills/import-messages/SKILL.md`
-- `$import-whatsapp`, isolated WhatsApp metadata sync/export through wacli; no
-  identity resolution, fan-in, or indexing →
-  `packs/ingestion/skills/import-whatsapp/SKILL.md`
-- `$msgvault`, `$local-msg-vault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
+- `$msgvault`, `msgvault setup`, `powerset create oauth app`, Gmail OAuth app setup for msgvault →
   `packs/ingestion/skills/msgvault/SKILL.md`
-- `$onboard`, `$ingestion-onboarding`, local ingestion onboarding, link/export
-  local network sources →
-  `packs/ingestion/skills/onboard/SKILL.md`
 - `$import-gmail`, Gmail, email, contact sync only: msgvault setup + sync +
   free directory-only import (matched people + a research-candidates pool) +
   fan-in merge + suggest/process tail; no Parallel/RapidAPI lookups or index
   build in-skill — processing/identity resolution/indexing is `$deep-context` →
   `packs/ingestion/skills/import-gmail/SKILL.md`
-- `$enrich-email-markers`, gmail LLM enrichment, mine email bodies for LinkedIn
-  markers, preview the context/markers we'd send to an LLM →
-  `packs/ingestion/skills/enrich-email-markers/SKILL.md`
 - `$deep-context`, process/resolve/enrich imported contacts, build deep context,
   per-person dossier from message bodies (Gmail + iMessage/WhatsApp DMs),
   "context/dossier on a person", "who is <phone/name> in my messages", find
@@ -363,10 +479,6 @@ Routes:
   `packs/ingestion/skills/logbook/SKILL.md`
 - `$import-twitter`, Twitter/X network import or Twitter/X smoke test →
   `packs/ingestion/skills/import-twitter/SKILL.md`
-- `$discover-contacts`, local network ingestion orchestration, LinkedIn CSV plus
-  msgvault/Twitter source preparation; iMessage/WhatsApp always route to
-  `$import-messages` →
-  `packs/ingestion/skills/discover-contacts/SKILL.md`
 
 Do not ask the user to pick a skill when the route is obvious. Ask a brief
 clarifying question only when the same wording could mean multiple surfaces,

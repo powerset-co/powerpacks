@@ -15,6 +15,9 @@ resumes cleanly.
 Outputs (fixed dir):
   <out-dir>/<person_id>.jsonl   one line per chunk: {chunk_index, facts, usage}
   <out-dir>/manifest.json       counts + token/cost totals
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -47,10 +50,9 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     load_env,
     load_owner,
-    now_iso,
     owner_background_block,
-    write_json,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
 from packs.ingestion.primitives.deep_context.review_store import (
     has_human_worth,

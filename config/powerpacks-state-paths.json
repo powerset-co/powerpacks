@@ -24,27 +24,6 @@
       "why": "Local runtime credentials/config belong in the canonical Powerpacks checkout. Copy only when canonical .env is missing; never overwrite or print contents."
     },
     {
-      "id": "accounts",
-      "path": ".powerpacks/ingestion/accounts.json",
-      "kind": "file",
-      "policy": "adopt_newer",
-      "why": "Source link registry used by setup/import/enrichment."
-    },
-    {
-      "id": "setup_ledger",
-      "path": ".powerpacks/setup/setup-run.json",
-      "kind": "file",
-      "policy": "report_only",
-      "why": "Setup ledger is a checkpoint/log. Report duplicates, but do not copy automatically unless explicitly requested."
-    },
-    {
-      "id": "discover_setup_ledger",
-      "path": ".powerpacks/network-import/discover/ledger.setup.json",
-      "kind": "file",
-      "policy": "report_only",
-      "why": "Discovery setup ledger is a checkpoint/log. Per-vertical manifests are more authoritative than stale status."
-    },
-    {
       "id": "messages_discovery_manifest",
       "path": ".powerpacks/network-import/discover/messages/manifest.json",
       "kind": "file",
@@ -98,7 +77,7 @@
       "path": ".powerpacks/network-import/import",
       "kind": "directory",
       "policy": "adopt_newer",
-      "why": "Stable per-source import/enrichment manifests and outputs consumed by setup UI."
+      "why": "Stable per-source import/enrichment manifests and outputs consumed by downstream merge/index stages."
     },
     {
       "id": "network_profile_cache",
@@ -121,11 +100,5 @@
       "policy": "report_only",
       "why": "DuckDB can be rebuilt; report duplicates but avoid copying while a process may have it open."
     }
-  ],
-  "linked_source_checks": {
-    "gmail": ["accounts.config.msgvault_db exists", "msgvault contains selected account emails"],
-    "linkedin_csv": ["accounts.config.csv_path exists"],
-    "messages": ["iMessage readable if configured", "WhatsApp wacli store authenticated if configured"],
-    "twitter": ["handle recorded"]
-  }
+  ]
 }

@@ -9,6 +9,11 @@ This is the stage-owned indexing entrypoint for local setup/app flows:
 
 The lower-level record builders stay in build_processing_pipeline.py. This
 wrapper owns orchestration and writes a stable stage manifest.
+
+Changelog:
+  2026-07-23 (dead accounts.json registry): dropped the vestigial `--accounts`
+    CLI arg and its `DEFAULT_ACCOUNTS` constant. `args.accounts` was never read —
+    not threaded into fan-in or any subcommand — so it was pure dead plumbing.
 """
 
 from __future__ import annotations
@@ -26,14 +31,13 @@ from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
-DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
 CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
 # The fan-in merge auto-ingests these decision/override files (default paths defined in
-# packs/ingestion/primitives/merge_network_sources/merge_network_sources.py). They must be
+# packs/ingestion/primitives/imports/merge_network_sources.py). They must be
 # fingerprinted so an updated override invalidates the fan-in no-op cache, but they are
 # decisions, not people sources — never pass them as merge --input.
 FAN_IN_OVERRIDE_FILES = [
@@ -189,7 +193,7 @@ def command_text(cmd: list[str]) -> str:
 def merge_command(args: argparse.Namespace, input_paths: list[Path]) -> list[str]:
     cmd = [
         sys.executable,
-        "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py",
+        "packs/ingestion/primitives/imports/merge_network_sources.py",
         "run",
         "--output-dir",
         str(Path(args.artifact_dir) / "merged"),
@@ -870,7 +874,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_common(s: argparse.ArgumentParser) -> None:
         s.add_argument("--operator-id", default="local")
-        s.add_argument("--accounts", default=str(DEFAULT_ACCOUNTS))
         s.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
         s.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
         s.add_argument("--artifact-dir", default=str(DEFAULT_ARTIFACT_DIR))

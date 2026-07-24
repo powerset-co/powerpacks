@@ -1,0 +1,15 @@
+{
+  "sources": {
+    "gmail": {
+      "inputs": {
+        "msgvault_db_default": "~/.msgvault/msgvault.db",
+        "sync_query": "-category:social -category:promotions -category:forums -category:updates"
+      },
+      "outputs": {
+        "contacts_csv": ".powerpacks/network-import/discover/gmail/contacts.csv",
+        "linkedin_resolution_queue_csv": ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv",
+        "manifest_json": ".powerpacks/network-import/discover/gmail/manifest.json"
+      }
+    }
+  }
+}

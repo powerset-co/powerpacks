@@ -25,6 +25,9 @@ calls + low/high LLM cost). Pass ``--fetch`` to actually fetch-then-summarize
 stage's fixed manifest — no ledgers, no run ids.
 
 Run: uv run --project . python -m packs.ingestion.primitives.deep_context.prefetch_profiles
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -60,23 +63,22 @@ from packs.ingestion.primitives.deep_context.common import (
     VERDICTS_JSONL,
     emit,
     load_env,
-    now_iso,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, read_json, write_json
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import linkedin_view
-from packs.ingestion.primitives.deep_context.reconcile_review_web import (
+from packs.ingestion.primitives.deep_context.review_web.model import (
     SYNTHETIC_PEOPLE_CSV,
     _all_review_parents,
+)
+from packs.ingestion.primitives.deep_context.review_web.workflow import (
     pending_linkedin_candidates,
 )
-from packs.ingestion.primitives.enrich_people.enrich_people import (
+from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
-    rapidapi_key,
-    rapidapi_profile,
-    read_json,
     read_usable_cached_profile,
-    write_json,
 )
-from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
+from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 STAGE = "profile-prefetch"

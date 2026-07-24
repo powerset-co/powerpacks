@@ -264,13 +264,13 @@ action and continue. Requires a valid Auth0 login (`$powerset login`).
 This alias is for msgvault/Gmail OAuth setup. Prefer browser automation:
 
 ```bash
-uv run --env-file .env --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup
+uv run --env-file .env --project . python packs/ingestion/primitives/setup/msgvault_setup.py browser-setup
 ```
 
 If the user only wants instructions, run:
 
 ```bash
-uv run --env-file .env --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py create-oauth-app
+uv run --env-file .env --project . python packs/ingestion/primitives/setup/msgvault_setup.py create-oauth-app
 ```
 
 If the user provided an email, add `--email <gmail>`. If they provided a Google

@@ -1,0 +1,681 @@
+#!/usr/bin/env python3
+"""Extract iMessage contact metadata with Python stdlib only.
+
+Reads `~/Library/Messages/chat.db` and local AddressBook SQLite databases in
+read-only mode (no Homebrew, no pip dependencies, no message content reads) and
+exports only: phone, name, source, group flags/names, message counts, and
+last-message time. It does not select message text/body columns. The default
+export includes Contacts.app phone rows even without iMessage history
+(`--message-handles-only` restricts to handles seen in message history).
+
+Usage:
+    extract_imessage.py check
+    extract_imessage.py open-privacy-settings --target both
+    extract_imessage.py extract [--output-csv PATH] [--output-jsonl PATH] [--manifest PATH]
+
+`open-privacy-settings` is macOS-only: `--target full-disk-access` for
+Messages `chat.db` access, `--target contacts` for AddressBook name matching,
+or `--target both`. If permissions or schema assumptions fail, `extract`
+writes a manifest with diagnostics so the harness can continue and an agent
+can patch the primitive.
+
+Changelog:
+  2026-07-23 (cmd inline): the ``cmd_check``/``cmd_extract``/
+    ``cmd_open_privacy_settings`` dispatchers were inlined into ``main`` (an
+    ``if args.command == ...`` chain replaces ``set_defaults(func=)`` +
+    ``args.func``). ``check``/``extract`` construct ``IMessageExtractor`` and
+    call the matching method; ``open-privacy-settings`` (which has no class
+    method) keeps its System-Settings body inline. Subcommands, flags, stdout
+    JSON, and exit codes (check strict-fail -> 1, extract fail -> 2,
+    open-privacy-settings error -> 2) are unchanged.
+  2026-07-23 (in-process): the check/extract logic moved onto an
+    ``IMessageExtractor`` class (``check(strict=...) -> dict`` returning a
+    ``status`` payload; ``extract(*, output_csv, output_jsonl, manifest, ...) ->
+    dict`` returning the manifest). The iMessage channel now calls these methods
+    in-process instead of spawning this file as a subprocess. The CLI is frozen:
+    ``check``/``extract``/``open-privacy-settings`` subcommands, flags, stdout
+    JSON, and exit codes (check strict-fail -> 1, extract fail -> 2) unchanged.
+  2026-07-23 (audit): extract_imessage.README.md sidecar folded into this
+    docstring.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import glob
+import json
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from packs.ingestion.primitives.common.contact_fields import canonicalize_phone  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
+
+
+DEFAULT_CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
+DEFAULT_ADDRESSBOOK_GLOB = str(
+    Path.home()
+    / "Library"
+    / "Application Support"
+    / "AddressBook"
+    / "Sources"
+    / "*"
+    / "AddressBook-v22.abcddb"
+)
+DEFAULT_OUT_DIR = MESSAGES_OUT_DIR
+APPLE_EPOCH_OFFSET = 978_307_200
+NS_PER_SEC = 1_000_000_000
+PRIVACY_SETTINGS_URLS = {
+    "full-disk-access": "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    "contacts": "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts",
+}
+
+
+@dataclass
+class Contact:
+    phone: str
+    name: str = ""
+    source: str = "imessage"
+    is_in_group_chats: bool = False
+    group_names: list[str] | None = None
+    message_count: int | None = None
+    last_message: str | None = None
+
+
+def lookup_key(raw: str) -> str:
+    digits = re.sub(r"[^\d]", "", raw or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
+
+
+def is_phone_identifier(identifier: str) -> bool:
+    if not identifier or "@" in identifier or identifier.startswith("urn:") or identifier.startswith("chat"):
+        return False
+    return len(re.sub(r"[^\d]", "", identifier)) >= 7
+
+
+def clean_name(first: str, last: str) -> str:
+    first = re.sub(r"/\d+$", "", (first or "").strip())
+    last = re.sub(r"/\d+$", "", (last or "").strip())
+    if first and last:
+        name = f"{first} {last}"
+    else:
+        name = first or last
+    if ";" in name:
+        left, right = name.split(";", 1)
+        name = f"{right} {left}"
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def apple_timestamp_to_iso(value: int | float | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return None
+    if raw <= 0:
+        return None
+
+    # Messages usually stores nanoseconds since 2001. Some old/local variants
+    # use seconds since 2001 or Unix-ish timestamps; handle all three.
+    if raw > 10_000_000_000:
+        unix_ts = (raw / NS_PER_SEC) + APPLE_EPOCH_OFFSET
+    elif raw < 2_000_000_000:
+        unix_ts = raw + APPLE_EPOCH_OFFSET
+    else:
+        unix_ts = raw
+    try:
+        return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def iso_desc_sort_value(value: str | None) -> float:
+    if not value:
+        return float("inf")
+    try:
+        return -datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return float("inf")
+
+
+def open_sqlite_readonly(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def sqlite_tables(path: Path) -> set[str]:
+    with open_sqlite_readonly(path) as conn:
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def check_chat_db(path: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "readable": False,
+        "required_tables": ["message", "handle"],
+        "missing_tables": [],
+        "error": None,
+    }
+    if not path.exists():
+        result["error"] = "chat.db does not exist"
+        return result
+    try:
+        tables = sqlite_tables(path)
+        result["readable"] = True
+        result["missing_tables"] = [table for table in result["required_tables"] if table not in tables]
+        result["has_group_tables"] = "chat" in tables and "chat_handle_join" in tables
+    except sqlite3.Error as exc:
+        result["error"] = str(exc)
+    return result
+
+
+def check_addressbook(addressbook_glob: str) -> dict[str, Any]:
+    matches = sorted(glob.glob(addressbook_glob))
+    contacts, diagnostics = read_addressbook_contacts(addressbook_glob)
+    error_diagnostics = [item for item in diagnostics if item.get("status") == "error"]
+    read_diagnostics = [item for item in diagnostics if item.get("status") == "read"]
+    return {
+        "glob": addressbook_glob,
+        "matches": len(matches),
+        "readable": bool(read_diagnostics) and not error_diagnostics,
+        "readable_databases": len(read_diagnostics),
+        "error_databases": len(error_diagnostics),
+        "contacts": len(contacts),
+        "diagnostics": diagnostics,
+    }
+
+
+def read_addressbook_contacts(addressbook_glob: str) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    contacts: dict[str, str] = {}
+    diagnostics: list[dict[str, Any]] = []
+    query = """
+        SELECT p.ZFULLNUMBER, r.ZFIRSTNAME, r.ZLASTNAME
+        FROM ZABCDPHONENUMBER p
+        JOIN ZABCDRECORD r ON p.ZOWNER = r.Z_PK
+        WHERE p.ZFULLNUMBER IS NOT NULL AND p.ZFULLNUMBER <> ''
+        ORDER BY p.ZFULLNUMBER, r.ZLASTNAME, r.ZFIRSTNAME
+    """
+    for db_name in sorted(glob.glob(addressbook_glob)):
+        path = Path(db_name)
+        try:
+            with open_sqlite_readonly(path) as conn:
+                for row in conn.execute(query):
+                    phone = canonicalize_phone(row["ZFULLNUMBER"] or "")
+                    if not phone:
+                        continue
+                    name = clean_name(row["ZFIRSTNAME"] or "", row["ZLASTNAME"] or "")
+                    current = contacts.get(phone, "")
+                    if name and (
+                        not current
+                        or len(name) > len(current)
+                        or (len(name) == len(current) and name.casefold() < current.casefold())
+                    ):
+                        contacts[phone] = name
+            diagnostics.append({"path": str(path), "status": "read"})
+        except sqlite3.Error as exc:
+            diagnostics.append({"path": str(path), "status": "error", "error": str(exc)})
+    return contacts, diagnostics
+
+
+def aggregate_message_stats(chat_db: Path) -> dict[str, dict[str, Any]]:
+    query = """
+        SELECT
+            h.id AS identifier,
+            COUNT(*) AS msg_count,
+            MAX(m.date) AS last_date
+        FROM message m
+        JOIN handle h ON h.ROWID = m.handle_id
+        WHERE h.id IS NOT NULL
+          AND h.id <> ''
+          AND (m.associated_message_type IS NULL
+               OR m.associated_message_type < 2000
+               OR m.associated_message_type > 3006)
+        GROUP BY h.id
+        ORDER BY h.id COLLATE NOCASE
+    """
+    stats: dict[str, dict[str, Any]] = {}
+    with open_sqlite_readonly(chat_db) as conn:
+        for row in conn.execute(query):
+            identifier = row["identifier"] or ""
+            if not is_phone_identifier(identifier):
+                continue
+            key = lookup_key(identifier)
+            phone = canonicalize_phone(identifier)
+            if not key or not phone:
+                continue
+            current = stats.setdefault(key, {"phone": phone, "message_count": 0, "last_message": None})
+            current["message_count"] += int(row["msg_count"] or 0)
+            last_message = apple_timestamp_to_iso(row["last_date"])
+            if last_message and (not current["last_message"] or last_message > current["last_message"]):
+                current["last_message"] = last_message
+    return stats
+
+
+def resolve_group_chat_name(chat_identifier: str, display_name: str | None, room_name: str | None) -> str:
+    for candidate in (display_name, room_name):
+        cleaned = re.sub(r"\s+", " ", (candidate or "").strip())
+        if cleaned and cleaned != chat_identifier:
+            return cleaned
+    return ""
+
+
+def read_group_metadata(chat_db: Path) -> dict[str, set[str]]:
+    query = """
+        SELECT
+            h.id AS identifier,
+            c.chat_identifier,
+            c.display_name,
+            c.room_name
+        FROM chat c
+        JOIN chat_handle_join chj ON chj.chat_id = c.ROWID
+        JOIN handle h ON h.ROWID = chj.handle_id
+        WHERE c.chat_identifier LIKE 'chat%'
+        ORDER BY h.id COLLATE NOCASE, c.chat_identifier COLLATE NOCASE,
+                 c.display_name COLLATE NOCASE, c.room_name COLLATE NOCASE
+    """
+    groups_by_key: dict[str, set[str]] = {}
+    try:
+        with open_sqlite_readonly(chat_db) as conn:
+            for row in conn.execute(query):
+                identifier = row["identifier"] or ""
+                if not is_phone_identifier(identifier):
+                    continue
+                key = lookup_key(identifier)
+                if not key:
+                    continue
+                group_name = resolve_group_chat_name(row["chat_identifier"] or "", row["display_name"], row["room_name"])
+                groups_by_key.setdefault(key, set())
+                if group_name:
+                    groups_by_key[key].add(group_name)
+    except sqlite3.Error:
+        return {}
+    return groups_by_key
+
+
+def build_contacts(
+    message_stats: dict[str, dict[str, Any]],
+    addressbook_contacts: dict[str, str],
+    group_metadata: dict[str, set[str]],
+    include_contact_only: bool,
+) -> list[Contact]:
+    contacts_by_phone: dict[str, Contact] = {}
+
+    for key, stats in message_stats.items():
+        phone = stats["phone"]
+        name = addressbook_contacts.get(phone, "")
+        groups = sorted(group_metadata.get(key, set()), key=str.casefold)
+        contacts_by_phone[phone] = Contact(
+            phone=phone,
+            name=name,
+            is_in_group_chats=key in group_metadata,
+            group_names=groups,
+            message_count=stats["message_count"] or None,
+            last_message=stats["last_message"],
+        )
+
+    if include_contact_only:
+        for phone, name in addressbook_contacts.items():
+            contacts_by_phone.setdefault(phone, Contact(phone=phone, name=name))
+
+    return sorted(
+        contacts_by_phone.values(),
+        key=lambda contact: (
+            -(contact.message_count or 0),
+            iso_desc_sort_value(contact.last_message),
+            contact.phone,
+            contact.name.casefold(),
+        ),
+    )
+
+
+def contact_to_csv_row(contact: Contact) -> list[str]:
+    return [
+        contact.phone,
+        contact.name,
+        contact.source,
+        str(contact.is_in_group_chats).lower(),
+        GROUP_SEPARATOR.join(contact.group_names or []),
+        str(contact.message_count) if contact.message_count is not None else "",
+        str(contact.message_count) if contact.message_count is not None else "",
+        "",
+        contact.last_message or "",
+        contact.last_message or "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+    ]
+
+
+def contact_to_json(contact: Contact) -> dict[str, Any]:
+    return {
+        "phone": contact.phone,
+        "name": contact.name,
+        "sources": ["imessage"],
+        "is_in_group_chats": contact.is_in_group_chats,
+        "group_names": contact.group_names or [],
+        "message_count": contact.message_count,
+        "imessage_message_count": contact.message_count,
+        "whatsapp_message_count": None,
+        "last_message": contact.last_message,
+        "imessage_last_message": contact.last_message,
+        "whatsapp_last_message": None,
+        "skip": False,
+        "match": {
+            "status": None,
+            "person_id": None,
+            "name": None,
+            "linkedin_url": None,
+            "confidence": None,
+            "method": None,
+            "reason": None,
+        },
+    }
+
+
+def write_csv(path: Path, contacts: list[Contact]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(CSV_HEADERS)
+        for contact in contacts:
+            writer.writerow(contact_to_csv_row(contact))
+
+
+def write_jsonl(path: Path, contacts: list[Contact]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for contact in contacts:
+            handle.write(json.dumps(contact_to_json(contact), sort_keys=True) + "\n")
+
+
+def failure_manifest(
+    *,
+    output_csv: Path,
+    output_jsonl: Path,
+    manifest: Path,
+    started_at: str,
+    error: str,
+    diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the ``status: failed`` extract manifest (empty counts + the output
+    artifact paths) written when chat.db is unreadable or extraction raises."""
+    return {
+        "created_at": started_at,
+        "completed_at": now_iso(),
+        "primitive": "messages/extract_imessage",
+        "status": "failed",
+        "error": error,
+        "diagnostics": diagnostics,
+        "artifacts": {
+            "csv": str(output_csv),
+            "jsonl": str(output_jsonl),
+            "manifest": str(manifest),
+        },
+        "counts": {
+            "contacts": 0,
+            "with_messages": 0,
+            "with_group_context": 0,
+        },
+    }
+
+
+class IMessageExtractor:
+    """Reads iMessage ``chat.db`` + local AddressBook metadata (read-only, no
+    message bodies). ``check`` gates macOS Full Disk Access / Contacts access;
+    ``extract`` writes the contacts CSV/JSONL + manifest. Both return the payload
+    dict (with ``status``) they surface — the iMessage channel calls them
+    in-process; the CLI wrappers print the payload and map the exit code."""
+
+    def __init__(
+        self,
+        *,
+        chat_db: str | Path = DEFAULT_CHAT_DB,
+        addressbook_glob: str = DEFAULT_ADDRESSBOOK_GLOB,
+    ) -> None:
+        self.chat_db = Path(chat_db).expanduser()
+        self.addressbook_glob = addressbook_glob
+
+    def check(self, *, strict: bool = False) -> dict[str, Any]:
+        """Probe chat.db + AddressBook readability. Returns the diagnostics dict
+        with ``status``: ``blocked_user_action`` when ``strict`` and the databases
+        are unreadable / missing tables (the Full Disk Access gate), else ``ok``."""
+        addressbook = check_addressbook(self.addressbook_glob)
+        result: dict[str, Any] = {
+            "primitive": "messages/extract_imessage",
+            "checked_at": now_iso(),
+            "chat_db": check_chat_db(self.chat_db),
+            "addressbook": addressbook,
+            "addressbook_glob": self.addressbook_glob,
+            "addressbook_matches": addressbook["matches"],
+            "python": sys.version.split()[0],
+            "platform": sys.platform,
+        }
+        unreadable = (
+            not result["chat_db"]["readable"]
+            or result["chat_db"]["missing_tables"]
+            or (addressbook["matches"] > 0 and not addressbook["readable"])
+        )
+        result["status"] = "blocked_user_action" if (strict and unreadable) else "ok"
+        return result
+
+    def extract(
+        self,
+        *,
+        output_csv: str | Path,
+        output_jsonl: str | Path,
+        manifest: str | Path,
+        include_contact_only: bool = True,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Export contact metadata to ``output_csv``/``output_jsonl`` + write the
+        manifest, returning the manifest dict (``status`` completed/failed). On an
+        unreadable chat.db or any extraction error it writes empty artifacts + a
+        failure manifest and returns it — it never raises for the caller."""
+        started = time.time()
+        started_at = now_iso()
+        output_csv = Path(output_csv)
+        output_jsonl = Path(output_jsonl)
+        manifest_path = Path(manifest)
+
+        chat_check = check_chat_db(self.chat_db)
+        if not chat_check["readable"] or chat_check["missing_tables"]:
+            failure = failure_manifest(
+                output_csv=output_csv,
+                output_jsonl=output_jsonl,
+                manifest=manifest_path,
+                started_at=started_at,
+                error="Messages database is not readable or is missing required tables",
+                diagnostics={"chat_db": chat_check},
+            )
+            write_csv(output_csv, [])
+            write_jsonl(output_jsonl, [])
+            write_json(manifest_path, failure)
+            return failure
+
+        try:
+            addressbook_contacts, addressbook_diagnostics = read_addressbook_contacts(self.addressbook_glob)
+            message_stats = aggregate_message_stats(self.chat_db)
+            group_metadata = read_group_metadata(self.chat_db)
+            contacts = build_contacts(
+                message_stats=message_stats,
+                addressbook_contacts=addressbook_contacts,
+                group_metadata=group_metadata,
+                include_contact_only=include_contact_only,
+            )
+            if limit is not None:
+                contacts = contacts[:limit]
+
+            write_csv(output_csv, contacts)
+            write_jsonl(output_jsonl, contacts)
+            manifest_payload = {
+                "created_at": started_at,
+                "completed_at": now_iso(),
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "primitive": "messages/extract_imessage",
+                "status": "completed",
+                "source": {
+                    "type": "imessage_chat_db",
+                    "chat_db": str(self.chat_db),
+                    "addressbook_glob": self.addressbook_glob,
+                },
+                "diagnostics": {
+                    "chat_db": chat_check,
+                    "addressbook": addressbook_diagnostics,
+                },
+                "artifacts": {
+                    "csv": str(output_csv),
+                    "jsonl": str(output_jsonl),
+                    "manifest": str(manifest_path),
+                },
+                "counts": {
+                    "contacts": len(contacts),
+                    "with_messages": sum(1 for contact in contacts if contact.message_count),
+                    "with_group_context": sum(1 for contact in contacts if contact.is_in_group_chats),
+                    "addressbook_contacts": len(addressbook_contacts),
+                    "message_handles": len(message_stats),
+                    "contact_only": sum(1 for contact in contacts if not contact.message_count),
+                },
+            }
+            write_json(manifest_path, manifest_payload)
+            return manifest_payload
+        except Exception as exc:
+            failure = failure_manifest(
+                output_csv=output_csv,
+                output_jsonl=output_jsonl,
+                manifest=manifest_path,
+                started_at=started_at,
+                error=str(exc),
+                diagnostics={"chat_db": chat_check, "exception_type": type(exc).__name__},
+            )
+            write_csv(output_csv, [])
+            write_jsonl(output_jsonl, [])
+            write_json(manifest_path, failure)
+            return failure
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Extract iMessage contact metadata with stdlib Python")
+    parser.add_argument("--chat-db", default=str(DEFAULT_CHAT_DB))
+    parser.add_argument("--addressbook-glob", default=DEFAULT_ADDRESSBOOK_GLOB)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    check = sub.add_parser("check")
+    check.add_argument("--strict", action="store_true")
+
+    privacy = sub.add_parser("open-privacy-settings", help="Open macOS privacy settings for Messages/Contacts access")
+    privacy.add_argument(
+        "--target",
+        choices=["full-disk-access", "contacts", "both"],
+        default="full-disk-access",
+        help="Privacy pane to open. Use contacts for AddressBook name matching.",
+    )
+    privacy.add_argument("--print-only", action="store_true", help="Print target URLs without opening System Settings")
+
+    extract = sub.add_parser("extract")
+    extract.add_argument("--output-csv", type=Path, default=DEFAULT_OUT_DIR / "imessage.contacts.csv")
+    extract.add_argument("--output-jsonl", type=Path, default=DEFAULT_OUT_DIR / "imessage.contacts.jsonl")
+    extract.add_argument("--manifest", type=Path, default=DEFAULT_OUT_DIR / "imessage.manifest.json")
+    extract.set_defaults(include_contact_only=True)
+    extract.add_argument(
+        "--include-contact-only",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    extract.add_argument(
+        "--message-handles-only",
+        dest="include_contact_only",
+        action="store_false",
+        help="Only export phone handles that appear in iMessage history",
+    )
+    extract.add_argument("--limit", type=int)
+
+    args = parser.parse_args()
+
+    if args.command == "check":
+        # Probe chat.db/AddressBook readability; strict-fail is the Full Disk
+        # Access / Contacts gate -> exit 1.
+        payload = IMessageExtractor(
+            chat_db=args.chat_db, addressbook_glob=args.addressbook_glob,
+        ).check(strict=args.strict)
+        emit(payload)
+        if payload["status"] != "ok":
+            raise SystemExit(1)
+        return
+
+    if args.command == "open-privacy-settings":
+        # macOS-only System Settings opener (no IMessageExtractor method) -> exit
+        # 2 on a non-darwin platform or if `open` fails.
+        targets = ["full-disk-access", "contacts"] if args.target == "both" else [args.target]
+        urls = [PRIVACY_SETTINGS_URLS[target] for target in targets]
+        result: dict[str, Any] = {
+            "primitive": "messages/extract_imessage",
+            "command": "open-privacy-settings",
+            "platform": sys.platform,
+            "targets": targets,
+            "urls": urls,
+            "opened": False,
+            "error": None,
+        }
+        if args.print_only:
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if sys.platform != "darwin":
+            result["error"] = "privacy settings helper is macOS-only"
+            print(json.dumps(result, indent=2, sort_keys=True))
+            raise SystemExit(2)
+        try:
+            for url in urls:
+                subprocess.run(["open", url], check=True)
+            result["opened"] = True
+        except (OSError, subprocess.CalledProcessError) as exc:
+            result["error"] = f"{type(exc).__name__}: {exc}"
+            print(json.dumps(result, indent=2, sort_keys=True))
+            raise SystemExit(2)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    # args.command == "extract": export contact metadata; extraction failure
+    # (unreadable chat.db / raised) -> exit 2.
+    payload = IMessageExtractor(
+        chat_db=args.chat_db, addressbook_glob=args.addressbook_glob,
+    ).extract(
+        output_csv=args.output_csv,
+        output_jsonl=args.output_jsonl,
+        manifest=args.manifest,
+        include_contact_only=args.include_contact_only,
+        limit=args.limit,
+    )
+    emit(payload)
+    if payload["status"] != "completed":
+        raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    main()

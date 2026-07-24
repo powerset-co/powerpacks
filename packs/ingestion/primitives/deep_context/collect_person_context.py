@@ -17,13 +17,15 @@ Memory: one person's recent window at a time (every source query is per-person
 Outputs (fixed dir, overwrite in place):
   <out-dir>/<person_id>.json   one bundle per person with >=1 message
   <out-dir>/manifest.json      counts/status/privacy
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import json
-import sqlite3
 import sys
 import time
 from itertools import islice
@@ -42,9 +44,8 @@ from packs.ingestion.primitives.deep_context.common import (
     Person,
     emit,
     load_people,
-    now_iso,
-    write_json,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 
 # Each channel is its own vertical with this deep cap: Gmail, iMessage, and WhatsApp
 # each pool up to DEFAULT_DEEP_CAP recent messages independently, then they're
@@ -154,7 +155,7 @@ def selected_people(args: argparse.Namespace, people_csv: Path) -> Iterator[Pers
 def collect_one(
     person: Person,
     *,
-    msgvault_con: sqlite3.Connection | None,
+    store: "sources.gni.MsgvaultStore | None",
     accounts: set[str],
     chat_db: Path,
     wacli_db: Path,
@@ -172,9 +173,9 @@ def collect_one(
     ``include_groups`` — group-chat bodies), bounded only by the char safety cap."""
     gmail: list[dict[str, Any]] = []
     gmail_total = 0
-    if msgvault_con is not None and person.emails:
-        gmail = sources.read_gmail(person, msgvault_con, accounts, cap=deep_cap)
-        gmail_total = sources.count_gmail(person, msgvault_con, accounts)
+    if store is not None and person.emails:
+        gmail = sources.read_gmail(person, store, accounts, cap=deep_cap)
+        gmail_total = sources.count_gmail(person, store, accounts)
     dm_chat: list[dict[str, Any]] = []
     group_chat: list[dict[str, Any]] = []
     true_chat_total = 0
@@ -219,18 +220,18 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     people_csv = Path(args.people_csv)
     _validate_people_csv(people_csv)
 
-    msgvault_con: sqlite3.Connection | None = None
+    store: "sources.gni.MsgvaultStore | None" = None
     accounts: set[str] = set()
     msgvault_db = Path(args.msgvault_db).expanduser()
     if msgvault_db.exists():
-        msgvault_con = sources.gni.connect_msgvault(msgvault_db)
+        store = sources.gni.MsgvaultStore(msgvault_db)
         try:
-            sources.gni.require_msgvault_schema(msgvault_con)
-            msgvault_con.row_factory = sqlite3.Row
-            accounts = sources.bec.account_emails(msgvault_con)
+            store.connect()
+            store.require_schema()
+            accounts = store.account_emails()
         except Exception:
-            msgvault_con.close()
-            msgvault_con = None
+            store.close()
+            store = None
 
     # One-time chat.db readability probe so a Full Disk Access denial is loud,
     # not silently swallowed as "0 iMessage messages".
@@ -270,7 +271,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                     continue
             messages, available = collect_one(
                 person,
-                msgvault_con=msgvault_con,
+                store=store,
                 accounts=accounts,
                 chat_db=chat_db,
                 wacli_db=wacli_db,
@@ -279,8 +280,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 max_group_size=args.max_group_size,
             )
             groups = sources.read_imessage_groups(person, chat_db) if person.phones else []
-            thread_participants = (sources.gmail_thread_participants(person, msgvault_con)
-                                   if msgvault_con is not None and person.emails else [])
+            thread_participants = (sources.gmail_thread_participants(person, store)
+                                   if store is not None and person.emails else [])
             if not messages and not groups:
                 if not args.dry_run:
                     bundle_path.unlink(missing_ok=True)
@@ -314,8 +315,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             if with_context % 25 == 0:
                 print(f"[collect] {with_context} bundles written", file=sys.stderr, flush=True)
     finally:
-        if msgvault_con is not None:
-            msgvault_con.close()
+        if store is not None:
+            store.close()
 
     elapsed_s = max(time.monotonic() - started, 1e-6)
     retained_group_messages, retained_max_group_size = _retained_group_policy(out_dir)
@@ -339,7 +340,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "groups_included": bool(args.include_groups),
         "max_group_size": args.max_group_size,
         "bundles_purged_for_scope": bundles_purged_for_scope,
-        "msgvault_available": msgvault_con is not None or msgvault_db.exists(),
+        "msgvault_available": store is not None or msgvault_db.exists(),
         "chat_db_available": chat_db.exists(),
         "chat_db_probe": chat_probe,
         "wacli_available": wacli_db.exists(),

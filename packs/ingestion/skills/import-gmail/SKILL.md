@@ -6,6 +6,11 @@ description: Add Gmail contacts to your local network. Use for $import-gmail. Se
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-23: Gmail discovery selects accounts only via repeated `--account-email`.
+  The primitive dropped its `--accounts`/accounts-file alternative and the
+  `discover()` wrapper (callers now construct `GmailDiscovery(...).run()`);
+  Step 5 already passes one `--account-email` per account plus one `--sync-after`,
+  so its command is unchanged. Fixed the guardrail path `gmail.py` → `gmail/discover.py`.
 - 2026-07-15: Added an all-account OAuth health preflight before sync. The
   workflow now collects every missing/expired account in one pass, asks once
   before authorizing that set, rechecks all selected accounts, and starts no
@@ -78,7 +83,7 @@ paths and rely on the primitives — don't pre-delete or invent folders.
   bug if you hit one). Plain shell for `cp`/`test`/`wc`/`cat` is fine; no glue
   scripts.
 - **Never call `msgvault` (or `msgvault sync-full`) directly.** Gmail syncing
-  happens *only* through Step 5's `gmail.py discover --sync-after "$SYNC_AFTER"`.
+  happens *only* through Step 5's `gmail/discover.py discover --sync-after "$SYNC_AFTER"`.
   A bare `msgvault sync-full <email>` has no date bound and pulls the entire
   mailbox, ignoring the chosen window. **Re-authorizing a lapsed token is
   `msgvault_setup.py add-account --force-auth` (OAuth only, no sync) — see Step 4;
@@ -135,7 +140,7 @@ If `whoami` fails or keys are missing, tell the user to run **`$setup`** first (
 Safe, local. Drives the next two steps:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py status
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py status
 ```
 
 The JSON reports `gcloud`, `config.oauth_configured`, `database.exists`, and
@@ -166,7 +171,7 @@ Only if Step 1 showed OAuth not configured. One-time browser setup for the
 the Google OAuth Desktop app, inits the db, authorizes the primary account**:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py browser-setup \
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py browser-setup \
   --email <primary-gmail> --add-account --init-db
 ```
 
@@ -180,7 +185,7 @@ Re-run `msgvault_setup.py status` after Step 3, because a fresh
 requested account in one command** before syncing anything:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py auth-check \
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py auth-check \
   --email <first-email> \
   --email <second-email>
 ```
@@ -203,14 +208,14 @@ them sequentially. After approval, run the normal grant for every missing
 account:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <email>
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email <email>
 ```
 
 For every expired/revoked account, use `--force-auth` (OAuth only; it downloads
 no mail and preserves already archived messages):
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/msgvault_setup/msgvault_setup.py add-account --email <email> --force-auth
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email <email> --force-auth
 ```
 
 After all grants complete, rerun the **same all-account `auth-check`**. Do not
@@ -239,7 +244,7 @@ if [ "${SYNC_YEARS:-3}" = "all" ]; then
 else
   SYNC_AFTER="$(date -v-${SYNC_YEARS:-3}y +%Y-%m-%d 2>/dev/null || date -d "${SYNC_YEARS:-3} years ago" +%Y-%m-%d)"
 fi
-uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail.py discover \
+uv run --project . python packs/ingestion/primitives/discover/gmail/discover.py discover \
   --account-email <first-email> \
   --account-email <second-email> \
   --sync-after "$SYNC_AFTER"
@@ -269,7 +274,7 @@ still-unresolved contact worth researching in
 No Parallel.ai, no RapidAPI, no spend prompt:
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/gmail.py run
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/gmail/importer.py run
 ```
 
 Report the manifest's `stats`: people imported and candidates staged. Identity
@@ -295,7 +300,7 @@ Check which sources are imported and suggest the missing ones (skip the ones
 already present):
 
 ```bash
-cd "$REPO" && uv run --project . python packs/ingestion/primitives/import_contacts_pipeline/status.py status
+cd "$REPO" && uv run --project . python packs/ingestion/primitives/imports/status.py status
 ```
 
 - `messages.import.imported: false` → suggest **`$import-messages`**

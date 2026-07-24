@@ -1,5 +1,19 @@
 <!--
 Changelog:
+- 2026-07-23: Gmail discovery account selection is `--account-email` (repeatable)
+  only — the `--accounts`/accounts-file path and the `discover()` wrapper were
+  dropped from the primitive (callers construct `GmailDiscovery(...).run()`).
+  Corrected the Bounded-sync stage row path `gmail.py discover` →
+  `gmail/discover.py discover`.
+- 2026-07-23 (audit): gmail/msgvault_store.py split into the gmail/msgvault/
+  package (store.py = MsgvaultStore + SQL, util.py = pure helpers) and
+  gmail/sync.py moved to gmail/msgvault/sync.py; the component table now links
+  the new paths.
+- 2026-07-23 (audit batch 17): gmail/network_import.py was split into
+  gmail/msgvault_store.py (msgvault reader/aggregation) and
+  gmail/discover_engine.py (per-account artifact-emission CLI).
+- 2026-07-23: The powerpacks-console app and its setup_gmail.py engine were
+  deleted; the harness skill is now the only Gmail import surface.
 - 2026-07-23: Removed the --resolve-legacy / --approve-parallel-spend flags.
   The import is directory-only, period; stored legacy resolutions migrate into
   overrides/review.csv via `bin/deep-context migrate-legacy` (the central SOT),
@@ -77,7 +91,7 @@ flowchart TD
 | --- | --- | --- |
 | Account choice | The user selects every Gmail address and a history window. Default is three years; a wider window needs confirmation. | Selection is explicit rather than inferred. |
 | OAuth and authorization | msgvault's desktop OAuth app is created if missing. Every selected address absent from `status.accounts` is authorized, including the primary account. | Existing OAuth configuration does not imply a new account is authorized. |
-| Bounded sync | All selected accounts are passed to one `gmail.py discover` invocation with repeated `--account-email` flags and one `--sync-after`. | Separate per-account calls can rewrite the stable manifest and lose earlier accounts from the following import. |
+| Bounded sync | All selected accounts are passed to one `gmail/discover.py discover` invocation with repeated `--account-email` flags and one `--sync-after`. | Separate per-account calls can rewrite the stable manifest and lose earlier accounts from the following import. |
 | Metadata extraction | msgvault first synchronizes messages into its local full-message archive. Powerpacks opens that SQLite database read-only and selects participants, direction, message/conversation IDs, timestamps, labels, counts, and display names. | Powerpacks does not select body, subject, MIME, or attachment content, although msgvault's local store contains message bodies and may contain attachments. |
 | Filtering | Automated/service addresses and contacts without bidirectional interaction are removed. Default category labels are also removed when both msgvault label tables exist. | The queue favors actual person-to-person relationships; missing label tables weaken category filtering rather than failing closed. |
 | Directory lookup | Gmail observations update the reusable local directory. Exact email, phone, or unambiguous unique-name mappings at confidence `>= 0.75` are reused; cached negative outcomes are not retried. | Known people attach immediately with no provider call. |
@@ -154,7 +168,6 @@ transient errors and never trigger forced reauthorization.
 |-- import/gmail/
 |   |-- people.csv
 |   |-- candidates.csv
-|   |-- ledger.json
 |   `-- manifest.json
 `-- merged/people.csv
 ```
@@ -177,22 +190,22 @@ output CSV rows are applied as raw material; their audit lives in
 - Stored legacy resolutions were accepted without an identity judge or human
   review — run `bin/deep-context migrate-legacy` so they enter the judged
   review loop.
-- The repo has three distinct surfaces: the harness skill, current local app v3
-  endpoints, and legacy `setup_gmail.py`. They share primitives but should not be
-  presented as one command contract.
+- The harness skill (`$import-gmail`) is the single Gmail import surface; the
+  former console app endpoints and their `setup_gmail.py` engine were removed
+  on 2026-07-23.
 
 ## Implementation map
 
 | Concern | Authority |
 | --- | --- |
 | Agent workflow | [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md) |
-| OAuth and account status | [`msgvault_setup.py`](../primitives/msgvault_setup/msgvault_setup.py) |
-| Sync and stable discovery | [`discover_contacts_pipeline/gmail.py`](../primitives/discover_contacts_pipeline/gmail.py) |
-| Metadata aggregation | [`gmail_network_import.py`](../primitives/gmail_network_import/gmail_network_import.py) |
-| Import orchestration | [`import_contacts_pipeline/gmail.py`](../primitives/import_contacts_pipeline/gmail.py) |
-| Directory reuse | [`discover_contacts_pipeline/directory.py`](../primitives/discover_contacts_pipeline/directory.py) |
+| OAuth and account status | [`msgvault_setup.py`](../primitives/setup/msgvault_setup.py) |
+| Sync and stable discovery | [`gmail/msgvault/sync.py`](../primitives/discover/gmail/msgvault/sync.py) |
+| Metadata aggregation | [`gmail/msgvault/store.py`](../primitives/discover/gmail/msgvault/store.py) (SQL + `MsgvaultStore`) and [`gmail/msgvault/util.py`](../primitives/discover/gmail/msgvault/util.py) (pure helpers) |
+| Per-account artifact emission | [`gmail/extract_gmail.py`](../primitives/discover/gmail/extract_gmail.py) |
+| Import orchestration | [`imports/gmail/importer.py`](../primitives/imports/gmail/importer.py) |
+| Directory reuse | [`imports/directory.py`](../primitives/imports/directory.py) |
 | Candidates schema | [`candidates_schema.py`](../schemas/candidates_schema.py) |
-| Per-source status | [`status.py`](../primitives/import_contacts_pipeline/status.py) |
-| Parallel resolver (legacy era; not callable from the import) | [`resolve_linkedin_queue.py`](../primitives/resolve_linkedin_queue/resolve_linkedin_queue.py) |
-| Profile hydration (legacy era; not callable from the import) | [`enrich_people.py`](../primitives/enrich_people/enrich_people.py) |
+| Per-source status | [`status.py`](../primitives/imports/status.py) |
+| Profile hydration (legacy era; not callable from the import) | [`enrich_people.py`](../primitives/enrich/enrich_people.py) |
 | Fan-in | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

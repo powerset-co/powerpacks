@@ -7,18 +7,24 @@ SKILLS_DIR="${1:-$CODEX_HOME/skills}"
 BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
-  search search-network search-network-jd search-company search-sql search-contacts build-local-search-index
-  # removed by the 2026-07 $search consolidation — cleaned up so stale installs don't linger
-  search-profile search-highlight extract-search-query recruit
+  search search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks install-powerpacks sales-nav-search build-outbound
-  setup import-contacts import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault
-  # deep-setup was consolidated into deep-context; keep it managed so stale installs are removed
-  import-email import-gmail enrich-email-markers discover-contacts import-twitter deep-context deep-setup logbook
-  import-messages import-imessage import-contacts-review clean-slate
+  setup msgvault import-gmail import-twitter deep-context logbook
+  import-messages clean-slate
+)
+
+# Skills that once shipped but no longer exist in the repo. Scrubbed from the
+# user's skills dir on update so retired routes can't dispatch deleted primitives.
+RETIRED_SKILLS=(
+  search-network search-network-jd search-profile search-highlight extract-search-query recruit
+  deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
+  import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
+  import-gmail-network import-linkedin-network import-twitter-network
+  linkedin-sync-mcp linkedin-sync-csv
 )
 
 mkdir -p "$SKILLS_DIR"
-for skill in "${MANAGED_SKILLS[@]}"; do
+for skill in "${MANAGED_SKILLS[@]}" "${RETIRED_SKILLS[@]}"; do
   rm -rf "$SKILLS_DIR/$skill"
 done
 "$REPO_ROOT/bin/setup-python"
@@ -43,24 +49,14 @@ install_powerpacks_bundle() {
   # Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$tmp/packs"
-  # The setup product path launches the local Powerpacks Console from the
-  # installed bundle, so users can run $setup from any Codex cwd. Keep setup
-  # sidecars here too: setup/index runs from this installed bundle and expects
+  # Setup sidecars run from this installed bundle: setup/index expects
   # scripts/build-local-duckdb-shim.py to materialize restored bootstrap records
   # into .powerpacks/search-index/local-search.duckdb.
   mkdir -p "$tmp/scripts"
-  for script in run-powerpacks-console.sh build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
+  for script in build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
     cp "$REPO_ROOT/scripts/$script" "$tmp/scripts/$script"
     chmod +x "$tmp/scripts/$script"
   done
-  mkdir -p "$tmp/app"
-  for file in README.md components.json index.html package-lock.json package.json postcss.config.js tailwind.config.ts tsconfig.app.json tsconfig.json tsconfig.node.json vite.config.ts; do
-    if [[ -f "$REPO_ROOT/app/$file" ]]; then
-      cp "$REPO_ROOT/app/$file" "$tmp/app/$file"
-    fi
-  done
-  cp -R "$REPO_ROOT/app/public" "$tmp/app/public"
-  cp -R "$REPO_ROOT/app/src" "$tmp/app/src"
   # Keep only the top-level skill entrypoint; avoid nested skill duplication
   # from copied packs during discovery.
   find "$tmp/packs" -type f -path "*/SKILL.md" -delete
@@ -75,8 +71,6 @@ $REPO_ROOT/adapters/codex/install.sh
 \`\`\`
 
 Installed Powerpacks skills link their local \`powerpacks/\` directory here.
-The bundle includes the local setup console app and launcher so \`\$setup\` can
-run from any Codex working directory.
 EOF
 
   if [[ -d "$BUNDLE_DIR/.powerpacks" ]]; then
@@ -127,18 +121,12 @@ install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
 install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
-install_skill import-whatsapp "$REPO_ROOT/packs/ingestion/skills/import-whatsapp/SKILL.md"
-install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
-install_skill onboard "$REPO_ROOT/packs/ingestion/skills/onboard/SKILL.md"
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
-install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
-install_skill enrich-email-markers "$REPO_ROOT/packs/ingestion/skills/enrich-email-markers/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
 install_skill clean-slate "$REPO_ROOT/packs/ingestion/skills/clean-slate/SKILL.md"
 install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
-install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
@@ -174,4 +162,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context clean-slate logbook discover-contacts import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"

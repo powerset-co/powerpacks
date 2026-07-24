@@ -31,6 +31,9 @@ Outputs:
   reconcile/manifest.json
   overrides/review.csv  the ONE file to EDIT (approved column; every judged row)
   (a "## LinkedIn identity" section injected into each parent markdown)
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio; normalize_email imports from common.contact_fields instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -79,13 +82,12 @@ from packs.ingestion.primitives.deep_context.common import (
     read_jsonl,
     load_env,
     load_owner,
-    normalize_email,
     normalize_phone,
-    now_iso,
     owner_background_block,
     parse_list,
-    write_json,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.review_store import (
     OVERRIDE_COLUMNS,
     USER_APPROVED,
@@ -93,7 +95,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     row_keys_for_person,
     write_override_rows,
 )
-from packs.ingestion.primitives.enrich_people.enrich_people import (
+from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
     read_usable_cached_profile,
 )

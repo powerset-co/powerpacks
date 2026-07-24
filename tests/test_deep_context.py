@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context import (
     build_parents as parents,
     cluster_merge_candidates as cluster,
@@ -25,10 +26,17 @@ from packs.ingestion.primitives.deep_context import (
     apply_retargets as retargets,
     reconcile_deep_research as dresearch,
     reconcile_linkedin as reconcile,
-    reconcile_review_web as web,
     restart_review,
     sources,
     synthesize_person_context as synth,
+)
+from packs.ingestion.primitives.deep_context.review_web import (
+    REVIEW_CSS,
+    decisions as web_decisions,
+    model as web_model,
+    rendering as web_rendering,
+    server as web_server,
+    workflow as web_workflow,
 )
 from packs.ingestion.primitives.deep_context.review_store import (
     load_override_rows as load_rows,
@@ -309,26 +317,28 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
     def test_read_gmail_keeps_thread_back_and_forth(self):
         con = self._con()
         self.addCleanup(con.close)
-        accounts = sources.bec.account_emails(con)
-        msgs = sources.read_gmail(self._person(), con, accounts)
+        store = sources.gni.MsgvaultStore(connection=con)
+        accounts = store.account_emails()
+        msgs = sources.read_gmail(self._person(), store, accounts)
         self.assertGreater(len(msgs), 1)            # was 1 (thread collapsed); now the back-and-forth
         self.assertEqual(len(msgs), 4)
 
     def test_collect_one_honest_available_and_capped(self):
         con = self._con()
         self.addCleanup(con.close)
-        accounts = sources.bec.account_emails(con)
+        store = sources.gni.MsgvaultStore(connection=con)
+        accounts = store.account_emails()
         nope = Path("/nonexistent-deepctx")
         # deep_cap below the true total => pool trimmed, but `available` reports the true 4.
         pool, available = collect.collect_one(
-            self._person(), msgvault_con=con, accounts=accounts,
+            self._person(), store=store, accounts=accounts,
             chat_db=nope, wacli_db=nope, deep_cap=2)
         self.assertEqual(available, 4)
         self.assertEqual(len(pool), 2)
         self.assertGreater(available, len(pool))    # capped == True downstream
         # deep_cap above the total => honest, not capped (the Bretton case).
         pool2, available2 = collect.collect_one(
-            self._person(), msgvault_con=con, accounts=accounts,
+            self._person(), store=store, accounts=accounts,
             chat_db=nope, wacli_db=nope, deep_cap=50)
         self.assertEqual(available2, 4)
         self.assertEqual(len(pool2), 4)
@@ -336,7 +346,8 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
     def test_gmail_does_not_starve_chat(self):
         con = self._con()
         self.addCleanup(con.close)
-        accounts = sources.bec.account_emails(con)
+        store = sources.gni.MsgvaultStore(connection=con)
+        accounts = store.account_emails()
         fake_dms = [{"channel": "imessage", "at": "2026-03-01T00:00:00Z",
                      "direction": "from_them", "text": "hey are we still on for friday"}]
         orig = (sources.read_imessage, sources.count_imessage_dms, sources.read_whatsapp)
@@ -345,7 +356,7 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
         sources.read_whatsapp = lambda p, db, cap=0: []
         try:
             pool, _ = collect.collect_one(
-                self._person(phones=["+14155550000"]), msgvault_con=con, accounts=accounts,
+                self._person(phones=["+14155550000"]), store=store, accounts=accounts,
                 chat_db=Path("/nope"), wacli_db=Path("/nope"), deep_cap=2)
         finally:
             sources.read_imessage, sources.count_imessage_dms, sources.read_whatsapp = orig
@@ -740,7 +751,7 @@ class TestEndToEnd(unittest.TestCase):
     """compose -> cluster -> lookup over synthetic fixtures, detecting a duplicate."""
 
     def _write_person(self, raw_dir: Path, facts_dir: Path, pid: str, name: str, phone: str, email: str):
-        common.write_json(raw_dir / f"{pid}.json", {
+        write_json(raw_dir / f"{pid}.json", {
             "person_id": pid, "full_name": name, "emails": [email] if email else [],
             "phones": [phone] if phone else [], "source_channels": ["imessage"],
             "messages": [{"at": "2023-01-01", "channel": "imessage", "direction": "from_them", "subject": "", "text": "hi"}],
@@ -1440,7 +1451,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                     "relationship_to_owner": "former professor",
                     "network_worth": {"decision": "maybe", "reason": "profession unknown"},
                 }}) + "\n", encoding="utf-8")
-                common.write_json(raw / f"{person_id}.json", {
+                write_json(raw / f"{person_id}.json", {
                     "person_id": person_id,
                     "messages": [{
                         "at": "2020-01-01T00:00:00Z",
@@ -1638,7 +1649,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                 "network_worth": {"decision": "maybe",
                                   "reason": "real person but no professional context"},
             }}) + "\n", encoding="utf-8")
-            common.write_json(raw / f"{pid}.json", {"person_id": pid, "messages": [{
+            write_json(raw / f"{pid}.json", {"person_id": pid, "messages": [{
                 "at": "2020-01-01T00:00:00Z", "direction": "from_them",
                 "text": f"Good to connect, this is {handle}.",
             }]})
@@ -2469,11 +2480,11 @@ class TestReviewWeb(unittest.TestCase):
             )
             fake_server = mock.Mock(server_address=("127.0.0.1", 43210))
             with mock.patch.object(
-                    web.urllib.request, "urlopen",
-                    side_effect=web.urllib.error.URLError("not running")), \
-                 mock.patch.object(web, "_all_review_parents", return_value=[]) as build, \
-                 mock.patch.object(web, "ThreadingHTTPServer", return_value=fake_server):
-                web.cmd_serve(args)
+                    web_server.urllib.request, "urlopen",
+                    side_effect=web_server.urllib.error.URLError("not running")), \
+                 mock.patch.object(web_server, "_all_review_parents", return_value=[]) as build, \
+                 mock.patch.object(web_server, "ThreadingHTTPServer", return_value=fake_server):
+                web_server.cmd_serve(args)
 
         build.assert_called_once_with(
             paths["verdicts"],
@@ -2488,7 +2499,7 @@ class TestReviewWeb(unittest.TestCase):
         fake_server.serve_forever.assert_called_once_with()
 
     def test_browser_observer_polls_only_while_external_updates_are_possible(self):
-        script = web.REVIEW_JS.read_text(encoding="utf-8")
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn('fetch("/api/status", { cache: "no-store" })', script)
         self.assertIn("const statusPollMs = 1000;", script)
         self.assertIn(
@@ -2541,7 +2552,7 @@ class TestReviewWeb(unittest.TestCase):
                 "done": "true",
             }
             for stage in ("worth", "enrich", "linkedin", "done"):
-                html = web.page_html(
+                html = web_rendering.page_html(
                     [],
                     {"stage": [stage]},
                     base / "review.csv",
@@ -2563,7 +2574,7 @@ class TestReviewWeb(unittest.TestCase):
     def test_early_linkedin_preview_polls_without_forcing_current_stage(self):
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
-            html = web.page_html(
+            html = web_rendering.page_html(
                 [],
                 {"stage": ["linkedin"], "preview": ["1"]},
                 base / "review.csv",
@@ -2590,7 +2601,7 @@ class TestReviewWeb(unittest.TestCase):
                 "completed_stages": ["worth", "enrich"],
                 "people_revision": "revision-1",
             }), encoding="utf-8")
-            selection = web.worth_selection_from_parents(
+            selection = web_workflow.worth_selection_from_parents(
                 [], manifest_path=review_manifest)
             enrichment_manifest = base / "research" / "manifest.json"
             enrichment_manifest.parent.mkdir(parents=True)
@@ -2601,7 +2612,7 @@ class TestReviewWeb(unittest.TestCase):
                 "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0},
             }), encoding="utf-8")
 
-            html = web.page_html(
+            html = web_rendering.page_html(
                 [],
                 {"stage": ["linkedin"]},
                 base / "review.csv",
@@ -2630,7 +2641,7 @@ class TestReviewWeb(unittest.TestCase):
             "realize": "done",
         }
         self.assertEqual(
-            {action: web.browser_stage_for_next_action(action) for action in expected},
+            {action: web_workflow.browser_stage_for_next_action(action) for action in expected},
             expected,
         )
 
@@ -2668,7 +2679,7 @@ class TestReviewWeb(unittest.TestCase):
             "completed_stages": ["worth"],
             "updated_at": "2026-07-16T00:00:00Z",
         }
-        baseline = web.review_state_token(
+        baseline = web_workflow.review_state_token(
             progress, selection, enrichment, review_manifest)
 
         changed_progress = {**progress, "worth_pending": 0}
@@ -2684,22 +2695,22 @@ class TestReviewWeb(unittest.TestCase):
         }
         self.assertNotEqual(
             baseline,
-            web.review_state_token(
+            web_workflow.review_state_token(
                 changed_progress, selection, enrichment, review_manifest),
         )
         self.assertNotEqual(
             baseline,
-            web.review_state_token(
+            web_workflow.review_state_token(
                 progress, changed_selection, enrichment, review_manifest),
         )
         self.assertNotEqual(
             baseline,
-            web.review_state_token(
+            web_workflow.review_state_token(
                 progress, selection, changed_enrichment, review_manifest),
         )
         self.assertNotEqual(
             baseline,
-            web.review_state_token(
+            web_workflow.review_state_token(
                 progress, selection, enrichment, changed_review),
         )
 
@@ -2766,12 +2777,12 @@ class TestReviewWeb(unittest.TestCase):
         with tempfile.TemporaryDirectory() as dd:
             d = Path(dd)
             verdicts, review = self._fixture(d)
-            ps, _ = web.build_parents(verdicts, review)
+            ps, _ = web_model.build_parents(verdicts, review)
             by = {p["name"]: p for p in ps}
             self.assertEqual(set(by), {"Jane Doe", "Pat Lee"})
-            self.assertEqual(web.parent_status(by["Jane Doe"]), "review")
-            self.assertEqual(web.parent_status(by["Pat Lee"]), "verified")
-            self.assertEqual(web.picked_link(by["Pat Lee"]), "https://www.linkedin.com/in/patlee")
+            self.assertEqual(web_model.parent_status(by["Jane Doe"]), "review")
+            self.assertEqual(web_model.parent_status(by["Pat Lee"]), "verified")
+            self.assertEqual(web_model.picked_link(by["Pat Lee"]), "https://www.linkedin.com/in/patlee")
             # reasoning + profile carried through for display
             cand = by["Jane Doe"]["candidates"][0]
             self.assertEqual(cand["headline"], "VP at Acme")
@@ -2783,13 +2794,13 @@ class TestReviewWeb(unittest.TestCase):
             verdicts, review = self._fixture(d)
             TH = reconcile.DEFAULT_CONFIRM
 
-            r = web.apply_decision(review, verdicts, "janedoe", "keep", "", TH)
+            r = web_decisions.apply_decision(review, verdicts, "janedoe", "keep", "", TH)
             self.assertEqual((r["action"], r["approved"]), ("verify", "yes"))
 
-            r = web.apply_decision(review, verdicts, "janedoe", "detach", "", TH)
+            r = web_decisions.apply_decision(review, verdicts, "janedoe", "detach", "", TH)
             self.assertEqual((r["action"], r["approved"]), ("detach", "yes"))
 
-            r = web.apply_decision(review, verdicts, "janedoe", "fix",
+            r = web_decisions.apply_decision(review, verdicts, "janedoe", "fix",
                                    "linkedin.com/in/jane-real", TH)
             self.assertEqual(r["action"], "retarget")
             self.assertEqual(r["new_url"], "https://www.linkedin.com/in/jane-real")
@@ -2797,8 +2808,8 @@ class TestReviewWeb(unittest.TestCase):
             self.assertEqual(rows["janedoe"]["new_public_identifier"], "jane-real")
 
             # reset a high-confidence confirmed -> restores auto/verify (re-applies at merge)
-            web.apply_decision(review, verdicts, "patlee", "detach", "", TH)
-            r = web.apply_decision(review, verdicts, "patlee", "reset", "", TH)
+            web_decisions.apply_decision(review, verdicts, "patlee", "detach", "", TH)
+            r = web_decisions.apply_decision(review, verdicts, "patlee", "reset", "", TH)
             self.assertEqual((r["action"], r["approved"]), ("verify", "auto"))
 
             # no duplicate rows introduced (still exactly the two pubs)
@@ -2809,18 +2820,18 @@ class TestReviewWeb(unittest.TestCase):
             d = Path(dd)
             verdicts, review = self._fixture(d)
             with self.assertRaises(ValueError):
-                web.apply_decision(review, verdicts, "janedoe", "fix", "", reconcile.DEFAULT_CONFIRM)
+                web_decisions.apply_decision(review, verdicts, "janedoe", "fix", "", reconcile.DEFAULT_CONFIRM)
 
     def test_exclude_marks_person_excluded(self):
         with tempfile.TemporaryDirectory() as dd:
             d = Path(dd)
             verdicts, review = self._fixture(d)
-            r = web.apply_decision(review, verdicts, "janedoe", "exclude", "", reconcile.DEFAULT_CONFIRM)
+            r = web_decisions.apply_decision(review, verdicts, "janedoe", "exclude", "", reconcile.DEFAULT_CONFIRM)
             self.assertEqual((r["action"], r["approved"]), ("exclude", "yes"))
-            parents, _ = web.build_parents(verdicts, review)
+            parents, _ = web_model.build_parents(verdicts, review)
             jane = next(p for p in parents if p["name"] == "Jane Doe")
-            self.assertEqual(web.candidate_state(jane["candidates"][0]), "excluded")
-            self.assertEqual(web.parent_status(jane), "excluded")
+            self.assertEqual(web_model.candidate_state(jane["candidates"][0]), "excluded")
+            self.assertEqual(web_model.parent_status(jane), "excluded")
 
     def _merged_fixture(self, d: Path) -> tuple[Path, Path]:
         """One Merged person: a confirmed keeper, a high-confidence wrong namesake, and a
@@ -2847,12 +2858,12 @@ class TestReviewWeb(unittest.TestCase):
         with tempfile.TemporaryDirectory() as dd:
             d = Path(dd)
             verdicts, review = self._merged_fixture(d)
-            parents, _ = web.build_parents(verdicts, review)
+            parents, _ = web_model.build_parents(verdicts, review)
             sam = next(p for p in parents if p["name"] == "Sam Jones")
             self.assertEqual(len(sam["candidates"]), 3)
-            pending = web.pending_linkedin_candidates(sam)
+            pending = web_workflow.pending_linkedin_candidates(sam)
             self.assertEqual([cand["pub"] for cand in pending], ["samreal", "sammaybe", "samwrong"])
-            html = web.render_linkedin_card(sam, pending[0], d, d)
+            html = web_rendering.render_linkedin_card(sam, pending[0], d, d)
             self.assertIn("Is this the right profile?", html)
             self.assertIn("data-decide='keep'", html)
             self.assertIn("data-open-fix", html)
@@ -3162,14 +3173,14 @@ class TestSyntheticReviewUI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "synthetic-people.csv"
             path.write_text(self.CSV_HEADER + self._csv_row(""), encoding="utf-8")
-            parents = web.load_synthetic_parents(path)
+            parents = web_model.load_synthetic_parents(path)
             self.assertEqual(len(parents), 1)
             cand = parents[0]["candidates"][0]
             self.assertTrue(cand["synthetic"])
-            self.assertEqual(web.candidate_state(cand), "review")  # pending -> Needs review pile
+            self.assertEqual(web_model.candidate_state(cand), "review")  # pending -> Needs review pile
             self.assertEqual(cand["experiences"], ["CTO @ StealthCo (present)"])
             self.assertIn("research gaps: education dates", cand["reason"])
-            html = web.render_linkedin_card(parents[0], cand, Path(tmpdir), Path(tmpdir))
+            html = web_rendering.render_linkedin_card(parents[0], cand, Path(tmpdir), Path(tmpdir))
             # A synthetic card renders the SAME decision UI as a real-LinkedIn card:
             # the "Is this the right profile?" question, a [No] [Use this profile]
             # binary-actions pair, and a hidden fix form revealed by No. No synthetic-
@@ -3200,11 +3211,11 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertNotIn("View LinkedIn", html)
             # approved=auto surfaces as verified
             path.write_text(self.CSV_HEADER + self._csv_row("auto"), encoding="utf-8")
-            cand = web.load_synthetic_parents(path)[0]["candidates"][0]
-            self.assertEqual(web.candidate_state(cand), "verified")
+            cand = web_model.load_synthetic_parents(path)[0]["candidates"][0]
+            self.assertEqual(web_model.candidate_state(cand), "verified")
 
     def test_linkedin_correction_is_spaced_below_its_divider(self) -> None:
-        css = (Path(web.__file__).with_name("reconcile_review.css")).read_text(encoding="utf-8")
+        css = REVIEW_CSS.read_text(encoding="utf-8")
         self.assertRegex(
             css,
             r'body\[data-stage="linkedin"\] \.alternate\s*\{'
@@ -3215,14 +3226,14 @@ class TestSyntheticReviewUI(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "synthetic-people.csv"
             path.write_text(self.CSV_HEADER + self._csv_row(""), encoding="utf-8")
-            self.assertEqual(web.apply_synthetic_decision(path, "synth-email-abc", "keep")["approved"], "yes")
+            self.assertEqual(web_decisions.apply_synthetic_decision(path, "synth-email-abc", "keep")["approved"], "yes")
             self.assertIn(",yes,", path.read_text())
-            self.assertEqual(web.apply_synthetic_decision(path, "synth-email-abc", "detach")["approved"], "no")
-            self.assertEqual(web.apply_synthetic_decision(path, "synth-email-abc", "reset")["approved"], "")
+            self.assertEqual(web_decisions.apply_synthetic_decision(path, "synth-email-abc", "detach")["approved"], "no")
+            self.assertEqual(web_decisions.apply_synthetic_decision(path, "synth-email-abc", "reset")["approved"], "")
             with self.assertRaises(ValueError):
-                web.apply_synthetic_decision(path, "synth-ghost", "keep")
+                web_decisions.apply_synthetic_decision(path, "synth-ghost", "keep")
             with self.assertRaises(ValueError):
-                web.apply_synthetic_decision(path, "synth-email-abc", "fix")
+                web_decisions.apply_synthetic_decision(path, "synth-email-abc", "fix")
 
 
 class TestEligibleSubsetPlausiblyAbsent(unittest.TestCase):
@@ -3248,7 +3259,7 @@ class TestSpamDropAtMerge(unittest.TestCase):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "merge_network_sources",
-            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py")
+            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/imports/merge_network_sources.py")
         merge = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
         spec.loader.exec_module(merge)
@@ -3275,7 +3286,7 @@ class TestSpamDropAtMerge(unittest.TestCase):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "merge_network_sources",
-            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py")
+            Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/imports/merge_network_sources.py")
         merge = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
         spec.loader.exec_module(merge)

@@ -14,20 +14,18 @@ architecture and current-versus-historical document status.
 | `$setup` | [`setup`](setup/SKILL.md) | LinkedIn-only setup, fan-in, Modal build, and local validation. | [LinkedIn and Modal indexing](../../indexing/docs/linkedin-modal-pipeline.md) |
 | `$import-gmail` | [`import-gmail`](import-gmail/SKILL.md) | Gmail/msgvault sync, metadata import, identity resolution, fan-in, and index rebuild. | [Gmail import pipeline](../docs/gmail-import-pipeline.md) |
 | `$import-messages` | [`import-messages`](import-messages/SKILL.md) | iMessage/WhatsApp metadata import, identity review, fan-in, and index rebuild. | [Message import pipeline](../docs/message-import-pipeline.md) |
-| `$import-whatsapp` | [`import-whatsapp`](import-whatsapp/SKILL.md) | Isolated wacli sync and metadata export; stops before identity resolution or indexing. | [Message import pipeline](../docs/message-import-pipeline.md#isolated-import-whatsapp) |
 | `$deep-context` | [`deep-context`](deep-context/SKILL.md) | Message-body dossiers, duplicate grouping, LinkedIn self-heal, and reviewed overrides. | [Deep-context pipeline](../docs/deep-context-pipeline.md) |
 | `$import-twitter` | [`import-twitter`](import-twitter/SKILL.md) | Twitter/X network import and LinkedIn validation. | Skill is the current guide. |
-| `$discover-contacts` | [`discover-contacts`](discover-contacts/SKILL.md) | Lower-level multi-source discovery/orchestration. | Skill and primitive docs. |
 
 `$import-email` and `$import-contacts` are retired names. Use `$import-gmail` and
 [`$import-messages`](import-messages/SKILL.md).
 
 ## Specialist workflows
 
-The remaining skill folders expose narrower onboarding, source import, marker,
-logbook, and compatibility surfaces. They are useful for explicit debugging or
-specialized requests but should not replace the primary workflow when the route
-above is clear.
+The remaining skill folders expose narrower surfaces: msgvault Gmail-archive
+setup, the clean-slate reset, and the logbook verbatim archive. They are useful
+for explicit debugging or specialized requests but should not replace the
+primary workflow when the route above is clear.
 
 The runtime ownership chain is:
 

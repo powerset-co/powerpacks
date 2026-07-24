@@ -10,6 +10,9 @@ confidence + depth distributions, and actionable flag lists:
   - errors               synthesis errors
 
 Outputs JSON to stdout + writes validation.json / validation.md in the dossier dir.
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -25,9 +28,8 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     emit,
     read_jsonl,
-    now_iso,
-    write_json,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 
 DEFAULT_MIN_CONFIDENCE = 0.5
 DEFAULT_TARGET_CONFIDENCE = 0.85

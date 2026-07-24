@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/build_email_context/build_email_context.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/deep_context/build_email_context.py"
 spec = importlib.util.spec_from_file_location("build_email_context", MODULE_PATH)
 build_email_context = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -13,6 +13,8 @@ sys.modules[spec.name] = build_email_context
 spec.loader.exec_module(build_email_context)
 
 bec = build_email_context
+# All msgvault SQLite access moved to MsgvaultStore; wrap the fixture connections.
+Store = bec.gni.MsgvaultStore
 
 SCHEMA = """
 CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
@@ -97,8 +99,9 @@ class HighestSignalSelectionTests(unittest.TestCase):
     def test_title_bearing_email_ranks_first(self):
         con = make_con()
         self.addCleanup(con.close)
-        rows, _ = bec.recent_emails_for(con, "jane@example.com", per_person=5, snippet_chars=100,
-                                        accounts=bec.account_emails(con))
+        store = Store(connection=con)
+        rows, _ = bec.recent_emails_for(store, "jane@example.com", per_person=5, snippet_chars=100,
+                                        accounts=store.account_emails())
         # 'My new role' snippet ("…Staff Engineer") carries a title -> highest signal.
         self.assertEqual(rows[0]["subject"], "My new role")
 
@@ -125,7 +128,7 @@ class NearDupTests(unittest.TestCase):
         """)
         con.commit()
         self.addCleanup(con.close)
-        rows, _ = bec.recent_emails_for(con, "jane@example.com", per_person=5, snippet_chars=200, accounts={"me@gmail.com"})
+        rows, _ = bec.recent_emails_for(Store(connection=con), "jane@example.com", per_person=5, snippet_chars=200, accounts={"me@gmail.com"})
         subjects = [r["subject"] for r in rows]
         self.assertEqual(len(rows), 2)            # 3 distinct threads -> 1 near-dup collapsed
         self.assertIn("Bio", subjects)            # the distinct, high-signal email kept
@@ -136,14 +139,14 @@ class AccountEmailsTests(unittest.TestCase):
     def test_lowercases_identifiers(self):
         con = make_con()
         self.addCleanup(con.close)
-        self.assertEqual(bec.account_emails(con), {"me@gmail.com"})
+        self.assertEqual(Store(connection=con).account_emails(), {"me@gmail.com"})
 
 
 class OwnerIdentityTests(unittest.TestCase):
     def test_derives_name_and_emails_from_msgvault(self):
         con = make_con()
         self.addCleanup(con.close)
-        owner = bec.owner_identity(con)
+        owner = Store(connection=con).owner_identity()
         # emails come from sources (lowercased); name from the participant row.
         self.assertEqual(owner["emails"], ["me@gmail.com"])
         self.assertEqual(owner["name"], "Me")
@@ -153,17 +156,18 @@ class OwnerIdentityTests(unittest.TestCase):
         con.row_factory = sqlite3.Row
         con.executescript(SCHEMA)
         self.addCleanup(con.close)
-        self.assertEqual(bec.owner_identity(con), {"name": "", "emails": []})
+        self.assertEqual(Store(connection=con).owner_identity(), {"name": "", "emails": []})
 
 
 class RecentEmailsTests(unittest.TestCase):
     def setUp(self):
         self.con = make_con()
         self.addCleanup(self.con.close)
-        self.accounts = bec.account_emails(self.con)
+        self.store = Store(connection=self.con)
+        self.accounts = self.store.account_emails()
 
     def _jane(self, **kw):
-        return bec.recent_emails_for(self.con, "jane@example.com", accounts=self.accounts, **kw)
+        return bec.recent_emails_for(self.store, "jane@example.com", accounts=self.accounts, **kw)
 
     def test_one_email_per_thread(self):
         rows, _ = self._jane(per_person=5, snippet_chars=100)
@@ -227,10 +231,11 @@ class DepthSelectionTests(unittest.TestCase):
     def setUp(self):
         self.con = make_con()
         self.addCleanup(self.con.close)
-        self.accounts = bec.account_emails(self.con)
+        self.store = Store(connection=self.con)
+        self.accounts = self.store.account_emails()
 
     def _jane(self, **kw):
-        return bec.recent_emails_for(self.con, "jane@example.com", accounts=self.accounts, **kw)
+        return bec.recent_emails_for(self.store, "jane@example.com", accounts=self.accounts, **kw)
 
     def test_depth_keeps_thread_back_and_forth(self):
         # Thread 100 has Jane's msg 10 AND my reply 11. Default keeps one; depth keeps both.
@@ -276,18 +281,18 @@ class DepthSelectionTests(unittest.TestCase):
         """)
         con.commit()
         self.addCleanup(con.close)
-        deep, _ = bec.recent_emails_for(con, "jane@example.com", per_person=10, snippet_chars=200,
+        deep, _ = bec.recent_emails_for(Store(connection=con), "jane@example.com", per_person=10, snippet_chars=200,
                                         accounts={"me@gmail.com"}, max_per_thread=None)
         # Depth keeps the thread's messages, but the two near-dups still collapse to one.
         self.assertEqual(len(deep), 2)
 
     def test_count_messages_for_excludes_third_party(self):
-        n = bec.count_messages_for(self.con, "jane@example.com", self.accounts)
+        n = self.store.count_messages_for("jane@example.com", self.accounts)
         # Jane-sent (10, 20) + owner->Jane (11, 30) = 4; Bob's third-party msg 13 excluded.
         self.assertEqual(n, 4)
 
     def test_count_messages_for_unknown_email_is_zero(self):
-        self.assertEqual(bec.count_messages_for(self.con, "nobody@nowhere.com", self.accounts), 0)
+        self.assertEqual(self.store.count_messages_for("nobody@nowhere.com", self.accounts), 0)
 
 
 class StreamContactGroupsTests(unittest.TestCase):
@@ -296,21 +301,22 @@ class StreamContactGroupsTests(unittest.TestCase):
     def setUp(self):
         self.con = make_con()
         self.addCleanup(self.con.close)
-        self.accounts = bec.account_emails(self.con)
+        self.store = Store(connection=self.con)
+        self.accounts = self.store.account_emails()
 
     def test_streamed_selection_matches_per_contact(self):
         emails = ["jane@example.com", "bob@example.com"]
-        bec.create_candidate_pid_table(self.con, emails)
+        self.store.create_candidate_pid_table(emails)
         fetch_limit = 5 * bec.FETCH_MULTIPLIER
         streamed = {}
-        for cemail, rows in bec.stream_contact_groups(self.con, fetch_limit):
+        for cemail, rows in self.store.stream_contact_groups(fetch_limit):
             kept, _ = bec.select_emails_from_rows(
                 rows, cemail, per_person=5, snippet_chars=100, accounts=self.accounts
             )
             streamed[cemail] = [(e["subject"], e["from_role"]) for e in kept]
         # Jane via the per-contact path — must be identical.
         per_contact, _ = bec.recent_emails_for(
-            self.con, "jane@example.com", per_person=5, snippet_chars=100, accounts=self.accounts
+            self.store, "jane@example.com", per_person=5, snippet_chars=100, accounts=self.accounts
         )
         self.assertEqual(streamed["jane@example.com"],
                          [(e["subject"], e["from_role"]) for e in per_contact])
@@ -318,12 +324,12 @@ class StreamContactGroupsTests(unittest.TestCase):
                          {"My new role", "Hello & welcome", "Intro to you"})
 
     def test_candidate_table_maps_only_known_emails(self):
-        n = bec.create_candidate_pid_table(self.con, ["jane@example.com", "nobody@nowhere.com"])
+        n = self.store.create_candidate_pid_table(["jane@example.com", "nobody@nowhere.com"])
         self.assertEqual(n, 1)  # only jane resolves to a participant id
 
     def test_body_mode_streamed(self):
-        bec.create_candidate_pid_table(self.con, ["jane@example.com"])
-        groups = dict(bec.stream_contact_groups(self.con, 5 * bec.FETCH_MULTIPLIER))
+        self.store.create_candidate_pid_table(["jane@example.com"])
+        groups = dict(self.store.stream_contact_groups(5 * bec.FETCH_MULTIPLIER))
         kept, _ = bec.select_emails_from_rows(
             groups["jane@example.com"], "jane@example.com", per_person=5,
             snippet_chars=200, accounts=self.accounts, source="body", head_chars=200, tail_chars=200,

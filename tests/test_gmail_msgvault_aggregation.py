@@ -13,13 +13,13 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MOD = ROOT / "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
+MOD = ROOT / "packs/ingestion/primitives/discover/gmail/msgvault/store.py"
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("gmail_network_import", MOD)
+    spec = importlib.util.spec_from_file_location("gmail_msgvault_store", MOD)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["gmail_network_import"] = module  # dataclass introspection needs this
+    sys.modules["gmail_msgvault_store"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -88,7 +88,7 @@ class GmailMsgvaultAggregationTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def aggregate(self):
-        rows = gni.aggregate_msgvault_contacts(self.con, "", [])
+        rows = gni.MsgvaultStore(connection=self.con).aggregate_contacts("", [])
         return {r["email"]: r for r in rows}, rows
 
     def test_contact_set_and_counts(self):

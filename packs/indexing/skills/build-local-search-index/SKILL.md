@@ -13,7 +13,7 @@ this local execution path, read
 
 ## Canonical input
 
-Prefer the canonical merged people CSV from `$discover-contacts`:
+Prefer the canonical merged people CSV written by the ingestion fan-in merge:
 
 ```text
 .powerpacks/network-import/merged/people.csv

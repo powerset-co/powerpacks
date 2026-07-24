@@ -15,6 +15,9 @@ Outputs:
   parents/<slug>.md     one merged canonical dossier per cluster
   (backrefs injected into each child dossier; parents added to index.json)
   parents/manifest.json
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio; normalize_email imports from common.contact_fields instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -39,13 +42,12 @@ from packs.ingestion.primitives.deep_context.common import (
     read_jsonl,
     emit,
     load_owner,
-    normalize_email,
     normalize_name,
-    now_iso,
     phone_digits,
     slugify,
-    write_json,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.contact_fields import normalize_email
 
 PARENT_ANCHOR = "<!-- parent-link -->"
 

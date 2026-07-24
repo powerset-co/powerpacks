@@ -20,6 +20,9 @@ step only builds the research queue, estimates cost, enforces the gate, and shel
 Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
   research_queue.csv     queue handed to deep_research_contacts
   manifest.json          subset size, estimated cost, gate decision, run status
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -71,12 +74,12 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     read_jsonl,
     load_owner,
-    now_iso,
     owner_background_block,
     parse_list,
     slugify,
 )
-from packs.ingestion.primitives.import_contacts_pipeline.common import write_manifest
+from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
     RESEARCH_CONFIDENCE_FLOOR,
@@ -93,8 +96,10 @@ from packs.ingestion.primitives.deep_context.review_store import RESEARCH_CONFIR
 # so the two never drift and stall the flow. Single source of truth lives in review_web. The
 # research-profile view is reused so the judge sees the SAME (name/headline/experience/education)
 # shape the review UI renders — no second profile parser to drift.
-from packs.ingestion.primitives.deep_context.reconcile_review_web import (
+from packs.ingestion.primitives.deep_context.review_web.model import (
     _research_profile_view,
+)
+from packs.ingestion.primitives.deep_context.review_web.workflow import (
     current_worth_selection,
 )
 from packs.ingestion.schemas.people_schema import (
@@ -102,7 +107,7 @@ from packs.ingestion.schemas.people_schema import (
     normalize_linkedin_url,
 )
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
-from packs.ingestion.primitives.deep_research_contacts.deep_research_contacts import (
+from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     PROCESSOR_PRICING_USD,
     filter_already_done,
 )
@@ -780,7 +785,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({args.processor}); "
           "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
     persist({**base, "status": STATUS_RUNNING}, STATUS_RUNNING, completed=reused_completed)
-    cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_research_contacts.deep_research_contacts",
+    cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_context.deep_research_contacts",
            "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]
     if manifest_path:
         cmd.extend(["--manifest", str(manifest_path)])

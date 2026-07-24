@@ -17,7 +17,7 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             powerset_pack,
-            ["fix-powerpacks", "install-powerpacks", "powerpacks-console", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
+            ["fix-powerpacks", "install-powerpacks", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
         )
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
@@ -31,22 +31,11 @@ class CoreLayoutTests(unittest.TestCase):
             [
                 "clean-slate",
                 "deep-context",
-                "discover-contacts",
-                "enrich-email-markers",
                 "import-gmail",
-                "import-gmail-network",
-                "import-linkedin-network",
                 "import-messages",
                 "import-twitter",
-                "import-twitter-network",
-                "import-whatsapp",
-                "ingestion-onboarding",
-                "linkedin-sync-csv",
-                "linkedin-sync-mcp",
-                "local-msg-vault",
                 "logbook",
                 "msgvault",
-                "onboard",
                 "setup",
             ],
         )
@@ -98,8 +87,6 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "build-local-search-index" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-gmail" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-whatsapp" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "discover-contacts" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
@@ -133,11 +120,9 @@ class CoreLayoutTests(unittest.TestCase):
             bundle = codex_home / "powerpacks"
             self.assertTrue((bundle / "packs").is_dir())
             self.assertTrue((bundle / "pyproject.toml").exists())
-            self.assertTrue((bundle / "scripts" / "run-powerpacks-console.sh").exists())
             self.assertTrue((bundle / "scripts" / "build-local-duckdb-shim.py").exists())
             self.assertTrue((skills_dir / "powerset" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
-            self.assertTrue((skills_dir / "import-whatsapp" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
@@ -292,10 +277,10 @@ class CoreLayoutTests(unittest.TestCase):
     def test_import_messages_documents_contact_sync_flow(self) -> None:
         text = (ROOT / "packs/ingestion/skills/import-messages/SKILL.md").read_text()
         self.assertIn("$import-messages", text)
-        self.assertIn("match_local_candidates/match_local_candidates.py match", text)
-        self.assertIn("import_contacts_pipeline/messages.py run", text)
+        self.assertIn("imports/messages/match_local_candidates.py match", text)
+        self.assertIn("imports/messages/importer.py run", text)
         self.assertIn("index_contacts_pipeline.py fan-in", text)
-        self.assertIn("import_contacts_pipeline/status.py status", text)
+        self.assertIn("imports/status.py status", text)
         self.assertIn("candidates.csv", text)
         self.assertIn("$deep-context", text)
         # Research/review and indexing live in the single deep-context workflow.

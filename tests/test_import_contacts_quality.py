@@ -3,14 +3,16 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
-from packs.ingestion.primitives.discover_contacts_pipeline.directory import DIRECTORY_COLUMNS
+from packs.ingestion.primitives.imports.directory import (
+    DIRECTORY_COLUMNS,
+    materialize_gmail_merged_people_csv,
+)
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
-from packs.ingestion.primitives.import_contacts_pipeline import gmail as gmail_import
-from packs.ingestion.primitives.import_contacts_pipeline import linkedin as linkedin_import
-from packs.ingestion.primitives.import_contacts_pipeline.common import (
+from packs.ingestion.primitives.imports.gmail import importer as gmail_import
+from packs.ingestion.primitives.imports.gmail import util as gmail_import_util
+from packs.ingestion.primitives.imports.common import (
     directory_source_account_quality,
     normalize_directory_source_accounts,
 )
@@ -59,12 +61,12 @@ class GmailCandidatesTests(unittest.TestCase):
             "last_interaction": "2026-05-01T10:00:00+00:00",
             "account_emails": "me@gmail.com",
         }
-        candidate = gmail_import.queue_row_to_candidate(row, cached_negative=True)
+        candidate = gmail_import_util.queue_row_to_candidate(row, cached_negative=True)
         self.assertEqual(candidate["candidate_key"], "email:jane@corp.com")
         self.assertEqual(candidate["source"], "gmail")
         self.assertEqual(json.loads(candidate["interaction_counts"]), {"gmail": 42})
         self.assertTrue(json.loads(candidate["evidence"])["cached_negative"])
-        self.assertIsNone(gmail_import.queue_row_to_candidate({"primary_email": ""}, cached_negative=False))
+        self.assertIsNone(gmail_import_util.queue_row_to_candidate({"primary_email": ""}, cached_negative=False))
 
     def test_write_gmail_candidates_unions_and_dedups_queues(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -89,7 +91,7 @@ class GmailCandidatesTests(unittest.TestCase):
             }
             import_dir = tmp / "import" / "gmail"
             import_dir.mkdir(parents=True)
-            result = gmail_import.write_gmail_candidates(artifacts, import_dir)
+            result = gmail_import_util.write_gmail_candidates(artifacts, import_dir)
             self.assertEqual(result["candidates"], 3)
             self.assertEqual(result["skipped"], {"no_email": 0, "duplicate_email": 1})
             with (import_dir / "candidates.csv").open(newline="", encoding="utf-8") as handle:
@@ -141,8 +143,8 @@ class ImportContactsQualityTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            with mock.patch.object(gmail_import, "DEFAULT_BASE_DIR", base):
-                artifacts = gmail_import.gmail_artifacts_from_discovery()
+            with mock.patch.object(gmail_import_util, "DEFAULT_BASE_DIR", base):
+                artifacts = gmail_import_util.gmail_artifacts_from_discovery()
 
             self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csv"], str(queue))
             self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csvs"], [{
@@ -181,12 +183,34 @@ class ImportContactsQualityTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            with mock.patch.object(gmail_import, "DEFAULT_BASE_DIR", base):
-                artifacts = gmail_import.gmail_artifacts_from_discovery()
+            with mock.patch.object(gmail_import_util, "DEFAULT_BASE_DIR", base):
+                artifacts = gmail_import_util.gmail_artifacts_from_discovery()
 
             self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csv"], str(queue))
             self.assertNotIn("gmail_linkedin_resolution_queue_csvs", artifacts)
             self.assertEqual(artifacts["gmail_invalid_discovery_records"][0]["reason"], "missing_people_schema_or_interaction_counts")
+
+    def test_gmail_import_removes_legacy_ledger_and_writes_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            import_root = tmp / "import"
+            import_dir = import_root / "gmail"
+            import_dir.mkdir(parents=True)
+            (import_dir / "ledger.json").write_text('{"status": "completed"}', encoding="utf-8")
+            args = gmail_import.build_parser().parse_args(["run"])
+
+            with mock.patch.object(gmail_import, "DEFAULT_IMPORT_DIR", import_root):
+                with mock.patch.object(gmail_import, "source_import_dir", return_value=import_dir):
+                    with mock.patch.object(gmail_import, "gmail_artifacts_from_discovery", return_value={}):
+                        payload = gmail_import.GmailImport(
+                            args=args,
+                            contract=gmail_import.GMAIL_IMPORT_CONTRACT,
+                        ).run()
+
+            self.assertEqual(payload["status"], "skipped")
+            self.assertTrue((import_dir / "manifest.json").is_file())
+            self.assertFalse((import_dir / "ledger.json").exists())
+            self.assertNotIn("ledger", json.dumps(payload).lower())
 
     def test_gmail_account_people_merge_preserves_interaction_counts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -217,15 +241,14 @@ class ImportContactsQualityTests(unittest.TestCase):
                         "last_interaction": last_interaction,
                     })
 
-            legacy = gmail_import.load_legacy_discover_module()
-            result = legacy.materialize_gmail_merged_people_csv([str(one), str(two)], out)
+            result = materialize_gmail_merged_people_csv([str(one), str(two)], out)
 
             self.assertEqual(result["status"], "completed")
             with out.open(newline="", encoding="utf-8") as handle:
                 rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(json.loads(rows[0]["interaction_counts"]), {"gmail": 5})
-            self.assertEqual(rows[0]["last_interaction"], "2026-01-03T00:00:00Z")
+            self.assertEqual(rows[0]["last_interaction"], "2026-01-03T00:00:00+00:00")
 
     def test_gmail_account_people_merge_unions_resolved_emails(self) -> None:
         # Multiple work emails that resolve to the SAME LinkedIn person must
@@ -256,8 +279,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                         "source_channels": "gmail_msgvault",
                     })
 
-            legacy = gmail_import.load_legacy_discover_module()
-            result = legacy.materialize_gmail_merged_people_csv([str(one), str(two), str(three)], out)
+            result = materialize_gmail_merged_people_csv([str(one), str(two), str(three)], out)
 
             self.assertEqual(result["status"], "completed")
             with out.open(newline="", encoding="utf-8") as handle:
@@ -338,50 +360,6 @@ class ImportContactsQualityTests(unittest.TestCase):
             with directory.open(newline="", encoding="utf-8") as handle:
                 rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(rows[0]["source_account"], "imessage,whatsapp")
-
-    def test_linkedin_direct_import_commits_people_to_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            accounts = tmp / "accounts.json"
-            source_csv = tmp / "Connections.csv"
-            source_csv.write_text("First Name,Last Name,URL\nAda,Lovelace,https://www.linkedin.com/in/ada\n", encoding="utf-8")
-            accounts.write_text(json.dumps({
-                "accounts": {
-                    "linkedin_csv": {
-                        "config": {
-                            "csv_path": str(source_csv),
-                            "source_label": "arthur",
-                        }
-                    }
-                }
-            }), encoding="utf-8")
-            child_people = tmp / "child_people.csv"
-            with child_people.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=PEOPLE_SCHEMA_COLUMNS)
-                writer.writeheader()
-                writer.writerow({
-                    "id": "person-ada",
-                    "public_identifier": "ada",
-                    "linkedin_url": "https://www.linkedin.com/in/ada",
-                    "full_name": "Ada Lovelace",
-                    "source_channels": "linkedin_csv",
-                })
-            directory = tmp / "directory.csv"
-            import_dir = tmp / "import"
-
-            with mock.patch.object(linkedin_import, "DEFAULT_DIRECTORY_CSV", directory), \
-                mock.patch.object(linkedin_import, "DEFAULT_IMPORT_DIR", import_dir), \
-                mock.patch.object(linkedin_import, "run_cmd", return_value=(0, {"status": "completed", "artifacts": {"people_csv": str(child_people)}}, "")):
-                payload = linkedin_import.run(SimpleNamespace(accounts=accounts, operator_id="operator-1"))
-
-            self.assertEqual(payload["status"], "completed")
-            self.assertEqual(payload["directory_checkpoint"]["confirmed_rows"], 1)
-            with directory.open(newline="", encoding="utf-8") as handle:
-                rows = list(CsvIO.dict_reader(handle))
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["source"], "linkedin_csv")
-            self.assertEqual(rows[0]["source_account"], "arthur")
-            self.assertEqual(rows[0]["linkedin_url"], "https://www.linkedin.com/in/ada")
 
 
 if __name__ == "__main__":

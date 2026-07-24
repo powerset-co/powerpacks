@@ -14,6 +14,9 @@ same phone/email keys resolve to the same messages both pipelines see.
 Slugs: a top-level entry is a PERSON (``slugify(name, id)`` — name + short id
 suffix, collision-proof) or a GROUP (``group_slug(name)`` — clean name slug). A
 group is its own entry written once, which also kills cross-person duplication.
+
+Changelog:
+  2026-07-23 (audit dedup): normalize_email imports from common.contact_fields instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -27,11 +30,11 @@ from typing import Iterator
 from packs.ingestion.primitives.deep_context.common import (
     Person,
     load_people,
-    normalize_email,
     normalize_name,
     normalize_phone,
     slugify,
 )
+from packs.ingestion.primitives.common.contact_fields import normalize_email
 
 # --- Fixed output layout (one dir, append-only sync; no ledgers, no run ids) ---
 LOGBOOK_ROOT = Path(".powerpacks/logbook")

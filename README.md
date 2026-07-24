@@ -66,23 +66,6 @@ The install flow runs `bin/setup-python`, which installs `uv` on macOS when
 Homebrew is available, then installs Python project dependencies from
 `pyproject.toml` / `uv.lock`.
 
-For the local Powerpacks Console app, use npm through the repo installer:
-
-```bash
-./install.sh app
-./install.sh app --dev --port 5177
-```
-
-Direct app commands are also supported:
-
-```bash
-cd app
-npm install
-npm run dev
-# Explicit sharing/preview only:
-npm run dev:share
-```
-
 ## Skills
 
 User-facing skill entrypoints, grouped by purpose. Each skill ships its own
@@ -106,10 +89,9 @@ Product and architecture walkthroughs live in the
 | --- | --- | --- |
 | [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface: one-command setup (Auth0 login + Powerset API runtime-key pull + MCP), credential refresh, setup status, Auth0 identity, MCP install, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
 | [`setup`](packs/ingestion/skills/setup/SKILL.md) | `$setup` | Deterministic LinkedIn-only setup: credentials, Modal profile enrichment, local source merge, Modal indexing, DuckDB download, and read-only validation. Gmail and messages remain separate import skills. |
-| [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$local-msg-vault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
+| [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
 | [`import-gmail`](packs/ingestion/skills/import-gmail/SKILL.md) | `$import-gmail` | Contact sync only: bounded msgvault sync, metadata-only extraction, free local-directory attach, and source fan-in. Unresolved contacts land in a research-candidates pool; identity lookups and indexing happen in `$deep-context`. See the [product guide](packs/ingestion/docs/gmail-import-pipeline.md). |
 | [`import-messages`](packs/ingestion/skills/import-messages/SKILL.md) | `$import-messages` | Contact sync only: adds iMessage/WhatsApp contact metadata, matches against imported LinkedIn/Gmail people for free, imports matched people + a research-candidates pool, and merges sources. No LLM, no research, no index build in-skill. See the [product guide](packs/ingestion/docs/message-import-pipeline.md). |
-| [`import-whatsapp`](packs/ingestion/skills/import-whatsapp/SKILL.md) | `$import-whatsapp` | Isolated WhatsApp metadata sync/export using `wacli`; the [message import guide](packs/ingestion/docs/message-import-pipeline.md#isolated-import-whatsapp) explains where it stops. |
 | [`deep-context`](packs/ingestion/skills/deep-context/SKILL.md) | `$deep-context`, "process my contacts" | The single post-import workflow and dossier surface: context over people + unresolved candidates, duplicate merge, a binary exception queue with editable Yes/No piles, one revision-bound lookup for effective-Yes people, LinkedIn verify/replace/Skip review, fan-in + Modal index + validate, plus ad-hoc person lookup/re-review. See the [product guide](packs/ingestion/docs/deep-context-pipeline.md). |
 
 ### Sales Nav
@@ -162,7 +144,7 @@ powerpacks/
 │   │   └── tasks/          build-local-search-index.task.json
 │   ├── ingestion/          LinkedIn, Gmail, Twitter, iMessage, and WhatsApp imports
 │   │   ├── skills/         setup, import-gmail, import-messages,
-│   │   │                   import-whatsapp, deep-context
+│   │   │                   deep-context
 │   │   ├── primitives/     source discovery/import + message leaf primitives
 │   │   ├── schemas/        people + message-contact contracts
 │   │   └── docs/           maintained ingestion product guides
@@ -225,7 +207,6 @@ $search-company stripe-like fintech infra companies
 $powerset setup                   # login + .env pull + powerset-search MCP
 $import-gmail                     # Gmail contact sync (free after OAuth)
 $import-messages                  # iMessage + WhatsApp contact sync
-$import-whatsapp                  # isolated WhatsApp sync test via wacli
 $deep-context                     # process contacts end-to-end, or run ad-hoc
                                   #   dossier lookup/re-review subcommands
 ```
@@ -398,7 +379,6 @@ Then, **inside the agent host**, sanity-check each skill family:
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
 | `import-gmail` | `$import-gmail` — should create a nine-step plan, ask for accounts/window, use one bounded multi-account discovery command, and end by suggesting missing sources + offering `$deep-context`. |
 | `import-messages` | `$import-messages` — should show a seven-step checklist, run free through discover/match/import (one import confirmation), and end with the same suggest/process tail. |
-| `import-whatsapp` | `$import-whatsapp` — should install/find wacli, show QR if needed, sync once, and export WhatsApp metadata. |
 | `deep-context` | `$deep-context check` should report local source readiness without starting a paid build; bare `$deep-context` should begin with sources, people, and waiting candidates. |
 
 If the agent host doesn't see a skill at all: re-run `./install.sh <host>`

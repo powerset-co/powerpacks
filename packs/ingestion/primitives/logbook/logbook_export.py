@@ -16,6 +16,9 @@ Output (one fixed dir, gitignored):
 Memory: one ordered cursor per (entry, channel), iterated row-by-row; one output
 file open at a time; only the current container's small stat buffer in RAM. Peak
 RSS is bounded by the work, not the corpus.
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -33,7 +36,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from packs.ingestion.primitives.deep_context import sources as dcs
-from packs.ingestion.primitives.deep_context.common import Person, emit, now_iso, write_json
+from packs.ingestion.primitives.deep_context.common import (
+    Person,
+    emit,
+)
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.logbook import logbook_sources as src
 from packs.ingestion.primitives.logbook.logbook_common import (
     DEFAULT_CHAT_DB,
@@ -353,7 +360,7 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
             for acct in gmail_accounts:
                 cmds.append(_cmd([
                     "uv", "run", "--project", ".",
-                    "python", "packs/ingestion/primitives/discover_contacts_pipeline/gmail.py",
+                    "python", "packs/ingestion/primitives/discover/gmail/discover.py",
                     "discover", "--account-email", acct, "--fresh",
                 ], "PHASE 2 deep sync"))
             caveats.append(
@@ -363,7 +370,7 @@ def cmd_deepen(args: argparse.Namespace) -> dict[str, Any]:
                 "(promotions/social/forums/updates are excluded by design)."
             )
         else:
-            cmds.append("uv run --project . python packs/ingestion/primitives/discover_contacts_pipeline/gmail.py discover --account-email <account-email> --fresh")
+            cmds.append("uv run --project . python packs/ingestion/primitives/discover/gmail/discover.py discover --account-email <account-email> --fresh")
 
     # --- WhatsApp: refresh + scoped backfill (after gmail auth). ----------------
     if "whatsapp" in channels:

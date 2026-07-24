@@ -15,20 +15,6 @@ DEFAULT_SKILLS_DIR="$HOME/.claude/skills"
 SKILLS_DIR="${1:-$DEFAULT_SKILLS_DIR}"
 
 mkdir -p "$SKILLS_DIR"
-rm -rf "$SKILLS_DIR/import-messages" \
-  "$SKILLS_DIR/import-imessage" \
-  "$SKILLS_DIR/import-whatsapp" \
-  "$SKILLS_DIR/import-contacts-review" \
-  "$SKILLS_DIR/import-contacts" \
-  "$SKILLS_DIR/import-email" \
-  "$SKILLS_DIR/import-gmail" \
-  "$SKILLS_DIR/import-network" \
-  "$SKILLS_DIR/search-network" \
-  "$SKILLS_DIR/search-profile" \
-  "$SKILLS_DIR/search-highlight" \
-  "$SKILLS_DIR/extract-search-query" \
-  "$SKILLS_DIR/recruit"
-rm -rf "$SKILLS_DIR/deep-setup"
 "$REPO_ROOT/bin/setup-python"
 
 copy_powerpacks_bundle() {
@@ -48,6 +34,19 @@ copy_powerpacks_bundle() {
   # from copied packs during discovery.
   find "$dest/powerpacks/packs" -type f -path "*/SKILL.md" -delete
 }
+
+# Skills that once shipped but no longer exist in the repo. Scrubbed from the
+# user's skills dir on update so retired routes can't dispatch deleted primitives.
+RETIRED_SKILLS=(
+  search-network search-network-jd search-profile search-highlight extract-search-query recruit
+  deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
+  import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
+  import-gmail-network import-linkedin-network import-twitter-network
+  linkedin-sync-mcp linkedin-sync-csv
+)
+for skill in "${RETIRED_SKILLS[@]}"; do
+  rm -rf "$SKILLS_DIR/$skill"
+done
 
 install_skill() {
   local skill_name="$1"
@@ -85,17 +84,12 @@ install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpa
 install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
 install_skill import-messages "$REPO_ROOT/packs/ingestion/skills/import-messages/SKILL.md"
-install_skill import-whatsapp "$REPO_ROOT/packs/ingestion/skills/import-whatsapp/SKILL.md"
-install_skill ingestion-onboarding "$REPO_ROOT/packs/ingestion/skills/ingestion-onboarding/SKILL.md"
-install_skill onboard "$REPO_ROOT/packs/ingestion/skills/onboard/SKILL.md"
 install_skill setup "$REPO_ROOT/packs/ingestion/skills/setup/SKILL.md"
 install_skill msgvault "$REPO_ROOT/packs/ingestion/skills/msgvault/SKILL.md"
-install_skill local-msg-vault "$REPO_ROOT/packs/ingestion/skills/local-msg-vault/SKILL.md"
 install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL.md"
-install_skill enrich-email-markers "$REPO_ROOT/packs/ingestion/skills/enrich-email-markers/SKILL.md"
 install_skill deep-context "$REPO_ROOT/packs/ingestion/skills/deep-context/SKILL.md"
 install_skill clean-slate "$REPO_ROOT/packs/ingestion/skills/clean-slate/SKILL.md"
-install_skill discover-contacts "$REPO_ROOT/packs/ingestion/skills/discover-contacts/SKILL.md"
+install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
@@ -117,5 +111,5 @@ EOF
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks sales-nav-search build-outbound"
-echo "  setup import-messages import-whatsapp ingestion-onboarding onboard msgvault local-msg-vault import-gmail enrich-email-markers deep-context clean-slate discover-contacts import-twitter"
+echo "  setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
 echo

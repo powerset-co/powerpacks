@@ -39,7 +39,7 @@ index like a real profile — so these people stop being invisible in search.
 | Research orchestration: queue build, cost gate ($25 / $0.05-per), eligibility | `packs/ingestion/primitives/deep_context/reconcile_deep_research.py` |
 | `parallel_to_research_json()` → `01_research_parallel.json` (person/positions/education/social) | `deep_research_contacts.py` |
 | Retarget proposal → enrich → people-row → merge auto-include | `reconcile_deep_research.py` + `apply_retargets.py` + `overrides/retarget-people.csv` |
-| RapidAPI enrich + cache + people-row merge | `packs/ingestion/primitives/enrich_people/enrich_people.py` |
+| RapidAPI enrich + cache + people-row merge | `packs/ingestion/primitives/enrich/enrich_people.py` |
 | Rich per-person facts | `.powerpacks/deep-context/facts/{person_id}.jsonl` (employers, school, topics, shared_context, identifiers, relationship_to_owner) |
 | Composed dossier | `.powerpacks/deep-context/dossiers/{slug}.md` |
 

@@ -32,16 +32,16 @@ def load_module(name: str, relative: str):
 
 
 merge_mod = load_module(
-    "merge_network_sources_interactions", "packs/ingestion/primitives/merge_network_sources/merge_network_sources.py"
+    "merge_network_sources_interactions", "packs/ingestion/primitives/imports/merge_network_sources.py"
 )
 gmail_mod = load_module(
-    "gmail_network_import_interactions", "packs/ingestion/primitives/gmail_network_import/gmail_network_import.py"
+    "gmail_import_interactions", "packs/ingestion/primitives/discover/gmail/extract_gmail.py"
 )
 match_mod = load_module(
-    "match_local_candidates_interactions", "packs/ingestion/primitives/match_local_candidates/match_local_candidates.py"
+    "match_local_candidates_interactions", "packs/ingestion/primitives/imports/messages/match_local_candidates.py"
 )
 messages_import_mod = load_module(
-    "import_messages_interactions", "packs/ingestion/primitives/import_contacts_pipeline/messages.py"
+    "import_messages_interactions", "packs/ingestion/primitives/imports/messages/importer.py"
 )
 
 
@@ -114,7 +114,7 @@ class MessagesWriterTests(unittest.TestCase):
             ),
             Path("contacts.csv"),
         )
-        merged = messages_import_mod.merge_messages_people_candidate(left, right)
+        merged = messages_import_mod.merge_matched_people_rows(left, right)
         self.assertEqual(json.loads(merged["interaction_counts"]), {"imessage": 87, "whatsapp": 9})
         self.assertEqual(merged["last_interaction"], "2026-06-05T00:00:00+00:00")
 

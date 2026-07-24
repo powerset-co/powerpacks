@@ -8,6 +8,11 @@
 **Created:** 2026-06-12
 
 **Changelog:**
+- 2026-07-23: The powerpacks-console app (`app/`) and the setup engine it drove
+  (`setup/setup_linkedin_csv.py`, `setup/setup_gmail.py`, `setup/setup.py`,
+  `setup/onboarding.py`) were deleted from the repo. References to them below
+  are implementation history, not live paths; `linkedin_modal_pipeline.py` is
+  the shipped surface.
 - 2026-06-12: Initial plan.
 
 ## Goal
@@ -21,7 +26,7 @@ no spend gates on this path.
 
 ## What already exists (reuse, don't rebuild)
 
-- `packs/ingestion/primitives/setup_linkedin_csv/setup_linkedin_csv.py` —
+- `packs/ingestion/primitives/setup/setup_linkedin_csv.py` —
   the onboarding-v2 end-to-end pipeline: inspect → discover → enrich →
   source_people → merge_network → index_estimate →
   index_records → search_duckdb, with `RunContext.event()` writing atomic

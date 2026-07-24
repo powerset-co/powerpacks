@@ -292,8 +292,8 @@ group bodies require an explicit current-run opt-in. See the
 
 | Symptom | Fix |
 | --- | --- |
-| `extract_imessage_contacts check` reports `chat_db.readable: false` | Grant Full Disk Access to the terminal app and restart it. |
-| `import_whatsapp_wacli run` cannot install `wacli` | Approve the Homebrew install when prompted; if `qrencode` is missing, install the exact dependency the primitive reports. |
+| `messages/extract_imessage.py check` reports `chat_db.readable: false` | Grant Full Disk Access to the terminal app and restart it. |
+| `messages/extract_whatsapp.py run` cannot install `wacli` | Approve the Homebrew install when prompted; if `qrencode` is missing, install the exact dependency the primitive reports. |
 | `$powerset env pull` reports `not_provisioned` | Ask a Powerset admin to provision your Modal/OpenAI runtime keys, then rerun `$powerset setup`. |
 | `auth login` browser callback never returns | Make sure nothing else is listening on `127.0.0.1:9876`. |
 | Codex / Claude Code / Pi doesn't see the new skills | Restart the host. In Pi, `/reload` also reloads skills. |
