@@ -16,7 +16,7 @@ Shape (GmailDiscovery(...).run()):
     - sync msgvault (skippable): window = --sync-after, else the resume marker
       from infer_msgvault_sync_after (msgvault/sync.py); an explicit window adds
       --noresume. A failed sync short-circuits with GmailDiscoveryFailed.
-    - call GmailDiscoverEngine().run_msgvault(...) in-process (no subprocess),
+    - call GmailExtractor().run_msgvault(...) in-process (no subprocess),
       which reads the synced store and writes this account's rows to the channel's
       FIXED queue_csv/people_csv (read back from there, never re-parsed out of the
       returned payload). The engine reports its calculation_mode: full_recount (its
@@ -34,6 +34,10 @@ Shape (GmailDiscovery(...).run()):
   linkedin_resolution_queue.csv (same rows) + a typed stage manifest (models.py).
 
 Changelog:
+  2026-07-23 (rename): the in-process extractor import moved from
+    `gmail/discover_engine.py`/`GmailDiscoverEngine` to
+    `gmail/extract_gmail.py`/`GmailExtractor`, and the base-dir helper from
+    `discover_engine_base_dir` to `extract_gmail_base_dir`. Behavior unchanged.
   2026-07-23 (in-process engine): GmailAccountChannel no longer spawns
     gmail/discover_engine.py as a subprocess. `_child_cmd()` and the
     `run_cmd(py_cmd(...))` msgvault spawn were replaced by a direct
@@ -99,8 +103,8 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
     output_path,
 )
-from packs.ingestion.primitives.discover.gmail.discover_engine import (  # noqa: E402
-    GmailDiscoverEngine,
+from packs.ingestion.primitives.discover.gmail.extract_gmail import (  # noqa: E402
+    GmailExtractor,
 )
 from packs.ingestion.primitives.discover.gmail.models import (  # noqa: E402
     GmailDiscoveryCompleted,
@@ -117,7 +121,7 @@ from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
     _merge_rows,
     gmail_incremental_input_id,
     gmail_discovery_merge_plan,
-    discover_engine_base_dir,
+    extract_gmail_base_dir,
     resolve_discovery_inputs,
 )
 from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: E402
@@ -128,7 +132,7 @@ from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: E
 class GmailAccountChannel:
     """One selected Gmail account. Owns its FIXED per-account output dir
     (gmail_discover_dir), its msgvault sync step, and its in-process
-    GmailDiscoverEngine.run_msgvault call. run() syncs (unless skipped), runs the
+    GmailExtractor.run_msgvault call. run() syncs (unless skipped), runs the
     engine, and reads this account's rows back from the engine's fixed queue_csv —
     never re-parsed out of the returned payload, since the engine writes known paths.
 
@@ -233,7 +237,7 @@ class GmailAccountChannel:
         if sync["status"] == "failed":
             self._finish_timing(started, sync)
             return GmailDiscoveryFailed(account_email=self.account_email, error=sync)
-        # In-process engine call (no subprocess): GmailDiscoverEngine.run_msgvault
+        # In-process engine call (no subprocess): GmailExtractor.run_msgvault
         # writes this account's rows to the channel's FIXED gmail_discover_dir paths
         # and RETURNS the same payload the CLI used to emit — so read the payload as
         # a dict with no type-sniffing, and take the queue/people CSVs from those
@@ -242,7 +246,7 @@ class GmailAccountChannel:
         # error payload -> failed channel): mirror it into an error payload so the
         # `code != 0` branch below stays equivalent.
         try:
-            payload = GmailDiscoverEngine().run_msgvault(
+            payload = GmailExtractor().run_msgvault(
                 db=self.msgvault_db,
                 account_email=self.account_email,
                 output_dir=self.output_base,
@@ -342,7 +346,7 @@ class GmailDiscovery:
         self.queue_csv = output_path("gmail", "linkedin_resolution_queue_csv")
         self.manifest_json = output_path("gmail", "manifest_json")
         self.contacts_csv.parent.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
-        child_output_base = discover_engine_base_dir(self.contacts_csv)
+        child_output_base = extract_gmail_base_dir(self.contacts_csv)
         self.channels: list[GmailAccountChannel] = [
             GmailAccountChannel(
                 account_email=email,
@@ -374,7 +378,7 @@ class GmailDiscovery:
             ))
 
         # PHASE 1 — per selected account: sync msgvault (unless skipped), then run
-        # the gmail/discover_engine.py child. Stop at the first failed channel.
+        # the in-process gmail/extract_gmail.py extractor. Stop at the first failed channel.
         for channel in self.channels:
             failed = channel.run()
             if failed is not None:

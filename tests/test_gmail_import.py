@@ -12,7 +12,7 @@ from pathlib import Path
 from packs.ingestion.schemas.people_schema import generate_person_id
 from packs.shared.csv_io import CsvIO
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover/gmail/discover_engine.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover/gmail/extract_gmail.py"
 spec = importlib.util.spec_from_file_location("gmail_import", MODULE_PATH)
 gmail_import = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -34,7 +34,7 @@ sys.modules[util_spec.name] = msgvault_util
 util_spec.loader.exec_module(msgvault_util)
 
 
-class GmailDiscoverEngineTests(unittest.TestCase):
+class GmailExtractorTests(unittest.TestCase):
     def invoke(self, argv):
         buf = StringIO()
         with redirect_stdout(buf):

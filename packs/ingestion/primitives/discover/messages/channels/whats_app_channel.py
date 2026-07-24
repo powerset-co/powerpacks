@@ -1,4 +1,4 @@
-"""WhatsAppChannel: WhatsAppWacli.run (fetch the pinned wacli binary, auth,
+"""WhatsAppChannel: WhatsAppExtractor.run (fetch the pinned wacli binary, auth,
 sync, export local metadata) -> normalize.
 
 Owns its fixed output paths — the ``WHATSAPP_*`` module constants, assigned to
@@ -9,10 +9,16 @@ run surfaces the non-blocking pre-full-sync re-link nudge on ``self.artifacts``.
 Metadata only — no message bodies.
 
 Changelog:
-  2026-07-23 (in-process): ``extract()`` now calls ``WhatsAppWacli().run(...)``
-    in-process instead of spawning ``whatsapp_wacli.py run``; branches on the
-    returned payload's ``status`` (blocked_user_action -> blocked, non-completed
-    -> failed). ``run_cmd``/``py_cmd`` are no longer imported, and the outer
+  2026-07-23 (extractor split): ``extract()`` now calls
+    ``WhatsAppExtractor().run(...)`` (imported from ``extract_whatsapp``) instead
+    of ``WhatsAppWacli().run(...)`` — the WhatsApp discovery orchestrator was
+    renamed and moved out of ``whatsapp_wacli.py`` into ``extract_whatsapp.py``
+    (parallel to ``extract_imessage``). Behavior, branches, fixed output paths,
+    and payload shapes unchanged.
+  2026-07-23 (in-process): ``extract()`` calls the extractor class ``run(...)``
+    in-process instead of spawning a file; branches on the returned payload's
+    ``status`` (blocked_user_action -> blocked, non-completed -> failed).
+    ``run_cmd``/``py_cmd`` are no longer imported, and the outer
     subprocess-timeout constant ``DEFAULT_WACLI_DEPTH_TIMEOUT`` is gone (the wacli
     phases keep their own internal timeouts; there is no outer child process to
     cap). Behavior, fixed output paths, and payload shapes unchanged.
@@ -35,8 +41,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
-from packs.ingestion.primitives.discover.messages.whatsapp_wacli import (  # noqa: E402
-    WhatsAppWacli,
+from packs.ingestion.primitives.discover.messages.extract_whatsapp import (  # noqa: E402
+    WhatsAppExtractor,
 )
 from packs.ingestion.primitives.discover.messages.channels.message_channel_base import (  # noqa: E402
     MessageChannel,
@@ -78,7 +84,7 @@ class WhatsAppChannel(MessageChannel):
         self.normalized_manifest = WHATSAPP_NORMALIZED_MANIFEST
 
     def extract(self) -> dict[str, Any] | None:
-        payload = WhatsAppWacli().run(
+        payload = WhatsAppExtractor().run(
             output_csv=WHATSAPP_CONTACTS,
             output_jsonl=WHATSAPP_RAW_JSONL,
             manifest=WHATSAPP_MANIFEST,

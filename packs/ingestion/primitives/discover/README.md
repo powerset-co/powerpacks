@@ -56,8 +56,8 @@ flowchart LR
   WA[("wacli SQLite<br/>.powerpacks/messages/wacli")]
   TW[("Twitter/X<br/>RapidAPI")]
 
-  MV --> GDISC["gmail/discover.py<br/>discover_engine.py<br/>· msgvault/{store,util,sync}.py"]
-  CDB --> MDISC["messages/discover.py<br/>extract_imessage · whatsapp_wacli<br/>· normalize_contacts · merge_contacts"]
+  MV --> GDISC["gmail/discover.py<br/>extract_gmail.py<br/>· msgvault/{store,util,sync}.py"]
+  CDB --> MDISC["messages/discover.py<br/>extract_imessage · extract_whatsapp<br/>· whatsapp_wacli · normalize_contacts · merge_contacts"]
   WA --> MDISC
   TW --> TDISC["twitter/network_import.py"]
 
@@ -76,10 +76,11 @@ flowchart LR
 | [`gmail/msgvault/store.py`](gmail/msgvault/store.py) | Canonical read-only access layer over the msgvault archive (`MsgvaultStore` + its SQL): metadata aggregation for discovery, plus body reads reserved for deep-context/logbook | msgvault SQLite (read-only) | — |
 | [`gmail/msgvault/util.py`](gmail/msgvault/util.py) | Pure msgvault/email helpers (no connection): address parsing, name/domain classification, label normalization, canonical-message identity, `DEFAULT_MSGVAULT_DB` | — | — (pure helpers) |
 | [`gmail/msgvault/sync.py`](gmail/msgvault/sync.py) | msgvault sync + incremental resume: `infer_msgvault_sync_after` (last-sync marker) and `sync_msgvault_account` (`msgvault sync-full --after ...`) | msgvault SQLite (read-only, for the resume marker) | msgvault DB (via `msgvault` subprocess); progress → stderr |
-| [`gmail/discover_engine.py`](gmail/discover_engine.py) | Per-account CLI child spawned by `discover.py`: msgvault metadata aggregation → local artifacts; also `apply-resolutions` for the import chain | msgvault SQLite (via `msgvault/store`) | `discover/gmail/<account>/`: `accounts.csv`, `gmail_threads.csv`, `gmail_contacts_aggregated.csv`, `targeted_emails.csv`, `linkedin_resolution_queue.csv`, `people.csv`, `manifest.json` |
+| [`gmail/extract_gmail.py`](gmail/extract_gmail.py) | In-process extractor (also a CLI) called by `discover.py`: msgvault metadata aggregation → local artifacts; also `apply-resolutions` for the import chain | msgvault SQLite (via `msgvault/store`) | `discover/gmail/<account>/`: `accounts.csv`, `gmail_threads.csv`, `gmail_contacts_aggregated.csv`, `targeted_emails.csv`, `linkedin_resolution_queue.csv`, `people.csv`, `manifest.json` |
 | [`messages/discover.py`](messages/discover.py) | CLI entry: iMessage/WhatsApp extract → normalize → merge → typed manifest; stops at the first blocked/failed child | `accounts.json` (linked channels) | `discover/messages/contacts.csv`, `manifest.json` (orchestrates children that write `.powerpacks/messages/`) |
 | [`messages/extract_imessage.py`](messages/extract_imessage.py) | Stdlib iMessage extractor (Full Disk Access gated); metadata only, never selects body columns | `~/Library/Messages/chat.db` + AddressBook SQLite (read-only) | `.powerpacks/messages/imessage.contacts.csv`, `.raw.jsonl`, `.manifest.json` |
-| [`messages/whatsapp_wacli.py`](messages/whatsapp_wacli.py) | Isolated WhatsApp metadata via `openclaw/wacli` (download pinned binary, auth, sync, export); metadata only | wacli SQLite under `.powerpacks/messages/wacli` (read-only) | `.powerpacks/messages/whatsapp.contacts.csv`, `.raw.jsonl`, manifest, progress jsonl, QR page |
+| [`messages/extract_whatsapp.py`](messages/extract_whatsapp.py) | In-process WhatsApp extractor (also a CLI, `run`/`export`) composing the wacli client: install → auth → sync → deepen → export local metadata; metadata only, never selects body columns | wacli SQLite under `.powerpacks/messages/wacli` (via the client) | `.powerpacks/messages/whatsapp.contacts.csv`, `.raw.jsonl`, manifest, progress jsonl |
+| [`messages/whatsapp_wacli.py`](messages/whatsapp_wacli.py) | wacli binary CLIENT (parallels `gmail/msgvault/sync.py`): download pinned binary, auth + login QR, sync, history-depth, group info; standalone `status`/`auth`/`ensure-wacli`/`logout` subcommands | wacli SQLite under `.powerpacks/messages/wacli` (read-only) | wacli store (via `wacli` subprocess), QR page, history-depth artifacts |
 | [`messages/normalize_contacts.py`](messages/normalize_contacts.py) | Normalize a per-channel contacts CSV → canonical messages JSONL | per-channel `*.contacts.csv` | `*.contacts.normalized.jsonl` + manifest |
 | [`messages/merge_contacts.py`](messages/merge_contacts.py) | Union N per-channel CSVs by canonical phone → one `contacts.csv` | `imessage.contacts.csv`, `whatsapp.contacts.csv` | `.powerpacks/messages/contacts.csv` + manifest |
 | [`messages/models.py`](messages/models.py) | Typed messages-discovery manifest dataclasses | — | — |

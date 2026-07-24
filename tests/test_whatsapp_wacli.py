@@ -18,11 +18,20 @@ from packs.shared.csv_io import CsvIO
 ROOT = Path(__file__).resolve().parents[1]
 PRIMITIVE = ROOT / "packs/ingestion/primitives/discover/messages/whatsapp_wacli.py"
 
-spec = importlib.util.spec_from_file_location("whatsapp_wacli", PRIMITIVE)
-assert spec and spec.loader
-mod = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = mod
-spec.loader.exec_module(mod)
+# `mod` is the wacli BINARY CLIENT (install/auth/QR/sync/history-depth/group-info
+# + the status/auth/ensure-wacli/logout CLI). `extract` is the EXTRACTOR that
+# composes it (Contact + store→CSV parse/write + WhatsAppExtractor.run + the
+# run/export CLI). Moved-function tests target `extract`; lifecycle tests `mod`.
+# Import the package so `extract_whatsapp`'s `from ...whatsapp_wacli import ...`
+# resolves against the same client module object the tests patch.
+import importlib as _importlib  # noqa: E402
+
+mod = _importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.whatsapp_wacli"
+)
+extract = _importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.extract_whatsapp"
+)
 
 
 def create_wacli_db(store: Path) -> None:
@@ -336,12 +345,12 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             tmp = Path(td)
             store = tmp / "wacli"
             create_wacli_db(store)
-            contacts, diagnostics = mod.export_contacts_from_store(store, name_fallback_csv=None)
+            contacts, diagnostics = extract.export_contacts_from_store(store, name_fallback_csv=None)
             csv_path = tmp / "contacts.csv"
             jsonl_path = tmp / "contacts.jsonl"
 
-            self.assertEqual(mod.write_csv(csv_path, contacts), 3)
-            self.assertEqual(mod.write_jsonl(jsonl_path, contacts), 3)
+            self.assertEqual(extract.write_csv(csv_path, contacts), 3)
+            self.assertEqual(extract.write_jsonl(jsonl_path, contacts), 3)
             self.assertFalse(diagnostics["queries_read_message_body_columns"])
             self.assertEqual(diagnostics["left_groups_skipped"], 1)
 
@@ -377,9 +386,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             })()
 
             stdout = io.StringIO()
-            with mock.patch.object(mod, "wacli_version", return_value={"path": "/tmp/wacli", "version": "wacli test"}), \
+            with mock.patch.object(extract, "wacli_version", return_value={"path": "/tmp/wacli", "version": "wacli test"}), \
                     redirect_stdout(stdout):
-                rc = mod.cmd_export(args)
+                rc = extract.cmd_export(args)
             self.assertEqual(rc, 0)
             payload = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(payload["status"], "completed")
@@ -407,7 +416,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 },
             })
 
-            contacts, diagnostics = mod.export_contacts_from_store(store, name_fallback_csv=None)
+            contacts, diagnostics = extract.export_contacts_from_store(store, name_fallback_csv=None)
             self.assertEqual(diagnostics["group_participant_cache_groups"], 1)
             self.assertEqual(diagnostics["group_participant_cache_rows"], 2)
             self.assertIn("+14155558888", contacts)
@@ -436,7 +445,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             fallback = tmp / "contacts.csv"
             fallback.write_text("phone,name\n+14155557777,Fallback Name\n", encoding="utf-8")
 
-            contacts, diagnostics = mod.export_contacts_from_store(store, name_fallback_csv=fallback)
+            contacts, diagnostics = extract.export_contacts_from_store(store, name_fallback_csv=fallback)
 
             self.assertEqual(diagnostics["name_fallback_rows"], 1)
             self.assertEqual(contacts["+14155557777"].name, "Fallback Name")
@@ -1909,62 +1918,65 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "include_left_groups": False,
                     "max_group_participants": 30,
                 })()
+                # `cmd_run`/`WhatsAppExtractor.run` live in the extractor module
+                # and look these names up in ITS namespace (client functions
+                # imported into it + export defined there), so patch on `extract`.
                 with mock.patch.object(
-                    mod,
+                    extract,
                     "ensure_wacli_installed",
                     return_value={"path": "/tmp/wacli", "version": "test"},
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "wacli_json",
                     return_value={"status": "ok"},
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "auth_status",
                     return_value={
                         "authenticated": True,
                         "linked_jid": "15550009999@s.whatsapp.net",
                     },
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "pairing_full_sync_status",
                     return_value={"state": "full_sync"},
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "store_stats",
                     side_effect=[
                         {"data": {"messages": existing_messages}},
                         {"data": {"messages": existing_messages}},
                     ],
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "history_depth_chat_states",
                     return_value={"15550001111@s.whatsapp.net": (1, 1768000000)},
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "history_depth_total_count",
                     side_effect=[existing_messages, existing_messages],
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "run_sync",
                     return_value={"returncode": 0},
                 ) as sync, mock.patch.object(
-                    mod,
+                    extract,
                     "run_history_depth_stage",
                     return_value={"status": "completed", "counts": {}},
                 ) as depth, mock.patch.object(
-                    mod,
+                    extract,
                     "refresh_group_info",
                     return_value={"status": "ok"},
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "refresh_contacts",
                     return_value={"status": "ok"},
                 ), mock.patch.object(
-                    mod,
+                    extract,
                     "export_contacts_from_store",
                     return_value=({}, diagnostics),
                 ), redirect_stdout(io.StringIO()):
-                    rc = mod.cmd_run(args)
+                    rc = extract.cmd_run(args)
 
                 self.assertEqual(rc, 0)
                 depth.assert_called_once()

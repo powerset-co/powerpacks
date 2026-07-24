@@ -4,7 +4,7 @@ materialize the merged Gmail people artifact.
 `run_gmail_apply_and_enrich(imp)` is the second import step. It gathers the
 explicit + directory + prior stored resolution records, commits them into
 `directory.csv`, combines the per-account resolution CSVs, applies them to each
-account's people.csv via an in-process `GmailDiscoverEngine().apply_resolutions(...)`
+account's people.csv via an in-process `GmailExtractor().apply_resolutions(...)`
 call, and materializes one merged Gmail `people.gmail.csv`. It runs NO Parallel
 resolution and NO RapidAPI hydration — deep-context owns all resolution and
 enrichment (stored legacy resolutions migrate via `bin/deep-context migrate-legacy`).
@@ -17,6 +17,9 @@ comes from `imports/directory.py`; the shared `emit_progress` /
 `artifact_dir_from_state` from `imports/gmail/util.py`.
 
 Changelog:
+  2026-07-23 (rename): the in-process apply-resolutions call moved from
+    `GmailDiscoverEngine` (`gmail/discover_engine.py`) to `GmailExtractor`
+    (`gmail/extract_gmail.py`). Behavior unchanged.
   2026-07-23 (in-process engine): the apply-resolutions step no longer spawns
     gmail/discover_engine.py as a subprocess. The `run_cmd(py_cmd(...))` call was
     replaced by a direct `GmailDiscoverEngine().apply_resolutions(...)` call that
@@ -43,7 +46,7 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.common.jsonio import emit, unique_strings  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.common import source_slug  # noqa: E402
-from packs.ingestion.primitives.discover.gmail.discover_engine import GmailDiscoverEngine  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.extract_gmail import GmailExtractor  # noqa: E402
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     build_directory_checkpoint,
     materialize_gmail_merged_people_csv,
@@ -115,13 +118,13 @@ def run_gmail_apply_and_enrich(imp: "GmailImport") -> bool:
         slug = source_slug(record.get("account_email") or record.get("slug") or f"account-{index}")
         account_dir = Path(str(record.get("people_csv") or "")).parent
         resolved_dir = account_dir / "resolved"
-        # In-process engine call (no subprocess): GmailDiscoverEngine.apply_resolutions
+        # In-process engine call (no subprocess): GmailExtractor.apply_resolutions
         # attaches the STORED resolutions and RETURNS the payload the CLI used to
         # emit. A ValueError surfaces the way the old subprocess CLI did (exit 2 ->
         # error payload -> failed step): mirror it into an error payload so the
         # non-completed branch below stays equivalent.
         try:
-            payload = GmailDiscoverEngine().apply_resolutions(
+            payload = GmailExtractor().apply_resolutions(
                 people_csv=record["people_csv"],
                 resolutions_csv=record["resolutions_csv"],
                 output_dir=resolved_dir,

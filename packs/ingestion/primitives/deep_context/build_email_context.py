@@ -17,7 +17,7 @@ step is wired up.
 
 Candidate set fidelity
 ----------------------
-The candidate emails are re-derived exactly the way ``gmail/discover_engine``
+The candidate emails are re-derived exactly the way ``gmail/extract_gmail``
 builds its ``linkedin_resolution_queue``: aggregate msgvault metadata
 (``MsgvaultStore.aggregate_contacts``), drop automated senders, keep only
 round-trip contacts (both sent AND received), then take the same queue rows. We
@@ -49,6 +49,9 @@ Outputs (one fixed directory, overwrite in place -- manifest + outputs only):
   <out-dir>/manifest.json         counts/status/timing
 
 Changelog:
+  2026-07-23 (rename): ``linkedin_resolution_queue_rows`` now imports from
+    ``gmail/extract_gmail`` (was ``gmail/discover_engine``, renamed). No behavior
+    change.
   2026-07-23 (audit): the msgvault reader split into the ``gmail/msgvault/``
     package — ``gni`` now aliases the concrete ``gmail/msgvault/store`` module
     (MsgvaultStore + DEFAULT_MSGVAULT_DB), the pure helpers
@@ -93,7 +96,7 @@ from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E
     default_excluded_labels,
     has_round_trip_interaction,
 )
-from packs.ingestion.primitives.discover.gmail.discover_engine import (  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.extract_gmail import (  # noqa: E402
     linkedin_resolution_queue_rows,
 )
 
@@ -323,7 +326,7 @@ def derive_candidates(
     include_automated: bool,
     include_role_mailboxes: bool,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Re-derive the Parallel resolution queue exactly like gmail/discover_engine,
+    """Re-derive the Parallel resolution queue exactly like gmail/extract_gmail,
     then drop role/service mailboxes (support@, info@, careers@, …) using the same
     detector the Parallel resolution path uses. Returns (queue, role_dropped)."""
     aggregated = store.aggregate_contacts(account_email, exclude_labels)

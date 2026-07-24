@@ -17,8 +17,9 @@ Shape:
     - IMessageChannel (channels/i_message_channel.py): extract_imessage.py check
       (Full Disk Access gate) -> extract chat.db + AddressBook metadata ->
       imessage.contacts.csv -> normalize.
-    - WhatsAppChannel (channels/whats_app_channel.py): whatsapp_wacli.py run
-      (fetch pinned wacli, auth, sync, export local metadata) ->
+    - WhatsAppChannel (channels/whats_app_channel.py): WhatsAppExtractor.run
+      (extract_whatsapp.py, composing the whatsapp_wacli client: fetch pinned
+      wacli, auth, sync, deepen, export local metadata) ->
       whatsapp.contacts.csv -> normalize. Missing QR -> blocked_user_action;
       surfaces the pre-full-sync re-link nudge.
   extract()/normalize() return None on success or a blocked/failed child payload
@@ -33,7 +34,7 @@ Changelog:
   2026-07-23 (in-process): MessagesDiscovery._merge now calls
     ``ContactsMerger().merge(...)`` in-process instead of spawning
     merge_contacts.py; the channels likewise call their leaf primitive classes
-    directly (extract_imessage/whatsapp_wacli/normalize_contacts). No self-owned
+    directly (extract_imessage/extract_whatsapp/normalize_contacts). No self-owned
     Python file is spawned as a subprocess anymore. ``run_cmd``/``py_cmd`` are no
     longer imported here. Fixed output paths, manifests, and the CLI are unchanged.
   2026-07-23 (terse): folded the resolve()/discover() wrapper functions into

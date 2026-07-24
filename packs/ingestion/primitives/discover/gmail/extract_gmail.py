@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Gmail discovery engine: msgvault aggregation -> local network artifacts.
+"""Gmail extractor: msgvault metadata aggregation -> local network artifacts.
 
-`GmailDiscoverEngine` is the in-process engine `gmail/discover.py` and the
-import chain call directly (no subprocess): `run_msgvault` aggregates one
-account's msgvault metadata into that account's discover artifacts,
-`apply_resolutions` attaches stored LinkedIn resolutions onto a Gmail
-people.csv, and `list_msgvault_accounts` lists the archive's source accounts.
-The module CLI (`main`) is a thin argparse wrapper over the SAME methods, so
-`discover_engine.py msgvault | apply-resolutions | msgvault-accounts` still run
-identically by path. Reads msgvault metadata through `gmail/msgvault/store.py`
-and writes Powerpacks-local artifacts; it never reads Gmail message bodies,
-subjects, snippets, raw MIME, or attachments. Product-flow docs:
-`packs/ingestion/docs/gmail-import-pipeline.md`.
+`GmailExtractor` is an in-process extractor (naming parity with
+`messages/extract_imessage.py`'s `IMessageExtractor`) that `gmail/discover.py`
+and the import chain call directly — no subprocess, no spawned child:
+`run_msgvault` aggregates one account's msgvault metadata into that account's
+discover artifacts, `apply_resolutions` attaches stored LinkedIn resolutions
+onto a Gmail people.csv, and `list_msgvault_accounts` lists the archive's
+source accounts. The module also ships a thin CLI (`main` -> argparse wrapper
+over the SAME methods), so `extract_gmail.py msgvault | apply-resolutions |
+msgvault-accounts` still run identically by path. Reads msgvault metadata
+through `gmail/msgvault/store.py` and writes Powerpacks-local artifacts; it
+never reads Gmail message bodies, subjects, snippets, raw MIME, or attachments.
+Product-flow docs: `packs/ingestion/docs/gmail-import-pipeline.md`.
 
 Usage:
-    discover_engine.py msgvault-accounts --db ~/.msgvault/msgvault.db
-    discover_engine.py msgvault --db ~/.msgvault/msgvault.db --account-email me@gmail.com
-    discover_engine.py apply-resolutions --people-csv PATH --resolutions-csv PATH
+    extract_gmail.py msgvault-accounts --db ~/.msgvault/msgvault.db
+    extract_gmail.py msgvault --db ~/.msgvault/msgvault.db --account-email me@gmail.com
+    extract_gmail.py apply-resolutions --people-csv PATH --resolutions-csv PATH
 
 `msgvault` writes to `.powerpacks/network-import/discover/gmail/<account>/`:
 `accounts.csv`, `gmail_threads.csv`, `gmail_contacts_aggregated.csv`,
@@ -35,6 +36,12 @@ import chain's `run_gmail_apply_and_enrich` step
 and applies STORED resolutions only.
 
 Changelog:
+  2026-07-23 (rename): `discover_engine.py` -> `extract_gmail.py` and the
+    `GmailDiscoverEngine` class -> `GmailExtractor`, for naming parity with
+    `messages/extract_imessage.py`'s `IMessageExtractor`/`WhatsAppExtractor`.
+    Method names, CLI subcommands/flags, emitted payloads, and exit codes are
+    unchanged; the file still runs by path as `extract_gmail.py`. The util
+    helper `discover_engine_base_dir` was renamed `extract_gmail_base_dir`.
   2026-07-23 (in-process engine): wrapped as the GmailDiscoverEngine class —
     each argparse subcommand's body became a method (msgvault -> run_msgvault,
     apply-resolutions -> apply_resolutions, msgvault-accounts ->
@@ -482,8 +489,8 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     return manifest
 
 
-class GmailDiscoverEngine:
-    """In-process Gmail discovery engine: msgvault metadata -> local artifacts.
+class GmailExtractor:
+    """In-process Gmail extractor: msgvault metadata -> local artifacts.
 
     The two operations the discovery/import chain needs, plus the account listing,
     exposed as methods that RETURN their payload dict (with a `status` field)
@@ -577,13 +584,13 @@ class GmailDiscoverEngine:
         )
 
 
-def _dispatch_msgvault_accounts(engine: GmailDiscoverEngine, args: argparse.Namespace) -> dict[str, Any]:
-    """`msgvault-accounts` CLI adapter -> GmailDiscoverEngine.list_msgvault_accounts."""
+def _dispatch_msgvault_accounts(engine: GmailExtractor, args: argparse.Namespace) -> dict[str, Any]:
+    """`msgvault-accounts` CLI adapter -> GmailExtractor.list_msgvault_accounts."""
     return engine.list_msgvault_accounts(db=args.db)
 
 
-def _dispatch_msgvault(engine: GmailDiscoverEngine, args: argparse.Namespace) -> dict[str, Any]:
-    """`msgvault` CLI adapter -> GmailDiscoverEngine.run_msgvault."""
+def _dispatch_msgvault(engine: GmailExtractor, args: argparse.Namespace) -> dict[str, Any]:
+    """`msgvault` CLI adapter -> GmailExtractor.run_msgvault."""
     return engine.run_msgvault(
         db=args.db,
         account_email=args.account_email,
@@ -595,8 +602,8 @@ def _dispatch_msgvault(engine: GmailDiscoverEngine, args: argparse.Namespace) ->
     )
 
 
-def _dispatch_apply_resolutions(engine: GmailDiscoverEngine, args: argparse.Namespace) -> dict[str, Any]:
-    """`apply-resolutions` CLI adapter -> GmailDiscoverEngine.apply_resolutions."""
+def _dispatch_apply_resolutions(engine: GmailExtractor, args: argparse.Namespace) -> dict[str, Any]:
+    """`apply-resolutions` CLI adapter -> GmailExtractor.apply_resolutions."""
     return engine.apply_resolutions(
         people_csv=args.people_csv,
         resolutions_csv=args.resolutions_csv,
@@ -640,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
     interrupt (the mapping the subprocess CLI has always exposed)."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    engine = GmailDiscoverEngine()
+    engine = GmailExtractor()
     try:
         payload = args.func(engine, args)
     except ValueError as exc:

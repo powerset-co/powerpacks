@@ -1,6 +1,8 @@
 """Gmail discovery utilities: tolerant parsers, row merge, incremental plan.
 
 Changelog:
+  2026-07-23 (rename): `discover_engine_base_dir` renamed `extract_gmail_base_dir`
+    (the extractor it points at was renamed discover_engine.py -> extract_gmail.py).
   2026-07-23 (audit):
     - Helpers split out of the former single-file gmail.py.
   2026-07-23 (audit batch 17): network_import_base_dir renamed to
@@ -157,8 +159,8 @@ def gmail_discovery_merge_plan(existing_manifest: dict[str, Any], account_emails
     return {"mode": "full_rewrite", "reason": "children_returned_full_recounts"}
 
 
-def discover_engine_base_dir(contacts_csv: Path) -> Path:
-    """Return the base dir expected by gmail/discover_engine.py --output-dir."""
+def extract_gmail_base_dir(contacts_csv: Path) -> Path:
+    """Return the base dir expected by gmail/extract_gmail.py --output-dir."""
     gmail_dir = contacts_csv.parent
     if gmail_dir.name == "gmail" and gmail_dir.parent.name == "discover":
         return gmail_dir.parent.parent

@@ -25,7 +25,7 @@ discover_messages = importlib.import_module(
 # path constants patched below (IMESSAGE_*/WHATSAPP_*) live on the concrete
 # channel module. The channels now call the leaf primitive CLASSES in-process
 # (no self-spawned subprocess), so behavior is patched on the class method where
-# it is DEFINED — IMessageExtractor.check/extract, WhatsAppWacli.run,
+# it is DEFINED — IMessageExtractor.check/extract, WhatsAppExtractor.run,
 # ContactsMerger.merge — not on a channel-module run_cmd global.
 i_message_channel = importlib.import_module(
     "packs.ingestion.primitives.discover.messages.channels.i_message_channel"
@@ -35,6 +35,9 @@ whats_app_channel = importlib.import_module(
 )
 extract_imessage = importlib.import_module(
     "packs.ingestion.primitives.discover.messages.extract_imessage"
+)
+extract_whatsapp = importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.extract_whatsapp"
 )
 whatsapp_wacli = importlib.import_module(
     "packs.ingestion.primitives.discover.messages.whatsapp_wacli"
@@ -57,6 +60,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
             "schemas/candidates_schema.py",
             "primitives/discover/messages/extract_imessage.py",
             "primitives/discover/messages/whatsapp_wacli.py",
+            "primitives/discover/messages/extract_whatsapp.py",
             "primitives/discover/messages/merge_contacts.py",
             "primitives/imports/messages/match_local_candidates.py",
             "primitives/deep_context/deep_research_contacts.py",
@@ -228,11 +232,11 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     self.assertNotIn(token, primitive_text)
 
     def test_discover_lets_whatsapp_primitive_choose_sync_strategy(self) -> None:
-        # The channel calls WhatsAppWacli.run in-process and lets the primitive
-        # choose the sync strategy: it passes no sync-mode kwarg and forwards its
-        # own sync-phase timeout, not a synthetic outer subprocess wall-clock cap.
+        # The channel calls WhatsAppExtractor.run in-process and lets the
+        # primitive choose the sync strategy: it passes no sync-mode kwarg and
+        # forwards its own sync-phase timeout, not a synthetic outer wall-clock cap.
         with mock.patch.object(
-            whatsapp_wacli.WhatsAppWacli, "run", return_value={"status": "completed"},
+            extract_whatsapp.WhatsAppExtractor, "run", return_value={"status": "completed"},
         ) as run:
             channel = whats_app_channel.WhatsAppChannel(
                 accounts_path=Path("accounts.json"),
@@ -282,7 +286,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "whatsapp.csv"
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
-                    mock.patch.object(whatsapp_wacli.WhatsAppWacli, "run", return_value={"status": "completed"}) as run:
+                    mock.patch.object(extract_whatsapp.WhatsAppExtractor, "run", return_value={"status": "completed"}) as run:
                 result = whats_app_channel.WhatsAppChannel(
                     accounts_path=Path(td) / "accounts.json",
                     other_enabled=False,
@@ -303,7 +307,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
                             "hint": "Re-link to pull years more history."},
             }
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
-                    mock.patch.object(whatsapp_wacli.WhatsAppWacli, "run", return_value=payload):
+                    mock.patch.object(extract_whatsapp.WhatsAppExtractor, "run", return_value=payload):
                 channel = whats_app_channel.WhatsAppChannel(
                     accounts_path=Path(td) / "accounts.json",
                     other_enabled=False,
@@ -359,7 +363,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
             self.assertTrue(imessage_check.call_args.kwargs["strict"])
 
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", whatsapp), \
-                    mock.patch.object(whatsapp_wacli.WhatsAppWacli, "run",
+                    mock.patch.object(extract_whatsapp.WhatsAppExtractor, "run",
                                       return_value={"status": "completed"}) as whatsapp_run:
                 result = whats_app_channel.WhatsAppChannel(
                     accounts_path=root / "accounts.json",

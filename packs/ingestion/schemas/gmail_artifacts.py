@@ -1,7 +1,7 @@
 """Shared Gmail-artifact column contracts for the ingestion stages.
 
 Single home for the Gmail LinkedIn-resolution CSV column orders that both the
-discover stage (`discover/gmail/discover_engine.py`) and the import stage
+discover stage (`discover/gmail/extract_gmail.py`) and the import stage
 (`imports/directory.py`, `imports/gmail/import_steps.py`) must agree on. Kept
 here — next to `people_schema.py` / `candidates_schema.py` — so the stages
 import ONE definition instead of each carrying a byte-identical copy that can

@@ -19,7 +19,7 @@ The pure email-identity/text/label helpers this class calls (`normalize_email`,
 connection. `_fold_msgvault_message` stays here: it is the per-message fold that
 only `aggregate_contacts` uses.
 
-Consumers: `gmail/discover_engine.py` (the discovery CLI child),
+Consumers: `gmail/extract_gmail.py` (the in-process extractor CLI),
 `deep_context/build_email_context.py` / `deep_context/sources.py` and
 `deep_context/collect_person_context.py` (per-person context + candidate
 re-derivation), and `logbook/logbook_sources.py` (candidate-pid temp table).

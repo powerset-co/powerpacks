@@ -62,6 +62,14 @@ Arthur reviews manually, drops comments; each batch = one commit, verdicts poste
 | 31 | gmail import: steps/ package, file-loader killed (opus) | `load_gmail_import_steps()` importlib file-loading FOSSIL deleted from imports/common.py; `import_steps.py` becomes real package modules: `imports/gmail/importer.py` = GmailImport orchestrator + CLI (path `importer.py run` unchanged), `imports/gmail/steps/{directory,enrich}.py` = the step functions via normal package imports; `materialize` already lived in imports/directory.py. Tests retargeted to direct imports/concrete patch targets |
 | 32 | match_local_candidates + common/paths | stale "stdlib-only port of contact_exporter" provenance removed — it uses difflib.SequenceMatcher (stdlib; thresholds tuned to it, documented not to swap without re-tuning). common/paths gains discover_source_dir + resolve_discover_source_dir builders |
 
+## Post-audit in-process + naming pass (2026-07-24)
+
+Arthur's lock-down of discover/import after the OO pass:
+- **In-process primitives.** The 7 sites that spawned OUR OWN Python via `run_cmd(py_cmd(...))` are now direct class calls: `discover_engine`→`GmailDiscoverEngine`, `extract_imessage`→`IMessageExtractor`, `whatsapp_wacli`→`WhatsAppWacli`, `normalize_contacts`→`ContactsNormalizer`, `merge_contacts`→`ContactsMerger`. Each keeps a thin argparse `main()` (CLI unchanged by path); channels/store/gmail-enrich import and call the classes, branching on the returned payload status. External binaries (msgvault, wacli, qrencode, open) stay subprocess.
+- **Lock-down validation.** Ran the real `$import-gmail` discover on the live 4.7GB msgvault DB (3 accounts, `--skip-msgvault-sync` since tokens lapsed): 552 contacts, output BYTE-IDENTICAL to the pre-refactor run. Live Gmail re-sync needs interactive OAuth (deferred to Arthur).
+- **Naming consistency.** `discover_engine.py`→`extract_gmail.py` (`GmailExtractor`), parallel to `extract_imessage.py`. `whatsapp_wacli.py` (2844 LOC) split into `extract_whatsapp.py` (`WhatsAppExtractor` = the discovery orchestrator + store→CSV parse, parallels extract_imessage) + `whatsapp_wacli.py` (the wacli-binary client: install/auth/sync/QR/group-info, parallels msgvault/sync.py; keeps `status`/`auth`/`logout`/`ensure-wacli` CLI).
+- gmail account-selection collapsed to a single repeatable `--account-email`; `MessagesDiscovery`/`GmailDiscovery` construct-and-run (no wrapper fn); `load_gmail_import_steps` file-loader deleted (steps/ package); generic-helper consolidation into `primitives/common/`; dead `accounts_json` config key pruned.
+
 ## Final target tree (post-batch-12)
 
 ```

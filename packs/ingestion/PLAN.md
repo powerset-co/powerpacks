@@ -140,7 +140,7 @@ Keep source importers focused on source-specific collection/parsing:
 
 - `linkedin/network_import`: parse `Connections.csv` into normalized people rows; do not own provider/cache/merge logic.
 - `twitter/network_import`: crawl Twitter/X and resolve/validate LinkedIn; avoid becoming another independent people enrichment implementation.
-- `gmail/discover_engine` (over `gmail/msgvault/store`) / messages-derived flows: emit local people rows or resolution queues, then use shared enrichment.
+- `gmail/extract_gmail` (over `gmail/msgvault/store`) / messages-derived flows: emit local people rows or resolution queues, then use shared enrichment.
 
 ### 4. Rename canonical artifacts to `people.csv`
 

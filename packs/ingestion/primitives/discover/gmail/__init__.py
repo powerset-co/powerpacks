@@ -1,10 +1,10 @@
-"""Gmail discovery package: util (parsers), discover (CLI), discover_engine
-(per-account artifact-emission child), and the `msgvault/` subpackage
+"""Gmail discovery package: util (parsers), discover (CLI), extract_gmail
+(in-process extractor + CLI), and the `msgvault/` subpackage
 (`store` = MsgvaultStore + SQL, `util` = pure helpers, `sync` = msgvault sync).
 
 The package name preserves `from ...discover import gmail` for
 module consumers; file invocations use gmail/discover.py. The `msgvault/`
-submodules and discover_engine are deliberately NOT re-exported here — consumers
+submodules and extract_gmail are deliberately NOT re-exported here — consumers
 (and test patches) import the concrete submodules.
 """
 
@@ -17,7 +17,7 @@ from packs.ingestion.primitives.discover.gmail.util import (  # noqa: F401
     GMAIL_CALCULATION_INCREMENTAL_DELTA,
     gmail_incremental_input_id,
     gmail_discovery_merge_plan,
-    discover_engine_base_dir,
+    extract_gmail_base_dir,
 )
 from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: F401
     MSGVAULT_REAUTH_ERROR_MARKERS,
