@@ -4,14 +4,15 @@
 > [Gmail import pipeline](gmail-import-pipeline.md) for shipped behavior. Parallel
 > matches currently proceed to hydration without this judge or human-review gate.
 
-_Created 2026-06-18. Changelog: 2026-06-18 initial draft._
+_Created 2026-06-18. Changelog: 2026-06-18 initial draft. 2026-07-24 replaced the
+example collision names with synthetic placeholders._
 
 ## Problem
 
 Gmail contact resolution (setup **Step 9**) turns an email into a LinkedIn
 profile via Parallel, then we hydrate it via RapidAPI. But **nothing verifies
 the resolved profile is actually the right person.** Same-name collisions slip
-through: the A/B run showed cases like `Alan Chen`, `Albert Ding`, `Amit Vyas`
+through: the A/B run showed cases like `Jordan Bravo`, `Casey Delta`, `Robin Ellis`
 where Parallel confidently returned a profile that is plausibly a *different*
 person with the same name and no real connection to the contact. These get
 merged into `people.csv` and pollute the network.
