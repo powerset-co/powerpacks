@@ -21,11 +21,10 @@ Raw provider payloads are kept in `raw_twitter_responses/` and
 State model (manifest-only, no ledger):
   One idempotent `run` per handle writes to the single fixed output dir above and
   overwrites in place, with exactly one `manifest.json` recording per-step status,
-  counts, and timing. Resume comes from the ARTIFACTS, not a step ledger: a step
-  whose output file already exists and is at least as new as its inputs is skipped
-  (the raw dumps / csvs are already on disk), so a rerun never redoes finished work
-  and the spend steps never re-spend once their output is present. To force a step
-  to rerun, delete its output (or the whole handle dir).
+  counts, timing, and config/input signature. Resume comes from the ARTIFACTS and
+  their manifest signatures, not a step ledger: a step is skipped only when every
+  required output exists and its relevant config and input contents still match.
+  Invalidating one step reruns it and every downstream step.
 
 Spend gates: `load_or_crawl` (RapidAPI Twitter), `moe_evaluate` (OpenAI), and
 `validate_linkedin` (RapidAPI LinkedIn) are spend-bearing. They run only with
@@ -95,7 +94,7 @@ from packs.ingestion.primitives.common.gates import (  # noqa: E402
     exit_code_for_status,
     needs_approval_payload,
 )
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, sha256_file, write_json  # noqa: E402
 from packs.ingestion.primitives.common.manifests import StagePayload, write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.common import source_slug  # noqa: E402
@@ -790,6 +789,7 @@ def step_moe_evaluate(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
     rows = CsvIO.read_dict_rows(out_dir / CANDIDATES)
     out = out_dir / MOE_EVALUATED
     if cfg.skip_moe:
+        (out_dir / MOE_USAGE).unlink(missing_ok=True)
         out_rows = []
         for row in rows:
             r = dict(row)
@@ -998,38 +998,50 @@ def step_format_people(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class StepSpec:
-    """One pipeline step: its function, its primary output, its inputs (for resume
-    freshness), and whether it is spend-bearing."""
+    """One pipeline step and its complete file/config cache contract."""
 
     name: str
     func: Callable[[TwitterInput, Path], dict[str, Any]]
-    output: str
+    outputs: tuple[str, ...]
     inputs: tuple[str, ...]
+    config: tuple[str, ...]
     spend: bool
 
 
+def _moe_outputs(cfg: TwitterInput) -> tuple[str, ...]:
+    return (MOE_EVALUATED,) if cfg.skip_moe else (MOE_EVALUATED, MOE_USAGE)
+
+
 STEPS: list[StepSpec] = [
-    StepSpec("load_or_crawl", step_load_or_crawl, FOLLOWERS_DUMP, (), True),
-    StepSpec("score_candidates", step_score_candidates, CANDIDATES, (FOLLOWERS_DUMP,), False),
-    StepSpec("moe_evaluate", step_moe_evaluate, MOE_EVALUATED, (CANDIDATES,), True),
-    StepSpec("pre_resolve_linkedin", step_pre_resolve_linkedin, LINKEDIN_RESOLVED, (MOE_EVALUATED, CANDIDATES), False),
-    StepSpec("validate_linkedin", step_validate_linkedin, LINKEDIN_VALIDATED, (LINKEDIN_RESOLVED,), True),
-    StepSpec("format_people", step_format_people, PEOPLE, (LINKEDIN_VALIDATED, LINKEDIN_RESOLVED), False),
+    StepSpec("load_or_crawl", step_load_or_crawl, (FOLLOWERS_DUMP,), (), ("handle", "source", "max_pages", "limit"), True),
+    StepSpec("score_candidates", step_score_candidates, (CANDIDATES,), (FOLLOWERS_DUMP,), ("min_score",), False),
+    StepSpec("moe_evaluate", step_moe_evaluate, (MOE_EVALUATED,), (CANDIDATES,), ("skip_moe", "moe_model", "moe_experts"), True),
+    StepSpec("pre_resolve_linkedin", step_pre_resolve_linkedin, (LINKEDIN_RESOLVED, LINKEDIN_QUEUE), (MOE_EVALUATED, CANDIDATES), ("verdicts", "skip_aggregator_fetch"), False),
+    StepSpec("validate_linkedin", step_validate_linkedin, (LINKEDIN_VALIDATED,), (LINKEDIN_RESOLVED,), (), True),
+    StepSpec("format_people", step_format_people, (PEOPLE, PEOPLE_LEGACY), (LINKEDIN_VALIDATED, LINKEDIN_RESOLVED), (), False),
 ]
 
 
-def _is_fresh(output: Path, inputs: list[Path]) -> bool:
-    """Resume-by-artifact test: True when `output` exists and is at least as new as
-    every input that exists. A fresh step is skipped (not rewritten), so its mtime is
-    preserved and the freshness chain stays stable across reruns; a stale/missing
-    output re-runs and correctly cascades downstream."""
-    if not output.exists():
-        return False
-    out_mtime = output.stat().st_mtime_ns
-    for inp in inputs:
-        if inp.exists() and inp.stat().st_mtime_ns > out_mtime:
-            return False
-    return True
+def _step_outputs(spec: StepSpec, cfg: TwitterInput) -> tuple[str, ...]:
+    """Return every output required for this invocation of a step."""
+    return _moe_outputs(cfg) if spec.name == "moe_evaluate" else spec.outputs
+
+
+def _step_signature(spec: StepSpec, cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
+    """Bind a cached step to its output-affecting config and exact input files."""
+    return {
+        "config": {name: getattr(cfg, name) for name in spec.config},
+        "inputs": {
+            name: ({"size": path.stat().st_size, "sha256": sha256_file(path)} if path.is_file() else {"exists": False})
+            for name in spec.inputs
+            for path in [out_dir / name]
+        },
+    }
+
+
+def _is_fresh(outputs: list[Path], signature: dict[str, Any], previous_step: dict[str, Any]) -> bool:
+    """A step is reusable only when all outputs exist and its stored signature matches."""
+    return bool(outputs) and all(path.is_file() for path in outputs) and previous_step.get("signature") == signature
 
 
 def moe_would_call_api(cfg: TwitterInput, out_dir: Path) -> bool:
@@ -1059,9 +1071,9 @@ class TwitterDiscovery:
     One idempotent ``run`` per handle into the fixed dir
     ``TWITTER_DISCOVER_DIR/<slug>/``, overwriting in place with a single
     ``manifest.json`` (per-step status/counts/timing + artifact fingerprints).
-    Resume comes from the artifacts, not a ledger: a step whose output already
-    exists and is newer than its inputs is skipped, so reruns never redo finished
-    work and the spend steps never re-spend once their output is on disk. Spend
+    Resume comes from the artifacts and their per-step manifest signatures, not a
+    ledger: a step is skipped only when all outputs and its config/input signature
+    match, and invalidation cascades downstream. Spend
     steps (crawl, MOE, LinkedIn validate) require ``--approve-spend``; without it
     ``run`` stops at the first spend step that would call an API and returns a
     ``needs_approval`` payload naming the step + estimated calls."""
@@ -1076,13 +1088,25 @@ class TwitterDiscovery:
         """Advance the pipeline, skipping fresh steps, until it completes, blocks on
         spend, or a step fails. Always writes the stage manifest and returns it."""
         self.dir.mkdir(parents=True, exist_ok=True)
+        previous = read_json(self.manifest_path, {}) or {}
+        previous_steps = previous.get("steps") if isinstance(previous.get("steps"), dict) else {}
+        previous_input = previous.get("input") if isinstance(previous.get("input"), dict) else None
+        self.represented_input = dict(previous_input) if previous_input is not None else asdict(self.cfg)
         steps: dict[str, Any] = {}
+        downstream_invalidated = False
         for spec in STEPS:
-            output = self.dir / spec.output
-            inputs = [self.dir / name for name in spec.inputs]
-            if _is_fresh(output, inputs):
-                steps[spec.name] = {"status": "cached", "output_file": str(output)}
+            outputs = [self.dir / name for name in _step_outputs(spec, self.cfg)]
+            signature = _step_signature(spec, self.cfg, self.dir)
+            previous_step = previous_steps.get(spec.name) if isinstance(previous_steps.get(spec.name), dict) else {}
+            if not downstream_invalidated and _is_fresh(outputs, signature, previous_step):
+                steps[spec.name] = {
+                    "status": "cached",
+                    "output_file": str(outputs[0]),
+                    "signature": signature,
+                }
+                self._record_config(spec)
                 continue
+            downstream_invalidated = True
             if spec.spend and not self.approve_spend and self._would_call_api(spec.name):
                 return self._needs_approval(spec, steps)
             started = time.time()
@@ -1095,8 +1119,15 @@ class TwitterDiscovery:
                 "status": "completed",
                 "counts": result,
                 "seconds": round(time.time() - started, 3),
+                "signature": _step_signature(spec, self.cfg, self.dir),
             }
+            self._record_config(spec)
         return self._write("completed", steps)
+
+    def _record_config(self, spec: StepSpec) -> None:
+        """Mark only settings whose owning step completed or was validly cached."""
+        for name in spec.config:
+            self.represented_input[name] = getattr(self.cfg, name)
 
     def _would_call_api(self, name: str) -> bool:
         """Whether a spend step would actually hit its provider on this run."""
@@ -1160,7 +1191,7 @@ class TwitterDiscovery:
             status=status,
             steps=steps,
             artifacts=self._artifacts(),
-            input=asdict(self.cfg),
+            input=self.represented_input,
             needs_approval=needs_approval,
             error=error,
             updated_at=now_iso(),
