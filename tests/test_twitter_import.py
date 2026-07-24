@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import shlex
 import sys
 import tempfile
 import unittest
@@ -231,6 +232,53 @@ class TwitterNetworkImportTests(unittest.TestCase):
             self.assertEqual(manifest["steps"]["moe_evaluate"]["status"], "completed")
             self.assertEqual(manifest["steps"]["pre_resolve_linkedin"]["status"], "completed")
 
+    def test_continue_command_round_trips_complete_input(self):
+        cfg = self.mod.TwitterInput(
+            handle="operator",
+            source="custom source",
+            limit=7,
+            min_score=31,
+            verdicts="enrich,skip",
+            max_pages=4,
+            skip_moe=True,
+            moe_model="model custom",
+            moe_experts="deep_tech,serial_founder",
+            moe_workers=3,
+            linkedin_workers=5,
+            aggregator_workers=2,
+            skip_aggregator_fetch=True,
+            sleep_seconds=1.25,
+        )
+        command = self.mod.TwitterDiscovery(cfg, approve_spend=False)._continue_command()
+        argv = shlex.split(command)
+        self.assertEqual(argv[:7], [
+            "uv", "run", "--project", ".", "python",
+            "packs/ingestion/primitives/discover/twitter/network_import.py", "run",
+        ])
+        parsed = self.mod.build_parser().parse_args(argv[6:])
+        self.assertTrue(parsed.approve_spend)
+        self.assertEqual(self.mod.build_input(parsed), cfg)
+
+    def test_blocked_config_preserves_completed_signatures(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), self.fake_providers():
+            config_a = ["run", "--handle", "operator", "--min-score", "0", "--limit", "1", "--skip-moe"]
+            self.assertEqual(self.call_main([*config_a, "--approve-spend"]), 0)
+            signatures_a = self.manifest(tmp)["step_signatures"]
+
+            config_b = [*config_a, "--max-pages", "2"]
+            self.assertEqual(self.call_main(config_b), 20)
+            blocked = self.manifest(tmp)
+            self.assertEqual(blocked["step_signatures"], signatures_a)
+
+            with patch.object(self.mod, "twitter_get_user") as get_user:
+                self.assertEqual(self.call_main(config_a), 0)
+                get_user.assert_not_called()
+            self.assertTrue(all(
+                step["status"] == "cached"
+                for step in self.manifest(tmp)["steps"].values()
+            ))
+
     def test_missing_companion_outputs_rerun_owner_and_downstream(self):
         cases = [
             ("linkedin_resolution_queue.csv", True, "pre_resolve_linkedin", False),
@@ -257,6 +305,36 @@ class TwitterNetworkImportTests(unittest.TestCase):
                 for step in self.mod.STEPS[owner_index:]:
                     self.assertEqual(manifest["steps"][step.name]["status"], "completed")
                 self.assertTrue((Path(tmp) / "operator" / filename).exists())
+
+    def test_truncated_companion_outputs_rerun_owner_and_downstream(self):
+        cases = [
+            ("linkedin_resolution_queue.csv", True, "pre_resolve_linkedin", False),
+            ("people_harmonic_all.csv", True, "format_people", False),
+            ("moe_usage.json", False, "moe_evaluate", True),
+        ]
+        for filename, skip_moe, owner, needs_approval in cases:
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as tmp, \
+                 patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), self.fake_providers():
+                args = ["run", "--handle", "operator", "--min-score", "0", "--limit", "1"]
+                if skip_moe:
+                    args.append("--skip-moe")
+                else:
+                    args.extend(["--moe-model", "model-a", "--moe-experts", "deep_tech"])
+                self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
+                companion = Path(tmp) / "operator" / filename
+                original = companion.read_bytes()
+                companion.write_bytes(original[:1])
+
+                self.assertEqual(self.call_main(args), 20 if needs_approval else 0)
+                manifest = self.manifest(tmp)
+                if needs_approval:
+                    self.assertEqual(manifest["needs_approval"]["step"], owner)
+                    self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
+                    manifest = self.manifest(tmp)
+                owner_index = [step.name for step in self.mod.STEPS].index(owner)
+                for step in self.mod.STEPS[owner_index:]:
+                    self.assertEqual(manifest["steps"][step.name]["status"], "completed")
+                self.assertEqual(companion.read_bytes(), original)
 
 
 if __name__ == "__main__":

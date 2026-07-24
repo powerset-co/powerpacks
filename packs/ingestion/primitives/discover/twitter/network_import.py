@@ -73,6 +73,7 @@ import concurrent.futures
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import time
@@ -698,6 +699,7 @@ class TwitterDiscoveryManifest(StagePayload):
     handle: str = ""
     status: str = ""  # completed | needs_approval | failed
     steps: dict[str, Any] = field(default_factory=dict)
+    step_signatures: dict[str, Any] = field(default_factory=dict)
     artifacts: dict[str, Any] = field(default_factory=dict)
     input: dict[str, Any] = field(default_factory=dict)
     needs_approval: dict[str, Any] | None = None
@@ -1028,20 +1030,24 @@ def _step_outputs(spec: StepSpec, cfg: TwitterInput) -> tuple[str, ...]:
 
 
 def _step_signature(spec: StepSpec, cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
-    """Bind a cached step to its output-affecting config and exact input files."""
+    """Bind a cached step to its config and exact input/output file contents."""
+    def files(names: tuple[str, ...]) -> dict[str, Any]:
+        return {
+            name: ({"size": path.stat().st_size, "sha256": sha256_file(path)} if path.is_file() else {"exists": False})
+            for name in names
+            for path in [out_dir / name]
+        }
+
     return {
         "config": {name: getattr(cfg, name) for name in spec.config},
-        "inputs": {
-            name: ({"size": path.stat().st_size, "sha256": sha256_file(path)} if path.is_file() else {"exists": False})
-            for name in spec.inputs
-            for path in [out_dir / name]
-        },
+        "inputs": files(spec.inputs),
+        "outputs": files(_step_outputs(spec, cfg)),
     }
 
 
-def _is_fresh(outputs: list[Path], signature: dict[str, Any], previous_step: dict[str, Any]) -> bool:
+def _is_fresh(outputs: list[Path], signature: dict[str, Any], previous_signature: dict[str, Any]) -> bool:
     """A step is reusable only when all outputs exist and its stored signature matches."""
-    return bool(outputs) and all(path.is_file() for path in outputs) and previous_step.get("signature") == signature
+    return bool(outputs) and all(path.is_file() for path in outputs) and previous_signature == signature
 
 
 def moe_would_call_api(cfg: TwitterInput, out_dir: Path) -> bool:
@@ -1090,6 +1096,14 @@ class TwitterDiscovery:
         self.dir.mkdir(parents=True, exist_ok=True)
         previous = read_json(self.manifest_path, {}) or {}
         previous_steps = previous.get("steps") if isinstance(previous.get("steps"), dict) else {}
+        stored_signatures = previous.get("step_signatures") if isinstance(previous.get("step_signatures"), dict) else {}
+        self.step_signatures = dict(stored_signatures)
+        if not self.step_signatures:
+            self.step_signatures = {
+                name: step["signature"]
+                for name, step in previous_steps.items()
+                if isinstance(step, dict) and isinstance(step.get("signature"), dict)
+            }
         previous_input = previous.get("input") if isinstance(previous.get("input"), dict) else None
         self.represented_input = dict(previous_input) if previous_input is not None else asdict(self.cfg)
         steps: dict[str, Any] = {}
@@ -1097,13 +1111,14 @@ class TwitterDiscovery:
         for spec in STEPS:
             outputs = [self.dir / name for name in _step_outputs(spec, self.cfg)]
             signature = _step_signature(spec, self.cfg, self.dir)
-            previous_step = previous_steps.get(spec.name) if isinstance(previous_steps.get(spec.name), dict) else {}
-            if not downstream_invalidated and _is_fresh(outputs, signature, previous_step):
+            previous_signature = self.step_signatures.get(spec.name)
+            if not downstream_invalidated and isinstance(previous_signature, dict) and _is_fresh(outputs, signature, previous_signature):
                 steps[spec.name] = {
                     "status": "cached",
                     "output_file": str(outputs[0]),
                     "signature": signature,
                 }
+                self.step_signatures[spec.name] = signature
                 self._record_config(spec)
                 continue
             downstream_invalidated = True
@@ -1121,6 +1136,7 @@ class TwitterDiscovery:
                 "seconds": round(time.time() - started, 3),
                 "signature": _step_signature(spec, self.cfg, self.dir),
             }
+            self.step_signatures[spec.name] = steps[spec.name]["signature"]
             self._record_config(spec)
         return self._write("completed", steps)
 
@@ -1178,11 +1194,29 @@ class TwitterDiscovery:
         return out
 
     def _continue_command(self) -> str:
-        """The re-run command that grants spend consent."""
-        return (
-            "uv run --project . python packs/ingestion/primitives/discover/twitter/network_import.py "
-            f"run --handle {self.cfg.handle} --approve-spend"
-        )
+        """A shell-safe re-run command preserving the complete requested config."""
+        args = [
+            "uv", "run", "--project", ".", "python",
+            "packs/ingestion/primitives/discover/twitter/network_import.py",
+            "run", "--handle", self.cfg.handle, "--approve-spend",
+            "--source", self.cfg.source,
+            "--max-pages", str(self.cfg.max_pages),
+            "--min-score", str(self.cfg.min_score),
+            "--verdicts", self.cfg.verdicts,
+            "--moe-model", self.cfg.moe_model,
+            "--moe-experts", self.cfg.moe_experts,
+            "--moe-workers", str(self.cfg.moe_workers),
+            "--linkedin-workers", str(self.cfg.linkedin_workers),
+            "--aggregator-workers", str(self.cfg.aggregator_workers),
+            "--sleep-seconds", str(self.cfg.sleep_seconds),
+        ]
+        if self.cfg.limit is not None:
+            args.extend(["--limit", str(self.cfg.limit)])
+        if self.cfg.skip_moe:
+            args.append("--skip-moe")
+        if self.cfg.skip_aggregator_fetch:
+            args.append("--skip-aggregator-fetch")
+        return shlex.join(args)
 
     def _write(self, status: str, steps: dict[str, Any], *, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> dict[str, Any]:
         """Build the typed manifest and write it (fingerprinted, no-op when unchanged)."""
@@ -1190,6 +1224,7 @@ class TwitterDiscovery:
             handle=self.cfg.handle,
             status=status,
             steps=steps,
+            step_signatures=self.step_signatures,
             artifacts=self._artifacts(),
             input=self.represented_input,
             needs_approval=needs_approval,
