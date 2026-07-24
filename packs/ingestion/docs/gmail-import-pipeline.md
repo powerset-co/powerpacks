@@ -1,5 +1,9 @@
 <!--
 Changelog:
+- 2026-07-23 (audit): gmail/msgvault_store.py split into the gmail/msgvault/
+  package (store.py = MsgvaultStore + SQL, util.py = pure helpers) and
+  gmail/sync.py moved to gmail/msgvault/sync.py; the component table now links
+  the new paths.
 - 2026-07-23 (audit batch 17): gmail/network_import.py was split into
   gmail/msgvault_store.py (msgvault reader/aggregation) and
   gmail/discover_engine.py (per-account artifact-emission CLI).
@@ -192,8 +196,8 @@ output CSV rows are applied as raw material; their audit lives in
 | --- | --- |
 | Agent workflow | [`import-gmail/SKILL.md`](../skills/import-gmail/SKILL.md) |
 | OAuth and account status | [`msgvault_setup.py`](../primitives/setup/msgvault_setup.py) |
-| Sync and stable discovery | [`discover/gmail/sync.py`](../primitives/discover/gmail/discover.py) |
-| Metadata aggregation | [`gmail/msgvault_store.py`](../primitives/discover/gmail/msgvault_store.py) |
+| Sync and stable discovery | [`gmail/msgvault/sync.py`](../primitives/discover/gmail/msgvault/sync.py) |
+| Metadata aggregation | [`gmail/msgvault/store.py`](../primitives/discover/gmail/msgvault/store.py) (SQL + `MsgvaultStore`) and [`gmail/msgvault/util.py`](../primitives/discover/gmail/msgvault/util.py) (pure helpers) |
 | Per-account artifact emission | [`gmail/discover_engine.py`](../primitives/discover/gmail/discover_engine.py) |
 | Import orchestration | [`imports/gmail/importer.py`](../primitives/imports/gmail/importer.py) |
 | Directory reuse | [`imports/directory.py`](../primitives/imports/directory.py) |

@@ -19,6 +19,13 @@ What it does (discover()):
      (same rows) + a typed stage manifest.
 
 Changelog:
+  2026-07-23 (audit): the per-account child spawn is now the frozen `EngineChild`
+    dataclass (account + argv + the FIXED gmail_discover_dir output paths) instead
+    of ad-hoc dicts, and the isinstance/defensive-path ladder over the child
+    payload is gone: run_cmd always returns a dict and the child is our own
+    discover_engine writing known paths, so the queue/people CSVs are read from
+    gmail_discover_dir (common/paths.py), not re-parsed out of the payload. The
+    msgvault sync import moved to the gmail/msgvault/ package.
   2026-07-23 (audit):
     - discover() became strictly keyword-only: the old `**_` catch-all
       swallowed unknown kwargs silently, so call sites could pass options that
@@ -37,6 +44,7 @@ Changelog:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import argparse
@@ -49,12 +57,12 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import gmail_discover_dir  # noqa: E402
 from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
     ordered_unique,
     read_csv_rows,
-    source_slug,
     write_csv_rows,
     write_stage_manifest,
 )
@@ -82,9 +90,36 @@ from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
     inputs,
     resolve_discovery_inputs,
 )
-from packs.ingestion.primitives.discover.gmail.sync import (  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: E402
     sync_msgvault_account,
 )
+
+
+@dataclass(frozen=True)
+class EngineChild:
+    """One discover_engine spawn: the account it covers, the argv used, and the
+    FIXED output paths it writes (built from gmail_discover_dir before the child
+    runs — the child does not choose them, so we never re-parse them out of its
+    payload)."""
+
+    account_email: str
+    cmd: tuple[str, ...]
+    output_base: Path
+
+    @property
+    def discover_dir(self) -> Path:
+        """The child's fixed per-account output directory."""
+        return gmail_discover_dir(self.output_base, self.account_email)
+
+    @property
+    def queue_csv(self) -> Path:
+        """The child's `linkedin_resolution_queue.csv` (the rows discover reads back)."""
+        return self.discover_dir / "linkedin_resolution_queue.csv"
+
+    @property
+    def people_csv(self) -> Path:
+        """The child's canonical `people.csv`."""
+        return self.discover_dir / "people.csv"
 
 
 def discover(
@@ -163,7 +198,6 @@ def discover(
     child_modes: list[str] = []
     child_output_base = discover_engine_base_dir(contacts_csv)
     for email in source_inputs["selected_accounts"]:
-        account_artifact_dir = child_output_base / "discover" / "gmail" / source_slug(email)
         if skip_msgvault_sync:
             sync = {
                 "status": "skipped",
@@ -185,29 +219,31 @@ def discover(
         if sync["status"] == "failed":
             failed = GmailDiscoveryFailed(account_email=email, error=sync)
             return write_stage_manifest(manifest_json, failed)
-        cmd = py_cmd(
-            "packs/ingestion/primitives/discover/gmail/discover_engine.py",
-            "msgvault",
-            "--db",
-            source_inputs["msgvault_db"],
-            "--account-email",
-            email,
-            "--output-dir",
-            str(child_output_base),
+        child_spawn = EngineChild(
+            account_email=email,
+            cmd=tuple(py_cmd(
+                "packs/ingestion/primitives/discover/gmail/discover_engine.py",
+                "msgvault",
+                "--db",
+                source_inputs["msgvault_db"],
+                "--account-email",
+                email,
+                "--output-dir",
+                str(child_output_base),
+            )),
+            output_base=child_output_base,
         )
-        code, child, stderr = run_cmd(cmd)
-        child_mode = str(child.get("calculation_mode") or child.get("counts", {}).get("calculation_mode") or GMAIL_CALCULATION_FULL_RECOUNT) if isinstance(child, dict) else GMAIL_CALCULATION_FULL_RECOUNT
+        # run_cmd ALWAYS returns (code, dict, stderr) and the child is our own
+        # discover_engine emitting a known payload — so read the payload as a
+        # dict with no type-sniffing, and take the queue/people CSVs from the
+        # child's FIXED gmail_discover_dir paths rather than re-parsing them out
+        # of the payload's artifacts block.
+        code, payload, stderr = run_cmd(list(child_spawn.cmd))
+        child_mode = str(payload.get("calculation_mode") or payload.get("counts", {}).get("calculation_mode") or GMAIL_CALCULATION_FULL_RECOUNT)
         child_modes.append(child_mode)
-        child_artifacts = child.get("artifacts") if isinstance(child, dict) and isinstance(child.get("artifacts"), dict) else {}
-        child_queue_text = str((child_artifacts or {}).get("linkedin_resolution_queue_csv") or "").strip()
-        child_people_text = str((child_artifacts or {}).get("people_csv") or "").strip()
-        child_artifact_dir = str(child.get("artifact_dir") or account_artifact_dir) if isinstance(child, dict) else str(account_artifact_dir)
-        child_queue = Path(child_queue_text) if child_queue_text else None
-        rows_written = 0
         rows: list[dict[str, Any]] = []
-        if child_queue and child_queue.is_file():
-            _fields, rows = read_csv_rows(child_queue)
-            rows_written = len(rows)
+        if child_spawn.queue_csv.is_file():
+            _fields, rows = read_csv_rows(child_spawn.queue_csv)
         # Replay-dedup key for the append-only path: YES — incremental children
         # only ever APPEND to the existing contacts/queue, so replaying the same
         # child output (rerun, crash-resume) must not append the same rows twice.
@@ -224,18 +260,18 @@ def discover(
             "account_email": email,
             "sync": sync,
             "code": code,
-            "status": child.get("status") if isinstance(child, dict) else "",
-            "contacts": child.get("contacts") or child.get("counts", {}).get("contacts_written", "") if isinstance(child, dict) else "",
+            "status": payload.get("status", ""),
+            "contacts": payload.get("contacts") or payload.get("counts", {}).get("contacts_written", ""),
             "calculation_mode": child_mode,
             "incremental_input_id": incremental_input_id if child_mode == GMAIL_CALCULATION_INCREMENTAL_DELTA else "",
-            "rows_read": rows_written,
-            "artifact_dir": child_artifact_dir,
-            "people_csv": child_people_text,
-            "linkedin_resolution_queue_csv": child_queue_text,
-            "artifacts": child_artifacts,
+            "rows_read": len(rows),
+            "artifact_dir": str(child_spawn.discover_dir),
+            "people_csv": str(child_spawn.people_csv),
+            "linkedin_resolution_queue_csv": str(child_spawn.queue_csv),
+            "artifacts": payload.get("artifacts", {}),
         })
         if code != 0:
-            failed = GmailDiscoveryFailed(account_email=email, error=stderr or child)
+            failed = GmailDiscoveryFailed(account_email=email, error=stderr or payload)
             return write_stage_manifest(manifest_json, failed)
 
     # PHASE 2 — decide how to combine child outputs with what is on disk.

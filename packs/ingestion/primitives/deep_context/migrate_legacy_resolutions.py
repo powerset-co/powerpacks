@@ -29,6 +29,9 @@ RapidAPI profile (profile_cache_v2) through the same judge as deep-research
 proposals — spend-bearing unless `--no-llm` (deterministic fallback, tests only).
 
 Run: uv run --project . python -m packs.ingestion.primitives.deep_context.migrate_legacy_resolutions
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -47,8 +50,8 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_DIR,
     RAW_DIR,
     emit,
-    now_iso,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
     judge_concurrency,
     proposal_fingerprint,

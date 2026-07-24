@@ -33,6 +33,9 @@ Changelog:
     - Moved from primitives/merge_network_sources/ into
       imports/; the duplicated try/except import block became
       the single repo-root bootstrap stanza.
+  2026-07-23 (audit dedup): the local plain normalize_email (strip + lowercase)
+    now imports from common.contact_fields; the local normalize_phone
+    (plus-preserving, no min-length) is a divergent variant and stays here.
 """
 
 from __future__ import annotations
@@ -65,6 +68,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
 )
 from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, short_hash  # noqa: E402
+from packs.ingestion.primitives.common.contact_fields import normalize_email  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/network-import/merged")
@@ -217,10 +221,6 @@ def keep_people_csv_row(row: dict[str, Any]) -> bool:
     if (row.get("enrichment_provider") or "").strip().lower() == "synthetic":
         return bool((row.get("public_identifier") or "").strip())
     return bool(stable_linkedin_key(row)) and has_rapidapi_profile(row)
-
-
-def normalize_email(value: str) -> str:
-    return (value or "").strip().lower()
 
 
 def normalize_phone(value: str) -> str:

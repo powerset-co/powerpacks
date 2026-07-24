@@ -1,6 +1,9 @@
 """msgvault sync for Gmail discovery: last-sync inference and account sync.
 
 Changelog:
+  2026-07-23 (audit): moved from `gmail/sync.py` into the `gmail/msgvault/`
+    package (it is msgvault lifecycle — sync-full + resume inference — so it
+    belongs beside store/util). Bootstrap depth +1; imports unchanged.
   2026-07-23 (audit):
     - Split out of the former single-file gmail.py.
     - run_gmail_msgvault moved out to gmail/discover.py: it drives discover(),
@@ -23,7 +26,7 @@ import sys
 
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode.
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

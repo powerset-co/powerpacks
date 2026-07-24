@@ -14,6 +14,9 @@ public_identifier; a row the user decided (approved yes/no) is never rewritten.
 Reads:  .powerpacks/deep-context/reconcile/deep-research/<handle>/01_research_parallel.json
         (+ research_queue.csv for contact identity, people.csv for carry columns)
 Writes: .powerpacks/network-import/overrides/synthetic-people.csv
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -39,8 +42,8 @@ from packs.ingestion.primitives.deep_context.common import (
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     VERDICTS_JSONL,
-    now_iso,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import DR_OUT_DIR, QUEUE_CSV
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED, load_override_rows

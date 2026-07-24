@@ -17,6 +17,9 @@ Memory: one person's recent window at a time (every source query is per-person
 Outputs (fixed dir, overwrite in place):
   <out-dir>/<person_id>.json   one bundle per person with >=1 message
   <out-dir>/manifest.json      counts/status/privacy
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -41,9 +44,8 @@ from packs.ingestion.primitives.deep_context.common import (
     Person,
     emit,
     load_people,
-    now_iso,
-    write_json,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 
 # Each channel is its own vertical with this deep cap: Gmail, iMessage, and WhatsApp
 # each pool up to DEFAULT_DEEP_CAP recent messages independently, then they're

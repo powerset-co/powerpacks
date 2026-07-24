@@ -13,6 +13,9 @@ Changelog:
   filter_already_done, build_input, parallel_to_research_json, …), the CLI surface
   (estimate/submit/poll/status/run + flags), the output file formats, and the
   PARALLEL_API_KEY env source are all unchanged; only the HTTP layer moved to the SDK.
+- 2026-07-23 (audit dedup): now_iso + write_json now import from common.jsonio
+  (byte-identical to the deleted local copies). read_json (raises; no default) and
+  the pretty+flush emit stay local — both diverge from jsonio's variants.
 
 Subcommands:
     estimate   Show the queue size + per-processor cost estimate. No network.
@@ -44,7 +47,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +61,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.shared.csv_io import CsvIO  # noqa: E402
 from packs.ingestion.primitives.imports.common import write_manifest  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
 
 
 def load_dotenv(path: Path) -> None:
@@ -237,20 +241,20 @@ PERSON_RESEARCH_OUTPUT_SCHEMA: dict[str, Any] = {
 # JSON / IO helpers
 # ---------------------------------------------------------------------------
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def emit(value: Any) -> None:
+    """Print a payload as pretty, key-sorted JSON on stdout, flushing immediately.
+
+    Kept local (not folded into common.jsonio.emit): this variant passes
+    flush=True so the final result is written before the process exits."""
     print(json.dumps(value, indent=2, sort_keys=True), flush=True)
 
 
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
 def read_json(path: Path) -> Any:
+    """Read + decode JSON at `path`, raising on a missing file or bad JSON.
+
+    Kept local (not common.jsonio.read_json): callers guard existence / wrap in
+    try-except and rely on the raise, whereas jsonio.read_json swallows errors
+    and returns a default."""
     return json.loads(path.read_text(encoding="utf-8"))
 
 

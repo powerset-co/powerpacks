@@ -9,6 +9,9 @@ Usage:
   lookup_person.py --phone "+1 415 555 1234"
   lookup_person.py --name "Jane Doe"
   lookup_person.py --email jane@acme.com --json
+
+Changelog:
+  2026-07-23 (audit dedup): normalize_email imports from common.contact_fields instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -21,10 +24,10 @@ from typing import Any
 from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     INDEX_JSON,
-    normalize_email,
     normalize_name,
     phone_digits,
 )
+from packs.ingestion.primitives.common.contact_fields import normalize_email
 
 
 def _dedup(slugs: list[str]) -> list[str]:

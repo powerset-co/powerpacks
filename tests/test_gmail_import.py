@@ -19,12 +19,19 @@ assert spec.loader is not None
 sys.modules[spec.name] = gmail_import
 spec.loader.exec_module(gmail_import)
 
-STORE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover/gmail/msgvault_store.py"
+STORE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover/gmail/msgvault/store.py"
 store_spec = importlib.util.spec_from_file_location("gmail_msgvault_store", STORE_PATH)
 msgvault_store = importlib.util.module_from_spec(store_spec)
 assert store_spec.loader is not None
 sys.modules[store_spec.name] = msgvault_store
 store_spec.loader.exec_module(msgvault_store)
+
+UTIL_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/discover/gmail/msgvault/util.py"
+util_spec = importlib.util.spec_from_file_location("gmail_msgvault_util", UTIL_PATH)
+msgvault_util = importlib.util.module_from_spec(util_spec)
+assert util_spec.loader is not None
+sys.modules[util_spec.name] = msgvault_util
+util_spec.loader.exec_module(msgvault_util)
 
 
 class GmailDiscoverEngineTests(unittest.TestCase):
@@ -37,7 +44,7 @@ class GmailDiscoverEngineTests(unittest.TestCase):
         return code, payload
 
     def test_parse_email_header_port(self):
-        parsed = msgvault_store.parse_email_header('"Jane Example" <jane@example.com>, john@example.org')
+        parsed = msgvault_util.parse_email_header('"Jane Example" <jane@example.com>, john@example.org')
         self.assertEqual(parsed, [("Jane Example", "jane@example.com"), ("", "john@example.org")])
 
     def test_msgvault_import_reads_metadata_without_subjects_or_bodies(self):

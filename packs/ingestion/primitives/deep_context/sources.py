@@ -27,8 +27,8 @@ from packs.ingestion.primitives.deep_context.common import Person, phone_digits
 # Reuse the Gmail email-context machinery (msgvault connect/schema + the
 # signature-aware body selection) exactly as the marker flow does.
 from packs.ingestion.primitives.deep_context import build_email_context as bec
-from packs.ingestion.primitives.discover.gmail import (  # noqa: F401 - re-exported for collector defaults
-    msgvault_store as gni,
+from packs.ingestion.primitives.discover.gmail.msgvault import (  # noqa: F401 - re-exported for collector defaults
+    store as gni,
 )
 
 # Every channel is its own vertical with the same deep cap: Gmail, iMessage, and

@@ -20,6 +20,9 @@ step only builds the research queue, estimates cost, enforces the gate, and shel
 Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
   research_queue.csv     queue handed to deep_research_contacts
   manifest.json          subset size, estimated cost, gate decision, run status
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -71,11 +74,11 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     read_jsonl,
     load_owner,
-    now_iso,
     owner_background_block,
     parse_list,
     slugify,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,

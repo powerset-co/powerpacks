@@ -14,6 +14,10 @@ resolution normalizers, the people.csv materializers) is imported from
 `run_gmail_*` off this module — those names must stay defined here.
 
 Changelog:
+  2026-07-23 (audit): the person-vs-role classifiers is_generic_or_non_person /
+    is_likely_person_name now import from common/contact_fields.py (they moved
+    out of the split-up discover/gmail msgvault reader — generic name/email
+    testers, not msgvault-specific).
   2026-07-23 (audit): dropped three self-contained CSV/column copies —
     LINKEDIN_RESOLUTION_COLUMNS now imports from schemas/gmail_artifacts.py,
     read_csv_rows from discover/common.py, and the local write_csv_rows is now
@@ -56,7 +60,7 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
 )
 from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress, py_cmd, run_cmd  # noqa: E402
 from packs.ingestion.primitives.discover.common import read_csv_rows, source_slug  # noqa: E402
-from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: E402
+from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
     is_generic_or_non_person,
     is_likely_person_name,
 )

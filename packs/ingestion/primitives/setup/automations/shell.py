@@ -9,6 +9,9 @@ CLI output.
 Changelog:
   2026-07-23 (audit):
     - Split out of the former 1,770-line setup/msgvault_setup.py.
+  2026-07-23 (audit dedup): emit deleted here (byte-identical to
+    common.jsonio.emit); its consumers (msgvault_setup, browser_flows,
+    setup_flows) now import emit from common.jsonio directly.
 """
 
 from __future__ import annotations
@@ -24,11 +27,6 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
-
-
-def emit(payload: dict[str, Any]) -> None:
-    """Print a payload as sorted, indented JSON on stdout."""
-    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def progress(message: str) -> None:

@@ -3,7 +3,7 @@
 
 The CLI child spawned per account by `gmail/discover.py discover` (which
 `$import-gmail` runs). Reads msgvault metadata through
-`gmail/msgvault_store.py` and writes Powerpacks-local artifacts; it never
+`gmail/msgvault/store.py` and writes Powerpacks-local artifacts; it never
 reads Gmail message bodies, subjects, snippets, raw MIME, or attachments.
 Product-flow docs: `packs/ingestion/docs/gmail-import-pipeline.md`.
 
@@ -29,16 +29,23 @@ import chain's `gmail_apply_and_enrich` step
 applies STORED resolutions only.
 
 Changelog:
+  2026-07-23 (audit): moved the last local CSV/path helpers to shared homes —
+    the strict `write_csv` became `CsvIO.write_dict_rows_strict`; the generic
+    `csv_key`/`normalize_csv_row`/`merge_csv_row`/`upsert_csv` became
+    `CsvIO.upsert_dict_rows` (+ its private helpers); `gmail_discover_dir` moved
+    to `common/paths.py`; and the inline applied-resolutions header list became
+    `schemas/gmail_artifacts.LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS`. The msgvault
+    reader now imports from the split `gmail/msgvault/` package (`store` +
+    `util`). Byte output unchanged.
   2026-07-23 (audit): LINKEDIN_RESOLUTION_QUEUE_COLUMNS and
     LINKEDIN_RESOLUTION_COLUMNS now come from the shared
     `schemas/gmail_artifacts.py` (they were byte-identical copies across the
     discover and import stages). The local `read_csv` helper was dropped for
-    the shared `CsvIO.read_dict_rows`; `write_csv` stays local (strict
-    extrasaction guard — see its docstring).
+    the shared `CsvIO.read_dict_rows`.
   2026-07-23 (audit batch 17): split out of the retired
     `gmail/network_import.py` monolith — this module keeps artifact emission
     plus the argparse entry; the msgvault reader/aggregation moved to
-    `gmail/msgvault_store.py`. Deleted with the split (no live consumers):
+    `gmail/msgvault/store.py`. Deleted with the split (no live consumers):
     the one-person seed cluster (`run`/`continue`/`approve`/`status`
     subcommands, OnePersonInput, make_artifacts, append_account), its
     `gmail-one` ledger machinery (load/save_ledger, step functions), the
@@ -51,7 +58,6 @@ Changelog:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import re
 import sys
@@ -65,14 +71,13 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash, write_json  # noqa: E402
-from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, gmail_discover_dir  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
-    source_slug,
 )
-from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.msgvault.store import MsgvaultStore  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
-    MsgvaultStore,
     classify_email,
     default_excluded_labels,
     domain_guess,
@@ -83,6 +88,7 @@ from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: 
 from packs.ingestion.schemas.gmail_artifacts import (  # noqa: E402
     LINKEDIN_RESOLUTION_COLUMNS,
     LINKEDIN_RESOLUTION_QUEUE_COLUMNS,
+    LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS,
 )
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS,
@@ -176,87 +182,6 @@ def normalize_linkedin_url(value: str) -> str:
     url = url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
     public_id = extract_public_identifier(url)
     return f"https://www.linkedin.com/in/{public_id}" if public_id else url
-
-
-def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
-    """Write dict rows to a CSV, creating parent directories.
-
-    Kept local (NOT CsvIO.write_dict_rows): this writer leaves ``extrasaction``
-    at the stdlib default ``"raise"`` and passes rows straight to
-    ``writerows`` — a loud-failure guard against a row carrying a key outside
-    ``fieldnames``. Every caller here builds exact-schema rows, so the bytes
-    match write_dict_rows, but the strict extra-key check is intentional."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def gmail_discover_dir(base_dir: Path, account_email: str = "") -> Path:
-    """Return the fixed per-account discover output directory."""
-    return base_dir / "discover" / "gmail" / source_slug(account_email or "all")
-
-
-def csv_key(row: dict[str, Any], fields: list[str]) -> tuple[str, ...] | None:
-    """Build a normalized upsert key from the given fields; None when empty."""
-    key = tuple(str(row.get(field) or "").strip().lower() for field in fields)
-    return key if any(key) else None
-
-
-def normalize_csv_row(fieldnames: list[str], row: dict[str, Any]) -> dict[str, Any]:
-    """Project a row onto exactly the given fieldnames (missing -> '')."""
-    return {field: row.get(field, "") for field in fieldnames}
-
-
-def merge_csv_row(fieldnames: list[str], existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    """Overlay non-empty incoming values onto an existing row; `added_at` is
-    first-write-wins."""
-    merged = normalize_csv_row(fieldnames, existing)
-    for field in fieldnames:
-        value = incoming.get(field, "")
-        if value in ("", None):
-            continue
-        if field == "added_at" and merged.get(field):
-            continue
-        merged[field] = value
-    return merged
-
-
-def upsert_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]], key_fields: list[str]) -> dict[str, int]:
-    """Merge incoming rows into an existing CSV by key, preserving rows the
-    incoming set does not restate; returns upsert counters."""
-    existing_rows = CsvIO.read_dict_rows(path) if path.exists() else []
-    keyed: dict[tuple[str, ...], dict[str, Any]] = {}
-    keyless_existing: list[dict[str, Any]] = []
-    for row in existing_rows:
-        normalized = normalize_csv_row(fieldnames, row)
-        key = csv_key(normalized, key_fields)
-        if key is None:
-            keyless_existing.append(normalized)
-            continue
-        keyed[key] = merge_csv_row(fieldnames, keyed[key], normalized) if key in keyed else normalized
-
-    incoming_keys: set[tuple[str, ...]] = set()
-    for row in rows:
-        normalized = normalize_csv_row(fieldnames, row)
-        key = csv_key(normalized, key_fields)
-        if key is None:
-            keyless_existing.append(normalized)
-            continue
-        incoming_keys.add(key)
-        keyed[key] = merge_csv_row(fieldnames, keyed[key], normalized) if key in keyed else normalized
-
-    output_rows = [keyed[key] for key in sorted(keyed)]
-    output_rows.extend(keyless_existing)
-    write_csv(path, fieldnames, output_rows)
-    return {
-        "incoming": len(rows),
-        "existing": len(existing_rows),
-        "written": len(output_rows),
-        "preserved_existing": len([key for key in keyed if key not in incoming_keys]),
-        "upserted": len(incoming_keys),
-    }
 
 
 def people_rows_from_msgvault(rows: list[dict[str, Any]], source_artifacts: list[str]) -> list[dict[str, Any]]:
@@ -381,8 +306,8 @@ def apply_linkedin_resolutions_to_people(people_csv: Path, resolutions_csv: Path
                     "matched_name": resolution.get("matched_name", ""),
                 })
         output_rows.append(normalized)
-    write_csv(out_path, PEOPLE_COLUMNS, output_rows)
-    write_csv(applied_path, ["primary_email", "linkedin_url", "public_identifier", "confidence", "matched_name"], applied)
+    CsvIO.write_dict_rows_strict(out_path, PEOPLE_COLUMNS, output_rows)
+    CsvIO.write_dict_rows_strict(applied_path, LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS, applied)
     return {
         "status": "completed",
         "input_people_csv": str(people_csv),
@@ -426,7 +351,7 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     if account_email and account_email not in seen_accounts:
         account_rows.append({"account_id": f"msgvault:{short_hash(account_email, 12)}", "account_email": account_email, "provider": "gmail", "source": "msgvault", "added_at": discovered_at})
     upserts: dict[str, dict[str, int]] = {}
-    upserts["accounts_csv"] = upsert_csv(accounts_path, ACCOUNT_COLUMNS, account_rows, ["account_email"])
+    upserts["accounts_csv"] = CsvIO.upsert_dict_rows(accounts_path, ACCOUNT_COLUMNS, account_rows, ["account_email"])
 
     threads_rows = [{
         "email": row["email"],
@@ -487,11 +412,11 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     resolution_queue_rows = linkedin_resolution_queue_rows(filtered)
     people_rows = people_rows_from_msgvault(filtered, [str(targeted_path), str(aggregated_path), str(resolution_queue_path)])
 
-    upserts["gmail_threads_csv"] = upsert_csv(threads_path, THREAD_COLUMNS, threads_rows, ["email"])
-    upserts["gmail_contacts_aggregated_csv"] = upsert_csv(aggregated_path, AGGREGATED_COLUMNS, aggregated_rows, ["email"])
-    upserts["targeted_emails_csv"] = upsert_csv(targeted_path, TARGETED_COLUMNS, targeted_rows, ["primary_email"])
-    upserts["linkedin_resolution_queue_csv"] = upsert_csv(resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows, ["handle"])
-    upserts["people_csv"] = upsert_csv(people_path, PEOPLE_COLUMNS, people_rows, ["primary_email"])
+    upserts["gmail_threads_csv"] = CsvIO.upsert_dict_rows(threads_path, THREAD_COLUMNS, threads_rows, ["email"])
+    upserts["gmail_contacts_aggregated_csv"] = CsvIO.upsert_dict_rows(aggregated_path, AGGREGATED_COLUMNS, aggregated_rows, ["email"])
+    upserts["targeted_emails_csv"] = CsvIO.upsert_dict_rows(targeted_path, TARGETED_COLUMNS, targeted_rows, ["primary_email"])
+    upserts["linkedin_resolution_queue_csv"] = CsvIO.upsert_dict_rows(resolution_queue_path, LINKEDIN_RESOLUTION_QUEUE_COLUMNS, resolution_queue_rows, ["handle"])
+    upserts["people_csv"] = CsvIO.upsert_dict_rows(people_path, PEOPLE_COLUMNS, people_rows, ["primary_email"])
 
     existing_manifest = read_json(manifest_path, {}) or {}
 

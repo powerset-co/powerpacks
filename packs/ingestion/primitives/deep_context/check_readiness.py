@@ -11,6 +11,9 @@ orchestrator can decide what's collectable before spending anything:
   - OPENAI_API_KEY (synthesis)        present | missing
 
 Exit status is always 0; read `ready` (all required sources usable) in the JSON.
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -34,8 +37,8 @@ from packs.ingestion.primitives.deep_context.common import (
     WHATSAPP_CHANNEL,
     emit,
     load_env,
-    now_iso,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso
 
 
 def count_message_people(people_csv: Path) -> int:

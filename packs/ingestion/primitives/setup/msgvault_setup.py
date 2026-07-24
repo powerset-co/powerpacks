@@ -38,6 +38,8 @@ Changelog:
       driver in automations/.
     - Absorbed the former sidecar README into this docstring; the sidecar
       file is deleted per hygiene rules.
+  2026-07-23 (audit dedup): emit now imports from common.jsonio (was
+    automations.shell.emit, deleted there as a jsonio dup).
 """
 
 from __future__ import annotations
@@ -77,10 +79,8 @@ from packs.ingestion.primitives.setup.automations.setup_flows import (  # noqa: 
     create_oauth_app_flow,
     setup_flow,
 )
-from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
-    emit,
-    expand,
-)
+from packs.ingestion.primitives.setup.automations.shell import expand  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 
 
 def cmd_status(args: argparse.Namespace) -> int:

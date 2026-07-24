@@ -25,6 +25,14 @@ Changelog:
   2026-07-23 (contract consolidation): GROUP_SEPARATOR and MESSAGE_CHANNELS now
     import from packs.ingestion.schemas.message_contacts (the message-contact CSV
     contract home) instead of being redefined here.
+  2026-07-23 (audit dedup): absorbs the plain normalize_email (strip + lowercase)
+    that deep_context.common and imports/merge_network_sources each duplicated;
+    the strict, validating normalize_email in discover/gmail/msgvault/util is a
+    different contract and stays separate.
+  2026-07-23 (audit): absorbs the person-vs-role classifiers is_likely_person_name
+    / is_generic_or_non_person (+ GENERIC_PREFIXES / GENERIC_KEYWORDS /
+    BUSINESS_NAME_KEYWORDS) from discover/gmail/msgvault_store — they are generic
+    name/email testers, not msgvault-specific. Behavior unchanged.
 """
 
 from __future__ import annotations
@@ -44,6 +52,14 @@ from packs.ingestion.schemas.message_contacts import GROUP_SEPARATOR, MESSAGE_CH
 from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 
 EMAIL_EXTRACT_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def normalize_email(value: str) -> str:
+    """Plain email key: strip + lowercase, no validation (blank stays blank).
+
+    Distinct from discover/gmail/msgvault/util.normalize_email, which validates
+    and raises on a malformed address."""
+    return (value or "").strip().lower()
 
 
 def normalize_phone(value: Any) -> str:
@@ -198,3 +214,87 @@ def latest_message(record: dict[str, Any]) -> str | None:
     if record.get("legacy_last_message"):
         values.append(record["legacy_last_message"])
     return max(values, default=None)
+
+
+# --- Person-vs-role classification (moved from the retired resolve_queue.py) ---
+
+GENERIC_PREFIXES = {
+    "noreply", "no-reply", "no_reply",
+    "donotreply", "do-not-reply", "do_not_reply",
+    "info", "contact", "support", "help", "hello",
+    "sales", "marketing", "hr", "careers", "jobs",
+    "admin", "administrator", "webmaster", "postmaster",
+    "office", "team", "staff", "general",
+    "billing", "invoices", "payments", "accounts", "accounting",
+    "newsletter", "news", "updates", "notifications",
+    "feedback", "enquiries", "inquiries",
+    "service", "customerservice", "care", "dispatch",
+    "concierge", "reservation", "reservations", "booking", "bookings",
+    "rsvp", "registration", "club", "member", "members", "membership", "memberservices",
+    "optical", "photos", "equity", "futures",
+    "launch", "eat", "pbx", "alumni", "masters", "csi",
+    "studentinfo", "fintechsupport", "casasupport",
+}
+
+GENERIC_KEYWORDS = {
+    "support", "service", "noreply", "reply", "taskforce",
+    "insurance", "verification", "recognition",
+}
+
+BUSINESS_NAME_KEYWORDS = {
+    "llc", "inc", "corp", "ltd", "team", "services", "service",
+    "spa", "optometry", "electronics", "insurance", "association",
+    "department", "office", "institute", "run", "discount", "massages",
+    "management", "concierge", "dispatch", "accounting", "task force",
+    "hawaii", "waikiki", "aruba", "support", "delivery",
+    "wines", "coffee", "mason", "security", "motors",
+}
+
+
+def is_likely_person_name(name: str) -> bool:
+    """Return True if the name looks like a real person (first + last)."""
+    if not name:
+        return False
+    clean = re.sub(r'\s*\([^)]*\)', '', name).strip()  # strip parentheticals like (LinkedIn Supplier)
+    clean = re.sub(r'^["\']|["\']$', '', clean).strip()
+    words = clean.split()
+    if len(words) < 2:
+        return False
+    if any(kw in clean.lower() for kw in BUSINESS_NAME_KEYWORDS):
+        return False
+    if '&' in clean:
+        return False
+    # All-caps or all-lower single tokens that aren't name-like
+    if clean == clean.upper() and len(words) <= 2:
+        return False
+    return True
+
+
+def is_generic_or_non_person(email: str) -> bool:
+    """Return True if the email looks like a role/service address, not a person."""
+    if not email or "@" not in email:
+        return True
+    local = email.split("@")[0].lower().strip()
+    # Strip plus-addressing
+    local = local.split("+")[0]
+    # Exact prefix match
+    if local in GENERIC_PREFIXES:
+        return True
+    # First segment match (e.g. customer.service@, no-reply@, info-mhi@)
+    base = re.split(r'[.\-_]', local)[0]
+    if base in GENERIC_PREFIXES:
+        return True
+    # Contains generic keyword anywhere
+    for kw in GENERIC_KEYWORDS:
+        if kw in local:
+            return True
+    # Phone-number-like local parts
+    if re.match(r'^\d{7,}$', local):
+        return True
+    # Single character local parts
+    if len(local) <= 1:
+        return True
+    # Local part is just digits (e.g. 2relaxinparadise is fine but pure digits aren't)
+    if re.match(r'^\d+$', local):
+        return True
+    return False

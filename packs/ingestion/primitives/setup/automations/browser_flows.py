@@ -11,6 +11,8 @@ Changelog:
   2026-07-23 (audit):
     - Extracted from the former fat cmd_* bodies in setup/msgvault_setup.py
       (cmd_browser_setup was ~217 lines inside the entry).
+  2026-07-23 (audit dedup): emit now imports from common.jsonio (was
+    automations.shell.emit, deleted there as a jsonio dup).
 """
 
 from __future__ import annotations
@@ -37,10 +39,8 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
 from packs.ingestion.primitives.setup.automations.oauth_browser import (  # noqa: E402
     DEFAULT_OAUTH_CLIENT_NAME,
 )
-from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
-    emit,
-    progress,
-)
+from packs.ingestion.primitives.setup.automations.shell import progress  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 
 
 def browser_setup_flow(

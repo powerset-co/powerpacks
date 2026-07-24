@@ -13,12 +13,17 @@ silently drift.
 - `LINKEDIN_RESOLUTION_COLUMNS`: the resolution *results* contract
   (`handle,status,linkedin_url,confidence,...`) the Gmail apply path, the
   directory commit, and the resolution-merge all read and write.
+- `LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS`: the `linkedin_resolutions_applied.csv`
+  audit sidecar the Gmail apply path writes (one row per person a stored
+  resolution was attached to).
 
 Changelog:
   2026-07-23 (audit): extracted from discover_engine.py, imports/directory.py,
     and imports/gmail/import_steps.py — LINKEDIN_RESOLUTION_COLUMNS was
     byte-identical in all three, LINKEDIN_RESOLUTION_QUEUE_COLUMNS in
     discover_engine.py with a downstream consumer. Values are unchanged.
+  2026-07-23 (audit): added LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS, lifted from the
+    inline header list in discover_engine.apply_linkedin_resolutions_to_people.
 """
 from __future__ import annotations
 
@@ -39,3 +44,4 @@ LINKEDIN_RESOLUTION_QUEUE_COLUMNS = [
     "source_channels",
 ]
 LINKEDIN_RESOLUTION_COLUMNS = ["handle", "status", "linkedin_url", "confidence", "matched_name", "matched_headline", "evidence", "reasoning"]
+LINKEDIN_RESOLUTIONS_APPLIED_COLUMNS = ["primary_email", "linkedin_url", "public_identifier", "confidence", "matched_name"]

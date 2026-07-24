@@ -1,5 +1,7 @@
 <!--
 Changelog:
+- 2026-07-23 (audit): gmail/msgvault_store.py split into the gmail/msgvault/
+  package (store.py + util.py); gmail/sync.py moved to gmail/msgvault/sync.py.
 - 2026-07-23 (audit batch 17): gmail/network_import.py rows retargeted to its
   split successors gmail/msgvault_store.py + gmail/discover_engine.py.
 - 2026-07-23 (audit batch 16): removed the retired $discover-contacts skill and

@@ -11,6 +11,9 @@ Outputs:
   <dossier-dir>/<slug>.md   one dossier per person
   index.json                lookup map (phone digits / email / name -> slug)
   index.md                  human-readable catalog
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -31,11 +34,10 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     read_jsonl,
     normalize_name,
-    now_iso,
     phone_digits,
     slugify,
-    write_json,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 
 MAX_TOPICS = 25
 

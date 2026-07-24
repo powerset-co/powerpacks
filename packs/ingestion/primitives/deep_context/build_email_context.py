@@ -28,7 +28,7 @@ Division of labor
 -----------------
 All msgvault SQLite access (connection, schema, the recent-emails-with-bodies
 SQL, the windowed all-contacts stream, owner/account derivation, honest counts)
-lives on ``MsgvaultStore`` in ``gmail/msgvault_store.py``. This module keeps only
+lives on ``MsgvaultStore`` in ``gmail/msgvault/store.py``. This module keeps only
 the non-DB logic: HTML/body cleaning, the deterministic identity-signal score,
 near-dup shingle detection, the per-thread email SELECTION
 (``select_emails_from_rows``), the ``recent_emails_for`` fetch+select wrapper,
@@ -49,8 +49,14 @@ Outputs (one fixed directory, overwrite in place -- manifest + outputs only):
   <out-dir>/manifest.json         counts/status/timing
 
 Changelog:
+  2026-07-23 (audit): the msgvault reader split into the ``gmail/msgvault/``
+    package — ``gni`` now aliases the concrete ``gmail/msgvault/store`` module
+    (MsgvaultStore + DEFAULT_MSGVAULT_DB), the pure helpers
+    ``has_round_trip_interaction`` / ``default_excluded_labels`` come from
+    ``gmail/msgvault/util``, and ``is_generic_or_non_person`` moved to
+    ``common/contact_fields``. No behavior change.
   2026-07-23 (audit batch 19): folded this module's second msgvault SQLite layer
-    into ``MsgvaultStore`` (gmail/msgvault_store.py). The recent-emails SQL +
+    into ``MsgvaultStore`` (gmail/msgvault/store.py). The recent-emails SQL +
     ``fetch_recent_rows``, ``create_candidate_pid_table``,
     ``stream_contact_groups``, ``account_emails``, ``owner_identity``, and
     ``count_messages_for`` now live there as methods; this module does all DB
@@ -58,7 +64,6 @@ Changelog:
     ``derive_candidates`` now take a store instead of a raw connection; the pure
     selection (``select_emails_from_rows``) and signal/near-dup helpers stay here.
   2026-07-23 (audit batch 17): the retired gmail/network_import.py split;
-    ``gni`` now aliases the concrete ``gmail/msgvault_store`` module,
     linkedin_resolution_queue_rows comes from ``gmail/discover_engine``, and
     emit/now_iso/write_json come from the discover stage's ``common``.
 """
@@ -81,13 +86,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.ingestion.primitives.common.contact_fields import is_generic_or_non_person  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
-from packs.ingestion.primitives.discover.gmail import msgvault_store as gni  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.msgvault import store as gni  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
+    default_excluded_labels,
+    has_round_trip_interaction,
+)
 from packs.ingestion.primitives.discover.gmail.discover_engine import (  # noqa: E402
     linkedin_resolution_queue_rows,
-)
-from packs.ingestion.primitives.discover.gmail.msgvault_store import (  # noqa: E402
-    is_generic_or_non_person,
 )
 
 DEFAULT_OUT_DIR = Path(".powerpacks/network-import/discover/email-context")
@@ -321,7 +328,7 @@ def derive_candidates(
     detector the Parallel resolution path uses. Returns (queue, role_dropped)."""
     aggregated = store.aggregate_contacts(account_email, exclude_labels)
     non_automated = [r for r in aggregated if include_automated or not r.get("automated_filtered")]
-    filtered = [r for r in non_automated if gni.has_round_trip_interaction(r)]
+    filtered = [r for r in non_automated if has_round_trip_interaction(r)]
     queue = linkedin_resolution_queue_rows(filtered)
     if include_role_mailboxes:
         return queue, 0
@@ -382,7 +389,7 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
 
     with gni.MsgvaultStore(db_path) as store:
         store.require_schema()
-        exclude_labels = gni.default_excluded_labels(args.include_category_mail)
+        exclude_labels = default_excluded_labels(args.include_category_mail)
         queue, role_mailboxes_dropped = derive_candidates(
             store, args.account_email, exclude_labels, args.include_automated, args.include_role_mailboxes
         )

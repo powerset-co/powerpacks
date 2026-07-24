@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MOD = ROOT / "packs/ingestion/primitives/discover/gmail/msgvault_store.py"
+MOD = ROOT / "packs/ingestion/primitives/discover/gmail/msgvault/store.py"
 
 
 def load_module():

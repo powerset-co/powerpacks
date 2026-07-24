@@ -13,11 +13,11 @@ metadata-vs-bodies split in the access layer — the discovery aggregation
 (`messages.subject`/`messages.snippet`, `message_bodies.body_text`). Both go
 through this one store.
 
-Pure email-identity/text helpers (`normalize_email`, `classify_email`,
-`parse_email_header`, `is_automated_email`, `best_display_name`, `split_name`,
-…) and the pure label/row helpers (`normalize_label_names`,
-`default_excluded_labels`, `has_round_trip_interaction`, `canonical_message_id`)
-stay as module-level functions — they take no connection.
+The pure email-identity/text/label helpers this class calls (`normalize_email`,
+`classify_email`, `best_display_name`, `canonical_message_id`,
+`normalize_label_names`, …) live in `msgvault/util.py` — they take no
+connection. `_fold_msgvault_message` stays here: it is the per-message fold that
+only `aggregate_contacts` uses.
 
 Consumers: `gmail/discover_engine.py` (the discovery CLI child),
 `deep_context/build_email_context.py` / `deep_context/sources.py` and
@@ -25,9 +25,11 @@ Consumers: `gmail/discover_engine.py` (the discovery CLI child),
 re-derivation), and `logbook/logbook_sources.py` (candidate-pid temp table).
 
 Changelog:
-  2026-07-23 (audit batch 22): absorbed is_likely_person_name /
-    is_generic_or_non_person (+ their keyword sets) from the retired legacy
-    resolver gmail/resolve_queue.py; deep-context owns LinkedIn resolution now.
+  2026-07-23 (audit): split `gmail/msgvault_store.py` into this package —
+    `store.py` is the `MsgvaultStore` class, its SQL constants, and the private
+    `_fold_msgvault_message` aggregation helper; the pure module-level helpers
+    and their constants moved to `msgvault/util.py`, and the person-vs-role
+    classifiers moved to `common/contact_fields.py`. No behavior change.
   2026-07-23 (audit batch 19): folded the second msgvault SQLite layer
     (`deep_context/build_email_context.py`) into this module. Introduced
     `MsgvaultStore` as the single access point; the former connection-bound
@@ -42,98 +44,32 @@ Changelog:
     `recent_emails_for` selection wrapper stays in build_email_context (it is
     pure over `fetch_recent_rows` output + `select_emails_from_rows`, and
     keeping it there avoids a discover→deep_context import cycle).
-  2026-07-23 (audit batch 17): split out of the retired
-    `gmail/network_import.py` monolith. DEFAULT_MSGVAULT_DB stays here (NOT
-    deduped into discover common.py: this one honors $MSGVAULT_HOME; common's
-    does not).
 """
 
 from __future__ import annotations
 
 import itertools
-import os
-import re
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
-DEFAULT_EXCLUDED_MSGVAULT_LABELS = ("CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_FORUMS", "CATEGORY_UPDATES")
+# Repo-root bootstrap so `packs.*` imports work in module AND script mode
+# (script-mode never imports the package __init__, so this must be in-file).
+_REPO_ROOT = Path(__file__).resolve().parents[6]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-PERSONAL_DOMAINS = {
-    "gmail.com",
-    "yahoo.com",
-    "hotmail.com",
-    "outlook.com",
-    "icloud.com",
-    "aol.com",
-    "msn.com",
-    "live.com",
-    "me.com",
-    "mac.com",
-    "protonmail.com",
-    "mail.com",
-    "ymail.com",
-    "googlemail.com",
-    "comcast.net",
-    "att.net",
-    "verizon.net",
-    "sbcglobal.net",
-    "cox.net",
-    "earthlink.net",
-    "126.com",
-    "163.com",
-    "qq.com",
-}
-NON_WORK_DOMAINS = PERSONAL_DOMAINS | {"noreply.github.com", "users.noreply.github.com"}
-AUTOMATED_EMAIL_KEYWORDS = {
-    "unsub",
-    "unsubscribe",
-    "bounce",
-    "spam",
-    "spamproc",
-    "noreply",
-    "no-reply",
-    "no_reply",
-    "donotreply",
-    "do-not-reply",
-    "mailer-daemon",
-    "postmaster",
-    "leave-",
-    "void-",
-    "reply.",
-    "notification",
-    "notifications",
-    "alert",
-    "alerts",
-    "reservation",
-    "reservations",
-    "booking",
-    "bookings",
-}
-SUPPORT_TICKET_DOMAINS = {"zendesk", "freshdesk", "intercom", "helpscout", "helpdesk"}
-TRAVEL_SERVICE_DOMAINS = {
-    "airbnb",
-    "vrbo",
-    "booking.com",
-    "hotels.com",
-    "expedia",
-    "uber.com",
-    "lyft.com",
-    "united",
-    "delta",
-    "aa.com",
-    "americanairlines",
-    "southwest",
-    "jetblue",
-    "alaska",
-    "marriott",
-    "hilton",
-    "hyatt",
-    "hertz",
-    "avis",
-    "enterprise",
-}
+from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
+    DEFAULT_MSGVAULT_DB,
+    best_display_name,
+    canonical_message_id,
+    classify_email,
+    is_automated_email,
+    msgvault_db_uri,
+    normalize_email,
+    normalize_label_names,
+)
 
 # Resolve a contact's participant id(s) up front so the message lookups can use
 # the sender_id / message_recipients.participant_id indexes directly. The old
@@ -223,197 +159,6 @@ LEFT JOIN message_bodies mb ON mb.message_id = r.mid
 WHERE r.rn <= ?
 ORDER BY r.cemail, r.at DESC, r.mid DESC
 """
-
-
-def normalize_email(email: str) -> str:
-    """Lowercase and validate an email address; raise ValueError when invalid."""
-    value = (email or "").strip().lower()
-    if not value or "@" not in value:
-        raise ValueError("--email must contain a valid email address")
-    local, domain = value.rsplit("@", 1)
-    if not local or not domain or "." not in domain:
-        raise ValueError("--email must contain a valid email address")
-    return value
-
-
-def normalize_name(name: str, email: str = "") -> str:
-    """Collapse whitespace in a display name, falling back to a name derived
-    from the email local part when the name is blank."""
-    value = " ".join((name or "").strip().split())
-    if value:
-        return value
-    local = email.split("@", 1)[0] if "@" in email else ""
-    local = re.sub(r"[._+-]+", " ", local)
-    return " ".join(part.capitalize() for part in local.split() if part)
-
-
-def classify_email(email: str) -> str:
-    """Classify an address as personal, work, other, or unknown by its domain."""
-    if not email or "@" not in email:
-        return "unknown"
-    domain = email.rsplit("@", 1)[1].lower()
-    if domain in PERSONAL_DOMAINS:
-        return "personal"
-    if domain in NON_WORK_DOMAINS:
-        return "other"
-    return "work"
-
-
-def domain_guess(email: str) -> dict[str, str]:
-    """Guess a company name from the email domain (local heuristic only)."""
-    domain = email.rsplit("@", 1)[1].lower() if "@" in email else ""
-    root = domain.split(".")[0] if domain else ""
-    company_guess = " ".join(part.capitalize() for part in re.split(r"[-_]", root) if part)
-    return {"domain": domain, "company_guess": company_guess, "method": "local_domain_heuristic"}
-
-
-def parse_email_header(header_value: str) -> list[tuple[str, str]]:
-    """Parse a Gmail From/To/Cc header into (display_name, email) pairs.
-
-    Ported from the legacy Gmail ingestion path, but kept stdlib-only and local.
-    """
-    if not header_value:
-        return []
-
-    parts: list[str] = []
-    current = ""
-    in_quotes = False
-    in_angle = False
-    for char in header_value:
-        if char == '"':
-            in_quotes = not in_quotes
-        elif char == "<":
-            in_angle = True
-        elif char == ">":
-            in_angle = False
-        elif char == "," and not in_quotes and not in_angle:
-            if current.strip():
-                parts.append(current.strip())
-            current = ""
-            continue
-        current += char
-    if current.strip():
-        parts.append(current.strip())
-
-    results: list[tuple[str, str]] = []
-    angle_pattern = r"^(.*?)\s*<([^>]+)>$"
-    email_pattern = r"^[a-zA-Z0-9._%+-]{2,}@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-    for part in parts:
-        value = part.strip()
-        if not value:
-            continue
-        angle_match = re.match(angle_pattern, value)
-        if angle_match:
-            name = normalize_name(angle_match.group(1).strip().strip('"'))
-            email = angle_match.group(2).strip().lower()
-            if re.match(email_pattern, email):
-                results.append((name, email))
-        else:
-            email = value.lower()
-            if re.match(email_pattern, email):
-                results.append(("", email))
-    return results
-
-
-def is_automated_email(email: str) -> tuple[bool, str]:
-    """Detect automated/service addresses; return (is_automated, reason)."""
-    if not email or "@" not in email:
-        return True, "invalid email"
-    local_part, domain = email.lower().rsplit("@", 1)
-    for keyword in AUTOMATED_EMAIL_KEYWORDS:
-        if keyword in local_part or keyword in domain:
-            return True, f"contains '{keyword}'"
-    for system in SUPPORT_TICKET_DOMAINS:
-        if system in domain:
-            return True, f"support ticket system ({system})"
-    for service in TRAVEL_SERVICE_DOMAINS:
-        if service in domain:
-            return True, f"travel/hospitality service ({service})"
-    if re.search(r"[a-f0-9]{16,}", local_part):
-        return True, "hash-like pattern in email"
-    if len(local_part) >= 20:
-        vowel_count = sum(1 for c in local_part if c in "aeiou")
-        vowel_ratio = vowel_count / len(local_part) if local_part else 0
-        if vowel_ratio < 0.15 and re.match(r"^[a-z0-9_-]+$", local_part):
-            return True, "random alphanumeric pattern"
-    if len(local_part) > 40 and re.match(r"^[a-z0-9_-]+$", local_part):
-        return True, "very long alphanumeric local part"
-    return False, ""
-
-
-def split_name(full_name: str) -> tuple[str, str]:
-    """Split a full name into (first, last), using the outermost tokens."""
-    parts = [part for part in re.split(r"\s+", (full_name or "").strip()) if part]
-    if not parts:
-        return "", ""
-    if len(parts) == 1:
-        return parts[0], ""
-    return parts[0], parts[-1]
-
-
-def default_name_for_email(email: str) -> str:
-    """Derive a capitalized display name from an email's local part."""
-    local = email.split("@", 1)[0] if "@" in email else email
-    local = re.sub(r"[._+-]+", " ", local)
-    return " ".join(part.capitalize() for part in local.split() if part)
-
-
-def best_display_name(email: str, names: dict[str, int]) -> str:
-    """Pick the most frequent non-empty display name observed for an email,
-    falling back to a name derived from the address."""
-    cleaned: dict[str, int] = {}
-    email_l = email.lower()
-    for name, count in names.items():
-        value = normalize_name(name, email)
-        if not value or value.lower() == email_l:
-            continue
-        cleaned[value] = cleaned.get(value, 0) + count
-    if cleaned:
-        return sorted(cleaned.items(), key=lambda item: (-item[1], item[0].casefold()))[0][0]
-    return default_name_for_email(email)
-
-
-def normalize_label_names(values: Iterable[str] | None) -> list[str]:
-    """Uppercase, trim, and dedupe label names, preserving first-seen order."""
-    out: list[str] = []
-    for value in values or []:
-        label = str(value or "").strip()
-        if label and label.upper() not in out:
-            out.append(label.upper())
-    return out
-
-
-def default_excluded_labels(include_category_mail: bool, extra_labels: Iterable[str] | None = None) -> list[str]:
-    """Return the label-exclusion list: Gmail category labels (unless included)
-    plus any extra labels, normalized."""
-    labels: list[str] = []
-    if not include_category_mail:
-        labels.extend(DEFAULT_EXCLUDED_MSGVAULT_LABELS)
-    labels.extend(extra_labels or [])
-    return normalize_label_names(labels)
-
-
-def msgvault_db_uri(path: Path) -> str:
-    """Return the read-only SQLite URI for a msgvault database path."""
-    return f"file:{path.expanduser().resolve()}?mode=ro"
-
-
-def canonical_message_id(row: Any) -> str:
-    """Stable identity for one real email message.
-
-    msgvault can store the same RFC822 message under multiple conversation_ids
-    (and across accounts), each with its own msgvault row id. Counting by row
-    id double-counts those copies. Prefer rfc822_message_id, then
-    source_message_id, then fall back to the msgvault row id.
-    """
-    for key in ("rfc822_message_id", "source_message_id"):
-        try:
-            value = str(row[key] or "").strip()
-        except (KeyError, IndexError):
-            value = ""
-        if value:
-            return f"{key}:{value}"
-    return f"row:{row['message_id']}"
 
 
 def _fold_msgvault_message(message: dict[str, Any], records: dict[str, dict[str, Any]], account_filter: str) -> None:
@@ -520,11 +265,6 @@ def _fold_msgvault_message(message: dict[str, Any], records: dict[str, dict[str,
                 record["first_interaction"] = message_at
             if not record["last_interaction"] or message_at > record["last_interaction"]:
                 record["last_interaction"] = message_at
-
-
-def has_round_trip_interaction(row: dict[str, Any]) -> bool:
-    """True when a contact has BOTH sent and received messages (round trip)."""
-    return int(row.get("total_sent") or 0) > 0 and int(row.get("total_received") or 0) > 0
 
 
 class MsgvaultStore:
@@ -921,86 +661,3 @@ class MsgvaultStore:
         # UNION (not UNION ALL) dedupes a message matched by both arms.
         sql = f"SELECT COUNT(*) AS n FROM ({' UNION '.join(arms)})"
         return int(con.execute(sql, params).fetchone()["n"])
-
-
-# --- Person-vs-role classification (moved from the retired resolve_queue.py) ---
-
-GENERIC_PREFIXES = {
-    "noreply", "no-reply", "no_reply",
-    "donotreply", "do-not-reply", "do_not_reply",
-    "info", "contact", "support", "help", "hello",
-    "sales", "marketing", "hr", "careers", "jobs",
-    "admin", "administrator", "webmaster", "postmaster",
-    "office", "team", "staff", "general",
-    "billing", "invoices", "payments", "accounts", "accounting",
-    "newsletter", "news", "updates", "notifications",
-    "feedback", "enquiries", "inquiries",
-    "service", "customerservice", "care", "dispatch",
-    "concierge", "reservation", "reservations", "booking", "bookings",
-    "rsvp", "registration", "club", "member", "members", "membership", "memberservices",
-    "optical", "photos", "equity", "futures",
-    "launch", "eat", "pbx", "alumni", "masters", "csi",
-    "studentinfo", "fintechsupport", "casasupport",
-}
-
-GENERIC_KEYWORDS = {
-    "support", "service", "noreply", "reply", "taskforce",
-    "insurance", "verification", "recognition",
-}
-
-BUSINESS_NAME_KEYWORDS = {
-    "llc", "inc", "corp", "ltd", "team", "services", "service",
-    "spa", "optometry", "electronics", "insurance", "association",
-    "department", "office", "institute", "run", "discount", "massages",
-    "management", "concierge", "dispatch", "accounting", "task force",
-    "hawaii", "waikiki", "aruba", "support", "delivery",
-    "wines", "coffee", "mason", "security", "motors",
-}
-
-def is_likely_person_name(name: str) -> bool:
-    """Return True if the name looks like a real person (first + last)."""
-    if not name:
-        return False
-    clean = re.sub(r'\s*\([^)]*\)', '', name).strip()  # strip parentheticals like (LinkedIn Supplier)
-    clean = re.sub(r'^["\']|["\']$', '', clean).strip()
-    words = clean.split()
-    if len(words) < 2:
-        return False
-    if any(kw in clean.lower() for kw in BUSINESS_NAME_KEYWORDS):
-        return False
-    if '&' in clean:
-        return False
-    # All-caps or all-lower single tokens that aren't name-like
-    if clean == clean.upper() and len(words) <= 2:
-        return False
-    return True
-
-
-def is_generic_or_non_person(email: str) -> bool:
-    """Return True if the email looks like a role/service address, not a person."""
-    if not email or "@" not in email:
-        return True
-    local = email.split("@")[0].lower().strip()
-    # Strip plus-addressing
-    local = local.split("+")[0]
-    # Exact prefix match
-    if local in GENERIC_PREFIXES:
-        return True
-    # First segment match (e.g. customer.service@, no-reply@, info-mhi@)
-    base = re.split(r'[.\-_]', local)[0]
-    if base in GENERIC_PREFIXES:
-        return True
-    # Contains generic keyword anywhere
-    for kw in GENERIC_KEYWORDS:
-        if kw in local:
-            return True
-    # Phone-number-like local parts
-    if re.match(r'^\d{7,}$', local):
-        return True
-    # Single character local parts
-    if len(local) <= 1:
-        return True
-    # Local part is just digits (e.g. 2relaxinparadise is fine but pure digits aren't)
-    if re.match(r'^\d+$', local):
-        return True
-    return False

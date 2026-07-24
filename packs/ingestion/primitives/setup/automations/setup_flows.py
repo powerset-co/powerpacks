@@ -10,6 +10,8 @@ the defining submodule.
 Changelog:
   2026-07-23 (audit):
     - Extracted from the former fat cmd_* bodies in setup/msgvault_setup.py.
+  2026-07-23 (audit dedup): emit now imports from common.jsonio (was
+    automations.shell.emit, deleted there as a jsonio dup).
 """
 
 from __future__ import annotations
@@ -30,10 +32,8 @@ from packs.ingestion.primitives.setup.automations import (  # noqa: E402
     msgvault_home,
     oauth_browser,
 )
-from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
-    emit,
-    expand,
-)
+from packs.ingestion.primitives.setup.automations.shell import expand  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 
 
 def create_oauth_app_flow(

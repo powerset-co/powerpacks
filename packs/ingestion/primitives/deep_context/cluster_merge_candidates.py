@@ -23,6 +23,9 @@ Writes a full verdict log (merge-verdicts.csv) incl. rejections for auditability
 ``--no-llm`` falls back to deterministic scoring (offline/tests only).
 
 Outputs: merge-candidates.csv / .md + a "Possible same person" section per dossier.
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
 
@@ -60,10 +63,9 @@ from packs.ingestion.primitives.deep_context.common import (
     read_jsonl,
     load_env,
     normalize_name,
-    now_iso,
     phone_digits,
-    write_json,
 )
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 
 DEFAULT_CONFIDENCE = 0.7   # judge must be at least this confident to merge
 GATE_NAME_SIM = 0.85       # below this (and no shared contact) a pair isn't worth a call

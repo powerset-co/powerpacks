@@ -21,7 +21,7 @@ discover_gmail = importlib.import_module(
     "packs.ingestion.primitives.discover.gmail.discover"
 )
 discover_gmail_sync = importlib.import_module(
-    "packs.ingestion.primitives.discover.gmail.sync"
+    "packs.ingestion.primitives.discover.gmail.msgvault.sync"
 )
 common_proc = importlib.import_module(
     "packs.ingestion.primitives.common.proc"
@@ -317,7 +317,10 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                     }
                 }
             }), encoding="utf-8")
-            scratch_queue = tmp / "scratch" / "queue-me@example.com.csv"
+            # The real discover_engine child always writes to this fixed path
+            # (gmail_discover_dir); discover() reads it back from there, not from
+            # the payload, so the fixture must stage the queue at the same path.
+            scratch_queue = tmp / "discover" / "gmail" / "me-example.com" / "linkedin_resolution_queue.csv"
             write_csv(
                 scratch_queue,
                 discover_gmail.GMAIL_DISCOVERY_COLUMNS,
@@ -372,7 +375,10 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                     }
                 }
             }), encoding="utf-8")
-            scratch_queue = tmp / "scratch" / "queue-me@example.com.csv"
+            # The real discover_engine child always writes to this fixed path
+            # (gmail_discover_dir); discover() reads it back from there, not from
+            # the payload, so the fixture must stage the queue at the same path.
+            scratch_queue = tmp / "discover" / "gmail" / "me-example.com" / "linkedin_resolution_queue.csv"
             paths = {
                 ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
                 ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",

@@ -4,6 +4,15 @@ Paths, the merged-people reader, identity normalization (phone/email/name), the
 dossier slug scheme, the privacy gate, and small manifest/JSONL utilities. Kept
 dependency-light (stdlib + repo schema helpers) so every stage imports the same
 identity logic and nothing drifts.
+
+Changelog:
+  2026-07-23 (audit dedup): now_iso / write_json / plain normalize_email deleted
+    here and moved to the canonical common.jsonio / common.contact_fields homes.
+    normalize_email is re-imported (used internally by _collect_emails); now_iso
+    is re-imported purely so the off-limits review_web modules can keep importing
+    it from here. write_json has no such consumer and is not re-exported. The
+    compact `emit` (single-line JSON) is intentionally NOT folded — it differs
+    from jsonio's pretty emit.
 """
 from __future__ import annotations
 
@@ -13,7 +22,6 @@ import json
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -22,6 +30,10 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
+from packs.ingestion.primitives.common.contact_fields import normalize_email  # noqa: E402
+# now_iso is re-exported here so review_web/ (off-limits) keeps importing it from
+# deep_context.common; the canonical home is common.jsonio.
+from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402,F401
 
 # --- Fixed output layout (one dir, overwrite in place; no ledgers, no run ids) ---
 ROOT = Path(".powerpacks/deep-context")
@@ -64,10 +76,6 @@ IMESSAGE_CHANNEL = "imessage"
 WHATSAPP_CHANNEL = "whatsapp"
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def load_env() -> None:
     """Load the nearest .env so OPENAI_API_KEY etc. land in os.environ.
 
@@ -107,10 +115,6 @@ def phone_digits(raw: str) -> str:
     if len(digits) == 11 and digits.startswith("1"):
         return digits[1:]
     return digits
-
-
-def normalize_email(raw: str) -> str:
-    return (raw or "").strip().lower()
 
 
 def normalize_name(raw: str) -> str:
@@ -263,11 +267,6 @@ def owner_background_block(owner: dict[str, Any]) -> str:
     if owner.get("notes"):
         lines.append(f"- Notes: {owner['notes']}")
     return "\n".join(lines)
-
-
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
