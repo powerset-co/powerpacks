@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Merge/dedupe local network-import sources into one people schema CSV.
 
-Dedupe rule:
-1. Merge rows with the same LinkedIn public identifier / URL.
-2. Keep non-LinkedIn rows separate, but emit similar-name review pairs in
-   `possible_duplicates_review.csv` (similar names without shared LinkedIn are
-   never auto-merged).
+Dedupe rule: merge rows that share a LinkedIn public identifier / URL. Rows
+without one are emitted as themselves. `linkedin:<pub>` is the ONLY cross-source
+join signal that exists — Connections.csv carries no email/phone, gmail carries
+no phone, and messages carries no email — so this stage does not attempt person
+identity resolution. That belongs to `deep_context/cluster_merge_candidates.py`,
+which blocks on email AND phone AND name and has a deterministic slam-dunk rule.
+
+This stage is also the `realize` step: `bin/deep-context realize` shells to it,
+and `apply_overrides` is the only place deep-context's decisions (worth drops,
+detach/retarget, verification) reach `merged/people.csv`.
 
 Stdlib-only. Local artifacts only. No uploads or external API calls. Accepts
 only explicit `--input` paths — it never scans `.powerpacks` for run
@@ -21,10 +26,20 @@ Usage:
 
 Outputs under `.powerpacks/network-import/merged/`: canonical `people.csv`,
 `people_harmonic_all.merged.csv` (temporary compatibility alias),
-`network_contacts.csv`, `possible_duplicates_review.csv`, and
-`merge_manifest.json`.
+`network_contacts.csv`, and `merge_manifest.json`.
 
 Changelog:
+  2026-07-24 (fan-in subtraction): the stage stopped pretending to do identity
+    work. DELETED the similar-name reviewer (`similar_pairs`, `REVIEW_COLUMNS`,
+    `possible_duplicates_review.csv`, `--name-threshold`, the `review_pairs`
+    manifest key, the now-unused `normalize_name`) — nothing read that CSV and
+    `cluster_merge_candidates` does the same job properly, so its only effect was
+    stamping `needs_review=true` on 114 of 723 real rows and an O(n^2)
+    SequenceMatcher sweep every merge. `needs_review` stays a column (the
+    indexing contract reads it) and is now always "false". Also deleted the
+    unreachable tail of `stable_source_key` (the `twitter:`/`id:`/`name:` tiers)
+    and the dead `singletons` branch of `build_groups`. LinkedIn grouping and the
+    email/phone keys were KEPT — see stable_source_key and build_groups for why.
   2026-07-24: Admission is identity, not enrichment. keep_people_csv_row now keeps
     a row with a stable LinkedIn key OR a usable email OR a usable phone; the
     RapidAPI-payload requirement (usable_rapidapi_payload / has_rapidapi_profile)
@@ -57,7 +72,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import difflib
 import json
 import re
 import shutil
@@ -100,7 +114,6 @@ INTERACTION_MERGE_COLUMNS = {"interaction_counts", "last_interaction"}
 # column, superseded_person_ids, has NO primary — it must never seed from, or
 # promote into, a contact field.
 LIST_COLUMN_PRIMARY = {"all_emails": "primary_email", "all_phones": "primary_phone"}
-REVIEW_COLUMNS = ["left_id", "right_id", "left_name", "right_name", "similarity", "left_sources", "right_sources", "reason"]
 NETWORK_CONTACT_COLUMNS = [
     "contact_id",
     "merge_key",
@@ -139,14 +152,6 @@ MAX_SOURCE_ARTIFACTS_PER_ROW = 12
 MAX_SOURCE_ARTIFACT_TEXT = 4096
 
 
-
-
-def normalize_name(value: str) -> str:
-    value = (value or "").lower()
-    value = re.sub(r"\([^)]*\)", " ", value)
-    value = re.sub(r"[^a-z0-9 ]+", " ", value)
-    parts = [p for p in value.split() if p not in {"jr", "sr", "ii", "iii", "phd", "mba", "md"}]
-    return " ".join(parts)
 
 
 def row_name(row: dict[str, str]) -> str:
@@ -437,6 +442,28 @@ def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, A
 
 
 def stable_source_key(row: dict[str, str]) -> str:
+    """The group key for a row with NO LinkedIn identity.
+
+    This can never join two SOURCES, and it is not trying to: Connections.csv
+    carries no email/phone, gmail carries no phone, messages carries no email, so
+    `linkedin:<pub>` is the only cross-source join signal that exists. Measured on
+    the real three-source fan-in: 926 input rows -> 765 groups, and every one of
+    the 129 multi-row groups is a `linkedin:` group. Zero non-LinkedIn groups hold
+    more than one row.
+
+    What email/phone DO buy is idempotence when the stage is fed its own previous
+    `merged/people.csv` alongside the per-source files — the
+    `--include-existing-artifacts` path in `index_contacts_pipeline`, which is on
+    by default and triggers whenever one of gmail/linkedin/messages is missing. A
+    contact-only person then arrives twice (source row + merged row) with no
+    LinkedIn to join on; these keys collapse the pair instead of duplicating it.
+
+    The terminal content hash only gives an identity-less row a group of its own.
+    Such a row has no LinkedIn key, no email and no phone, so
+    `keep_people_csv_row` drops it moments later — which is why the old
+    `twitter:`/`id:`/`name:` tiers below this point were deleted: they could only
+    ever key rows that never reach the output.
+    """
     for email in [row.get("primary_email", ""), *listish_values(row.get("all_emails", ""))]:
         email = normalize_email(email)
         if email:
@@ -445,16 +472,6 @@ def stable_source_key(row: dict[str, str]) -> str:
         phone = normalize_phone(phone)
         if phone:
             return f"phone:{phone}"
-    handle = (row.get("twitter_handle") or "").strip().lower().lstrip("@")
-    if handle:
-        return f"twitter:{handle}"
-    source_id = (row.get("id") or "").strip()
-    if source_id and not source_id.startswith("merged:"):
-        return f"id:{source_id}"
-    name = normalize_name(row_name(row))
-    channel = ",".join(row_source_channels(row))
-    if name:
-        return f"name:{short_hash(channel + ':' + name, 16)}"
     return f"row:{short_hash(json.dumps({col: row.get(col, '') for col in PEOPLE_SCHEMA_COLUMNS if col != 'source_artifacts'}, sort_keys=True), 16)}"
 
 
@@ -702,45 +719,15 @@ def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
     return merged
 
 
-def build_groups(rows: list[dict[str, str]]) -> tuple[dict[str, list[dict[str, str]]], list[dict[str, str]]]:
+def build_groups(rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+    """Bucket every row under its merge key: `linkedin:<pub>` when it has one,
+    otherwise stable_source_key. Both always return a key, so every row lands in a
+    group and there is no keyless leftover set (the old `singletons` return was
+    dead — measured 0 rows on the real fan-in and unreachable by construction)."""
     groups: dict[str, list[dict[str, str]]] = {}
-    singletons: list[dict[str, str]] = []
     for row in rows:
-        key = stable_linkedin_key(row) or stable_source_key(row)
-        if key:
-            groups.setdefault(key, []).append(row)
-        else:
-            singletons.append(row)
-    return groups, singletons
-
-
-def similar_pairs(rows: list[dict[str, Any]], threshold: float) -> list[dict[str, Any]]:
-    review: list[dict[str, Any]] = []
-    named = [(i, normalize_name(row_name(r)), r) for i, r in enumerate(rows) if normalize_name(row_name(r))]
-    for i in range(len(named)):
-        _, left_name, left = named[i]
-        for j in range(i + 1, len(named)):
-            _, right_name, right = named[j]
-            if left.get("merge_key") == right.get("merge_key"):
-                continue
-            if not left_name or not right_name:
-                continue
-            ratio = difflib.SequenceMatcher(None, left_name, right_name).ratio()
-            exact_parts = set(left_name.split()) == set(right_name.split()) and len(left_name.split()) >= 2
-            if ratio >= threshold or exact_parts:
-                left["needs_review"] = "true"
-                right["needs_review"] = "true"
-                review.append({
-                    "left_id": left.get("id", ""),
-                    "right_id": right.get("id", ""),
-                    "left_name": row_name(left),
-                    "right_name": row_name(right),
-                    "similarity": round(ratio, 3),
-                    "left_sources": left.get("source_channels", ""),
-                    "right_sources": right.get("source_channels", ""),
-                    "reason": "similar_name_no_shared_linkedin",
-                })
-    return review
+        groups.setdefault(stable_linkedin_key(row) or stable_source_key(row), []).append(row)
+    return groups
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -771,26 +758,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         rows = load_people_file(path)
         all_rows.extend(rows)
         per_file[str(path)] = len(rows)
-    groups, singletons = build_groups(all_rows)
+    groups = build_groups(all_rows)
     merged_rows: list[dict[str, Any]] = []
     source_rows: list[dict[str, Any]] = []
     for key, rows in sorted(groups.items()):
         merged = merge_group(key, rows)
         merged_rows.append(merged)
         source_rows.extend(source_fact_rows(merged, rows))
-    for row in singletons:
-        normalized = normalize_people_row(row)
-        normalized.update({
-            "merge_key": stable_source_key(normalized),
-            "merge_confidence": "0.0",
-            "merge_sources": normalized.get("source_channels", ""),
-            "merged_row_count": 1,
-            "needs_review": "false",
-        })
-        if not normalized.get("id"):
-            normalized["id"] = f"merged:{short_hash(normalized['merge_key'])}"
-        merged_rows.append(normalized)
-        source_rows.extend(source_fact_rows(normalized, [normalized]))
     # Re-apply the durable self-heal override BEFORE the keep-filter: a `detach` clears
     # the wrong link (the person stays on their email/phone); a `verify` annotates the row.
     overrides = load_overrides(override_path)
@@ -803,18 +777,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     people_with_linkedin = sum(1 for row in merged_rows if stable_linkedin_key(row))
     kept_merge_keys = {row.get("merge_key", "") for row in merged_rows}
     source_rows = [row for row in source_rows if row.get("merge_key", "") in kept_merge_keys]
-    review = similar_pairs(merged_rows, args.name_threshold)
     output_dir = Path(args.output_dir)
     output = output_dir / "people.csv"
     legacy_output = output_dir / "people_harmonic_all.merged.csv"
-    review_path = output_dir / "possible_duplicates_review.csv"
     network_contacts_path = output_dir / "network_contacts.csv"
     network_contact_sources_path = output_dir / "network_contact_sources.csv"
     network_companies_path = output_dir / "network_companies.csv"
     manifest = output_dir / "merge_manifest.json"
     CsvIO.write_dict_rows(output, MERGED_COLUMNS, merged_rows)
     shutil.copyfile(output, legacy_output)
-    CsvIO.write_dict_rows(review_path, REVIEW_COLUMNS, review)
     CsvIO.write_dict_rows(network_contacts_path, NETWORK_CONTACT_COLUMNS, [network_contact_row(row) for row in merged_rows])
     CsvIO.write_dict_rows(network_contact_sources_path, NETWORK_CONTACT_SOURCE_COLUMNS, source_rows)
     company_rows = network_company_rows(merged_rows)
@@ -838,7 +809,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         "worth_dropped_person_ids": override_stats["worth_dropped_person_ids"],
         "merged_rows": len(merged_rows),
         "linkedin_groups": len(groups),
-        "review_pairs": len(review),
         "source_rows": len(source_rows),
         "company_rows": len(company_rows),
         "output": str(output),
@@ -860,7 +830,6 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run")
     run.add_argument("--input", action="append", help="Input people.csv, people_harmonic_all.csv, or messages contacts.csv; repeatable. No filesystem discovery is performed.")
     run.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
-    run.add_argument("--name-threshold", type=float, default=0.92)
     # Defaults are None -> resolved to <output-dir>/../overrides/<file> at run time; '' disables.
     run.add_argument("--overrides", default=None,
                      help="Self-heal override CSV (detach/verify/retarget per public_identifier); defaults to the overrides/ sibling of --output-dir, '' to disable.")

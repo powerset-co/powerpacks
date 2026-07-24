@@ -296,7 +296,6 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
             "network_contact_sources.csv",
             "network_companies.csv",
             "merge_manifest.json",
-            "possible_duplicates_review.csv",
         ]:
             src = source_dir / name
             if src.exists():
