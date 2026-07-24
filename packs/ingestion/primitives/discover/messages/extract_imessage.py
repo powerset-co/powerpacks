@@ -20,6 +20,14 @@ writes a manifest with diagnostics so the harness can continue and an agent
 can patch the primitive.
 
 Changelog:
+  2026-07-24 (shared IO): the local raw-``csv.writer`` and hand-rolled JSONL
+    writers were dropped for the shared ones — the CSV goes through the
+    discover-stage ``write_csv_rows`` (LF terminators, unchanged-bytes writes
+    skipped) and the JSONL through ``common.jsonio.write_jsonl``.
+    ``contact_to_csv_row`` now returns a ``CSV_HEADERS``-keyed dict instead of a
+    positional list; the column order and cell values are unchanged. Output line
+    endings move from CRLF to LF (the gitignored derived artifacts are rewritten
+    once); every other byte is identical.
   2026-07-23 (cmd inline): the ``cmd_check``/``cmd_extract``/
     ``cmd_open_privacy_settings`` dispatchers were inlined into ``main`` (an
     ``if args.command == ...`` chain replaces ``set_defaults(func=)`` +
@@ -42,7 +50,6 @@ Changelog:
 from __future__ import annotations
 
 import argparse
-import csv
 import glob
 import json
 import re
@@ -62,8 +69,14 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.contact_fields import canonicalize_phone  # noqa: E402
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import (  # noqa: E402
+    emit,
+    now_iso,
+    write_json,
+    write_jsonl as write_jsonl_rows,
+)
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
+from packs.ingestion.primitives.discover.common import write_csv_rows  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 
 
@@ -349,28 +362,33 @@ def build_contacts(
     )
 
 
-def contact_to_csv_row(contact: Contact) -> list[str]:
-    return [
-        contact.phone,
-        contact.name,
-        contact.source,
-        str(contact.is_in_group_chats).lower(),
-        GROUP_SEPARATOR.join(contact.group_names or []),
-        str(contact.message_count) if contact.message_count is not None else "",
-        str(contact.message_count) if contact.message_count is not None else "",
-        "",
-        contact.last_message or "",
-        contact.last_message or "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-    ]
+def contact_to_csv_row(contact: Contact) -> dict[str, str]:
+    """One contact as a `CSV_HEADERS`-keyed row. iMessage owns only the
+    `imessage_*` per-channel cells; the whatsapp and match columns stay empty for
+    the import stage to fill."""
+    message_count = str(contact.message_count) if contact.message_count is not None else ""
+    last_message = contact.last_message or ""
+    return {
+        "phone": contact.phone,
+        "name": contact.name,
+        "source": contact.source,
+        "is_in_group_chats": str(contact.is_in_group_chats).lower(),
+        "group_names": GROUP_SEPARATOR.join(contact.group_names or []),
+        "message_count": message_count,
+        "imessage_message_count": message_count,
+        "whatsapp_message_count": "",
+        "last_message": last_message,
+        "imessage_last_message": last_message,
+        "whatsapp_last_message": "",
+        "skip": "",
+        "match_status": "",
+        "matched_person_id": "",
+        "matched_name": "",
+        "matched_linkedin_url": "",
+        "match_confidence": "",
+        "match_method": "",
+        "match_reason": "",
+    }
 
 
 def contact_to_json(contact: Contact) -> dict[str, Any]:
@@ -400,19 +418,14 @@ def contact_to_json(contact: Contact) -> dict[str, Any]:
 
 
 def write_csv(path: Path, contacts: list[Contact]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(CSV_HEADERS)
-        for contact in contacts:
-            writer.writerow(contact_to_csv_row(contact))
+    """Write the message-contact CSV through the discover-stage writer, so an
+    unchanged rerun leaves the file (and its mtime) alone."""
+    write_csv_rows(path, CSV_HEADERS, [contact_to_csv_row(contact) for contact in contacts])
 
 
 def write_jsonl(path: Path, contacts: list[Contact]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for contact in contacts:
-            handle.write(json.dumps(contact_to_json(contact), sort_keys=True) + "\n")
+    """Write the message-contact JSONL through the shared newline-delimited writer."""
+    write_jsonl_rows(path, (contact_to_json(contact) for contact in contacts))
 
 
 def failure_manifest(

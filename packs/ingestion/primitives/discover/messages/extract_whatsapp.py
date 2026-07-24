@@ -25,6 +25,15 @@ WhatsApp channel. Readiness (`status`) and the re-link (`logout`) flows stay on
 the client (`whatsapp_wacli.py status`/`logout`).
 
 Changelog:
+- 2026-07-24 (shared IO): the local raw-`csv.DictWriter` and hand-rolled JSONL
+  writers were dropped for the shared ones — the CSV goes through the
+  discover-stage `write_csv_rows` (LF terminators, unchanged-bytes writes
+  skipped) and the JSONL through `common.jsonio.write_jsonl`. The per-contact
+  row shapes moved out of the writers into `contact_to_csv_row` /
+  `contact_to_json`, mirroring `extract_imessage`; cell values, column order,
+  and the returned row counts are unchanged. Output line endings move from CRLF
+  to LF (the gitignored derived artifacts are rewritten once); every other byte
+  is identical.
 - 2026-07-23 (cmd inline): the `cmd_run`/`cmd_export` dispatchers were inlined
   into `main` (an `if args.command == ...` chain replaces `set_defaults(func=)` +
   `args.func`). `run` constructs `WhatsAppExtractor`, calls `run`, emits, and
@@ -47,7 +56,6 @@ Changelog:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import sqlite3
@@ -64,7 +72,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import (  # noqa: E402
+    emit,
+    now_iso,
+    write_json,
+    write_jsonl as write_jsonl_rows,
+)
+from packs.ingestion.primitives.discover.common import write_csv_rows  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 from packs.ingestion.primitives.discover.messages.whatsapp_wacli import (  # noqa: E402
@@ -446,68 +460,77 @@ def sorted_contacts(contacts: dict[str, Contact]) -> list[Contact]:
     )
 
 
+def contact_to_csv_row(contact: Contact) -> dict[str, str]:
+    """One contact as a `CSV_HEADERS`-keyed row. WhatsApp owns only the
+    `whatsapp_*` per-channel cells; the imessage and match columns stay empty for
+    the import stage to fill."""
+    message_count = "" if contact.message_count is None else str(contact.message_count)
+    last_message = contact.last_message or ""
+    return {
+        "phone": contact.phone,
+        "name": contact.name,
+        "source": contact.source,
+        "is_in_group_chats": "true" if contact.is_in_group_chats else "false",
+        "group_names": serialize_groups(contact.group_names),
+        "message_count": message_count,
+        "imessage_message_count": "",
+        "whatsapp_message_count": message_count,
+        "last_message": last_message,
+        "imessage_last_message": "",
+        "whatsapp_last_message": last_message,
+        "skip": "",
+        "match_status": "",
+        "matched_person_id": "",
+        "matched_name": "",
+        "matched_linkedin_url": "",
+        "match_confidence": "",
+        "match_method": "",
+        "match_reason": "",
+    }
+
+
+def contact_to_json(contact: Contact) -> dict[str, Any]:
+    """One contact as the JSONL record: typed nulls/booleans where the CSV uses
+    empty cells, and the match block the import stage later fills in."""
+    return {
+        "phone": contact.phone,
+        "name": contact.name,
+        "sources": [contact.source],
+        "is_in_group_chats": contact.is_in_group_chats,
+        "group_names": sorted(contact.group_names, key=str.casefold),
+        "message_count": contact.message_count,
+        "imessage_message_count": None,
+        "whatsapp_message_count": contact.message_count,
+        "last_message": contact.last_message,
+        "imessage_last_message": None,
+        "whatsapp_last_message": contact.last_message,
+        "skip": False,
+        "match": {
+            "status": None,
+            "person_id": None,
+            "name": None,
+            "linkedin_url": None,
+            "confidence": None,
+            "method": None,
+            "reason": None,
+        },
+    }
+
+
 def write_csv(path: Path, contacts: dict[str, Contact]) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Write the message-contact CSV through the discover-stage writer, so an
+    unchanged rerun leaves the file (and its mtime) alone. Returns the row count."""
     rows = sorted_contacts(contacts)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_HEADERS)
-        writer.writeheader()
-        for contact in rows:
-            writer.writerow({
-                "phone": contact.phone,
-                "name": contact.name,
-                "source": contact.source,
-                "is_in_group_chats": "true" if contact.is_in_group_chats else "false",
-                "group_names": serialize_groups(contact.group_names),
-                "message_count": "" if contact.message_count is None else str(contact.message_count),
-                "imessage_message_count": "",
-                "whatsapp_message_count": "" if contact.message_count is None else str(contact.message_count),
-                "last_message": contact.last_message or "",
-                "imessage_last_message": "",
-                "whatsapp_last_message": contact.last_message or "",
-                "skip": "",
-                "match_status": "",
-                "matched_person_id": "",
-                "matched_name": "",
-                "matched_linkedin_url": "",
-                "match_confidence": "",
-                "match_method": "",
-                "match_reason": "",
-            })
+    write_csv_rows(path, CSV_HEADERS, [contact_to_csv_row(contact) for contact in rows])
     return len(rows)
 
 
 def write_jsonl(path: Path | None, contacts: dict[str, Contact]) -> int:
+    """Write the message-contact JSONL through the shared newline-delimited
+    writer, returning the row count. A `None` path means the caller opted out."""
     if path is None:
         return 0
-    path.parent.mkdir(parents=True, exist_ok=True)
-    rows = sorted_contacts(contacts)
-    with path.open("w", encoding="utf-8") as handle:
-        for contact in rows:
-            handle.write(json.dumps({
-                "phone": contact.phone,
-                "name": contact.name,
-                "sources": [contact.source],
-                "is_in_group_chats": contact.is_in_group_chats,
-                "group_names": sorted(contact.group_names, key=str.casefold),
-                "message_count": contact.message_count,
-                "imessage_message_count": None,
-                "whatsapp_message_count": contact.message_count,
-                "last_message": contact.last_message,
-                "imessage_last_message": None,
-                "whatsapp_last_message": contact.last_message,
-                "skip": False,
-                "match": {
-                    "status": None,
-                    "person_id": None,
-                    "name": None,
-                    "linkedin_url": None,
-                    "confidence": None,
-                    "method": None,
-                    "reason": None,
-                },
-            }, sort_keys=True) + "\n")
-    return len(rows)
+    return write_jsonl_rows(path, (contact_to_json(contact) for contact in sorted_contacts(contacts)))
 
 
 def completed_payload(
