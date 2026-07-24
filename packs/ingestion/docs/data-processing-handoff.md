@@ -81,13 +81,26 @@ work_experiences, education, current_title, current_company,
 current_company_urn, entity_urn, enrichment_provider, enriched_at,
 harmonic_response, harmonic_location, rapidapi_response, twitter_handle,
 twitter_response, primary_email, all_emails, primary_phone, all_phones,
-source_channels, source_artifacts
+source_channels, source_artifacts, superseded_person_ids,
+interaction_counts, last_interaction, enrichment_status, enrichment_error
 ```
+
+Every column is optional on read. A `people.csv` written before a column
+existed simply lacks it, and `normalize_people_row` fills the gap with `""`;
+`packs/indexing/lib/contracts.py::OPTIONAL_PEOPLE_SCHEMA_COLUMNS` keeps those
+newer columns out of the validator's hard-error path.
+
+`enrichment_status` is `enriched` / `failed` / `skipped` (blank when no
+enrichment run has touched the row), and `enrichment_error` carries the provider
+reason for a failed row. Enrichment annotates a row it could not hydrate rather
+than dropping it, so "the provider rate-limited us" stays distinguishable from
+"never attempted".
 
 Merge adds these columns to merged `people.csv`:
 
 ```txt
-merge_key, merge_confidence, merge_sources, merged_row_count, needs_review
+merge_key, merge_confidence, merge_sources, merged_row_count, needs_review,
+linkedin_verified, linkedin_verified_confidence, linkedin_verified_reason
 ```
 
 ### `network_contacts.csv`

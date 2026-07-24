@@ -16,6 +16,9 @@ enrich_people orchestrator, deep-context retargeting, tests).
   education; stamps enrichment provenance).
 - `confirmed_people_row` — the people.csv confirmation predicate (LinkedIn
   identifier + successful rapidapi_response).
+- `stamp_enrichment_outcome` / `provider_failure_reason` — the ONLY writer of the
+  shared schema's `enrichment_status` / `enrichment_error` columns, and the one
+  place a provider failure is turned into human-readable text.
 - `generate_person_id` — LinkedIn person id with a stable-key fallback.
 
 Company identity: work experiences preserve `rapidapi_company_id`,
@@ -24,6 +27,10 @@ Company identity: work experiences preserve `rapidapi_company_id`,
 `current_company_urn` is a legacy shared-schema field not populated here.
 
 Changelog:
+  2026-07-24: added `stamp_enrichment_outcome` / `provider_failure_reason`;
+    `merge_provider_profile` now stamps `enrichment_status`/`enrichment_error`
+    on every row it returns, so a row the provider could not hydrate is
+    annotated instead of silently dropped downstream.
   2026-07-23 (audit decomposition): split out of enrich_people.py verbatim,
     minus the dead `split_name` (its only real consumer imports the
     discover/gmail/msgvault copy).
@@ -46,6 +53,9 @@ from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.schemas.company_identity import rapidapi_experience_to_powerpacks  # noqa: E402
 from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    ENRICHMENT_STATUS_ENRICHED,
+    ENRICHMENT_STATUS_FAILED,
+    ENRICHMENT_STATUS_SKIPPED,
     extract_public_identifier,
     generate_person_id as generate_linkedin_person_id,
     normalize_linkedin_url,
@@ -53,6 +63,10 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     parse_jsonish,
     stable_person_id_from_key,
 )
+
+# Longest provider error text kept on a people row. The full text stays in the
+# stage's raw_provider_responses/ payloads; this column is a human-readable hint.
+MAX_ENRICHMENT_ERROR_CHARS = 300
 
 
 def generate_person_id(public_identifier: str, fallback: str = "") -> str:
@@ -176,6 +190,10 @@ def route_row(row: dict[str, str], force: bool = False) -> tuple[str, str]:
 
 
 def merge_provider_profile(base: dict[str, Any], rapid: dict[str, Any], rapid_raw: dict[str, Any] | None) -> dict[str, Any]:
+    # Read the provider outcome BEFORE normalizing: the rapidapi_* status columns
+    # live on the provider_enriched row, not in the shared people schema, so
+    # normalize_people_row is about to drop them.
+    failure_reason = provider_failure_reason(base)
     base = normalize_people_row(base)
     public_identifier = base.get("public_identifier") or rapid.get("public_identifier") or extract_public_identifier(base.get("linkedin_url") or rapid.get("linkedin_url") or "")
     row: dict[str, Any] = dict(base)
@@ -203,7 +221,7 @@ def merge_provider_profile(base: dict[str, Any], rapid: dict[str, Any], rapid_ra
     else:
         row["linkedin_url"] = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
         row["enrichment_provider"] = row.get("enrichment_provider") or "existing_only"
-    return normalize_people_row(row)
+    return stamp_enrichment_outcome(normalize_people_row(row), attempted=True, error=failure_reason)
 
 
 def confirmed_people_row(row: dict[str, Any]) -> bool:
@@ -213,3 +231,40 @@ def confirmed_people_row(row: dict[str, Any]) -> bool:
         return False
     raw = parse_jsonish(row.get("rapidapi_response"), None)
     return isinstance(raw, dict) and normalize_linkedin_profile(raw).get("success") is True
+
+
+def provider_failure_reason(row: dict[str, Any]) -> str:
+    """Human-readable reason text from a provider/cache row's `rapidapi_error` +
+    `rapidapi_status_code` columns (both the provider_enriched and the
+    recent-failures CSVs carry them). Empty when the row records no failure."""
+    error = str(row.get("rapidapi_error") or "").strip()
+    status = str(row.get("rapidapi_status_code") or "").strip()
+    if error and status and status != "200":
+        return f"rapidapi {status}: {error}"
+    if error:
+        return error
+    if status and status != "200":
+        return f"rapidapi status {status}"
+    return ""
+
+
+def stamp_enrichment_outcome(row: dict[str, Any], *, attempted: bool, error: str = "") -> dict[str, Any]:
+    """Record this run's terminal enrichment outcome on a people row and return it.
+
+    The ONE writer of `enrichment_status` / `enrichment_error`. A row carrying a
+    usable provider payload is `enriched`; otherwise it is `failed` when the
+    provider was consulted this run (including a fetch suppressed by a cached
+    prior failure, where `error` is the cached reason) and `skipped` when it was
+    not. The stamp is recomputed from scratch every run, so a stale status from a
+    previous people.csv never survives — nothing here deletes the row, which is
+    the point: a failure is annotation, not erasure."""
+    if confirmed_people_row(row):
+        row["enrichment_status"] = ENRICHMENT_STATUS_ENRICHED
+        row["enrichment_error"] = ""
+    elif attempted:
+        row["enrichment_status"] = ENRICHMENT_STATUS_FAILED
+        row["enrichment_error"] = str(error or "enrichment failed")[:MAX_ENRICHMENT_ERROR_CHARS]
+    else:
+        row["enrichment_status"] = ENRICHMENT_STATUS_SKIPPED
+        row["enrichment_error"] = ""
+    return row

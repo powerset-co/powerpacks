@@ -32,11 +32,18 @@ class IndexingScaffoldTests(unittest.TestCase):
         self.assertEqual(task_json["inputs"]["people_csv"], str(CANONICAL_PEOPLE_CSV))
 
     def test_contract_accepts_fixture_people_csv(self) -> None:
+        # The fixture predates enrichment_status/enrichment_error, exactly like
+        # every people.csv already on a user's disk. Newer schema columns are
+        # OPTIONAL: their absence is a warning, never an error, and the file
+        # still validates.
         result = validate_people_csv(FIXTURE_PEOPLE)
         self.assertTrue(result.ok, result.as_dict())
         self.assertEqual(result.row_count, 4)
         self.assertEqual(result.errors, [])
-        self.assertEqual(result.warnings, ["rows with weak generated identity: 1"])
+        self.assertEqual(result.warnings, [
+            "missing optional people schema columns: enrichment_error, enrichment_status",
+            "rows with weak generated identity: 1",
+        ])
         self.assertIn("id", result.columns)
         self.assertIn("needs_review", result.columns)
 
