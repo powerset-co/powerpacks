@@ -233,7 +233,7 @@ def classify_queue(links: list[dict[str, str]], cache_dir: Path) -> dict[str, li
       LLM cost must be projected in the dry run.
     - After the fetch, a person whose fetch FAILED is now ``cached`` but not
       summarizable, so they drop OUT of the summary-miss set and never reach the
-      LLM (the hallucination guard — no "Jackson Ding is a professional at a
+      LLM (the hallucination guard — no "Jordan Bravo is a professional at a
       company" filler for a bad-URL fetch).
     - An already-summarized person is never a miss.
 
