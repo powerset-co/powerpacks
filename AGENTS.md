@@ -84,7 +84,7 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
   incrementality, and dedup mostly already exist. Gmail/msgvault is already
   resumable: compute the latest synced message, pass `--after`, sync, update —
   see `infer_msgvault_sync_after` in
-  `discover/gmail/sync.py`. Do not build a new resume mechanism on
+  `discover/gmail/msgvault/sync.py`. Do not build a new resume mechanism on
   top of it.
 - **Orchestrate the per-source discover/import primitives directly.** Chain the
   existing `discover/<source>/` and
@@ -99,6 +99,134 @@ Hard rules for any ingestion/discovery/enrichment/indexing change:
 When in doubt, do the smaller thing: fewer files, fewer concepts, one
 directory, one manifest. If you think a change genuinely needs more machinery
 than this, stop and ask the user before building it.
+
+---
+
+## Development ground rules
+
+Distilled from the 2026-07 ingestion audit (absorbs the former root
+`HYGIENE.md`). These are how code in this repo is written, moved, and deleted.
+The examples are ingestion-flavored but the rules apply repo-wide.
+
+### Structure — primitives match stages, one concern per file
+
+- Pipeline packages mirror the stages: `discover/`, `imports/`, `enrich/`,
+  `deep_context/`, `logbook/`, `setup/`, with per-vertical subpackages
+  (`gmail/`, `messages/`, `linkedin/`, `twitter/`) and a vertical-local
+  `util.py`. No flat primitive dumps. A file that belongs to another stage is
+  misfiled even if it works — move it (`imports/gmail/import_steps.py` and
+  `imports/directory.py` were both discover-stage squatters once).
+- Naming is symmetric across verticals: `extract_<source>.py` reads a raw local
+  store into contacts (`extract_imessage`, `extract_whatsapp`, `extract_gmail`);
+  the external-binary lifecycle client is a separate module
+  (`whatsapp_wacli.py` for the wacli binary, `gmail/msgvault/sync.py` for the
+  msgvault binary). Reader and binary-client never share a file.
+- Large drivers decompose into a clearly-named subpackage of ~200–300-line
+  single-concern modules (`setup/automations/`, `gmail/msgvault/`,
+  `imports/gmail/steps/`, `discover/messages/channels/`); the original CLI path
+  stays a thin entry so skill commands never change.
+
+### The orchestrator pattern (channel + store)
+
+- A **channel/step class** owns its fixed output paths (plain instance
+  attributes set in `__init__` — never `@property` stubs or call-time constant
+  reads added "so tests can patch") and its step chain, recording contributions
+  on `self.artifacts`. A **store/orchestrator class** owns the output dir (one
+  mkdir), the run loop (stop at first blocked/failed payload), and the typed
+  stage manifest. Copy this *shape* per vertical; do NOT extract a base class
+  unless method bodies are genuinely identical — a base that owns a 3-line loop
+  is ceremony.
+- **Construct-and-run.** The class constructor resolves its own config; callers
+  do `GmailDiscovery(account_emails=[...]).run()`. No `discover()`/`resolve()`
+  wrapper functions around a class you can init.
+- **CLI = thin argparse over the same class.** `main()` parses, constructs,
+  calls the method inline, `emit(payload)`, maps status → exit code. No
+  `cmd_*(args)` dispatcher functions, no `set_defaults(func=...)` indirection.
+  Every CLI entry keeps its `if __name__ == "__main__"` guard (skills invoke by
+  file path; a missing guard is a silent no-op).
+
+### In-process, never self-subprocess
+
+- **Never `run_cmd(py_cmd("<our own .py>"))`.** Our primitives are classes;
+  callers in the same repo import and call them, branching on the returned
+  payload's `status` — not on a subprocess exit code through a JSON pipe.
+- Subprocess is only for genuinely external things: the `msgvault` and `wacli`
+  binaries, `gcloud`, `qrencode`, macOS `open`, and Modal re-hosting.
+
+### Explicit inputs — no hidden registries
+
+- Selection and configuration are explicit CLI/caller arguments: gmail is a
+  repeatable `--account-email`, messages is `--include-imessage`/
+  `--include-whatsapp`. No state-file fallbacks. The `accounts.json` registry
+  died because nothing wrote most of it and nothing read the rest — if a config
+  layer has no writer or no reader, delete it; do not defend it with defaults.
+- One config door per primitive: a single resolver returning a frozen dataclass
+  with documented precedence (explicit override > config default). `| None`
+  params are inherit-sentinels only where a lower layer actually exists.
+- Spend gates are explicit flags, not state machines: `--approve-spend`, and a
+  `needs_approval` payload + exit 20 (`common/gates.py`) emitted BEFORE any
+  paid call. Resume comes from artifacts on disk (fixed paths, mtimes,
+  fingerprints), never from `approve`/`continue` ledger runners.
+
+### One home per concept
+
+- Generic helpers live once: `primitives/common/{jsonio,proc,paths,
+  contact_fields,gates,manifests}.py`; cross-stage contracts in
+  `packs/ingestion/schemas/`; CSV IO on `packs.shared.csv_io.CsvIO`. Before
+  writing a helper or a column list, grep for it — this repo once carried
+  `now_iso` ×11, `write_json` ×10, and a 33-function byte-identical fork.
+- Never leave compatibility shims or package-`__init__` re-export layers after
+  a move; update every call site (skills, tests, docs, bin, adapters,
+  `py_cmd`-style path strings) and finish with a zero-stale-reference grep.
+- Deliberately divergent variants are PINNED and documented at the definition:
+  the non-percent-decoding LinkedIn-id pair in `extract_gmail`, the
+  source-tuned `normalize_name` match keys, the fingerprinted-LF vs plain
+  writers, `bundle_evidence_fingerprint` (its serialization is a paid-cache
+  key — changing it silently re-bills every dossier). Don't "unify" them; say
+  why they diverge where they live.
+
+### Moving & deleting
+
+- Verify consumers by REAL imports/invocations (grep code, not doc mentions)
+  before keeping or deleting anything. Then delete dead code together with its
+  tests, doc rows, skill routes, adapter list entries, and config keys — a
+  retired skill also goes into every adapter's `RETIRED_SKILLS` scrub list.
+- Prefer wholesale deletion over surgical preservation of surfaces nobody uses
+  (the console app went as one cut). Git history is the archive; `.bkup` is for
+  data files only, never code.
+
+### Docstrings, docs, comments
+
+- Module docstrings state CURRENT behavior, present tense, with a terse
+  what-this-actually-does flow block for stage entries. Change history lives in
+  a dated module-top `Changelog:` block — never in function docstrings, never
+  as inline "we changed X" comments.
+- No `<file>.README.md` sidecars. At most one `README.md` per directory,
+  describing the directory: a mermaid data-flow plus a per-file
+  role/reads/writes table.
+- CLIs emit JSON; progress is terse one-line stderr with a stable prefix.
+
+### Tests
+
+- Patch the concrete module/class where the thing is DEFINED, never a
+  re-export. Never add prod indirection to make patching easier — tests pass
+  explicit params (`out_dir=...`) instead.
+- Fixtures are obviously-synthetic (`Jordan Bravo`, `casey@example.com`,
+  `+15550100`); never real contact PII, in code or in git history.
+- After a structural refactor, lock behavior with a REAL run: execute the
+  actual skill flow against real local data (a worktree gives you a free
+  cold-start environment) and diff the outputs against the previous run —
+  byte-identical, or every delta explained. Fast iteration is compile +
+  targeted suites; full CI gates the merge.
+
+### Working the repo
+
+- Fan mechanical work out to sub-agents with disjoint file ownership; each
+  agent reads this section first; the parent verifies the combined tree,
+  runs the affected suites, and commits. Serialize agents whose scopes touch
+  the same files.
+- Conventional commits; `BREAKING CHANGE:` when a CLI/contract changes. Write
+  the subject as what changed, not which internal batch produced it.
 
 ---
 
