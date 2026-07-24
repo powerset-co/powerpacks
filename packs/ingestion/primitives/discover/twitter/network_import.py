@@ -1065,6 +1065,24 @@ def _can_adopt_signature(
         return False
     if any(not (out_dir / name).is_file() for name in (*spec.inputs, *_step_outputs(spec, cfg))):
         return False
+    fingerprints = previous.get("fingerprints")
+    prior_outputs = fingerprints.get("output_artifacts") if isinstance(fingerprints, dict) else None
+    if not isinstance(prior_outputs, dict):
+        return False
+
+    def matches_prior(name: str, current: dict[str, Any]) -> bool:
+        prior = prior_outputs.get(str(out_dir / name))
+        return (
+            isinstance(prior, dict)
+            and prior.get("exists") is True
+            and prior.get("size") == current.get("size")
+            and prior.get("sha256") == current.get("sha256")
+        )
+
+    if any(not matches_prior(name, current_signature["inputs"][name]) for name in spec.inputs):
+        return False
+    if any(not matches_prior(name, current_signature["outputs"][name]) for name in _step_outputs(spec, cfg)):
+        return False
     expected_config = current_signature["config"]
     if inline_signature is not None:
         if inline_signature.get("config") != expected_config:

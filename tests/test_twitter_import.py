@@ -314,6 +314,78 @@ class TwitterNetworkImportTests(unittest.TestCase):
             self.assertTrue(all("outputs" in signature for signature in upgraded["step_signatures"].values()))
             self.assertTrue(all(step["status"] == "cached" for step in upgraded["steps"].values()))
 
+    def test_legacy_config_change_cannot_adopt_inconsistent_downstream(self):
+        followers = [
+            {
+                "handle": "zero", "display_name": "Zero Signal", "bio": "", "follower_count": 0,
+                "following_count": 1, "verified": False, "location": "", "website_url": "",
+                "twitter_user_id": "1",
+            },
+            {
+                "handle": "site", "display_name": "Site Signal", "bio": "", "follower_count": 0,
+                "following_count": 1, "verified": False, "location": "", "website_url": "https://example.com",
+                "twitter_user_id": "2",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp, patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), \
+             self.fake_providers(), patch.object(self.mod, "twitter_followers_page", return_value=(followers, "", {}, 200, "")):
+            config_a = [
+                "run", "--handle", "operator", "--min-score", "0",
+                "--moe-model", "model-a", "--moe-experts", "deep_tech",
+            ]
+            self.assertEqual(self.call_main([*config_a, "--approve-spend"]), 0)
+            manifest = self.manifest(tmp)
+            manifest.pop("step_signatures")
+            for step in manifest["steps"].values():
+                step.pop("signature", None)
+            self.mod.write_json(Path(tmp) / "operator" / "manifest.json", manifest)
+
+            config_b = [
+                "run", "--handle", "operator", "--min-score", "1",
+                "--moe-model", "model-a", "--moe-experts", "deep_tech",
+            ]
+            self.assertEqual(self.call_main(config_b), 20)
+            blocked = self.manifest(tmp)
+            self.assertEqual(blocked["steps"]["score_candidates"]["status"], "completed")
+            self.assertEqual(blocked["needs_approval"]["step"], "moe_evaluate")
+            self.assertNotIn("pre_resolve_linkedin", blocked["steps"])
+
+    def test_inline_signature_migration_rejects_corrupted_companion_output(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), self.fake_providers():
+            args = ["run", "--handle", "operator", "--min-score", "0", "--limit", "1", "--skip-moe"]
+            self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
+            manifest = self.manifest(tmp)
+            manifest.pop("step_signatures")
+            for step in manifest["steps"].values():
+                step["signature"].pop("outputs")
+            self.mod.write_json(Path(tmp) / "operator" / "manifest.json", manifest)
+            legacy = Path(tmp) / "operator" / "people_harmonic_all.csv"
+            expected = legacy.read_bytes()
+            legacy.write_bytes(expected[:1])
+
+            self.assertEqual(self.call_main(args), 0)
+            upgraded = self.manifest(tmp)
+            self.assertEqual(upgraded["steps"]["format_people"]["status"], "completed")
+            self.assertEqual(legacy.read_bytes(), expected)
+
+    def test_legacy_manifest_without_fingerprints_requires_paid_approval(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)), self.fake_providers():
+            args = ["run", "--handle", "operator", "--min-score", "0", "--limit", "1", "--skip-moe"]
+            self.assertEqual(self.call_main([*args, "--approve-spend"]), 0)
+            manifest = self.manifest(tmp)
+            manifest.pop("step_signatures")
+            manifest.pop("fingerprints")
+            for step in manifest["steps"].values():
+                step.pop("signature", None)
+            self.mod.write_json(Path(tmp) / "operator" / "manifest.json", manifest)
+
+            with patch.object(self.mod, "twitter_get_user") as get_user:
+                self.assertEqual(self.call_main(args), 20)
+                get_user.assert_not_called()
+            self.assertEqual(self.manifest(tmp)["needs_approval"]["step"], "load_or_crawl")
+
     def test_reverted_free_score_rerun_reuses_valid_moe(self):
         followers = [
             {
