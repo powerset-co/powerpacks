@@ -15,7 +15,8 @@ copies it replaces:
 - `write_jsonl` — mkdir parents, one JSON object per line, utf-8; returns the
   number of rows written.
 - `parse_last_json` — return the LAST top-level JSON object emitted on a child's
-  stdout (`{}` when none); the tolerant progress-then-result contract.
+  stdout (`{}` when none); the tolerant progress-then-result contract, which
+  scans past undecodable stretches instead of stopping at the first one.
 - `unique_strings` — order-preserving de-dup of a scalar/list into stripped
   non-empty strings.
 - `sha256_file` — streaming SHA-256 of a file (fingerprint helper).
@@ -23,6 +24,13 @@ copies it replaces:
   pass their historical length so existing digests are unchanged.
 
 Changelog:
+  2026-07-24 (dedup): `parse_last_json` absorbed the divergent copy that lived
+    in discover/messages/whatsapp_wacli.py. That copy's scan-forward recovery
+    (on a decode error, jump to the next `{` instead of stopping) is now the
+    canonical behavior — strictly more tolerant, and required for Go binaries
+    that interleave log output with their JSON result. The fork's `dict | None`
+    return was NOT promoted: `{}` stays the contract, and every former fork
+    consumer already coerced a non-dict to `{}`.
   2026-07-24 (jsonl home): added the `read_jsonl` / `write_jsonl` pair. The repo
     carried 28 separate newline-delimited-JSON reader/writer definitions and no
     shared one; the message extractors now route here, and the remaining copies
@@ -131,6 +139,10 @@ def parse_last_json(stdout: str) -> dict[str, Any]:
 
     Children print human progress lines and then a final JSON result; scanning
     for the last decodable dict tolerates that interleaving without a delimiter.
+    An undecodable stretch does NOT end the scan — it advances to the next `{`
+    and keeps going — so a truncated or interleaved fragment ahead of the real
+    payload (the msgvault and wacli Go binaries both interleave log/binary
+    output with their `--json` result) still yields the final object.
     """
     text = (stdout or "").strip()
     if not text:
@@ -144,12 +156,15 @@ def parse_last_json(stdout: str) -> dict[str, Any]:
         if idx >= len(text):
             break
         try:
-            value, end = decoder.raw_decode(text, idx)
+            value, idx = decoder.raw_decode(text, idx)
         except json.JSONDecodeError:
-            break
+            nxt = text.find("{", idx + 1)  # always > idx, so the scan terminates
+            if nxt == -1:
+                break
+            idx = nxt
+            continue
         if isinstance(value, dict):
             last = value
-        idx = end
     return last
 
 

@@ -617,29 +617,51 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertEqual(stamp.read_text().strip(), "v0.14.0-fullsync")
             self.assertEqual(out["version"], "0.14.0")
 
-    def test_cmd_ensure_wacli_reports_action_and_version(self) -> None:
-        import argparse as _argparse
+    def test_ensure_wacli_command_reports_action_and_version(self) -> None:
         # already current -> action "current"
         buf = io.StringIO()
-        with mock.patch.object(mod, "wacli_pinned_current", return_value=True), \
+        with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "ensure-wacli"]), \
+             mock.patch.object(mod, "wacli_pinned_current", return_value=True), \
              mock.patch.object(mod, "ensure_wacli_installed",
                                return_value={"path": "/x/wacli", "version": "wacli 0.13.0", "pinned": True}), \
              redirect_stdout(buf):
-            rc = mod.cmd_ensure_wacli(_argparse.Namespace())
+            rc = mod.main()
         self.assertEqual(rc, 0)
         payload = json.loads(buf.getvalue())
         self.assertEqual(payload["command"], "ensure-wacli")
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["action"], "current")
         self.assertEqual(payload["pinned_version"], mod.WACLI_PINNED_VERSION)
+        self.assertNotIn("store", payload)  # ensure-wacli never touches a store
         # was stale/missing -> action "downloaded"
         buf = io.StringIO()
-        with mock.patch.object(mod, "wacli_pinned_current", return_value=False), \
+        with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "ensure-wacli"]), \
+             mock.patch.object(mod, "wacli_pinned_current", return_value=False), \
              mock.patch.object(mod, "ensure_wacli_installed",
                                return_value={"path": "/x/wacli", "version": "wacli 0.13.0", "pinned": True}), \
              redirect_stdout(buf):
-            mod.cmd_ensure_wacli(_argparse.Namespace())
+            mod.main()
         self.assertEqual(json.loads(buf.getvalue())["action"], "downloaded")
+
+    def test_cli_maps_blocked_and_failed_to_exit_codes(self) -> None:
+        blocked = mod.PrimitiveBlocked({"status": "blocked_user_action", "message": "no prebuilt"})
+        buf = io.StringIO()
+        with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "ensure-wacli"]), \
+             mock.patch.object(mod, "wacli_pinned_current", side_effect=blocked), \
+             redirect_stdout(buf):
+            rc = mod.main()
+        self.assertEqual(rc, 20)
+        self.assertEqual(json.loads(buf.getvalue())["status"], "blocked_user_action")
+
+        buf = io.StringIO()
+        with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "ensure-wacli"]), \
+             mock.patch.object(mod, "wacli_pinned_current", side_effect=RuntimeError("boom")), \
+             redirect_stdout(buf):
+            rc = mod.main()
+        self.assertEqual(rc, 1)
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error"], "RuntimeError: boom")
 
     def test_pairing_full_sync_status_detects_pre_full_sync_session(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -675,16 +697,16 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertIsNone(mod.read_pairing_marker(store))
 
     def test_logout_is_noop_when_not_authenticated_but_clears_marker(self) -> None:
-        import argparse as _argparse
         with tempfile.TemporaryDirectory() as td:
             store = Path(td)
             mod.write_pairing_marker(store)  # a stale marker should still be cleared
             buf = io.StringIO()
-            with mock.patch.object(mod, "ensure_wacli_installed", return_value={"pinned": True}), \
+            with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "logout", "--store", str(store)]), \
+                 mock.patch.object(mod, "ensure_wacli_installed", return_value={"pinned": True}), \
                  mock.patch.object(mod, "auth_status", return_value={"authenticated": False}), \
                  mock.patch.object(mod, "wacli_json") as wacli_json, \
                  redirect_stdout(buf):
-                rc = mod.cmd_logout(_argparse.Namespace(store=str(store)))
+                rc = mod.main()
             self.assertEqual(rc, 0)
             wacli_json.assert_not_called()  # nothing to invalidate
             payload = json.loads(buf.getvalue())
@@ -695,16 +717,16 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertFalse((store / mod.PAIRING_MARKER_NAME).exists())
 
     def test_logout_invalidates_session_when_authenticated(self) -> None:
-        import argparse as _argparse
         with tempfile.TemporaryDirectory() as td:
             store = Path(td)
             buf = io.StringIO()
-            with mock.patch.object(mod, "ensure_wacli_installed", return_value={"pinned": True}), \
+            with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "logout", "--store", str(store)]), \
+                 mock.patch.object(mod, "ensure_wacli_installed", return_value={"pinned": True}), \
                  mock.patch.object(mod, "auth_status",
                                    side_effect=[{"authenticated": True}, {"authenticated": False}]), \
                  mock.patch.object(mod, "wacli_json", return_value={"success": True}) as wacli_json, \
                  redirect_stdout(buf):
-                rc = mod.cmd_logout(_argparse.Namespace(store=str(store)))
+                rc = mod.main()
             self.assertEqual(rc, 0)
             wacli_json.assert_called_once_with(store, ["auth", "logout"], timeout=60)
             payload = json.loads(buf.getvalue())

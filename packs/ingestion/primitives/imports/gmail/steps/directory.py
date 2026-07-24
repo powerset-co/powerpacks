@@ -15,8 +15,9 @@ per-account resolution combiner (`combine_gmail_resolution_records`), and the
 small record normalizers (`gmail_queue_records`, `ordered_records`,
 `_is_resolvable_person`, `parse_json_list`). Everything cross-source — the whole
 `directory.csv` contract, the resolution normalizers, the people.csv
-materializers — is imported from `imports/directory.py`; the shared
-`emit_progress` / `artifact_dir_from_state` come from `imports/gmail/util.py`.
+materializers — is imported from `imports/directory.py`; `emit_progress` comes
+from `common/proc.py` and its `GMAIL_IMPORT_PREFIX` tag plus
+`artifact_dir_from_state` from `imports/gmail/util.py`.
 
 Changelog:
   2026-07-23 (steps split): extracted from the file-loaded gmail/import_steps.py
@@ -60,9 +61,10 @@ from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     parse_confidence,
     resolution_from_directory_match,
 )
+from packs.ingestion.primitives.common.proc import emit_progress  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.util import (  # noqa: E402
+    GMAIL_IMPORT_PREFIX,
     artifact_dir_from_state,
-    emit_progress,
 )
 from packs.ingestion.schemas.gmail_artifacts import LINKEDIN_RESOLUTION_COLUMNS  # noqa: E402
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url  # noqa: E402
@@ -374,7 +376,7 @@ def run_gmail_directory(imp: "GmailImport") -> bool:
         results.append(result)
     imp._mark_step("gmail_directory", "completed", checkpoint=checkpoint, observation_checkpoint=observation_checkpoint, resolved=total_resolved, unresolved=total_unresolved, cached_negative=total_cached_negative, payload={"results": results})
     if total_cached_negative:
-        emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_cached_negative} already attempted, {total_unresolved} unresolved.")
+        emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_cached_negative} already attempted, {total_unresolved} unresolved.", GMAIL_IMPORT_PREFIX)
     else:
-        emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_unresolved} unresolved.")
+        emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_unresolved} unresolved.", GMAIL_IMPORT_PREFIX)
     return True
