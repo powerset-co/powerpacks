@@ -22,6 +22,12 @@ every identifier match demotes to `suggested` until deep-context ships the
 replacement approval surface.
 
 Changelog:
+  2026-07-23 (oop): the `run()` flow (fixed import dir, people.csv/candidates.csv
+    outputs, floor knobs, manifest input, and the gate sequence) was folded into
+    a `MessagesImport` orchestrator; run() is now a thin `MessagesImport(args).run()`
+    wrapper. The pure row/floor/diff/directory helpers stay module-level (the
+    package __init__ re-exports them). Still stateless — no run-state store, one
+    fixed output dir + one manifest; behavior, CLI, and manifest payloads unchanged.
   2026-07-23 (audit):
     - One upfront repo-root path bootstrap replaced the duplicated try/except
       import block.
@@ -435,135 +441,169 @@ def replace_messages_directory_rows(
     }
 
 
-def run(args: argparse.Namespace) -> dict:
-    """The whole import: schema/fingerprint no-op checks -> prerequisite gates
-    (contacts discovered; matched unless --allow-unmatched) -> the
-    --confirm-import approval when the diff adds rows -> materialize
-    people.csv + candidates.csv -> replace the directory messages slice."""
-    import_dir = DEFAULT_IMPORT_DIR / "messages"
-    people_csv_path = import_dir / "people.csv"
-    schema_stale = people_csv_schema_stale(people_csv_path)
-    min_message_count = int(getattr(args, "min_message_count", DEFAULT_MIN_MESSAGE_COUNT))
-    include_group_only = bool(getattr(args, "include_group_only", False))
-    expected_input = {
-        "pipeline_contract": MESSAGES_IMPORT_CONTRACT,
-        "mode": "contacts-direct",
-        "min_message_count": min_message_count,
-        "include_group_only": include_group_only,
-    }
-    current = None if schema_stale else import_manifest_current(
-        "messages",
-        expected_input,
-        import_dir=DEFAULT_IMPORT_DIR,
-    )
-    if current:
-        return current
-    read_accounts(args.accounts)
-    contacts_csv = WORKING_CONTACTS_CSV
-    manifest_input = {
-        **expected_input,
-        "contacts_csv": str(contacts_csv),
-        "match_manifest": str(MATCH_MANIFEST_JSON),
-        "discovery_manifest": str(DEFAULT_BASE_DIR / "discover" / "messages" / "manifest.json"),
-    }
-    if not contacts_csv.exists():
-        return write_manifest("messages", {
-            "status": "failed",
-            "reason": "messages_contacts_missing",
-            "message": (
-                f"Discover Messages contacts before import: {contacts_csv}. "
-                "Run: uv run --project . python packs/ingestion/primitives/"
-                "discover/messages/discover.py discover"
-            ),
-            "input": manifest_input,
-            "outputs": {},
-            "stats": {"people": 0, "candidates": 0},
-        }, import_dir=DEFAULT_IMPORT_DIR)
-    if not MATCH_MANIFEST_JSON.exists() and not args.allow_unmatched:
-        return write_manifest("messages", {
-            "status": "failed",
-            "reason": "messages_contacts_not_matched",
-            "message": (
-                "Match contacts against your network before import (or pass "
-                "--allow-unmatched). Run: uv run --project . python packs/ingestion/"
-                f"primitives/imports/messages/match_local_candidates.py match "
-                f"--contacts {contacts_csv}"
-            ),
-            "input": manifest_input,
-            "outputs": {},
-            "stats": {"people": 0, "candidates": 0},
-        }, import_dir=DEFAULT_IMPORT_DIR)
-    diff = messages_import_diff(
-        contacts_csv,
-        import_dir,
-        min_message_count=min_message_count,
-        include_group_only=include_group_only,
-    )
-    if diff["new_rows"] > 0 and not args.confirm_import:
-        message = (
-            f"Import Messages contacts: attach message activity to {diff['people_rows']} "
-            f"matched people and add {diff['candidate_rows']} research candidates?"
+class MessagesImport:
+    """Orchestrates the contacts-direct Messages import.
+
+    Owns the fixed import dir, its `people.csv` / `candidates.csv` outputs, the
+    floor knobs, the manifest input, and the gate sequence (schema/manifest
+    no-op -> contacts-present and matched prerequisites -> the --confirm-import
+    approval when the diff adds rows -> materialize people.csv + candidates.csv
+    -> replace the directory messages slice -> the import manifest). Stateless:
+    no run-state store, just the one fixed output dir and one manifest. The pure
+    row/floor/diff/directory transforms stay module-level functions the
+    orchestrator calls."""
+
+    source = "messages"
+
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        self.import_dir = DEFAULT_IMPORT_DIR / self.source
+        self.people_csv = self.import_dir / "people.csv"
+        self.candidates_csv = self.import_dir / "candidates.csv"
+        self.contacts_csv = WORKING_CONTACTS_CSV
+        self.min_message_count = int(getattr(args, "min_message_count", DEFAULT_MIN_MESSAGE_COUNT))
+        self.include_group_only = bool(getattr(args, "include_group_only", False))
+        self.expected_input = {
+            "pipeline_contract": MESSAGES_IMPORT_CONTRACT,
+            "mode": "contacts-direct",
+            "min_message_count": self.min_message_count,
+            "include_group_only": self.include_group_only,
+        }
+        self.manifest_input = {
+            **self.expected_input,
+            "contacts_csv": str(self.contacts_csv),
+            "match_manifest": str(MATCH_MANIFEST_JSON),
+            "discovery_manifest": str(DEFAULT_BASE_DIR / "discover" / self.source / "manifest.json"),
+        }
+
+    def _manifest(self, **fields: Any) -> dict:
+        """Write this stage's single import manifest with the given payload fields."""
+        return write_manifest(self.source, fields, import_dir=DEFAULT_IMPORT_DIR)
+
+    def run(self) -> dict:
+        """Gate sequence -> materialization. Returns the manifest payload."""
+        # An existing people.csv predating the interaction-count columns is a code
+        # change, not a data change, so the fingerprint no-op cannot catch it — a
+        # stale schema forces a re-run.
+        schema_stale = people_csv_schema_stale(self.people_csv)
+        current = None if schema_stale else import_manifest_current(
+            self.source,
+            self.expected_input,
+            import_dir=DEFAULT_IMPORT_DIR,
         )
-        return write_manifest("messages", {
-            "status": "blocked_approval",
-            "approval_type": "import_confirmation",
-            "message": message,
-            "blocked": {
-                "status": "blocked_approval",
-                "approval_type": "import_confirmation",
-                "source": "messages",
-                "message": message,
-                "payload": diff,
+        if current:
+            return current
+        read_accounts(self.args.accounts)
+        if not self.contacts_csv.exists():
+            return self._manifest(
+                status="failed",
+                reason="messages_contacts_missing",
+                message=(
+                    f"Discover Messages contacts before import: {self.contacts_csv}. "
+                    "Run: uv run --project . python packs/ingestion/primitives/"
+                    "discover/messages/discover.py discover"
+                ),
+                input=self.manifest_input,
+                outputs={},
+                stats={"people": 0, "candidates": 0},
+            )
+        if not MATCH_MANIFEST_JSON.exists() and not self.args.allow_unmatched:
+            return self._manifest(
+                status="failed",
+                reason="messages_contacts_not_matched",
+                message=(
+                    "Match contacts against your network before import (or pass "
+                    "--allow-unmatched). Run: uv run --project . python packs/ingestion/"
+                    f"primitives/imports/messages/match_local_candidates.py match "
+                    f"--contacts {self.contacts_csv}"
+                ),
+                input=self.manifest_input,
+                outputs={},
+                stats={"people": 0, "candidates": 0},
+            )
+        diff = messages_import_diff(
+            self.contacts_csv,
+            self.import_dir,
+            min_message_count=self.min_message_count,
+            include_group_only=self.include_group_only,
+        )
+        if diff["new_rows"] > 0 and not self.args.confirm_import:
+            message = (
+                f"Import Messages contacts: attach message activity to {diff['people_rows']} "
+                f"matched people and add {diff['candidate_rows']} research candidates?"
+            )
+            return self._manifest(
+                status="blocked_approval",
+                approval_type="import_confirmation",
+                message=message,
+                blocked={
+                    "status": "blocked_approval",
+                    "approval_type": "import_confirmation",
+                    "source": "messages",
+                    "message": message,
+                    "payload": diff,
+                },
+                input=self.manifest_input,
+                outputs={},
+                stats={
+                    "people": 0,
+                    "candidates": diff["candidate_rows"],
+                },
+                diff=diff,
+            )
+        return self._materialize(diff)
+
+    def _materialize(self, diff: dict[str, Any]) -> dict:
+        """Split matched people vs candidates, write both CSVs, replace the
+        directory messages slice, and write the completed/failed manifest."""
+        materialized, people_rows, candidate_rows = selected_contacts_people(
+            self.contacts_csv,
+            min_message_count=self.min_message_count,
+            include_group_only=self.include_group_only,
+        )
+        self.import_dir.mkdir(parents=True, exist_ok=True)
+        # Review-era artifacts are not part of this stage's contract; delete leftovers.
+        legacy_input = self.import_dir / "people.input.csv"
+        if legacy_input.exists():
+            legacy_input.unlink()
+        legacy_enrichment = self.import_dir / "enrichment"
+        if legacy_enrichment.exists():
+            shutil.rmtree(legacy_enrichment)
+        write_csv_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, people_rows)
+        write_csv_rows(self.candidates_csv, CANDIDATES_SCHEMA_COLUMNS, candidate_rows)
+        directory_replacement = replace_messages_directory_rows(self.people_csv)
+        directory_normalization = normalize_directory_source_accounts("messages")
+        directory_quality = directory_source_account_quality("messages")
+        status = "completed" if directory_quality["status"] == "ok" else "failed"
+        return self._manifest(
+            status=status,
+            reason="directory_source_account_quality_failed" if status == "failed" else "",
+            input=self.manifest_input,
+            outputs={
+                "people_csv": str(self.people_csv),
+                "candidates_csv": str(self.candidates_csv),
             },
-            "input": manifest_input,
-            "outputs": {},
-            "stats": {
-                "people": 0,
-                "candidates": diff["candidate_rows"],
+            stats={
+                "people": csv_count(str(self.people_csv)),
+                "candidates": csv_count(str(self.candidates_csv)),
             },
-            "diff": diff,
-        }, import_dir=DEFAULT_IMPORT_DIR)
-    materialized, people_rows, candidate_rows = selected_contacts_people(
-        contacts_csv,
-        min_message_count=min_message_count,
-        include_group_only=include_group_only,
-    )
-    import_dir.mkdir(parents=True, exist_ok=True)
-    # Review-era artifacts are not part of this stage's contract; delete leftovers.
-    legacy_input = import_dir / "people.input.csv"
-    if legacy_input.exists():
-        legacy_input.unlink()
-    legacy_enrichment = import_dir / "enrichment"
-    if legacy_enrichment.exists():
-        shutil.rmtree(legacy_enrichment)
-    write_csv_rows(people_csv_path, PEOPLE_SCHEMA_COLUMNS, people_rows)
-    candidates_csv_path = import_dir / "candidates.csv"
-    write_csv_rows(candidates_csv_path, CANDIDATES_SCHEMA_COLUMNS, candidate_rows)
-    directory_replacement = replace_messages_directory_rows(people_csv_path)
-    directory_normalization = normalize_directory_source_accounts("messages")
-    directory_quality = directory_source_account_quality("messages")
-    status = "completed" if directory_quality["status"] == "ok" else "failed"
-    return write_manifest("messages", {
-        "status": status,
-        "reason": "directory_source_account_quality_failed" if status == "failed" else "",
-        "input": manifest_input,
-        "outputs": {
-            "people_csv": str(people_csv_path),
-            "candidates_csv": str(candidates_csv_path),
-        },
-        "stats": {
-            "people": csv_count(str(people_csv_path)),
-            "candidates": csv_count(str(candidates_csv_path)),
-        },
-        "diff": diff,
-        "materialized": materialized,
-        "directory": {
-            "path": str(DEFAULT_DIRECTORY_CSV),
-            "replacement": directory_replacement,
-            "normalization": directory_normalization,
-            "quality": directory_quality,
-        },
-    }, import_dir=DEFAULT_IMPORT_DIR)
+            diff=diff,
+            materialized=materialized,
+            directory={
+                "path": str(DEFAULT_DIRECTORY_CSV),
+                "replacement": directory_replacement,
+                "normalization": directory_normalization,
+                "quality": directory_quality,
+            },
+        )
+
+
+def run(args: argparse.Namespace) -> dict:
+    """The whole import, via the `MessagesImport` orchestrator: schema/fingerprint
+    no-op checks -> prerequisite gates (contacts discovered; matched unless
+    --allow-unmatched) -> the --confirm-import approval when the diff adds rows ->
+    materialize people.csv + candidates.csv -> replace the directory messages slice."""
+    return MessagesImport(args).run()
 
 
 def build_parser() -> argparse.ArgumentParser:

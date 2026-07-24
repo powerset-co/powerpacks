@@ -6,11 +6,13 @@ Hosts the LinkedIn import pipeline
 
   parse + convert -> RapidAPI enrichment -> merged people.csv
 
-RapidAPI spend is ALWAYS approved on this path (team decision): the primitive's
-approval block is auto-approved in a loop. The shared profile cache lives on
-the volume (cache/profile_cache_v2), so the primitive's cache hits/misses are
-team-wide: every profile any operator fetched before is free and instant, and
-every new fetch lands in the shared cache for the next operator.
+RapidAPI spend is ALWAYS approved on this path (team decision): the single
+`run` is invoked with the explicit --approve-spend gate satisfied, so it fetches
+cache misses without a needs_approval stop (no approve/continue loop). The shared
+profile cache lives on the volume (cache/profile_cache_v2), so the primitive's
+cache hits/misses are team-wide: every profile any operator fetched before is
+free and instant, and every new fetch lands in the shared cache for the next
+operator.
 
 Output people.csv is written to the operator's volume input path, ready for
 run_indexing.py.
@@ -42,9 +44,10 @@ def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Name
         operator_id=args.operator_id,
         limit=None,
         output_dir=str(WORK),
-        ledger=str(WORK / "ledger.json"),
-        force=True,
-        no_harmonic=False,
+        # RapidAPI spend is always approved on the Modal path (team decision):
+        # satisfy the explicit gate so the single `run` proceeds through cache
+        # misses without a needs_approval stop.
+        approve_spend=True,
         refresh_cache=False,
         profile_cache_dir=str(cache_dir),
         company_corpus_jsonl=[],
@@ -57,14 +60,13 @@ def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Name
     )
 
 
-def enrichment_stats(ledger: dict) -> dict:
-    steps = ledger.get("steps") or {}
-    enrich = (steps.get("enrich_people") or {}).get("summary") or {}
+def enrichment_stats(manifest: dict) -> dict:
+    counts = manifest.get("counts") or {}
     return {
-        "queue_count": enrich.get("queue_count"),
-        "cache_hit_count": enrich.get("cache_hit_count"),
-        "paid_call_count": enrich.get("paid_call_count"),
-        "recent_failure_count": enrich.get("recent_failure_count"),
+        "queue_count": counts.get("queue_count"),
+        "cache_hit_count": counts.get("cache_hit_count"),
+        "paid_call_count": counts.get("paid_call_count"),
+        "recent_failure_count": counts.get("recent_failure_count"),
     }
 
 
@@ -93,26 +95,22 @@ def main() -> int:
 
     WORK.mkdir(parents=True, exist_ok=True)
     ns = import_namespace(args, cache_dir)
-    ledger_path = Path(ns.ledger)
+    # The import stage overwrites one manifest.json in its fixed discover dir;
+    # that manifest (not a ledger) is the source of truth for status + artifacts.
+    manifest_path = linkedin_import.discover_output_dir(Path(ns.output_dir)) / "manifest.json"
 
     write_status(run_vol, status | {"phase": "enrich"})
+    # RapidAPI is always approved on this path (approve_spend=True), so the single
+    # `run` completes without a needs_approval stop — no approve/continue loop.
     code = linkedin_import.command_run(ns)
-    # RapidAPI is always approved on this path: drain the primitive's approval
-    # blocks instead of surfacing them.
-    approvals = 0
-    while code == 20:
-        approvals += 1
-        linkedin_import.command_approve(argparse.Namespace(ledger=str(ledger_path), approval_id=None))
-        write_status(run_vol, status | {"phase": "enrich", "auto_approvals": approvals})
-        code = linkedin_import.command_continue(argparse.Namespace(ledger=str(ledger_path)))
 
-    ledger = linkedin_import.load_ledger(ledger_path) if ledger_path.exists() else {}
-    if code != 0 or ledger.get("status") != "completed":
-        write_status(run_vol, status | {"status": "failed", "phase": "enrich", "exit_code": code, "ledger_status": ledger.get("status"), "finished_at": now_iso()})
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    if code != 0 or manifest.get("status") != "completed":
+        write_status(run_vol, status | {"status": "failed", "phase": "enrich", "exit_code": code, "run_status": manifest.get("status"), "error": manifest.get("error"), "finished_at": now_iso()})
         return code or 1
 
     write_status(run_vol, status | {"phase": "persist"})
-    people_csv = str((ledger.get("artifacts") or {}).get("people_csv") or "")
+    people_csv = str((manifest.get("artifacts") or {}).get("people_csv") or "")
     if not people_csv or not Path(people_csv).exists():
         write_status(run_vol, status | {"status": "failed", "phase": "persist", "error": f"import completed but people.csv missing: {people_csv}", "finished_at": now_iso()})
         return 1
@@ -122,7 +120,7 @@ def main() -> int:
     with Path(people_csv).open(newline="", encoding="utf-8-sig") as handle:
         people_count = sum(1 for _ in CsvIO.dict_reader(handle))
 
-    stats = enrichment_stats(ledger) | {"people": people_count, "auto_approvals": approvals}
+    stats = enrichment_stats(manifest) | {"people": people_count}
     (run_vol / "import-stats.json").write_text(json.dumps(stats, indent=2))
     print(f"[run-linkedin] people={people_count} stats={json.dumps(stats)}", flush=True)
     write_status(run_vol, status | {"status": "completed", "phase": "done", "stats": stats, "finished_at": now_iso()})

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.indexing.lib.artifact_io import write_parquet_rows
+from packs.shared.csv_io import CsvIO
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -164,21 +165,26 @@ class PipelinePhase13Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             artifact_dir = root / "enrichment"
+            cfg = enrich_people.build_config(
+                input_csv=root / "people.csv",
+                artifact_dir=artifact_dir,
+                profile_cache_dir=root / "cache",
+                refresh_cache=True,
+                max_workers=1,
+                max_rpm=0,
+            )
+            orchestrator = enrich_people.EnrichPeople(cfg)
             hits = artifact_dir / "rapidapi_cache_hits.csv"
             misses = artifact_dir / "rapidapi_cache_misses.csv"
-            enrich_people.write_csv(hits, enrich_people.CACHE_COLUMNS, [])
-            enrich_people.write_csv(misses, enrich_people.CACHE_COLUMNS, [{
+            CsvIO.write_dict_rows(hits, enrich_people.CACHE_COLUMNS, [])
+            CsvIO.write_dict_rows(misses, enrich_people.CACHE_COLUMNS, [{
                 "id": "p1",
                 "public_identifier": "ada",
                 "linkedin_url": "https://www.linkedin.com/in/ada",
                 "cache_status": "miss",
             }])
-            ledger = {
-                "artifact_dir": str(artifact_dir),
-                "input": {"profile_cache_dir": str(root / "cache"), "refresh_cache": True, "max_workers": 1, "max_rpm": 0},
-                "artifacts": {"rapidapi_cache_hits_csv": str(hits), "rapidapi_cache_misses_csv": str(misses)},
-                "paid_call_count": 1,
-            }
+            orchestrator.artifacts.update({"rapidapi_cache_hits_csv": str(hits), "rapidapi_cache_misses_csv": str(misses)})
+            orchestrator.counts["paid_call_count"] = 1
             rapid = {
                 "status_code": 200,
                 "data": {"public_identifier": "ada", "full_name": "Ada Lovelace"},
@@ -189,8 +195,8 @@ class PipelinePhase13Tests(unittest.TestCase):
             }
             with mock.patch.object(enrich_people, "rapidapi_key", return_value="key"), \
                 mock.patch.object(enrich_people, "rapidapi_profile", return_value=rapid):
-                summary = enrich_people.step_enrich_linkedin(ledger)
-            rows = enrich_people.read_csv(Path(summary["output_file"]))
+                summary = orchestrator.enrich_linkedin()
+            rows = CsvIO.read_dict_rows(Path(summary["output_file"]))
         self.assertEqual(summary["retried"], 1)
         self.assertEqual(summary["retry_successes"], 1)
         self.assertEqual(summary["retry_failures"], 0)

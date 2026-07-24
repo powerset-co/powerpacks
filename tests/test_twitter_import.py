@@ -55,23 +55,25 @@ class TwitterNetworkImportTests(unittest.TestCase):
         self.assertEqual(user["website_url"], "https://example.com")
         self.assertEqual(user["follower_count"], 12000)
 
-    def test_run_blocks_before_rapidapi_crawl(self):
+    def test_run_needs_approval_before_rapidapi_crawl(self):
+        # Without --approve-spend the run must stop before the first spend step
+        # (the crawl) and record a needs_approval manifest — no provider call.
         with tempfile.TemporaryDirectory() as tmp:
-            ledger = Path(tmp) / "run.json"
-            with patch.dict(os.environ, {"RAPIDAPI_TWITTER_KEY": "test"}, clear=True):
-                with patch.object(self.mod, "twitter_get_user") as get_user:
-                    code = self.call_main(["run", "--ledger", str(ledger), "--handle", "operator"])
-                    self.assertEqual(code, 20)
-                    get_user.assert_not_called()
-            saved = self.mod.read_json(ledger)
-            self.assertEqual(saved["blocked"]["step_id"], "load_or_crawl")
+            with patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)):
+                with patch.dict(os.environ, {"RAPIDAPI_TWITTER_KEY": "test"}, clear=True):
+                    with patch.object(self.mod, "twitter_get_user") as get_user:
+                        code = self.call_main(["run", "--handle", "operator"])
+                        self.assertEqual(code, 20)
+                        get_user.assert_not_called()
+                manifest = self.mod.read_json(Path(tmp) / "operator" / "manifest.json")
+                self.assertEqual(manifest["status"], "needs_approval")
+                self.assertEqual(manifest["needs_approval"]["step"], "load_or_crawl")
+                self.assertEqual(manifest["needs_approval"]["provider"], "rapidapi_twitter")
 
     def test_approved_pipeline_writes_people_shape(self):
+        # A single `run --approve-spend` advances the whole pipeline in one pass.
         with tempfile.TemporaryDirectory() as tmp:
-            cwd = os.getcwd()
-            os.chdir(tmp)
-            try:
-                ledger = Path(tmp) / "run.json"
+            with patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)):
                 env = {"RAPIDAPI_TWITTER_KEY": "tw", "RAPIDAPI_LINKEDIN_KEY": "li"}
                 follower = {
                     "handle": "founder",
@@ -92,18 +94,17 @@ class TwitterNetworkImportTests(unittest.TestCase):
                     "experiences": [{"title": "Founder", "company_name": "Analytical Engines"}],
                     "education": [],
                 }
-                with patch.dict(os.environ, env, clear=True):
-                    self.assertEqual(self.call_main(["run", "--ledger", str(ledger), "--handle", "operator", "--min-score", "0", "--limit", "1", "--skip-moe"]), 20)
-                    self.assertEqual(self.call_main(["approve", "--ledger", str(ledger)]), 0)
-                    with patch.object(self.mod, "twitter_get_user", return_value={"twitter_user_id": "123", "raw_response": {}}), \
-                         patch.object(self.mod, "twitter_followers_page", return_value=([follower], "", {}, 200, "")):
-                        self.assertEqual(self.call_main(["continue", "--ledger", str(ledger)]), 20)
-                    self.assertEqual(self.call_main(["approve", "--ledger", str(ledger)]), 0)
-                    with patch.object(self.mod, "rapidapi_linkedin_profile", return_value=(200, linkedin_response, "")):
-                        self.assertEqual(self.call_main(["continue", "--ledger", str(ledger)]), 0)
-                saved = self.mod.read_json(ledger)
-                people_path = Path(saved["artifacts"]["people_csv"])
-                legacy_path = Path(saved["artifacts"]["people_harmonic_all_csv"])
+                with patch.dict(os.environ, env, clear=True), \
+                     patch.object(self.mod, "twitter_get_user", return_value={"twitter_user_id": "123", "raw_response": {}}), \
+                     patch.object(self.mod, "twitter_followers_page", return_value=([follower], "", {}, 200, "")), \
+                     patch.object(self.mod, "rapidapi_linkedin_profile", return_value=(200, linkedin_response, "")):
+                    code = self.call_main([
+                        "run", "--handle", "operator", "--approve-spend",
+                        "--min-score", "0", "--limit", "1", "--skip-moe",
+                    ])
+                    self.assertEqual(code, 0)
+                people_path = Path(tmp) / "operator" / "people.csv"
+                legacy_path = Path(tmp) / "operator" / "people_harmonic_all.csv"
                 self.assertEqual(people_path.name, "people.csv")
                 self.assertTrue(legacy_path.exists())
                 with people_path.open(newline="", encoding="utf-8") as handle:
@@ -115,8 +116,37 @@ class TwitterNetworkImportTests(unittest.TestCase):
                 self.assertEqual(rows[0]["source_channels"], "twitter")
                 self.assertIn("linkedin_validated.csv", rows[0]["source_artifacts"])
                 self.assertIn("moe_verdict", rows[0]["twitter_response"])
-            finally:
-                os.chdir(cwd)
+
+    def test_rerun_is_cached_and_needs_no_approval(self):
+        # After a completed run, a second `run` without --approve-spend must skip
+        # every step by artifact freshness and complete without a spend gate.
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(self.mod, "TWITTER_DISCOVER_DIR", Path(tmp)):
+                env = {"RAPIDAPI_TWITTER_KEY": "tw", "RAPIDAPI_LINKEDIN_KEY": "li"}
+                follower = {
+                    "handle": "founder",
+                    "display_name": "Ada Lovelace",
+                    "bio": "Founder building AI https://www.linkedin.com/in/ada-lovelace",
+                    "follower_count": 10000,
+                    "following_count": 42,
+                    "verified": True,
+                    "location": "London",
+                    "website_url": "",
+                    "twitter_user_id": "999",
+                }
+                linkedin_response = {"first_name": "Ada", "last_name": "Lovelace", "full_name": "Ada Lovelace", "headline": "Founder", "experiences": [{"title": "Founder", "company_name": "Analytical Engines"}], "education": []}
+                with patch.dict(os.environ, env, clear=True), \
+                     patch.object(self.mod, "twitter_get_user", return_value={"twitter_user_id": "123", "raw_response": {}}), \
+                     patch.object(self.mod, "twitter_followers_page", return_value=([follower], "", {}, 200, "")), \
+                     patch.object(self.mod, "rapidapi_linkedin_profile", return_value=(200, linkedin_response, "")):
+                    self.assertEqual(self.call_main(["run", "--handle", "operator", "--approve-spend", "--min-score", "0", "--limit", "1", "--skip-moe"]), 0)
+                    # Second run, no approval, no provider calls should fire.
+                    with patch.object(self.mod, "twitter_get_user") as get_user:
+                        self.assertEqual(self.call_main(["run", "--handle", "operator"]), 0)
+                        get_user.assert_not_called()
+                manifest = self.mod.read_json(Path(tmp) / "operator" / "manifest.json")
+                self.assertEqual(manifest["status"], "completed")
+                self.assertTrue(all(step["status"] == "cached" for step in manifest["steps"].values()))
 
 
 if __name__ == "__main__":

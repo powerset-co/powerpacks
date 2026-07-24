@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resumable local LinkedIn Connections.csv import.
+"""Idempotent local LinkedIn Connections.csv import.
 
 This primitive is source-specific only: it parses LinkedIn's Connections.csv into
 Powerpacks' shared people schema, then delegates LinkedIn profile enrichment to
@@ -7,49 +7,59 @@ Powerpacks' shared people schema, then delegates LinkedIn profile enrichment to
 handling, normalization, and final `people.csv` writing live in that shared
 primitive; enrichment is RapidAPI-only (no Harmonic).
 
-Stdlib-only; local artifacts only, under
-`.powerpacks/network-import/discover/linkedin/` by default. Usable
-profile-cache entries hydrate without keys or approval; cache misses fetch
-immediately when `RAPIDAPI_LINKEDIN_KEY` or `RAPIDAPI_KEY` is set, and fail
-with a missing-key error otherwise (there is no approval step). Cache
-format/seeding is documented in `enrich_people.py` (default cache dir
-`.powerpacks/network-import/profile_cache_v2`; override with
+Contract: ONE idempotent `run` (plus `status`, which reads the stage manifest,
+and `check-keys`). A run writes its output CSVs and one `manifest.json` into a
+fixed directory (`.powerpacks/network-import/discover/linkedin/` by default) and
+overwrites in place — no ledger, no `continue`, no per-step state store. Reruns
+are idempotent because the output path is stable.
+
+Local artifacts only. Usable profile-cache entries hydrate without keys or
+approval (cache hits never spend). Cache misses need paid RapidAPI fetches:
+without `--approve-spend` the run stops at a `needs_approval` manifest (miss
+count + credit estimate, clean nonzero exit) BEFORE any fetch; with the flag it
+fetches when `RAPIDAPI_LINKEDIN_KEY`/`RAPIDAPI_KEY` is set and fails clearly
+otherwise. Cache format/seeding is documented in `enrich_people.py` (default
+cache dir `.powerpacks/network-import/profile_cache_v2`; override with
 `--profile-cache-dir`). Cache hits count into `cache_hit_count`, misses into
 `paid_call_count`.
 
 Usage:
-    network_import.py run --csv ~/Downloads/Connections.csv --source-user LABEL [--operator-id local]
-    network_import.py continue | approve | status | check-keys
+    network_import.py run --csv ~/Downloads/Connections.csv --source-user LABEL [--operator-id local] [--approve-spend]
+    network_import.py status | check-keys
 
 `run` converts the CSV locally, then enriches. Artifacts (paths exposed in the
-ledger `artifacts` map; `people_csv` is the canonical interface):
+manifest `artifacts` map; `people_csv` is the canonical interface):
 `connections_for_enrichment.csv`, `source_people.csv`,
 `linkedin_enrichment_queue.csv`, `rapidapi_cache_hits.csv`,
 `rapidapi_cache_misses.csv`, `rapidapi_recent_failures.csv`,
 `needs_resolution_queue.csv`, `skipped_enrichment.csv`,
-`provider_enriched.csv`, `raw_provider_responses/`, `people.csv`, and
-`enrich_people.ledger.json`.
+`provider_enriched.csv`, `raw_provider_responses/`, and `people.csv`.
 
 Changelog:
+  2026-07-23 (audit): replaced the per-step ledger runner (load_ledger/
+    save_ledger/mark_step/pipeline_steps/next_pending_step/approval_id/
+    block_for_delegate_approval/ensure_delegate_ledger/execute_step/
+    run_until_blocked_or_done/command_continue/command_approve and the delegate
+    enrich_people.ledger.json) with a LinkedInImport orchestrator that owns the
+    fixed discover dir, the convert -> enrich steps, and one manifest.json. The
+    enrich delegate now runs in-process via EnrichPeople; paid RapidAPI spend is
+    gated by an explicit `--approve-spend` (forwarded to the delegate).
   2026-07-23 (audit): dropped the local byte-identical write_csv for the
     shared CsvIO.write_dict_rows (read_csv_rows stays local — its empty-on-
     missing + normalization behavior differs from CsvIO.read_dict_rows);
     `import csv` dropped with it.
   2026-07-23 (audit): network_import.README.md sidecar folded into this
-    docstring; fixed the stale claim that RapidAPI calls are approval-gated
-    (missing keys fail the run — nothing blocks on approval).
+    docstring.
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -69,9 +79,6 @@ from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, w
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_PROFILE_CACHE_DIR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "linkedin"
-DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "network_import.ledger.json"
-
 CONNECTION_COLUMNS = [
     "person_id",
     "public_identifier",
@@ -84,32 +91,13 @@ CONNECTION_COLUMNS = [
     "linkedin_email",
     "connected_on",
 ]
-PIPELINE_STEPS = ["convert", "enrich_people"]
-GENERATED_DISCOVER_FILES = [
-    "connections_for_enrichment.csv",
-    "source_people.csv",
-    "linkedin_enrichment_queue.csv",
-    "rapidapi_cache_hits.csv",
-    "rapidapi_cache_misses.csv",
-    "rapidapi_recent_failures.csv",
-    "needs_resolution_queue.csv",
-    "skipped_enrichment.csv",
-    "provider_enriched.csv",
-    "people.csv",
-    "enrich_people.ledger.json",
-]
-GENERATED_DISCOVER_DIRS = ["raw_provider_responses"]
-
-
-class PipelineBlocked(Exception):
-    def __init__(self, payload: dict[str, Any], code: int = 20) -> None:
-        super().__init__(payload.get("message") or "blocked")
-        self.payload = payload
-        self.code = code
+# `run` exit code when paid RapidAPI cache-miss fetches are gated behind
+# --approve-spend: nonzero (so callers/CI notice) but clean (not a failure).
+NEEDS_APPROVAL_CODE = people_enrichment.NEEDS_APPROVAL_CODE
 
 
 class PipelineFailed(Exception):
-    pass
+    """A hard, non-recoverable step failure (e.g. the Connections.csv is missing)."""
 
 
 def discover_output_dir(output_dir: Path) -> Path:
@@ -118,12 +106,6 @@ def discover_output_dir(output_dir: Path) -> Path:
     if output_dir.name == "discover":
         return output_dir / "linkedin"
     return output_dir / "discover" / "linkedin"
-
-
-def reset_delegate_state(discover_dir: Path) -> None:
-    ledger = discover_dir / "enrich_people.ledger.json"
-    if ledger.exists():
-        ledger.unlink()
 
 
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -267,308 +249,257 @@ def parse_connections_csv(path: Path, source_user: str, limit: int | None = None
     return connections, {"parsed": len(connections), "duplicates": duplicates, "skipped_invalid": skipped}
 
 
-def load_ledger(path: Path) -> dict[str, Any]:
-    ledger = read_json(path, {}) or {}
-    ledger.setdefault("primitive", "linkedin/network_import")
-    ledger.setdefault("version", 2)
-    ledger.setdefault("created_at", now_iso())
-    ledger.setdefault("updated_at", now_iso())
-    ledger.setdefault("steps", {})
-    ledger.setdefault("approvals", {})
-    ledger.setdefault("artifacts", {})
-    return ledger
+@dataclass(frozen=True)
+class LinkedInImportConfig:
+    """Frozen, keyword-only config for one LinkedIn import run. The throughput
+    knobs stay `None`-able inherit sentinels; enrich_people.build_config resolves
+    them to defaults inside the delegated enrichment run."""
+
+    csv: Path
+    source_user: str
+    run_dir: Path
+    operator_id: str = "local"
+    limit: int | None = None
+    profile_cache_dir: Path = DEFAULT_PROFILE_CACHE_DIR
+    refresh_cache: bool = False
+    company_corpus_jsonl: tuple[str, ...] = ()
+    sleep_seconds: float = 0.0
+    force_enrich: bool = False
+    convert_only: bool = False
+    max_workers: int | None = None
+    max_rpm: float | None = None
+    failure_retry_hours: float | None = None
+    approve_spend: bool = False
+
+    def manifest_input(self) -> dict[str, Any]:
+        return {
+            "csv": str(self.csv),
+            "source_user": self.source_user,
+            "operator_id": self.operator_id,
+            "limit": self.limit,
+            "profile_cache_dir": str(self.profile_cache_dir),
+            "refresh_cache": self.refresh_cache,
+            "company_corpus_jsonl": [str(p) for p in self.company_corpus_jsonl],
+            "sleep_seconds": self.sleep_seconds,
+            "force_enrich": self.force_enrich,
+            "convert_only": self.convert_only,
+            "approve_spend": self.approve_spend,
+        }
 
 
-def save_ledger(path: Path, ledger: dict[str, Any]) -> None:
-    ledger["updated_at"] = now_iso()
-    write_json(path, ledger)
+@dataclass
+class LinkedInImportManifest:
+    """Typed constructor for the LinkedIn import stage `manifest.json` — the whole
+    durable state contract (status + per-step timing + counts + artifact paths).
+    No ledger, no run id: the discover dir is fixed so reruns overwrite here."""
+
+    status: str
+    artifact_dir: str
+    input: dict[str, Any]
+    counts: dict[str, Any] = field(default_factory=dict)
+    artifacts: dict[str, Any] = field(default_factory=dict)
+    steps: dict[str, Any] = field(default_factory=dict)
+    needs_approval: dict[str, Any] | None = None
+    error: str | None = None
+    started_at: str = ""
+    updated_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "primitive": "linkedin/network_import",
+            "status": self.status,
+            "artifact_dir": self.artifact_dir,
+            "input": self.input,
+            "counts": self.counts,
+            "artifacts": self.artifacts,
+            "steps": self.steps,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at or now_iso(),
+        }
+        if self.needs_approval is not None:
+            payload["needs_approval"] = self.needs_approval
+        if self.error is not None:
+            payload["error"] = self.error
+        return payload
 
 
-def mark_step(ledger: dict[str, Any], step_id: str, status: str, **extra: Any) -> None:
-    rec = ledger.setdefault("steps", {}).setdefault(step_id, {"id": step_id})
-    if status == "running" and "started_at" not in rec:
-        rec["started_at"] = now_iso()
-    if status in {"completed", "failed", "blocked_approval", "skipped"}:
-        rec["finished_at"] = now_iso()
-    rec["status"] = status
-    rec.update({k: v for k, v in extra.items() if v is not None})
+class LinkedInImport:
+    """Idempotent LinkedIn Connections.csv import: convert -> delegated
+    enrichment -> one manifest.json in a fixed discover dir. Owns the run dir,
+    the two steps, and the manifest; the enrichment run is delegated in-process
+    to enrich_people.EnrichPeople against the SAME dir so the enriched people.csv
+    and provider artifacts land here. (EnrichPeople writes its own manifest.json
+    first; this stage's manifest is written last and is the authoritative one for
+    the dir, embedding the enrichment counts + artifacts.)"""
 
+    def __init__(self, cfg: LinkedInImportConfig) -> None:
+        self.cfg = cfg
+        self.run_dir = cfg.run_dir
+        self.run_dir.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
+        self.manifest_path = self.run_dir / "manifest.json"
+        self.artifacts: dict[str, Any] = {}
+        self.counts: dict[str, Any] = {}
+        self.steps: dict[str, Any] = {}
+        self.started_at = now_iso()
 
-def pipeline_steps(ledger: dict[str, Any]) -> list[str]:
-    if ledger.get("input", {}).get("convert_only"):
-        return ["convert"]
-    return PIPELINE_STEPS
-
-
-def next_pending_step(ledger: dict[str, Any]) -> str | None:
-    for step_id in pipeline_steps(ledger):
-        if ledger.setdefault("steps", {}).get(step_id, {}).get("status") != "completed":
-            return step_id
-    return None
-
-
-def approval_id(ledger: dict[str, Any], step_id: str) -> str:
-    return f"linkedin:{step_id}"
-
-
-def block_for_delegate_approval(ledger_path: Path, ledger: dict[str, Any], blocked: dict[str, Any], delegate_ledger: Path) -> None:
-    app_id = approval_id(ledger, "enrich_people")
-    ledger["blocked"] = {
-        "step_id": "enrich_people",
-        "approval_id": app_id,
-        "approval_type": blocked.get("approval_type", "external_api_spend"),
-        "delegate_ledger": str(delegate_ledger),
-        "delegate_approval_id": blocked.get("approval_id"),
-    }
-    mark_step(ledger, "enrich_people", "blocked_approval", approval_id=app_id, approval_type=ledger["blocked"]["approval_type"])
-    save_ledger(ledger_path, ledger)
-    raise PipelineBlocked({
-        "status": "blocked_approval",
-        "step_id": "enrich_people",
-        "approval_id": app_id,
-        "approval_type": ledger["blocked"]["approval_type"],
-        "message": blocked.get("message") or "Approve paid LinkedIn enrichment?",
-        "ledger": str(ledger_path),
-        "delegate_ledger": str(delegate_ledger),
-        "delegate_approval_id": blocked.get("approval_id"),
-        "continue_command": f"uv run --project . python packs/ingestion/primitives/imports/linkedin/network_import.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/imports/linkedin/network_import.py continue --ledger {ledger_path}",
-    })
-
-
-def step_convert(ledger: dict[str, Any]) -> dict[str, Any]:
-    run_dir = Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
-    inp = Path(ledger["input"]["csv"])
-    connections, stats = parse_connections_csv(inp, ledger["input"]["source_user"], ledger["input"].get("limit"))
-    connection_rows = [conn.row() for conn in connections]
-    people_rows = [conn.people_row(inp) for conn in connections]
-    connections_out = run_dir / "connections_for_enrichment.csv"
-    people_out = run_dir / "source_people.csv"
-    merged_connections = upsert_csv(
-        connections_out,
-        CONNECTION_COLUMNS,
-        connection_rows,
-        ["public_identifier", "linkedin_url", "linkedin_email", "person_id"],
-    )
-    merged_people = upsert_csv(
-        people_out,
-        PEOPLE_COLUMNS,
-        people_rows,
-        ["person_id", "public_identifier", "linkedin_url", "email"],
-    )
-    ledger["artifacts"].update({
-        "connections_csv": str(connections_out),
-        "source_people_csv": str(people_out),
-    })
-    return {
-        **stats,
-        "connections_file": str(connections_out),
-        "source_people_file": str(people_out),
-        "connections_total": len(merged_connections),
-        "source_people_total": len(merged_people),
-    }
-
-
-def ensure_delegate_ledger(ledger: dict[str, Any]) -> Path:
-    run_dir = Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
-    delegate_path = run_dir / "enrich_people.ledger.json"
-    if delegate_path.exists():
-        return delegate_path
-    source_people = ledger.get("artifacts", {}).get("source_people_csv")
-    if not source_people:
-        raise PipelineFailed("convert step did not produce source_people_csv")
-    delegate = {
-        "primitive": "enrich_people",
-        "version": 1,
-        "status": "running",
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "artifact_dir": str(run_dir),
-        "ledger": str(delegate_path),
-        "input": {
-            "input_csv": source_people,
-            "limit": None,
-            "force": bool(ledger.get("input", {}).get("force_enrich")),
-            "profile_cache_dir": ledger.get("input", {}).get("profile_cache_dir") or str(DEFAULT_PROFILE_CACHE_DIR),
-            "refresh_cache": bool(ledger.get("input", {}).get("refresh_cache")),
-            "company_corpus_jsonl": ledger.get("input", {}).get("company_corpus_jsonl") or [],
-            "sleep_seconds": ledger.get("input", {}).get("sleep_seconds") or 0.0,
-            "max_workers": ledger.get("input", {}).get("max_workers"),
-            "max_rpm": ledger.get("input", {}).get("max_rpm"),
-            "failure_retry_hours": ledger.get("input", {}).get("failure_retry_hours"),
-        },
-        "steps": {},
-        "approvals": {},
-        "artifacts": {},
-    }
-    people_enrichment.save_ledger(delegate_path, delegate)
-    return delegate_path
-
-
-def step_enrich_people(ledger: dict[str, Any], ledger_path: Path) -> dict[str, Any]:
-    delegate_path = ensure_delegate_ledger(ledger)
-    try:
-        with contextlib.redirect_stdout(io.StringIO()):
-            code = people_enrichment.run_until_blocked_or_done(delegate_path)
-    except people_enrichment.PipelineBlocked as blocked:
-        block_for_delegate_approval(ledger_path, ledger, blocked.payload, delegate_path)
-    if code != 0:
-        delegate = people_enrichment.load_ledger(delegate_path)
-        failed_step = people_enrichment.next_pending_step(delegate)
-        error = "enrich_people failed"
-        if failed_step:
-            error = delegate.get("steps", {}).get(failed_step, {}).get("error") or error
-        raise PipelineFailed(error)
-
-    delegate = people_enrichment.load_ledger(delegate_path)
-    artifacts = delegate.get("artifacts", {}) or {}
-    ledger["artifacts"].update({f"enrich_people_{key}": value for key, value in artifacts.items()})
-    for key in [
-        "people_csv",
-        "provider_enriched_csv",
-        "linkedin_enrichment_queue_csv",
-        "rapidapi_cache_hits_csv",
-        "rapidapi_cache_misses_csv",
-        "rapidapi_recent_failures_csv",
-        "needs_resolution_queue_csv",
-        "skipped_enrichment_csv",
-        "raw_provider_responses_dir",
-    ]:
-        if artifacts.get(key):
-            ledger["artifacts"][key] = artifacts[key]
-    ledger["artifacts"]["enrich_people_ledger"] = str(delegate_path)
-    return {
-        "delegate_ledger": str(delegate_path),
-        "people_csv": artifacts.get("people_csv"),
-        "cache_hit_count": delegate.get("cache_hit_count", 0),
-        "paid_call_count": delegate.get("paid_call_count", 0),
-        "queue_count": delegate.get("queue_count", 0),
-    }
-
-
-def execute_step(ledger_path: Path, ledger: dict[str, Any], step_id: str) -> dict[str, Any]:
-    if step_id == "convert":
-        return step_convert(ledger)
-    if step_id == "enrich_people":
-        return step_enrich_people(ledger, ledger_path)
-    raise PipelineFailed(f"unknown step: {step_id}")
-
-
-def run_until_blocked_or_done(ledger_path: Path) -> int:
-    ledger = load_ledger(ledger_path)
-    while True:
-        step_id = next_pending_step(ledger)
-        if step_id is None:
-            ledger["status"] = "completed"
-            ledger.pop("blocked", None)
-            save_ledger(ledger_path, ledger)
-            emit({"status": "completed", "ledger": str(ledger_path), "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})})
-            return 0
+    def run(self) -> LinkedInImportManifest:
         try:
-            mark_step(ledger, step_id, "running")
-            save_ledger(ledger_path, ledger)
-            summary = execute_step(ledger_path, ledger, step_id)
-            if step_id == "convert":
-                ledger["connection_count"] = summary.get("parsed", 0)
-            mark_step(ledger, step_id, "completed", summary=summary)
-            ledger.pop("blocked", None)
-            save_ledger(ledger_path, ledger)
+            convert = self._timed("convert", self.convert)
         except PipelineFailed as exc:
-            mark_step(ledger, step_id, "failed", error=str(exc))
-            ledger["status"] = "failed"
-            save_ledger(ledger_path, ledger)
-            emit({"status": "failed", "step_id": step_id, "error": str(exc), "ledger": str(ledger_path)})
-            return 1
+            return self._write(status="failed", error=str(exc))
+        self.counts.update({
+            "connections_parsed": convert.get("parsed", 0),
+            "connections_total": convert.get("connections_total", 0),
+            "source_people_total": convert.get("source_people_total", 0),
+        })
+        if self.cfg.convert_only:
+            return self._write(status="completed")
+        enrich = self.enrich()
+        self.steps["enrich_people"] = {"status": enrich.status, "counts": enrich.counts, "steps": enrich.steps}
+        self.artifacts.update(enrich.artifacts)
+        for key in ("cache_hit_count", "paid_call_count", "queue_count", "recent_failure_count", "people_rows"):
+            self.counts[key] = enrich.counts.get(key, 0)
+        if enrich.status == "needs_approval":
+            return self._write(status="needs_approval", needs_approval=enrich.needs_approval)
+        if enrich.status == "failed":
+            return self._write(status="failed", error=enrich.error or "enrich_people failed")
+        return self._write(status="completed")
+
+    def _timed(self, step_id: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        started = now_iso()
+        summary = fn()
+        self.steps[step_id] = {"status": "completed", "started_at": started, "finished_at": now_iso(), "summary": summary}
+        return summary
+
+    def _write(self, *, status: str, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> LinkedInImportManifest:
+        manifest = LinkedInImportManifest(
+            status=status,
+            artifact_dir=str(self.run_dir),
+            input=self.cfg.manifest_input(),
+            counts=self.counts,
+            artifacts=self.artifacts,
+            steps=self.steps,
+            needs_approval=needs_approval,
+            error=error,
+            started_at=self.started_at,
+            updated_at=now_iso(),
+        )
+        write_json(self.manifest_path, manifest.to_dict())
+        return manifest
+
+    def convert(self) -> dict[str, Any]:
+        """Parse the Connections.csv into connections + source-people CSVs,
+        upserted in place under the fixed discover dir."""
+        inp = self.cfg.csv
+        connections, stats = parse_connections_csv(inp, self.cfg.source_user, self.cfg.limit)
+        connection_rows = [conn.row() for conn in connections]
+        people_rows = [conn.people_row(inp) for conn in connections]
+        connections_out = self.run_dir / "connections_for_enrichment.csv"
+        people_out = self.run_dir / "source_people.csv"
+        merged_connections = upsert_csv(
+            connections_out,
+            CONNECTION_COLUMNS,
+            connection_rows,
+            ["public_identifier", "linkedin_url", "linkedin_email", "person_id"],
+        )
+        merged_people = upsert_csv(
+            people_out,
+            PEOPLE_COLUMNS,
+            people_rows,
+            ["person_id", "public_identifier", "linkedin_url", "email"],
+        )
+        self.artifacts.update({
+            "connections_csv": str(connections_out),
+            "source_people_csv": str(people_out),
+        })
+        return {
+            **stats,
+            "connections_file": str(connections_out),
+            "source_people_file": str(people_out),
+            "connections_total": len(merged_connections),
+            "source_people_total": len(merged_people),
+        }
+
+    def enrich(self) -> people_enrichment.EnrichManifest:
+        """Delegate RapidAPI enrichment to enrich_people, in-process, against the
+        SAME discover dir. Returns the delegate's typed manifest (whose status
+        carries needs_approval / failed straight up to this stage)."""
+        source_people = self.artifacts.get("source_people_csv")
+        if not source_people:
+            raise PipelineFailed("convert step did not produce source_people_csv")
+        cfg = people_enrichment.build_config(
+            input_csv=source_people,
+            artifact_dir=self.run_dir,
+            profile_cache_dir=self.cfg.profile_cache_dir,
+            limit=None,
+            force=self.cfg.force_enrich,
+            refresh_cache=self.cfg.refresh_cache,
+            company_corpus_jsonl=list(self.cfg.company_corpus_jsonl),
+            sleep_seconds=self.cfg.sleep_seconds,
+            max_workers=self.cfg.max_workers,
+            max_rpm=self.cfg.max_rpm,
+            failure_retry_hours=self.cfg.failure_retry_hours,
+            approve_spend=self.cfg.approve_spend,
+        )
+        return people_enrichment.EnrichPeople(cfg).run()
+
+
+def manifest_emit_payload(manifest: LinkedInImportManifest) -> dict[str, Any]:
+    """The terse JSON a CLI run emits: status + manifest path + counts/artifacts,
+    plus needs_approval / error detail when present."""
+    payload: dict[str, Any] = {
+        "status": manifest.status,
+        "artifact_dir": manifest.artifact_dir,
+        "manifest": str(Path(manifest.artifact_dir) / "manifest.json"),
+        "counts": manifest.counts,
+        "artifacts": manifest.artifacts,
+    }
+    if manifest.needs_approval is not None:
+        payload["needs_approval"] = manifest.needs_approval
+    if manifest.error is not None:
+        payload["error"] = manifest.error
+    return payload
+
+
+def exit_code_for_status(status: str) -> int:
+    return {"completed": 0, "needs_approval": NEEDS_APPROVAL_CODE, "failed": 1}.get(status, 1)
 
 
 def command_run(args: argparse.Namespace) -> int:
     run_dir = discover_output_dir(Path(args.output_dir))
-    ledger_path = Path(args.ledger)
-    if ledger_path.exists() and not args.force:
-        existing = load_ledger(ledger_path)
-        if existing.get("status") not in {"completed", "failed"}:
-            emit({"status": "active_run_exists", "ledger": str(ledger_path), "message": "Use continue/approve or --force."})
-            return 0
-    if args.no_harmonic:
-        # Accepted for old scripts; shared enrichment is RapidAPI-only now.
-        pass
-    reset_delegate_state(run_dir)
-    ledger = {
-        "primitive": "linkedin/network_import",
-        "version": 2,
-        "status": "running",
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "artifact_dir": str(run_dir),
-        "artifact_layout": "stable_discover",
-        "discover_dir": str(run_dir),
-        "ledger": str(ledger_path),
-        "input": {
-            "csv": str(Path(args.csv)),
-            "source_user": args.source_user,
-            "operator_id": args.operator_id,
-            "limit": args.limit,
-            "profile_cache_dir": str(Path(args.profile_cache_dir)),
-            "refresh_cache": args.refresh_cache,
-            "company_corpus_jsonl": [str(Path(p)) for p in (args.company_corpus_jsonl or [])],
-            "sleep_seconds": args.sleep_seconds,
-            "force_enrich": args.force_enrich,
-            "convert_only": args.convert_only,
-            "max_workers": args.max_workers,
-            "max_rpm": args.max_rpm,
-            "failure_retry_hours": args.failure_retry_hours,
-        },
-        "steps": {},
-        "approvals": {},
-        "artifacts": {},
-    }
-    save_ledger(ledger_path, ledger)
-    try:
-        return run_until_blocked_or_done(ledger_path)
-    except PipelineBlocked as blocked:
-        emit(blocked.payload)
-        return blocked.code
-
-
-def command_continue(args: argparse.Namespace) -> int:
-    if not Path(args.ledger).exists():
-        emit({"status": "missing_ledger", "ledger": args.ledger})
-        return 2
-    try:
-        return run_until_blocked_or_done(Path(args.ledger))
-    except PipelineBlocked as blocked:
-        emit(blocked.payload)
-        return blocked.code
-
-
-def command_approve(args: argparse.Namespace) -> int:
-    ledger_path = Path(args.ledger)
-    ledger = load_ledger(ledger_path)
-    blocked = ledger.get("blocked") or {}
-    app_id = args.approval_id or blocked.get("approval_id")
-    if not app_id:
-        emit({"status": "no_pending_approval", "ledger": str(ledger_path)})
-        return 1
-    ledger.setdefault("approvals", {})[app_id] = {"approved_at": now_iso(), "source": "operator"}
-
-    delegate_ledger = blocked.get("delegate_ledger")
-    delegate_approval_id = blocked.get("delegate_approval_id")
-    if delegate_ledger and delegate_approval_id:
-        delegate_path = Path(delegate_ledger)
-        delegate = people_enrichment.load_ledger(delegate_path)
-        delegate.setdefault("approvals", {})[delegate_approval_id] = {"approved_at": now_iso(), "source": "operator", "step_id": "enrich_linkedin"}
-        if delegate.get("blocked", {}).get("approval_id") == delegate_approval_id:
-            delegate.pop("blocked", None)
-        people_enrichment.save_ledger(delegate_path, delegate)
-
-    ledger.pop("blocked", None)
-    save_ledger(ledger_path, ledger)
-    emit({"status": "approved", "approval_id": app_id, "ledger": str(ledger_path), "delegate_ledger": delegate_ledger})
-    return 0
+    cfg = LinkedInImportConfig(
+        csv=Path(args.csv),
+        source_user=args.source_user,
+        run_dir=run_dir,
+        operator_id=args.operator_id,
+        limit=args.limit,
+        profile_cache_dir=Path(args.profile_cache_dir),
+        refresh_cache=args.refresh_cache,
+        company_corpus_jsonl=tuple(str(Path(p)) for p in (args.company_corpus_jsonl or [])),
+        sleep_seconds=args.sleep_seconds,
+        force_enrich=args.force_enrich,
+        convert_only=args.convert_only,
+        max_workers=args.max_workers,
+        max_rpm=args.max_rpm,
+        failure_retry_hours=args.failure_retry_hours,
+        approve_spend=args.approve_spend,
+    )
+    manifest = LinkedInImport(cfg).run()
+    emit(manifest_emit_payload(manifest))
+    return exit_code_for_status(manifest.status)
 
 
 def command_status(args: argparse.Namespace) -> int:
-    ledger = load_ledger(Path(args.ledger))
-    emit({"status": ledger.get("status", "unknown"), "blocked": ledger.get("blocked"), "steps": ledger.get("steps", {}), "artifacts": ledger.get("artifacts", {})})
+    run_dir = discover_output_dir(Path(args.output_dir))
+    manifest = read_json(run_dir / "manifest.json", {}) or {}
+    emit({
+        "status": manifest.get("status", "unknown"),
+        "artifact_dir": str(run_dir),
+        "counts": manifest.get("counts", {}),
+        "artifacts": manifest.get("artifacts", {}),
+        "steps": manifest.get("steps", {}),
+        "needs_approval": manifest.get("needs_approval"),
+    })
     return 0
 
 
@@ -585,8 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--operator-id", default="local")
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
     run.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
-    run.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    run.add_argument("--force", action="store_true", help="Overwrite an active LinkedIn network-import ledger")
+    run.add_argument("--approve-spend", action="store_true", help="Authorize paid RapidAPI fetches for cache misses (otherwise a run with misses stops at needs_approval)")
     run.add_argument("--convert-only", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--force-enrich", action="store_true", help="Re-enrich rows even when source rows look complete")
     run.add_argument("--profile-cache-dir", default=str(DEFAULT_PROFILE_CACHE_DIR))
@@ -600,17 +530,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-rapidapi", action="store_true", help=argparse.SUPPRESS)
     run.set_defaults(func=command_run)
 
-    cont = sub.add_parser("continue")
-    cont.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    cont.set_defaults(func=command_continue)
-
-    approve = sub.add_parser("approve")
-    approve.add_argument("--ledger", default=str(DEFAULT_LEDGER))
-    approve.add_argument("--approval-id")
-    approve.set_defaults(func=command_approve)
-
     status = sub.add_parser("status")
-    status.add_argument("--ledger", default=str(DEFAULT_LEDGER))
+    status.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     status.set_defaults(func=command_status)
 
     keys = sub.add_parser("check-keys")

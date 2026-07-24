@@ -1,5 +1,16 @@
 <!--
 Changelog:
+- 2026-07-23 (audit): linkedin/network_import.py + enrich/enrich_people.py migrated
+  to manifest-only; both are now a single idempotent `run` writing one
+  manifest.json (the per-primitive ledger runners, the `continue`/`approve`
+  subcommands, and the delegate enrich_people.ledger.json are gone). The LinkedIn
+  CSV path + the two LinkedIn/shared-enrichment RapidAPI gate rows now say spend is
+  gated by `--approve-spend` (a needs_approval stop on cache misses); cache hits
+  stay local-only. run_linkedin.py invokes the single approved `run` on Modal.
+- 2026-07-23 (audit): twitter/network_import.py migrated to manifest-only; the
+  `$import-twitter` runtime row is now `run` with spend gated by `--approve-spend`
+  (the `approve`/`continue` subcommands and the ledger are gone), and the two
+  Twitter RapidAPI gate rows note the artifact-cache behavior.
 - 2026-07-23 (audit): gmail/msgvault_store.py split into the gmail/msgvault/
   package (store.py + util.py); gmail/sync.py moved to gmail/msgvault/sync.py.
 - 2026-07-23 (audit batch 17): gmail/network_import.py rows retargeted to its
@@ -47,9 +58,9 @@ primitives so runs are deterministic, ledgered, testable, and resumable.
 | User command / skill | Skill file | Runtime script(s) | Result |
 | --- | --- | --- | --- |
 | `$import-gmail` | `packs/ingestion/skills/import-gmail/SKILL.md` | bounded `gmail.py discover` -> directory/Parallel/RapidAPI import -> fan-in -> Modal index | msgvault Gmail metadata imported into the local network and search index. |
-| `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter/network_import.py run/approve/continue`; then the indexing fan-in | Twitter/X `people.csv`, then merged local network artifacts. |
+| `$import-twitter` | `packs/ingestion/skills/import-twitter/SKILL.md` | `twitter/network_import.py run` (spend gated by `--approve-spend`); then the indexing fan-in | Twitter/X `people.csv`, then merged local network artifacts. |
 | `$import-messages` | `packs/ingestion/skills/import-messages/SKILL.md` | ingestion discovery/match/research/review -> source import -> fan-in -> Modal index | Reviewed iMessage/WhatsApp metadata in merged local network artifacts. |
-| LinkedIn CSV path | `$setup` (or `linkedin/network_import.py` directly) | `linkedin/network_import.py` -> `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
+| LinkedIn CSV path | `$setup` (or `linkedin/network_import.py` directly) | `linkedin/network_import.py run` (spend gated by `--approve-spend`) delegating to `enrich_people.py` | LinkedIn Connections export plus shared RapidAPI/cached profile enrichment. |
 
 ## Canonical CSV contracts
 
@@ -124,10 +135,10 @@ enrichment primitive for rows that already have LinkedIn identity.
 
 | Surface | RapidAPI usage | Where it happens | Gate |
 | --- | --- | --- | --- |
-| LinkedIn CSV import | LinkedIn profile enrichment for cache misses | `linkedin/network_import.py` delegates to `enrich_people.py` | Approval-gated by `enrich_people`; cache hits are local-only. |
-| Shared people enrichment | LinkedIn profile enrichment for rows with `linkedin_url` / `public_identifier` | `enrich_people.py` | Approval-gated for RapidAPI cache misses. |
-| Twitter/X import | Twitter follower crawl | `twitter/network_import.py` step `load_or_crawl` | Approval-gated. |
-| Twitter/X import | LinkedIn validation/enrichment for pre-resolved LinkedIn URLs | `twitter/network_import.py` step `validate_linkedin` | Approval-gated. |
+| LinkedIn CSV import | LinkedIn profile enrichment for cache misses | `linkedin/network_import.py` delegates to `enrich_people.py` | Gated by `--approve-spend` (a `needs_approval` stop on cache misses, forwarded to the delegate); cache hits are local-only. |
+| Shared people enrichment | LinkedIn profile enrichment for rows with `linkedin_url` / `public_identifier` | `enrich_people.py` | Gated by `--approve-spend` (a `needs_approval` stop on RapidAPI cache misses); cache hits never spend. |
+| Twitter/X import | Twitter follower crawl | `twitter/network_import.py` step `load_or_crawl` | Gated by `--approve-spend`; cached once `followers_dump.csv` exists. |
+| Twitter/X import | LinkedIn validation/enrichment for pre-resolved LinkedIn URLs | `twitter/network_import.py` step `validate_linkedin` | Gated by `--approve-spend`; cached once `linkedin_validated.csv` exists. |
 | Gmail/msgvault | No lookups inside the import; `gmail/discover_engine.py msgvault` emits `linkedin_resolution_queue.csv` and `gmail/discover_engine.py apply-resolutions` attaches already-STORED resolutions | new LinkedIn resolution/research is owned by `$deep-context` (`deep_context/deep_research_contacts.py` + the identity judge) | msgvault import local-only; all resolution spend lives behind deep-context gates; RapidAPI only later through `enrich_people.py`. |
 | Messages/iMessage/WhatsApp | None in local import today | ingestion message primitives | Local metadata/review only unless later resolver/enrichment is explicitly added. |
 

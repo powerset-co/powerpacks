@@ -1,19 +1,44 @@
-"""Gmail import step functions for the LIVE import chain.
+"""Gmail import orchestration for the LIVE import chain.
 
-Contains ONLY the gmail-specific orchestration — `run_gmail_directory` and
-`run_gmail_apply_and_enrich` (which applies STORED resolutions: no Parallel
-calls, no RapidAPI hydration; deep-context owns resolution/enrichment, and
-`bin/deep-context migrate-legacy` adopts the stored era into
-overrides/review.csv) — plus the gmail queue/observation/resolution commit
-helpers and the ledger run-state helpers (`save_ledger`/`mark_step`/
-`begin_step`). Everything cross-source (the whole directory.csv contract, the
-resolution normalizers, the people.csv materializers) is imported from
-`imports/directory.py`; the json/proc field helpers come from
-`packs.ingestion.primitives.common`. Loaded via
-`imports.common.load_gmail_import_steps`, which getattrs `save_ledger` /
-`run_gmail_*` off this module — those names must stay defined here.
+Exposes `GmailImport` — the orchestrator the live import dispatches. It owns the
+fixed import dir, the JSON run-state (still persisted to `ledger.json` this
+round — KEPT; its removal is a separate decision), and the two-step chain:
+  - directory apply: apply the shared `directory.csv` to each Gmail queue,
+    splitting resolved / unresolved / cached-negative and committing the Gmail
+    observations + directory resolutions back into `directory.csv`.
+  - stored-resolution apply: attach STORED resolutions only (directory +
+    explicit; no Parallel calls, no RapidAPI hydration — deep-context owns
+    resolution/enrichment, and `bin/deep-context migrate-legacy` adopts the
+    stored era into overrides/review.csv) onto each account people.csv via
+    discover_engine apply-resolutions, then materialize one merged Gmail
+    people.csv.
+`GmailImport.run()` then splits matched people vs candidates, runs the directory
+source-account quality gate, and writes the import manifest.
+
+The per-step run-state helpers (`_save`/`_mark_step`/`_begin_step`) are methods
+that mutate `self.ledger` in place (the dict `ledger.json` mirrors), so the
+ledger is no longer threaded through free functions. The directory-commit,
+resolution-merge, and queue helpers stay module-level pure transforms the steps
+call; everything cross-source (the whole directory.csv contract, the resolution
+normalizers, the people.csv materializers) is imported from `imports/directory.py`,
+and the shared import helpers (manifest read/write, ledger constructor, people/
+candidate materialization) from `imports/common.py` + `imports/gmail/util.py`.
+
+Loaded via `imports.common.load_gmail_import_steps`, which getattrs `GmailImport`
+off this module — that name must stay defined here, and the loader + the
+`importer.py` caller move together.
 
 Changelog:
+  2026-07-23 (oop): the `run_gmail_directory` / `run_gmail_apply_and_enrich`
+    free functions that mutated a threaded `ledger` dict (plus the module-level
+    `save_ledger` / `mark_step` / `begin_step` and the whole `run()` body that
+    lived in importer.py) were folded into a `GmailImport` orchestrator class
+    that owns the import dir, the ledger run-state, the step chain, the people/
+    candidate split, the quality gate, and the manifest. importer.py is now a
+    thin CLI wrapper that getattrs `GmailImport` off the loaded module. The fixed
+    output paths, ledger.json contract, CLI surface, and manifest payloads are
+    unchanged; the directory-commit / resolution-merge / queue helpers stay
+    module-level pure transforms.
   2026-07-23 (audit): the person-vs-role classifiers is_generic_or_non_person /
     is_likely_person_name now import from common/contact_fields.py (they moved
     out of the split-up discover/gmail msgvault reader — generic name/email
@@ -41,6 +66,7 @@ Changelog:
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -57,9 +83,12 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_DISCOVER_DIR,
+    DEFAULT_IMPORT_DIR,
+    DEFAULT_PROFILE_CACHE_DIR,
+    source_import_dir,
 )
 from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress, py_cmd, run_cmd  # noqa: E402
-from packs.ingestion.primitives.discover.common import read_csv_rows, source_slug  # noqa: E402
+from packs.ingestion.primitives.discover.common import read_accounts, read_csv_rows, source_slug  # noqa: E402
 from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
     is_generic_or_non_person,
     is_likely_person_name,
@@ -79,6 +108,20 @@ from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     normalized_directory_row,
     parse_confidence,
     resolution_from_directory_match,
+)
+from packs.ingestion.primitives.imports.common import (  # noqa: E402
+    GmailImportLedger,
+    copy_people_csv,
+    csv_count,
+    directory_source_account_quality,
+    import_manifest_current,
+    linked_gmail_accounts,
+    normalize_directory_source_accounts,
+    write_manifest,
+)
+from packs.ingestion.primitives.imports.gmail.util import (  # noqa: E402
+    gmail_artifacts_from_discovery,
+    write_gmail_candidates,
 )
 from packs.ingestion.schemas.gmail_artifacts import LINKEDIN_RESOLUTION_COLUMNS  # noqa: E402
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url  # noqa: E402
@@ -319,30 +362,6 @@ def ordered_records(records: list[dict[str, Any]], account_order: list[str] | No
     )
 
 
-def save_ledger(path: Path, ledger: dict[str, Any]) -> None:
-    """Persist the run ledger, stamping updated_at."""
-    ledger["updated_at"] = now_iso()
-    write_json(path, ledger)
-
-
-def mark_step(ledger: dict[str, Any], step: str, status: str, **extra: Any) -> None:
-    """Update one step's status/timestamps in the ledger (in place)."""
-    rec = ledger.setdefault("steps", {}).setdefault(step, {"id": step})
-    if status == "running" and "started_at" not in rec:
-        rec["started_at"] = now_iso()
-    if status in {"completed", "failed", "blocked", "skipped"}:
-        rec["finished_at"] = now_iso()
-    rec["status"] = status
-    rec.update({k: v for k, v in extra.items() if v is not None})
-
-
-def begin_step(ledger_path: Path, ledger: dict[str, Any], step: str, message: str) -> None:
-    """Mark a step running, persist the ledger, and emit a progress line."""
-    mark_step(ledger, step, "running")
-    save_ledger(ledger_path, ledger)
-    emit_progress(message)
-
-
 def gmail_queue_records(artifacts: dict[str, Any]) -> list[dict[str, Any]]:
     """Normalize the per-account Gmail queue records out of the run artifacts."""
     queue_records = artifacts.get("gmail_linkedin_resolution_queue_csvs") or []
@@ -351,154 +370,302 @@ def gmail_queue_records(artifacts: dict[str, Any]) -> list[dict[str, Any]]:
     return [record for record in queue_records if isinstance(record, dict) and record.get("queue_csv")]
 
 
-def run_gmail_directory(ledger_path: Path, ledger: dict[str, Any]) -> bool:
-    """Apply directory.csv LinkedIn mappings to every Gmail queue, recording resolved/unresolved/cached-negative."""
-    input_cfg = ledger.get("input", {})
-    artifacts = ledger.setdefault("artifacts", {})
-    queue_records = ordered_records(gmail_queue_records(artifacts), unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
-    if not queue_records:
+class GmailImport:
+    """Orchestrates the directory-only Gmail import.
+
+    Owns the fixed import dir, the JSON run-state (mirrored into `ledger.json` —
+    KEPT this round), the two-step chain (directory apply -> stored-resolution
+    apply + people materialization), the matched-people / candidates split, the
+    directory source-account quality gate, and the import manifest. The step
+    methods mutate `self.ledger` in place instead of threading a ledger dict
+    through free functions; the module-level directory-commit / resolution-merge
+    / queue helpers stay pure transforms the steps call.
+
+    A step failure ends the run with status `failed` (steps record their own
+    error in the ledger); there is no approval gate — nothing here spends. The
+    contract token is supplied by the caller (importer.py owns it for the package
+    __init__ re-export)."""
+
+    def __init__(self, *, args: argparse.Namespace, contract: str) -> None:
+        self.args = args
+        self.contract = contract
+        self.import_dir = source_import_dir("gmail")
+        self.ledger_path = self.import_dir / "ledger.json"
+        self.ledger: dict[str, Any] = {}
+
+    # --- run-state (owned by the orchestrator; mirrored into ledger.json) -----
+
+    def _save(self) -> None:
+        """Persist the run ledger, stamping updated_at."""
+        self.ledger["updated_at"] = now_iso()
+        write_json(self.ledger_path, self.ledger)
+
+    def _mark_step(self, step: str, status: str, **extra: Any) -> None:
+        """Update one step's status/timestamps in the ledger (in place)."""
+        rec = self.ledger.setdefault("steps", {}).setdefault(step, {"id": step})
+        if status == "running" and "started_at" not in rec:
+            rec["started_at"] = now_iso()
+        if status in {"completed", "failed", "blocked", "skipped"}:
+            rec["finished_at"] = now_iso()
+        rec["status"] = status
+        rec.update({k: v for k, v in extra.items() if v is not None})
+
+    def _begin_step(self, step: str, message: str) -> None:
+        """Mark a step running, persist the ledger, and emit a progress line."""
+        self._mark_step(step, "running")
+        self._save()
+        emit_progress(message)
+
+    # --- steps ----------------------------------------------------------------
+
+    def _directory_step(self) -> bool:
+        """Apply directory.csv LinkedIn mappings to every Gmail queue, recording resolved/unresolved/cached-negative."""
+        input_cfg = self.ledger.get("input", {})
+        artifacts = self.ledger.setdefault("artifacts", {})
+        queue_records = ordered_records(gmail_queue_records(artifacts), unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
+        if not queue_records:
+            checkpoint = build_directory_checkpoint(input_cfg, artifacts)
+            artifacts["directory_csv"] = checkpoint["directory_csv"]
+            self._mark_step("gmail_directory", "skipped", reason="no Gmail LinkedIn queue", checkpoint=checkpoint)
+            return True
+        self._begin_step("gmail_directory", f"Applying directory LinkedIn mappings to {len(queue_records)} Gmail queue(s).")
+        observation_checkpoint = commit_gmail_observations_to_directory(input_cfg, artifacts)
+        checkpoint = build_directory_checkpoint(input_cfg, artifacts)
+        directory_csv = Path(checkpoint["directory_csv"])
+        artifacts["directory_csv"] = str(directory_csv)
+        artifacts["gmail_directory_by_slug"] = {}
+        by_slug = artifacts["gmail_directory_by_slug"]
+        artifacts["gmail_directory_resolution_records"] = []
+        artifacts["gmail_unresolved_linkedin_resolution_queue_csvs"] = []
+        artifacts["gmail_cached_negative_linkedin_resolution_queue_csvs"] = []
+        results = []
+        total_resolved = 0
+        total_unresolved = 0
+        total_cached_negative = 0
+        for index, record in enumerate(queue_records):
+            slug = source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}")
+            out_dir = artifact_dir_from_ledger(self.ledger) / f"gmail-directory-{slug}"
+            result = apply_directory_to_gmail_queue(record, directory_csv, out_dir)
+            result["slug"] = slug
+            by_slug[slug] = result
+            total_resolved += int(result.get("resolved") or 0)
+            total_unresolved += int(result.get("unresolved") or 0)
+            total_cached_negative += int(result.get("cached_negative") or 0)
+            if int(result.get("resolved") or 0) > 0:
+                artifacts["gmail_directory_resolution_records"].append({
+                    "account_email": record.get("account_email", ""),
+                    "resolutions_csv": result.get("directory_resolutions_csv"),
+                    "people_csv": record.get("people_csv"),
+                    "slug": slug,
+                    "source": "directory",
+                    "resolved": result.get("resolved"),
+                })
+            if int(result.get("unresolved") or 0) > 0:
+                artifacts["gmail_unresolved_linkedin_resolution_queue_csvs"].append({
+                    "account_email": record.get("account_email", ""),
+                    "queue_csv": result.get("unresolved_queue_csv"),
+                    "people_csv": record.get("people_csv"),
+                    "slug": slug,
+                    "source": "directory_unresolved",
+                    "unresolved": result.get("unresolved"),
+                })
+            if int(result.get("cached_negative") or 0) > 0:
+                artifacts["gmail_cached_negative_linkedin_resolution_queue_csvs"].append({
+                    "account_email": record.get("account_email", ""),
+                    "queue_csv": result.get("cached_negative_queue_csv"),
+                    "people_csv": record.get("people_csv"),
+                    "slug": slug,
+                    "source": "directory_cached_negative",
+                    "cached_negative": result.get("cached_negative"),
+                })
+            results.append(result)
+        self._mark_step("gmail_directory", "completed", checkpoint=checkpoint, observation_checkpoint=observation_checkpoint, resolved=total_resolved, unresolved=total_unresolved, cached_negative=total_cached_negative, payload={"results": results})
+        if total_cached_negative:
+            emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_cached_negative} already attempted, {total_unresolved} unresolved.")
+        else:
+            emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_unresolved} unresolved.")
+        return True
+
+    def _apply_and_enrich_step(self) -> bool:
+        """Apply the combined stored Gmail resolutions to each account's people.csv and materialize the merged Gmail people artifact."""
+        input_cfg = self.ledger.get("input", {})
+        artifacts = self.ledger.setdefault("artifacts", {})
+        raw_resolution_records: list[dict[str, Any]] = []
+        if input_cfg.get("gmail_resolutions_csv"):
+            people_records = [
+                record for record in ordered_records(
+                    artifacts.get("gmail_people_records") or [],
+                    unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")),
+                )
+                if isinstance(record, dict) and record.get("people_csv")
+            ]
+            raw_resolution_records.extend([
+                {
+                    "account_email": record.get("account_email", ""),
+                    "resolutions_csv": input_cfg.get("gmail_resolutions_csv"),
+                    "people_csv": record.get("people_csv"),
+                    "slug": record.get("slug") or record.get("account_email") or f"account-{index}",
+                    "source": "explicit",
+                }
+                for index, record in enumerate(people_records)
+            ])
+        raw_resolution_records.extend(record for record in artifacts.get("gmail_directory_resolution_records") or [] if isinstance(record, dict))
+        raw_resolution_records.extend(record for record in artifacts.get("gmail_linkedin_resolutions_csvs") or [] if isinstance(record, dict))
+        if raw_resolution_records:
+            commit_gmail_resolutions_to_directory(input_cfg, artifacts, raw_resolution_records)
+        resolution_records = combine_gmail_resolution_records(raw_resolution_records, artifact_dir_from_ledger(self.ledger))
+        if not resolution_records:
+            self._mark_step("gmail_apply_enrich", "skipped", reason="no gmail resolutions")
+            return True
+        resolution_records = ordered_records(resolution_records, unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
         checkpoint = build_directory_checkpoint(input_cfg, artifacts)
         artifacts["directory_csv"] = checkpoint["directory_csv"]
-        mark_step(ledger, "gmail_directory", "skipped", reason="no Gmail LinkedIn queue", checkpoint=checkpoint)
-        return True
-    begin_step(ledger_path, ledger, "gmail_directory", f"Applying directory LinkedIn mappings to {len(queue_records)} Gmail queue(s).")
-    observation_checkpoint = commit_gmail_observations_to_directory(input_cfg, artifacts)
-    checkpoint = build_directory_checkpoint(input_cfg, artifacts)
-    directory_csv = Path(checkpoint["directory_csv"])
-    artifacts["directory_csv"] = str(directory_csv)
-    artifacts["gmail_directory_by_slug"] = {}
-    by_slug = artifacts["gmail_directory_by_slug"]
-    artifacts["gmail_directory_resolution_records"] = []
-    artifacts["gmail_unresolved_linkedin_resolution_queue_csvs"] = []
-    artifacts["gmail_cached_negative_linkedin_resolution_queue_csvs"] = []
-    results = []
-    total_resolved = 0
-    total_unresolved = 0
-    total_cached_negative = 0
-    for index, record in enumerate(queue_records):
-        slug = source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}")
-        out_dir = artifact_dir_from_ledger(ledger) / f"gmail-directory-{slug}"
-        result = apply_directory_to_gmail_queue(record, directory_csv, out_dir)
-        result["slug"] = slug
-        by_slug[slug] = result
-        total_resolved += int(result.get("resolved") or 0)
-        total_unresolved += int(result.get("unresolved") or 0)
-        total_cached_negative += int(result.get("cached_negative") or 0)
-        if int(result.get("resolved") or 0) > 0:
-            artifacts["gmail_directory_resolution_records"].append({
-                "account_email": record.get("account_email", ""),
-                "resolutions_csv": result.get("directory_resolutions_csv"),
-                "people_csv": record.get("people_csv"),
-                "slug": slug,
-                "source": "directory",
-                "resolved": result.get("resolved"),
-            })
-        if int(result.get("unresolved") or 0) > 0:
-            artifacts["gmail_unresolved_linkedin_resolution_queue_csvs"].append({
-                "account_email": record.get("account_email", ""),
-                "queue_csv": result.get("unresolved_queue_csv"),
-                "people_csv": record.get("people_csv"),
-                "slug": slug,
-                "source": "directory_unresolved",
-                "unresolved": result.get("unresolved"),
-            })
-        if int(result.get("cached_negative") or 0) > 0:
-            artifacts["gmail_cached_negative_linkedin_resolution_queue_csvs"].append({
-                "account_email": record.get("account_email", ""),
-                "queue_csv": result.get("cached_negative_queue_csv"),
-                "people_csv": record.get("people_csv"),
-                "slug": slug,
-                "source": "directory_cached_negative",
-                "cached_negative": result.get("cached_negative"),
-            })
-        results.append(result)
-    mark_step(ledger, "gmail_directory", "completed", checkpoint=checkpoint, observation_checkpoint=observation_checkpoint, resolved=total_resolved, unresolved=total_unresolved, cached_negative=total_cached_negative, payload={"results": results})
-    if total_cached_negative:
-        emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_cached_negative} already attempted, {total_unresolved} unresolved.")
-    else:
-        emit_progress(f"Gmail directory mappings applied: {total_resolved} resolved, {total_unresolved} unresolved.")
-    return True
-
-
-def run_gmail_apply_and_enrich(ledger_path: Path, ledger: dict[str, Any]) -> bool:
-    """Apply the combined stored Gmail resolutions to each account's people.csv and materialize the merged Gmail people artifact."""
-    input_cfg = ledger.get("input", {})
-    artifacts = ledger.setdefault("artifacts", {})
-    raw_resolution_records: list[dict[str, Any]] = []
-    if input_cfg.get("gmail_resolutions_csv"):
-        people_records = [
-            record for record in ordered_records(
-                artifacts.get("gmail_people_records") or [],
-                unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")),
+        artifacts["directory_checkpoint"] = checkpoint
+        artifacts["gmail_apply_enrich_by_slug"] = {}
+        by_slug = artifacts["gmail_apply_enrich_by_slug"]
+        artifacts["gmail_resolved_people_csvs"] = []
+        artifacts["gmail_enrich_people_ledgers"] = []
+        artifacts["gmail_final_people_csvs"] = []
+        artifacts["gmail_combined_resolutions_csvs"] = resolution_records
+        self._begin_step("gmail_apply_enrich", f"Applying Gmail LinkedIn matches for {len(resolution_records)} account file(s).")
+        results = []
+        final_people_csvs = []
+        for index, record in enumerate(resolution_records):
+            slug = source_slug(record.get("account_email") or record.get("slug") or f"account-{index}")
+            account_dir = Path(str(record.get("people_csv") or "")).parent
+            resolved_dir = account_dir / "resolved"
+            apply_cmd = py_cmd(
+                "packs/ingestion/primitives/discover/gmail/discover_engine.py",
+                "apply-resolutions",
+                "--people-csv", str(record["people_csv"]),
+                "--resolutions-csv", str(record["resolutions_csv"]),
+                "--output-dir", str(resolved_dir),
             )
-            if isinstance(record, dict) and record.get("people_csv")
-        ]
-        raw_resolution_records.extend([
-            {
-                "account_email": record.get("account_email", ""),
-                "resolutions_csv": input_cfg.get("gmail_resolutions_csv"),
-                "people_csv": record.get("people_csv"),
-                "slug": record.get("slug") or record.get("account_email") or f"account-{index}",
-                "source": "explicit",
-            }
-            for index, record in enumerate(people_records)
-        ])
-    raw_resolution_records.extend(record for record in artifacts.get("gmail_directory_resolution_records") or [] if isinstance(record, dict))
-    raw_resolution_records.extend(record for record in artifacts.get("gmail_linkedin_resolutions_csvs") or [] if isinstance(record, dict))
-    if raw_resolution_records:
-        commit_gmail_resolutions_to_directory(input_cfg, artifacts, raw_resolution_records)
-    resolution_records = combine_gmail_resolution_records(raw_resolution_records, artifact_dir_from_ledger(ledger))
-    if not resolution_records:
-        mark_step(ledger, "gmail_apply_enrich", "skipped", reason="no gmail resolutions")
+            code, payload, stderr = run_cmd(apply_cmd, prefix="[gmail-import]")
+            if code != 0:
+                self._mark_step("gmail_apply_enrich", "failed", error=stderr or payload)
+                self.ledger["status"] = "failed"
+                self._save()
+                emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": stderr or payload})
+                return False
+            resolved_people = payload.get("people_csv") or record["people_csv"]
+            artifacts.setdefault("gmail_resolved_people_csvs", []).append(resolved_people)
+            artifacts["gmail_resolved_people_csv"] = resolved_people
+            result = {"account_email": record.get("account_email", ""), "slug": slug, "apply": payload, "people_csv": resolved_people}
+            final_people_csvs.append(resolved_people)
+            artifacts["gmail_people_csv"] = resolved_people
+            result["final_people_csv"] = resolved_people
+            by_slug[slug] = result
+            results.append(result)
+        artifacts["gmail_account_final_people_csvs"] = final_people_csvs
+        artifacts["gmail_final_people_csvs"] = final_people_csvs
+        gmail_merge = materialize_gmail_merged_people_csv(final_people_csvs, DEFAULT_BASE_DIR / "gmail" / "people.gmail.csv")
+        artifacts["gmail_merged_people"] = gmail_merge
+        if gmail_merge.get("status") == "completed" and gmail_merge.get("people_csv"):
+            artifacts["gmail_merged_people_csv"] = gmail_merge.get("people_csv")
+            artifacts["gmail_final_people_csvs"] = [str(gmail_merge.get("people_csv"))]
+            artifacts["gmail_people_csv"] = str(gmail_merge.get("people_csv"))
+        self._mark_step("gmail_apply_enrich", "completed", payload={"results": results, "gmail_merged_people": gmail_merge})
+        emit_progress("Gmail LinkedIn matches applied and enrichment completed.")
         return True
-    resolution_records = ordered_records(resolution_records, unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
-    checkpoint = build_directory_checkpoint(input_cfg, artifacts)
-    artifacts["directory_csv"] = checkpoint["directory_csv"]
-    artifacts["directory_checkpoint"] = checkpoint
-    artifacts["gmail_apply_enrich_by_slug"] = {}
-    by_slug = artifacts["gmail_apply_enrich_by_slug"]
-    artifacts["gmail_resolved_people_csvs"] = []
-    artifacts["gmail_enrich_people_ledgers"] = []
-    artifacts["gmail_final_people_csvs"] = []
-    artifacts["gmail_combined_resolutions_csvs"] = resolution_records
-    begin_step(ledger_path, ledger, "gmail_apply_enrich", f"Applying Gmail LinkedIn matches for {len(resolution_records)} account file(s).")
-    results = []
-    final_people_csvs = []
-    for index, record in enumerate(resolution_records):
-        slug = source_slug(record.get("account_email") or record.get("slug") or f"account-{index}")
-        account_dir = Path(str(record.get("people_csv") or "")).parent
-        resolved_dir = account_dir / "resolved"
-        apply_cmd = py_cmd(
-            "packs/ingestion/primitives/discover/gmail/discover_engine.py",
-            "apply-resolutions",
-            "--people-csv", str(record["people_csv"]),
-            "--resolutions-csv", str(record["resolutions_csv"]),
-            "--output-dir", str(resolved_dir),
-        )
-        code, payload, stderr = run_cmd(apply_cmd, prefix="[gmail-import]")
-        if code != 0:
-            mark_step(ledger, "gmail_apply_enrich", "failed", error=stderr or payload)
-            ledger["status"] = "failed"
-            save_ledger(ledger_path, ledger)
-            emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": stderr or payload})
-            return False
-        resolved_people = payload.get("people_csv") or record["people_csv"]
-        artifacts.setdefault("gmail_resolved_people_csvs", []).append(resolved_people)
-        artifacts["gmail_resolved_people_csv"] = resolved_people
-        result = {"account_email": record.get("account_email", ""), "slug": slug, "apply": payload, "people_csv": resolved_people}
-        final_people_csvs.append(resolved_people)
-        artifacts["gmail_people_csv"] = resolved_people
-        result["final_people_csv"] = resolved_people
-        by_slug[slug] = result
-        results.append(result)
-    artifacts["gmail_account_final_people_csvs"] = final_people_csvs
-    artifacts["gmail_final_people_csvs"] = final_people_csvs
-    gmail_merge = materialize_gmail_merged_people_csv(final_people_csvs, DEFAULT_BASE_DIR / "gmail" / "people.gmail.csv")
-    artifacts["gmail_merged_people"] = gmail_merge
-    if gmail_merge.get("status") == "completed" and gmail_merge.get("people_csv"):
-        artifacts["gmail_merged_people_csv"] = gmail_merge.get("people_csv")
-        artifacts["gmail_final_people_csvs"] = [str(gmail_merge.get("people_csv"))]
-        artifacts["gmail_people_csv"] = str(gmail_merge.get("people_csv"))
-    mark_step(ledger, "gmail_apply_enrich", "completed", payload={"results": results, "gmail_merged_people": gmail_merge})
-    emit_progress("Gmail LinkedIn matches applied and enrichment completed.")
-    return True
+
+    # --- orchestration --------------------------------------------------------
+
+    def run(self) -> dict[str, Any]:
+        """The whole import: fingerprint no-op check -> build the ledger -> the
+        two step methods (directory match, then apply + people materialization)
+        -> candidates + directory quality checks -> the import manifest."""
+        args = self.args
+        expected_input = {
+            "pipeline_contract": self.contract,
+            "mode": "directory-only",
+        }
+        current = import_manifest_current("gmail", expected_input, import_dir=DEFAULT_IMPORT_DIR)
+        if current and not getattr(args, "force", False):
+            return current
+        accounts = read_accounts(args.accounts)
+        import_dir = self.import_dir
+        emails = linked_gmail_accounts(accounts)
+        self.ledger = GmailImportLedger(
+            artifact_dir=str(import_dir),
+            input={
+                "operator_id": args.operator_id,
+                "from_accounts": str(args.accounts),
+                "gmail_account_emails": emails,
+                # Directory-only, always: this import applies the directory and any
+                # STORED resolutions; resolution + enrichment live in deep-context
+                # (migrate-legacy for the stored era, judged lookups for new people).
+                "linkedin_directory_csv": str(DEFAULT_DIRECTORY_CSV),
+                "profile_cache_dir": str(DEFAULT_PROFILE_CACHE_DIR),
+            },
+            artifacts=gmail_artifacts_from_discovery(),
+        ).to_dict()
+        ledger = self.ledger
+        if not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csvs"):
+            reason = "no Gmail discovery queue"
+            status = "skipped"
+            if ledger["artifacts"].get("gmail_linkedin_resolution_queue_csv") or ledger["artifacts"].get("gmail_invalid_discovery_records"):
+                reason = "gmail_discovery_missing_per_account_people_csv"
+            return write_manifest("gmail", {
+                "status": status,
+                "reason": reason,
+                "artifact_dir": str(import_dir),
+                "artifacts": ledger.get("artifacts", {}),
+            }, import_dir=DEFAULT_IMPORT_DIR)
+        write_json(self.ledger_path, ledger)
+        for step in (self._directory_step, self._apply_and_enrich_step):
+            if not step():
+                return write_manifest("gmail", {
+                    "status": "failed",
+                    "ledger": str(self.ledger_path),
+                    "artifact_dir": str(import_dir),
+                    "steps": ledger.get("steps", {}),
+                    "artifacts": ledger.get("artifacts", {}),
+                }, import_dir=DEFAULT_IMPORT_DIR)
+            self._save()
+        ledger["status"] = "completed"
+        self._save()
+        people_csv = copy_people_csv("gmail", str(ledger.get("artifacts", {}).get("gmail_merged_people_csv") or ledger.get("artifacts", {}).get("gmail_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
+        candidates = write_gmail_candidates(ledger.get("artifacts", {}), import_dir)
+        directory_normalization = normalize_directory_source_accounts("gmail")
+        directory_quality = directory_source_account_quality("gmail")
+        if directory_quality["status"] != "ok":
+            return write_manifest("gmail", {
+                "status": "failed",
+                "reason": "directory_source_account_quality_failed",
+                "ledger": str(self.ledger_path),
+                "artifact_dir": str(import_dir),
+                "outputs": {
+                    "people_csv": people_csv,
+                    "directory_csv": str(DEFAULT_DIRECTORY_CSV),
+                },
+                "directory_normalization": directory_normalization,
+                "directory_quality": directory_quality,
+                "steps": ledger.get("steps", {}),
+                "artifacts": ledger.get("artifacts", {}),
+            }, import_dir=DEFAULT_IMPORT_DIR)
+        return write_manifest("gmail", {
+            "status": "completed",
+            "ledger": str(self.ledger_path),
+            "artifact_dir": str(import_dir),
+            "input": {
+                **expected_input,
+                "discovery_manifest": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json"),
+                "contacts_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "contacts.csv"),
+                "linkedin_resolution_queue_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "linkedin_resolution_queue.csv"),
+            },
+            "outputs": {
+                "people_csv": people_csv,
+                "candidates_csv": candidates["candidates_csv"],
+                "directory_csv": str(DEFAULT_DIRECTORY_CSV),
+            },
+            "stats": {
+                "people": csv_count(people_csv),
+                "candidates": candidates["candidates"],
+            },
+            "candidates": candidates,
+            "steps": ledger.get("steps", {}),
+            "directory_normalization": directory_normalization,
+            "directory_quality": directory_quality,
+            "artifacts": ledger.get("artifacts", {}),
+        }, import_dir=DEFAULT_IMPORT_DIR)

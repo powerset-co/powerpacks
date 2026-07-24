@@ -2,6 +2,17 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-07-23 (audit): `twitter/network_import.py` migrated from the resumable
+  ledger step-machine (`run/approve/continue/status` + `network_import.ledger.json`)
+  to a manifest-only single-`run` orchestrator (`TwitterDiscovery`): resume is by
+  artifact freshness, spend consent is the single `--approve-spend` flag, and the
+  stage records one typed `manifest.json`. Step logic unchanged.
+- 2026-07-23 (oop): `gmail/discover.py`'s monolithic 4-phase `discover()` became a
+  `GmailAccountChannel` per selected account (owns its fixed per-account output
+  dir, msgvault sync, and `discover_engine` child spawn) plus a `GmailDiscovery`
+  store (owns the output dir, channel loop, merge plan, and manifest) — the #320
+  `messages/discover.py` channel+store pattern. `discover()` is now a thin
+  wrapper; behavior, fixed output paths, and typed manifest payloads unchanged.
 - 2026-07-23 (audit): `gmail/msgvault_store.py` split into the `gmail/msgvault/`
   package (`store.py` = `MsgvaultStore` + SQL, `util.py` = pure helpers) and
   `gmail/sync.py` moved to `gmail/msgvault/sync.py`; the person-vs-role
@@ -46,14 +57,14 @@ flowchart LR
 
   GDISC --> GOUT["discover/gmail/<br/>contacts.csv,<br/>linkedin_resolution_queue.csv,<br/>manifest.json<br/>(+ per-account subdirs)"]
   MDISC --> MOUT["discover/messages/contacts.csv,<br/>manifest.json<br/>(+ .powerpacks/messages/ working CSVs)"]
-  TDISC --> TOUT["discover/twitter/&lt;handle&gt;/<br/>people.csv, followers_dump.csv,<br/>moe_evaluated.csv, ... manifest"]
+  TDISC --> TOUT["discover/twitter/&lt;handle&gt;/<br/>people.csv, followers_dump.csv,<br/>moe_evaluated.csv, ..., manifest.json"]
 ```
 
 ## Files
 
 | File | Role | Reads | Writes |
 | --- | --- | --- | --- |
-| [`gmail/discover.py`](gmail/discover.py) | CLI entry: 4-phase Gmail discovery — resolve config → per-account msgvault sync → spawn engine per account → merge child rows → typed manifest | `accounts.json`, `discovery.config.json`, prior `discover/gmail/manifest.json` | `discover/gmail/contacts.csv`, `linkedin_resolution_queue.csv`, `manifest.json` |
+| [`gmail/discover.py`](gmail/discover.py) | CLI entry: `discover()` resolves config then runs `GmailDiscovery` (store) over one `GmailAccountChannel` per account — per-account msgvault sync → spawn engine → read fixed queue → merge plan → typed manifest | `accounts.json`, `discovery.config.json`, prior `discover/gmail/manifest.json` | `discover/gmail/contacts.csv`, `linkedin_resolution_queue.csv`, `manifest.json` |
 | [`gmail/util.py`](gmail/util.py) | Tolerant parsers, row merge (`_merge_rows`), incremental merge plan (`gmail_discovery_merge_plan`), column/const defs | prior `manifest.json` (applied-inputs state) | — (pure helpers) |
 | [`gmail/models.py`](gmail/models.py) | Typed stage-manifest dataclasses — the only payload shapes `discover.py` may emit | — | — |
 | [`gmail/msgvault/store.py`](gmail/msgvault/store.py) | Canonical read-only access layer over the msgvault archive (`MsgvaultStore` + its SQL): metadata aggregation for discovery, plus body reads reserved for deep-context/logbook | msgvault SQLite (read-only) | — |
@@ -66,7 +77,7 @@ flowchart LR
 | [`messages/normalize_contacts.py`](messages/normalize_contacts.py) | Normalize a per-channel contacts CSV → canonical messages JSONL | per-channel `*.contacts.csv` | `*.contacts.normalized.jsonl` + manifest |
 | [`messages/merge_contacts.py`](messages/merge_contacts.py) | Union N per-channel CSVs by canonical phone → one `contacts.csv` | `imessage.contacts.csv`, `whatsapp.contacts.csv` | `.powerpacks/messages/contacts.csv` + manifest |
 | [`messages/models.py`](messages/models.py) | Typed messages-discovery manifest dataclasses | — | — |
-| [`twitter/network_import.py`](twitter/network_import.py) | Resumable Twitter/X orchestrator: crawl → score → MOE triage → free LinkedIn pre-resolve → RapidAPI validate → format people (spend-gated steps) | Twitter/X + LinkedIn RapidAPI, OpenAI | `discover/twitter/<handle>/`: `followers_dump.csv`, `candidates.csv`, `moe_evaluated.csv`, `linkedin_*.csv`, `people.csv`, `raw_*` dirs |
+| [`twitter/network_import.py`](twitter/network_import.py) | Manifest-only Twitter/X orchestrator (`TwitterDiscovery`): one idempotent `run` — crawl → score → MOE triage → free LinkedIn pre-resolve → RapidAPI validate → format people; spend steps gated by `--approve-spend`, resume by artifact freshness | Twitter/X + LinkedIn RapidAPI, OpenAI | `discover/twitter/<handle>/`: `followers_dump.csv`, `candidates.csv`, `moe_evaluated.csv`, `linkedin_*.csv`, `people.csv`, `raw_*` dirs, `manifest.json` |
 | [`common.py`](common.py) | Shared discover/import helpers: CSV/JSON IO, accounts state, stage manifests (`write_stage_manifest`), child-process runner (`run_cmd`), base-dir constants | — | — (used by callers) |
 | [`discovery_config.py`](discovery_config.py) + [`discovery.config.json`](discovery.config.json) | Static discovery input/output contract; resolves per-source output paths and the accounts path | `discovery.config.json` | — |
 

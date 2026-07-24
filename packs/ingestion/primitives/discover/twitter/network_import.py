@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resumable local Twitter/X network import orchestrator.
+"""Manifest-only local Twitter/X network import orchestrator.
 
 Runs the Twitter/X discovery pipeline into Powerpacks-local artifacts under
 `.powerpacks/network-import/discover/twitter/<handle>/` (no Postgres writes; no
@@ -18,15 +18,27 @@ local CSV input — Twitter source data comes from RapidAPI):
 Raw provider payloads are kept in `raw_twitter_responses/` and
 `raw_linkedin_responses/` for audit/debug.
 
-Stdlib-only. No external API calls before approval: `load_or_crawl`,
-`moe_evaluate`, and `validate_linkedin` are spend-bearing approval gates. The
-hidden `--limit` row cap exists only for tiny local smoke tests.
+State model (manifest-only, no ledger):
+  One idempotent `run` per handle writes to the single fixed output dir above and
+  overwrites in place, with exactly one `manifest.json` recording per-step status,
+  counts, and timing. Resume comes from the ARTIFACTS, not a step ledger: a step
+  whose output file already exists and is at least as new as its inputs is skipped
+  (the raw dumps / csvs are already on disk), so a rerun never redoes finished work
+  and the spend steps never re-spend once their output is present. To force a step
+  to rerun, delete its output (or the whole handle dir).
+
+Spend gates: `load_or_crawl` (RapidAPI Twitter), `moe_evaluate` (OpenAI), and
+`validate_linkedin` (RapidAPI LinkedIn) are spend-bearing. They run only with
+`--approve-spend`; without it `run` stops before the first spend step that would
+call an API and emits a `needs_approval` payload naming the step + estimated
+calls (exit 20). Once an output is on disk that step is cached, so a later rerun
+without `--approve-spend` advances past it. The hidden `--limit` row cap exists
+only for tiny local smoke tests.
 
 Usage:
-    network_import.py run --handle myhandle --max-pages 5
-    network_import.py approve      # approve the current blocked spend-bearing step
-    network_import.py continue     # advance until completed or the next gate
-    network_import.py status
+    network_import.py run --handle myhandle --max-pages 5            # stops at spend gate
+    network_import.py run --handle myhandle --max-pages 5 --approve-spend
+    network_import.py status --handle myhandle
     network_import.py check-keys   # key presence only; never prints values
 
 Env: `RAPIDAPI_TWITTER_KEY` (falls back to `RAPIDAPI_KEY`) for Twitter/X,
@@ -34,6 +46,14 @@ Env: `RAPIDAPI_TWITTER_KEY` (falls back to `RAPIDAPI_KEY`) for Twitter/X,
 `OPENAI_API_KEY` for MOE evaluation.
 
 Changelog:
+  2026-07-23 (audit): replaced the resumable ledger step-machine
+    (run/approve/continue/status + network_import.ledger.json) with a manifest-only
+    single-`run` orchestrator (TwitterDiscovery). Resume is now by artifact
+    freshness (output newer than inputs), spend consent is the single
+    `--approve-spend` flag (the `approve`/`continue` subcommands and the ledger are
+    gone), and the stage records a typed `manifest.json`. Step logic is unchanged;
+    the local `source_slug` duplicate now comes from discover/common; dead
+    `subprocess` / `normalize_people_row` imports dropped.
   2026-07-23 (audit): dropped the local byte-identical read_csv/write_csv for
     the shared CsvIO.read_dict_rows / CsvIO.write_dict_rows; `import csv`
     dropped with them.
@@ -49,16 +69,15 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -68,17 +87,53 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
+from packs.ingestion.primitives.discover.common import (  # noqa: E402
+    StagePayload,
+    source_slug,
+    write_stage_manifest,
+)
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
     generate_person_id,
-    normalize_people_row,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "twitter"
-DEFAULT_LEDGER = DEFAULT_DISCOVER_DIR / "network_import.ledger.json"
+# Fixed per-stage output root (base/discover/twitter). The handle dir hangs off
+# this; a run overwrites in place, so reruns are idempotent by path. Module-level
+# so tests can patch it to a scratch dir.
+TWITTER_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "twitter"
 TWITTER_API_BASE = "https://twitter241.p.rapidapi.com"
 LINKEDIN_API_BASE = "https://professional-network-data.p.rapidapi.com"
+
+# Fixed output filenames — the durable per-stage contract. Each step's output is
+# looked up by these names, which is also how resume-by-artifact freshness works.
+FOLLOWERS_DUMP = "followers_dump.csv"
+CANDIDATES = "candidates.csv"
+MOE_EVALUATED = "moe_evaluated.csv"
+MOE_USAGE = "moe_usage.json"
+LINKEDIN_RESOLVED = "linkedin_resolved.csv"
+LINKEDIN_QUEUE = "linkedin_resolution_queue.csv"
+LINKEDIN_VALIDATED = "linkedin_validated.csv"
+PEOPLE = "people.csv"
+PEOPLE_LEGACY = "people_harmonic_all.csv"
+RAW_TWITTER_DIR = "raw_twitter_responses"
+RAW_LINKEDIN_DIR = "raw_linkedin_responses"
+
+# Logical artifact key -> filename, used to build the manifest `artifacts` map (and
+# its fingerprints) from whichever fixed outputs exist after a run.
+ARTIFACT_FILES = {
+    "followers_dump_csv": FOLLOWERS_DUMP,
+    "candidates_csv": CANDIDATES,
+    "moe_evaluated_csv": MOE_EVALUATED,
+    "moe_usage_json": MOE_USAGE,
+    "linkedin_resolved_csv": LINKEDIN_RESOLVED,
+    "linkedin_resolution_queue_csv": LINKEDIN_QUEUE,
+    "linkedin_validated_csv": LINKEDIN_VALIDATED,
+    "people_csv": PEOPLE,
+    "people_harmonic_all_csv": PEOPLE_LEGACY,
+    "raw_twitter_responses_dir": RAW_TWITTER_DIR,
+    "raw_linkedin_responses_dir": RAW_LINKEDIN_DIR,
+}
 
 FOLLOWERS_COLUMNS = [
     "handle", "display_name", "bio", "follower_count", "following_count",
@@ -94,7 +149,6 @@ MOE_COLUMNS = CANDIDATE_COLUMNS + [
 VALIDATED_COLUMNS = MOE_COLUMNS + [
     "linkedin_validation_status", "linkedin_name", "linkedin_headline", "linkedin_exp_count", "rapidapi_response",
 ]
-PIPELINE_STEPS = ["load_or_crawl", "score_candidates", "moe_evaluate", "pre_resolve_linkedin", "validate_linkedin", "format_people"]
 LINK_AGGREGATORS = ["linktr.ee", "linktree.com", "bio.link", "beacons.ai", "lnk.bio", "campsite.bio", "solo.to", "tap.bio", "carrd.co", "about.me"]
 LINKEDIN_URL_PATTERN = re.compile(r"https?://(?:www\.)?linkedin\.com/in/([a-zA-Z0-9_.%-]+)")
 
@@ -128,32 +182,36 @@ EXPERTS: dict[str, dict[str, Any]] = {
 EXPERT_WEIGHT_SCALE = 5.0 / sum(float(e["weight"]) for e in EXPERTS.values())
 MOE_BATCH_SIZE = 25
 
-
-class PipelineBlocked(Exception):
-    def __init__(self, payload: dict[str, Any], code: int = 20) -> None:
-        super().__init__(payload.get("message") or "blocked")
-        self.payload = payload
-        self.code = code
+# Spend-step display labels and providers, surfaced in the needs_approval payload.
+STEP_LABELS = {
+    "load_or_crawl": "RapidAPI Twitter follower crawl",
+    "moe_evaluate": "OpenAI MOE expert evaluation",
+    "validate_linkedin": "RapidAPI LinkedIn profile validation",
+}
+STEP_PROVIDERS = {
+    "load_or_crawl": "rapidapi_twitter",
+    "moe_evaluate": "openai",
+    "validate_linkedin": "rapidapi_linkedin",
+}
 
 
 class PipelineFailed(Exception):
-    pass
-
-
-def source_slug(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "").strip().lower()).strip("-._") or "source"
+    """A hard failure (missing key, missing handle, provider error) that aborts the run."""
 
 
 def generate_linkedin_id(public_identifier: str) -> str:
+    """Stable person id derived from a LinkedIn public identifier."""
     return generate_person_id(public_identifier)
 
 
 def generate_synthetic_id(handle: str) -> str:
+    """Deterministic synthetic person id for a Twitter handle with no LinkedIn match."""
     import uuid
     return str(uuid.uuid5(uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890"), f"twitter:{handle.lower().strip()}"))
 
 
 def http_json(method: str, url: str, *, headers: dict[str, str] | None = None, params: dict[str, str] | None = None, timeout: int = 60) -> tuple[int, dict[str, Any] | None, str]:
+    """GET/POST `url`, returning `(status_code, parsed_json_or_None, error_text)`."""
     if params:
         url = url + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, method=method, headers=headers or {})
@@ -173,6 +231,7 @@ def http_json(method: str, url: str, *, headers: dict[str, str] | None = None, p
 
 
 def extract_linkedin_from_text(text: str) -> str:
+    """Return the first canonical `linkedin.com/in/<slug>` URL in `text`, else ''."""
     if not text:
         return ""
     match = LINKEDIN_URL_PATTERN.search(text)
@@ -183,15 +242,18 @@ def extract_linkedin_from_text(text: str) -> str:
 
 
 def extract_linkedin_slug(url: str) -> str:
+    """Return the lowercased public-identifier slug from a LinkedIn profile URL."""
     return urllib.parse.unquote((LINKEDIN_URL_PATTERN.search(url or "") or ["", ""])[1]).rstrip("/").lower()
 
 
 def is_link_aggregator(url: str) -> bool:
+    """True when `url` points at a known link-aggregator (linktree/bio.link/...)."""
     low = (url or "").lower()
     return any(domain in low for domain in LINK_AGGREGATORS)
 
 
 def fetch_text(url: str, timeout: int = 10) -> str:
+    """Fetch a public page's text (best-effort; '' on any error)."""
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -201,6 +263,7 @@ def fetch_text(url: str, timeout: int = 10) -> str:
 
 
 def parse_twitter_user(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Flatten a nested Twitter user payload into a flat contact dict, or None."""
     user_obj: Any = data
     for key in ("result", "data", "user", "result"):
         if isinstance(user_obj, dict) and key in user_obj:
@@ -244,6 +307,7 @@ def parse_twitter_user(data: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def parse_followers_timeline(data: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """Parse a followers timeline page into `(users, next_bottom_cursor)`."""
     users: list[dict[str, Any]] = []
     next_cursor = ""
     result = data.get("result", data) if isinstance(data, dict) else {}
@@ -266,6 +330,7 @@ def parse_followers_timeline(data: dict[str, Any]) -> tuple[list[dict[str, Any]]
 
 
 def twitter_get_user(handle: str, api_key: str) -> dict[str, Any]:
+    """Look up a Twitter user by handle via RapidAPI (raises PipelineFailed on failure)."""
     status, data, error = http_json(
         "GET", f"{TWITTER_API_BASE}/user",
         headers={"x-rapidapi-host": "twitter241.p.rapidapi.com", "x-rapidapi-key": api_key},
@@ -281,6 +346,7 @@ def twitter_get_user(handle: str, api_key: str) -> dict[str, Any]:
 
 
 def twitter_followers_page(user_id: str, api_key: str, cursor: str = "") -> tuple[list[dict[str, Any]], str, dict[str, Any] | None, int, str]:
+    """Fetch one followers page: `(users, next_cursor, raw, status_code, error)`."""
     params = {"user": str(user_id), "count": "100"}
     if cursor:
         params["cursor"] = cursor
@@ -296,6 +362,7 @@ def twitter_followers_page(user_id: str, api_key: str, cursor: str = "") -> tupl
 
 
 def score_row(row: dict[str, Any]) -> int:
+    """Heuristic 0-100 enrichment score from a follower's bio/website/verified/reach."""
     bio = (row.get("bio") or "").lower()
     website = (row.get("website_url") or "").lower()
     score = 0
@@ -341,6 +408,7 @@ def score_row(row: dict[str, Any]) -> int:
 
 
 def heuristic_verdict(score: int) -> str:
+    """Bucket a heuristic score into `enrich` / `maybe` / `skip`."""
     if score >= 50:
         return "enrich"
     if score >= 20:
@@ -349,6 +417,7 @@ def heuristic_verdict(score: int) -> str:
 
 
 def normalize_name(name: str) -> str:
+    """Lowercase, strip accents/parentheticals/suffixes to a bare comparison name."""
     name = re.sub(r"\(.*?\)", "", name or "")
     name = re.split(r"\s*[|•/—–]\s*", name)[0]
     nfkd = unicodedata.normalize("NFKD", name)
@@ -360,6 +429,7 @@ def normalize_name(name: str) -> str:
 
 
 def names_match(twitter_name: str, linkedin_first: str, linkedin_last: str) -> bool:
+    """Fuzzy check that a Twitter display name and a LinkedIn first/last are the same person."""
     tw = normalize_name(twitter_name)
     first = normalize_name(linkedin_first)
     last = normalize_name(linkedin_last)
@@ -378,6 +448,7 @@ def names_match(twitter_name: str, linkedin_first: str, linkedin_last: str) -> b
 
 
 def parse_linkedin_profile(data: dict[str, Any] | None, public_identifier: str) -> dict[str, Any]:
+    """Normalize a RapidAPI LinkedIn profile payload into a flat profile dict."""
     if not isinstance(data, dict):
         return {}
     profile = data.get("data") if isinstance(data.get("data"), dict) else data
@@ -408,6 +479,7 @@ def parse_linkedin_profile(data: dict[str, Any] | None, public_identifier: str) 
 
 
 def rapidapi_linkedin_profile(linkedin_url: str, api_key: str) -> tuple[int, dict[str, Any] | None, str]:
+    """Fetch a LinkedIn profile by URL via RapidAPI: `(status, data, error)`."""
     status, data, error = http_json(
         "GET", f"{LINKEDIN_API_BASE}/get-profile-data-by-url",
         headers={"x-rapidapi-host": "professional-network-data.p.rapidapi.com", "x-rapidapi-key": api_key},
@@ -416,8 +488,8 @@ def rapidapi_linkedin_profile(linkedin_url: str, api_key: str) -> tuple[int, dic
     return status, data, error
 
 
-
 def openai_chat_json(system_prompt: str, user_prompt: str, model: str) -> dict[str, Any]:
+    """Call OpenAI chat completions in JSON mode; return the parsed object + `_usage`."""
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise PipelineFailed("OPENAI_API_KEY is not set")
@@ -455,6 +527,7 @@ def openai_chat_json(system_prompt: str, user_prompt: str, model: str) -> dict[s
 
 
 def candidate_context(idx: int, row: dict[str, Any]) -> dict[str, Any]:
+    """Build the compact per-candidate context object handed to the MOE experts."""
     return {
         "idx": idx,
         "handle": row.get("handle", ""),
@@ -472,6 +545,7 @@ def candidate_context(idx: int, row: dict[str, Any]) -> dict[str, Any]:
 
 
 def evaluate_expert_batch(expert_name: str, batch: list[dict[str, Any]], model: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Run one expert over one batch; return `(expert, {idx: signal}, usage)`."""
     expert = EXPERTS[expert_name]
     user_prompt = (
         "Evaluate these Twitter/X enrichment candidates through your lens. "
@@ -492,6 +566,7 @@ def evaluate_expert_batch(expert_name: str, batch: list[dict[str, Any]], model: 
 
 
 def aggregate_expert_signals(expert_results: dict[str, dict[str, Any]], expert_names: list[str]) -> dict[str, Any]:
+    """Weight/combine per-expert signals into a MOE verdict + composite + top expert."""
     weighted_sum = 0.0
     weight_sum = 0.0
     max_signal = 0
@@ -534,15 +609,18 @@ def aggregate_expert_signals(expert_results: dict[str, dict[str, Any]], expert_n
 
 
 def split_batches(items: list[Any], batch_size: int) -> list[list[Any]]:
+    """Chunk `items` into fixed-size batches."""
     return [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
 
 
 def fetch_aggregator_pair(item: tuple[int, str]) -> tuple[int, str]:
+    """Fetch one link-aggregator page and extract a LinkedIn URL: `(idx, url)`."""
     idx, url = item
     return idx, extract_linkedin_from_text(fetch_text(url))
 
 
 def validate_linkedin_row(item: tuple[int, dict[str, str], str, Path]) -> tuple[int, dict[str, Any]]:
+    """Validate one pre-resolved LinkedIn URL against RapidAPI, classifying the match."""
     idx, row, key, raw_dir = item
     result: dict[str, Any] = dict(row)
     status = row.get("linkedin_status", "")
@@ -574,8 +652,21 @@ def validate_linkedin_row(item: tuple[int, dict[str, str], str, Path]) -> tuple[
     return idx, result
 
 
+def load_rapidapi_json(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Parse the stored `rapidapi_response` JSON blob on a validated row, or None."""
+    raw = row.get("rapidapi_response") or ""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
 @dataclass
 class TwitterInput:
+    """Frozen-ish run configuration for one handle's discovery pipeline."""
+
     handle: str = ""
     source: str = "twitter"
     limit: int | None = None
@@ -592,85 +683,47 @@ class TwitterInput:
     sleep_seconds: float = 0.0
 
 
-def load_ledger(path: Path) -> dict[str, Any]:
-    ledger = read_json(path, {}) or {}
-    ledger.setdefault("primitive", "twitter/network_import")
-    ledger.setdefault("version", 1)
-    ledger.setdefault("created_at", now_iso())
-    ledger.setdefault("updated_at", now_iso())
-    ledger.setdefault("steps", {})
-    ledger.setdefault("approvals", {})
-    ledger.setdefault("artifacts", {})
-    return ledger
+@dataclass
+class TwitterDiscoveryManifest(StagePayload):
+    """Typed stage manifest for a Twitter/X discovery run. One per handle dir; the
+    durable state contract (per-step status/counts/timing + artifact fingerprints).
+    None-valued optionals are dropped by StagePayload.to_payload()."""
+
+    handle: str = ""
+    status: str = ""  # completed | needs_approval | failed
+    steps: dict[str, Any] = field(default_factory=dict)
+    artifacts: dict[str, Any] = field(default_factory=dict)
+    input: dict[str, Any] = field(default_factory=dict)
+    needs_approval: dict[str, Any] | None = None
+    error: str | None = None
+    updated_at: str = ""
+    source: str = "twitter"
+    primitive: str = "twitter/network_import"
 
 
-def save_ledger(path: Path, ledger: dict[str, Any]) -> None:
-    ledger["updated_at"] = now_iso()
-    write_json(path, ledger)
+# --- step functions: each reads its fixed inputs and writes its fixed outputs ---
+# Step LOGIC is unchanged from the ledger version; only the state plumbing (ledger
+# artifacts dict -> fixed paths under `out_dir`, `ledger["input"]` -> the `cfg`
+# dataclass) changed. The orchestrator owns freshness, spend gating, and timing.
 
-
-def mark_step(ledger: dict[str, Any], step_id: str, status: str, **extra: Any) -> None:
-    rec = ledger.setdefault("steps", {}).setdefault(step_id, {"id": step_id})
-    if status == "running" and "started_at" not in rec:
-        rec["started_at"] = now_iso()
-    if status in {"completed", "failed", "blocked_approval", "skipped"}:
-        rec["finished_at"] = now_iso()
-    rec["status"] = status
-    rec.update({k: v for k, v in extra.items() if v is not None})
-
-
-def next_pending_step(ledger: dict[str, Any]) -> str | None:
-    for step_id in PIPELINE_STEPS:
-        if ledger.setdefault("steps", {}).get(step_id, {}).get("status") != "completed":
-            return step_id
-    return None
-
-
-def approval_id(ledger: dict[str, Any], step_id: str) -> str:
-    return f"twitter:{step_id}"
-
-
-def artifact_dir_from_ledger(ledger: dict[str, Any]) -> Path:
-    return Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
-
-
-def is_approved(ledger: dict[str, Any], step_id: str) -> bool:
-    return bool(ledger.setdefault("approvals", {}).get(approval_id(ledger, step_id)))
-
-
-def block_for_approval(ledger_path: Path, ledger: dict[str, Any], step_id: str, message: str) -> None:
-    app_id = approval_id(ledger, step_id)
-    ledger["blocked"] = {"step_id": step_id, "approval_id": app_id, "approval_type": "external_api_spend"}
-    mark_step(ledger, step_id, "blocked_approval", approval_id=app_id, approval_type="external_api_spend")
-    save_ledger(ledger_path, ledger)
-    raise PipelineBlocked({
-        "status": "blocked_approval",
-        "step_id": step_id,
-        "approval_id": app_id,
-        "approval_type": "external_api_spend",
-        "message": message,
-        "ledger": str(ledger_path),
-        "continue_command": f"uv run --project . python packs/ingestion/primitives/discover/twitter/network_import.py approve --ledger {ledger_path} && uv run --project . python packs/ingestion/primitives/discover/twitter/network_import.py continue --ledger {ledger_path}",
-    })
-
-
-def step_load_or_crawl(ledger: dict[str, Any]) -> dict[str, Any]:
-    inp = ledger["input"]
-    out = artifact_dir_from_ledger(ledger) / "followers_dump.csv"
-    raw_dir = artifact_dir_from_ledger(ledger) / "raw_twitter_responses"
+def step_load_or_crawl(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
+    """Crawl the operator's followers via RapidAPI into followers_dump.csv + raw dumps.
+    Spend-bearing (RapidAPI Twitter)."""
+    out = out_dir / FOLLOWERS_DUMP
+    raw_dir = out_dir / RAW_TWITTER_DIR
     raw_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     key = os.getenv("RAPIDAPI_TWITTER_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
     if not key:
         raise PipelineFailed("RAPIDAPI_TWITTER_KEY/RAPIDAPI_KEY is not set")
-    handle = inp.get("handle", "").lstrip("@")
+    handle = cfg.handle.lstrip("@")
     if not handle:
         raise PipelineFailed("--handle is required")
     user = twitter_get_user(handle, key)
     write_json(raw_dir / f"user_{handle}.json", user.get("raw_response"))
     cursor = ""
     seen: set[str] = set()
-    for page in range(int(inp.get("max_pages") or 1)):
+    for page in range(int(cfg.max_pages or 1)):
         users, cursor, raw, status, error = twitter_followers_page(user["twitter_user_id"], key, cursor)
         write_json(raw_dir / f"followers_{handle}_{page}.json", {"status": status, "error": error, "raw": raw})
         for u in users:
@@ -690,27 +743,25 @@ def step_load_or_crawl(ledger: dict[str, Any]) -> dict[str, Any]:
                 "first_seen_at": now_iso(),
                 "source": handle,
             })
-            if inp.get("limit") and len(rows) >= int(inp["limit"]):
+            if cfg.limit and len(rows) >= int(cfg.limit):
                 break
-        if inp.get("limit") and len(rows) >= int(inp["limit"]):
-            rows = rows[: int(inp["limit"])]
+        if cfg.limit and len(rows) >= int(cfg.limit):
+            rows = rows[: int(cfg.limit)]
             break
         if not cursor or cursor == "0" or not users:
             break
-        time.sleep(float(inp.get("sleep_seconds") or 0.0))
+        time.sleep(float(cfg.sleep_seconds or 0.0))
     CsvIO.write_dict_rows(out, FOLLOWERS_COLUMNS, rows)
-    ledger["artifacts"]["followers_dump_csv"] = str(out)
-    ledger["artifacts"]["raw_twitter_responses_dir"] = str(raw_dir)
     return {"rows": len(rows), "output_file": str(out)}
 
 
-def step_score_candidates(ledger: dict[str, Any]) -> dict[str, Any]:
-    inp = ledger["input"]
-    rows = CsvIO.read_dict_rows(Path(ledger["artifacts"]["followers_dump_csv"]))
+def step_score_candidates(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
+    """Heuristic-score the follower dump and keep enrich/maybe candidates -> candidates.csv."""
+    rows = CsvIO.read_dict_rows(out_dir / FOLLOWERS_DUMP)
     out_rows: list[dict[str, Any]] = []
     for r in rows:
         score = score_row(r)
-        if score < int(inp.get("min_score") or 0) and heuristic_verdict(score) == "skip":
+        if score < int(cfg.min_score or 0) and heuristic_verdict(score) == "skip":
             continue
         row = {col: r.get(col, "") for col in FOLLOWERS_COLUMNS}
         row.update({
@@ -721,17 +772,17 @@ def step_score_candidates(ledger: dict[str, Any]) -> dict[str, Any]:
         })
         out_rows.append(row)
     out_rows.sort(key=lambda x: int(x.get("enrichment_score") or 0), reverse=True)
-    out = artifact_dir_from_ledger(ledger) / "candidates.csv"
+    out = out_dir / CANDIDATES
     CsvIO.write_dict_rows(out, CANDIDATE_COLUMNS, out_rows)
-    ledger["artifacts"]["candidates_csv"] = str(out)
     return {"rows": len(out_rows), "output_file": str(out)}
 
 
-def step_moe_evaluate(ledger: dict[str, Any]) -> dict[str, Any]:
-    inp = ledger["input"]
-    rows = CsvIO.read_dict_rows(Path(ledger["artifacts"]["candidates_csv"]))
-    out = artifact_dir_from_ledger(ledger) / "moe_evaluated.csv"
-    if inp.get("skip_moe"):
+def step_moe_evaluate(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
+    """MOE-triage candidates via OpenAI experts -> moe_evaluated.csv (+ moe_usage.json).
+    Spend-bearing unless --skip-moe, which falls back to the heuristic verdict."""
+    rows = CsvIO.read_dict_rows(out_dir / CANDIDATES)
+    out = out_dir / MOE_EVALUATED
+    if cfg.skip_moe:
         out_rows = []
         for row in rows:
             r = dict(row)
@@ -747,17 +798,16 @@ def step_moe_evaluate(ledger: dict[str, Any]) -> dict[str, Any]:
             })
             out_rows.append(r)
         CsvIO.write_dict_rows(out, MOE_COLUMNS, out_rows)
-        ledger["artifacts"]["moe_evaluated_csv"] = str(out)
         return {"rows": len(out_rows), "skipped": True, "output_file": str(out)}
 
-    expert_names = list(EXPERTS) if inp.get("moe_experts") in {"", "all", None} else [x.strip() for x in str(inp.get("moe_experts")).split(",") if x.strip()]
+    expert_names = list(EXPERTS) if cfg.moe_experts in {"", "all", None} else [x.strip() for x in str(cfg.moe_experts).split(",") if x.strip()]
     unknown = [name for name in expert_names if name not in EXPERTS]
     if unknown:
         raise PipelineFailed(f"Unknown MOE experts: {', '.join(unknown)}")
     contexts = [candidate_context(i, row) for i, row in enumerate(rows)]
     batches = split_batches(contexts, MOE_BATCH_SIZE)
-    model = str(inp.get("moe_model") or "gpt-4o-mini")
-    max_workers = max(1, min(int(inp.get("moe_workers") or 6), len(expert_names) * max(1, len(batches))))
+    model = str(cfg.moe_model or "gpt-4o-mini")
+    max_workers = max(1, min(int(cfg.moe_workers or 6), len(expert_names) * max(1, len(batches))))
     by_handle: dict[str, dict[str, dict[str, Any]]] = {row.get("handle", ""): {} for row in rows}
     raw_usage: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -779,24 +829,23 @@ def step_moe_evaluate(ledger: dict[str, Any]) -> dict[str, Any]:
         merged.update(agg)
         out_rows.append(merged)
     CsvIO.write_dict_rows(out, MOE_COLUMNS, out_rows)
-    write_json(artifact_dir_from_ledger(ledger) / "moe_usage.json", raw_usage)
-    ledger["artifacts"]["moe_evaluated_csv"] = str(out)
-    ledger["artifacts"]["moe_usage_json"] = str(artifact_dir_from_ledger(ledger) / "moe_usage.json")
+    write_json(out_dir / MOE_USAGE, raw_usage)
     counts: dict[str, int] = {}
     for row in out_rows:
         counts[row.get("moe_verdict", "")] = counts.get(row.get("moe_verdict", ""), 0) + 1
     return {"rows": len(out_rows), "verdict_counts": counts, "experts": expert_names, "output_file": str(out)}
 
 
-def step_pre_resolve_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
-    inp = ledger["input"]
-    verdicts = {v.strip() for v in str(inp.get("verdicts") or "enrich,maybe").split(",") if v.strip()}
-    src = Path(ledger["artifacts"].get("moe_evaluated_csv") or ledger["artifacts"]["candidates_csv"])
+def step_pre_resolve_linkedin(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
+    """Free LinkedIn pre-resolution from bio/website/link-aggregators -> linkedin_resolved.csv
+    plus linkedin_resolution_queue.csv for the still-unresolved rows."""
+    verdicts = {v.strip() for v in str(cfg.verdicts or "enrich,maybe").split(",") if v.strip()}
+    src = out_dir / MOE_EVALUATED if (out_dir / MOE_EVALUATED).exists() else out_dir / CANDIDATES
     rows = CsvIO.read_dict_rows(src)
     output: list[dict[str, Any]] = []
     pre_count = 0
     aggregator_jobs: list[tuple[int, str]] = []
-    for idx, row in enumerate(rows):
+    for row in rows:
         verdict = row.get("moe_verdict") or row.get("heuristic_verdict")
         if verdict not in verdicts:
             continue
@@ -805,12 +854,12 @@ def step_pre_resolve_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
             row["linkedin_url"] = url
             row["linkedin_status"] = "found_pre_resolved"
             pre_count += 1
-        elif not url and not inp.get("skip_aggregator_fetch") and is_link_aggregator(row.get("website_url", "")):
+        elif not url and not cfg.skip_aggregator_fetch and is_link_aggregator(row.get("website_url", "")):
             aggregator_jobs.append((len(output), row["website_url"]))
         output.append(row)
     fetched = 0
     if aggregator_jobs:
-        workers = max(1, int(inp.get("aggregator_workers") or 10))
+        workers = max(1, int(cfg.aggregator_workers or 10))
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for idx, url in executor.map(fetch_aggregator_pair, aggregator_jobs):
                 if url and idx < len(output) and not output[idx].get("linkedin_url"):
@@ -818,61 +867,58 @@ def step_pre_resolve_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
                     output[idx]["linkedin_status"] = "found_pre_resolved"
                     pre_count += 1
                     fetched += 1
-    out = artifact_dir_from_ledger(ledger) / "linkedin_resolved.csv"
-    queue = artifact_dir_from_ledger(ledger) / "linkedin_resolution_queue.csv"
+    out = out_dir / LINKEDIN_RESOLVED
+    queue = out_dir / LINKEDIN_QUEUE
     unresolved = [r for r in output if not r.get("linkedin_url")]
     CsvIO.write_dict_rows(out, MOE_COLUMNS, output)
     CsvIO.write_dict_rows(queue, MOE_COLUMNS, unresolved)
-    ledger["artifacts"]["linkedin_resolved_csv"] = str(out)
-    ledger["artifacts"]["linkedin_resolution_queue_csv"] = str(queue)
-    needs_resolution = len(unresolved)
-    return {"rows": len(output), "pre_resolved": pre_count, "aggregator_resolved": fetched, "needs_resolution": needs_resolution, "output_file": str(out), "resolution_queue": str(queue)}
+    return {
+        "rows": len(output),
+        "pre_resolved": pre_count,
+        "aggregator_resolved": fetched,
+        "needs_resolution": len(unresolved),
+        "output_file": str(out),
+        "resolution_queue": str(queue),
+    }
 
 
-def step_validate_linkedin(ledger: dict[str, Any]) -> dict[str, Any]:
+def step_validate_linkedin(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
+    """Validate pre-resolved LinkedIn URLs against RapidAPI -> linkedin_validated.csv
+    (+ raw_linkedin_responses/). Spend-bearing when any row carries a URL to check."""
     key = os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip() or os.getenv("RAPIDAPI_KEY", "").strip()
     if not key:
         raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
-    rows = CsvIO.read_dict_rows(Path(ledger["artifacts"]["linkedin_resolved_csv"]))
-    raw_dir = artifact_dir_from_ledger(ledger) / "raw_linkedin_responses"
+    rows = CsvIO.read_dict_rows(out_dir / LINKEDIN_RESOLVED)
+    raw_dir = out_dir / RAW_LINKEDIN_DIR
     raw_dir.mkdir(parents=True, exist_ok=True)
     out_rows: list[dict[str, Any]] = [dict(row) for row in rows]
     jobs = [(i, row, key, raw_dir) for i, row in enumerate(rows)]
-    workers = max(1, int(ledger["input"].get("linkedin_workers") or 10))
-    if ledger["input"].get("sleep_seconds"):
+    workers = max(1, int(cfg.linkedin_workers or 10))
+    if cfg.sleep_seconds:
         workers = 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         for idx, result in executor.map(validate_linkedin_row, jobs):
             out_rows[idx] = result
-            if ledger["input"].get("sleep_seconds"):
-                time.sleep(float(ledger["input"].get("sleep_seconds") or 0.0))
+            if cfg.sleep_seconds:
+                time.sleep(float(cfg.sleep_seconds or 0.0))
     stats: dict[str, int] = {}
     for row in out_rows:
         status = row.get("linkedin_validation_status") or row.get("linkedin_status") or "no_url"
         stats[status] = stats.get(status, 0) + 1
-    out = artifact_dir_from_ledger(ledger) / "linkedin_validated.csv"
+    out = out_dir / LINKEDIN_VALIDATED
     CsvIO.write_dict_rows(out, VALIDATED_COLUMNS, out_rows)
-    ledger["artifacts"]["linkedin_validated_csv"] = str(out)
-    ledger["artifacts"]["raw_linkedin_responses_dir"] = str(raw_dir)
     return {"rows": len(out_rows), "stats": stats, "workers": workers, "output_file": str(out)}
 
-def load_rapidapi_json(row: dict[str, Any]) -> dict[str, Any] | None:
-    raw = row.get("rapidapi_response") or ""
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return None
 
-
-def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
-    src = Path(ledger["artifacts"].get("linkedin_validated_csv") or ledger["artifacts"].get("linkedin_resolved_csv"))
+def step_format_people(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
+    """Format validated rows into the canonical people.csv (+ people_harmonic_all.csv alias)."""
+    src = out_dir / LINKEDIN_VALIDATED if (out_dir / LINKEDIN_VALIDATED).exists() else out_dir / LINKEDIN_RESOLVED
     rows = CsvIO.read_dict_rows(src)
-    source_artifacts = [
-        value for key, value in sorted(ledger.get("artifacts", {}).items())
-        if key.endswith("_csv") and value
-    ]
+    # source_artifacts mirrors the ledger version: the *_csv artifacts that exist,
+    # ordered by their logical key name (people.csv is written after this, so it is
+    # correctly excluded).
+    csv_artifacts = {key: ARTIFACT_FILES[key] for key in ARTIFACT_FILES if key.endswith("_csv") and not key.startswith("people")}
+    source_artifacts = [str(out_dir / name) for key, name in sorted(csv_artifacts.items()) if (out_dir / name).exists()]
     people: list[dict[str, Any]] = []
     for row in rows:
         linkedin_url = row.get("linkedin_url", "")
@@ -936,102 +982,191 @@ def step_format_people(ledger: dict[str, Any]) -> dict[str, Any]:
             "source_channels": "twitter",
             "source_artifacts": json.dumps(source_artifacts, ensure_ascii=False),
         })
-    out = artifact_dir_from_ledger(ledger) / "people.csv"
-    legacy = artifact_dir_from_ledger(ledger) / "people_harmonic_all.csv"
+    out = out_dir / PEOPLE
+    legacy = out_dir / PEOPLE_LEGACY
     CsvIO.write_dict_rows(out, PEOPLE_COLUMNS, people)
     shutil.copyfile(out, legacy)
-    ledger["artifacts"]["people_csv"] = str(out)
-    ledger["artifacts"]["people_harmonic_all_csv"] = str(legacy)
     return {"rows": len(people), "output_file": str(out), "legacy_output_file": str(legacy)}
 
 
-STEP_FUNCS = {
-    "load_or_crawl": step_load_or_crawl,
-    "score_candidates": step_score_candidates,
-    "moe_evaluate": step_moe_evaluate,
-    "pre_resolve_linkedin": step_pre_resolve_linkedin,
-    "validate_linkedin": step_validate_linkedin,
-    "format_people": step_format_people,
-}
+@dataclass(frozen=True)
+class StepSpec:
+    """One pipeline step: its function, its primary output, its inputs (for resume
+    freshness), and whether it is spend-bearing."""
+
+    name: str
+    func: Callable[[TwitterInput, Path], dict[str, Any]]
+    output: str
+    inputs: tuple[str, ...]
+    spend: bool
 
 
-def validation_would_call_api(ledger: dict[str, Any]) -> bool:
-    artifact = ledger.get("artifacts", {}).get("linkedin_resolved_csv")
-    if not artifact or not Path(artifact).exists():
+STEPS: list[StepSpec] = [
+    StepSpec("load_or_crawl", step_load_or_crawl, FOLLOWERS_DUMP, (), True),
+    StepSpec("score_candidates", step_score_candidates, CANDIDATES, (FOLLOWERS_DUMP,), False),
+    StepSpec("moe_evaluate", step_moe_evaluate, MOE_EVALUATED, (CANDIDATES,), True),
+    StepSpec("pre_resolve_linkedin", step_pre_resolve_linkedin, LINKEDIN_RESOLVED, (MOE_EVALUATED, CANDIDATES), False),
+    StepSpec("validate_linkedin", step_validate_linkedin, LINKEDIN_VALIDATED, (LINKEDIN_RESOLVED,), True),
+    StepSpec("format_people", step_format_people, PEOPLE, (LINKEDIN_VALIDATED, LINKEDIN_RESOLVED), False),
+]
+
+
+def _is_fresh(output: Path, inputs: list[Path]) -> bool:
+    """Resume-by-artifact test: True when `output` exists and is at least as new as
+    every input that exists. A fresh step is skipped (not rewritten), so its mtime is
+    preserved and the freshness chain stays stable across reruns; a stale/missing
+    output re-runs and correctly cascades downstream."""
+    if not output.exists():
+        return False
+    out_mtime = output.stat().st_mtime_ns
+    for inp in inputs:
+        if inp.exists() and inp.stat().st_mtime_ns > out_mtime:
+            return False
+    return True
+
+
+def moe_would_call_api(cfg: TwitterInput, out_dir: Path) -> bool:
+    """True when the MOE step would actually spend (not --skip-moe and candidates exist)."""
+    if cfg.skip_moe:
+        return False
+    candidates = out_dir / CANDIDATES
+    if not candidates.exists():
         return True
-    for row in CsvIO.read_dict_rows(Path(artifact)):
+    return bool(CsvIO.read_dict_rows(candidates))
+
+
+def validation_would_call_api(out_dir: Path) -> bool:
+    """True when validation would spend: some pre-resolved row carries a URL to check."""
+    resolved = out_dir / LINKEDIN_RESOLVED
+    if not resolved.exists():
+        return True
+    for row in CsvIO.read_dict_rows(resolved):
         if row.get("linkedin_url") and row.get("linkedin_status") in {"found", "found_pre_resolved"}:
             return True
     return False
 
 
-def moe_would_call_api(ledger: dict[str, Any]) -> bool:
-    if ledger.get("input", {}).get("skip_moe"):
+class TwitterDiscovery:
+    """Manifest-only Twitter/X discovery orchestrator.
+
+    One idempotent ``run`` per handle into the fixed dir
+    ``TWITTER_DISCOVER_DIR/<slug>/``, overwriting in place with a single
+    ``manifest.json`` (per-step status/counts/timing + artifact fingerprints).
+    Resume comes from the artifacts, not a ledger: a step whose output already
+    exists and is newer than its inputs is skipped, so reruns never redo finished
+    work and the spend steps never re-spend once their output is on disk. Spend
+    steps (crawl, MOE, LinkedIn validate) require ``--approve-spend``; without it
+    ``run`` stops at the first spend step that would call an API and returns a
+    ``needs_approval`` payload naming the step + estimated calls."""
+
+    def __init__(self, cfg: TwitterInput, *, approve_spend: bool) -> None:
+        self.cfg = cfg
+        self.approve_spend = approve_spend
+        self.dir = TWITTER_DISCOVER_DIR / source_slug(cfg.handle)
+        self.manifest_path = self.dir / "manifest.json"
+
+    def run(self) -> dict[str, Any]:
+        """Advance the pipeline, skipping fresh steps, until it completes, blocks on
+        spend, or a step fails. Always writes the stage manifest and returns it."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        steps: dict[str, Any] = {}
+        for spec in STEPS:
+            output = self.dir / spec.output
+            inputs = [self.dir / name for name in spec.inputs]
+            if _is_fresh(output, inputs):
+                steps[spec.name] = {"status": "cached", "output_file": str(output)}
+                continue
+            if spec.spend and not self.approve_spend and self._would_call_api(spec.name):
+                return self._needs_approval(spec, steps)
+            started = time.time()
+            try:
+                result = spec.func(self.cfg, self.dir)
+            except Exception as exc:
+                steps[spec.name] = {"status": "failed", "error": str(exc)}
+                return self._write("failed", steps, error=f"{spec.name}: {exc}")
+            steps[spec.name] = {
+                "status": "completed",
+                "counts": result,
+                "seconds": round(time.time() - started, 3),
+            }
+        return self._write("completed", steps)
+
+    def _would_call_api(self, name: str) -> bool:
+        """Whether a spend step would actually hit its provider on this run."""
+        if name == "load_or_crawl":
+            return True
+        if name == "moe_evaluate":
+            return moe_would_call_api(self.cfg, self.dir)
+        if name == "validate_linkedin":
+            return validation_would_call_api(self.dir)
         return False
-    artifact = ledger.get("artifacts", {}).get("candidates_csv")
-    if not artifact or not Path(artifact).exists():
-        return True
-    return bool(CsvIO.read_dict_rows(Path(artifact)))
+
+    def _estimate(self, name: str) -> int:
+        """Best-effort provider-call estimate for the needs_approval message."""
+        if name == "load_or_crawl":
+            return int(self.cfg.max_pages or 1) + 1  # user lookup + follower pages
+        if name == "moe_evaluate":
+            candidates = self.dir / CANDIDATES
+            rows = CsvIO.read_dict_rows(candidates) if candidates.exists() else []
+            experts = list(EXPERTS) if self.cfg.moe_experts in {"", "all", None} else [x.strip() for x in str(self.cfg.moe_experts).split(",") if x.strip()]
+            batches = -(-len(rows) // MOE_BATCH_SIZE) if rows else 0
+            return len(experts) * batches
+        if name == "validate_linkedin":
+            resolved = self.dir / LINKEDIN_RESOLVED
+            rows = CsvIO.read_dict_rows(resolved) if resolved.exists() else []
+            return sum(1 for r in rows if r.get("linkedin_url") and r.get("linkedin_status") in {"found", "found_pre_resolved"})
+        return 0
+
+    def _needs_approval(self, spec: StepSpec, steps: dict[str, Any]) -> dict[str, Any]:
+        """Record the blocked spend step and write a needs_approval manifest."""
+        provider = STEP_PROVIDERS[spec.name]
+        estimate = self._estimate(spec.name)
+        steps[spec.name] = {"status": "needs_approval", "provider": provider, "estimated_calls": estimate}
+        return self._write("needs_approval", steps, needs_approval={
+            "step": spec.name,
+            "provider": provider,
+            "estimated_calls": estimate,
+            "message": f"Approval required before {STEP_LABELS[spec.name]} (~{estimate} {provider} calls). Re-run with --approve-spend.",
+            "continue_command": self._continue_command(),
+        })
+
+    def _artifacts(self) -> dict[str, Any]:
+        """The subset of fixed output artifacts that exist, keyed by logical name."""
+        out: dict[str, Any] = {}
+        for key, name in ARTIFACT_FILES.items():
+            path = self.dir / name
+            if path.exists():
+                out[key] = str(path)
+        return out
+
+    def _continue_command(self) -> str:
+        """The re-run command that grants spend consent."""
+        return (
+            "uv run --project . python packs/ingestion/primitives/discover/twitter/network_import.py "
+            f"run --handle {self.cfg.handle} --approve-spend"
+        )
+
+    def _write(self, status: str, steps: dict[str, Any], *, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> dict[str, Any]:
+        """Build the typed manifest and write it (fingerprinted, no-op when unchanged)."""
+        payload = TwitterDiscoveryManifest(
+            handle=self.cfg.handle,
+            status=status,
+            steps=steps,
+            artifacts=self._artifacts(),
+            input=asdict(self.cfg),
+            needs_approval=needs_approval,
+            error=error,
+            updated_at=now_iso(),
+        )
+        return write_stage_manifest(self.manifest_path, payload)
 
 
-def step_requires_approval(ledger: dict[str, Any], step_id: str) -> bool:
-    if step_id == "load_or_crawl":
-        return True
-    if step_id == "moe_evaluate":
-        return moe_would_call_api(ledger)
-    if step_id == "validate_linkedin":
-        return validation_would_call_api(ledger)
-    return False
-
-
-def ensure_api_keys_for_step(step_id: str) -> None:
-    if step_id == "load_or_crawl":
-        if not (os.getenv("RAPIDAPI_TWITTER_KEY") or os.getenv("RAPIDAPI_KEY")):
-            raise PipelineFailed("RAPIDAPI_TWITTER_KEY/RAPIDAPI_KEY is not set")
-    if step_id == "moe_evaluate":
-        if not os.getenv("OPENAI_API_KEY"):
-            raise PipelineFailed("OPENAI_API_KEY is not set")
-    if step_id == "validate_linkedin":
-        if not (os.getenv("RAPIDAPI_LINKEDIN_KEY") or os.getenv("RAPIDAPI_KEY")):
-            raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
-
-
-def run_pipeline(ledger_path: Path, *, stop_after: str | None = None) -> dict[str, Any]:
-    ledger = load_ledger(ledger_path)
-    while True:
-        step_id = next_pending_step(ledger)
-        if not step_id:
-            ledger.pop("blocked", None)
-            save_ledger(ledger_path, ledger)
-            return {"status": "completed", "ledger": str(ledger_path), "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"), "artifacts": ledger.get("artifacts", {})}
-        if stop_after and ledger.get("steps", {}).get(stop_after, {}).get("status") == "completed":
-            save_ledger(ledger_path, ledger)
-            return {"status": "stopped", "ledger": str(ledger_path), "next_step": step_id}
-        if step_requires_approval(ledger, step_id) and not is_approved(ledger, step_id):
-            ensure_api_keys_for_step(step_id)
-            label = "RapidAPI Twitter follower crawl" if step_id == "load_or_crawl" else ("OpenAI MOE expert evaluation" if step_id == "moe_evaluate" else "RapidAPI LinkedIn profile validation")
-            block_for_approval(ledger_path, ledger, step_id, f"Approval required before {label}.")
-        mark_step(ledger, step_id, "running")
-        save_ledger(ledger_path, ledger)
-        try:
-            result = STEP_FUNCS[step_id](ledger)
-            mark_step(ledger, step_id, "completed", result=result)
-            ledger.pop("blocked", None)
-            save_ledger(ledger_path, ledger)
-        except PipelineBlocked:
-            raise
-        except Exception as exc:
-            mark_step(ledger, step_id, "failed", error=str(exc))
-            save_ledger(ledger_path, ledger)
-            raise
-
-
-def create_ledger(args: argparse.Namespace) -> dict[str, Any]:
+def build_input(args: argparse.Namespace) -> TwitterInput:
+    """Build a TwitterInput from parsed `run` args (handle normalized, source defaulted)."""
     handle = args.handle.lstrip("@").strip().lower()
     if not handle:
         raise PipelineFailed("--handle is required")
-    artifact_dir = DEFAULT_DISCOVER_DIR / source_slug(handle)
-    inp = TwitterInput(
+    return TwitterInput(
         handle=handle,
         source=args.source or handle,
         limit=args.limit,
@@ -1047,71 +1182,29 @@ def create_ledger(args: argparse.Namespace) -> dict[str, Any]:
         skip_aggregator_fetch=args.skip_aggregator_fetch,
         sleep_seconds=args.sleep_seconds,
     )
-    ledger = {
-        "primitive": "twitter/network_import",
-        "version": 1,
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "artifact_dir": str(artifact_dir),
-        "input": asdict(inp),
-        "steps": {},
-        "approvals": {},
-        "artifacts": {},
-    }
-    return ledger
 
 
-def cmd_run(args: argparse.Namespace) -> None:
-    ledger = create_ledger(args)
-    ledger_path = Path(args.ledger)
-    if str(ledger_path) == str(DEFAULT_LEDGER):
-        ledger_path = artifact_dir_from_ledger(ledger) / "network_import.ledger.json"
-    ledger["ledger"] = str(ledger_path)
-    save_ledger(ledger_path, ledger)
-    result = run_pipeline(ledger_path, stop_after=args.stop_after)
-    emit(result)
+def cmd_run(args: argparse.Namespace) -> int:
+    """`run`: one idempotent pipeline pass for a handle; emits the stage manifest."""
+    cfg = build_input(args)
+    payload = TwitterDiscovery(cfg, approve_spend=args.approve_spend).run()
+    emit(payload)
+    return {"completed": 0, "needs_approval": 20, "failed": 1}.get(str(payload.get("status")), 0)
 
 
-def cmd_continue(args: argparse.Namespace) -> None:
-    result = run_pipeline(Path(args.ledger), stop_after=args.stop_after)
-    emit(result)
+def cmd_status(args: argparse.Namespace) -> int:
+    """`status`: read and emit a handle's manifest.json (artifacts-only, no spend)."""
+    out_dir = TWITTER_DISCOVER_DIR / source_slug(args.handle.lstrip("@").strip().lower())
+    manifest = read_json(out_dir / "manifest.json")
+    if not manifest:
+        emit({"status": "missing", "manifest": str(out_dir / "manifest.json")})
+        return 0
+    emit(manifest)
+    return 0
 
 
-def cmd_status(args: argparse.Namespace) -> None:
-    ledger = load_ledger(Path(args.ledger))
-    if not ledger:
-        emit({"status": "missing", "ledger": str(args.ledger)})
-        return
-    emit({
-        "status": "blocked" if ledger.get("blocked") else ("completed" if not next_pending_step(ledger) else "running"),
-        "ledger": str(args.ledger),
-        "artifact_dir": ledger.get("artifact_dir") or ledger.get("run_dir"),
-        "next_step": next_pending_step(ledger),
-        "blocked": ledger.get("blocked"),
-        "steps": ledger.get("steps", {}),
-        "artifacts": ledger.get("artifacts", {}),
-    })
-
-
-def cmd_approve(args: argparse.Namespace) -> None:
-    ledger_path = Path(args.ledger)
-    ledger = load_ledger(ledger_path)
-    if not ledger:
-        raise PipelineFailed(f"Ledger not found: {ledger_path}")
-    step_id = args.step or ledger.get("blocked", {}).get("step_id") or next_pending_step(ledger)
-    if not step_id:
-        emit({"status": "noop", "message": "No pending step", "ledger": str(ledger_path)})
-        return
-    app_id = approval_id(ledger, step_id)
-    ledger.setdefault("approvals", {})[app_id] = {"approved_at": now_iso(), "step_id": step_id, "approved_by": "local_operator"}
-    if ledger.get("blocked", {}).get("step_id") == step_id:
-        ledger.pop("blocked", None)
-    mark_step(ledger, step_id, "approved", approval_id=app_id)
-    save_ledger(ledger_path, ledger)
-    emit({"status": "approved", "step_id": step_id, "approval_id": app_id, "ledger": str(ledger_path)})
-
-
-def cmd_check_keys(args: argparse.Namespace) -> None:
+def cmd_check_keys(args: argparse.Namespace) -> int:
+    """`check-keys`: report presence of the RapidAPI/OpenAI env vars, never values."""
     emit({
         "status": "ok",
         "has_rapidapi_key": bool(os.getenv("RAPIDAPI_KEY")),
@@ -1119,24 +1212,25 @@ def cmd_check_keys(args: argparse.Namespace) -> None:
         "has_rapidapi_linkedin_key": bool(os.getenv("RAPIDAPI_LINKEDIN_KEY")),
         "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
     })
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI: `run` (single idempotent pass), `status`, `check-keys`."""
     parser = argparse.ArgumentParser(
         description=(
-            "Powerpacks-local Twitter/X network import via RapidAPI. "
-            "External API spend is approval-gated. An internal row cap exists only for local smoke tests; "
-            "do not use caps in real ingestion workflows."
+            "Powerpacks-local Twitter/X network import via RapidAPI. Spend-bearing steps "
+            "(crawl, MOE, LinkedIn validation) require --approve-spend; without it run stops "
+            "at the first spend step with a needs_approval payload. Reruns are idempotent by "
+            "fixed path and resume from artifacts on disk. An internal row cap exists only for "
+            "local smoke tests; do not use caps in real ingestion workflows."
         )
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--ledger", default=str(DEFAULT_LEDGER), help="Path to import ledger JSON")
-    common.add_argument("--stop-after", choices=PIPELINE_STEPS, help=argparse.SUPPRESS)
-
-    run = sub.add_parser("run", parents=[common], help="Create a run and advance until the first approval gate")
+    run = sub.add_parser("run", help="Run one idempotent discovery pass for a handle (stops at the first spend gate without --approve-spend)")
     run.add_argument("--handle", required=True, help="Operator Twitter/X handle whose followers should be imported")
+    run.add_argument("--approve-spend", action="store_true", help="Consent to the spend-bearing steps (RapidAPI crawl, OpenAI MOE, RapidAPI LinkedIn validation)")
     run.add_argument("--source", default="", help="Source label; defaults to --handle")
     run.add_argument("--max-pages", type=int, default=1, help="Maximum RapidAPI follower pages to crawl")
     run.add_argument("--min-score", type=int, default=20, help="Minimum heuristic score for enrichment candidates")
@@ -1152,32 +1246,21 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--skip-moe", action="store_true", help=argparse.SUPPRESS)
     run.set_defaults(func=cmd_run)
 
-    cont = sub.add_parser("continue", parents=[common], help="Continue an existing run")
-    cont.set_defaults(func=cmd_continue)
-
-    approve = sub.add_parser("approve", help="Approve the current blocked external API step")
-    approve.add_argument("--ledger", default=str(DEFAULT_LEDGER), help="Path to import ledger JSON")
-    approve.add_argument("--step", choices=PIPELINE_STEPS, help="Step to approve; defaults to current blocked/pending step")
-    approve.set_defaults(func=cmd_approve)
-
-    status = sub.add_parser("status", help="Show run status")
-    status.add_argument("--ledger", default=str(DEFAULT_LEDGER), help="Path to import ledger JSON")
+    status = sub.add_parser("status", help="Show run status from a handle's manifest.json")
+    status.add_argument("--handle", required=True, help="Handle whose manifest.json to read")
     status.set_defaults(func=cmd_status)
 
-    keys = sub.add_parser("check-keys", help="Check whether local RapidAPI env vars are present without printing values")
+    keys = sub.add_parser("check-keys", help="Check whether local RapidAPI/OpenAI env vars are present without printing values")
     keys.set_defaults(func=cmd_check_keys)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry: dispatch a subcommand, translating failures into JSON + exit codes."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        args.func(args)
-        return 0
-    except PipelineBlocked as exc:
-        emit(exc.payload)
-        return exc.code
+        return args.func(args)
     except PipelineFailed as exc:
         emit({"status": "failed", "error": str(exc)})
         return 1

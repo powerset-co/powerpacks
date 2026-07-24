@@ -514,6 +514,162 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["contacts"], 0)
             self.assertTrue(paths[("gmail", "linkedin_resolution_queue_csv")].exists())
 
+    def test_gmail_account_channel_records_contribution_from_child_queue(self) -> None:
+        # Exercise GmailAccountChannel directly (the #320 channel/store split):
+        # it syncs, spawns the engine child, and reads this account's rows back
+        # from its FIXED queue_csv, recording what it contributed on self.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            channel = discover_gmail.GmailAccountChannel(
+                account_email="me@example.com",
+                output_base=tmp,
+                msgvault_db=str(tmp / "msgvault.db"),
+                sync_query="-category:social",
+            )
+            write_csv(
+                channel.queue_csv,
+                discover_gmail.GMAIL_DISCOVERY_COLUMNS,
+                [{
+                    "handle": "jane@example.com",
+                    "id": "gmail:jane@example.com",
+                    "account_emails": json.dumps(["me@example.com"]),
+                    "source_ids": json.dumps(["gmail:jane@example.com"]),
+                    "display_name": "Jane Example",
+                    "full_name": "Jane Example",
+                    "primary_email": "jane@example.com",
+                    "source": "gmail_msgvault",
+                    "source_channels": "gmail_msgvault",
+                    "total_messages": "2",
+                    "thread_count": "1",
+                    "last_interaction": "2026-01-02T00:00:00Z",
+                }],
+            )
+
+            def fake_run_cmd(cmd, timeout=None):
+                self.assertIn("--output-dir", cmd)
+                self.assertEqual(Path(cmd[cmd.index("--output-dir") + 1]), tmp)
+                self.assertEqual(cmd[cmd.index("--account-email") + 1], "me@example.com")
+                return 0, {
+                    "status": "completed",
+                    "calculation_mode": discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
+                    "artifacts": {"linkedin_resolution_queue_csv": str(channel.queue_csv)},
+                    "counts": {"contacts_written": 1},
+                }, ""
+
+            with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}) as sync_mock:
+                with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                    result = channel.run()
+
+            self.assertIsNone(result)
+            sync_mock.assert_called_once()
+            self.assertEqual(channel.mode, discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA)
+            self.assertEqual([row["primary_email"] for row in channel.rows], ["jane@example.com"])
+            self.assertEqual(channel.artifacts["linkedin_resolution_queue_csv"], str(channel.queue_csv))
+            self.assertEqual(channel.artifacts["people_csv"], str(channel.people_csv))
+            self.assertTrue(channel.incremental_input_id)
+            self.assertEqual(
+                channel.incremental_input_id,
+                discover_gmail.gmail_incremental_input_id("me@example.com", channel.rows),
+            )
+            self.assertEqual(channel.record["account_email"], "me@example.com")
+            self.assertEqual(channel.record["rows_read"], 1)
+            self.assertEqual(channel.record["artifact_dir"], str(channel.discover_dir))
+            self.assertEqual(channel.record["incremental_input_id"], channel.incremental_input_id)
+            self.assertEqual(channel.output, {
+                "account_email": "me@example.com",
+                "calculation_mode": discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
+                "incremental_input_id": channel.incremental_input_id,
+                "rows": channel.rows,
+            })
+
+    def test_gmail_account_channel_failed_sync_short_circuits_before_child(self) -> None:
+        # A failed msgvault sync stops the channel before the engine child spawns.
+        channel = discover_gmail.GmailAccountChannel(
+            account_email="me@example.com",
+            output_base=Path("/nonexistent"),
+            msgvault_db="/nonexistent/msgvault.db",
+            sync_query="",
+        )
+        failed_sync = {"status": "failed", "account_email": "me@example.com", "error": "boom"}
+        with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value=failed_sync):
+            with mock.patch.object(discover_gmail, "run_cmd") as run_cmd_mock:
+                result = channel.run()
+
+        self.assertIsInstance(result, discover_gmail.GmailDiscoveryFailed)
+        self.assertEqual(result.account_email, "me@example.com")
+        self.assertEqual(result.error, failed_sync)
+        run_cmd_mock.assert_not_called()
+
+    def test_gmail_discovery_store_loops_channels_and_writes_outputs(self) -> None:
+        # Exercise GmailDiscovery directly: it builds one channel per selected
+        # account, runs them, and writes contacts.csv + queue.csv + manifest.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            account_queue = tmp / "discover/gmail/me-example.com/linkedin_resolution_queue.csv"
+            write_csv(
+                account_queue,
+                discover_gmail.GMAIL_DISCOVERY_COLUMNS,
+                [{
+                    "handle": "jane@example.com",
+                    "id": "gmail:jane@example.com",
+                    "account_emails": json.dumps(["me@example.com"]),
+                    "source_ids": json.dumps(["gmail:jane@example.com"]),
+                    "display_name": "Jane Example",
+                    "full_name": "Jane Example",
+                    "primary_email": "jane@example.com",
+                    "source": "gmail_msgvault",
+                    "source_channels": "gmail_msgvault",
+                    "total_messages": "2",
+                    "thread_count": "1",
+                    "last_interaction": "2026-01-02T00:00:00Z",
+                }],
+            )
+            paths = {
+                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
+                ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
+                ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
+            }
+            source_inputs = {
+                "selected_accounts": ["me@example.com"],
+                "msgvault_db": str(tmp / "msgvault.db"),
+                "sync_query": "",
+            }
+
+            def fake_run_cmd(cmd, timeout=None):
+                return 0, {"status": "completed", "counts": {"contacts_written": 1}}, ""
+
+            with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
+                with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
+                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                        store = discover_gmail.GmailDiscovery(source_inputs=source_inputs)
+                        payload = store.run()
+
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["contacts"], 1)
+            self.assertEqual([channel.account_email for channel in store.channels], ["me@example.com"])
+            self.assertEqual(payload["children"][0]["account_email"], "me@example.com")
+            with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
+                rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual([row["primary_email"] for row in rows], ["jane@example.com"])
+            self.assertEqual(rows[0]["total_messages"], "2")
+
+    def test_gmail_discovery_store_skips_without_selected_accounts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            paths = {
+                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
+                ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
+                ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
+            }
+            with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
+                store = discover_gmail.GmailDiscovery(source_inputs={"selected_accounts": [], "msgvault_db": "", "sync_query": ""})
+                payload = store.run()
+
+            self.assertEqual(payload["status"], "skipped")
+            self.assertEqual(payload["reason"], "no_selected_accounts")
+            self.assertEqual(store.channels, [])
+            self.assertFalse(paths[("gmail", "linkedin_resolution_queue_csv")].exists())
+
     def test_messages_contacts_direct_selects_matched_and_candidates(self) -> None:
         # The review-CSV materializer is gone: import is contacts-direct.
         # Matched rows become people rows; floor-passing unmatched rows become

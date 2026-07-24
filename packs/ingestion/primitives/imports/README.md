@@ -2,6 +2,12 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-07-23 (oop): gmail + messages importers went OO — a `GmailImport`
+  orchestrator (in `gmail/import_steps.py`, owning the import dir + `ledger.json`
+  run-state + step chain + manifest; `importer.py` is now a thin CLI wrapper) and
+  a `MessagesImport` orchestrator (owning the gate sequence + manifest; pure
+  helpers stay module-level). Updated the gmail/messages importer + `import_steps`
+  rows below. Contracts/output paths unchanged.
 - 2026-07-23 (audit batch 23): created — gist-style functionality map (mermaid
   data-flow + a per-file role/reads/writes table) for the import stage.
 
@@ -43,16 +49,16 @@ flowchart LR
 
 | File | Role | Reads | Writes |
 | --- | --- | --- | --- |
-| [`gmail/importer.py`](gmail/importer.py) | Import entry (directory-only): build the ledger, dispatch the two step functions, split matched people vs candidates, quality-gate, typed manifest | `discover/gmail/*` queues, `directory.csv`, `accounts.json` | `import/gmail/people.csv`, `candidates.csv`, `ledger.json`, `manifest.json`, `directory.csv` |
-| [`gmail/import_steps.py`](gmail/import_steps.py) | The dynamically-loaded step functions — `run_gmail_directory` (apply directory, split resolved/unresolved/cached-negative) and `run_gmail_apply_and_enrich` (attach STORED resolutions, materialize merged people.csv) — plus `save_ledger` + directory helpers | gmail queues, `directory.csv`, per-account `people.csv` | per-account resolved CSVs, `directory.csv`, merged Gmail `people.gmail.csv` |
+| [`gmail/importer.py`](gmail/importer.py) | Thin CLI entry (directory-only): loads the gmail import module and runs its `GmailImport` orchestrator; owns only the CLI surface (`run` / `--force`) + `GMAIL_IMPORT_CONTRACT` | `accounts.json` (via the orchestrator) | — (delegates all output to `GmailImport`) |
+| [`gmail/import_steps.py`](gmail/import_steps.py) | The file-loaded `GmailImport` orchestrator — owns the import dir, the `ledger.json` run-state, and the two-step chain: directory apply (split resolved/unresolved/cached-negative) then stored-resolution apply (attach STORED resolutions, materialize merged people.csv) — plus the matched-people/candidates split, the quality gate, and the manifest; the directory-commit / queue transforms stay module-level | `discover/gmail/*` queues, `directory.csv`, per-account `people.csv` | `import/gmail/people.csv`, `candidates.csv`, `ledger.json`, `manifest.json`, per-account resolved CSVs, `directory.csv`, merged Gmail `people.gmail.csv` |
 | [`gmail/util.py`](gmail/util.py) | Discovery-artifact collection (`gmail_artifacts_from_discovery`) + candidate writing (`write_gmail_candidates`) | `discover/gmail/manifest.json` + per-account artifacts | `import/gmail/candidates.csv` |
-| [`messages/importer.py`](messages/importer.py) | Import entry (contacts-direct): route `matched`→people, `unmatched`/`suggested`→candidates (floor-tested), replace the directory messages slice; `--confirm-import` approval gate | `.powerpacks/messages/contacts.csv` (match-annotated), match manifest | `import/messages/people.csv`, `candidates.csv`, `directory.csv`, `manifest.json` |
+| [`messages/importer.py`](messages/importer.py) | Import entry (contacts-direct): the `MessagesImport` orchestrator routes `matched`→people, `unmatched`/`suggested`→candidates (floor-tested), replaces the directory messages slice, `--confirm-import` approval gate; the pure row/floor/diff helpers stay module-level | `.powerpacks/messages/contacts.csv` (match-annotated), match manifest | `import/messages/people.csv`, `candidates.csv`, `directory.csv`, `manifest.json` |
 | [`messages/util.py`](messages/util.py) | Messages-vertical tolerant field parsers + the deterministic "worth researching" candidate floor + interaction/last-message readers | — | — (pure helpers) |
 | [`messages/match_local_candidates.py`](messages/match_local_candidates.py) | Tiered local matcher (phone/email exact → exact name → same-last-name prefix/fuzzy tiers); annotates `contacts.csv` in place with `match_status`; tier-0 gated by `research_review.csv` approvals (no live producer — see importer Known gap) | `contacts.csv`, `merged/people.csv` (+ optional `--candidates`), `research_review.csv` | `contacts.csv` (in place), `*.match.manifest.json` |
 | [`linkedin/network_import.py`](linkedin/network_import.py) | LinkedIn `Connections.csv` import — the Modal-hosted convert+enrich exception; parses to the people schema, delegates enrichment to `enrich/enrich_people.py` (RapidAPI) | `Connections.csv`, profile cache, RapidAPI | `discover/linkedin/people.csv` + enrichment artifacts + ledger |
 | [`directory.py`](directory.py) | Cross-source `directory.csv` contract: `DIRECTORY_COLUMNS`, email/phone/name identity keys, row merge, `people.csv → directory` commit | `directory.csv`, per-source `people.csv` | `directory.csv` (via callers) |
 | [`merge_network_sources.py`](merge_network_sources.py) | Fan-in: merge/dedupe explicit per-source `people.csv` by LinkedIn public id; similar names without shared LinkedIn go to a review file, never auto-merged | `--input` per-source `people.csv` files | `merged/people.csv`, `network_contacts.csv`, `possible_duplicates_review.csv`, `merge_manifest.json` |
-| [`common.py`](common.py) | Shared import helpers: import-manifest read/write (`write_manifest`, `import_manifest_current`), `GmailImportLedger`, `load_gmail_import_steps`, `copy_people_csv`, directory source-account quality checks | import manifests | `import/<source>/manifest.json` |
+| [`common.py`](common.py) | Shared import helpers: import-manifest read/write (`write_manifest`, `import_manifest_current`), `GmailImportLedger` (the `ledger.json` constructor), `load_gmail_import_steps` (file-loads the module whose `GmailImport` orchestrator the gmail entry getattrs), `copy_people_csv`, directory source-account quality checks | import manifests | `import/<source>/manifest.json` |
 | [`status.py`](status.py) | Read-only per-source import status: discovery ran? import completed/current? row counts + merged summary — the presence check skills use to suggest missing sources | discover + import manifests, `merged/people.csv` | — (always exits 0) |
 
 ## Stage contract

@@ -2,6 +2,11 @@
 """Shared helpers for import/enrich contact stages.
 
 Changelog:
+  2026-07-23 (oop): load_gmail_import_steps now returns the module whose
+    `GmailImport` orchestrator the caller getattrs (the gmail step free functions
+    + run() body were folded into that class in gmail/import_steps.py); the loader
+    contract (file-loaded, no __init__ side effects) is unchanged. GmailImportLedger
+    stays the typed ledger.json constructor the orchestrator builds.
   2026-07-23 (audit):
     - load_gmail_import_steps: gmail step functions extracted from the retired
       before_split orchestrator into gmail/import_steps.py.
@@ -55,11 +60,11 @@ from packs.shared.csv_io import CsvIO
 class GmailImportLedger:
     """Typed constructor for the gmail import's `ledger.json`.
 
-    The ledger is JSON run-state shared with the dynamically loaded step
-    functions (gmail/import_steps.py in this package), which mutate it as a plain dict
-    (`steps` / `artifacts` / `status`) and persist it via `save_ledger` — so
-    this class owns the SHAPE at construction time and `to_dict()` hands over
-    the mutable runtime form the steps expect."""
+    The ledger is JSON run-state owned by the `GmailImport` orchestrator
+    (gmail/import_steps.py in this package), whose step methods mutate it as a
+    plain dict (`steps` / `artifacts` / `status`) and persist it via the
+    orchestrator's `_save` — so this class owns the SHAPE at construction time
+    and `to_dict()` hands over the mutable runtime form the orchestrator expects."""
 
     artifact_dir: str
     input: dict[str, Any]
@@ -85,12 +90,13 @@ class GmailImportLedger:
 
 
 def load_gmail_import_steps() -> Any:
-    """Load the gmail step functions the live import dispatches (run_gmail_directory /
-    run_gmail_apply_and_enrich / save_ledger) from this package's gmail/import_steps.py.
-    No Parallel resolution, no RapidAPI hydration (deep-context owns both; stored
-    legacy resolutions migrate via `bin/deep-context migrate-legacy`). File-loaded
-    to keep the step module's exact loader semantics (no package __init__ side
-    effects at load time)."""
+    """Load the gmail import module the live import dispatches from this package's
+    gmail/import_steps.py, and return it (the caller getattrs the `GmailImport`
+    orchestrator off it — plus `materialize_gmail_merged_people_csv`, re-exported
+    for tests). No Parallel resolution, no RapidAPI hydration (deep-context owns
+    both; stored legacy resolutions migrate via `bin/deep-context migrate-legacy`).
+    File-loaded to keep the step module's exact loader semantics (no package
+    __init__ side effects at load time)."""
     path = Path(__file__).resolve().parent / "gmail" / "import_steps.py"
     spec = importlib.util.spec_from_file_location("_powerpacks_gmail_import_steps", path)
     if not spec or not spec.loader:
