@@ -96,7 +96,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.write_people(people)
             cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
+                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "completed")
@@ -120,7 +120,7 @@ class EnrichPeopleTests(unittest.TestCase):
             cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
                 # A cache miss must NOT fetch without approval: assert no network.
-                with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
+                with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir)])
             self.assertEqual(code, enrich_people.NEEDS_APPROVAL_CODE)
             self.assertEqual(payload["status"], "needs_approval")
@@ -162,7 +162,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.write_people(people)
             cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "r"}, clear=True):
-                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
+                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
             self.assertFalse(any(name.endswith("_enrich") and name != "rapidapi_profile" for name in dir(enrich_people)))
@@ -181,7 +181,7 @@ class EnrichPeopleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
             self.write_people(people, rapidapi_response=self.profile())
-            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out")])
             self.assertEqual(code, 0)
             self.assertEqual(payload["counts"]["paid_call_count"], 0)
@@ -199,7 +199,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.write_people(people, rapidapi_response={"success": False, "message": "not found"})
             cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
+                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "completed")
@@ -239,7 +239,7 @@ class EnrichPeopleTests(unittest.TestCase):
             cache_dir = Path(tmp) / "cache"
             cache_dir.mkdir()
             (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
-            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
                     "--profile-cache-dir", str(cache_dir),
@@ -262,7 +262,7 @@ class EnrichPeopleTests(unittest.TestCase):
             cache_dir.mkdir()
             (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
+                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
                     code, payload = self.invoke([
                         "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
                         "--profile-cache-dir", str(cache_dir), "--refresh-cache", "--approve-spend",
@@ -292,7 +292,7 @@ class EnrichPeopleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
                 john_profile = self.profile(company_id="456")
                 john_profile["full_name"] = "John Example"
-                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": john_profile, "error": "", "from_cache": False}) as mocked:
+                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": john_profile, "error": "", "from_cache": False}) as mocked:
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--approve-spend"])
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["counts"]["queue_count"], 2)
@@ -339,7 +339,7 @@ class EnrichPeopleTests(unittest.TestCase):
 
     def test_rapidapi_linkedin_key_preferred(self):
         with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "preferred", "RAPIDAPI_KEY": "fallback"}, clear=True):
-            self.assertEqual(enrich_people.rapidapi_key(), "preferred")
+            self.assertEqual(rapidapi_client.RapidApiClient.resolve_key(), "preferred")
 
     def test_cache_slug_is_sanitized(self):
         path = enrich_people.profile_cache_path(Path("cache"), "../bad/slug")
@@ -347,8 +347,8 @@ class EnrichPeopleTests(unittest.TestCase):
 
     def test_failed_profile_is_cached_with_last_checked_at(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(rapidapi_client, "http_json", return_value=(200, {"success": False, "message": "not found"}, "")):
-                result = enrich_people.rapidapi_profile("jane-example", "https://www.linkedin.com/in/jane-example", "key", cache_dir=Path(tmp))
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", return_value=(200, {"success": False, "message": "not found"}, "")):
+                result = rapidapi_client.RapidApiClient("key").fetch_profile("jane-example", "https://www.linkedin.com/in/jane-example", cache_dir=Path(tmp))
             cached = json.loads((Path(tmp) / "jane-example.json").read_text(encoding="utf-8"))
             self.assertIn("last_checked_at", cached)
             self.assertEqual(cached["public_identifier"], "jane-example")
@@ -370,7 +370,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 "status_code": 404,
                 "error": "not found",
             }), encoding="utf-8")
-            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
                     "--profile-cache-dir", str(cache_dir),
@@ -397,7 +397,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 "normalized_profile": {"success": False, "error": "not found"},
             }), encoding="utf-8")
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(enrich_people, "rapidapi_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
+                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
                     code, payload = self.invoke([
                         "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
                         "--profile-cache-dir", str(cache_dir), "--approve-spend",

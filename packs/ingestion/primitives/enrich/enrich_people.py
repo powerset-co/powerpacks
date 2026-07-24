@@ -9,8 +9,8 @@ modules, one concern each — import from the defining module, not through here:
 
 - `models.py` — EnrichConfig/build_config, EnrichManifest, the stage CSV
   columns, PipelineFailed.
-- `rapidapi_client.py` — RapidAPI key/env handling, http_json, retry/backoff,
-  the cache-aware `rapidapi_profile` fetch, DEFAULT_RAPIDAPI_* knobs.
+- `rapidapi_client.py` — the RapidApiClient class: key/env handling, http_json,
+  retry/backoff, the cache-aware `fetch_profile`, DEFAULT_RAPIDAPI_* knobs.
 - `profile_cache.py` — profile-cache slugs/paths/reads, failure TTL,
   cache-status classification, and the cache seeding format documentation.
 - `profile_transforms.py` — pure row transforms: route_row, normalize_rapidapi,
@@ -71,6 +71,13 @@ Cache seeding format is documented in `profile_cache.py`. Company identity
 field behavior is documented in `profile_transforms.py`.
 
 Changelog:
+  2026-07-23 (audit oo-cli): the CLI command handlers (command_run/status/
+    check_keys) moved onto EnrichPeople so the class is the single entry point:
+    command_run is a @classmethod that instantiates + runs the orchestrator;
+    status/check_keys are @staticmethods. build_parser/main dispatch to
+    EnrichPeople.command_*. RapidAPI access is now through the RapidApiClient
+    class (resolve_key/fetch_profile) instead of the module rapidapi_key/
+    rapidapi_profile functions.
   2026-07-23 (audit decomposition): split the module into models.py /
     rapidapi_client.py / profile_cache.py / profile_transforms.py, keeping only
     the EnrichPeople orchestrator, its progress knobs, and the CLI here. The
@@ -146,8 +153,7 @@ from packs.ingestion.primitives.enrich.rapidapi_client import (  # noqa: E402
     DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
     DEFAULT_RAPIDAPI_MAX_RPM,
     DEFAULT_RAPIDAPI_MAX_WORKERS,
-    rapidapi_key,
-    rapidapi_profile,
+    RapidApiClient,
 )
 from packs.ingestion.schemas.company_identity import build_company_identity_lookup  # noqa: E402
 from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
@@ -208,7 +214,7 @@ class EnrichPeople:
                     f"fetches (~{paid} credits). Re-run with --approve-spend to proceed."
                 ),
             })
-        if paid > 0 and not rapidapi_key():
+        if paid > 0 and not RapidApiClient.resolve_key():
             return self._write(status="failed", error="RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
         try:
             self._timed("enrich_linkedin", self.enrich_linkedin)
@@ -374,10 +380,11 @@ class EnrichPeople:
             return {"processed": 0, "cached": 0, "fetched": 0, "output_file": str(out_path), "providers": {"rapidapi": False}}
 
         paid_call_count = int(self.counts.get("paid_call_count") or 0)
-        rapid_key = rapidapi_key()
+        client = RapidApiClient()
         # Defensive: run() gates on this before calling us, but keep the guard so
-        # a direct caller cannot silently spend against a missing key.
-        if paid_call_count > 0 and not rapid_key:
+        # a direct caller cannot silently spend against a missing key. One client
+        # is shared across the pool below (it is stateless beyond its key/retry).
+        if paid_call_count > 0 and not client.api_key:
             raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
 
         profile_cache_dir = cfg.profile_cache_dir
@@ -428,10 +435,9 @@ class EnrichPeople:
                             "attempts": 1,
                         }
             else:
-                rapid = rapidapi_profile(
+                rapid = client.fetch_profile(
                     public_identifier,
                     linkedin_url,
-                    rapid_key,
                     cache_dir=profile_cache_dir,
                     refresh_cache=refresh_cache,
                     wait_for_attempt=rate_limiter.wait,
@@ -549,52 +555,57 @@ class EnrichPeople:
         emit_progress(f"Wrote people.csv with {len(rows)} confirmed rows.")
         return {"rows": len(rows), "unfiltered_rows": len(unfiltered_rows), "filtered_rows": filtered_rows, "output_file": str(output)}
 
+    # ---- CLI command handlers ----
+    # The class is the single entry point for running enrichment: `command_run`
+    # builds a config and instantiates + runs this orchestrator; `command_status`
+    # and `command_check_keys` are read-only queries that need no instance. The
+    # module `build_parser`/`main` wire argparse to these.
+    @classmethod
+    def command_run(cls, args: argparse.Namespace) -> int:
+        artifact_dir = Path(args.artifact_dir) if args.artifact_dir else Path(args.output_dir) / "enrichment"
+        cfg = build_config(
+            input_csv=args.input,
+            artifact_dir=artifact_dir,
+            profile_cache_dir=args.profile_cache_dir,
+            limit=args.limit,
+            force=args.force,
+            refresh_cache=args.refresh_cache,
+            company_corpus_jsonl=args.company_corpus_jsonl,
+            sleep_seconds=args.sleep_seconds,
+            max_workers=args.max_workers,
+            max_rpm=args.max_rpm,
+            failure_retry_hours=args.failure_retry_hours,
+            approve_spend=args.approve_spend,
+        )
+        manifest = cls(cfg).run()
+        emit(manifest_emit_payload(manifest))
+        return exit_code_for_status(manifest.status)
 
-def command_run(args: argparse.Namespace) -> int:
-    artifact_dir = Path(args.artifact_dir) if args.artifact_dir else Path(args.output_dir) / "enrichment"
-    cfg = build_config(
-        input_csv=args.input,
-        artifact_dir=artifact_dir,
-        profile_cache_dir=args.profile_cache_dir,
-        limit=args.limit,
-        force=args.force,
-        refresh_cache=args.refresh_cache,
-        company_corpus_jsonl=args.company_corpus_jsonl,
-        sleep_seconds=args.sleep_seconds,
-        max_workers=args.max_workers,
-        max_rpm=args.max_rpm,
-        failure_retry_hours=args.failure_retry_hours,
-        approve_spend=args.approve_spend,
-    )
-    manifest = EnrichPeople(cfg).run()
-    emit(manifest_emit_payload(manifest))
-    return exit_code_for_status(manifest.status)
+    @staticmethod
+    def command_status(args: argparse.Namespace) -> int:
+        artifact_dir = Path(args.artifact_dir) if args.artifact_dir else Path(args.output_dir) / "enrichment"
+        manifest = read_json(artifact_dir / "manifest.json", {}) or {}
+        emit({
+            "status": manifest.get("status", "unknown"),
+            "artifact_dir": str(artifact_dir),
+            "counts": manifest.get("counts", {}),
+            "artifacts": manifest.get("artifacts", {}),
+            "steps": manifest.get("steps", {}),
+            "needs_approval": manifest.get("needs_approval"),
+        })
+        return 0
 
-
-def command_status(args: argparse.Namespace) -> int:
-    artifact_dir = Path(args.artifact_dir) if args.artifact_dir else Path(args.output_dir) / "enrichment"
-    manifest = read_json(artifact_dir / "manifest.json", {}) or {}
-    emit({
-        "status": manifest.get("status", "unknown"),
-        "artifact_dir": str(artifact_dir),
-        "counts": manifest.get("counts", {}),
-        "artifacts": manifest.get("artifacts", {}),
-        "steps": manifest.get("steps", {}),
-        "needs_approval": manifest.get("needs_approval"),
-    })
-    return 0
-
-
-def command_check_keys(_: argparse.Namespace) -> int:
-    emit({
-        "status": "ok",
-        "provider": "rapidapi",
-        "keys_present": {
-            "RAPIDAPI_KEY": bool(os.getenv("RAPIDAPI_KEY", "").strip()),
-            "RAPIDAPI_LINKEDIN_KEY": bool(os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip()),
-        },
-    })
-    return 0
+    @staticmethod
+    def command_check_keys(_: argparse.Namespace) -> int:
+        emit({
+            "status": "ok",
+            "provider": "rapidapi",
+            "keys_present": {
+                "RAPIDAPI_KEY": bool(os.getenv("RAPIDAPI_KEY", "").strip()),
+                "RAPIDAPI_LINKEDIN_KEY": bool(os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip()),
+            },
+        })
+        return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -614,15 +625,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-rpm", type=float, default=DEFAULT_RAPIDAPI_MAX_RPM)
     run.add_argument("--failure-retry-hours", type=float, default=DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
-    run.set_defaults(func=command_run)
+    run.set_defaults(func=EnrichPeople.command_run)
 
     status = sub.add_parser("status")
     status.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     status.add_argument("--artifact-dir", default="", help=argparse.SUPPRESS)
-    status.set_defaults(func=command_status)
+    status.set_defaults(func=EnrichPeople.command_status)
 
     keys = sub.add_parser("check-keys")
-    keys.set_defaults(func=command_check_keys)
+    keys.set_defaults(func=EnrichPeople.command_check_keys)
     return parser
 
 
