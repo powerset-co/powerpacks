@@ -10,6 +10,10 @@ copies it replaces:
   result payload.
 - `read_json` — safe read; returns `default` on missing file or decode error.
 - `write_json` — mkdir parents, indent=2, sort_keys, single trailing newline.
+- `read_jsonl` — newline-delimited JSON objects into a list; `[]` for a missing
+  file, blank lines skipped, a malformed line raises.
+- `write_jsonl` — mkdir parents, one JSON object per line, utf-8; returns the
+  number of rows written.
 - `parse_last_json` — return the LAST top-level JSON object emitted on a child's
   stdout (`{}` when none); the tolerant progress-then-result contract.
 - `unique_strings` — order-preserving de-dup of a scalar/list into stripped
@@ -19,6 +23,13 @@ copies it replaces:
   pass their historical length so existing digests are unchanged.
 
 Changelog:
+  2026-07-24 (jsonl home): added the `read_jsonl` / `write_jsonl` pair. The repo
+    carried 28 separate newline-delimited-JSON reader/writer definitions and no
+    shared one; the message extractors now route here, and the remaining copies
+    can collapse onto it. `write_jsonl` keeps `sort_keys=True` /
+    `ensure_ascii=True` as defaults so the artifacts it replaced stay
+    byte-identical, with both exposed as keyword overrides for the callers that
+    write literal UTF-8.
   2026-07-23 (audit consolidation): created; absorbs the duplicated now_iso /
     emit / read_json / write_json / parse_last_json / unique_strings /
     sha256_file copies and the `sha`/`short_hash` truncated-digest helpers from
@@ -32,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -67,6 +79,51 @@ def write_json(path: Path, payload: Any) -> None:
     """Write `payload` as key-sorted JSON (indent 2, trailing newline), mkdir-ing parents."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read newline-delimited JSON objects into a list; `[]` for a missing file.
+
+    Blank lines are skipped, so a file's trailing newline costs nothing. A
+    malformed line raises `json.JSONDecodeError` — unlike `read_json`'s tolerant
+    default-on-error contract, a half-written JSONL artifact should be loud
+    rather than silently short.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if stripped:
+                rows.append(json.loads(stripped))
+    return rows
+
+
+def write_jsonl(
+    path: Path,
+    rows: Iterable[Any],
+    *,
+    sort_keys: bool = True,
+    ensure_ascii: bool = True,
+) -> int:
+    """Write `rows` as newline-delimited JSON, mkdir-ing parents; returns the count.
+
+    One compact JSON value per line, LF-terminated, utf-8. `rows` is consumed as
+    an iterable, so generators stream instead of materializing. The defaults
+    match the artifacts this replaced: `sort_keys` keeps reruns diff-stable and
+    `ensure_ascii` escapes non-ASCII — pass `ensure_ascii=False` for the
+    artifacts that keep literal UTF-8.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=sort_keys, ensure_ascii=ensure_ascii) + "\n")
+            written += 1
+    return written
 
 
 def parse_last_json(stdout: str) -> dict[str, Any]:
