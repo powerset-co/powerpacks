@@ -2,6 +2,8 @@
 
 Created: 2026-07-23
 Changelog: (temporary file — will fold into AGENTS.md; agents MUST read this before editing/moving code)
+  - 2026-07-23 (class-sharing pass): added "Shared homes" + "Orchestrator pattern"
+    sections after the five OO refactors landed.
 
 ## Imports
 - One import list at the top. Never duplicated try/except import blocks, never inline/conditional imports.
@@ -25,6 +27,45 @@ Changelog: (temporary file — will fold into AGENTS.md; agents MUST read this b
 
 ## Typed payloads
 - Stage manifests / ledgers are dataclasses (per-vertical `models.py`, or a shared dataclass for shared shapes) — never ad-hoc dicts. A stage cannot invent fields inline.
+
+## Shared homes (don't re-implement these)
+- **Typed stage manifests** live in `primitives/common/manifests.py`: `StagePayload`
+  (base for the per-vertical `models.py` dataclasses) + `write_stage_manifest`
+  (fingerprinted, no-op-when-unchanged) + the fingerprint helpers. Any stage that
+  writes a fingerprinted stage manifest reaches here — do not copy the chain into a
+  new vertical's `common`. (`imports/common.py` keeps a *separate*, intentionally
+  divergent `write_manifest` + `collect_artifact_paths` — different dedup/match
+  rules and a source-derived path — that is a different contract; leave it alone.)
+- **The spend gate** lives in `primitives/common/gates.py`: `EXIT_NEEDS_APPROVAL`
+  (the `--approve-spend`-gated `run` exit code), `exit_code_for_status`,
+  `manifest_emit_payload` (the terse CLI JSON from a typed orchestrator manifest),
+  and `needs_approval_payload` (the canonical **step-gate** shape:
+  step/provider/estimated_calls/message[/continue_command]). A spend-gated
+  orchestrator that names a blocked step uses `needs_approval_payload`. A gate with
+  a genuinely different shape (e.g. enrich_people's *credit-gate*: reason/
+  paid_call_count/cache_hit_count/estimated_credits) keeps its own literal — don't
+  bend one shape onto the other just for symmetry, but DO use the shared exit code +
+  emit helpers.
+
+## Orchestrator pattern (copy the shape, not a base class)
+The discover/import verticals converged on the same OO shape, but their bodies
+differ enough that a shared base class would own nothing. Copy the SHAPE; do not
+extract a base:
+- **Channel class** (`MessageChannel`/`IMessageChannel`/`WhatsAppChannel`,
+  `GmailAccountChannel`): one source. Owns its fixed output paths (read from the
+  module-level constants at call time so tests can patch them) and its
+  extract/sync -> normalize/spawn subprocess chain; records what it contributed on
+  `self.artifacts`; its `run()` returns `None` on success or a blocked/failed
+  payload that short-circuits the store.
+- **Store/orchestrator** (`MessagesDiscovery`, `GmailDiscovery`): owns the output
+  dir (the ONE mkdir), the enabled channels, the run loop (stop at the first
+  blocked/failed channel), the merge, and the single typed stage manifest.
+- Do NOT hoist a shared base for these. The failure payloads differ (typed
+  `GmailDiscoveryFailed` vs the `blocked_child`/`failed_child` dicts, which live
+  only in `messages/discover.py`), and the merge bodies differ (a subprocess
+  `merge_contacts` union vs the gmail incremental/full-recount merge plan). A base
+  would own a ~3-line loop whose failure handling also differs. Keep the shape
+  consistent across new verticals; keep the bodies local.
 
 ## Docs & READMEs
 - NO per-file `<name>.README.md` sidecars. A module's usage/docs live in its own

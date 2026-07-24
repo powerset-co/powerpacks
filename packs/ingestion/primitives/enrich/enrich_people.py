@@ -68,6 +68,13 @@ Company identity: work experiences preserve `rapidapi_company_id`,
 `current_company_urn` is a legacy shared-schema field not populated here.
 
 Changelog:
+  2026-07-23 (audit class-sharing): the spend-gate exit code + CLI-emit helpers
+    moved to common/gates.py — EXIT_NEEDS_APPROVAL (NEEDS_APPROVAL_CODE is now an
+    alias of it), exit_code_for_status, and manifest_emit_payload are imported
+    from there. The needs_approval PAYLOAD stays a local literal: it is the
+    credit-gate shape (reason/paid_call_count/cache_hit_count/estimated_credits/
+    message), distinct from twitter's step-gate shape, so it does not use the
+    shared step-gate builder.
   2026-07-23 (audit): replaced the per-step ledger runner (load_ledger/
     save_ledger/mark_step/next_pending_step/approval_id/is_approved/
     block_for_approval/PIPELINE_STEPS/execute_step/ensure_keys/
@@ -116,6 +123,7 @@ from packs.ingestion.schemas.people_schema import (
     parse_jsonish,
     stable_person_id_from_key,
 )
+from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL, exit_code_for_status, manifest_emit_payload
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash, write_json
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR
 from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress
@@ -131,8 +139,9 @@ DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS = float(os.environ.get("POWERPACKS_RAPIDA
 DEFAULT_PROGRESS_INTERVAL_SECONDS = float(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_SECONDS", "60"))
 DEFAULT_PROGRESS_INTERVAL_ROWS = int(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_ROWS", "100"))
 # `run` exit code when paid RapidAPI cache-miss fetches are gated behind
-# --approve-spend: nonzero (so callers/CI notice) but clean (not a failure).
-NEEDS_APPROVAL_CODE = 20
+# --approve-spend. The value + the status->code mapping live in common/gates.py;
+# kept here as a module alias for the name callers/tests already reach for.
+NEEDS_APPROVAL_CODE = EXIT_NEEDS_APPROVAL
 
 QUEUE_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["enrichment_route", "enrichment_reason"]
 CACHE_COLUMNS = QUEUE_COLUMNS + ["cache_status", "cache_path", "cache_reason"]
@@ -1065,27 +1074,6 @@ class EnrichPeople:
         filtered_rows = len(unfiltered_rows) - len(rows)
         emit_progress(f"Wrote people.csv with {len(rows)} confirmed rows.")
         return {"rows": len(rows), "unfiltered_rows": len(unfiltered_rows), "filtered_rows": filtered_rows, "output_file": str(output)}
-
-
-def manifest_emit_payload(manifest: EnrichManifest) -> dict[str, Any]:
-    """The terse JSON a CLI run emits: status + manifest path + counts/artifacts,
-    plus the needs_approval / error detail when present."""
-    payload: dict[str, Any] = {
-        "status": manifest.status,
-        "artifact_dir": manifest.artifact_dir,
-        "manifest": str(Path(manifest.artifact_dir) / "manifest.json"),
-        "counts": manifest.counts,
-        "artifacts": manifest.artifacts,
-    }
-    if manifest.needs_approval is not None:
-        payload["needs_approval"] = manifest.needs_approval
-    if manifest.error is not None:
-        payload["error"] = manifest.error
-    return payload
-
-
-def exit_code_for_status(status: str) -> int:
-    return {"completed": 0, "needs_approval": NEEDS_APPROVAL_CODE, "failed": 1}.get(status, 1)
 
 
 def command_run(args: argparse.Namespace) -> int:

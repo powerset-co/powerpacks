@@ -46,6 +46,12 @@ Env: `RAPIDAPI_TWITTER_KEY` (falls back to `RAPIDAPI_KEY`) for Twitter/X,
 `OPENAI_API_KEY` for MOE evaluation.
 
 Changelog:
+  2026-07-23 (audit class-sharing): the spend-gate contract moved to
+    common/gates.py — the inline exit-code map in cmd_run is now
+    exit_code_for_status, and the needs_approval payload is built by the shared
+    needs_approval_payload (step/provider/estimated_calls shape, unchanged bytes).
+    StagePayload + write_stage_manifest now import from common/manifests.py
+    (source_slug still comes from discover/common).
   2026-07-23 (audit): replaced the resumable ledger step-machine
     (run/approve/continue/status + network_import.ledger.json) with a manifest-only
     single-`run` orchestrator (TwitterDiscovery). Resume is now by artifact
@@ -85,13 +91,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
-from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
-from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    StagePayload,
-    source_slug,
-    write_stage_manifest,
+from packs.ingestion.primitives.common.gates import (  # noqa: E402
+    exit_code_for_status,
+    needs_approval_payload,
 )
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
+from packs.ingestion.primitives.common.manifests import StagePayload, write_stage_manifest  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
+from packs.ingestion.primitives.discover.common import source_slug  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS as PEOPLE_COLUMNS,
     generate_person_id,
@@ -1122,13 +1129,13 @@ class TwitterDiscovery:
         provider = STEP_PROVIDERS[spec.name]
         estimate = self._estimate(spec.name)
         steps[spec.name] = {"status": "needs_approval", "provider": provider, "estimated_calls": estimate}
-        return self._write("needs_approval", steps, needs_approval={
-            "step": spec.name,
-            "provider": provider,
-            "estimated_calls": estimate,
-            "message": f"Approval required before {STEP_LABELS[spec.name]} (~{estimate} {provider} calls). Re-run with --approve-spend.",
-            "continue_command": self._continue_command(),
-        })
+        return self._write("needs_approval", steps, needs_approval=needs_approval_payload(
+            step=spec.name,
+            provider=provider,
+            estimated_calls=estimate,
+            message=f"Approval required before {STEP_LABELS[spec.name]} (~{estimate} {provider} calls). Re-run with --approve-spend.",
+            continue_command=self._continue_command(),
+        ))
 
     def _artifacts(self) -> dict[str, Any]:
         """The subset of fixed output artifacts that exist, keyed by logical name."""
@@ -1189,7 +1196,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     cfg = build_input(args)
     payload = TwitterDiscovery(cfg, approve_spend=args.approve_spend).run()
     emit(payload)
-    return {"completed": 0, "needs_approval": 20, "failed": 1}.get(str(payload.get("status")), 0)
+    return exit_code_for_status(str(payload.get("status")))
 
 
 def cmd_status(args: argparse.Namespace) -> int:

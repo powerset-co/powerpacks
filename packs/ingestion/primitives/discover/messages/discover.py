@@ -61,6 +61,7 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
     MESSAGES_OUT_DIR,
 )
+from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     account_config,
@@ -68,7 +69,6 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
     read_accounts,
     read_csv_rows,
     write_csv_rows,
-    write_stage_manifest,
 )
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS  # noqa: E402
 

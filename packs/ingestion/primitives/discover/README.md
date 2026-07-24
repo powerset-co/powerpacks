@@ -78,7 +78,7 @@ flowchart LR
 | [`messages/merge_contacts.py`](messages/merge_contacts.py) | Union N per-channel CSVs by canonical phone → one `contacts.csv` | `imessage.contacts.csv`, `whatsapp.contacts.csv` | `.powerpacks/messages/contacts.csv` + manifest |
 | [`messages/models.py`](messages/models.py) | Typed messages-discovery manifest dataclasses | — | — |
 | [`twitter/network_import.py`](twitter/network_import.py) | Manifest-only Twitter/X orchestrator (`TwitterDiscovery`): one idempotent `run` — crawl → score → MOE triage → free LinkedIn pre-resolve → RapidAPI validate → format people; spend steps gated by `--approve-spend`, resume by artifact freshness | Twitter/X + LinkedIn RapidAPI, OpenAI | `discover/twitter/<handle>/`: `followers_dump.csv`, `candidates.csv`, `moe_evaluated.csv`, `linkedin_*.csv`, `people.csv`, `raw_*` dirs, `manifest.json` |
-| [`common.py`](common.py) | Shared discover/import helpers: CSV/JSON IO, accounts state, stage manifests (`write_stage_manifest`), child-process runner (`run_cmd`), base-dir constants | — | — (used by callers) |
+| [`common.py`](common.py) | Discover-stage helpers: LF CSV IO, accounts/channel state, `source_slug`. The typed stage-manifest contract (`StagePayload`/`write_stage_manifest`) now lives in `primitives/common/manifests.py` and is re-exported here; the spend-gate contract lives in `primitives/common/gates.py` | — | — (used by callers) |
 | [`discovery_config.py`](discovery_config.py) + [`discovery.config.json`](discovery.config.json) | Static discovery input/output contract; resolves per-source output paths and the accounts path | `discovery.config.json` | — |
 
 ## Stage contract

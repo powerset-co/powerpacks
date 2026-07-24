@@ -74,11 +74,11 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import gmail_discover_dir  # noqa: E402
 from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
+from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
     read_csv_rows,
     write_csv_rows,
-    write_stage_manifest,
 )
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
     output_path,
