@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import html
 import json
 import os
@@ -33,14 +34,13 @@ import platform
 import queue
 import re
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,6 +52,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -64,20 +65,49 @@ DEFAULT_OUTPUT_JSONL = DEFAULT_OUT_DIR / "wacli.contacts.jsonl"
 DEFAULT_MANIFEST = DEFAULT_OUTPUT_CSV.with_suffix(DEFAULT_OUTPUT_CSV.suffix + ".manifest.json")
 DEFAULT_PROGRESS_JSONL = DEFAULT_MANIFEST.with_suffix(DEFAULT_MANIFEST.suffix + ".progress.jsonl")
 DEFAULT_NAME_FALLBACK_CSV = DEFAULT_OUT_DIR / "contacts.csv"
+DEFAULT_HISTORY_DEPTH_DIR = DEFAULT_OUT_DIR / "history-depth"
 DEFAULT_MAX_MESSAGES = int(os.environ.get("POWERPACKS_WACLI_MAX_MESSAGES", "0"))
-# Store-size target used by incremental sync: existing messages + headroom for
-# new ones (headroom = max(1000, budget // 10) via effective_max_messages). A
-# rerun therefore pulls only the delta, not the whole history. Tunable — higher
-# is safer for very active accounts between syncs, but slower.
+# Store-size target used after the first sync: existing messages + headroom for
+# new ones (headroom = max(1000, budget // 10) via effective_max_messages).
+# The primitive chooses full vs incremental from the local store; there is no
+# user-facing sync mode.
 DEFAULT_INCREMENTAL_BUDGET = int(os.environ.get("POWERPACKS_WACLI_INCREMENTAL_BUDGET", "20000"))
-SYNC_MODES = ("auto", "full", "incremental")
 DEFAULT_QR_PNG = DEFAULT_OUT_DIR / "wacli-login-qr.png"
 DEFAULT_QR_HTML = DEFAULT_OUT_DIR / "wacli-login-qr.html"
 DEFAULT_MAX_GROUP_PARTICIPANTS = int(os.environ.get("POWERPACKS_WACLI_MAX_GROUP_PARTICIPANTS", "30"))
 DEFAULT_GROUP_PARTICIPANTS_CACHE = DEFAULT_OUT_DIR / "wacli.group-participants.json"
 DEFAULT_IDLE_EXIT = os.environ.get("POWERPACKS_WACLI_IDLE_EXIT", "30s")
-DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "600"))
-DEFAULT_SYNC_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_SYNC_TIMEOUT", "900"))
+# A newly paired account keeps the auth process alive while whatsmeow completes
+# its initial account bootstrap. That can take hours on a large archive.
+DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "10800"))
+DEFAULT_SYNC_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_SYNC_TIMEOUT", "10800"))
+DEFAULT_HISTORY_DEPTH_MAX_COUNT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_MAX_COUNT", "20"))
+DEFAULT_HISTORY_DEPTH_COUNT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_COUNT", "500"))
+DEFAULT_HISTORY_DEPTH_REQUESTS = int(os.environ.get("POWERPACKS_WACLI_DEPTH_REQUESTS", "10"))
+DEFAULT_HISTORY_DEPTH_NO_GROWTH_LIMIT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_NO_GROWTH_LIMIT", "1"))
+DEFAULT_HISTORY_DEPTH_REQUEST_DELAY = os.environ.get("POWERPACKS_WACLI_DEPTH_REQUEST_DELAY", "10s")
+DEFAULT_HISTORY_DEPTH_BATCH_SIZE = int(os.environ.get("POWERPACKS_WACLI_DEPTH_BATCH_SIZE", "10"))
+DEFAULT_HISTORY_DEPTH_MAX_IN_FLIGHT = int(
+    os.environ.get("POWERPACKS_WACLI_DEPTH_MAX_IN_FLIGHT", "10")
+)
+DEFAULT_HISTORY_DEPTH_RESPONSE_WAIT = os.environ.get("POWERPACKS_WACLI_DEPTH_RESPONSE_WAIT", "10s")
+DEFAULT_HISTORY_DEPTH_BATCH_DELAY = os.environ.get(
+    "POWERPACKS_WACLI_DEPTH_BATCH_DELAY",
+    "10s",
+)
+DEFAULT_HISTORY_DEPTH_TIMEOUT_BACKOFF = os.environ.get(
+    "POWERPACKS_WACLI_DEPTH_TIMEOUT_BACKOFF",
+    "1m",
+)
+DEFAULT_HISTORY_DEPTH_BUDGET_SECONDS = int(os.environ.get("POWERPACKS_WACLI_DEPTH_BUDGET_SECONDS", "6300"))
+DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT = int(
+    os.environ.get(
+        "POWERPACKS_WACLI_DEPTH_ATTEMPT_TIMEOUT",
+        str(DEFAULT_HISTORY_DEPTH_BUDGET_SECONDS),
+    )
+)
+DEFAULT_HISTORY_DEPTH_LOOKBACK_YEARS = 3
+HISTORY_DEPTH_POLICY_VERSION = 4
 DEFAULT_DEVICE_PLATFORM = os.environ.get("POWERPACKS_WACLI_DEVICE_PLATFORM", "DESKTOP")
 DEFAULT_DEVICE_LABEL = os.environ.get("POWERPACKS_WACLI_DEVICE_LABEL", "Mac OS")
 DEFAULT_FULL_SYNC_DAYS = os.environ.get("POWERPACKS_WACLI_FULL_SYNC_DAYS", "3650")
@@ -92,7 +122,7 @@ PAIRING_MARKER_NAME = ".powerpacks-pairing.json"
 # for this tag — no Go toolchain on the user's machine — and keep it off the
 # upstream Homebrew tap so we control the version.
 WACLI_REPO = "powerset-co/wacli"
-WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.13.0-fullsync")
+WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.14.0-fullsync")
 WACLI_RELEASE_BASE = os.environ.get(
     "POWERPACKS_WACLI_RELEASE_BASE",
     f"https://github.com/{WACLI_REPO}/releases/download",
@@ -131,6 +161,31 @@ class Contact:
     group_names: set[str] = field(default_factory=set)
     message_count: int | None = None
     last_message: str | None = None
+
+
+@dataclass(frozen=True)
+class HistoryDepthTarget:
+    chat_jid: str
+    chat_ref: str
+    kind: str
+    current_count: int
+    current_latest_ts: int = 0
+    state_changed: bool = False
+
+
+@dataclass(frozen=True)
+class HistoryDepthAttempt:
+    returncode: int
+    requests_sent: int
+    responses_seen: int
+    target_added: int
+    unrelated_added: int
+    after_count: int
+    error_category: str
+    retryable: bool
+    after_latest_ts: int = 0
+    messages_received: int = 0
+    end_type: str = ""
 
 
 class PrimitiveBlocked(Exception):
@@ -187,7 +242,18 @@ def run_command(
     heartbeat_interval: float = 120.0,
 ) -> dict[str, Any]:
     if not stream_to_stderr and not heartbeat_message:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            stderr = (stderr + f"\ncommand timed out after {timeout}s").strip() + "\n"
+            return {
+                "returncode": 124,
+                "stdout": stdout,
+                "stderr": stderr,
+                "json": parse_last_json(stdout),
+            }
         return {
             "returncode": proc.returncode,
             "stdout": proc.stdout,
@@ -360,7 +426,11 @@ def wacli_json(store: Path, args: list[str], *, timeout: int = 300) -> dict[str,
     return payload if isinstance(payload, dict) else {}
 
 
-def auth_status(store: Path) -> dict[str, Any]:
+def auth_status(
+    store: Path,
+    *,
+    include_linked_jid: bool = False,
+) -> dict[str, Any]:
     payload = wacli_json(store, ["auth", "status"], timeout=60)
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
     status = {
@@ -368,6 +438,8 @@ def auth_status(store: Path) -> dict[str, Any]:
         "raw_success": payload.get("success"),
         "error": payload.get("error"),
     }
+    if include_linked_jid:
+        status["linked_jid"] = str(data.get("linked_jid") or "")
     if not status["authenticated"]:
         if DEFAULT_QR_HTML.exists():
             status["qr_page"] = str(DEFAULT_QR_HTML)
@@ -555,8 +627,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     output: list[str] = []
     opened = False
     connected = False
-    interrupted_bootstrap_sync = False
-    started = time.time()
+    deadline = time.time() + timeout
 
     lines: queue.Queue[tuple[str, str]] = queue.Queue()
 
@@ -570,7 +641,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     stderr_thread.start()
 
     def handle_line(source: str, text: str) -> None:
-        nonlocal opened, connected, interrupted_bootstrap_sync
+        nonlocal opened, connected, deadline
         output.append(text)
         event = None
         if source == "stderr" and text.startswith("{"):
@@ -588,10 +659,11 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                 opened = True
                 emit_status("Refreshed WhatsApp QR page.")
             elif event_name == "connected":
+                if not connected:
+                    # Give the initial archive bootstrap its own complete
+                    # timeout window after the user finishes the QR step.
+                    deadline = time.time() + timeout
                 connected = True
-                if not interrupted_bootstrap_sync:
-                    proc.send_signal(signal.SIGINT)
-                    interrupted_bootstrap_sync = True
             return
         stdout_payload = wa_qr_payload(text) if source == "stdout" else None
         if stdout_payload:
@@ -601,7 +673,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
 
     try:
         while proc.poll() is None:
-            if time.time() - started > timeout:
+            if time.time() > deadline:
                 proc.kill()
                 output.append(f"command timed out after {timeout}s")
                 break
@@ -631,22 +703,27 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
             "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-messages.",
             "command": command_text(cmd),
         })
-    if returncode != 0 and not connected:
-        raise PrimitiveBlocked({
-            "status": "blocked_user_action",
-            "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
-            "command": command_text(cmd),
-            "qr_page": str(DEFAULT_QR_HTML),
-            "qr_png": str(DEFAULT_QR_PNG),
-            "detail": joined[-2000:],
-        })
+    if returncode != 0:
+        if not connected:
+            raise PrimitiveBlocked({
+                "status": "blocked_user_action",
+                "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
+                "command": command_text(cmd),
+                "qr_page": str(DEFAULT_QR_HTML),
+                "qr_png": str(DEFAULT_QR_PNG),
+                "detail": joined[-2000:],
+            })
+        raise PrimitiveFailed(
+            "WhatsApp connected, but its initial history sync did not finish. "
+            "Rerun $import-messages to try again."
+        )
     return {
         "command": command_text(cmd),
         "returncode": returncode,
         "qr_page": str(DEFAULT_QR_HTML),
         "qr_png": str(DEFAULT_QR_PNG),
         "connected_event": connected,
-        "auth_bootstrap_sync_interrupted": interrupted_bootstrap_sync,
+        "auth_bootstrap_sync_completed": connected and returncode == 0,
     }
 
 
@@ -669,21 +746,10 @@ def effective_max_messages(requested: int, existing: int) -> int:
     return max(requested, existing + max(1000, requested // 10))
 
 
-def resolve_effective_max(mode: str, requested: int, existing: int) -> int:
-    """Resolve the wacli --max-messages target from the sync mode.
-
-    `full` always re-backfills everything (0 = unlimited). `incremental` targets
-    existing + headroom so a rerun pulls only the delta. `auto` (default) is
-    smart: a first run (empty store) backfills fully, later runs go incremental.
-    An explicit positive ``requested`` (someone passed --max-messages N) always
-    wins over the mode."""
+def resolve_effective_max(requested: int, existing: int) -> int:
+    """Choose full on an empty store and incremental once it is populated."""
     if requested and requested > 0:
         return effective_max_messages(requested, existing)
-    if mode == "full":
-        return 0
-    if mode == "incremental":
-        return effective_max_messages(DEFAULT_INCREMENTAL_BUDGET, existing)
-    # auto: full on the first run, incremental once the store is populated.
     if existing > 0:
         return effective_max_messages(DEFAULT_INCREMENTAL_BUDGET, existing)
     return 0
@@ -1020,6 +1086,929 @@ def open_wacli_db(store: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+HISTORY_DEPTH_HEADERS = [
+    "chat_ref",
+    "kind",
+    "initial_count",
+    "current_count",
+    "current_latest_ts",
+    "target_rows_added",
+    "unrelated_rows_added",
+    "attempts",
+    "requests_sent",
+    "responses_seen",
+    "transient_failures",
+    "no_growth_attempts",
+    "outcome",
+    "error_category",
+    "updated_at",
+]
+HISTORY_DEPTH_TERMINAL_OUTCOMES = {
+    "completed_threshold",
+    "recovered",
+    "server_zero",
+    "gone",
+    "out_of_scope",
+}
+HISTORY_DEPTH_MORE_REMAIN_END_TYPES = {
+    "COMPLETE_BUT_MORE_MESSAGES_REMAIN_ON_PRIMARY",
+    "COMPLETE_ON_DEMAND_SYNC_BUT_MORE_MSG_REMAIN_ON_PRIMARY",
+}
+
+
+def history_chat_ref(jid: str) -> str:
+    return "wa-" + hashlib.sha256(jid.encode("utf-8")).hexdigest()[:16]
+
+
+def history_depth_cutoff_ts(now: datetime | None = None) -> int:
+    current = now or datetime.now(timezone.utc)
+    try:
+        cutoff = current.replace(year=current.year - DEFAULT_HISTORY_DEPTH_LOOKBACK_YEARS)
+    except ValueError:
+        cutoff = current.replace(
+            year=current.year - DEFAULT_HISTORY_DEPTH_LOOKBACK_YEARS,
+            day=28,
+        )
+    return int(cutoff.timestamp())
+
+
+def history_depth_visible_predicates(conn: sqlite3.Connection, alias: str = "m") -> list[str]:
+    columns = table_columns(conn, "messages")
+    predicates: list[str] = []
+    if "revoked" in columns:
+        predicates.append(f"COALESCE({alias}.revoked, 0) = 0")
+    if "deleted_for_me" in columns:
+        predicates.append(f"COALESCE({alias}.deleted_for_me, 0) = 0")
+    return predicates
+
+
+def history_depth_direct_predicates(
+    *,
+    chat_alias: str = "c",
+    message_alias: str = "m",
+) -> list[str]:
+    return [
+        f"COALESCE({chat_alias}.kind, 'unknown') <> 'group'",
+        f"{message_alias}.chat_jid NOT LIKE '%@g.us'",
+        f"{message_alias}.chat_jid NOT LIKE '%@newsletter'",
+        (
+            f"({message_alias}.chat_jid LIKE '%@s.whatsapp.net' "
+            f"OR {message_alias}.chat_jid LIKE '%@lid')"
+        ),
+    ]
+
+
+def history_depth_chat_states(store: Path) -> dict[str, tuple[int, int]]:
+    if not (store / "wacli.db").exists():
+        return {}
+    conn = open_wacli_db(store)
+    try:
+        if not table_exists(conn, "messages") or not table_exists(conn, "chats"):
+            return {}
+        visibility = history_depth_visible_predicates(conn)
+        where_sql = " AND ".join([
+            *history_depth_direct_predicates(),
+            *visibility,
+        ])
+        rows = conn.execute(
+            f"""
+            SELECT m.chat_jid, COUNT(*) AS message_count, MAX(m.ts) AS latest_ts
+            FROM messages m
+            JOIN chats c ON c.jid = m.chat_jid
+            WHERE {where_sql}
+            GROUP BY m.chat_jid
+            """,
+        ).fetchall()
+        return {
+            str(row["chat_jid"]): (
+                int(row["message_count"]),
+                int(row["latest_ts"] or 0),
+            )
+            for row in rows
+        }
+    finally:
+        conn.close()
+
+
+def history_depth_total_count(store: Path) -> int:
+    if not (store / "wacli.db").exists():
+        return 0
+    conn = open_wacli_db(store)
+    try:
+        if not table_exists(conn, "messages"):
+            return 0
+        row = conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+        return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
+def history_depth_targets(
+    store: Path,
+    *,
+    active_since_ts: int,
+    max_count: int = DEFAULT_HISTORY_DEPTH_MAX_COUNT,
+    before_states: dict[str, tuple[int, int]] | None = None,
+    bootstrap: bool = False,
+    resume_refs: set[str] | None = None,
+    exclude_jids: set[str] | None = None,
+) -> list[HistoryDepthTarget]:
+    previous = before_states or {}
+    resumable = resume_refs or set()
+    excluded = exclude_jids or set()
+    conn = open_wacli_db(store)
+    try:
+        visibility = history_depth_visible_predicates(conn)
+        where_sql = " AND ".join([
+            *history_depth_direct_predicates(),
+            *visibility,
+        ])
+        rows = conn.execute(
+            f"""
+            SELECT
+                m.chat_jid,
+                c.kind,
+                COUNT(*) AS message_count,
+                MAX(m.ts) AS latest_ts
+            FROM messages m
+            JOIN chats c ON c.jid = m.chat_jid
+            WHERE {where_sql}
+            GROUP BY m.chat_jid, c.kind
+            HAVING COUNT(*) <= ? AND MAX(m.ts) >= ?
+            ORDER BY MAX(m.ts) DESC, m.chat_jid
+            """,
+            (max_count, active_since_ts),
+        ).fetchall()
+        targets: list[HistoryDepthTarget] = []
+        for row in rows:
+            chat_jid = str(row["chat_jid"])
+            if chat_jid in excluded:
+                continue
+            chat_ref = history_chat_ref(chat_jid)
+            current_state = (
+                int(row["message_count"]),
+                int(row["latest_ts"] or 0),
+            )
+            state_changed = (
+                before_states is not None
+                and previous.get(chat_jid) != current_state
+            )
+            if (
+                bootstrap
+                or chat_ref in resumable
+                or state_changed
+            ):
+                targets.append(
+                    HistoryDepthTarget(
+                        chat_jid=chat_jid,
+                        chat_ref=chat_ref,
+                        kind=str(row["kind"]),
+                        current_count=current_state[0],
+                        current_latest_ts=current_state[1],
+                        state_changed=state_changed,
+                    )
+                )
+        return targets
+    finally:
+        conn.close()
+
+
+def history_depth_counts(store: Path, chat_jid: str) -> tuple[int, int, int]:
+    conn = open_wacli_db(store)
+    try:
+        visibility = history_depth_visible_predicates(conn)
+        where_sql = " AND ".join(["m.chat_jid = ?", *visibility])
+        target = conn.execute(
+            f"SELECT COUNT(*), MAX(m.ts) FROM messages m WHERE {where_sql}",
+            (chat_jid,),
+        ).fetchone()
+        total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+        return (
+            int(target[0] or 0),
+            int(total[0] or 0),
+            int(target[1] or 0),
+        )
+    finally:
+        conn.close()
+
+
+def history_depth_state_digest(states: dict[str, tuple[int, int]]) -> str:
+    digest = hashlib.sha256()
+    for chat_jid, (message_count, latest_ts) in sorted(states.items()):
+        digest.update(history_chat_ref(chat_jid).encode("ascii"))
+        digest.update(f":{message_count}:{latest_ts}\n".encode("ascii"))
+    return digest.hexdigest()
+
+
+def read_history_depth_results(path: Path) -> dict[str, dict[str, str]]:
+    if not path.exists():
+        return {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        return {
+            str(row.get("chat_ref") or ""): dict(row)
+            for row in CsvIO.dict_reader(handle)
+            if row.get("chat_ref")
+        }
+
+
+def read_history_depth_manifest(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_history_depth_results(path: Path, rows: dict[str, dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=HISTORY_DEPTH_HEADERS)
+        writer.writeheader()
+        for chat_ref in sorted(rows):
+            row = rows[chat_ref]
+            writer.writerow({key: row.get(key, "") for key in HISTORY_DEPTH_HEADERS})
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def result_int(row: dict[str, Any], key: str) -> int:
+    try:
+        return int(row.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def classify_history_backfill_error(
+    *,
+    returncode: int,
+    stderr: str,
+    requests_sent: int,
+) -> tuple[str, bool]:
+    if returncode == 0:
+        return "none", False
+    text = stderr.casefold()
+    if returncode == 124 or "timed out" in text or "timeout" in text:
+        return "timeout", True
+    if any(token in text for token in (
+        "no such host",
+        "temporary failure in name resolution",
+        "network is unreachable",
+        "connection reset",
+        "connection refused",
+        "no route to host",
+        "dial tcp",
+        "i/o timeout",
+        "websocket",
+    )):
+        return "connection", True
+    if "database is locked" in text or "store is locked" in text or "lock wait" in text:
+        return "store_lock", True
+    if "not authenticated" in text or "logged out" in text:
+        return "unauthenticated", False
+    if "access denied" in text or "forbidden" in text or "no access" in text:
+        return "access_limited", False
+    if requests_sent > 0:
+        return "request_error", False
+    return "command_error", False
+
+
+def history_backfill_json_data(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    return data if isinstance(data, dict) else payload
+
+
+@dataclass(frozen=True)
+class WacliHistoryDepthAdapter:
+    """Thin Powerpacks boundary around wacli's native batch command.
+
+    wacli owns connection reuse, throttling, response correlation, and PN/LID
+    preference/fallback. This adapter owns only command construction plus the
+    privacy-safe conversion from raw command results to hashed stage rows.
+    """
+
+    store: Path
+    count: int = DEFAULT_HISTORY_DEPTH_COUNT
+    requests: int = DEFAULT_HISTORY_DEPTH_REQUESTS
+    request_delay: str = DEFAULT_HISTORY_DEPTH_REQUEST_DELAY
+    batch_size: int = DEFAULT_HISTORY_DEPTH_BATCH_SIZE
+    max_in_flight: int = DEFAULT_HISTORY_DEPTH_MAX_IN_FLIGHT
+    response_wait: str = DEFAULT_HISTORY_DEPTH_RESPONSE_WAIT
+    batch_delay: str = DEFAULT_HISTORY_DEPTH_BATCH_DELAY
+    timeout_backoff: str = DEFAULT_HISTORY_DEPTH_TIMEOUT_BACKOFF
+    timeout: int = DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT
+
+    def command(self, targets: list[HistoryDepthTarget]) -> list[str]:
+        cmd = [
+            wacli_bin() or "wacli",
+            "--store",
+            str(self.store),
+            "--json",
+            "history",
+            "backfill-batch",
+            "--count",
+            str(self.count),
+            "--requests",
+            str(self.requests),
+            "--wait",
+            self.response_wait,
+            "--request-delay",
+            self.request_delay,
+            "--batch-size",
+            str(self.batch_size),
+            "--max-inflight",
+            str(self.max_in_flight),
+            "--batch-delay",
+            self.batch_delay,
+            "--timeout-backoff",
+            self.timeout_backoff,
+            "--idle-exit",
+            "5s",
+        ]
+        for target in targets:
+            cmd.extend(["--chat", target.chat_jid])
+        return cmd
+
+    def run(
+        self,
+        targets: list[HistoryDepthTarget],
+    ) -> tuple[dict[str, HistoryDepthAttempt], int]:
+        if not targets:
+            return {}, 0
+        before_counts = {
+            target.chat_ref: history_depth_counts(self.store, target.chat_jid)[0]
+            for target in targets
+        }
+        before_total = history_depth_total_count(self.store)
+        result = run_command(
+            self.command(targets),
+            timeout=self.timeout,
+            heartbeat_message="Deepening WhatsApp history.",
+        )
+        data = history_backfill_json_data(result.get("json"))
+        raw_chats = data.get("chats") if isinstance(data.get("chats"), list) else []
+        chat_results = {
+            str(item.get("chat") or ""): item
+            for item in raw_chats
+            if isinstance(item, dict) and item.get("chat")
+        }
+        global_returncode = int(result.get("returncode") or 0)
+        stderr = str(result.get("stderr") or "")
+        attempts: dict[str, HistoryDepthAttempt] = {}
+        total_target_added = 0
+        for target in targets:
+            after_count, _after_total, after_latest_ts = history_depth_counts(
+                self.store,
+                target.chat_jid,
+            )
+            target_added = max(0, after_count - before_counts[target.chat_ref])
+            total_target_added += target_added
+            chat_data = chat_results.get(target.chat_jid, {})
+            requests_sent = result_int(chat_data, "requests_sent")
+            responses_seen = result_int(chat_data, "responses_seen")
+            messages_received = result_int(chat_data, "messages_received")
+            chat_error = str(chat_data.get("error") or "")
+            local_returncode = global_returncode
+            missing_result = not chat_data
+            if local_returncode == 0 and chat_error:
+                local_returncode = (
+                    124 if "timed out" in chat_error.casefold() else 1
+                )
+            error_text = "\n".join(
+                part for part in (chat_error, stderr) if part
+            )
+            error_category, retryable = classify_history_backfill_error(
+                returncode=local_returncode,
+                stderr=error_text,
+                requests_sent=requests_sent,
+            )
+            if missing_result and global_returncode == 0:
+                error_category = "missing_result"
+                retryable = True
+            elif (
+                local_returncode == 0
+                and requests_sent > 0
+                and responses_seen == 0
+            ):
+                # A request without a protocol response is not proof that the
+                # server has no older history. Keep it resumable.
+                error_category = "timeout"
+                retryable = True
+            attempts[target.chat_ref] = HistoryDepthAttempt(
+                returncode=local_returncode,
+                requests_sent=requests_sent,
+                responses_seen=responses_seen,
+                target_added=target_added,
+                unrelated_added=0,
+                after_count=after_count,
+                error_category=error_category,
+                retryable=retryable,
+                after_latest_ts=after_latest_ts,
+                messages_received=messages_received,
+                end_type=str(chat_data.get("end_type") or ""),
+            )
+        after_total = history_depth_total_count(self.store)
+        unrelated_added = max(
+            0,
+            (after_total - before_total) - total_target_added,
+        )
+        return attempts, unrelated_added
+
+
+def run_history_backfill_batch_attempt(
+    store: Path,
+    targets: list[HistoryDepthTarget],
+    *,
+    count: int = DEFAULT_HISTORY_DEPTH_COUNT,
+    requests: int = DEFAULT_HISTORY_DEPTH_REQUESTS,
+    request_delay: str = DEFAULT_HISTORY_DEPTH_REQUEST_DELAY,
+    batch_size: int = DEFAULT_HISTORY_DEPTH_BATCH_SIZE,
+    max_in_flight: int = DEFAULT_HISTORY_DEPTH_MAX_IN_FLIGHT,
+    response_wait: str = DEFAULT_HISTORY_DEPTH_RESPONSE_WAIT,
+    batch_delay: str = DEFAULT_HISTORY_DEPTH_BATCH_DELAY,
+    timeout_backoff: str = DEFAULT_HISTORY_DEPTH_TIMEOUT_BACKOFF,
+    timeout: int = DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT,
+) -> tuple[dict[str, HistoryDepthAttempt], int]:
+    return WacliHistoryDepthAdapter(
+        store=store,
+        count=count,
+        requests=requests,
+        request_delay=request_delay,
+        batch_size=batch_size,
+        max_in_flight=max_in_flight,
+        response_wait=response_wait,
+        batch_delay=batch_delay,
+        timeout_backoff=timeout_backoff,
+        timeout=timeout,
+    ).run(targets)
+
+
+def run_history_backfill_attempt(
+    store: Path,
+    target: HistoryDepthTarget,
+    *,
+    count: int = DEFAULT_HISTORY_DEPTH_COUNT,
+    requests: int = DEFAULT_HISTORY_DEPTH_REQUESTS,
+    request_delay: str = DEFAULT_HISTORY_DEPTH_REQUEST_DELAY,
+    timeout: int = DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT,
+) -> HistoryDepthAttempt:
+    attempts, unrelated_added = run_history_backfill_batch_attempt(
+        store,
+        [target],
+        count=count,
+        requests=requests,
+        request_delay=request_delay,
+        batch_size=1,
+        max_in_flight=1,
+        timeout=timeout,
+    )
+    attempt = attempts[target.chat_ref]
+    return replace(attempt, unrelated_added=unrelated_added)
+
+
+def history_depth_summary(
+    *,
+    targets: list[HistoryDepthTarget],
+    rows: dict[str, dict[str, Any]],
+    results_path: Path,
+    progress_path: Path,
+    active_since_ts: int,
+    max_count: int,
+    count: int,
+    requests: int,
+    request_delay: str,
+    no_growth_limit: int,
+    batch_size: int,
+    max_in_flight: int,
+    response_wait: str,
+    batch_delay: str,
+    timeout_backoff: str,
+    time_budget_seconds: int,
+    bootstrap: bool,
+    source_total_messages: int,
+    source_dm_state_sha256: str,
+    recovered_pre_sync_changes: bool,
+) -> dict[str, Any]:
+    target_rows = [rows[target.chat_ref] for target in targets if target.chat_ref in rows]
+    completed = sum(
+        1 for row in target_rows if row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES
+    )
+    pending = len(targets) - completed
+    return {
+        "status": "completed" if pending == 0 else "partial",
+        "policy": {
+            "version": HISTORY_DEPTH_POLICY_VERSION,
+            "active_since": datetime.fromtimestamp(active_since_ts, timezone.utc).isoformat(),
+            "lookback_years": DEFAULT_HISTORY_DEPTH_LOOKBACK_YEARS,
+            "selection": "bootstrap_recent_shallow" if bootstrap else "changed_recent_shallow",
+            "recovered_pre_sync_changes": recovered_pre_sync_changes,
+            "max_message_count": max_count,
+            "count_per_request": count,
+            "requests_per_attempt": requests,
+            "request_delay": request_delay,
+            "batch_size": batch_size,
+            "max_in_flight": max_in_flight,
+            "response_wait": response_wait,
+            "batch_delay": batch_delay,
+            "timeout_backoff": timeout_backoff,
+            "time_budget_seconds": time_budget_seconds,
+            "no_growth_limit": no_growth_limit,
+            "native_batch_command": True,
+            "one_connection_per_run": True,
+            "one_command_per_run": True,
+            "identity_strategy": "saved_preference_then_opposite_fallback",
+            "identity_preference_store": "private_wacli_db",
+            "retry_scope": "next_import",
+        },
+        "counts": {
+            "eligible": len(targets),
+            "completed": completed,
+            "pending": pending,
+            "with_real_request": sum(1 for row in target_rows if result_int(row, "requests_sent") > 0),
+            "recovered_chats": sum(
+                1
+                for row in target_rows
+                if row.get("outcome") in {"completed_threshold", "recovered"}
+            ),
+            "target_rows_added": sum(result_int(row, "target_rows_added") for row in target_rows),
+            "unrelated_rows_added": sum(result_int(row, "unrelated_rows_added") for row in target_rows),
+            "server_zero": sum(1 for row in target_rows if row.get("outcome") == "server_zero"),
+            "transient_failures": sum(result_int(row, "transient_failures") for row in target_rows),
+            "terminal_errors": sum(1 for row in target_rows if row.get("outcome") == "terminal_error"),
+            "source_total_messages": source_total_messages,
+        },
+        "source": {
+            "dm_state_sha256": source_dm_state_sha256,
+        },
+        "outputs": {
+            "results_csv": str(results_path),
+            "progress_jsonl": str(progress_path),
+        },
+        "privacy": {
+            "powerpacks_queries_read_message_bodies": False,
+            "raw_identifiers_persisted": False,
+            "returned_history_persisted_locally_by_wacli": True,
+            "llm_called": False,
+            "network": "whatsapp_only",
+        },
+    }
+
+
+def write_history_depth_manifest(out_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    return write_stage_manifest(out_dir / "manifest.json", payload)
+
+
+def run_history_depth_stage(
+    store: Path,
+    *,
+    out_dir: Path = DEFAULT_HISTORY_DEPTH_DIR,
+    active_since_ts: int | None = None,
+    max_count: int = DEFAULT_HISTORY_DEPTH_MAX_COUNT,
+    count: int = DEFAULT_HISTORY_DEPTH_COUNT,
+    requests: int = DEFAULT_HISTORY_DEPTH_REQUESTS,
+    request_delay: str = DEFAULT_HISTORY_DEPTH_REQUEST_DELAY,
+    no_growth_limit: int = DEFAULT_HISTORY_DEPTH_NO_GROWTH_LIMIT,
+    batch_size: int = DEFAULT_HISTORY_DEPTH_BATCH_SIZE,
+    max_in_flight: int = DEFAULT_HISTORY_DEPTH_MAX_IN_FLIGHT,
+    response_wait: str = DEFAULT_HISTORY_DEPTH_RESPONSE_WAIT,
+    batch_delay: str = DEFAULT_HISTORY_DEPTH_BATCH_DELAY,
+    timeout_backoff: str = DEFAULT_HISTORY_DEPTH_TIMEOUT_BACKOFF,
+    attempt_timeout: int = DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT,
+    time_budget_seconds: int = DEFAULT_HISTORY_DEPTH_BUDGET_SECONDS,
+    before_states: dict[str, tuple[int, int]] | None = None,
+    before_total_messages: int | None = None,
+    cold_start: bool = False,
+    exclude_jids: set[str] | None = None,
+) -> dict[str, Any]:
+    if active_since_ts is None:
+        active_since_ts = history_depth_cutoff_ts()
+    results_path = out_dir / "results.csv"
+    progress_path = out_dir / "progress.jsonl"
+    manifest_path = out_dir / "manifest.json"
+    initialized = results_path.exists()
+    rows: dict[str, dict[str, Any]] = read_history_depth_results(results_path)
+    current_states = history_depth_chat_states(store)
+    current_by_ref = {
+        history_chat_ref(chat_jid): state
+        for chat_jid, state in current_states.items()
+    }
+    excluded_refs = {history_chat_ref(jid) for jid in (exclude_jids or set())}
+    for chat_ref, row in rows.items():
+        if row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES:
+            continue
+        if chat_ref in excluded_refs:
+            row["outcome"] = "out_of_scope"
+            row["error_category"] = "none"
+            row["updated_at"] = now_iso()
+            continue
+        current_state = current_by_ref.get(chat_ref)
+        if current_state is None:
+            row["outcome"] = "gone"
+            row["error_category"] = "none"
+            row["updated_at"] = now_iso()
+        elif current_state[1] < active_since_ts:
+            row["current_count"] = current_state[0]
+            row["current_latest_ts"] = current_state[1]
+            row["outcome"] = "out_of_scope"
+            row["error_category"] = "none"
+            row["updated_at"] = now_iso()
+        elif current_state[0] > max_count:
+            row["current_count"] = current_state[0]
+            row["current_latest_ts"] = current_state[1]
+            row["outcome"] = "completed_threshold"
+            row["error_category"] = "none"
+            row["updated_at"] = now_iso()
+    previous_manifest = read_history_depth_manifest(manifest_path)
+    previous_counts = (
+        previous_manifest.get("counts")
+        if isinstance(previous_manifest.get("counts"), dict)
+        else {}
+    )
+    previous_source = (
+        previous_manifest.get("source")
+        if isinstance(previous_manifest.get("source"), dict)
+        else {}
+    )
+    has_source_total = "source_total_messages" in previous_counts
+    prior_source_digest = str(previous_source.get("dm_state_sha256") or "")
+    has_source_digest = len(prior_source_digest) == 64
+    previous_policy = (
+        previous_manifest.get("policy")
+        if isinstance(previous_manifest.get("policy"), dict)
+        else {}
+    )
+    has_current_policy = (
+        result_int(previous_policy, "version") == HISTORY_DEPTH_POLICY_VERSION
+    )
+    prior_source_total = (
+        result_int(previous_counts, "source_total_messages")
+        if has_source_total
+        else None
+    )
+    pre_sync_states = before_states if before_states is not None else current_states
+    pre_sync_digest = history_depth_state_digest(pre_sync_states)
+    recovered_pre_sync_changes = (
+        initialized
+        and (
+            (
+                prior_source_total is not None
+                and before_total_messages is not None
+                and prior_source_total != before_total_messages
+            )
+            or (
+                has_source_digest
+                and prior_source_digest != pre_sync_digest
+            )
+        )
+    )
+    bootstrap = (
+        cold_start
+        or not initialized
+        or not has_current_policy
+        or not has_source_total
+        or not has_source_digest
+        or recovered_pre_sync_changes
+    )
+    # This watermark represents the post-account-sync state whose changed
+    # chats are about to be durably seeded. Keep it fixed during targeted
+    # backfill: if WhatsApp returns rows for another chat, the next invocation
+    # sees the mismatch and performs one catch-up bootstrap.
+    source_total_messages = history_depth_total_count(store)
+    source_dm_state_sha256 = history_depth_state_digest(current_states)
+    resume_refs = {
+        chat_ref
+        for chat_ref, row in rows.items()
+        if row.get("outcome") not in HISTORY_DEPTH_TERMINAL_OUTCOMES
+    }
+    targets = history_depth_targets(
+        store,
+        active_since_ts=active_since_ts,
+        max_count=max_count,
+        before_states=before_states,
+        bootstrap=bootstrap,
+        resume_refs=resume_refs,
+        exclude_jids=exclude_jids,
+    )
+    stage_started = time.monotonic()
+    write_progress(progress_path, {
+        "event": "history_depth_started",
+        "eligible": len(targets),
+        "selection": "bootstrap_recent_shallow" if bootstrap else "changed_recent_shallow",
+        "recovered_pre_sync_changes": recovered_pre_sync_changes,
+    })
+
+    def persist() -> dict[str, Any]:
+        write_history_depth_results(results_path, rows)
+        summary = history_depth_summary(
+            targets=targets,
+            rows=rows,
+            results_path=results_path,
+            progress_path=progress_path,
+            active_since_ts=active_since_ts,
+            max_count=max_count,
+            count=count,
+            requests=requests,
+            request_delay=request_delay,
+            no_growth_limit=no_growth_limit,
+            batch_size=batch_size,
+            max_in_flight=max_in_flight,
+            response_wait=response_wait,
+            batch_delay=batch_delay,
+            timeout_backoff=timeout_backoff,
+            time_budget_seconds=time_budget_seconds,
+            bootstrap=bootstrap,
+            source_total_messages=source_total_messages,
+            source_dm_state_sha256=source_dm_state_sha256,
+            recovered_pre_sync_changes=recovered_pre_sync_changes,
+        )
+        return write_history_depth_manifest(out_dir, summary)
+
+    for target in targets:
+        row = rows.get(target.chat_ref)
+        if row is None:
+            rows[target.chat_ref] = {
+                "chat_ref": target.chat_ref,
+                "kind": target.kind,
+                "initial_count": target.current_count,
+                "current_count": target.current_count,
+                "current_latest_ts": target.current_latest_ts,
+                "target_rows_added": 0,
+                "unrelated_rows_added": 0,
+                "attempts": 0,
+                "requests_sent": 0,
+                "responses_seen": 0,
+                "transient_failures": 0,
+                "no_growth_attempts": 0,
+                "outcome": "pending",
+                "error_category": "none",
+                "updated_at": now_iso(),
+            }
+        elif (
+            row.get("outcome") in {"gone", "out_of_scope"}
+            or result_int(row, "current_count") != target.current_count
+            or result_int(row, "current_latest_ts") != target.current_latest_ts
+            or target.state_changed
+        ):
+            row["current_count"] = target.current_count
+            row["current_latest_ts"] = target.current_latest_ts
+            row["no_growth_attempts"] = 0
+            row["outcome"] = "pending"
+            row["error_category"] = "none"
+
+    # Persist every selected target before the first network request so budget
+    # exhaustion or interruption cannot lose unvisited work.
+    summary = persist()
+
+    def target_needs_attempt(candidate: HistoryDepthTarget) -> bool:
+        candidate_row = rows.get(candidate.chat_ref)
+        if candidate_row is None:
+            return True
+        return not (
+            candidate_row.get("outcome") in HISTORY_DEPTH_TERMINAL_OUTCOMES
+            and result_int(candidate_row, "current_count") == candidate.current_count
+        )
+
+    attempt_targets = [target for target in targets if target_needs_attempt(target)]
+    if attempt_targets:
+        elapsed = time.monotonic() - stage_started
+        if time_budget_seconds > 0 and elapsed >= time_budget_seconds:
+            write_progress(progress_path, {"event": "history_depth_budget_exhausted"})
+            return persist()
+        command_timeout = attempt_timeout
+        if time_budget_seconds > 0:
+            command_timeout = min(
+                command_timeout,
+                max(1, int(time_budget_seconds - elapsed)),
+            )
+        write_progress(progress_path, {
+            "event": "history_depth_batch_started",
+            "targets": len(attempt_targets),
+            "batch_size": batch_size,
+            "max_in_flight": max_in_flight,
+        })
+        if len(attempt_targets) == 1:
+            target = attempt_targets[0]
+            attempt = run_history_backfill_attempt(
+                store,
+                target,
+                count=count,
+                requests=requests,
+                request_delay=request_delay,
+                timeout=command_timeout,
+            )
+            attempts = {target.chat_ref: attempt}
+            batch_unrelated_added = attempt.unrelated_added
+            attempts[target.chat_ref] = replace(attempt, unrelated_added=0)
+        else:
+            attempts, batch_unrelated_added = run_history_backfill_batch_attempt(
+                store,
+                attempt_targets,
+                count=count,
+                requests=requests,
+                request_delay=request_delay,
+                batch_size=batch_size,
+                max_in_flight=max_in_flight,
+                response_wait=response_wait,
+                batch_delay=batch_delay,
+                timeout_backoff=timeout_backoff,
+                timeout=command_timeout,
+            )
+        for index, target in enumerate(attempt_targets):
+            row = rows.get(target.chat_ref)
+            if row is None:
+                raise PrimitiveFailed("history depth target was not seeded")
+            attempt = attempts.get(target.chat_ref)
+            if attempt is None:
+                attempt = HistoryDepthAttempt(
+                    returncode=0,
+                    requests_sent=0,
+                    responses_seen=0,
+                    target_added=0,
+                    unrelated_added=0,
+                    after_count=target.current_count,
+                    error_category="missing_result",
+                    retryable=True,
+                    after_latest_ts=target.current_latest_ts,
+                )
+            if index == 0 and batch_unrelated_added:
+                attempt = replace(
+                    attempt,
+                    unrelated_added=attempt.unrelated_added + batch_unrelated_added,
+                )
+
+            row["attempts"] = result_int(row, "attempts") + 1
+            row["requests_sent"] = result_int(row, "requests_sent") + attempt.requests_sent
+            row["responses_seen"] = result_int(row, "responses_seen") + attempt.responses_seen
+            row["target_rows_added"] = result_int(row, "target_rows_added") + attempt.target_added
+            row["unrelated_rows_added"] = result_int(row, "unrelated_rows_added") + attempt.unrelated_added
+            row["current_count"] = attempt.after_count
+            if attempt.after_latest_ts:
+                row["current_latest_ts"] = attempt.after_latest_ts
+            row["error_category"] = attempt.error_category
+            row["updated_at"] = now_iso()
+
+            if attempt.returncode == 0 and attempt.target_added > 0:
+                row["no_growth_attempts"] = 0
+                if attempt.after_count > max_count:
+                    row["outcome"] = "completed_threshold"
+                elif attempt.end_type == "COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY":
+                    row["outcome"] = "recovered"
+                else:
+                    row["outcome"] = "pending"
+            elif attempt.retryable:
+                row["transient_failures"] = result_int(row, "transient_failures") + 1
+                if attempt.target_added > 0:
+                    row["no_growth_attempts"] = 0
+                row["outcome"] = (
+                    "completed_threshold"
+                    if attempt.after_count > max_count
+                    else "pending"
+                )
+            elif (
+                attempt.returncode == 0
+                and attempt.responses_seen > 0
+                and attempt.messages_received == 0
+            ):
+                if attempt.end_type in HISTORY_DEPTH_MORE_REMAIN_END_TYPES:
+                    row["no_growth_attempts"] = 0
+                    row["outcome"] = "pending"
+                else:
+                    row["no_growth_attempts"] = result_int(row, "no_growth_attempts") + 1
+                    row["outcome"] = (
+                        "server_zero"
+                        if result_int(row, "no_growth_attempts") >= no_growth_limit
+                        else "pending"
+                    )
+            elif attempt.returncode == 0:
+                row["outcome"] = "pending"
+            else:
+                row["outcome"] = "terminal_error"
+
+            write_progress(progress_path, {
+                "event": "history_depth_attempt",
+                "chat_ref": target.chat_ref,
+                "attempt": result_int(row, "attempts"),
+                "requests_sent": attempt.requests_sent,
+                "responses_seen": attempt.responses_seen,
+                "messages_received": attempt.messages_received,
+                "target_added": attempt.target_added,
+                "unrelated_added": attempt.unrelated_added,
+                "outcome": row["outcome"],
+                "error_category": attempt.error_category,
+            })
+            summary = persist()
+
+    write_progress(progress_path, {
+        "event": "history_depth_completed",
+        "eligible": summary["counts"]["eligible"],
+        "completed": summary["counts"]["completed"],
+        "pending": summary["counts"]["pending"],
+    })
+    return summary
 
 
 def load_contacts_by_jid(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
@@ -1374,7 +2363,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     store = Path(args.store)
     try:
         wacli_info = ensure_wacli_installed(install=False)
-        status = auth_status(store)
+        status = auth_status(store, include_linked_jid=True)
         doctor = wacli_json(store, ["doctor"], timeout=60)
         stats = store_stats(store)
         emit({
@@ -1572,6 +2561,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         wacli_info = ensure_wacli_installed(install=not args.no_install)
         write_progress(progress_jsonl, {"event": "wacli_ready", "wacli": wacli_info})
+        existing_messages_at_start = history_depth_total_count(store)
         doctor = wacli_json(store, ["doctor"], timeout=60)
         status = auth_status(store)
         auth_summary: dict[str, Any] = {"authenticated_before": status.get("authenticated")}
@@ -1582,7 +2572,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 idle_exit=args.idle_exit,
                 open_qr_page=not getattr(args, "no_open_qr_page", False),
             ))
-            status = auth_status(store)
+            status = auth_status(store, include_linked_jid=True)
             if not status.get("authenticated"):
                 raise PrimitiveBlocked({
                     "status": "blocked_user_action",
@@ -1597,11 +2587,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             emit_status(pairing["hint"])
         write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing})
 
-        stats_before_sync = store_stats(store)
-        existing_messages = store_message_count(stats_before_sync) or 0
-        sync_mode = getattr(args, "sync_mode", "auto")
-        effective_max_messages_value = resolve_effective_max(
-            sync_mode, args.max_messages, existing_messages
+        cold_start = existing_messages_at_start == 0
+        before_states = history_depth_chat_states(store)
+        before_total_messages = history_depth_total_count(store)
+        effective_max_messages_value = (
+            0
+            if cold_start
+            else resolve_effective_max(args.max_messages, before_total_messages)
         )
         sync_summary = run_sync(
             store,
@@ -1609,11 +2601,35 @@ def cmd_run(args: argparse.Namespace) -> int:
             idle_exit=args.idle_exit,
             max_messages=effective_max_messages_value,
         )
-        sync_summary["sync_mode"] = sync_mode
-        sync_summary["incremental"] = effective_max_messages_value > 0
+        sync_summary["strategy"] = "cold_full" if cold_start else "incremental"
+        sync_summary["incremental"] = not cold_start
         sync_summary["requested_max_messages"] = args.max_messages
-        sync_summary["existing_messages_before_sync"] = existing_messages
+        sync_summary["existing_messages_at_start"] = existing_messages_at_start
+        sync_summary["existing_messages_before_sync"] = before_total_messages
         write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
+        emit_status("Deepening recent shallow WhatsApp conversations in paced batches.")
+        doctor_data = doctor.get("data") if isinstance(doctor.get("data"), dict) else {}
+        linked_jid = str(
+            status.get("linked_jid")
+            or doctor_data.get("linked_jid")
+            or ""
+        )
+        history_depth = run_history_depth_stage(
+            store,
+            out_dir=manifest.parent / "history-depth",
+            before_states=before_states,
+            before_total_messages=before_total_messages,
+            cold_start=cold_start,
+            exclude_jids={linked_jid} if linked_jid else set(),
+        )
+        write_progress(
+            progress_jsonl,
+            {
+                "event": "history_depth_completed",
+                "status": history_depth.get("status"),
+                "counts": history_depth.get("counts"),
+            },
+        )
         group_info = refresh_group_info(
             store,
             timeout=args.group_info_timeout,
@@ -1652,6 +2668,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         payload["command"] = "run"
         payload["auth"] = auth_summary
         payload["sync"] = sync_summary
+        payload["history_depth"] = history_depth
         write_json(manifest, payload)
         write_progress(progress_jsonl, {"event": "completed", "counts": payload["counts"]})
         emit(payload)
@@ -1713,10 +2730,6 @@ def main() -> int:
     add_output_args(run)
     run.add_argument("--progress-jsonl", default=str(DEFAULT_PROGRESS_JSONL))
     run.add_argument("--max-messages", type=int, default=DEFAULT_MAX_MESSAGES)
-    run.add_argument("--sync-mode", choices=SYNC_MODES, default="auto",
-                     help="auto: full on first run, incremental after; "
-                          "full: always re-backfill everything; "
-                          "incremental: only pull new messages since last sync")
     run.add_argument("--idle-exit", default=DEFAULT_IDLE_EXIT)
     run.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
     run.add_argument("--sync-timeout", type=int, default=DEFAULT_SYNC_TIMEOUT)
