@@ -42,3 +42,8 @@ app/coverage/
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# Agent worktrees. Coding agents create git worktrees here; they are checkouts,
+# never repo content. Leaving them untracked also meant `update-powerpacks`
+# tried to stash live worktrees before resetting the checkout.
+.claude/worktrees/
