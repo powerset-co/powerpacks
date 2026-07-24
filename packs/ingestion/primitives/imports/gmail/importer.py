@@ -79,8 +79,9 @@ from packs.ingestion.primitives.imports.common import (  # noqa: E402
 )
 from packs.ingestion.primitives.imports.gmail.steps.directory import run_gmail_directory  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.steps.enrich import run_gmail_apply_and_enrich  # noqa: E402
+from packs.ingestion.primitives.common.proc import emit_progress  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.util import (  # noqa: E402
-    emit_progress,
+    GMAIL_IMPORT_PREFIX,
     gmail_artifacts_from_discovery,
     write_gmail_candidates,
 )
@@ -124,7 +125,7 @@ class GmailImport:
     def _begin_step(self, step: str, message: str) -> None:
         """Mark a step running and emit a progress line."""
         self._mark_step(step, "running")
-        emit_progress(message)
+        emit_progress(message, GMAIL_IMPORT_PREFIX)
 
     # --- orchestration --------------------------------------------------------
 

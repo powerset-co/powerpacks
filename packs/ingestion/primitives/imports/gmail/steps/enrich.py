@@ -13,8 +13,9 @@ It mutates the orchestrator's transient `imp.state` in place; a non-completed
 apply-resolutions payload ends the run (`imp.state["status"] = "failed"`, returns
 False). The directory-commit / resolution-combine transforms live in
 `steps/directory.py`; the cross-source `materialize_gmail_merged_people_csv`
-comes from `imports/directory.py`; the shared `emit_progress` /
-`artifact_dir_from_state` from `imports/gmail/util.py`.
+comes from `imports/directory.py`; `emit_progress` from `common/proc.py` and its
+`GMAIL_IMPORT_PREFIX` tag plus `artifact_dir_from_state` from
+`imports/gmail/util.py`.
 
 Changelog:
   2026-07-23 (rename): the in-process apply-resolutions call moved from
@@ -56,9 +57,10 @@ from packs.ingestion.primitives.imports.gmail.steps.directory import (  # noqa: 
     commit_gmail_resolutions_to_directory,
     ordered_records,
 )
+from packs.ingestion.primitives.common.proc import emit_progress  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.util import (  # noqa: E402
+    GMAIL_IMPORT_PREFIX,
     artifact_dir_from_state,
-    emit_progress,
 )
 
 if TYPE_CHECKING:
@@ -154,5 +156,5 @@ def run_gmail_apply_and_enrich(imp: "GmailImport") -> bool:
         artifacts["gmail_final_people_csvs"] = [str(gmail_merge.get("people_csv"))]
         artifacts["gmail_people_csv"] = str(gmail_merge.get("people_csv"))
     imp._mark_step("gmail_apply_enrich", "completed", payload={"results": results, "gmail_merged_people": gmail_merge})
-    emit_progress("Gmail LinkedIn matches applied and enrichment completed.")
+    emit_progress("Gmail LinkedIn matches applied and enrichment completed.", GMAIL_IMPORT_PREFIX)
     return True

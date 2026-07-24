@@ -25,6 +25,16 @@ The discovery `run`/`export` entry points (install → auth → sync → deepen 
 export contacts) live in `extract_whatsapp.py`, which imports this client.
 
 Changelog:
+- 2026-07-24 (dedup): the local `parse_last_json` fork was deleted; its
+  scan-forward recovery was promoted into `common/jsonio.parse_last_json`,
+  which this module now imports (results are `{}` rather than `None` when no
+  object decodes — every consumer here already coerced non-dicts to `{}`).
+  `run_command` is PINNED as deliberately divergent from `common/proc.run_cmd`
+  (see the reasons at its definition); its never-passed `env` and
+  `stream_to_stderr` parameters were dropped. The CLI lost its
+  `set_defaults(func=...)`/`args.func(args)` dispatcher: the four subcommands
+  are payload-returning functions with explicit parameters, dispatched inline
+  by `main()`.
 - 2026-07-23 (extractor split): the `Contact` dataclass, the store→CSV/JSONL
   parse/write logic, the `WhatsAppWacli` orchestrator (now `WhatsAppExtractor`),
   and the `run`/`export` CLI subcommands moved to `extract_whatsapp.py`. This
@@ -70,7 +80,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, parse_last_json, write_json  # noqa: E402
 from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -213,38 +223,44 @@ def write_progress(path: Path | None, payload: dict[str, Any]) -> None:
         handle.write(line + "\n")
 
 
-def parse_last_json(text: str) -> dict[str, Any] | None:
-    decoder = json.JSONDecoder()
-    idx = 0
-    last: Any = None
-    while idx < len(text):
-        while idx < len(text) and text[idx].isspace():
-            idx += 1
-        if idx >= len(text):
-            break
-        try:
-            obj, idx = decoder.raw_decode(text, idx)
-            last = obj
-        except json.JSONDecodeError:
-            nxt = text.find("{", idx + 1)
-            if nxt == -1:
-                break
-            idx = nxt
-    return last if isinstance(last, dict) else None
-
-
 def run_command(
     cmd: list[str],
     *,
     timeout: int,
-    env: dict[str, str] | None = None,
-    stream_to_stderr: bool = False,
     heartbeat_message: str | None = None,
     heartbeat_interval: float = 120.0,
 ) -> dict[str, Any]:
-    if not stream_to_stderr and not heartbeat_message:
+    """Run one `wacli` binary invocation, returning
+    `{returncode, stdout, stderr, json}`.
+
+    PINNED DIVERGENCE from `common/proc.py:run_cmd` — deliberately NOT unified:
+
+    - `run_cmd` returns `(code, last_json, stderr)` and throws the child's raw
+      stdout away, because its children are Powerpacks primitives whose stdout
+      IS the JSON payload. wacli is a Go binary whose stdout TEXT is
+      load-bearing: `wacli_version` parses the version string out of it,
+      `run_sync` scans stdout+stderr for the linked-device block message, and
+      the failure paths tail it into the error. Adding stdout to `run_cmd`
+      would break its tuple contract for its own caller.
+    - On timeout `run_cmd` kills the child and reports the killed process's
+      returncode; here the timeout is normalized to 124 with the partial stdout
+      and stderr preserved, so a sync that ran out of its 3-hour budget can
+      still be classified (e.g. the linked-device block) instead of just
+      failing opaquely.
+    - `run_cmd` streams the child's stderr through live as progress. wacli logs
+      pages of connection/sync noise, so its stderr is captured silently and a
+      single `heartbeat_message` line is emitted every `heartbeat_interval`
+      seconds for the long auth/sync/history-depth runs instead.
+    - No heartbeat means no reader threads at all: a plain
+      `subprocess.run` fast path for the short `--version` / `--json` calls.
+
+    Unifying would mean bolting four additive knobs (raw stdout, 124
+    normalization, heartbeat, stderr suppression) onto a helper with one other
+    caller — a net complexity increase, not a dedup.
+    """
+    if not heartbeat_message:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
@@ -267,7 +283,6 @@ def run_command(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=env,
     )
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
@@ -275,8 +290,6 @@ def run_command(
     def reader(stream: Any, chunks: list[str]) -> None:
         for line in iter(stream.readline, ""):
             chunks.append(line)
-            if stream_to_stderr:
-                print(line, end="", file=sys.stderr, flush=True)
 
     threads = [
         threading.Thread(target=reader, args=(proc.stdout, stdout_chunks), daemon=True),
@@ -1882,191 +1895,130 @@ def store_stats(store: Path) -> dict[str, Any]:
         return {"status": "warning", "error": str(exc)}
 
 
-def cmd_ensure_wacli(args: argparse.Namespace) -> int:
+def ensure_wacli_report() -> dict[str, Any]:
     """Download/refresh the pinned wacli binary to the current pin. Idempotent
     (a no-op when already current). Called by $update-powerpacks so a pin bump
     reaches the machine without running an import."""
-    try:
-        already_current = wacli_pinned_current()
-        info = ensure_wacli_installed()
-        emit({
-            "primitive": "messages/whatsapp_wacli",
-            "command": "ensure-wacli",
-            "status": "ok",
-            "action": "current" if already_current else "downloaded",
-            "pinned_version": WACLI_PINNED_VERSION,
-            "wacli": info,
-        })
-        return 0
-    except PrimitiveBlocked as exc:
-        emit({"primitive": "messages/whatsapp_wacli", "command": "ensure-wacli", **exc.payload})
-        return exc.code
-    except Exception as exc:
-        emit({
-            "primitive": "messages/whatsapp_wacli",
-            "command": "ensure-wacli",
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
-        })
-        return 1
+    already_current = wacli_pinned_current()
+    info = ensure_wacli_installed()
+    return {
+        "status": "ok",
+        "action": "current" if already_current else "downloaded",
+        "pinned_version": WACLI_PINNED_VERSION,
+        "wacli": info,
+    }
 
 
-def cmd_status(args: argparse.Namespace) -> int:
-    store = Path(args.store)
-    try:
-        wacli_info = ensure_wacli_installed(install=False)
-        status = auth_status(store, include_linked_jid=True)
-        doctor = wacli_json(store, ["doctor"], timeout=60)
-        stats = store_stats(store)
-        emit({
-            "primitive": "messages/whatsapp_wacli",
-            "command": "status",
-            "status": "ok",
-            "store": str(store),
-            "wacli": wacli_info,
-            "auth": status,
-            "pairing": pairing_full_sync_status(store, authenticated=bool(status.get("authenticated"))),
-            "doctor": doctor,
-            "store_stats": stats,
-        })
-        return 0 if status.get("authenticated") else 1
-    except PrimitiveBlocked as exc:
-        emit({"primitive": "messages/whatsapp_wacli", "command": "status", **exc.payload})
-        return exc.code
-    except Exception as exc:
-        emit({
-            "primitive": "messages/whatsapp_wacli",
-            "command": "status",
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            "store": str(store),
-        })
-        return 1
+def status_report(store: Path) -> dict[str, Any]:
+    """Install / auth / pairing / doctor / store-size snapshot for one store."""
+    wacli_info = ensure_wacli_installed(install=False)
+    status = auth_status(store, include_linked_jid=True)
+    doctor = wacli_json(store, ["doctor"], timeout=60)
+    stats = store_stats(store)
+    return {
+        "status": "ok",
+        "wacli": wacli_info,
+        "auth": status,
+        "pairing": pairing_full_sync_status(store, authenticated=bool(status.get("authenticated"))),
+        "doctor": doctor,
+        "store_stats": stats,
+    }
 
 
-def cmd_logout(args: argparse.Namespace) -> int:
+def logout_report(store: Path) -> dict[str, Any]:
     """Invalidate the WhatsApp session so the next auth issues a fresh QR. Backs
     the pre-full-sync re-link flow: an old (upstream/pre-full-sync) link is logged
     out here, then discovery re-pairs with full history sync. Idempotent on an
     already-logged-out store."""
-    store = Path(args.store)
-    try:
-        ensure_wacli_installed(install=False)
-        authenticated_before = bool(auth_status(store).get("authenticated"))
-        result: dict[str, Any] = {}
-        if authenticated_before:
-            result = wacli_json(store, ["auth", "logout"], timeout=60)
-        marker_removed = False
-        marker = pairing_marker_path(store)
-        if marker.exists():
-            marker.unlink()
-            marker_removed = True
-        emit({
-            "primitive": "messages/whatsapp_wacli",
-            "command": "logout",
-            "status": "ok",
-            "store": str(store),
-            "authenticated_before": authenticated_before,
-            "authenticated_after": bool(auth_status(store).get("authenticated")),
-            "marker_removed": marker_removed,
-            "result": result,
-        })
-        return 0
-    except PrimitiveBlocked as exc:
-        emit({"primitive": "messages/whatsapp_wacli", "command": "logout", **exc.payload})
-        return exc.code
-    except Exception as exc:
-        emit({
-            "primitive": "messages/whatsapp_wacli",
-            "command": "logout",
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            "store": str(store),
-        })
-        return 1
+    ensure_wacli_installed(install=False)
+    authenticated_before = bool(auth_status(store).get("authenticated"))
+    result: dict[str, Any] = {}
+    if authenticated_before:
+        result = wacli_json(store, ["auth", "logout"], timeout=60)
+    marker_removed = False
+    marker = pairing_marker_path(store)
+    if marker.exists():
+        marker.unlink()
+        marker_removed = True
+    return {
+        "status": "ok",
+        "authenticated_before": authenticated_before,
+        "authenticated_after": bool(auth_status(store).get("authenticated")),
+        "marker_removed": marker_removed,
+        "result": result,
+    }
 
 
-def cmd_auth(args: argparse.Namespace) -> int:
-    store = Path(args.store)
+def auth_report(
+    store: Path,
+    *,
+    idle_exit: str = DEFAULT_IDLE_EXIT,
+    auth_timeout: int = DEFAULT_AUTH_TIMEOUT,
+    install: bool = True,
+    open_qr_page: bool = True,
+) -> dict[str, Any]:
+    """Link the WhatsApp account (QR scan when needed) without syncing or
+    exporting anything; `status` is `linked` or `blocked_user_action`."""
     store.mkdir(parents=True, exist_ok=True)
-    try:
-        wacli_info = ensure_wacli_installed(install=not args.no_install)
-        doctor = wacli_json(store, ["doctor"], timeout=60)
-        status_before = auth_status(store)
-        auth_summary: dict[str, Any] = {
-            "authenticated_before": status_before.get("authenticated"),
-            "ran_sync": False,
-            "exported_contacts": False,
-        }
-        if not status_before.get("authenticated"):
-            auth_summary.update(run_auth(
-                store,
-                timeout=args.auth_timeout,
-                idle_exit=args.idle_exit,
-                open_qr_page=not getattr(args, "no_open_qr_page", False),
-            ))
-        status_after = auth_status(store)
-        auth_summary["authenticated_after"] = status_after.get("authenticated")
-        linked = bool(status_after.get("authenticated"))
-        if not status_before.get("authenticated") and linked:
-            write_pairing_marker(store)  # we just paired with full sync
-        pairing = pairing_full_sync_status(store, authenticated=linked)
-        if pairing.get("state") == "pre_full_sync":
-            emit_status(pairing["hint"])
-        emit({
-            "primitive": "messages/whatsapp_wacli",
-            "command": "auth",
-            "status": "linked" if linked else "blocked_user_action",
-            "pairing": pairing,
-            "message": (
-                "WhatsApp account is linked. No WhatsApp sync or export was run."
-                if linked
-                else "WhatsApp needs a QR scan. Scan it, then rerun the auth command."
-            ),
-            "store": str(store),
-            "wacli": wacli_info,
-            "doctor": doctor,
-            "auth": auth_summary,
-            "qr_page": status_after.get("qr_page") or auth_summary.get("qr_page") or "",
-            "qr_png": status_after.get("qr_png") or auth_summary.get("qr_png") or "",
-            "privacy": {
-                "reads_message_bodies": False,
-                "syncs_messages": False,
-                "exports_contacts": False,
-            },
-        })
-        return 0 if linked else 20
-    except PrimitiveBlocked as exc:
-        emit({"primitive": "messages/whatsapp_wacli", "command": "auth", **exc.payload, "store": str(store)})
-        return exc.code
-    except Exception as exc:
-        emit({
-            "primitive": "messages/whatsapp_wacli",
-            "command": "auth",
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            "store": str(store),
-        })
-        return 1
+    wacli_info = ensure_wacli_installed(install=install)
+    doctor = wacli_json(store, ["doctor"], timeout=60)
+    status_before = auth_status(store)
+    auth_summary: dict[str, Any] = {
+        "authenticated_before": status_before.get("authenticated"),
+        "ran_sync": False,
+        "exported_contacts": False,
+    }
+    if not status_before.get("authenticated"):
+        auth_summary.update(run_auth(
+            store,
+            timeout=auth_timeout,
+            idle_exit=idle_exit,
+            open_qr_page=open_qr_page,
+        ))
+    status_after = auth_status(store)
+    auth_summary["authenticated_after"] = status_after.get("authenticated")
+    linked = bool(status_after.get("authenticated"))
+    if not status_before.get("authenticated") and linked:
+        write_pairing_marker(store)  # we just paired with full sync
+    pairing = pairing_full_sync_status(store, authenticated=linked)
+    if pairing.get("state") == "pre_full_sync":
+        emit_status(pairing["hint"])
+    return {
+        "status": "linked" if linked else "blocked_user_action",
+        "pairing": pairing,
+        "message": (
+            "WhatsApp account is linked. No WhatsApp sync or export was run."
+            if linked
+            else "WhatsApp needs a QR scan. Scan it, then rerun the auth command."
+        ),
+        "wacli": wacli_info,
+        "doctor": doctor,
+        "auth": auth_summary,
+        "qr_page": status_after.get("qr_page") or auth_summary.get("qr_page") or "",
+        "qr_png": status_after.get("qr_png") or auth_summary.get("qr_png") or "",
+        "privacy": {
+            "reads_message_bodies": False,
+            "syncs_messages": False,
+            "exports_contacts": False,
+        },
+    }
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--store", default=str(DEFAULT_STORE), help="wacli store directory")
 
 
-def main() -> int:
-    """The wacli client's standalone lifecycle CLI (status/auth/ensure-wacli/
-    logout). The discovery `run`/`export` entry points live in
-    `extract_whatsapp.py`."""
+def build_parser() -> argparse.ArgumentParser:
+    """The standalone lifecycle CLI surface: status / ensure-wacli / auth /
+    logout. Every subcommand except `ensure-wacli` takes `--store` (installing
+    the binary never touches a store)."""
     parser = argparse.ArgumentParser(description="Manage the openclaw/wacli WhatsApp client (install, auth, status, logout)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     status = sub.add_parser("status", help="show wacli install/auth/store status")
     add_common_args(status)
-    status.set_defaults(func=cmd_status)
 
-    ensure = sub.add_parser("ensure-wacli", help="download/refresh the pinned wacli binary to the current pin (idempotent)")
-    ensure.set_defaults(func=cmd_ensure_wacli)
+    sub.add_parser("ensure-wacli", help="download/refresh the pinned wacli binary to the current pin (idempotent)")
 
     auth = sub.add_parser("auth", help="authenticate WhatsApp without syncing or exporting metadata")
     add_common_args(auth)
@@ -2074,14 +2026,51 @@ def main() -> int:
     auth.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
     auth.add_argument("--no-install", action="store_true", help="deprecated no-op; the pinned wacli fork always auto-downloads when missing or stale")
     auth.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
-    auth.set_defaults(func=cmd_auth)
 
     logout = sub.add_parser("logout", help="invalidate the WhatsApp session (re-link flow); next discovery shows a fresh QR")
     add_common_args(logout)
-    logout.set_defaults(func=cmd_logout)
+    return parser
 
-    args = parser.parse_args()
-    return int(args.func(args))
+
+def main() -> int:
+    """The wacli client's standalone lifecycle CLI (status/auth/ensure-wacli/
+    logout): parse, build the subcommand's payload, emit it, map status to the
+    exit code (20 blocked, 1 failed or not-linked-on-status, else 0). One
+    envelope and one error mapping for every subcommand. The discovery
+    `run`/`export` entry points live in `extract_whatsapp.py`."""
+    args = build_parser().parse_args()
+    envelope: dict[str, Any] = {"primitive": "messages/whatsapp_wacli", "command": args.command}
+    store = Path(args.store) if hasattr(args, "store") else None
+    if store is not None:
+        envelope["store"] = str(store)
+    try:
+        if args.command == "status":
+            payload = status_report(store)
+            emit({**envelope, **payload})
+            return 0 if payload["auth"].get("authenticated") else 1
+        if args.command == "ensure-wacli":
+            emit({**envelope, **ensure_wacli_report()})
+            return 0
+        if args.command == "auth":
+            payload = auth_report(
+                store,
+                idle_exit=args.idle_exit,
+                auth_timeout=args.auth_timeout,
+                install=not args.no_install,
+                open_qr_page=not args.no_open_qr_page,
+            )
+            emit({**envelope, **payload})
+            return 0 if payload["status"] == "linked" else 20
+        if args.command == "logout":
+            emit({**envelope, **logout_report(store)})
+            return 0
+        return 2
+    except PrimitiveBlocked as exc:
+        emit({**envelope, **exc.payload})
+        return exc.code
+    except Exception as exc:
+        emit({**envelope, "status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+        return 1
 
 
 if __name__ == "__main__":

@@ -7,6 +7,9 @@ streamed-stderr), plus text tailing and lenient JSON extraction from noisy
 CLI output.
 
 Changelog:
+  2026-07-24 (dedup): `run_command` is PINNED as deliberately divergent from
+    `common/proc.run_cmd` rather than folded into it; the reasons live at its
+    definition.
   2026-07-23 (audit):
     - Split out of the former 1,770-line setup/msgvault_setup.py.
   2026-07-23 (audit dedup): emit deleted here (byte-identical to
@@ -43,7 +46,17 @@ def run_command(cmd: list[str], *, timeout: int = 90, env: dict[str, str] | None
     """Run a command with captured output and detached stdin.
 
     Returns {ok, returncode, stdout, stderr}; missing binaries map to
-    returncode 127 and timeouts to 124 instead of raising."""
+    returncode 127 and timeouts to 124 instead of raising.
+
+    PINNED DIVERGENCE from `common/proc.py:run_cmd` — deliberately NOT unified:
+    setup automation probes third-party CLIs (`gcloud`, `msgvault`, `npm`,
+    `codex`, `open`) that are routinely ABSENT, so a missing binary is an
+    ordinary answer (`ok: False`, rc 127) rather than the FileNotFoundError
+    `run_cmd` would raise, and every caller branches on `ok`. It also returns
+    raw stdout because gcloud/msgvault output is text, `--format=json` blobs,
+    and access tokens — not the single trailing primitive payload `run_cmd`
+    parses. `run_streaming_command` below is the live-stderr variant used for
+    the browser flows; keeping the two split is why neither needs a mode flag."""
     try:
         completed = subprocess.run(
             cmd,

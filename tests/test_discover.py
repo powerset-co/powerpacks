@@ -27,6 +27,9 @@ discover_gmail_sync = importlib.import_module(
 common_proc = importlib.import_module(
     "packs.ingestion.primitives.common.proc"
 )
+common_jsonio = importlib.import_module(
+    "packs.ingestion.primitives.common.jsonio"
+)
 import_messages = importlib.import_module(
     "packs.ingestion.primitives.imports.messages.importer"
 )
@@ -58,6 +61,36 @@ def write_csv(path: Path, fields: list[str], rows: list[dict[str, str]]) -> None
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+class ParseLastJsonTests(unittest.TestCase):
+    """The one `parse_last_json`, after the divergent whatsapp_wacli fork folded in."""
+
+    def test_returns_last_top_level_object_after_progress_lines(self) -> None:
+        stdout = 'syncing Jordan Bravo\n{"step": 1}\nstill syncing\n{"status": "ok"}\n'
+        self.assertEqual(common_jsonio.parse_last_json(stdout), {"status": "ok"})
+
+    def test_scans_forward_past_malformed_json_between_objects(self) -> None:
+        # The promoted wacli behavior: a truncated/garbled object mid-stream no
+        # longer ends the scan, so the real trailing payload still wins.
+        stdout = '{"step": 1}\n{"truncated": \n{"status": "ok", "contacts": 2}\n'
+        self.assertEqual(
+            common_jsonio.parse_last_json(stdout),
+            {"status": "ok", "contacts": 2},
+        )
+
+    def test_scans_forward_past_non_json_noise_between_objects(self) -> None:
+        stdout = '{"step": 1}\n\x00\x01 binary noise {not json at all\n{"status": "ok"}\n'
+        self.assertEqual(common_jsonio.parse_last_json(stdout), {"status": "ok"})
+
+    def test_keeps_earlier_object_when_nothing_decodes_after_the_garbage(self) -> None:
+        stdout = '{"status": "ok"}\ntrailing {garbage that never closes\n'
+        self.assertEqual(common_jsonio.parse_last_json(stdout), {"status": "ok"})
+
+    def test_empty_or_json_free_output_is_an_empty_dict(self) -> None:
+        for stdout in ("", "   \n", "no json here at all\n"):
+            with self.subTest(stdout=stdout):
+                self.assertEqual(common_jsonio.parse_last_json(stdout), {})
 
 
 class DiscoverContactsPipelineTests(unittest.TestCase):

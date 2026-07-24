@@ -2,10 +2,11 @@
 """Gmail import helpers shared across the importer and its step modules.
 
 Discovery-artifact collection (`gmail_artifacts_from_discovery`), candidate
-writing (`write_gmail_candidates`), and two tiny cross-cutting helpers the
-`importer.py` orchestrator and both `steps/` modules lean on: `emit_progress`
-(the `[gmail-import]`-tagged stderr progress line) and `artifact_dir_from_state`
-(the intermediate-artifact directory).
+writing (`write_gmail_candidates`), and two tiny cross-cutting things the
+`importer.py` orchestrator and both `steps/` modules lean on:
+`GMAIL_IMPORT_PREFIX` (the stderr progress tag they hand to
+`common.proc.emit_progress`) and `artifact_dir_from_state` (the
+intermediate-artifact directory).
 
 Free and local: apply the shared identity directory to the discovered Gmail
 queues, materialize `import/gmail/people.csv`, and write the still-unresolved
@@ -16,6 +17,9 @@ central source of truth the fan-in and the review flow read); new lookups run
 through deep-context's judged, budget-gated stages.
 
 Changelog:
+  2026-07-24 (dedup): the local `emit_progress` wrapper was deleted — it only
+    bound a prefix onto `common.proc.emit_progress`, which already takes one.
+    Callers import that function directly and pass `GMAIL_IMPORT_PREFIX`.
   2026-07-23 (steps split): emit_progress + artifact_dir_from_state moved here
     from the old import_steps.py so the importer and both steps/ modules share
     one home instead of the file-loaded module owning them.
@@ -46,17 +50,16 @@ from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
 )
 from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_DISCOVER_DIR  # noqa: E402
-from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     read_csv_rows,
     source_slug,
     write_csv_rows,
 )
 
-
-def emit_progress(message: str) -> None:
-    """Write one progress line to stderr, tagged for the gmail import chain."""
-    _emit_progress(message, "[gmail-import]")
+# stderr progress tag for the gmail import chain. The importer and both steps/
+# modules pass it to common.proc.emit_progress, which is the one home for the
+# "write a progress line" behavior — this vertical owns only its prefix.
+GMAIL_IMPORT_PREFIX = "[gmail-import]"
 
 
 def artifact_dir_from_state(state: dict[str, Any]) -> Path:
