@@ -38,5 +38,4 @@ from packs.ingestion.primitives.discover.gmail.discover import (  # noqa: F401
     build_parser,
     discover,
     main,
-    run_gmail_msgvault,
 )

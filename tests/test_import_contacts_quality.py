@@ -188,13 +188,15 @@ class ImportContactsQualityTests(unittest.TestCase):
             self.assertNotIn("gmail_linkedin_resolution_queue_csvs", artifacts)
             self.assertEqual(artifacts["gmail_invalid_discovery_records"][0]["reason"], "missing_people_schema_or_interaction_counts")
 
-    def test_gmail_import_writes_manifest_without_ledger(self) -> None:
+    def test_gmail_import_removes_legacy_ledger_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             accounts = tmp / "accounts.json"
             accounts.write_text('{"accounts": {}}', encoding="utf-8")
             import_root = tmp / "import"
             import_dir = import_root / "gmail"
+            import_dir.mkdir(parents=True)
+            (import_dir / "ledger.json").write_text('{"status": "completed"}', encoding="utf-8")
             steps = load_gmail_import_steps()
             args = gmail_import.build_parser().parse_args(["run", "--accounts", str(accounts)])
 

@@ -6,8 +6,6 @@ Changelog:
     belongs beside store/util). Bootstrap depth +1; imports unchanged.
   2026-07-23 (audit):
     - Split out of the former single-file gmail.py.
-    - run_gmail_msgvault moved out to gmail/discover.py: it drives discover(),
-      which is not importable here without a circular import.
 """
 
 from __future__ import annotations
@@ -36,11 +34,6 @@ from packs.ingestion.primitives.discover.common import ordered_unique  # noqa: E
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
     source_config,
 )
-from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
-    _as_list,
-)
-
-
 MSGVAULT_REAUTH_ERROR_MARKERS = (
     "expired or revoked",
     "cannot re-authorize",

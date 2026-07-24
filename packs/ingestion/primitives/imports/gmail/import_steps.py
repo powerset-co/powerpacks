@@ -554,6 +554,7 @@ class GmailImport:
         two step methods (directory match, then apply + people materialization)
         -> candidates + directory quality checks -> the import manifest."""
         args = self.args
+        (self.import_dir / "ledger.json").unlink(missing_ok=True)
         expected_input = {
             "pipeline_contract": self.contract,
             "mode": "directory-only",

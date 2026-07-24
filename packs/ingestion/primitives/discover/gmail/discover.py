@@ -48,10 +48,6 @@ Changelog:
       were never honored; a typo or phantom option now raises TypeError.
     - The old `accounts_path` alias parameter was removed; `accounts_file` is
       the single accounts-state parameter.
-    - run_gmail_msgvault moved here from sync.py during the audit split: it
-      drives discover(), so leaving it in sync.py made `discover` an unbound
-      name there (latent NameError) and fixing it in place would have required
-      a circular import.
   2026-07-23 (audit batch 17): the per-account child was renamed —
     `gmail/network_import.py` split into `gmail/msgvault_store.py` (reader)
     and `gmail/discover_engine.py` (the CLI spawned here); the base-dir helper
@@ -496,20 +492,6 @@ def discover(
         limit=limit,
         no_attachments=no_attachments,
     ).run()
-
-
-def run_gmail_msgvault(ledger_path: Path, ledger: dict[str, Any], _worker: dict[str, Any]) -> bool:
-    input_cfg = ledger.get("input") or {}
-    payload = discover(
-        accounts_file=Path(str(input_cfg.get("from_accounts") or ".powerpacks/ingestion/accounts.json")),
-        selected_accounts=_as_list(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email") or []),
-        msgvault_db=str(input_cfg.get("msgvault_db") or ""),
-        sync_query=str(input_cfg.get("gmail_sync_query") or ""),
-        skip_msgvault_sync=bool(input_cfg.get("skip_msgvault_sync")),
-    )
-    ledger.setdefault("artifacts", {})["gmail_contacts_csv"] = payload.get("contacts_csv", "")
-    ledger.setdefault("artifacts", {})["gmail_linkedin_resolution_queue_csv"] = payload.get("linkedin_resolution_queue_csv", "")
-    return payload.get("status") in {"completed", "skipped"}
 
 
 def build_parser() -> argparse.ArgumentParser:
