@@ -135,10 +135,10 @@ class PipelinePhase13Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 3), \
             mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 1.0), \
-            mock.patch.object(rapidapi_client, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (200, payload, "")]) as http_json, \
+            mock.patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (200, payload, "")]) as http_json, \
             mock.patch.object(rapidapi_client.time, "sleep") as sleep:
             wait = mock.Mock()
-            result = rapidapi_client.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True, wait_for_attempt=wait)
+            result = rapidapi_client.RapidApiClient("key").fetch_profile("ada", "https://www.linkedin.com/in/ada", cache_dir=tmp, refresh_cache=True, wait_for_attempt=wait)
             cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
         self.assertEqual(result["status_code"], 200)
         self.assertEqual(result["attempts"], 2)
@@ -151,9 +151,9 @@ class PipelinePhase13Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 2), \
             mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 0.5), \
-            mock.patch.object(rapidapi_client, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (429, {"message": "Too many requests"}, "")]) as http_json, \
+            mock.patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (429, {"message": "Too many requests"}, "")]) as http_json, \
             mock.patch.object(rapidapi_client.time, "sleep") as sleep:
-            result = rapidapi_client.rapidapi_profile("ada", "https://www.linkedin.com/in/ada", "key", cache_dir=tmp, refresh_cache=True)
+            result = rapidapi_client.RapidApiClient("key").fetch_profile("ada", "https://www.linkedin.com/in/ada", cache_dir=tmp, refresh_cache=True)
             cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
         self.assertEqual(result["status_code"], 429)
         self.assertEqual(result["attempts"], 2)
@@ -194,8 +194,8 @@ class PipelinePhase13Tests(unittest.TestCase):
                 "normalized_profile": {"success": True},
                 "attempts": 2,
             }
-            with mock.patch.object(enrich_people, "rapidapi_key", return_value="key"), \
-                mock.patch.object(enrich_people, "rapidapi_profile", return_value=rapid):
+            with mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key", return_value="key"), \
+                mock.patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value=rapid):
                 summary = orchestrator.enrich_linkedin()
             rows = CsvIO.read_dict_rows(Path(summary["output_file"]))
         self.assertEqual(summary["retried"], 1)

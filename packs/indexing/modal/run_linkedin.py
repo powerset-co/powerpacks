@@ -107,7 +107,7 @@ def main() -> int:
     write_status(run_vol, status | {"phase": "enrich"})
     # RapidAPI is always approved on this path (approve_spend=True), so the single
     # `run` completes without a needs_approval stop — no approve/continue loop.
-    code = linkedin_import.command_run(ns)
+    code = linkedin_import.LinkedInImport.command_run(ns)
 
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     if code != 0 or manifest.get("status") != "completed":

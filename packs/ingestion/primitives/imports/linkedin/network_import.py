@@ -36,6 +36,11 @@ manifest `artifacts` map; `people_csv` is the canonical interface):
 `provider_enriched.csv`, `raw_provider_responses/`, and `people.csv`.
 
 Changelog:
+  2026-07-23 (audit oo-cli): the CLI command handlers moved onto LinkedInImport
+    (command_run is a @classmethod that instantiates + runs the orchestrator;
+    status/check_keys are @staticmethods). build_parser/main dispatch to
+    LinkedInImport.command_*; check-keys delegates to
+    people_enrichment.EnrichPeople.command_check_keys.
   2026-07-23 (audit decomposition): the local discover_output_dir moved to
     common/paths.py as `resolve_discover_source_dir(output_dir, "linkedin")`
     (generalized over source), and the local read_csv_rows/row_key/upsert_csv
@@ -418,47 +423,53 @@ class LinkedInImport:
         )
         return people_enrichment.EnrichPeople(cfg).run()
 
+    # ---- CLI command handlers ----
+    # The class is the single entry point for running the LinkedIn import:
+    # `command_run` builds a config and instantiates + runs this orchestrator;
+    # `command_status` is a read-only manifest query; `command_check_keys`
+    # delegates to the enrichment delegate's class. `build_parser`/`main` wire
+    # argparse to these.
+    @classmethod
+    def command_run(cls, args: argparse.Namespace) -> int:
+        run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
+        cfg = LinkedInImportConfig(
+            csv=Path(args.csv),
+            source_user=args.source_user,
+            run_dir=run_dir,
+            operator_id=args.operator_id,
+            limit=args.limit,
+            profile_cache_dir=Path(args.profile_cache_dir),
+            refresh_cache=args.refresh_cache,
+            company_corpus_jsonl=tuple(str(Path(p)) for p in (args.company_corpus_jsonl or [])),
+            sleep_seconds=args.sleep_seconds,
+            force_enrich=args.force_enrich,
+            convert_only=args.convert_only,
+            max_workers=args.max_workers,
+            max_rpm=args.max_rpm,
+            failure_retry_hours=args.failure_retry_hours,
+            approve_spend=args.approve_spend,
+        )
+        manifest = cls(cfg).run()
+        emit(manifest_emit_payload(manifest))
+        return exit_code_for_status(manifest.status)
 
-def command_run(args: argparse.Namespace) -> int:
-    run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
-    cfg = LinkedInImportConfig(
-        csv=Path(args.csv),
-        source_user=args.source_user,
-        run_dir=run_dir,
-        operator_id=args.operator_id,
-        limit=args.limit,
-        profile_cache_dir=Path(args.profile_cache_dir),
-        refresh_cache=args.refresh_cache,
-        company_corpus_jsonl=tuple(str(Path(p)) for p in (args.company_corpus_jsonl or [])),
-        sleep_seconds=args.sleep_seconds,
-        force_enrich=args.force_enrich,
-        convert_only=args.convert_only,
-        max_workers=args.max_workers,
-        max_rpm=args.max_rpm,
-        failure_retry_hours=args.failure_retry_hours,
-        approve_spend=args.approve_spend,
-    )
-    manifest = LinkedInImport(cfg).run()
-    emit(manifest_emit_payload(manifest))
-    return exit_code_for_status(manifest.status)
+    @staticmethod
+    def command_status(args: argparse.Namespace) -> int:
+        run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
+        manifest = read_json(run_dir / "manifest.json", {}) or {}
+        emit({
+            "status": manifest.get("status", "unknown"),
+            "artifact_dir": str(run_dir),
+            "counts": manifest.get("counts", {}),
+            "artifacts": manifest.get("artifacts", {}),
+            "steps": manifest.get("steps", {}),
+            "needs_approval": manifest.get("needs_approval"),
+        })
+        return 0
 
-
-def command_status(args: argparse.Namespace) -> int:
-    run_dir = resolve_discover_source_dir(Path(args.output_dir), "linkedin")
-    manifest = read_json(run_dir / "manifest.json", {}) or {}
-    emit({
-        "status": manifest.get("status", "unknown"),
-        "artifact_dir": str(run_dir),
-        "counts": manifest.get("counts", {}),
-        "artifacts": manifest.get("artifacts", {}),
-        "steps": manifest.get("steps", {}),
-        "needs_approval": manifest.get("needs_approval"),
-    })
-    return 0
-
-
-def command_check_keys(_: argparse.Namespace) -> int:
-    return people_enrichment.command_check_keys(argparse.Namespace())
+    @staticmethod
+    def command_check_keys(_: argparse.Namespace) -> int:
+        return people_enrichment.EnrichPeople.command_check_keys(argparse.Namespace())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -482,14 +493,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--failure-retry-hours", type=float, default=DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
     run.add_argument("--no-harmonic", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--no-rapidapi", action="store_true", help=argparse.SUPPRESS)
-    run.set_defaults(func=command_run)
+    run.set_defaults(func=LinkedInImport.command_run)
 
     status = sub.add_parser("status")
     status.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
-    status.set_defaults(func=command_status)
+    status.set_defaults(func=LinkedInImport.command_status)
 
     keys = sub.add_parser("check-keys")
-    keys.set_defaults(func=command_check_keys)
+    keys.set_defaults(func=LinkedInImport.command_check_keys)
     return parser
 
 

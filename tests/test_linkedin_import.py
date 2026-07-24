@@ -73,7 +73,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.write_connections(csv_path)
             cache_dir = Path(tmp) / "profile_cache"
             with patch.dict("os.environ", {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(linkedin_import.people_enrichment, "rapidapi_profile", return_value={"status_code": 200, "data": self.cache_entry()["raw_response"], "error": "", "from_cache": False}):
+                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.cache_entry()["raw_response"], "error": "", "from_cache": False}):
                     code, payload = self.invoke([
                         "run",
                         "--csv", str(csv_path),
@@ -109,7 +109,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             cache_dir = Path(tmp) / "profile_cache"
             with patch.dict("os.environ", {"RAPIDAPI_KEY": "r"}, clear=True):
                 # A cache miss must NOT fetch without approval: assert no network.
-                with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
+                with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                     code, payload = self.invoke([
                         "run",
                         "--csv", str(csv_path),
@@ -135,7 +135,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             cache_dir.mkdir()
             (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
             # No --approve-spend and no key: a seeded cache hit must never need approval.
-            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),
@@ -182,7 +182,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             manifest_path = discover_dir / "manifest.json"
 
             self.write_connections(csv_path, [("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024")])
-            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),
@@ -213,7 +213,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
                 ("Jane", "Example", "jane-example", "jane@example.com", "Acme", "CEO", "01 Jan 2024"),
                 ("Sam", "Example", "sam-example", "sam@example.com", "BetaCo", "Founder", "02 Jan 2024"),
             ])
-            with patch.object(rapidapi_client, "http_json", side_effect=AssertionError("network called")):
+            with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
                 code, payload = self.invoke([
                     "run",
                     "--csv", str(csv_path),
