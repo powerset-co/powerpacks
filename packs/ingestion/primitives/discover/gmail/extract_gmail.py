@@ -36,6 +36,24 @@ import chain's `run_gmail_apply_and_enrich` step
 and applies STORED resolutions only.
 
 Changelog:
+  2026-07-24 (calculation_mode declared): `run_msgvault`'s returned payload now
+    carries the `calculation_mode` its manifest already recorded, so
+    `gmail/discover.py` reads a declared value instead of falling through to a
+    default for a key no producer ever set. The value is still always
+    `full_recount`, and that is CORRECT, not a stub: `aggregate_contacts` takes
+    no date floor, so every run re-derives whole-store totals from the entire
+    local archive. msgvault's `--after` resume marker only bounds what the sync
+    DOWNLOADS. Emitting `incremental_delta` here would make discover SUM these
+    whole-store totals onto the previous ones and inflate every count.
+    Producing a genuine delta is NOT a signal-threading change; it needs a
+    date-scoped aggregation plus fixes for four consequences: (1) the per-account
+    artifact CSVs are upserted by `CsvIO.upsert_dict_rows`, which OVERWRITES
+    matched fields rather than summing, so delta rows would clobber whole-store
+    counts in `gmail_contacts_aggregated.csv`/`targeted_emails.csv`/`people.csv`;
+    (2) `first_interaction` would collapse to the window start; (3) summing
+    per-window `thread_count` double-counts threads spanning the boundary;
+    (4) the `has_round_trip_interaction` filter is per-run, so a contact whose
+    reply landed in an earlier window would be dropped from the delta.
   2026-07-24 (one LinkedIn normalizer): the local `extract_public_identifier`/
     `normalize_linkedin_url` pair — pinned to NOT percent-decode the slug — was
     deleted; both now come from `schemas/people_schema.py`, which decodes. The
@@ -112,6 +130,9 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
 )
 from packs.ingestion.primitives.discover.gmail.msgvault.store import MsgvaultStore  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
+    GMAIL_CALCULATION_FULL_RECOUNT,
+)
 from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
     classify_email,
@@ -435,7 +456,18 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
         "task": "import_gmail_network_msgvault",
         "version": 2,
         "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
-        "calculation_mode": "full_recount",
+        # PINNED full_recount — the honest value, not a stub. The rows above come
+        # from MsgvaultStore.aggregate_contacts(), which has NO date floor: it
+        # folds every message in the local archive for this account, so
+        # total_messages/thread_count are always whole-store totals. msgvault's
+        # `--after` resume marker (msgvault/sync.py:infer_msgvault_sync_after)
+        # governs what the sync DOWNLOADS, not what this re-derives, so even a
+        # strictly incremental sync yields a full recount here. Reporting
+        # incremental_delta would make discover.py append these totals to the
+        # previous ones (util._merge_rows SUMS total_messages/thread_count) and
+        # inflate every count on every run. Producing a real delta needs a
+        # date-scoped aggregation — see the module docstring's Changelog.
+        "calculation_mode": GMAIL_CALCULATION_FULL_RECOUNT,
         "created_at": existing_manifest.get("created_at") or discovered_at,
         "updated_at": discovered_at,
         "status": "completed",
@@ -547,6 +579,12 @@ class GmailExtractor:
         return {
             "status": "completed",
             "artifact_dir": str(out_dir),
+            # How the caller must combine these rows with what it already has.
+            # Always full_recount today (the rows restate this account's whole
+            # truth) — see the PINNED note in write_msgvault_artifacts. Declared
+            # explicitly so gmail/discover.py reads a real value instead of
+            # falling through to a default for a key nothing ever set.
+            "calculation_mode": manifest["calculation_mode"],
             "artifacts": manifest["artifacts"],
             "counts": manifest["counts"],
             "privacy": manifest["privacy"],
