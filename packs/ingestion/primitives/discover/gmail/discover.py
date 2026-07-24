@@ -12,16 +12,16 @@ Shape (GmailDiscovery(...).run()):
   selected -> the skipped/empty manifest path.
 
   Each selected account is a GmailAccountChannel that owns its fixed per-account
-  output dir (gmail_discover_dir) and its sync -> engine-child chain:
+  output dir (gmail_discover_dir) and its sync -> engine chain:
     - sync msgvault (skippable): window = --sync-after, else the resume marker
       from infer_msgvault_sync_after (msgvault/sync.py); an explicit window adds
       --noresume. A failed sync short-circuits with GmailDiscoveryFailed.
-    - spawn gmail/discover_engine.py, which reads the synced store and writes this
-      account's rows to the channel's FIXED queue_csv/people_csv (read back from
-      there, never re-parsed out of the payload). The child reports its
-      calculation_mode: full_recount (its rows ARE the account's whole truth) |
-      incremental_delta (only new rows, appended once, deduped by
-      incremental_input_id).
+    - call GmailDiscoverEngine().run_msgvault(...) in-process (no subprocess),
+      which reads the synced store and writes this account's rows to the channel's
+      FIXED queue_csv/people_csv (read back from there, never re-parsed out of the
+      returned payload). The engine reports its calculation_mode: full_recount (its
+      rows ARE the account's whole truth) | incremental_delta (only new rows,
+      appended once, deduped by incremental_input_id).
     extract records what it contributed in self.artifacts; run() returns None on
     success or a GmailDiscoveryFailed payload that short-circuits the run.
 
@@ -34,6 +34,14 @@ Shape (GmailDiscovery(...).run()):
   linkedin_resolution_queue.csv (same rows) + a typed stage manifest (models.py).
 
 Changelog:
+  2026-07-23 (in-process engine): GmailAccountChannel no longer spawns
+    gmail/discover_engine.py as a subprocess. `_child_cmd()` and the
+    `run_cmd(py_cmd(...))` msgvault spawn were replaced by a direct
+    `GmailDiscoverEngine().run_msgvault(...)` call; the channel now branches on the
+    RETURNED payload's status (a ValueError is mirrored into an error payload) and
+    still reads the queue rows back from the fixed gmail_discover_dir path. The now
+    unused `py_cmd`/`run_cmd` import was dropped. Fixed paths, calc-mode handling,
+    manifest payloads, and the failure branch are unchanged.
   2026-07-23 (account-email selection): account selection collapsed to the single
     repeatable --account-email list. The discover() wrapper, the --accounts flag,
     and the accounts_file/selected_accounts parameters are gone; the accounts.json
@@ -82,7 +90,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import gmail_discover_dir  # noqa: E402
-from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
 from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
@@ -91,6 +98,9 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
 )
 from packs.ingestion.primitives.discover.discovery_config import (  # noqa: E402
     output_path,
+)
+from packs.ingestion.primitives.discover.gmail.discover_engine import (  # noqa: E402
+    GmailDiscoverEngine,
 )
 from packs.ingestion.primitives.discover.gmail.models import (  # noqa: E402
     GmailDiscoveryCompleted,
@@ -117,22 +127,22 @@ from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: E
 
 class GmailAccountChannel:
     """One selected Gmail account. Owns its FIXED per-account output dir
-    (gmail_discover_dir), its msgvault sync step, and its gmail/discover_engine.py
-    child spawn. run() syncs (unless skipped), spawns the child, and reads this
-    account's rows back from the child's fixed queue_csv — never re-parsed out of
-    the payload, since the child is our own discover_engine writing known paths.
+    (gmail_discover_dir), its msgvault sync step, and its in-process
+    GmailDiscoverEngine.run_msgvault call. run() syncs (unless skipped), runs the
+    engine, and reads this account's rows back from the engine's fixed queue_csv —
+    never re-parsed out of the returned payload, since the engine writes known paths.
 
     It records what it contributed on self:
       artifacts             the fixed queue/people CSV paths it produced
-      mode                  the child's calculation_mode (full_recount |
+      mode                  the engine's calculation_mode (full_recount |
                             incremental_delta)
-      rows                  the queue rows the child wrote (empty when missing)
+      rows                  the queue rows the engine wrote (empty when missing)
       incremental_input_id  content-hash dedup key for the append-only path
       record                the per-account entry the store puts in manifest.children
       output                the incoming row the store feeds the merge
 
     run() returns None on success or a GmailDiscoveryFailed payload (failed sync
-    or non-zero child exit) that short-circuits the discovery run."""
+    or a non-completed engine payload) that short-circuits the discovery run."""
 
     def __init__(
         self,
@@ -215,34 +225,31 @@ class GmailAccountChannel:
             no_attachments=self.no_attachments,
         )
 
-    def _child_cmd(self) -> list[str]:
-        """argv for the gmail/discover_engine.py child. --output-dir is the base;
-        the child derives its own gmail_discover_dir under it (the paths above)."""
-        return py_cmd(
-            "packs/ingestion/primitives/discover/gmail/discover_engine.py",
-            "msgvault",
-            "--db",
-            self.msgvault_db,
-            "--account-email",
-            self.account_email,
-            "--output-dir",
-            str(self.output_base),
-        )
-
     def run(self) -> GmailDiscoveryFailed | None:
-        """Sync then spawn the engine child, recording the contribution on self.
+        """Sync then run the engine in-process, recording the contribution on self.
         Returns None on success or a GmailDiscoveryFailed payload that stops the run."""
         started = time.monotonic()
         sync = self._sync()
         if sync["status"] == "failed":
             self._finish_timing(started, sync)
             return GmailDiscoveryFailed(account_email=self.account_email, error=sync)
-        # run_cmd ALWAYS returns (code, dict, stderr) and the child is our own
-        # discover_engine emitting a known payload — so read the payload as a dict
-        # with no type-sniffing, and take the queue/people CSVs from the child's
-        # FIXED gmail_discover_dir paths rather than re-parsing them out of the
-        # payload's artifacts block.
-        code, payload, stderr = run_cmd(self._child_cmd())
+        # In-process engine call (no subprocess): GmailDiscoverEngine.run_msgvault
+        # writes this account's rows to the channel's FIXED gmail_discover_dir paths
+        # and RETURNS the same payload the CLI used to emit — so read the payload as
+        # a dict with no type-sniffing, and take the queue/people CSVs from those
+        # FIXED paths rather than re-parsing them out of the payload's artifacts
+        # block. A ValueError surfaces the way the old subprocess CLI did (exit 2 ->
+        # error payload -> failed channel): mirror it into an error payload so the
+        # `code != 0` branch below stays equivalent.
+        try:
+            payload = GmailDiscoverEngine().run_msgvault(
+                db=self.msgvault_db,
+                account_email=self.account_email,
+                output_dir=self.output_base,
+            )
+        except ValueError as exc:
+            payload = {"status": "error", "error": str(exc)}
+        code = 0 if payload.get("status") == "completed" else 1
         self.mode = str(
             payload.get("calculation_mode")
             or payload.get("counts", {}).get("calculation_mode")
@@ -276,7 +283,7 @@ class GmailAccountChannel:
         }
         if code != 0:
             self._finish_timing(started, sync)
-            return GmailDiscoveryFailed(account_email=self.account_email, error=stderr or payload)
+            return GmailDiscoveryFailed(account_email=self.account_email, error=payload)
         self._finish_timing(started, sync)
         return None
 

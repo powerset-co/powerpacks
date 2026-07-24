@@ -4,13 +4,19 @@ channel return-shape payload builders (``blocked_child`` / ``failed_child``).
 A channel is one message source (iMessage or WhatsApp). The concrete subclasses
 (``IMessageChannel`` / ``WhatsAppChannel``, in sibling modules) set their three
 fixed output paths (``contacts_csv``/``normalized_jsonl``/``normalized_manifest``)
-in their own ``__init__`` and own their extract -> normalize subprocess chain.
+in their own ``__init__`` and own their extract -> normalize chain (both now
+in-process calls into the leaf primitive classes).
 ``extract()``/``normalize()``/``run()`` return ``None`` on
 success or a blocked/failed child payload that short-circuits the discovery run.
 ``blocked_child`` and ``failed_child`` are the shared return shapes both channels
 (and the store's merge) emit; they live here as the base's return-shape helpers.
 
 Changelog:
+  2026-07-23 (in-process): ``normalize()`` now calls ``ContactsNormalizer().
+    normalize(...)`` in-process instead of spawning ``normalize_contacts.py``;
+    it branches on the returned payload's ``status`` (non-``ok`` -> failed).
+    ``run_cmd``/``py_cmd`` are no longer imported here. The no-op-when-fresh and
+    empty-JSONL-when-missing shortcuts are unchanged.
   2026-07-23 (terse): dropped the ``@property``/``NotImplementedError`` path
     accessors (contacts_csv/normalized_jsonl/normalized_manifest) that existed to
     read module constants at call time for test patching; subclasses now set the
@@ -35,7 +41,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.jsonio import write_json  # noqa: E402
-from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
+from packs.ingestion.primitives.discover.messages.normalize_contacts import (  # noqa: E402
+    ContactsNormalizer,
+)
 
 
 # --- child payloads (a channel step returns None on success, else one of these) ---
@@ -132,15 +140,11 @@ class MessageChannel:
                 "counts": {"rows_written": 0},
             })
             return None
-        code, payload, stderr = run_cmd(py_cmd(
-            "packs/ingestion/primitives/discover/messages/normalize_contacts.py",
-            "normalize",
-            "--input", str(input_csv),
-            "--out-jsonl", str(output_jsonl),
-            "--manifest", str(manifest),
-        ))
-        if code != 0:
-            return failed_child(f"normalize_{self.name}", payload, stderr)
+        payload = ContactsNormalizer().normalize(
+            input=input_csv, out_jsonl=output_jsonl, manifest=manifest,
+        )
+        if payload.get("status") != "ok":
+            return failed_child(f"normalize_{self.name}", payload, "")
         return None
 
     def run(self) -> dict[str, Any] | None:

@@ -35,6 +35,11 @@ Per-phone merge rules (consistent with `normalize_contacts.py`):
   one whose `match_status` is matched > suggested > unmatched > empty.
 
 Changelog:
+  2026-07-23 (in-process): the merge logic moved onto a ``ContactsMerger`` class
+    (``merge(*, inputs, output, manifest) -> dict`` returning the manifest with
+    ``status: ok``). ``MessagesDiscovery._merge`` calls it in-process instead of
+    spawning this file; the ``merge`` CLI subcommand, flags, stdout, and the
+    schema-mismatch ``SystemExit`` are unchanged.
   2026-07-23 (audit): merge_contacts.README.md sidecar folded into this
     docstring.
 """
@@ -283,59 +288,88 @@ def write_output_csv(path: Path, records: list[dict[str, Any]]) -> int:
 # Subcommand
 # ---------------------------------------------------------------------------
 
+class ContactsMerger:
+    """Unions N per-channel message-contact CSVs into one canonical contacts.csv,
+    deduplicating by canonical phone. Its one method does the read/merge/write and
+    returns the manifest (with ``status: ok``) — ``MessagesDiscovery`` calls it
+    in-process; the CLI wrapper emits it. A schema-mismatched input still raises
+    ``SystemExit`` (via ``read_input_csv``) rather than returning a payload."""
+
+    def merge(
+        self,
+        *,
+        inputs: list[str | Path],
+        output: str | Path,
+        manifest: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Merge ``inputs`` into ``output`` CSV, write the manifest, and return
+        it. ``manifest`` defaults next to ``output`` when omitted."""
+        input_paths = [Path(p) for p in inputs]
+        output_path = Path(output)
+        manifest_path = (
+            Path(manifest)
+            if manifest
+            else output_path.with_suffix(output_path.suffix + ".manifest.json")
+        )
+
+        by_phone: dict[str, dict[str, Any]] = {}
+        per_input_counts: list[dict[str, Any]] = []
+        sources_per_phone: dict[str, set[str]] = {}
+
+        for path in input_paths:
+            records, counts = read_input_csv(path)
+            merged_in_this_file = 0
+            new_in_this_file = 0
+            for rec in records:
+                phone = rec["phone"]
+                if phone in by_phone:
+                    by_phone[phone] = _merge_records(by_phone[phone], rec)
+                    merged_in_this_file += 1
+                else:
+                    by_phone[phone] = rec
+                    new_in_this_file += 1
+                sources_per_phone.setdefault(phone, set()).update(rec.get("sources") or [])
+            per_input_counts.append({
+                "path": str(path),
+                **counts,
+                "added_new": new_in_this_file,
+                "merged_into_existing": merged_in_this_file,
+            })
+
+        rows_written = write_output_csv(output_path, list(by_phone.values()))
+
+        cross_channel = sum(1 for s in sources_per_phone.values() if len(s) > 1)
+        by_source: dict[str, int] = {}
+        for sources in sources_per_phone.values():
+            for s in sources:
+                by_source[s] = by_source.get(s, 0) + 1
+
+        manifest_payload = {
+            "primitive": "messages/merge_contacts",
+            "command": "merge",
+            "status": "ok",
+            "created_at": now_iso(),
+            "inputs": per_input_counts,
+            "output": str(output_path),
+            "manifest_path": str(manifest_path),
+            "counts": {
+                "rows_written": rows_written,
+                "unique_phones": len(by_phone),
+                "cross_channel_phones": cross_channel,
+                "by_source": by_source,
+            },
+        }
+        write_json(manifest_path, manifest_payload)
+        return manifest_payload
+
+
 def cmd_merge(args: argparse.Namespace) -> int:
-    inputs = [Path(p) for p in args.inputs]
-    output = Path(args.output)
-    manifest_path = Path(args.manifest) if args.manifest else output.with_suffix(output.suffix + ".manifest.json")
-
-    by_phone: dict[str, dict[str, Any]] = {}
-    per_input_counts: list[dict[str, Any]] = []
-    sources_per_phone: dict[str, set[str]] = {}
-
-    for path in inputs:
-        records, counts = read_input_csv(path)
-        merged_in_this_file = 0
-        new_in_this_file = 0
-        for rec in records:
-            phone = rec["phone"]
-            if phone in by_phone:
-                by_phone[phone] = _merge_records(by_phone[phone], rec)
-                merged_in_this_file += 1
-            else:
-                by_phone[phone] = rec
-                new_in_this_file += 1
-            sources_per_phone.setdefault(phone, set()).update(rec.get("sources") or [])
-        per_input_counts.append({
-            "path": str(path),
-            **counts,
-            "added_new": new_in_this_file,
-            "merged_into_existing": merged_in_this_file,
-        })
-
-    rows_written = write_output_csv(output, list(by_phone.values()))
-
-    cross_channel = sum(1 for s in sources_per_phone.values() if len(s) > 1)
-    by_source: dict[str, int] = {}
-    for sources in sources_per_phone.values():
-        for s in sources:
-            by_source[s] = by_source.get(s, 0) + 1
-
-    manifest = {
-        "primitive": "messages/merge_contacts",
-        "command": "merge",
-        "created_at": now_iso(),
-        "inputs": per_input_counts,
-        "output": str(output),
-        "manifest_path": str(manifest_path),
-        "counts": {
-            "rows_written": rows_written,
-            "unique_phones": len(by_phone),
-            "cross_channel_phones": cross_channel,
-            "by_source": by_source,
-        },
-    }
-    write_json(manifest_path, manifest)
-    emit(manifest)
+    """CLI wrapper: run ``ContactsMerger.merge`` and emit the manifest."""
+    emit(ContactsMerger().merge(
+        inputs=list(args.inputs),
+        output=args.output,
+        manifest=args.manifest if args.manifest else None,
+    ))
     return 0
 
 

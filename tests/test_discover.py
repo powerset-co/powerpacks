@@ -189,10 +189,9 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             def fake_output_path(source: str, key: str) -> Path:
                 return paths[(source, key)]
 
-            def fake_run_cmd(cmd, timeout=None):
-                self.assertIn("--output-dir", cmd)
-                self.assertEqual(Path(cmd[cmd.index("--output-dir") + 1]), tmp)
-                return 0, {
+            def fake_run_msgvault(engine, *, db, account_email, output_dir):
+                self.assertEqual(Path(output_dir), tmp)
+                return {
                     "status": "completed",
                     "artifact_dir": str(account_dir),
                     "artifacts": {
@@ -200,11 +199,11 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                         "people_csv": str(account_people),
                     },
                     "counts": {"contacts_written": 1},
-                }, ""
+                }
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com", "messages_added": 4}):
-                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                    with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", fake_run_msgvault):
                         payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
 
             self.assertEqual(payload["status"], "completed")
@@ -232,7 +231,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
-                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                    with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", fake_run_msgvault):
                         payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
 
             self.assertEqual(payload["status"], "completed")
@@ -262,8 +261,8 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 }],
             )
 
-            def fake_incremental_run_cmd(cmd, timeout=None):
-                return 0, {
+            def fake_incremental_run_msgvault(engine, *, db, account_email, output_dir):
+                return {
                     "status": "completed",
                     "calculation_mode": discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
                     "artifacts": {
@@ -271,11 +270,11 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                         "people_csv": str(tmp / "scratch" / "people.csv"),
                     },
                     "counts": {"contacts_written": 1},
-                }, ""
+                }
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
-                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_incremental_run_cmd):
+                    with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", fake_incremental_run_msgvault):
                         payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
 
             self.assertEqual(payload["status"], "completed")
@@ -290,7 +289,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
-                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_incremental_run_cmd):
+                    with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", fake_incremental_run_msgvault):
                         replay_payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
 
             self.assertEqual(replay_payload["status"], "completed")
@@ -335,17 +334,17 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
             }
 
-            def fake_incremental_run_cmd(cmd, timeout=None):
-                return 0, {
+            def fake_incremental_run_msgvault(engine, *, db, account_email, output_dir):
+                return {
                     "status": "completed",
                     "calculation_mode": discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
                     "artifacts": {"linkedin_resolution_queue_csv": str(scratch_queue)},
                     "counts": {"contacts_written": 1},
-                }, ""
+                }
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
-                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_incremental_run_cmd):
+                    with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", fake_incremental_run_msgvault):
                         payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
 
             self.assertEqual(payload["status"], "failed")
@@ -386,18 +385,17 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                     }],
                 )
 
-                def fake_run_cmd(cmd, timeout=None):
-                    child = {
+                def fake_run_msgvault(engine, *, db, account_email, output_dir):
+                    return {
                         "status": "completed",
                         "calculation_mode": mode,
                         "artifacts": {"linkedin_resolution_queue_csv": str(scratch_queue)},
                         "counts": {"contacts_written": 1},
                     }
-                    return 0, child, ""
 
                 with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
                     with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
-                        with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                        with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", fake_run_msgvault):
                             return discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
 
             full_payload = run_with_child(
@@ -479,7 +477,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
-                    with mock.patch.object(discover_gmail, "run_cmd", return_value=(0, {"status": "completed", "artifacts": {}}, "")):
+                    with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", return_value={"status": "completed", "artifacts": {}}):
                         payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
 
             self.assertEqual(payload["status"], "completed")
@@ -517,19 +515,18 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 }],
             )
 
-            def fake_run_cmd(cmd, timeout=None):
-                self.assertIn("--output-dir", cmd)
-                self.assertEqual(Path(cmd[cmd.index("--output-dir") + 1]), tmp)
-                self.assertEqual(cmd[cmd.index("--account-email") + 1], "me@example.com")
-                return 0, {
+            def fake_run_msgvault(engine, *, db, account_email, output_dir):
+                self.assertEqual(Path(output_dir), tmp)
+                self.assertEqual(account_email, "me@example.com")
+                return {
                     "status": "completed",
                     "calculation_mode": discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
                     "artifacts": {"linkedin_resolution_queue_csv": str(channel.queue_csv)},
                     "counts": {"contacts_written": 1},
-                }, ""
+                }
 
             with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}) as sync_mock:
-                with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", fake_run_msgvault):
                     result = channel.run()
 
             self.assertIsNone(result)
@@ -564,13 +561,13 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         )
         failed_sync = {"status": "failed", "account_email": "me@example.com", "error": "boom"}
         with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value=failed_sync):
-            with mock.patch.object(discover_gmail, "run_cmd") as run_cmd_mock:
+            with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault") as run_msgvault_mock:
                 result = channel.run()
 
         self.assertIsInstance(result, discover_gmail.GmailDiscoveryFailed)
         self.assertEqual(result.account_email, "me@example.com")
         self.assertEqual(result.error, failed_sync)
-        run_cmd_mock.assert_not_called()
+        run_msgvault_mock.assert_not_called()
 
     def test_gmail_discovery_store_loops_channels_and_writes_outputs(self) -> None:
         # Exercise GmailDiscovery directly: it builds one channel per selected
@@ -602,12 +599,12 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
             }
 
-            def fake_run_cmd(cmd, timeout=None):
-                return 0, {"status": "completed", "counts": {"contacts_written": 1}}, ""
+            def fake_run_msgvault(engine, *, db, account_email, output_dir):
+                return {"status": "completed", "counts": {"contacts_written": 1}}
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
-                    with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
+                    with mock.patch.object(discover_gmail.GmailDiscoverEngine, "run_msgvault", fake_run_msgvault):
                         store = discover_gmail.GmailDiscovery(
                             account_emails=["me@example.com"], msgvault_db=str(tmp / "msgvault.db"), sync_query="")
                         payload = store.run()

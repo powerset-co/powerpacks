@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Gmail discovery engine: msgvault aggregation -> local network artifacts.
 
-The CLI child spawned per account by `gmail/discover.py discover` (which
-`$import-gmail` runs). Reads msgvault metadata through
-`gmail/msgvault/store.py` and writes Powerpacks-local artifacts; it never
-reads Gmail message bodies, subjects, snippets, raw MIME, or attachments.
-Product-flow docs: `packs/ingestion/docs/gmail-import-pipeline.md`.
+`GmailDiscoverEngine` is the in-process engine `gmail/discover.py` and the
+import chain call directly (no subprocess): `run_msgvault` aggregates one
+account's msgvault metadata into that account's discover artifacts,
+`apply_resolutions` attaches stored LinkedIn resolutions onto a Gmail
+people.csv, and `list_msgvault_accounts` lists the archive's source accounts.
+The module CLI (`main`) is a thin argparse wrapper over the SAME methods, so
+`discover_engine.py msgvault | apply-resolutions | msgvault-accounts` still run
+identically by path. Reads msgvault metadata through `gmail/msgvault/store.py`
+and writes Powerpacks-local artifacts; it never reads Gmail message bodies,
+subjects, snippets, raw MIME, or attachments. Product-flow docs:
+`packs/ingestion/docs/gmail-import-pipeline.md`.
 
 Usage:
     discover_engine.py msgvault-accounts --db ~/.msgvault/msgvault.db
@@ -24,11 +30,19 @@ Multiple Gmail accounts are separate msgvault source accounts: list them with
 
 `apply-resolutions` attaches a `linkedin_resolutions.csv` back onto a Gmail
 `people.csv` (`--min-confidence` defaults to 0.75); the live caller is the
-import chain's `gmail_apply_and_enrich` step
-(`imports/gmail/import_steps.py`), which
-applies STORED resolutions only.
+import chain's `run_gmail_apply_and_enrich` step
+(`imports/gmail/steps/enrich.py`), which calls `apply_resolutions` in-process
+and applies STORED resolutions only.
 
 Changelog:
+  2026-07-23 (in-process engine): wrapped as the GmailDiscoverEngine class —
+    each argparse subcommand's body became a method (msgvault -> run_msgvault,
+    apply-resolutions -> apply_resolutions, msgvault-accounts ->
+    list_msgvault_accounts) that RETURNS its payload dict; in-process callers
+    (discover.py, imports/gmail/steps/enrich.py) import the class and call the
+    method directly instead of spawning this file via run_cmd(py_cmd(...)).
+    main() is now a thin build_parser -> construct -> dispatch -> emit wrapper;
+    CLI subcommands, flags, payloads, and exit codes are unchanged.
   2026-07-23 (audit): moved the last local CSV/path helpers to shared homes —
     the strict `write_csv` became `CsvIO.write_dict_rows_strict`; the generic
     `csv_key`/`normalize_csv_row`/`merge_csv_row`/`upsert_csv` became
@@ -468,64 +482,127 @@ def write_msgvault_artifacts(rows: list[dict[str, Any]], out_dir: Path, account_
     return manifest
 
 
-def command_msgvault_accounts(args: argparse.Namespace) -> int:
-    """`msgvault-accounts`: list Gmail source accounts in the local archive."""
-    with MsgvaultStore(Path(args.db)) as store:
-        store.require_schema()
-        accounts = store.list_accounts()
-    emit({
-        "status": "ok",
-        "source": "msgvault",
-        "db": str(Path(args.db).expanduser()),
-        "accounts": accounts,
-        "count": len(accounts),
-        "privacy": {
-            "message_bodies_read": False,
-            "message_subjects_included": False,
-            "raw_mime_read": False,
-            "local_artifacts_only": True,
-        },
-    })
-    return 0
+class GmailDiscoverEngine:
+    """In-process Gmail discovery engine: msgvault metadata -> local artifacts.
+
+    The two operations the discovery/import chain needs, plus the account listing,
+    exposed as methods that RETURN their payload dict (with a `status` field)
+    instead of emitting it. In-process callers construct the engine and call a
+    method directly (`gmail/discover.py` -> `run_msgvault`,
+    `imports/gmail/steps/enrich.py` -> `apply_resolutions`); the module CLI
+    (`main`) is a thin argparse wrapper over the SAME methods. The engine never
+    reads Gmail message bodies, subjects, snippets, raw MIME, or attachments."""
+
+    def list_msgvault_accounts(self, *, db: str | Path) -> dict[str, Any]:
+        """List the Gmail source accounts in the local msgvault archive.
+
+        Returns the `status: ok` payload the CLI `msgvault-accounts` subcommand
+        emits verbatim."""
+        with MsgvaultStore(Path(db)) as store:
+            store.require_schema()
+            accounts = store.list_accounts()
+        return {
+            "status": "ok",
+            "source": "msgvault",
+            "db": str(Path(db).expanduser()),
+            "accounts": accounts,
+            "count": len(accounts),
+            "privacy": {
+                "message_bodies_read": False,
+                "message_subjects_included": False,
+                "raw_mime_read": False,
+                "local_artifacts_only": True,
+            },
+        }
+
+    def run_msgvault(
+        self,
+        *,
+        db: str | Path,
+        account_email: str,
+        output_dir: str | Path,
+        include_automated: bool = False,
+        include_category_mail: bool = False,
+        limit: int | None = None,
+        exclude_labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate one account's msgvault contacts and write its discover
+        artifacts under `gmail_discover_dir(output_dir, account_email)`.
+
+        Automated/noreply addresses are dropped unless `include_automated`; the
+        default Gmail category labels are excluded unless `include_category_mail`,
+        alongside any `exclude_labels`. Returns the `status: completed` payload the
+        CLI `msgvault` subcommand emits (artifact_dir + artifacts + counts +
+        privacy)."""
+        excluded_labels = default_excluded_labels(include_category_mail, list(exclude_labels or []))
+        with MsgvaultStore(Path(db)) as store:
+            store.require_schema()
+            rows = store.aggregate_contacts(account_email, excluded_labels)
+        out_dir = gmail_discover_dir(Path(output_dir), account_email)
+        manifest = write_msgvault_artifacts(
+            rows,
+            out_dir,
+            account_email=account_email,
+            include_automated=include_automated,
+            limit=limit,
+            excluded_labels=excluded_labels,
+        )
+        return {
+            "status": "completed",
+            "artifact_dir": str(out_dir),
+            "artifacts": manifest["artifacts"],
+            "counts": manifest["counts"],
+            "privacy": manifest["privacy"],
+            "summary": "Imported Gmail contact metadata from msgvault and wrote a LinkedIn resolution queue. No message bodies, subjects, raw MIME, external APIs, uploads, or prod writes were used.",
+        }
+
+    def apply_resolutions(
+        self,
+        *,
+        people_csv: str | Path,
+        resolutions_csv: str | Path,
+        output_dir: str | Path,
+        min_confidence: float = 0.75,
+    ) -> dict[str, Any]:
+        """Attach stored LinkedIn resolutions onto a Gmail people.csv (found rows
+        at/above `min_confidence` rewritten to LinkedIn identity).
+
+        Returns the `status: completed` payload the CLI `apply-resolutions`
+        subcommand emits."""
+        return apply_linkedin_resolutions_to_people(
+            Path(people_csv),
+            Path(resolutions_csv),
+            Path(output_dir),
+            min_confidence=min_confidence,
+        )
 
 
-def command_msgvault(args: argparse.Namespace) -> int:
-    """`msgvault`: aggregate one account's contacts and write the discover
-    artifacts for it."""
-    excluded_labels = default_excluded_labels(bool(args.include_category_mail), args.exclude_label)
-    with MsgvaultStore(Path(args.db)) as store:
-        store.require_schema()
-        rows = store.aggregate_contacts(args.account_email, excluded_labels)
-    out_dir = gmail_discover_dir(Path(args.output_dir), args.account_email)
-    manifest = write_msgvault_artifacts(
-        rows,
-        out_dir,
+def _dispatch_msgvault_accounts(engine: GmailDiscoverEngine, args: argparse.Namespace) -> dict[str, Any]:
+    """`msgvault-accounts` CLI adapter -> GmailDiscoverEngine.list_msgvault_accounts."""
+    return engine.list_msgvault_accounts(db=args.db)
+
+
+def _dispatch_msgvault(engine: GmailDiscoverEngine, args: argparse.Namespace) -> dict[str, Any]:
+    """`msgvault` CLI adapter -> GmailDiscoverEngine.run_msgvault."""
+    return engine.run_msgvault(
+        db=args.db,
         account_email=args.account_email,
+        output_dir=args.output_dir,
         include_automated=bool(args.include_automated),
+        include_category_mail=bool(args.include_category_mail),
         limit=args.limit,
-        excluded_labels=excluded_labels,
+        exclude_labels=args.exclude_label,
     )
-    emit({
-        "status": "completed",
-        "artifact_dir": str(out_dir),
-        "artifacts": manifest["artifacts"],
-        "counts": manifest["counts"],
-        "privacy": manifest["privacy"],
-        "summary": "Imported Gmail contact metadata from msgvault and wrote a LinkedIn resolution queue. No message bodies, subjects, raw MIME, external APIs, uploads, or prod writes were used.",
-    })
-    return 0
 
 
-def command_apply_resolutions(args: argparse.Namespace) -> int:
-    """`apply-resolutions`: attach stored resolutions onto a people.csv."""
-    payload = apply_linkedin_resolutions_to_people(
-        Path(args.people_csv),
-        Path(args.resolutions_csv),
-        Path(args.output_dir),
+def _dispatch_apply_resolutions(engine: GmailDiscoverEngine, args: argparse.Namespace) -> dict[str, Any]:
+    """`apply-resolutions` CLI adapter -> GmailDiscoverEngine.apply_resolutions."""
+    return engine.apply_resolutions(
+        people_csv=args.people_csv,
+        resolutions_csv=args.resolutions_csv,
+        output_dir=args.output_dir,
         min_confidence=args.min_confidence,
     )
-    emit(payload)
-    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -535,7 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sources = sub.add_parser("msgvault-accounts", aliases=["msgvault-sources"], help="List Gmail source accounts in a local msgvault SQLite archive")
     sources.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
-    sources.set_defaults(func=command_msgvault_accounts)
+    sources.set_defaults(func=_dispatch_msgvault_accounts)
 
     msgvault = sub.add_parser("msgvault", aliases=["import-msgvault"], help="Import Gmail contact metadata from a local msgvault SQLite archive")
     msgvault.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
@@ -545,30 +622,35 @@ def build_parser() -> argparse.ArgumentParser:
     msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
     msgvault.add_argument("--exclude-label", action="append", default=[], help="Exclude messages with this msgvault/Gmail label name; may be repeated")
     msgvault.add_argument("--include-category-mail", action="store_true", help="Do not exclude default Gmail category labels: Social, Promotions, Forums, Updates")
-    msgvault.set_defaults(func=command_msgvault)
+    msgvault.set_defaults(func=_dispatch_msgvault)
 
     apply = sub.add_parser("apply-resolutions", help="Apply LinkedIn resolution results to a Gmail/msgvault people.csv")
     apply.add_argument("--people-csv", required=True)
     apply.add_argument("--resolutions-csv", required=True)
     apply.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     apply.add_argument("--min-confidence", type=float, default=0.75)
-    apply.set_defaults(func=command_apply_resolutions)
+    apply.set_defaults(func=_dispatch_apply_resolutions)
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Parse args and dispatch; JSON error payloads on ValueError/interrupt."""
+    """Parse args, construct the engine, dispatch to the matching method, emit its
+    payload, and return the exit code: 0 on success, 2 on ValueError, 130 on
+    interrupt (the mapping the subprocess CLI has always exposed)."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    engine = GmailDiscoverEngine()
     try:
-        return args.func(args)
+        payload = args.func(engine, args)
     except ValueError as exc:
         emit({"status": "error", "error": str(exc)})
         return 2
     except KeyboardInterrupt:
         emit({"status": "interrupted"})
         return 130
+    emit(payload)
+    return 0
 
 
 if __name__ == "__main__":

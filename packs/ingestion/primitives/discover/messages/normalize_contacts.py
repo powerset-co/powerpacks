@@ -10,6 +10,11 @@ Writes the normalized JSONL (default
 it with row counts.
 
 Changelog:
+  2026-07-23 (in-process): the normalize logic moved onto a ``ContactsNormalizer``
+    class (``normalize(*, input, out_jsonl, manifest) -> dict`` returning the
+    manifest with ``status: ok``). The message channels call it in-process instead
+    of spawning this file; the ``normalize`` CLI subcommand, flags, and stdout are
+    unchanged.
   2026-07-23 (audit): normalize_contacts.README.md sidecar folded into this
     docstring; dropped the stale contact-exporter naming (the pipeline no
     longer uses contact-exporter).
@@ -40,7 +45,7 @@ from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
     parse_int,
     total_message_count,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.ingestion.schemas.message_contacts import MESSAGE_CHANNELS  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -171,33 +176,59 @@ def read_contacts(path: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
     return contacts, counts
 
 
+class ContactsNormalizer:
+    """Normalizes a message-contacts CSV into canonical messages JSONL. Its one
+    method does the read/dedup/write and returns the manifest (with ``status:
+    ok``) — the message channels call it in-process; the CLI wrapper prints it."""
+
+    def normalize(
+        self,
+        *,
+        input: str | Path,
+        out_jsonl: str | Path | None = None,
+        manifest: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Read ``input`` CSV, write the normalized JSONL + manifest, and return
+        the manifest dict. ``out_jsonl``/``manifest`` default next to the shared
+        messages dir when omitted."""
+        input_path = Path(input)
+        out_jsonl_path = (
+            Path(out_jsonl)
+            if out_jsonl
+            else MESSAGES_OUT_DIR / "contacts.normalized.jsonl"
+        )
+        manifest_path = (
+            Path(manifest)
+            if manifest
+            else out_jsonl_path.with_suffix(out_jsonl_path.suffix + ".manifest.json")
+        )
+
+        contacts, counts = read_contacts(input_path)
+        out_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_jsonl_path.open("w", encoding="utf-8") as handle:
+            for contact in contacts:
+                handle.write(json.dumps(contact, sort_keys=True) + "\n")
+
+        manifest_payload = {
+            "created_at": now_iso(),
+            "primitive": "messages/normalize_contacts",
+            "status": "ok",
+            "input": str(input_path),
+            "artifacts": {
+                "jsonl": str(out_jsonl_path),
+                "manifest": str(manifest_path),
+            },
+            "counts": counts,
+        }
+        write_json(manifest_path, manifest_payload)
+        return manifest_payload
+
+
 def cmd_normalize(args: argparse.Namespace) -> None:
-    input_path = Path(args.input)
-    out_jsonl = (
-        Path(args.out_jsonl)
-        if args.out_jsonl
-        else MESSAGES_OUT_DIR / "contacts.normalized.jsonl"
-    )
-    manifest_path = Path(args.manifest) if args.manifest else out_jsonl.with_suffix(out_jsonl.suffix + ".manifest.json")
-
-    contacts, counts = read_contacts(input_path)
-    out_jsonl.parent.mkdir(parents=True, exist_ok=True)
-    with out_jsonl.open("w", encoding="utf-8") as handle:
-        for contact in contacts:
-            handle.write(json.dumps(contact, sort_keys=True) + "\n")
-
-    manifest = {
-        "created_at": now_iso(),
-        "primitive": "messages/normalize_contacts",
-        "input": str(input_path),
-        "artifacts": {
-            "jsonl": str(out_jsonl),
-            "manifest": str(manifest_path),
-        },
-        "counts": counts,
-    }
-    write_json(manifest_path, manifest)
-    print(json.dumps(manifest, indent=2, sort_keys=True))
+    """CLI wrapper: run ``ContactsNormalizer.normalize`` and print the manifest."""
+    emit(ContactsNormalizer().normalize(
+        input=args.input, out_jsonl=args.out_jsonl, manifest=args.manifest,
+    ))
 
 
 def main() -> None:

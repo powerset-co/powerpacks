@@ -21,15 +21,26 @@ INGESTION = ROOT / "packs/ingestion"
 discover_messages = importlib.import_module(
     "packs.ingestion.primitives.discover.messages.discover"
 )
-# The channel classes and their owned path constants live in channels/; module
-# globals patched below (run_cmd, IMESSAGE_*/WHATSAPP_*, wacli timeouts) must be
-# patched on the concrete channel module the channel reads them from, not on the
-# discover module.
+# The channel classes and their owned path constants live in channels/; the
+# path constants patched below (IMESSAGE_*/WHATSAPP_*) live on the concrete
+# channel module. The channels now call the leaf primitive CLASSES in-process
+# (no self-spawned subprocess), so behavior is patched on the class method where
+# it is DEFINED — IMessageExtractor.check/extract, WhatsAppWacli.run,
+# ContactsMerger.merge — not on a channel-module run_cmd global.
 i_message_channel = importlib.import_module(
     "packs.ingestion.primitives.discover.messages.channels.i_message_channel"
 )
 whats_app_channel = importlib.import_module(
     "packs.ingestion.primitives.discover.messages.channels.whats_app_channel"
+)
+extract_imessage = importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.extract_imessage"
+)
+whatsapp_wacli = importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.whatsapp_wacli"
+)
+merge_contacts = importlib.import_module(
+    "packs.ingestion.primitives.discover.messages.merge_contacts"
 )
 import_messages = importlib.import_module(
     "packs.ingestion.primitives.imports.messages.importer"
@@ -217,14 +228,12 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     self.assertNotIn(token, primitive_text)
 
     def test_discover_lets_whatsapp_primitive_choose_sync_strategy(self) -> None:
-        captured: dict[str, list[str]] = {}
-
-        def fake_run_cmd(command, timeout=None):
-            captured["command"] = command
-            captured["timeout"] = timeout
-            return (0, {}, "")
-
-        with mock.patch.object(whats_app_channel, "run_cmd", fake_run_cmd):
+        # The channel calls WhatsAppWacli.run in-process and lets the primitive
+        # choose the sync strategy: it passes no sync-mode kwarg and forwards its
+        # own sync-phase timeout, not a synthetic outer subprocess wall-clock cap.
+        with mock.patch.object(
+            whatsapp_wacli.WhatsAppWacli, "run", return_value={"status": "completed"},
+        ) as run:
             channel = whats_app_channel.WhatsAppChannel(
                 accounts_path=Path("accounts.json"),
                 other_enabled=False,
@@ -233,14 +242,9 @@ class IngestionMessagesContractTests(unittest.TestCase):
             result = channel.extract()
 
         self.assertIsNone(result)
-        cmd = captured["command"]
-        self.assertNotIn("--sync-mode", cmd)
-        self.assertEqual(
-            captured["timeout"],
-            whats_app_channel.DEFAULT_WACLI_SYNC_TIMEOUT
-            + whats_app_channel.DEFAULT_WACLI_DEPTH_TIMEOUT
-            + 900,
-        )
+        kwargs = run.call_args.kwargs
+        self.assertNotIn("sync_mode", kwargs)
+        self.assertEqual(kwargs["sync_timeout"], whats_app_channel.DEFAULT_WACLI_SYNC_TIMEOUT)
 
         parser = discover_messages.build_parser()
         options = parser.parse_args(["discover", "--include-whatsapp"])
@@ -278,17 +282,17 @@ class IngestionMessagesContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "whatsapp.csv"
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
-                    mock.patch.object(whats_app_channel, "run_cmd", return_value=(0, {"status": "completed"}, "")) as run_cmd:
+                    mock.patch.object(whatsapp_wacli.WhatsAppWacli, "run", return_value={"status": "completed"}) as run:
                 result = whats_app_channel.WhatsAppChannel(
                     accounts_path=Path(td) / "accounts.json",
                     other_enabled=False,
                     max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
                 ).extract()
         self.assertIsNone(result)
-        command = run_cmd.call_args.args[0]
-        self.assertEqual(command[command.index("--max-messages") + 1], "0")
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["max_messages"], 0)
         # The pinned wacli fork auto-builds; discovery no longer suppresses install.
-        self.assertNotIn("--no-install", command)
+        self.assertNotIn("no_install", kwargs)
 
     def test_extract_whatsapp_records_pre_full_sync_nudge_in_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -299,7 +303,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
                             "hint": "Re-link to pull years more history."},
             }
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
-                    mock.patch.object(whats_app_channel, "run_cmd", return_value=(0, payload, "")):
+                    mock.patch.object(whatsapp_wacli.WhatsAppWacli, "run", return_value=payload):
                 channel = whats_app_channel.WhatsAppChannel(
                     accounts_path=Path(td) / "accounts.json",
                     other_enabled=False,
@@ -342,18 +346,21 @@ class IngestionMessagesContractTests(unittest.TestCase):
             whatsapp.write_text("phone,name\n+14155550102,Old WhatsApp\n", encoding="utf-8")
 
             with mock.patch.object(i_message_channel, "IMESSAGE_CONTACTS", imessage), \
-                    mock.patch.object(i_message_channel, "run_cmd", side_effect=[
-                        (0, {"status": "ok"}, ""),
-                        (0, {"status": "completed"}, ""),
-                    ]) as imessage_run:
+                    mock.patch.object(extract_imessage.IMessageExtractor, "check",
+                                      return_value={"status": "ok"}) as imessage_check, \
+                    mock.patch.object(extract_imessage.IMessageExtractor, "extract",
+                                      return_value={"status": "completed"}) as imessage_extract:
                 result = i_message_channel.IMessageChannel(
                     accounts_path=root / "accounts.json", other_enabled=False).extract()
             self.assertIsNone(result)
-            self.assertEqual(imessage_run.call_count, 2)
-            self.assertIn("extract", imessage_run.call_args_list[1].args[0])
+            # The channel gates on check (Full Disk Access) then runs extract.
+            self.assertEqual(imessage_check.call_count, 1)
+            self.assertEqual(imessage_extract.call_count, 1)
+            self.assertTrue(imessage_check.call_args.kwargs["strict"])
 
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", whatsapp), \
-                    mock.patch.object(whats_app_channel, "run_cmd", return_value=(0, {"status": "completed"}, "")) as whatsapp_run:
+                    mock.patch.object(whatsapp_wacli.WhatsAppWacli, "run",
+                                      return_value={"status": "completed"}) as whatsapp_run:
                 result = whats_app_channel.WhatsAppChannel(
                     accounts_path=root / "accounts.json",
                     other_enabled=False,
@@ -361,7 +368,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 ).extract()
             self.assertIsNone(result)
             self.assertEqual(whatsapp_run.call_count, 1)
-            self.assertIn("run", whatsapp_run.call_args.args[0])
 
     def test_messages_discovery_merges_only_selected_channels(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -376,15 +382,16 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", whatsapp), \
                     mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
                     mock.patch.object(discover_messages, "MERGED_CONTACTS_MANIFEST", manifest), \
-                    mock.patch.object(discover_messages, "run_cmd", return_value=(0, {"status": "ok"}, "")) as run_cmd:
+                    mock.patch.object(merge_contacts.ContactsMerger, "merge",
+                                      return_value={"status": "ok"}) as merge:
                 result = discover_messages.MessagesDiscovery(
                     include_imessage=True, include_whatsapp=False, out_dir=root,
                 )._merge()
 
         self.assertIsNone(result)
-        command = run_cmd.call_args.args[0]
-        self.assertIn(str(imessage), command)
-        self.assertNotIn(str(whatsapp), command)
+        inputs = merge.call_args.kwargs["inputs"]
+        self.assertIn(imessage, inputs)
+        self.assertNotIn(whatsapp, inputs)
 
     def test_refreshed_export_overwrites_downstream_contacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:

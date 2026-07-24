@@ -16,6 +16,14 @@ Usage:
     whatsapp_wacli.py auth | ensure-wacli | logout
 
 Changelog:
+- 2026-07-23 (in-process): the outer `run` entry moved onto a `WhatsAppWacli`
+  class (`run(*, output_csv, output_jsonl, manifest, progress_jsonl,
+  max_messages, ...) -> dict` returning the completed/blocked/failed payload).
+  The WhatsApp channel calls `WhatsAppWacli().run(...)` in-process instead of
+  spawning this file. The wacli GO BINARY is still invoked as a subprocess
+  (external tool) from inside the class. The CLI is frozen: `run`/`status`/
+  `auth`/`export`/`logout`/`ensure-wacli` subcommands, flags, stdout JSON, and
+  exit codes (completed 0, blocked 20, failed 1) unchanged.
 - 2026-07-23: whatsapp_wacli.README.md sidecar folded into this docstring.
 - 2026-07-23: The isolated WhatsApp wrapper skill was retired; user-facing
   rerun hints now point at $import-messages and the status/User-Agent
@@ -2547,163 +2555,228 @@ def cmd_export(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    started = time.time()
-    store = Path(args.store)
-    output_csv = Path(args.output_csv)
-    output_jsonl = Path(args.output_jsonl) if args.output_jsonl else None
-    manifest = Path(args.manifest)
-    progress_jsonl = Path(args.progress_jsonl) if args.progress_jsonl else None
-    name_fallback_csv = Path(args.name_fallback_csv) if getattr(args, "name_fallback_csv", None) else None
-    store.mkdir(parents=True, exist_ok=True)
-    write_progress(progress_jsonl, {"event": "started", "store": str(store)})
+class WhatsAppWacli:
+    """Outer WhatsApp metadata entry: install the pinned wacli, authenticate, sync
+    once, deepen recent history, and export local metadata. Wraps the wacli GO
+    BINARY (still invoked as a subprocess — external tool) but is itself called
+    in-process by the WhatsApp channel. ``run`` does all the work and returns the
+    completed/blocked/failed payload (with ``status``); it writes the manifest and
+    progress artifacts but does not print to stdout — the CLI wrapper emits."""
 
-    try:
-        wacli_info = ensure_wacli_installed(install=not args.no_install)
-        write_progress(progress_jsonl, {"event": "wacli_ready", "wacli": wacli_info})
-        existing_messages_at_start = history_depth_total_count(store)
-        doctor = wacli_json(store, ["doctor"], timeout=60)
-        status = auth_status(store)
-        auth_summary: dict[str, Any] = {"authenticated_before": status.get("authenticated")}
-        if not status.get("authenticated"):
-            auth_summary.update(run_auth(
-                store,
-                timeout=args.auth_timeout,
-                idle_exit=args.idle_exit,
-                open_qr_page=not getattr(args, "no_open_qr_page", False),
-            ))
-            status = auth_status(store, include_linked_jid=True)
-            if not status.get("authenticated"):
-                raise PrimitiveBlocked({
-                    "status": "blocked_user_action",
-                    "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
-                    "store": str(store),
-                })
-        auth_summary["authenticated_after"] = status.get("authenticated")
-        if not auth_summary.get("authenticated_before") and status.get("authenticated"):
-            write_pairing_marker(store)  # we just paired with full sync
-        pairing = pairing_full_sync_status(store, authenticated=bool(status.get("authenticated")))
-        if pairing.get("state") == "pre_full_sync":
-            emit_status(pairing["hint"])
-        write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing})
+    def __init__(self, *, store: str | Path = DEFAULT_STORE) -> None:
+        self.store = Path(store)
 
-        cold_start = existing_messages_at_start == 0
-        before_states = history_depth_chat_states(store)
-        before_total_messages = history_depth_total_count(store)
-        effective_max_messages_value = (
-            0
-            if cold_start
-            else resolve_effective_max(args.max_messages, before_total_messages)
-        )
-        sync_summary = run_sync(
-            store,
-            timeout=args.sync_timeout,
-            idle_exit=args.idle_exit,
-            max_messages=effective_max_messages_value,
-        )
-        sync_summary["strategy"] = "cold_full" if cold_start else "incremental"
-        sync_summary["incremental"] = not cold_start
-        sync_summary["requested_max_messages"] = args.max_messages
-        sync_summary["existing_messages_at_start"] = existing_messages_at_start
-        sync_summary["existing_messages_before_sync"] = before_total_messages
-        write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
-        emit_status("Deepening recent shallow WhatsApp conversations in paced batches.")
-        doctor_data = doctor.get("data") if isinstance(doctor.get("data"), dict) else {}
-        linked_jid = str(
-            status.get("linked_jid")
-            or doctor_data.get("linked_jid")
-            or ""
-        )
-        history_depth = run_history_depth_stage(
-            store,
-            out_dir=manifest.parent / "history-depth",
-            before_states=before_states,
-            before_total_messages=before_total_messages,
-            cold_start=cold_start,
-            exclude_jids={linked_jid} if linked_jid else set(),
-        )
-        write_progress(
-            progress_jsonl,
-            {
-                "event": "history_depth_completed",
-                "status": history_depth.get("status"),
-                "counts": history_depth.get("counts"),
-            },
-        )
-        group_info = refresh_group_info(
-            store,
-            timeout=args.group_info_timeout,
-            min_interval=args.group_info_interval,
-        )
-        write_progress(progress_jsonl, {"event": "group_info_refreshed", "group_info_refresh": group_info})
-        refresh = refresh_contacts(store)
-        stats = store_stats(store)
-        contacts, diagnostics = export_contacts_from_store(
-            store,
-            include_left_groups=args.include_left_groups,
-            max_group_participants=args.max_group_participants,
-            name_fallback_csv=name_fallback_csv,
-        )
-        csv_rows = write_csv(output_csv, contacts)
-        jsonl_rows = write_jsonl(output_jsonl, contacts)
-        elapsed_ms = int((time.time() - started) * 1000)
-        emit_status("WhatsApp sync finished.")
-        payload = completed_payload(
-            store=store,
-            output_csv=output_csv,
-            output_jsonl=output_jsonl,
-            manifest=manifest,
-            progress_jsonl=progress_jsonl,
-            wacli_info=wacli_info,
-            doctor=doctor,
-            stats=stats,
-            refresh=refresh,
-            group_info=group_info,
-            diagnostics=diagnostics,
-            csv_rows=csv_rows,
-            jsonl_rows=jsonl_rows,
-            elapsed_ms=elapsed_ms,
-            pairing=pairing,
-        )
-        payload["command"] = "run"
-        payload["auth"] = auth_summary
-        payload["sync"] = sync_summary
-        payload["history_depth"] = history_depth
-        write_json(manifest, payload)
-        write_progress(progress_jsonl, {"event": "completed", "counts": payload["counts"]})
-        emit(payload)
-        return 0
-    except PrimitiveBlocked as exc:
-        payload = {
-            "primitive": "messages/whatsapp_wacli",
-            "command": "run",
-            **exc.payload,
-            "store": str(store),
-            "artifacts": {"manifest": str(manifest), "progress_jsonl": str(progress_jsonl) if progress_jsonl else None},
-        }
-        write_json(manifest, payload)
-        write_progress(progress_jsonl, {"event": "blocked", "message": payload.get("message")})
-        emit(payload)
-        return exc.code
-    except Exception as exc:
-        status_after_failure: dict[str, Any] = {}
+    def run(
+        self,
+        *,
+        output_csv: str | Path,
+        output_jsonl: str | Path | None,
+        manifest: str | Path,
+        progress_jsonl: str | Path | None,
+        max_messages: int,
+        max_group_participants: int = DEFAULT_MAX_GROUP_PARTICIPANTS,
+        sync_timeout: int = DEFAULT_SYNC_TIMEOUT,
+        name_fallback_csv: str | Path | None = DEFAULT_NAME_FALLBACK_CSV,
+        idle_exit: str = DEFAULT_IDLE_EXIT,
+        auth_timeout: int = DEFAULT_AUTH_TIMEOUT,
+        group_info_timeout: int = 60,
+        group_info_interval: float = 0.2,
+        include_left_groups: bool = False,
+        no_install: bool = False,
+        no_open_qr_page: bool = False,
+    ) -> dict[str, Any]:
+        """Install/auth/sync/deepen/export in one pass. Returns the payload:
+        ``status: completed`` on success (with counts + pairing), ``status:
+        blocked_user_action`` when a QR scan / install step is needed, or
+        ``status: failed`` on any error. Writes the manifest + progress artifacts."""
+        started = time.time()
+        store = self.store
+        output_csv = Path(output_csv)
+        output_jsonl = Path(output_jsonl) if output_jsonl else None
+        manifest = Path(manifest)
+        progress_jsonl = Path(progress_jsonl) if progress_jsonl else None
+        name_fallback_csv = Path(name_fallback_csv) if name_fallback_csv else None
+        store.mkdir(parents=True, exist_ok=True)
+        write_progress(progress_jsonl, {"event": "started", "store": str(store)})
+
         try:
-            status_after_failure = auth_status(store)
-        except Exception as status_exc:
-            status_after_failure = {"error": f"{type(status_exc).__name__}: {status_exc}"}
-        payload = {
-            "primitive": "messages/whatsapp_wacli",
-            "command": "run",
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
-            "store": str(store),
-            "auth_after_failure": status_after_failure,
-            "artifacts": {"manifest": str(manifest), "progress_jsonl": str(progress_jsonl) if progress_jsonl else None},
-        }
-        write_json(manifest, payload)
-        write_progress(progress_jsonl, {"event": "failed", "error": payload["error"]})
-        emit(payload)
-        return 1
+            wacli_info = ensure_wacli_installed(install=not no_install)
+            write_progress(progress_jsonl, {"event": "wacli_ready", "wacli": wacli_info})
+            existing_messages_at_start = history_depth_total_count(store)
+            doctor = wacli_json(store, ["doctor"], timeout=60)
+            status = auth_status(store)
+            auth_summary: dict[str, Any] = {"authenticated_before": status.get("authenticated")}
+            if not status.get("authenticated"):
+                auth_summary.update(run_auth(
+                    store,
+                    timeout=auth_timeout,
+                    idle_exit=idle_exit,
+                    open_qr_page=not no_open_qr_page,
+                ))
+                status = auth_status(store, include_linked_jid=True)
+                if not status.get("authenticated"):
+                    raise PrimitiveBlocked({
+                        "status": "blocked_user_action",
+                        "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
+                        "store": str(store),
+                    })
+            auth_summary["authenticated_after"] = status.get("authenticated")
+            if not auth_summary.get("authenticated_before") and status.get("authenticated"):
+                write_pairing_marker(store)  # we just paired with full sync
+            pairing = pairing_full_sync_status(store, authenticated=bool(status.get("authenticated")))
+            if pairing.get("state") == "pre_full_sync":
+                emit_status(pairing["hint"])
+            write_progress(progress_jsonl, {"event": "authenticated", "auth": auth_summary, "pairing": pairing})
+
+            cold_start = existing_messages_at_start == 0
+            before_states = history_depth_chat_states(store)
+            before_total_messages = history_depth_total_count(store)
+            effective_max_messages_value = (
+                0
+                if cold_start
+                else resolve_effective_max(max_messages, before_total_messages)
+            )
+            sync_summary = run_sync(
+                store,
+                timeout=sync_timeout,
+                idle_exit=idle_exit,
+                max_messages=effective_max_messages_value,
+            )
+            sync_summary["strategy"] = "cold_full" if cold_start else "incremental"
+            sync_summary["incremental"] = not cold_start
+            sync_summary["requested_max_messages"] = max_messages
+            sync_summary["existing_messages_at_start"] = existing_messages_at_start
+            sync_summary["existing_messages_before_sync"] = before_total_messages
+            write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
+            emit_status("Deepening recent shallow WhatsApp conversations in paced batches.")
+            doctor_data = doctor.get("data") if isinstance(doctor.get("data"), dict) else {}
+            linked_jid = str(
+                status.get("linked_jid")
+                or doctor_data.get("linked_jid")
+                or ""
+            )
+            history_depth = run_history_depth_stage(
+                store,
+                out_dir=manifest.parent / "history-depth",
+                before_states=before_states,
+                before_total_messages=before_total_messages,
+                cold_start=cold_start,
+                exclude_jids={linked_jid} if linked_jid else set(),
+            )
+            write_progress(
+                progress_jsonl,
+                {
+                    "event": "history_depth_completed",
+                    "status": history_depth.get("status"),
+                    "counts": history_depth.get("counts"),
+                },
+            )
+            group_info = refresh_group_info(
+                store,
+                timeout=group_info_timeout,
+                min_interval=group_info_interval,
+            )
+            write_progress(progress_jsonl, {"event": "group_info_refreshed", "group_info_refresh": group_info})
+            refresh = refresh_contacts(store)
+            stats = store_stats(store)
+            contacts, diagnostics = export_contacts_from_store(
+                store,
+                include_left_groups=include_left_groups,
+                max_group_participants=max_group_participants,
+                name_fallback_csv=name_fallback_csv,
+            )
+            csv_rows = write_csv(output_csv, contacts)
+            jsonl_rows = write_jsonl(output_jsonl, contacts)
+            elapsed_ms = int((time.time() - started) * 1000)
+            emit_status("WhatsApp sync finished.")
+            payload = completed_payload(
+                store=store,
+                output_csv=output_csv,
+                output_jsonl=output_jsonl,
+                manifest=manifest,
+                progress_jsonl=progress_jsonl,
+                wacli_info=wacli_info,
+                doctor=doctor,
+                stats=stats,
+                refresh=refresh,
+                group_info=group_info,
+                diagnostics=diagnostics,
+                csv_rows=csv_rows,
+                jsonl_rows=jsonl_rows,
+                elapsed_ms=elapsed_ms,
+                pairing=pairing,
+            )
+            payload["command"] = "run"
+            payload["auth"] = auth_summary
+            payload["sync"] = sync_summary
+            payload["history_depth"] = history_depth
+            write_json(manifest, payload)
+            write_progress(progress_jsonl, {"event": "completed", "counts": payload["counts"]})
+            return payload
+        except PrimitiveBlocked as exc:
+            payload = {
+                "primitive": "messages/whatsapp_wacli",
+                "command": "run",
+                **exc.payload,
+                "store": str(store),
+                "artifacts": {"manifest": str(manifest), "progress_jsonl": str(progress_jsonl) if progress_jsonl else None},
+            }
+            write_json(manifest, payload)
+            write_progress(progress_jsonl, {"event": "blocked", "message": payload.get("message")})
+            return payload
+        except Exception as exc:
+            status_after_failure: dict[str, Any] = {}
+            try:
+                status_after_failure = auth_status(store)
+            except Exception as status_exc:
+                status_after_failure = {"error": f"{type(status_exc).__name__}: {status_exc}"}
+            payload = {
+                "primitive": "messages/whatsapp_wacli",
+                "command": "run",
+                "status": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+                "store": str(store),
+                "auth_after_failure": status_after_failure,
+                "artifacts": {"manifest": str(manifest), "progress_jsonl": str(progress_jsonl) if progress_jsonl else None},
+            }
+            write_json(manifest, payload)
+            write_progress(progress_jsonl, {"event": "failed", "error": payload["error"]})
+            return payload
+
+
+def run_exit_code(payload: dict[str, Any]) -> int:
+    """Map a ``run`` payload status to the CLI exit code (0 completed, 20 blocked,
+    1 failed) — the same mapping the old ``cmd_run`` returned directly."""
+    status = payload.get("status")
+    if status == "completed":
+        return 0
+    if status == "blocked_user_action":
+        return 20
+    return 1
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """CLI wrapper: run ``WhatsAppWacli.run``, emit the payload, and map its status
+    to the exit code."""
+    payload = WhatsAppWacli(store=args.store).run(
+        output_csv=args.output_csv,
+        output_jsonl=args.output_jsonl,
+        manifest=args.manifest,
+        progress_jsonl=args.progress_jsonl,
+        max_messages=args.max_messages,
+        max_group_participants=args.max_group_participants,
+        sync_timeout=args.sync_timeout,
+        name_fallback_csv=args.name_fallback_csv,
+        idle_exit=args.idle_exit,
+        auth_timeout=args.auth_timeout,
+        group_info_timeout=args.group_info_timeout,
+        group_info_interval=args.group_info_interval,
+        include_left_groups=args.include_left_groups,
+        no_install=args.no_install,
+        no_open_qr_page=args.no_open_qr_page,
+    )
+    emit(payload)
+    return run_exit_code(payload)
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:

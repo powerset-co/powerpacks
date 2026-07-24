@@ -1,14 +1,21 @@
-"""WhatsAppChannel: whatsapp_wacli.py run (fetch the pinned wacli binary, auth,
+"""WhatsAppChannel: WhatsAppWacli.run (fetch the pinned wacli binary, auth,
 sync, export local metadata) -> normalize.
 
 Owns its fixed output paths — the ``WHATSAPP_*`` module constants, assigned to
-instance attributes in ``__init__`` — plus the wacli max-messages and sync/depth
+instance attributes in ``__init__`` — plus the wacli max-messages and sync
 timeout defaults, which are channel-scoped. A missing
 QR pairing returns ``blocked_user_action`` (with the QR page path); a completed
 run surfaces the non-blocking pre-full-sync re-link nudge on ``self.artifacts``.
 Metadata only — no message bodies.
 
 Changelog:
+  2026-07-23 (in-process): ``extract()`` now calls ``WhatsAppWacli().run(...)``
+    in-process instead of spawning ``whatsapp_wacli.py run``; branches on the
+    returned payload's ``status`` (blocked_user_action -> blocked, non-completed
+    -> failed). ``run_cmd``/``py_cmd`` are no longer imported, and the outer
+    subprocess-timeout constant ``DEFAULT_WACLI_DEPTH_TIMEOUT`` is gone (the wacli
+    phases keep their own internal timeouts; there is no outer child process to
+    cap). Behavior, fixed output paths, and payload shapes unchanged.
   2026-07-23 (channels split): moved out of messages/discover.py into channels/;
     the WhatsApp-owned ``WHATSAPP_*`` path constants and the wacli
     max-messages / sync / depth timeout defaults moved here with it. The QR page
@@ -28,7 +35,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
-from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
+from packs.ingestion.primitives.discover.messages.whatsapp_wacli import (  # noqa: E402
+    WhatsAppWacli,
+)
 from packs.ingestion.primitives.discover.messages.channels.message_channel_base import (  # noqa: E402
     MessageChannel,
     blocked_child,
@@ -38,11 +47,9 @@ from packs.ingestion.primitives.discover.messages.channels.message_channel_base 
 
 DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES = 0
 # First full backfill scales with history size (~3-year default window):
-# ~30 minutes on small accounts, a few hours on large ones. 3h hard cap.
+# ~30 minutes on small accounts, a few hours on large ones. 3h hard cap. Passed
+# through as the wacli sync-phase timeout.
 DEFAULT_WACLI_SYNC_TIMEOUT = 10800
-# The WhatsApp primitive may then spend up to 105 minutes on paced targeted
-# history requests. Keep the outer channel timeout above both native phases.
-DEFAULT_WACLI_DEPTH_TIMEOUT = 6300
 
 # Fixed per-stage output paths owned by the WhatsApp channel (stable path ->
 # idempotent reruns). The channel assigns these to instance attributes in __init__.
@@ -71,18 +78,16 @@ class WhatsAppChannel(MessageChannel):
         self.normalized_manifest = WHATSAPP_NORMALIZED_MANIFEST
 
     def extract(self) -> dict[str, Any] | None:
-        code, payload, stderr = run_cmd(py_cmd(
-            "packs/ingestion/primitives/discover/messages/whatsapp_wacli.py",
-            "run",
-            "--output-csv", str(WHATSAPP_CONTACTS),
-            "--output-jsonl", str(WHATSAPP_RAW_JSONL),
-            "--manifest", str(WHATSAPP_MANIFEST),
-            "--progress-jsonl", str(WHATSAPP_PROGRESS_JSONL),
-            "--max-messages", str(self.max_messages),
-            "--max-group-participants", "30",
-            "--sync-timeout", str(DEFAULT_WACLI_SYNC_TIMEOUT),
-        ), timeout=DEFAULT_WACLI_SYNC_TIMEOUT + DEFAULT_WACLI_DEPTH_TIMEOUT + 900)
-        if code != 0 and payload.get("status") == "blocked_user_action":
+        payload = WhatsAppWacli().run(
+            output_csv=WHATSAPP_CONTACTS,
+            output_jsonl=WHATSAPP_RAW_JSONL,
+            manifest=WHATSAPP_MANIFEST,
+            progress_jsonl=WHATSAPP_PROGRESS_JSONL,
+            max_messages=self.max_messages,
+            max_group_participants=30,
+            sync_timeout=DEFAULT_WACLI_SYNC_TIMEOUT,
+        )
+        if payload.get("status") == "blocked_user_action":
             return blocked_child(
                 message=str(payload.get("message") or "WhatsApp needs a QR scan."),
                 accounts_path=self.accounts_path,
@@ -92,8 +97,8 @@ class WhatsAppChannel(MessageChannel):
                 include_imessage=self.other_enabled,
                 include_whatsapp=True,
             )
-        if code != 0:
-            return failed_child("extract_whatsapp", payload, stderr)
+        if payload.get("status") != "completed":
+            return failed_child("extract_whatsapp", payload, "")
         self.artifacts["whatsapp_contacts_csv"] = str(WHATSAPP_CONTACTS)
         self.artifacts["whatsapp_provider"] = "wacli"
         # Surface the non-blocking "re-link for deeper history" nudge to the skill

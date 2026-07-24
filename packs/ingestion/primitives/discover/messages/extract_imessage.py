@@ -20,6 +20,13 @@ writes a manifest with diagnostics so the harness can continue and an agent
 can patch the primitive.
 
 Changelog:
+  2026-07-23 (in-process): the check/extract logic moved onto an
+    ``IMessageExtractor`` class (``check(strict=...) -> dict`` returning a
+    ``status`` payload; ``extract(*, output_csv, output_jsonl, manifest, ...) ->
+    dict`` returning the manifest). The iMessage channel now calls these methods
+    in-process instead of spawning this file as a subprocess. The CLI is frozen:
+    ``check``/``extract``/``open-privacy-settings`` subcommands, flags, stdout
+    JSON, and exit codes (check strict-fail -> 1, extract fail -> 2) unchanged.
   2026-07-23 (audit): extract_imessage.README.md sidecar folded into this
     docstring.
 """
@@ -47,7 +54,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.contact_fields import canonicalize_phone  # noqa: E402
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS, GROUP_SEPARATOR  # noqa: E402
 
@@ -401,24 +408,13 @@ def write_jsonl(path: Path, contacts: list[Contact]) -> None:
 
 
 def cmd_check(args: argparse.Namespace) -> None:
-    chat_db = Path(args.chat_db).expanduser()
-    addressbook = check_addressbook(args.addressbook_glob)
-    result = {
-        "primitive": "messages/extract_imessage",
-        "checked_at": now_iso(),
-        "chat_db": check_chat_db(chat_db),
-        "addressbook": addressbook,
-        "addressbook_glob": args.addressbook_glob,
-        "addressbook_matches": addressbook["matches"],
-        "python": sys.version.split()[0],
-        "platform": sys.platform,
-    }
-    print(json.dumps(result, indent=2, sort_keys=True))
-    if args.strict and (
-        not result["chat_db"]["readable"]
-        or result["chat_db"]["missing_tables"]
-        or (addressbook["matches"] > 0 and not addressbook["readable"])
-    ):
+    """CLI wrapper: run ``IMessageExtractor.check``, print the result JSON, and
+    exit 1 when a strict check failed (the Full Disk Access / Contacts gate)."""
+    payload = IMessageExtractor(
+        chat_db=args.chat_db, addressbook_glob=args.addressbook_glob,
+    ).check(strict=args.strict)
+    emit(payload)
+    if payload["status"] != "ok":
         raise SystemExit(1)
 
 
@@ -454,11 +450,16 @@ def cmd_open_privacy_settings(args: argparse.Namespace) -> None:
 
 
 def failure_manifest(
-    args: argparse.Namespace,
+    *,
+    output_csv: Path,
+    output_jsonl: Path,
+    manifest: Path,
     started_at: str,
     error: str,
     diagnostics: dict[str, Any],
 ) -> dict[str, Any]:
+    """Build the ``status: failed`` extract manifest (empty counts + the output
+    artifact paths) written when chat.db is unreadable or extraction raises."""
     return {
         "created_at": started_at,
         "completed_at": now_iso(),
@@ -467,9 +468,9 @@ def failure_manifest(
         "error": error,
         "diagnostics": diagnostics,
         "artifacts": {
-            "csv": str(args.output_csv),
-            "jsonl": str(args.output_jsonl),
-            "manifest": str(args.manifest),
+            "csv": str(output_csv),
+            "jsonl": str(output_jsonl),
+            "manifest": str(manifest),
         },
         "counts": {
             "contacts": 0,
@@ -479,89 +480,154 @@ def failure_manifest(
     }
 
 
-def cmd_extract(args: argparse.Namespace) -> None:
-    started = time.time()
-    started_at = now_iso()
-    chat_db = Path(args.chat_db).expanduser()
-    output_csv = Path(args.output_csv)
-    output_jsonl = Path(args.output_jsonl)
-    manifest_path = Path(args.manifest)
+class IMessageExtractor:
+    """Reads iMessage ``chat.db`` + local AddressBook metadata (read-only, no
+    message bodies). ``check`` gates macOS Full Disk Access / Contacts access;
+    ``extract`` writes the contacts CSV/JSONL + manifest. Both return the payload
+    dict (with ``status``) they surface — the iMessage channel calls them
+    in-process; the CLI wrappers print the payload and map the exit code."""
 
-    args.output_csv = output_csv
-    args.output_jsonl = output_jsonl
-    args.manifest = manifest_path
+    def __init__(
+        self,
+        *,
+        chat_db: str | Path = DEFAULT_CHAT_DB,
+        addressbook_glob: str = DEFAULT_ADDRESSBOOK_GLOB,
+    ) -> None:
+        self.chat_db = Path(chat_db).expanduser()
+        self.addressbook_glob = addressbook_glob
 
-    chat_check = check_chat_db(chat_db)
-    if not chat_check["readable"] or chat_check["missing_tables"]:
-        manifest = failure_manifest(
-            args,
-            started_at,
-            "Messages database is not readable or is missing required tables",
-            {"chat_db": chat_check},
-        )
-        write_csv(output_csv, [])
-        write_jsonl(output_jsonl, [])
-        write_json(manifest_path, manifest)
-        print(json.dumps(manifest, indent=2, sort_keys=True))
-        raise SystemExit(2)
-
-    try:
-        addressbook_contacts, addressbook_diagnostics = read_addressbook_contacts(args.addressbook_glob)
-        message_stats = aggregate_message_stats(chat_db)
-        group_metadata = read_group_metadata(chat_db)
-        contacts = build_contacts(
-            message_stats=message_stats,
-            addressbook_contacts=addressbook_contacts,
-            group_metadata=group_metadata,
-            include_contact_only=args.include_contact_only,
-        )
-        if args.limit is not None:
-            contacts = contacts[: args.limit]
-
-        write_csv(output_csv, contacts)
-        write_jsonl(output_jsonl, contacts)
-        manifest = {
-            "created_at": started_at,
-            "completed_at": now_iso(),
-            "elapsed_ms": int((time.time() - started) * 1000),
+    def check(self, *, strict: bool = False) -> dict[str, Any]:
+        """Probe chat.db + AddressBook readability. Returns the diagnostics dict
+        with ``status``: ``blocked_user_action`` when ``strict`` and the databases
+        are unreadable / missing tables (the Full Disk Access gate), else ``ok``."""
+        addressbook = check_addressbook(self.addressbook_glob)
+        result: dict[str, Any] = {
             "primitive": "messages/extract_imessage",
-            "status": "completed",
-            "source": {
-                "type": "imessage_chat_db",
-                "chat_db": str(chat_db),
-                "addressbook_glob": args.addressbook_glob,
-            },
-            "diagnostics": {
-                "chat_db": chat_check,
-                "addressbook": addressbook_diagnostics,
-            },
-            "artifacts": {
-                "csv": str(output_csv),
-                "jsonl": str(output_jsonl),
-                "manifest": str(manifest_path),
-            },
-            "counts": {
-                "contacts": len(contacts),
-                "with_messages": sum(1 for contact in contacts if contact.message_count),
-                "with_group_context": sum(1 for contact in contacts if contact.is_in_group_chats),
-                "addressbook_contacts": len(addressbook_contacts),
-                "message_handles": len(message_stats),
-                "contact_only": sum(1 for contact in contacts if not contact.message_count),
-            },
+            "checked_at": now_iso(),
+            "chat_db": check_chat_db(self.chat_db),
+            "addressbook": addressbook,
+            "addressbook_glob": self.addressbook_glob,
+            "addressbook_matches": addressbook["matches"],
+            "python": sys.version.split()[0],
+            "platform": sys.platform,
         }
-        write_json(manifest_path, manifest)
-        print(json.dumps(manifest, indent=2, sort_keys=True))
-    except Exception as exc:
-        manifest = failure_manifest(
-            args,
-            started_at,
-            str(exc),
-            {"chat_db": chat_check, "exception_type": type(exc).__name__},
+        unreadable = (
+            not result["chat_db"]["readable"]
+            or result["chat_db"]["missing_tables"]
+            or (addressbook["matches"] > 0 and not addressbook["readable"])
         )
-        write_csv(output_csv, [])
-        write_jsonl(output_jsonl, [])
-        write_json(manifest_path, manifest)
-        print(json.dumps(manifest, indent=2, sort_keys=True))
+        result["status"] = "blocked_user_action" if (strict and unreadable) else "ok"
+        return result
+
+    def extract(
+        self,
+        *,
+        output_csv: str | Path,
+        output_jsonl: str | Path,
+        manifest: str | Path,
+        include_contact_only: bool = True,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Export contact metadata to ``output_csv``/``output_jsonl`` + write the
+        manifest, returning the manifest dict (``status`` completed/failed). On an
+        unreadable chat.db or any extraction error it writes empty artifacts + a
+        failure manifest and returns it — it never raises for the caller."""
+        started = time.time()
+        started_at = now_iso()
+        output_csv = Path(output_csv)
+        output_jsonl = Path(output_jsonl)
+        manifest_path = Path(manifest)
+
+        chat_check = check_chat_db(self.chat_db)
+        if not chat_check["readable"] or chat_check["missing_tables"]:
+            failure = failure_manifest(
+                output_csv=output_csv,
+                output_jsonl=output_jsonl,
+                manifest=manifest_path,
+                started_at=started_at,
+                error="Messages database is not readable or is missing required tables",
+                diagnostics={"chat_db": chat_check},
+            )
+            write_csv(output_csv, [])
+            write_jsonl(output_jsonl, [])
+            write_json(manifest_path, failure)
+            return failure
+
+        try:
+            addressbook_contacts, addressbook_diagnostics = read_addressbook_contacts(self.addressbook_glob)
+            message_stats = aggregate_message_stats(self.chat_db)
+            group_metadata = read_group_metadata(self.chat_db)
+            contacts = build_contacts(
+                message_stats=message_stats,
+                addressbook_contacts=addressbook_contacts,
+                group_metadata=group_metadata,
+                include_contact_only=include_contact_only,
+            )
+            if limit is not None:
+                contacts = contacts[:limit]
+
+            write_csv(output_csv, contacts)
+            write_jsonl(output_jsonl, contacts)
+            manifest_payload = {
+                "created_at": started_at,
+                "completed_at": now_iso(),
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "primitive": "messages/extract_imessage",
+                "status": "completed",
+                "source": {
+                    "type": "imessage_chat_db",
+                    "chat_db": str(self.chat_db),
+                    "addressbook_glob": self.addressbook_glob,
+                },
+                "diagnostics": {
+                    "chat_db": chat_check,
+                    "addressbook": addressbook_diagnostics,
+                },
+                "artifacts": {
+                    "csv": str(output_csv),
+                    "jsonl": str(output_jsonl),
+                    "manifest": str(manifest_path),
+                },
+                "counts": {
+                    "contacts": len(contacts),
+                    "with_messages": sum(1 for contact in contacts if contact.message_count),
+                    "with_group_context": sum(1 for contact in contacts if contact.is_in_group_chats),
+                    "addressbook_contacts": len(addressbook_contacts),
+                    "message_handles": len(message_stats),
+                    "contact_only": sum(1 for contact in contacts if not contact.message_count),
+                },
+            }
+            write_json(manifest_path, manifest_payload)
+            return manifest_payload
+        except Exception as exc:
+            failure = failure_manifest(
+                output_csv=output_csv,
+                output_jsonl=output_jsonl,
+                manifest=manifest_path,
+                started_at=started_at,
+                error=str(exc),
+                diagnostics={"chat_db": chat_check, "exception_type": type(exc).__name__},
+            )
+            write_csv(output_csv, [])
+            write_jsonl(output_jsonl, [])
+            write_json(manifest_path, failure)
+            return failure
+
+
+def cmd_extract(args: argparse.Namespace) -> None:
+    """CLI wrapper: run ``IMessageExtractor.extract``, print the manifest JSON,
+    and exit 2 when extraction failed."""
+    payload = IMessageExtractor(
+        chat_db=args.chat_db, addressbook_glob=args.addressbook_glob,
+    ).extract(
+        output_csv=args.output_csv,
+        output_jsonl=args.output_jsonl,
+        manifest=args.manifest,
+        include_contact_only=args.include_contact_only,
+        limit=args.limit,
+    )
+    emit(payload)
+    if payload["status"] != "completed":
         raise SystemExit(2)
 
 

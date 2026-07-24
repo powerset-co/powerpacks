@@ -4,19 +4,25 @@ materialize the merged Gmail people artifact.
 `run_gmail_apply_and_enrich(imp)` is the second import step. It gathers the
 explicit + directory + prior stored resolution records, commits them into
 `directory.csv`, combines the per-account resolution CSVs, applies them to each
-account's people.csv via the `discover/gmail/discover_engine.py apply-resolutions`
-child, and materializes one merged Gmail `people.gmail.csv`. It runs NO Parallel
+account's people.csv via an in-process `GmailDiscoverEngine().apply_resolutions(...)`
+call, and materializes one merged Gmail `people.gmail.csv`. It runs NO Parallel
 resolution and NO RapidAPI hydration — deep-context owns all resolution and
 enrichment (stored legacy resolutions migrate via `bin/deep-context migrate-legacy`).
 
-It mutates the orchestrator's transient `imp.state` in place; a failed
-apply-resolutions child ends the run (`imp.state["status"] = "failed"`, returns
+It mutates the orchestrator's transient `imp.state` in place; a non-completed
+apply-resolutions payload ends the run (`imp.state["status"] = "failed"`, returns
 False). The directory-commit / resolution-combine transforms live in
 `steps/directory.py`; the cross-source `materialize_gmail_merged_people_csv`
 comes from `imports/directory.py`; the shared `emit_progress` /
 `artifact_dir_from_state` from `imports/gmail/util.py`.
 
 Changelog:
+  2026-07-23 (in-process engine): the apply-resolutions step no longer spawns
+    gmail/discover_engine.py as a subprocess. The `run_cmd(py_cmd(...))` call was
+    replaced by a direct `GmailDiscoverEngine().apply_resolutions(...)` call that
+    branches on the RETURNED payload's status (a ValueError is mirrored into an
+    error payload); the now unused `py_cmd`/`run_cmd` import was dropped. Fixed
+    output paths and the failed-step payload are unchanged.
   2026-07-23 (steps split): extracted from the file-loaded gmail/import_steps.py
     (deleted). The apply-and-enrich step body became this module-level
     `run_gmail_apply_and_enrich(imp)` taking the GmailImport orchestrator. No
@@ -36,8 +42,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, unique_strings  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
-from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
 from packs.ingestion.primitives.discover.common import source_slug  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.discover_engine import GmailDiscoverEngine  # noqa: E402
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     build_directory_checkpoint,
     materialize_gmail_merged_people_csv,
@@ -109,18 +115,23 @@ def run_gmail_apply_and_enrich(imp: "GmailImport") -> bool:
         slug = source_slug(record.get("account_email") or record.get("slug") or f"account-{index}")
         account_dir = Path(str(record.get("people_csv") or "")).parent
         resolved_dir = account_dir / "resolved"
-        apply_cmd = py_cmd(
-            "packs/ingestion/primitives/discover/gmail/discover_engine.py",
-            "apply-resolutions",
-            "--people-csv", str(record["people_csv"]),
-            "--resolutions-csv", str(record["resolutions_csv"]),
-            "--output-dir", str(resolved_dir),
-        )
-        code, payload, stderr = run_cmd(apply_cmd, prefix="[gmail-import]")
-        if code != 0:
-            imp._mark_step("gmail_apply_enrich", "failed", error=stderr or payload)
+        # In-process engine call (no subprocess): GmailDiscoverEngine.apply_resolutions
+        # attaches the STORED resolutions and RETURNS the payload the CLI used to
+        # emit. A ValueError surfaces the way the old subprocess CLI did (exit 2 ->
+        # error payload -> failed step): mirror it into an error payload so the
+        # non-completed branch below stays equivalent.
+        try:
+            payload = GmailDiscoverEngine().apply_resolutions(
+                people_csv=record["people_csv"],
+                resolutions_csv=record["resolutions_csv"],
+                output_dir=resolved_dir,
+            )
+        except ValueError as exc:
+            payload = {"status": "error", "error": str(exc)}
+        if payload.get("status") != "completed":
+            imp._mark_step("gmail_apply_enrich", "failed", error=payload)
             imp.state["status"] = "failed"
-            emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": stderr or payload})
+            emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": payload})
             return False
         resolved_people = payload.get("people_csv") or record["people_csv"]
         artifacts.setdefault("gmail_resolved_people_csvs", []).append(resolved_people)

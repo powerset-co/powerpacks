@@ -1,14 +1,20 @@
 """IMessageChannel: iMessage extract (Full Disk Access gated) -> normalize.
 
 Owns its fixed output paths — the ``IMESSAGE_*`` module constants, assigned to
-instance attributes in ``__init__``. ``extract()``
-runs ``extract_imessage.py check --strict`` (the macOS Full Disk Access /
-Contacts gate; a failure returns ``blocked_user_action``) then ``extract``,
-writing ``imessage.contacts.csv`` + raw jsonl + manifest; the inherited
-``normalize()`` turns the CSV into canonical JSONL. Metadata only — never selects
-message body columns.
+instance attributes in ``__init__``. ``extract()`` calls
+``IMessageExtractor().check(strict=True)`` in-process (the macOS Full Disk Access
+/ Contacts gate; a non-``ok`` status returns ``blocked_user_action``) then
+``.extract(...)``, writing ``imessage.contacts.csv`` + raw jsonl + manifest; the
+inherited ``normalize()`` turns the CSV into canonical JSONL. Metadata only —
+never selects message body columns.
 
 Changelog:
+  2026-07-23 (in-process): ``extract()`` now calls the ``IMessageExtractor`` class
+    in-process (``check`` then ``extract``) instead of spawning
+    ``extract_imessage.py`` as a subprocess; branches on the returned payload's
+    ``status`` (non-``ok`` check -> blocked, non-``completed`` extract -> failed).
+    ``run_cmd``/``py_cmd`` are no longer imported here. Behavior, fixed output
+    paths, and payload shapes unchanged.
   2026-07-23 (channels split): moved out of messages/discover.py into channels/;
     the iMessage-owned ``IMESSAGE_*`` path constants moved here with it. Shared
     ``MESSAGES_DIR`` stays sourced from common/paths (``MESSAGES_OUT_DIR``).
@@ -27,7 +33,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
-from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
+from packs.ingestion.primitives.discover.messages.extract_imessage import (  # noqa: E402
+    IMessageExtractor,
+)
 from packs.ingestion.primitives.discover.messages.channels.message_channel_base import (  # noqa: E402
     MessageChannel,
     blocked_child,
@@ -55,26 +63,22 @@ class IMessageChannel(MessageChannel):
         self.normalized_manifest = IMESSAGE_NORMALIZED_MANIFEST
 
     def extract(self) -> dict[str, Any] | None:
-        code, payload, stderr = run_cmd(py_cmd(
-            "packs/ingestion/primitives/discover/messages/extract_imessage.py",
-            "check", "--strict",
-        ))
-        if code != 0:
+        extractor = IMessageExtractor()
+        check = extractor.check(strict=True)
+        if check.get("status") != "ok":
             return blocked_child(
                 message="Enable macOS Full Disk Access / Contacts access for this terminal, then continue.",
                 accounts_path=self.accounts_path,
-                detail=payload or stderr[-1000:],
+                detail=check,
                 include_imessage=True,
                 include_whatsapp=self.other_enabled,
             )
-        code, payload, stderr = run_cmd(py_cmd(
-            "packs/ingestion/primitives/discover/messages/extract_imessage.py",
-            "extract",
-            "--output-csv", str(IMESSAGE_CONTACTS),
-            "--output-jsonl", str(IMESSAGE_RAW_JSONL),
-            "--manifest", str(IMESSAGE_MANIFEST),
-        ), timeout=600)
-        if code != 0:
-            return failed_child("extract_imessage", payload, stderr)
+        result = extractor.extract(
+            output_csv=IMESSAGE_CONTACTS,
+            output_jsonl=IMESSAGE_RAW_JSONL,
+            manifest=IMESSAGE_MANIFEST,
+        )
+        if result.get("status") != "completed":
+            return failed_child("extract_imessage", result, "")
         self.artifacts["imessage_contacts_csv"] = str(IMESSAGE_CONTACTS)
         return None

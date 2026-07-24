@@ -12,7 +12,8 @@ Shape:
   the stage manifest. main() constructs it and calls run() — no wrapper function.
 
   Each source is a MessageChannel (channels/) that owns its own output paths and
-  its extract -> normalize subprocess chain:
+  its extract -> normalize chain (both in-process calls into the leaf primitive
+  classes):
     - IMessageChannel (channels/i_message_channel.py): extract_imessage.py check
       (Full Disk Access gate) -> extract chat.db + AddressBook metadata ->
       imessage.contacts.csv -> normalize.
@@ -29,6 +30,12 @@ Shape:
   Metadata only: no bodies, no research, no upload.
 
 Changelog:
+  2026-07-23 (in-process): MessagesDiscovery._merge now calls
+    ``ContactsMerger().merge(...)`` in-process instead of spawning
+    merge_contacts.py; the channels likewise call their leaf primitive classes
+    directly (extract_imessage/whatsapp_wacli/normalize_contacts). No self-owned
+    Python file is spawned as a subprocess anymore. ``run_cmd``/``py_cmd`` are no
+    longer imported here. Fixed output paths, manifests, and the CLI are unchanged.
   2026-07-23 (terse): folded the resolve()/discover() wrapper functions into
     MessagesDiscovery — the constructor now resolves channels from accounts_file
     (+ explicit --include-* override) itself, so callers just construct and run().
@@ -80,7 +87,6 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
     discover_source_dir,
 )
 from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
-from packs.ingestion.primitives.common.proc import py_cmd, run_cmd  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     account_config,
     channel_is_linked,
@@ -88,6 +94,7 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
     read_csv_rows,
     write_csv_rows,
 )
+from packs.ingestion.primitives.discover.messages.merge_contacts import ContactsMerger  # noqa: E402
 from packs.ingestion.primitives.discover.messages.channels.message_channel_base import (  # noqa: E402
     MessageChannel,
     failed_child,
@@ -201,9 +208,9 @@ class MessagesDiscovery:
 
     def _merge(self) -> dict[str, Any] | None:
         """Union the enabled channels' contacts CSVs by canonical phone into
-        MERGED_CONTACTS (via merge_contacts.py). Writes an empty merged CSV +
-        manifest when no channel produced an export; returns a failed child on a
-        non-zero merge."""
+        MERGED_CONTACTS (via ``ContactsMerger`` in-process). Writes an empty
+        merged CSV + manifest when no channel produced an export; returns a failed
+        child on a non-``ok`` merge."""
         inputs = [channel.contacts_csv for channel in self.channels if channel.contacts_csv.exists()]
         if not inputs:
             write_csv_rows(MERGED_CONTACTS, CSV_HEADERS, [])
@@ -215,13 +222,11 @@ class MessagesDiscovery:
                 "counts": {"rows_written": 0, "unique_phones": 0, "cross_channel_phones": 0, "by_source": {}},
             })
             return None
-        command = py_cmd("packs/ingestion/primitives/discover/messages/merge_contacts.py", "merge")
-        for input_csv in inputs:
-            command.extend(["--input", str(input_csv)])
-        command.extend(["--output", str(MERGED_CONTACTS), "--manifest", str(MERGED_CONTACTS_MANIFEST)])
-        code, payload, stderr = run_cmd(command)
-        if code != 0:
-            return failed_child("ensure_contacts", payload, stderr)
+        payload = ContactsMerger().merge(
+            inputs=inputs, output=MERGED_CONTACTS, manifest=MERGED_CONTACTS_MANIFEST,
+        )
+        if payload.get("status") != "ok":
+            return failed_child("ensure_contacts", payload, "")
         return None
 
     def _not_completed(self, child: dict[str, Any]) -> dict[str, Any]:
