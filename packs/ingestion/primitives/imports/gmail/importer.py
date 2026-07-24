@@ -12,19 +12,19 @@ through deep-context's judged, budget-gated stages.
 Thin CLI entry: `run` loads the gmail import steps module (file-loaded via
 `load_gmail_import_steps` so it keeps its exact loader semantics), getattrs the
 `GmailImport` orchestrator off it, and runs it. The orchestrator owns the fixed
-import dir, the ledger run-state (still written to `ledger.json` this round),
-the directory-apply -> stored-resolution-apply step chain, the matched-people /
+import dir, transient step state, the directory-apply -> stored-resolution-apply
+step chain, the matched-people /
 candidates split, the directory quality gate, and the manifest. This module owns
 only the CLI surface and `GMAIL_IMPORT_CONTRACT` (the package __init__ re-exports
 it); exit 0 completed/skipped, 1 failed. No approval gate: nothing here spends.
 
 Changelog:
-  2026-07-23 (oop): the import flow (manifest no-op check, ledger construction,
+  2026-07-23 (oop): the import flow (manifest no-op check, state construction,
     step dispatch, people/candidate materialization, quality gate, manifest) was
     folded into a `GmailImport` orchestrator in gmail/import_steps.py. run() is
     now a thin wrapper that getattrs GmailImport off the loaded steps module and
     passes GMAIL_IMPORT_CONTRACT in. CLI flags, exit codes, fixed output paths,
-    ledger.json, and manifest payloads are unchanged.
+    and manifest payloads are unchanged.
   2026-07-23 (audit):
     - One upfront repo-root path bootstrap replaced the duplicated try/except
       import block.

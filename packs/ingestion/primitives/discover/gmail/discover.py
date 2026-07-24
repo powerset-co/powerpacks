@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Any
 import argparse
 import sys
+import time
 
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode.
@@ -155,6 +156,7 @@ class GmailAccountChannel:
         self.incremental_input_id: str = ""
         self.artifacts: dict[str, Any] = {}
         self.record: dict[str, Any] = {}
+        self.timing: dict[str, Any] = {}
 
     # Path accessors are computed from the module-level gmail_discover_dir at call
     # time so the child does not choose its own output — discover() reads these.
@@ -222,8 +224,10 @@ class GmailAccountChannel:
     def run(self) -> GmailDiscoveryFailed | None:
         """Sync then spawn the engine child, recording the contribution on self.
         Returns None on success or a GmailDiscoveryFailed payload that stops the run."""
+        started = time.monotonic()
         sync = self._sync()
         if sync["status"] == "failed":
+            self._finish_timing(started, sync)
             return GmailDiscoveryFailed(account_email=self.account_email, error=sync)
         # run_cmd ALWAYS returns (code, dict, stderr) and the child is our own
         # discover_engine emitting a known payload — so read the payload as a dict
@@ -263,8 +267,19 @@ class GmailAccountChannel:
             "artifacts": payload.get("artifacts", {}),
         }
         if code != 0:
+            self._finish_timing(started, sync)
             return GmailDiscoveryFailed(account_email=self.account_email, error=stderr or payload)
+        self._finish_timing(started, sync)
         return None
+
+    def _finish_timing(self, started: float, sync: dict[str, Any]) -> None:
+        """Record this account's monotonic elapsed time and optional sync count."""
+        self.timing = {
+            "email": self.account_email,
+            "duration_seconds": round(time.monotonic() - started, 3),
+        }
+        if sync.get("messages_added") not in (None, ""):
+            self.timing["messages_added"] = sync["messages_added"]
 
 
 class GmailDiscovery:
@@ -319,8 +334,13 @@ class GmailDiscovery:
         ]
 
     def run(self) -> dict[str, Any]:
+        started_at = now_iso()
+        started = time.monotonic()
         if not self.source_inputs["selected_accounts"]:
             return write_stage_manifest(self.manifest_json, GmailDiscoverySkipped(
+                started_at=started_at,
+                duration_seconds=round(time.monotonic() - started, 3),
+                accounts_timing=[],
                 reason="no_selected_accounts",
                 contacts_csv=str(self.contacts_csv),
                 linkedin_resolution_queue_csv=str(self.queue_csv),
@@ -331,6 +351,9 @@ class GmailDiscovery:
         for channel in self.channels:
             failed = channel.run()
             if failed is not None:
+                failed.started_at = started_at
+                failed.duration_seconds = round(time.monotonic() - started, 3)
+                failed.accounts_timing = [item.timing for item in self.channels if item.timing]
                 return write_stage_manifest(self.manifest_json, failed)
         children = [channel.record for channel in self.channels]
         child_modes = [channel.mode for channel in self.channels]
@@ -353,6 +376,9 @@ class GmailDiscovery:
         # the deltas do not restate. Fail loudly instead of silently losing contacts.
         if merge_plan["mode"] != "incremental_update" and incremental_outputs:
             mismatch = GmailDiscoveryIncrementalMismatch(
+                started_at=started_at,
+                duration_seconds=round(time.monotonic() - started, 3),
+                accounts_timing=[channel.timing for channel in self.channels],
                 calculation_version=GMAIL_INTERACTION_CALCULATION_VERSION,
                 calculation_mode=merge_plan["mode"],
                 selected_accounts=self.source_inputs["selected_accounts"],
@@ -388,6 +414,9 @@ class GmailDiscovery:
         write_csv_rows(self.contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
         write_csv_rows(self.queue_csv, GMAIL_DISCOVERY_COLUMNS, merged)
         return write_stage_manifest(self.manifest_json, GmailDiscoveryCompleted(
+            started_at=started_at,
+            duration_seconds=round(time.monotonic() - started, 3),
+            accounts_timing=[channel.timing for channel in self.channels],
             calculation_version=GMAIL_INTERACTION_CALCULATION_VERSION,
             calculation_mode=merge_plan["mode"],
             calculation_reason=merge_plan["reason"],

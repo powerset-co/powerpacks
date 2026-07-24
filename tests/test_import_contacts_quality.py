@@ -188,6 +188,29 @@ class ImportContactsQualityTests(unittest.TestCase):
             self.assertNotIn("gmail_linkedin_resolution_queue_csvs", artifacts)
             self.assertEqual(artifacts["gmail_invalid_discovery_records"][0]["reason"], "missing_people_schema_or_interaction_counts")
 
+    def test_gmail_import_writes_manifest_without_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            accounts = tmp / "accounts.json"
+            accounts.write_text('{"accounts": {}}', encoding="utf-8")
+            import_root = tmp / "import"
+            import_dir = import_root / "gmail"
+            steps = load_gmail_import_steps()
+            args = gmail_import.build_parser().parse_args(["run", "--accounts", str(accounts)])
+
+            with mock.patch.object(steps, "DEFAULT_IMPORT_DIR", import_root):
+                with mock.patch.object(steps, "source_import_dir", return_value=import_dir):
+                    with mock.patch.object(steps, "gmail_artifacts_from_discovery", return_value={}):
+                        payload = steps.GmailImport(
+                            args=args,
+                            contract=gmail_import.GMAIL_IMPORT_CONTRACT,
+                        ).run()
+
+            self.assertEqual(payload["status"], "skipped")
+            self.assertTrue((import_dir / "manifest.json").is_file())
+            self.assertFalse((import_dir / "ledger.json").exists())
+            self.assertNotIn("ledger", json.dumps(payload).lower())
+
     def test_gmail_account_people_merge_preserves_interaction_counts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

@@ -31,6 +31,9 @@ class GmailPrivacy:
 
 @dataclass
 class GmailDiscoverySkipped(StagePayload):
+    started_at: str = ""
+    duration_seconds: float = 0.0
+    accounts_timing: list[dict[str, Any]] = field(default_factory=list)
     reason: str = ""
     contacts_csv: str = ""
     linkedin_resolution_queue_csv: str = ""
@@ -40,6 +43,9 @@ class GmailDiscoverySkipped(StagePayload):
 
 @dataclass
 class GmailDiscoveryFailed(StagePayload):
+    started_at: str = ""
+    duration_seconds: float = 0.0
+    accounts_timing: list[dict[str, Any]] = field(default_factory=list)
     account_email: str = ""
     error: Any = None
     status: str = "failed"
@@ -49,6 +55,9 @@ class GmailDiscoveryFailed(StagePayload):
 @dataclass
 class GmailDiscoveryIncrementalMismatch(StagePayload):
     """A full rewrite built from delta-only children would drop rows — loud failure."""
+    started_at: str = ""
+    duration_seconds: float = 0.0
+    accounts_timing: list[dict[str, Any]] = field(default_factory=list)
     calculation_version: str = ""
     calculation_mode: str = ""
     calculation_reason: str = "full_rewrite_requires_full_recount_children"
@@ -61,6 +70,9 @@ class GmailDiscoveryIncrementalMismatch(StagePayload):
 
 @dataclass
 class GmailDiscoveryCompleted(StagePayload):
+    started_at: str = ""
+    duration_seconds: float = 0.0
+    accounts_timing: list[dict[str, Any]] = field(default_factory=list)
     calculation_version: str = ""
     calculation_mode: str = ""
     calculation_reason: str = ""

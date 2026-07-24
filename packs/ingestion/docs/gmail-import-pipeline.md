@@ -163,7 +163,6 @@ transient errors and never trigger forced reauthorization.
 |-- import/gmail/
 |   |-- people.csv
 |   |-- candidates.csv
-|   |-- ledger.json
 |   `-- manifest.json
 `-- merged/people.csv
 ```

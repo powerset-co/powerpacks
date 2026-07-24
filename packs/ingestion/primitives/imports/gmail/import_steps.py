@@ -1,8 +1,7 @@
 """Gmail import orchestration for the LIVE import chain.
 
 Exposes `GmailImport` — the orchestrator the live import dispatches. It owns the
-fixed import dir, the JSON run-state (still persisted to `ledger.json` this
-round — KEPT; its removal is a separate decision), and the two-step chain:
+fixed import dir, transient run state, and the two-step chain:
   - directory apply: apply the shared `directory.csv` to each Gmail queue,
     splitting resolved / unresolved / cached-negative and committing the Gmail
     observations + directory resolutions back into `directory.csv`.
@@ -15,13 +14,11 @@ round — KEPT; its removal is a separate decision), and the two-step chain:
 `GmailImport.run()` then splits matched people vs candidates, runs the directory
 source-account quality gate, and writes the import manifest.
 
-The per-step run-state helpers (`_save`/`_mark_step`/`_begin_step`) are methods
-that mutate `self.ledger` in place (the dict `ledger.json` mirrors), so the
-ledger is no longer threaded through free functions. The directory-commit,
+The per-step helpers mutate transient `self.state` in place. The directory-commit,
 resolution-merge, and queue helpers stay module-level pure transforms the steps
 call; everything cross-source (the whole directory.csv contract, the resolution
 normalizers, the people.csv materializers) is imported from `imports/directory.py`,
-and the shared import helpers (manifest read/write, ledger constructor, people/
+and the shared import helpers (manifest read/write, people/
 candidate materialization) from `imports/common.py` + `imports/gmail/util.py`.
 
 Loaded via `imports.common.load_gmail_import_steps`, which getattrs `GmailImport`
@@ -29,16 +26,8 @@ off this module — that name must stay defined here, and the loader + the
 `importer.py` caller move together.
 
 Changelog:
-  2026-07-23 (oop): the `run_gmail_directory` / `run_gmail_apply_and_enrich`
-    free functions that mutated a threaded `ledger` dict (plus the module-level
-    `save_ledger` / `mark_step` / `begin_step` and the whole `run()` body that
-    lived in importer.py) were folded into a `GmailImport` orchestrator class
-    that owns the import dir, the ledger run-state, the step chain, the people/
-    candidate split, the quality gate, and the manifest. importer.py is now a
-    thin CLI wrapper that getattrs `GmailImport` off the loaded module. The fixed
-    output paths, ledger.json contract, CLI surface, and manifest payloads are
-    unchanged; the directory-commit / resolution-merge / queue helpers stay
-    module-level pure transforms.
+  2026-07-24: Gmail step state became transient; the import persists only its
+    output files and manifest.json.
   2026-07-23 (audit): the person-vs-role classifiers is_generic_or_non_person /
     is_likely_person_name now import from common/contact_fields.py (they moved
     out of the split-up discover/gmail msgvault reader — generic name/email
@@ -59,7 +48,7 @@ Changelog:
     imports/directory.py (whose build_directory_checkpoint / commit_directory_rows
     / materialize_source_merged_people_csv use the fingerprinted LF write_csv_rows
     and ISO-aware latest_interaction — so gmail-import's directory.csv is now
-    written LF, not CRLF, once). now_iso/emit/write_json/unique_strings from
+    written LF, not CRLF, once). now_iso/emit/unique_strings from
     common.jsonio, run_cmd/py_cmd/emit_progress from common.proc, DEFAULT_* paths
     from common.paths, source_slug from discover/common. gmail_directory_source_key
     is the shared three-arg recipe.
@@ -78,7 +67,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, unique_strings, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, unique_strings  # noqa: E402
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
@@ -110,7 +99,6 @@ from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     resolution_from_directory_match,
 )
 from packs.ingestion.primitives.imports.common import (  # noqa: E402
-    GmailImportLedger,
     copy_people_csv,
     csv_count,
     directory_source_account_quality,
@@ -133,9 +121,9 @@ def emit_progress(message: str) -> None:
     _emit_progress(message, "[gmail-import]")
 
 
-def artifact_dir_from_ledger(ledger: dict[str, Any]) -> Path:
-    """Directory a ledger writes its per-run artifacts into (defaults to discover root)."""
-    return Path(str(ledger.get("artifact_dir") or ledger.get("run_dir") or DEFAULT_DISCOVER_DIR))
+def artifact_dir_from_state(state: dict[str, Any]) -> Path:
+    """Directory the import writes intermediate artifacts into."""
+    return Path(str(state.get("artifact_dir") or DEFAULT_DISCOVER_DIR))
 
 
 def _is_resolvable_person(row: dict[str, str]) -> bool:
@@ -373,16 +361,15 @@ def gmail_queue_records(artifacts: dict[str, Any]) -> list[dict[str, Any]]:
 class GmailImport:
     """Orchestrates the directory-only Gmail import.
 
-    Owns the fixed import dir, the JSON run-state (mirrored into `ledger.json` —
-    KEPT this round), the two-step chain (directory apply -> stored-resolution
+    Owns the fixed import dir, transient run state, the two-step chain (directory apply -> stored-resolution
     apply + people materialization), the matched-people / candidates split, the
     directory source-account quality gate, and the import manifest. The step
-    methods mutate `self.ledger` in place instead of threading a ledger dict
+    methods mutate `self.state` in place instead of threading a state dict
     through free functions; the module-level directory-commit / resolution-merge
     / queue helpers stay pure transforms the steps call.
 
     A step failure ends the run with status `failed` (steps record their own
-    error in the ledger); there is no approval gate — nothing here spends. The
+    error in transient state); there is no approval gate — nothing here spends. The
     contract token is supplied by the caller (importer.py owns it for the package
     __init__ re-export)."""
 
@@ -390,19 +377,13 @@ class GmailImport:
         self.args = args
         self.contract = contract
         self.import_dir = source_import_dir("gmail")
-        self.ledger_path = self.import_dir / "ledger.json"
-        self.ledger: dict[str, Any] = {}
+        self.state: dict[str, Any] = {}
 
-    # --- run-state (owned by the orchestrator; mirrored into ledger.json) -----
-
-    def _save(self) -> None:
-        """Persist the run ledger, stamping updated_at."""
-        self.ledger["updated_at"] = now_iso()
-        write_json(self.ledger_path, self.ledger)
+    # --- transient run state --------------------------------------------------
 
     def _mark_step(self, step: str, status: str, **extra: Any) -> None:
-        """Update one step's status/timestamps in the ledger (in place)."""
-        rec = self.ledger.setdefault("steps", {}).setdefault(step, {"id": step})
+        """Update one step's status/timestamps in transient state."""
+        rec = self.state.setdefault("steps", {}).setdefault(step, {"id": step})
         if status == "running" and "started_at" not in rec:
             rec["started_at"] = now_iso()
         if status in {"completed", "failed", "blocked", "skipped"}:
@@ -411,17 +392,16 @@ class GmailImport:
         rec.update({k: v for k, v in extra.items() if v is not None})
 
     def _begin_step(self, step: str, message: str) -> None:
-        """Mark a step running, persist the ledger, and emit a progress line."""
+        """Mark a step running and emit a progress line."""
         self._mark_step(step, "running")
-        self._save()
         emit_progress(message)
 
     # --- steps ----------------------------------------------------------------
 
     def _directory_step(self) -> bool:
         """Apply directory.csv LinkedIn mappings to every Gmail queue, recording resolved/unresolved/cached-negative."""
-        input_cfg = self.ledger.get("input", {})
-        artifacts = self.ledger.setdefault("artifacts", {})
+        input_cfg = self.state.get("input", {})
+        artifacts = self.state.setdefault("artifacts", {})
         queue_records = ordered_records(gmail_queue_records(artifacts), unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
         if not queue_records:
             checkpoint = build_directory_checkpoint(input_cfg, artifacts)
@@ -444,7 +424,7 @@ class GmailImport:
         total_cached_negative = 0
         for index, record in enumerate(queue_records):
             slug = source_slug(record.get("account_email") or record.get("slug") or f"queue-{index}")
-            out_dir = artifact_dir_from_ledger(self.ledger) / f"gmail-directory-{slug}"
+            out_dir = artifact_dir_from_state(self.state) / f"gmail-directory-{slug}"
             result = apply_directory_to_gmail_queue(record, directory_csv, out_dir)
             result["slug"] = slug
             by_slug[slug] = result
@@ -488,8 +468,8 @@ class GmailImport:
 
     def _apply_and_enrich_step(self) -> bool:
         """Apply the combined stored Gmail resolutions to each account's people.csv and materialize the merged Gmail people artifact."""
-        input_cfg = self.ledger.get("input", {})
-        artifacts = self.ledger.setdefault("artifacts", {})
+        input_cfg = self.state.get("input", {})
+        artifacts = self.state.setdefault("artifacts", {})
         raw_resolution_records: list[dict[str, Any]] = []
         if input_cfg.get("gmail_resolutions_csv"):
             people_records = [
@@ -513,7 +493,7 @@ class GmailImport:
         raw_resolution_records.extend(record for record in artifacts.get("gmail_linkedin_resolutions_csvs") or [] if isinstance(record, dict))
         if raw_resolution_records:
             commit_gmail_resolutions_to_directory(input_cfg, artifacts, raw_resolution_records)
-        resolution_records = combine_gmail_resolution_records(raw_resolution_records, artifact_dir_from_ledger(self.ledger))
+        resolution_records = combine_gmail_resolution_records(raw_resolution_records, artifact_dir_from_state(self.state))
         if not resolution_records:
             self._mark_step("gmail_apply_enrich", "skipped", reason="no gmail resolutions")
             return True
@@ -524,7 +504,6 @@ class GmailImport:
         artifacts["gmail_apply_enrich_by_slug"] = {}
         by_slug = artifacts["gmail_apply_enrich_by_slug"]
         artifacts["gmail_resolved_people_csvs"] = []
-        artifacts["gmail_enrich_people_ledgers"] = []
         artifacts["gmail_final_people_csvs"] = []
         artifacts["gmail_combined_resolutions_csvs"] = resolution_records
         self._begin_step("gmail_apply_enrich", f"Applying Gmail LinkedIn matches for {len(resolution_records)} account file(s).")
@@ -544,8 +523,7 @@ class GmailImport:
             code, payload, stderr = run_cmd(apply_cmd, prefix="[gmail-import]")
             if code != 0:
                 self._mark_step("gmail_apply_enrich", "failed", error=stderr or payload)
-                self.ledger["status"] = "failed"
-                self._save()
+                self.state["status"] = "failed"
                 emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": stderr or payload})
                 return False
             resolved_people = payload.get("people_csv") or record["people_csv"]
@@ -572,7 +550,7 @@ class GmailImport:
     # --- orchestration --------------------------------------------------------
 
     def run(self) -> dict[str, Any]:
-        """The whole import: fingerprint no-op check -> build the ledger -> the
+        """The whole import: fingerprint no-op check -> build transient state -> the
         two step methods (directory match, then apply + people materialization)
         -> candidates + directory quality checks -> the import manifest."""
         args = self.args
@@ -586,9 +564,12 @@ class GmailImport:
         accounts = read_accounts(args.accounts)
         import_dir = self.import_dir
         emails = linked_gmail_accounts(accounts)
-        self.ledger = GmailImportLedger(
-            artifact_dir=str(import_dir),
-            input={
+        self.state = {
+            "primitive": "import_contacts_gmail",
+            "source": "gmail",
+            "status": "running",
+            "artifact_dir": str(import_dir),
+            "input": {
                 "operator_id": args.operator_id,
                 "from_accounts": str(args.accounts),
                 "gmail_account_emails": emails,
@@ -598,42 +579,38 @@ class GmailImport:
                 "linkedin_directory_csv": str(DEFAULT_DIRECTORY_CSV),
                 "profile_cache_dir": str(DEFAULT_PROFILE_CACHE_DIR),
             },
-            artifacts=gmail_artifacts_from_discovery(),
-        ).to_dict()
-        ledger = self.ledger
-        if not ledger["artifacts"].get("gmail_linkedin_resolution_queue_csvs"):
+            "steps": {},
+            "artifacts": gmail_artifacts_from_discovery(),
+        }
+        state = self.state
+        if not state["artifacts"].get("gmail_linkedin_resolution_queue_csvs"):
             reason = "no Gmail discovery queue"
             status = "skipped"
-            if ledger["artifacts"].get("gmail_linkedin_resolution_queue_csv") or ledger["artifacts"].get("gmail_invalid_discovery_records"):
+            if state["artifacts"].get("gmail_linkedin_resolution_queue_csv") or state["artifacts"].get("gmail_invalid_discovery_records"):
                 reason = "gmail_discovery_missing_per_account_people_csv"
             return write_manifest("gmail", {
                 "status": status,
                 "reason": reason,
                 "artifact_dir": str(import_dir),
-                "artifacts": ledger.get("artifacts", {}),
+                "artifacts": state.get("artifacts", {}),
             }, import_dir=DEFAULT_IMPORT_DIR)
-        write_json(self.ledger_path, ledger)
         for step in (self._directory_step, self._apply_and_enrich_step):
             if not step():
                 return write_manifest("gmail", {
                     "status": "failed",
-                    "ledger": str(self.ledger_path),
                     "artifact_dir": str(import_dir),
-                    "steps": ledger.get("steps", {}),
-                    "artifacts": ledger.get("artifacts", {}),
+                    "steps": state.get("steps", {}),
+                    "artifacts": state.get("artifacts", {}),
                 }, import_dir=DEFAULT_IMPORT_DIR)
-            self._save()
-        ledger["status"] = "completed"
-        self._save()
-        people_csv = copy_people_csv("gmail", str(ledger.get("artifacts", {}).get("gmail_merged_people_csv") or ledger.get("artifacts", {}).get("gmail_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
-        candidates = write_gmail_candidates(ledger.get("artifacts", {}), import_dir)
+        state["status"] = "completed"
+        people_csv = copy_people_csv("gmail", str(state.get("artifacts", {}).get("gmail_merged_people_csv") or state.get("artifacts", {}).get("gmail_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
+        candidates = write_gmail_candidates(state.get("artifacts", {}), import_dir)
         directory_normalization = normalize_directory_source_accounts("gmail")
         directory_quality = directory_source_account_quality("gmail")
         if directory_quality["status"] != "ok":
             return write_manifest("gmail", {
                 "status": "failed",
                 "reason": "directory_source_account_quality_failed",
-                "ledger": str(self.ledger_path),
                 "artifact_dir": str(import_dir),
                 "outputs": {
                     "people_csv": people_csv,
@@ -641,12 +618,11 @@ class GmailImport:
                 },
                 "directory_normalization": directory_normalization,
                 "directory_quality": directory_quality,
-                "steps": ledger.get("steps", {}),
-                "artifacts": ledger.get("artifacts", {}),
+                "steps": state.get("steps", {}),
+                "artifacts": state.get("artifacts", {}),
             }, import_dir=DEFAULT_IMPORT_DIR)
         return write_manifest("gmail", {
             "status": "completed",
-            "ledger": str(self.ledger_path),
             "artifact_dir": str(import_dir),
             "input": {
                 **expected_input,
@@ -664,8 +640,8 @@ class GmailImport:
                 "candidates": candidates["candidates"],
             },
             "candidates": candidates,
-            "steps": ledger.get("steps", {}),
+            "steps": state.get("steps", {}),
             "directory_normalization": directory_normalization,
             "directory_quality": directory_quality,
-            "artifacts": ledger.get("artifacts", {}),
+            "artifacts": state.get("artifacts", {}),
         }, import_dir=DEFAULT_IMPORT_DIR)

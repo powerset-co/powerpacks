@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -209,12 +210,17 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 }, ""
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
-                with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
+                with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com", "messages_added": 4}):
                     with mock.patch.object(discover_gmail, "run_cmd", side_effect=fake_run_cmd):
                         payload = discover_gmail.discover(accounts_file=accounts)
 
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["contacts"], 1)
+            datetime.fromisoformat(payload["started_at"].replace("Z", "+00:00"))
+            self.assertGreaterEqual(payload["duration_seconds"], 0)
+            self.assertEqual(payload["accounts_timing"][0]["email"], "me@example.com")
+            self.assertEqual(payload["accounts_timing"][0]["messages_added"], 4)
+            self.assertGreaterEqual(payload["accounts_timing"][0]["duration_seconds"], 0)
             self.assertEqual(payload["contacts_csv"], str(paths[("gmail", "contacts_csv")]))
             self.assertEqual(payload["linkedin_resolution_queue_csv"], str(paths[("gmail", "linkedin_resolution_queue_csv")]))
             manifest = json.loads(paths[("gmail", "manifest_json")].read_text(encoding="utf-8"))
@@ -667,8 +673,41 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             self.assertEqual(payload["status"], "skipped")
             self.assertEqual(payload["reason"], "no_selected_accounts")
+            datetime.fromisoformat(payload["started_at"].replace("Z", "+00:00"))
+            self.assertGreaterEqual(payload["duration_seconds"], 0)
+            self.assertEqual(payload["accounts_timing"], [])
             self.assertEqual(store.channels, [])
             self.assertFalse(paths[("gmail", "linkedin_resolution_queue_csv")].exists())
+
+    def test_gmail_discovery_failed_outcome_includes_account_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            paths = {
+                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
+                ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
+                ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
+            }
+            source_inputs = {
+                "selected_accounts": ["me@example.com"],
+                "msgvault_db": str(tmp / "msgvault.db"),
+                "sync_query": "",
+            }
+            failed_sync = {
+                "status": "failed",
+                "account_email": "me@example.com",
+                "error": "boom",
+            }
+
+            with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
+                with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value=failed_sync):
+                    payload = discover_gmail.GmailDiscovery(source_inputs=source_inputs).run()
+
+            self.assertEqual(payload["status"], "failed")
+            datetime.fromisoformat(payload["started_at"].replace("Z", "+00:00"))
+            self.assertGreaterEqual(payload["duration_seconds"], 0)
+            self.assertEqual(payload["accounts_timing"][0]["email"], "me@example.com")
+            self.assertGreaterEqual(payload["accounts_timing"][0]["duration_seconds"], 0)
+            self.assertNotIn("messages_added", payload["accounts_timing"][0])
 
     def test_messages_contacts_direct_selects_matched_and_candidates(self) -> None:
         # The review-CSV materializer is gone: import is contacts-direct.
