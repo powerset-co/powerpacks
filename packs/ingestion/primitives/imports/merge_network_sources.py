@@ -25,6 +25,15 @@ Outputs under `.powerpacks/network-import/merged/`: canonical `people.csv`,
 `merge_manifest.json`.
 
 Changelog:
+  2026-07-24: Admission is identity, not enrichment. keep_people_csv_row now keeps
+    a row with a stable LinkedIn key OR a usable email OR a usable phone; the
+    RapidAPI-payload requirement (usable_rapidapi_payload / has_rapidapi_profile)
+    is deleted. Manifest counters follow: filtered_without_linkedin,
+    filtered_without_rapidapi_payload and the always-wrong rapidapi_payload_rows
+    are replaced by people_with_linkedin / people_contact_only alongside the
+    unchanged filtered_people_csv_rows. Fixed union_list_column /merge_group
+    treating superseded_person_ids as a phone column, which could seed a
+    person id into primary_phone (LIST_COLUMN_PRIMARY now pairs explicitly).
   2026-07-24 (one pub rule): the local `row_public_identifier` (stored
     `public_identifier` first, URL only as fallback) was deleted for
     `people_schema.row_public_identifier`, which derives from `linkedin_url`
@@ -73,7 +82,6 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     stable_linkedin_key,
     extract_public_identifier,
 )
-from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, short_hash  # noqa: E402
 from packs.ingestion.primitives.common.contact_fields import normalize_email  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -88,6 +96,10 @@ MERGED_COLUMNS = PEOPLE_SCHEMA_COLUMNS + ["merge_key", "merge_confidence", "merg
     "linkedin_verified_reason"]
 # Merged channel-wise (max) / by recency instead of first-non-empty choose().
 INTERACTION_MERGE_COLUMNS = {"interaction_counts", "last_interaction"}
+# The LIST_VALUE_COLUMNS that also carry a paired primary scalar. The third list
+# column, superseded_person_ids, has NO primary — it must never seed from, or
+# promote into, a contact field.
+LIST_COLUMN_PRIMARY = {"all_emails": "primary_email", "all_phones": "primary_phone"}
 REVIEW_COLUMNS = ["left_id", "right_id", "left_name", "right_name", "similarity", "left_sources", "right_sources", "reason"]
 NETWORK_CONTACT_COLUMNS = [
     "contact_id",
@@ -201,35 +213,6 @@ def compact_source_artifacts(values: list[Any], *, limit: int = MAX_SOURCE_ARTIF
     return json.dumps(out, ensure_ascii=False)
 
 
-def usable_rapidapi_payload(value: str) -> bool:
-    if not value:
-        return False
-    try:
-        payload = json.loads(value)
-    except Exception:
-        return False
-    if not isinstance(payload, dict) or not payload:
-        return False
-    return normalize_linkedin_profile(payload).get("success") is True
-
-
-def has_rapidapi_profile(row: dict[str, Any]) -> bool:
-    return usable_rapidapi_payload(str(row.get("rapidapi_response") or ""))
-
-
-def keep_people_csv_row(row: dict[str, Any]) -> bool:
-    # Synthetic rows (deep-researched people with NO real LinkedIn) have neither a
-    # LinkedIn key nor a rapidapi payload by design. Their approved gate
-    # (auto = high research completeness, yes = user approved) is enforced at
-    # LOAD time in load_people_file — normalization strips the non-schema
-    # `approved` column, so a synthetic row reaching this gate either passed the
-    # load filter or was already admitted into a prior merge. Real rows keep the
-    # strict LinkedIn+rapidapi requirement unchanged.
-    if (row.get("enrichment_provider") or "").strip().lower() == "synthetic":
-        return bool((row.get("public_identifier") or "").strip())
-    return bool(stable_linkedin_key(row)) and has_rapidapi_profile(row)
-
-
 def normalize_phone(value: str) -> str:
     phone = (value or "").strip()
     if not phone:
@@ -237,8 +220,6 @@ def normalize_phone(value: str) -> str:
     digits = re.sub(r"\D+", "", phone)
     return f"+{digits}" if phone.startswith("+") and digits else digits
 
-
-# --- self-heal override (from $deep-context reconcile) ----------------------
 
 def _phone10(value: str) -> str:
     """Loose phone key (last 10 digits) so +1 / country-code variants still match."""
@@ -255,6 +236,27 @@ def _row_phones(row: dict[str, Any]) -> set[str]:
     return {_phone10(p) for p in [row.get("primary_phone", ""), *listish_values(row.get("all_phones", ""))]
             if _phone10(p)}
 
+
+def keep_people_csv_row(row: dict[str, Any]) -> bool:
+    """Admit a person to the merged network: a LinkedIn key, an email, or a phone.
+
+    Identity is what makes a person real here; enrichment is decoration. A row is
+    kept when it carries ANY reachable identity — a stable LinkedIn key, a usable
+    email, or a usable phone. Only rows with none of the three are dropped.
+
+    Synthetic rows (deep-researched people with NO real LinkedIn) carry a
+    `synth-` public_identifier instead. Their approved gate (auto = high research
+    completeness, yes = user approved) is enforced at LOAD time in
+    load_people_file — normalization strips the non-schema `approved` column, so
+    a synthetic row reaching this gate either passed the load filter or was
+    already admitted into a prior merge.
+    """
+    if (row.get("enrichment_provider") or "").strip().lower() == "synthetic":
+        return bool((row.get("public_identifier") or "").strip())
+    return bool(stable_linkedin_key(row) or _row_emails(row) or _row_phones(row))
+
+
+# --- self-heal override (from $deep-context reconcile) ----------------------
 
 def load_overrides(path: Path | None) -> dict[str, dict[str, Any]]:
     """public_identifier -> {action, emails, phones, confidence, reason} from the override CSV."""
@@ -373,9 +375,10 @@ def apply_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, A
     synthesis-owned `llm_worth` with no user rescue) removes the person entirely,
     regardless of the per-row decision state. Then, ONLY for approved decisions
     (auto = high-confidence, or a user `yes`): `detach`/`retarget` clear the wrong
-    LinkedIn (so the LinkedIn-only people.csv drops that old row — for a retarget the
-    correct enriched row arrives via retarget-people.csv); `verify` annotates the
-    surviving row. Idempotent."""
+    LinkedIn (the person survives on their email/phone identity — for a retarget the
+    correct enriched row arrives via retarget-people.csv and re-merges onto them);
+    `verify` annotates the surviving row. Removing a person entirely is `exclude` /
+    a worth no, never a detach. Idempotent."""
     detached = verified = retargeted = excluded = spam_dropped = worth_dropped = 0
     dropped_pids: set[str] = set()
     if not overrides:
@@ -642,12 +645,15 @@ def union_list_column(rows: list[dict[str, str]], col: str) -> str:
     """Set-union a LIST_VALUE_COLUMNS column across all rows in a merge group.
 
     Preserves first-seen order, normalizes emails/phones via listish_values,
-    and emits a JSON string list (the canonical storage shape).
+    and emits a JSON string list (the canonical storage shape). Only the contact
+    columns fold their paired primary scalar in (LIST_COLUMN_PRIMARY);
+    superseded_person_ids is unioned on its own values alone.
     """
-    primary_col = "primary_email" if col == "all_emails" else "primary_phone"
+    primary_col = LIST_COLUMN_PRIMARY.get(col, "")
     seen: list[str] = []
     for row in rows:
-        for value in [row.get(primary_col, ""), *listish_values(row.get(col, ""))]:
+        primaries = [row.get(primary_col, "")] if primary_col else []
+        for value in [*primaries, *listish_values(row.get(col, ""))]:
             value = (value or "").strip()
             if col == "all_emails":
                 value = normalize_email(value)
@@ -676,8 +682,8 @@ def merge_group(key: str, rows: list[dict[str, str]]) -> dict[str, Any]:
         merged[col] = union_list_column(rows, col)
         # Keep the primary value consistent: if primary_email/primary_phone is
         # empty but aliases exist, promote the first alias.
-        primary_col = "primary_email" if col == "all_emails" else "primary_phone"
-        if not merged.get(primary_col):
+        primary_col = LIST_COLUMN_PRIMARY.get(col, "")
+        if primary_col and not merged.get(primary_col):
             aliases = listish_values(merged[col])
             if aliases:
                 merged[primary_col] = aliases[0]
@@ -785,17 +791,16 @@ def cmd_run(args: argparse.Namespace) -> int:
             normalized["id"] = f"merged:{short_hash(normalized['merge_key'])}"
         merged_rows.append(normalized)
         source_rows.extend(source_fact_rows(normalized, [normalized]))
-    # Re-apply the durable self-heal override BEFORE the LinkedIn keep-filter: a `detach`
-    # clears the wrong link so that person drops out here; a `verify` annotates the row.
+    # Re-apply the durable self-heal override BEFORE the keep-filter: a `detach` clears
+    # the wrong link (the person stays on their email/phone); a `verify` annotates the row.
     overrides = load_overrides(override_path)
     override_stats = apply_overrides(merged_rows, overrides)
     # `exclude` is a hard drop (user doesn't want this person indexed) — remove before the
-    # LinkedIn keep-filter so it's counted as an exclusion, not a missing-LinkedIn filter.
+    # keep-filter so it's counted as an exclusion, not a missing-identity filter.
     merged_rows = [row for row in merged_rows if not row.pop("__excluded__", False)]
     unfiltered_merged_rows = len(merged_rows)
-    filtered_without_linkedin = sum(1 for row in merged_rows if not stable_linkedin_key(row))
-    filtered_without_rapidapi_payload = sum(1 for row in merged_rows if not has_rapidapi_profile(row))
     merged_rows = [row for row in merged_rows if keep_people_csv_row(row)]
+    people_with_linkedin = sum(1 for row in merged_rows if stable_linkedin_key(row))
     kept_merge_keys = {row.get("merge_key", "") for row in merged_rows}
     source_rows = [row for row in source_rows if row.get("merge_key", "") in kept_merge_keys]
     review = similar_pairs(merged_rows, args.name_threshold)
@@ -819,8 +824,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         "inputs": per_file,
         "input_rows": len(all_rows),
         "unfiltered_merged_rows": unfiltered_merged_rows,
-        "filtered_without_linkedin": filtered_without_linkedin,
-        "filtered_without_rapidapi_payload": filtered_without_rapidapi_payload,
+        # Kept-population composition + the one honest drop count: a row is
+        # dropped only when it has no LinkedIn key, no email and no phone.
+        "people_with_linkedin": people_with_linkedin,
+        "people_contact_only": len(merged_rows) - people_with_linkedin,
         "filtered_people_csv_rows": unfiltered_merged_rows - len(merged_rows),
         "overrides_detached": override_stats["detached"],
         "overrides_verified": override_stats["verified"],
@@ -830,7 +837,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         "overrides_worth_dropped": override_stats["worth_dropped"],
         "worth_dropped_person_ids": override_stats["worth_dropped_person_ids"],
         "merged_rows": len(merged_rows),
-        "rapidapi_payload_rows": len(merged_rows),
         "linkedin_groups": len(groups),
         "review_pairs": len(review),
         "source_rows": len(source_rows),
