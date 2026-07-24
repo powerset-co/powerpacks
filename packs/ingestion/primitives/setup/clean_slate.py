@@ -18,7 +18,7 @@ PRESERVED (paid/LLM, stable keys):
   profile_cache_v2/            RapidAPI profile cache, keyed by pub
   owner.json + lookup          owner bio (RapidAPI)
   messages/, msgvault stores   raw local extracts
-  logbook/, memory/, ingestion/  archives and wiring
+  logbook/, memory/             archives
 
 SCRUBBED (derived; regenerates free on the next full run):
   merged/, directory.csv, overrides/ (review decisions incl. mirrors),
@@ -29,6 +29,10 @@ SCRUBBED (derived; regenerates free on the next full run):
 Dry run by default. --apply moves and writes a manifest into the backup dir.
 
 Created: 2026-07-18
+Changelog:
+  2026-07-23 (nuke accounts.json): dropped the ("ingestion", ...) PRESERVE entry.
+    Nothing writes .powerpacks/ingestion/ anymore (the accounts.json linked-source
+    registry was deleted), so there is no wiring left to preserve.
 """
 from __future__ import annotations
 
@@ -80,7 +84,6 @@ PRESERVE = [
     ("messages", "raw local message extracts + wacli store"),
     ("logbook", "verbatim conversation archive"),
     ("memory", "project-local agent memory"),
-    ("ingestion", "linked-source wiring (accounts.json)"),
 ]
 
 

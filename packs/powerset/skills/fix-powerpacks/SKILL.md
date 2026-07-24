@@ -20,11 +20,11 @@ Use this skill for `$fix-powerpacks` and for requests like:
 
 This is a repair workflow. Its default command applies safe local repairs:
 copy/adopt newer canonical state and copy `.env` only if canonical `.env` is
-missing, repair `accounts.json` from local msgvault, adopt an authenticated
-wacli store, and move aside a bad unauthenticated wacli placeholder so the user
-can reauth cleanly. It must not run imports, msgvault sync, WhatsApp sync,
-enrichment, processing, uploads, provider-spend operations, or destructive
-cleanup unless the user separately and explicitly requests that.
+missing, adopt an authenticated wacli store, and move aside a bad unauthenticated
+wacli placeholder so the user can reauth cleanly. It must not run imports,
+msgvault sync, WhatsApp sync, enrichment, processing, uploads, provider-spend
+operations, or destructive cleanup unless the user separately and explicitly
+requests that.
 
 ## Principles
 
@@ -57,7 +57,6 @@ The fixer script reads that contract and knows the managed paths needed for
 setup/import/enrichment to work, including:
 
 - `.env` local runtime config/credentials, copied only if canonical `.env` is missing and never printed
-- `.powerpacks/ingestion/accounts.json`
 - `.powerpacks/messages/research_review.csv`
 - `.powerpacks/messages/contacts.csv`
 - `.powerpacks/messages/wacli/`
@@ -140,14 +139,12 @@ Summarize:
 - current working directory;
 - legacy `.powerpacks` roots found;
 - managed paths copied/adopted, including whether `.env` was copied or kept without showing contents;
-- linked source checks that failed;
 - per-source discovery/import manifest health:
   `.powerpacks/network-import/discover/<vertical>/manifest.json` and
   `.powerpacks/network-import/import/<vertical>/manifest.json`;
 - stale run-id/temp artifact directories under `.powerpacks/network-import/`,
   with path, approximate size, and why they are not part of the current stable
   contract;
-- whether Gmail accounts were repaired from msgvault;
 - whether WhatsApp/wacli was authenticated, copied from a better store, or
   scrubbed for reauth;
 - root cause for anything still failing.
@@ -176,8 +173,6 @@ Allowed by default:
 - copy legacy `.env` only when canonical `.env` is missing; never overwrite an
   existing canonical `.env`;
 - update only Powerpacks-owned local state under canonical `.powerpacks`;
-- read `~/.msgvault/msgvault.db` and repair `accounts.json` Gmail linkage when
-  the local DB clearly contains the selected Gmail accounts;
 - read-only test WhatsApp/wacli auth using the canonical store;
 - report discovery/import manifest status for Gmail, LinkedIn, and Messages;
 - report stale run-id/temp artifact directories so the harness can propose a
@@ -213,7 +208,7 @@ End with a concise summary:
 Canonical repo: ...
 Copied/adopted: N files / M directories
 Kept target because newer: ...
-Linked source checks: Gmail ok, WhatsApp store present/auth unknown, LinkedIn CSV missing, ...
+WhatsApp/wacli auth: authenticated / present-unauthenticated / missing
 Source stages: Gmail discovery/import ok, LinkedIn discovery/import ok, Messages discovery/import missing/stale
 Stale run dirs: ...
 Quarantined legacy state: yes/no

@@ -7,13 +7,19 @@ Powerpacks product state should live under the canonical non-.codex repo's
 should not remain the runtime root.
 
 Default mode applies safe repairs: copy missing/newer managed state into the
-canonical repo, repair accounts.json from local msgvault evidence, adopt an
-authenticated wacli store, and scrub an unauthenticated canonical wacli store so
-the user can reauth cleanly. Use --dry-run to inspect the plan without changes.
-Use --quarantine-legacy-state only after review; it renames legacy .powerpacks
-directories instead of deleting them.
+canonical repo, adopt an authenticated wacli store, and scrub an unauthenticated
+canonical wacli store so the user can reauth cleanly. Use --dry-run to inspect
+the plan without changes. Use --quarantine-legacy-state only after review; it
+renames legacy .powerpacks directories instead of deleting them.
 
 Changelog:
+  2026-07-23 (nuke accounts.json): removed the accounts.json repair/reader
+    machinery — repair_gmail_accounts, linked_source_checks, the msgvault/
+    account-record helpers (account_records/config_obj/string_list/
+    msgvault_accounts/accounts_container), the --no-repair-accounts flag, and
+    the stale --accounts command strings. The linked-source registry was
+    deleted; gmail selection is now --account-email and messages selection is
+    --include-imessage/--include-whatsapp.
   2026-07-23 (audit batch 16): linkedin discovery_command now points at the
     live $setup path (linkedin_modal_pipeline.py import-linkedin); the
     standalone linkedin/discover.py CLI was deleted with the retired
@@ -46,8 +52,8 @@ VERTICAL_STAGE_PATHS = {
     "gmail": {
         "discovery": ".powerpacks/network-import/discover/gmail/manifest.json",
         "import": ".powerpacks/network-import/import/gmail/manifest.json",
-        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover/gmail/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
-        "import_command": "uv run --project . python packs/ingestion/primitives/imports/gmail/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
+        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover/gmail/discover.py discover --account-email <gmail-account-email>",
+        "import_command": "uv run --project . python packs/ingestion/primitives/imports/gmail/importer.py run --operator-id <operator-id>",
     },
     "linkedin": {
         "discovery": ".powerpacks/network-import/discover/linkedin/manifest.json",
@@ -58,8 +64,8 @@ VERTICAL_STAGE_PATHS = {
     "messages": {
         "discovery": ".powerpacks/network-import/discover/messages/manifest.json",
         "import": ".powerpacks/network-import/import/messages/manifest.json",
-        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover/messages/discover.py discover --accounts .powerpacks/ingestion/accounts.json",
-        "import_command": "uv run --project . python packs/ingestion/primitives/imports/messages/importer.py run --accounts .powerpacks/ingestion/accounts.json --operator-id <operator-id>",
+        "discovery_command": "uv run --project . python packs/ingestion/primitives/discover/messages/discover.py discover --include-imessage --include-whatsapp",
+        "import_command": "uv run --project . python packs/ingestion/primitives/imports/messages/importer.py run --operator-id <operator-id>",
     },
 }
 
@@ -101,11 +107,6 @@ def load_json(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def newest_mtime(path: Path) -> float:
@@ -230,54 +231,6 @@ def legacy_repos(config: dict[str, Any], canonical: Path, extras: list[str]) -> 
         if ((path / ".powerpacks").exists() or (path / ".env").exists()) and path not in out:
             out.append(path)
     return out
-
-
-def account_records(accounts: dict[str, Any]) -> dict[str, Any]:
-    records = accounts.get("accounts") or accounts.get("channels") or accounts.get("sources") or {}
-    return records if isinstance(records, dict) else {}
-
-
-def config_obj(record: dict[str, Any]) -> dict[str, Any]:
-    cfg = record.get("config") if isinstance(record.get("config"), dict) else {}
-    return cfg if isinstance(cfg, dict) else {}
-
-
-def string_list(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        return [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
-    return []
-
-
-def msgvault_accounts(db_path: Path) -> dict[str, Any]:
-    if not db_path.exists():
-        return {"status": "missing", "path": str(db_path), "accounts": []}
-    try:
-        with sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT identifier AS account_email, display_name, COUNT(messages.id) AS message_count
-                FROM sources
-                LEFT JOIN messages ON messages.source_id = sources.id
-                WHERE lower(source_type) = 'gmail' AND identifier IS NOT NULL AND identifier != ''
-                GROUP BY sources.id, identifier, display_name
-                ORDER BY identifier
-                """
-            ).fetchall()
-        accounts = [
-            {
-                "account_email": str(row["account_email"]).strip().lower(),
-                "display_name": row["display_name"] or "",
-                "message_count": int(row["message_count"] or 0),
-            }
-            for row in rows
-            if str(row["account_email"] or "").strip()
-        ]
-        return {"status": "ok", "path": str(db_path), "accounts": accounts}
-    except Exception as exc:
-        return {"status": "failed", "path": str(db_path), "error": f"{type(exc).__name__}: {exc}", "accounts": []}
 
 
 def wacli_store_summary(store: Path) -> dict[str, Any]:
@@ -413,128 +366,6 @@ def repair_wacli_store(canonical: Path, legacy: list[Path], *, apply: bool, back
     return result
 
 
-def accounts_container(accounts: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    if isinstance(accounts.get("accounts"), dict):
-        return accounts["accounts"], "accounts"
-    if isinstance(accounts.get("channels"), dict):
-        return accounts["channels"], "channels"
-    accounts.setdefault("accounts", {})
-    return accounts["accounts"], "accounts"
-
-
-def repair_gmail_accounts(canonical: Path, config: dict[str, Any], *, apply: bool) -> dict[str, Any]:
-    accounts_path = canonical / ".powerpacks/ingestion/accounts.json"
-    accounts = load_json(accounts_path)
-    records, records_key = accounts_container(accounts)
-    gmail = records.get("gmail") if isinstance(records.get("gmail"), dict) else {}
-    cfg = config_obj(gmail)
-    db_text = str(cfg.get("msgvault_db") or config.get("external_paths", {}).get("msgvault_default_db") or "~/.msgvault/msgvault.db")
-    db = expand_path(db_text)
-    discovered = msgvault_accounts(db)
-    discovered_emails = sorted({str(row.get("account_email") or "").strip().lower() for row in discovered.get("accounts", []) if row.get("account_email")})
-    existing_selected = string_list(cfg.get("selected_accounts")) or string_list(cfg.get("account_emails")) or string_list(gmail.get("usernames"))
-    missing_existing = [email for email in existing_selected if email.lower() not in set(discovered_emails)]
-    needs_update = bool(discovered_emails) and (
-        not gmail.get("linked")
-        or bool(gmail.get("skipped"))
-        or sorted(email.lower() for email in existing_selected) != discovered_emails
-        or str(cfg.get("msgvault_db") or "") != str(db)
-    )
-    result = {
-        "accounts_path": str(accounts_path),
-        "records_key": records_key,
-        "msgvault": discovered,
-        "existing_selected_accounts": existing_selected,
-        "desired_accounts": discovered_emails,
-        "missing_existing_accounts": missing_existing,
-        "action": "none",
-        "root_cause": "",
-    }
-    if discovered.get("status") != "ok":
-        result["root_cause"] = "msgvault database is missing or unreadable"
-        return result
-    if not discovered_emails:
-        result["root_cause"] = "msgvault database has no Gmail source accounts"
-        return result
-    if not needs_update:
-        result["root_cause"] = "accounts.json Gmail config already matches msgvault accounts"
-        return result
-    result["root_cause"] = "accounts.json Gmail config is stale or missing compared with local msgvault accounts"
-    result["action"] = "updated" if apply else "would_update"
-    if apply:
-        now = now_iso()
-        next_cfg = dict(cfg)
-        next_cfg.update({
-            "msgvault_db": str(db),
-            "account_emails": discovered_emails,
-            "available_accounts": discovered_emails,
-            "selected_accounts": discovered_emails,
-            "pending_accounts": [email for email in string_list(cfg.get("pending_accounts")) if email.lower() not in set(discovered_emails)],
-        })
-        records["gmail"] = {
-            **gmail,
-            "linked": True,
-            "skipped": False,
-            "usernames": discovered_emails,
-            "artifacts": gmail.get("artifacts") if isinstance(gmail.get("artifacts"), list) else [],
-            "config": next_cfg,
-            "last_checked_at": now,
-            "last_success_at": now,
-            "notes": "Repaired by fix-powerpacks from local msgvault accounts; no Gmail sync or import was run.",
-        }
-        accounts[records_key] = records
-        accounts.setdefault("version", 2)
-        accounts["updated_at"] = now
-        write_json(accounts_path, accounts)
-    return result
-
-
-def linked_source_checks(canonical: Path, config: dict[str, Any]) -> dict[str, Any]:
-    accounts_path = canonical / ".powerpacks/ingestion/accounts.json"
-    accounts = load_json(accounts_path)
-    records = account_records(accounts)
-    checks: dict[str, Any] = {"accounts_path": str(accounts_path), "accounts_exists": accounts_path.exists(), "sources": {}}
-
-    for source, record in sorted(records.items()):
-        if not isinstance(record, dict):
-            continue
-        if not (record.get("linked") or record.get("status") == "linked"):
-            continue
-        cfg = config_obj(record)
-        item: dict[str, Any] = {"linked": True, "status": record.get("status") or "linked"}
-        if source == "gmail":
-            db_text = str(cfg.get("msgvault_db") or config.get("external_paths", {}).get("msgvault_default_db") or "~/.msgvault/msgvault.db")
-            db = expand_path(db_text)
-            discovered = msgvault_accounts(db)
-            selected = string_list(cfg.get("selected_accounts")) or string_list(cfg.get("account_emails")) or string_list(record.get("usernames"))
-            discovered_emails = {row.get("account_email") for row in discovered.get("accounts", [])}
-            missing = [email for email in selected if email.lower() not in discovered_emails]
-            item.update({"msgvault": discovered, "selected_accounts": selected, "missing_selected_accounts": missing, "ok": discovered.get("status") == "ok" and not missing})
-        elif source == "linkedin_csv":
-            csv_path = expand_path(str(cfg.get("csv_path") or "")) if cfg.get("csv_path") else None
-            item.update({"csv_path": str(csv_path) if csv_path else "", "ok": bool(csv_path and csv_path.exists())})
-        elif source == "messages":
-            msg_cfg = config_obj(record)
-            whatsapp = msg_cfg.get("whatsapp") if isinstance(msg_cfg.get("whatsapp"), dict) else {}
-            imessage = msg_cfg.get("imessage") if isinstance(msg_cfg.get("imessage"), dict) else {}
-            wacli_store = canonical / ".powerpacks/messages/wacli"
-            wacli_auth = wacli_auth_status(canonical, wacli_store)
-            whatsapp_expected = bool(whatsapp.get("authenticated") or whatsapp.get("status") in {"authenticated", "linked"})
-            item.update({
-                "imessage_config": imessage,
-                "whatsapp_config": whatsapp,
-                "wacli_store": wacli_store_summary(wacli_store),
-                "wacli_auth_status": wacli_auth,
-                "ok": (not whatsapp_expected) or bool(wacli_auth.get("authenticated")),
-            })
-        elif source == "twitter":
-            item.update({"handle": (string_list(record.get("usernames")) or [cfg.get("handle") or ""])[0], "ok": True})
-        else:
-            item["ok"] = True
-        checks["sources"][source] = item
-    return checks
-
-
 def adopt_state(canonical: Path, legacy: list[Path], config: dict[str, Any], *, apply: bool, backup: bool) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     for spec in config.get("managed_paths") or []:
@@ -666,7 +497,6 @@ def main() -> int:
     parser.add_argument("--dry-run", dest="apply", action="store_false", help="Inspect the repair plan without changing files.")
     parser.add_argument("--backup", action="store_true", default=True, help="Backup target files/dirs before overwrite/copy where applicable. This is the default for replacements.")
     parser.add_argument("--no-backup", dest="backup", action="store_false", help="Do not create backups before replacement operations.")
-    parser.add_argument("--no-repair-accounts", action="store_true", help="Do not repair accounts.json from local msgvault evidence")
     parser.add_argument("--no-repair-wacli", action="store_true", help="Do not copy a better authenticated legacy wacli store into the canonical repo")
     parser.add_argument("--scrub-bad-wacli", dest="scrub_bad_wacli", action="store_true", default=True, help="Move an unauthenticated canonical wacli store aside when no authenticated store exists. This is the default.")
     parser.add_argument("--no-scrub-bad-wacli", dest="scrub_bad_wacli", action="store_false", help="Leave an unauthenticated canonical wacli store in place.")
@@ -688,22 +518,11 @@ def main() -> int:
         status = "needs_attention"
 
     actions = adopt_state(canonical, legacy, config, apply=args.apply, backup=args.backup)
-    gmail_repair = {"action": "skipped", "reason": "--no-repair-accounts"} if args.no_repair_accounts else repair_gmail_accounts(canonical, config, apply=args.apply)
-    if gmail_repair.get("action") in {"would_update", "updated"}:
-        status = "needs_attention" if not args.apply else status
-        if not args.apply:
-            issues.append("accounts.json Gmail config can be repaired from local msgvault accounts")
     wacli_repair = {"action": "skipped", "reason": "--no-repair-wacli"} if args.no_repair_wacli else repair_wacli_store(canonical, legacy, apply=args.apply, backup=args.backup, scrub_bad=bool(args.scrub_bad_wacli))
     if wacli_repair.get("action") in {"would_copy", "would_move_stale"}:
         status = "needs_attention"
         issues.append(str(wacli_repair.get("root_cause") or "wacli store can be repaired"))
-    checks = linked_source_checks(canonical, config)
     stages = vertical_stage_health(canonical)
-    for source, item in (checks.get("sources") or {}).items():
-
-        if isinstance(item, dict) and item.get("ok") is False:
-            status = "needs_attention"
-            issues.append(f"linked source check failed: {source}")
 
     quarantine = []
     if args.quarantine_legacy_state:
@@ -722,9 +541,7 @@ def main() -> int:
         "legacy_repos": [str(path) for path in legacy],
         "issues": issues,
         "adoption_actions": actions,
-        "gmail_accounts_repair": gmail_repair,
         "wacli_store_repair": wacli_repair,
-        "linked_source_checks": checks,
         "source_stage_health": stages,
         "quarantine": quarantine,
         "next": "cd " + str(canonical),

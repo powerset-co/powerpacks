@@ -24,13 +24,6 @@
       "why": "Local runtime credentials/config belong in the canonical Powerpacks checkout. Copy only when canonical .env is missing; never overwrite or print contents."
     },
     {
-      "id": "accounts",
-      "path": ".powerpacks/ingestion/accounts.json",
-      "kind": "file",
-      "policy": "adopt_newer",
-      "why": "Source link registry used by setup/import/enrichment."
-    },
-    {
       "id": "messages_discovery_manifest",
       "path": ".powerpacks/network-import/discover/messages/manifest.json",
       "kind": "file",
@@ -107,11 +100,5 @@
       "policy": "report_only",
       "why": "DuckDB can be rebuilt; report duplicates but avoid copying while a process may have it open."
     }
-  ],
-  "linked_source_checks": {
-    "gmail": ["accounts.config.msgvault_db exists", "msgvault contains selected account emails"],
-    "linkedin_csv": ["accounts.config.csv_path exists"],
-    "messages": ["iMessage readable if configured", "WhatsApp wacli store authenticated if configured"],
-    "twitter": ["handle recorded"]
-  }
+  ]
 }

@@ -499,9 +499,6 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             state = root / ".powerpacks" / "network-import"
             import_dir = state / "import"
             directory = state / "directory.csv"
-            accounts = root / ".powerpacks" / "ingestion" / "accounts.json"
-            accounts.parent.mkdir(parents=True, exist_ok=True)
-            accounts.write_text("{}\n", encoding="utf-8")
             contacts = root / ".powerpacks" / "messages" / "contacts.csv"
             match_manifest = root / ".powerpacks" / "messages" / "contacts.csv.match.manifest.json"
 
@@ -518,7 +515,6 @@ class MessagesImportRuntimeTests(unittest.TestCase):
                     "state": state,
                     "import_dir": import_dir / "messages",
                     "directory": directory,
-                    "accounts": accounts,
                     "contacts": contacts,
                     "match_manifest": match_manifest,
                 }
@@ -543,7 +539,6 @@ class MessagesImportRuntimeTests(unittest.TestCase):
     @staticmethod
     def run_import(env: dict[str, object], *, confirm: bool, **overrides: object) -> dict[str, object]:
         args = {
-            "accounts": env["accounts"],
             "operator_id": "local",
             "confirm_import": confirm,
             "min_message_count": import_messages.DEFAULT_MIN_MESSAGE_COUNT,
