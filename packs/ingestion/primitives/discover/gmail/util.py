@@ -1,6 +1,11 @@
 """Gmail discovery utilities: tolerant parsers, row merge, incremental plan.
 
 Changelog:
+  2026-07-24 (merge policy): gmail_discovery_merge_plan takes the caller's
+    observed output state as keyword-only args (`output_rows`,
+    `full_rerun_requested`) and checks two new branches FIRST — `empty_output`
+    (no populated contacts.csv to append to) and `full_rerun_requested`
+    (--fresh). The function stays pure; the caller owns the filesystem read.
   2026-07-23 (rename): `discover_engine_base_dir` renamed `extract_gmail_base_dir`
     (the extractor it points at was renamed discover_engine.py -> extract_gmail.py).
   2026-07-23 (audit):
@@ -149,7 +154,44 @@ def _same_account_emails(left: Any, right: list[str]) -> bool:
     return sorted(_as_list(left)) == sorted(_as_list(right))
 
 
-def gmail_discovery_merge_plan(existing_manifest: dict[str, Any], account_emails: list[str], child_modes: list[str]) -> dict[str, str]:
+def gmail_discovery_merge_plan(
+    existing_manifest: dict[str, Any],
+    account_emails: list[str],
+    child_modes: list[str],
+    *,
+    output_rows: int,
+    full_rerun_requested: bool = False,
+) -> dict[str, str]:
+    """Decide how child outputs combine with the stage output already on disk.
+
+    Pure — every input is passed in, so the caller owns all filesystem reads.
+    `output_rows` is the row count of the existing contacts.csv (0 when the file
+    is missing or header-only); `full_rerun_requested` is the caller's explicit
+    rescan request (`--fresh`).
+
+    Order, first match wins:
+      empty_output          nothing on disk to append to, so there is no
+                            baseline to preserve -> rebuild from the children.
+                            This is also what keeps the append path from
+                            replaying a delta onto an absent baseline and
+                            double-counting it (_merge_rows SUMS the counts).
+      full_rerun_requested  the caller asked for a full rescan; honor it over
+                            any incremental opportunity.
+      calculation_version_changed / account_emails_changed
+                            the rows on disk were computed under different rules
+                            or for a different account set -> they cannot be
+                            appended to.
+      children_returned_incremental_deltas
+                            EVERY child returned new-only rows -> keep the
+                            existing rows and append the unapplied deltas.
+      children_returned_full_recounts
+                            otherwise; a child's rows restate its whole truth,
+                            so the children alone are the new output.
+    """
+    if output_rows <= 0:
+        return {"mode": "full_rewrite", "reason": "empty_output"}
+    if full_rerun_requested:
+        return {"mode": "full_rewrite", "reason": "full_rerun_requested"}
     if existing_manifest.get("calculation_version") != GMAIL_INTERACTION_CALCULATION_VERSION:
         return {"mode": "full_rewrite", "reason": "calculation_version_changed"}
     if not _same_account_emails(existing_manifest.get("account_emails"), account_emails):

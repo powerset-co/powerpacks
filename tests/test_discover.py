@@ -24,6 +24,12 @@ discover_gmail = importlib.import_module(
 discover_gmail_sync = importlib.import_module(
     "packs.ingestion.primitives.discover.gmail.msgvault.sync"
 )
+discover_gmail_util = importlib.import_module(
+    "packs.ingestion.primitives.discover.gmail.util"
+)
+extract_gmail = importlib.import_module(
+    "packs.ingestion.primitives.discover.gmail.extract_gmail"
+)
 common_proc = importlib.import_module(
     "packs.ingestion.primitives.common.proc"
 )
@@ -260,7 +266,9 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(rows[0]["total_messages"], "2")
             self.assertEqual(manifest["calculation_version"], discover_gmail.GMAIL_INTERACTION_CALCULATION_VERSION)
             self.assertEqual(manifest["calculation_mode"], "full_rewrite")
-            self.assertEqual(manifest["calculation_reason"], "calculation_version_changed")
+            # First run: contacts.csv does not exist yet, so the empty-output
+            # branch decides this before the calculation-version check does.
+            self.assertEqual(manifest["calculation_reason"], "empty_output")
 
             with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
@@ -498,6 +506,225 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             discover_gmail.gmail_incremental_input_id("one@example.com", rows),
             discover_gmail.gmail_incremental_input_id("two@example.com", rows),
         )
+
+    def test_gmail_merge_plan_policy_order(self) -> None:
+        """The ordered merge policy: incremental only with a populated output and
+        no explicit full-rerun request."""
+        plan = discover_gmail_util.gmail_discovery_merge_plan
+        version = discover_gmail_util.GMAIL_INTERACTION_CALCULATION_VERSION
+        delta = discover_gmail_util.GMAIL_CALCULATION_INCREMENTAL_DELTA
+        recount = discover_gmail_util.GMAIL_CALCULATION_FULL_RECOUNT
+        current = {"calculation_version": version, "account_emails": ["me@example.com"]}
+        accounts = ["me@example.com"]
+
+        # An empty/missing output wins over every other branch — there is no
+        # baseline to append to, so the children must rebuild it.
+        for rows in (0, -1):
+            self.assertEqual(
+                plan(current, accounts, [delta], output_rows=rows),
+                {"mode": "full_rewrite", "reason": "empty_output"},
+            )
+        # An explicit full rerun beats an available incremental opportunity.
+        self.assertEqual(
+            plan(current, accounts, [delta], output_rows=5, full_rerun_requested=True),
+            {"mode": "full_rewrite", "reason": "full_rerun_requested"},
+        )
+        # Then the pre-existing branches, unchanged.
+        self.assertEqual(
+            plan({"calculation_version": "older-version"}, accounts, [delta], output_rows=5),
+            {"mode": "full_rewrite", "reason": "calculation_version_changed"},
+        )
+        self.assertEqual(
+            plan({"calculation_version": version, "account_emails": ["other@example.com"]},
+                 accounts, [delta], output_rows=5),
+            {"mode": "full_rewrite", "reason": "account_emails_changed"},
+        )
+        self.assertEqual(
+            plan(current, accounts, [delta], output_rows=5),
+            {"mode": "incremental_update", "reason": "children_returned_incremental_deltas"},
+        )
+        # A single full-recount child forces the rebuild for the whole stage.
+        self.assertEqual(
+            plan(current, accounts, [delta, recount], output_rows=5),
+            {"mode": "full_rewrite", "reason": "children_returned_full_recounts"},
+        )
+        self.assertEqual(
+            plan(current, accounts, [], output_rows=5),
+            {"mode": "full_rewrite", "reason": "children_returned_full_recounts"},
+        )
+
+    def test_gmail_extractor_declares_full_recount_calculation_mode(self) -> None:
+        """The real producer contract: extract_gmail re-derives whole-store totals
+        from the entire archive, so it declares full_recount in BOTH its manifest
+        and its returned payload. Nothing in the pipeline emits incremental_delta."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            db = tmp / "msgvault.db"
+            write_msgvault_db(db)
+            payload = extract_gmail.GmailExtractor().run_msgvault(
+                db=str(db), account_email="me@example.com", output_dir=str(tmp),
+            )
+            self.assertEqual(
+                payload["calculation_mode"],
+                discover_gmail_util.GMAIL_CALCULATION_FULL_RECOUNT,
+            )
+            child_manifest = json.loads(
+                (tmp / "discover/gmail/me-example.com/manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                child_manifest["calculation_mode"],
+                discover_gmail_util.GMAIL_CALCULATION_FULL_RECOUNT,
+            )
+
+    def _run_gmail_discovery(self, tmp: Path, paths: dict, mode: str, *, total_messages: str,
+                             thread_count: str, last_interaction: str, fresh: bool = False) -> dict:
+        """Run GmailDiscovery once against a staged child queue at the fixed path."""
+        scratch_queue = tmp / "discover" / "gmail" / "me-example.com" / "linkedin_resolution_queue.csv"
+        write_csv(
+            scratch_queue,
+            discover_gmail.GMAIL_DISCOVERY_COLUMNS,
+            [{
+                "handle": "jordan@example.com",
+                "id": "gmail:jordan@example.com",
+                "account_emails": json.dumps(["me@example.com"]),
+                "source_ids": json.dumps(["gmail:jordan@example.com"]),
+                "display_name": "Jordan Bravo",
+                "full_name": "Jordan Bravo",
+                "primary_email": "jordan@example.com",
+                "source": "gmail_msgvault",
+                "source_channels": "gmail_msgvault",
+                "total_messages": total_messages,
+                "thread_count": thread_count,
+                "last_interaction": last_interaction,
+            }],
+        )
+
+        def fake_run_msgvault(engine, *, db, account_email, output_dir):
+            return {
+                "status": "completed",
+                "calculation_mode": mode,
+                "artifacts": {"linkedin_resolution_queue_csv": str(scratch_queue)},
+                "counts": {"contacts_written": 1},
+            }
+
+        with mock.patch.object(discover_gmail, "output_path", side_effect=lambda s, k: paths[(s, k)]):
+            with mock.patch.object(discover_gmail, "sync_msgvault_account",
+                                   return_value={"status": "completed", "account_email": "me@example.com"}):
+                with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", fake_run_msgvault):
+                    return discover_gmail.GmailDiscovery(
+                        account_emails=["me@example.com"], fresh=fresh,
+                    ).run()
+
+    @staticmethod
+    def _gmail_paths(tmp: Path) -> dict:
+        return {
+            ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
+            ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
+            ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
+        }
+
+    def test_gmail_empty_or_missing_output_forces_full_rewrite(self) -> None:
+        """A surviving manifest is not enough to append to: with contacts.csv gone
+        or header-only, the plan must rebuild rather than treat deltas as new."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            paths = self._gmail_paths(tmp)
+            # Seed a manifest whose calculation_version + account_emails match, so
+            # only the new empty-output branch can explain the full rewrite.
+            self._run_gmail_discovery(
+                tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
+                total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
+            )
+            self.assertTrue(paths[("gmail", "contacts_csv")].exists())
+
+            # contacts.csv deleted, manifest.json survives.
+            paths[("gmail", "contacts_csv")].unlink()
+            payload = self._run_gmail_discovery(
+                tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
+                total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
+            )
+            self.assertEqual(payload["calculation_mode"], "full_rewrite")
+            self.assertEqual(payload["calculation_reason"], "empty_output")
+
+            # Header-only contacts.csv counts as empty too.
+            write_csv(paths[("gmail", "contacts_csv")], discover_gmail.GMAIL_DISCOVERY_COLUMNS, [])
+            payload = self._run_gmail_discovery(
+                tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
+                total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
+            )
+            self.assertEqual(payload["calculation_mode"], "full_rewrite")
+            self.assertEqual(payload["calculation_reason"], "empty_output")
+
+    def test_gmail_fresh_requests_a_full_rerun(self) -> None:
+        """--fresh is the explicit full-rerun door and is recorded as the reason."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            paths = self._gmail_paths(tmp)
+            self._run_gmail_discovery(
+                tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
+                total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
+            )
+            # Populated output + matching manifest: without --fresh the reason is
+            # the ordinary full-recount one.
+            baseline = self._run_gmail_discovery(
+                tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
+                total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
+            )
+            self.assertEqual(baseline["calculation_reason"], "children_returned_full_recounts")
+
+            fresh_payload = self._run_gmail_discovery(
+                tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
+                total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
+                fresh=True,
+            )
+            self.assertEqual(fresh_payload["calculation_mode"], "full_rewrite")
+            self.assertEqual(fresh_payload["calculation_reason"], "full_rerun_requested")
+            self.assertTrue(discover_gmail.GmailDiscovery(
+                account_emails=["me@example.com"], fresh=True,
+            ).full_rerun_requested)
+
+    def test_gmail_delta_replay_without_existing_output_does_not_double_count(self) -> None:
+        """Belt and braces for the replay-recording fix.
+
+        The empty-output branch makes this state unreachable in production, so the
+        plan is forced here (patched on the consuming module, which is where the
+        from-imported name is bound) to prove the incremental branch does not
+        depend on that guard: whenever it applies a delta's rows it must record
+        the incremental_input_id, or the next run replays the same rows and
+        _merge_rows sums total_messages/thread_count a second time.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            paths = self._gmail_paths(tmp)
+            forced_plan = {"mode": "incremental_update", "reason": "forced_for_test"}
+            with mock.patch.object(discover_gmail, "gmail_discovery_merge_plan",
+                                   return_value=forced_plan):
+                # No contacts.csv exists at all — the exact state the old
+                # `and self.contacts_csv.exists()` gate mishandled.
+                self.assertFalse(paths[("gmail", "contacts_csv")].exists())
+                first = self._run_gmail_discovery(
+                    tmp, paths, discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
+                    total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
+                )
+                self.assertEqual(first["calculation_mode"], "incremental_update")
+                # The id MUST be recorded even though there was no existing output.
+                self.assertEqual(len(first["applied_incremental_inputs"]), 1)
+                applied_id = first["applied_incremental_inputs"][0]
+                first_rows = CsvIO.read_dict_rows(paths[("gmail", "contacts_csv")])
+                self.assertEqual(first_rows[0]["total_messages"], "10")
+                self.assertEqual(first_rows[0]["thread_count"], "3")
+
+                # Replaying the identical child output must be recognized and
+                # skipped, leaving the counts exactly where they were.
+                second = self._run_gmail_discovery(
+                    tmp, paths, discover_gmail.GMAIL_CALCULATION_INCREMENTAL_DELTA,
+                    total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
+                )
+                self.assertEqual(second["skipped_incremental_inputs"], [applied_id])
+                self.assertEqual(second["applied_incremental_inputs"], [applied_id])
+                second_rows = CsvIO.read_dict_rows(paths[("gmail", "contacts_csv")])
+                self.assertEqual(second_rows[0]["total_messages"], "10")
+                self.assertEqual(second_rows[0]["thread_count"], "3")
 
     def test_gmail_discovery_ignores_missing_child_queue_instead_of_reading_dot(self) -> None:
         with tempfile.TemporaryDirectory() as td:
