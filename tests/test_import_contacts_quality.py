@@ -193,13 +193,11 @@ class ImportContactsQualityTests(unittest.TestCase):
     def test_gmail_import_removes_legacy_ledger_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            accounts = tmp / "accounts.json"
-            accounts.write_text('{"accounts": {}}', encoding="utf-8")
             import_root = tmp / "import"
             import_dir = import_root / "gmail"
             import_dir.mkdir(parents=True)
             (import_dir / "ledger.json").write_text('{"status": "completed"}', encoding="utf-8")
-            args = gmail_import.build_parser().parse_args(["run", "--accounts", str(accounts)])
+            args = gmail_import.build_parser().parse_args(["run"])
 
             with mock.patch.object(gmail_import, "DEFAULT_IMPORT_DIR", import_root):
                 with mock.patch.object(gmail_import, "source_import_dir", return_value=import_dir):

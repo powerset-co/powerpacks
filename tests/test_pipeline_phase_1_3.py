@@ -225,22 +225,6 @@ class PipelinePhase13Tests(unittest.TestCase):
         self.assertEqual(path, cache_path)
         self.assertIsNotNone(failure)
 
-    def test_linkedin_csv_path_falls_back_to_repo_local_discovered_export(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp) / "network-import"
-            repo_local = base / "discover" / "linkedin" / "Connections.csv"
-            repo_local.parent.mkdir(parents=True)
-            repo_local.write_text("First Name,Last Name\nAda,Lovelace\n", encoding="utf-8")
-            accounts = {
-                "accounts": {
-                    "linkedin_csv": {
-                        "config": {"csv_path": "/path/to/Downloads/missing/Connections.csv"},
-                    }
-                }
-            }
-            with mock.patch.object(import_common, "DEFAULT_BASE_DIR", base):
-                self.assertEqual(import_common.linkedin_csv_path(accounts), str(repo_local))
-
     def test_write_csv_rows_skips_unchanged_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = Path(tmp) / "rows.csv"

@@ -58,7 +58,6 @@ class IndexContactsPipelineTest(unittest.TestCase):
 
             args = argparse.Namespace(
                 operator_id="operator-1",
-                accounts=".powerpacks/ingestion/accounts.json",
                 people_csv=".powerpacks/network-import/merged/people.csv",
                 output_dir=".powerpacks/search-index",
                 artifact_dir=".powerpacks/network-import/index/contacts",

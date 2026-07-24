@@ -10,7 +10,6 @@ discover/import primitives.
 - `DEFAULT_DISCOVER_DIR` / `DEFAULT_IMPORT_DIR` — the discover and import roots
   under it (per-vertical subdirs hang off these).
 - `DEFAULT_DIRECTORY_CSV` — the cross-source `directory.csv` aggregate.
-- `DEFAULT_ACCOUNTS` — the packaged `accounts.json` linked-source state.
 - `DEFAULT_PROFILE_CACHE_DIR` — the LinkedIn profile enrichment cache.
 - `DEFAULT_MSGVAULT_DB` — the local msgvault SQLite db, honoring `$MSGVAULT_HOME`.
 - `MESSAGES_OUT_DIR` — `.powerpacks/messages`, the iMessage/WhatsApp scratch dir.
@@ -23,6 +22,9 @@ discover/import primitives.
   discover output dir (`<base>/discover/gmail/<account-slug>`).
 
 Changelog:
+  2026-07-23 (dead accounts.json registry): removed `DEFAULT_ACCOUNTS`. The
+    `accounts.json` linked-source registry lost its only writer and all readers,
+    so the path constant naming it had no live consumer.
   2026-07-23 (audit consolidation): created; unifies the DEFAULT_BASE_DIR (x5),
     DEFAULT_IMPORT_DIR, DEFAULT_DIRECTORY_CSV, DEFAULT_ACCOUNTS (x2),
     DEFAULT_PROFILE_CACHE_DIR (x2), DEFAULT_MSGVAULT_DB (the
@@ -56,7 +58,6 @@ DEFAULT_BASE_DIR = Path(".powerpacks/network-import")
 DEFAULT_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover"
 DEFAULT_IMPORT_DIR = DEFAULT_BASE_DIR / "import"
 DEFAULT_DIRECTORY_CSV = DEFAULT_BASE_DIR / "directory.csv"
-DEFAULT_ACCOUNTS = Path(".powerpacks/ingestion/accounts.json")
 DEFAULT_PROFILE_CACHE_DIR = DEFAULT_BASE_DIR / "profile_cache_v2"
 DEFAULT_MSGVAULT_DB = Path(os.environ.get("MSGVAULT_HOME", str(Path.home() / ".msgvault"))) / "msgvault.db"
 MESSAGES_OUT_DIR = Path(".powerpacks/messages")

@@ -22,6 +22,10 @@ every identifier match demotes to `suggested` until deep-context ships the
 replacement approval surface.
 
 Changelog:
+  2026-07-23 (dead accounts.json registry): removed the `read_accounts(self.args.
+    accounts)` no-op (its return value was discarded) along with the `read_accounts`/
+    `DEFAULT_ACCOUNTS` imports and the `--accounts` CLI arg. Nothing in this import
+    reads the `accounts.json` registry.
   2026-07-23 (oop): the `run()` flow (fixed import dir, people.csv/candidates.csv
     outputs, floor knobs, manifest input, and the gate sequence) was folded into
     a `MessagesImport` orchestrator; run() is now a thin `MessagesImport(args).run()`
@@ -78,13 +82,11 @@ from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
 from packs.ingestion.primitives.common.contact_fields import phones_from_value  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit, unique_strings  # noqa: E402
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
-    DEFAULT_ACCOUNTS,
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_IMPORT_DIR,
 )
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    read_accounts,
     read_csv_rows,
     write_csv_rows,
 )
@@ -493,7 +495,6 @@ class MessagesImport:
         )
         if current:
             return current
-        read_accounts(self.args.accounts)
         if not self.contacts_csv.exists():
             return self._manifest(
                 status="failed",
@@ -613,7 +614,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Import matched Messages contacts + research candidates"
     )
     parser.add_argument("command", choices=["run"])
-    parser.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     parser.add_argument("--operator-id", default="local")
     parser.add_argument("--confirm-import", action="store_true")
     parser.add_argument(

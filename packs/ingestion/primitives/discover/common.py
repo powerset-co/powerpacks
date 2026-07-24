@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Discover-stage helpers: CSV I/O, account state, and stage manifests.
+"""Discover-stage helpers: CSV I/O, the `source_slug` helper, and stage manifests.
 
 Holds only the things unique to the discover stage — the fingerprinted LF CSV
-reader/writer, the linked-account state accessors (superset variant that reads
-both `accounts` and `channels` groups), and the `source_slug` helper. The typed
+reader/writer, the `ordered_unique`/`source_slug` helpers. The typed
 `StagePayload` + `write_stage_manifest` manifest contract now lives in
 `packs.ingestion.primitives.common.manifests` (re-exported here for callers that
 still reach for it via this module); the cross-vertical json/proc/paths/
 contact-field helpers live in `packs.ingestion.primitives.common`.
 
 Changelog:
+  2026-07-23 (dead accounts.json registry): deleted the last account-state
+    accessors — ``read_accounts``/``account_channel``/``account_config``. The
+    `accounts.json` registry lost its only writer, and grep proved zero live
+    callers of these readers, so they went with it (the `read_json` import went
+    too).
   2026-07-23 (messages explicit-selection): deleted ``channel_is_linked`` — its
     sole caller was messages discovery's accounts.json linkage read, which was
     removed when message channel selection became explicit ``--include-*`` only.
-    ``account_channel``/``account_config`` remain (still used by discover callers
-    reading channel config groups).
   2026-07-23 (audit class-sharing): moved the typed-manifest contract
     (StagePayload, write_stage_manifest, and the collect/artifact/manifest
     fingerprint helpers) to common/manifests.py so non-discover stages can share
@@ -46,7 +48,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
 # Re-export the typed-manifest contract from its shared home so callers that still
 # import StagePayload / write_stage_manifest from discover.common keep working.
 from packs.ingestion.primitives.common.manifests import StagePayload, write_stage_manifest  # noqa: E402,F401
@@ -80,27 +81,6 @@ def write_csv_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]
         except OSError:
             pass
     path.write_bytes(content)
-
-
-def read_accounts(path: Path) -> dict[str, Any]:
-    """Read the packaged accounts.json state, `{}` when missing/invalid."""
-    return read_json(path, {}) or {}
-
-
-def account_channel(accounts: dict[str, Any], name: str) -> dict[str, Any]:
-    """Return a channel's record, checking both the `accounts` and `channels` groups."""
-    for key in ("accounts", "channels"):
-        group = accounts.get(key)
-        if isinstance(group, dict) and isinstance(group.get(name), dict):
-            return group[name]
-    return {}
-
-
-def account_config(accounts: dict[str, Any], name: str) -> dict[str, Any]:
-    """Return a channel's `config` sub-dict, `{}` when absent."""
-    channel = account_channel(accounts, name)
-    cfg = channel.get("config")
-    return cfg if isinstance(cfg, dict) else {}
 
 
 def ordered_unique(values: list[Any]) -> list[str]:

@@ -6,6 +6,9 @@ modules (channels/i_message_channel.py, channels/whats_app_channel.py,
 messages/discover.py), never these package re-exports.
 
 Changelog:
+  2026-07-23 (dead accounts.json registry): dropped the DEFAULT_ACCOUNTS re-export —
+    the accounts.json registry was deleted, and nothing imported the constant from
+    this package.
   2026-07-23 (explicit-selection): dropped the messages_discovery_inputs re-export —
     the accounts.json-linkage resolver was deleted when channel selection became
     explicit --include-* only.
@@ -17,7 +20,6 @@ Changelog:
     concrete modules.
 """
 
-from packs.ingestion.primitives.common.paths import DEFAULT_ACCOUNTS  # noqa: F401
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS  # noqa: F401
 from packs.ingestion.primitives.discover.messages.channels.message_channel_base import (  # noqa: F401
     MessageChannel,

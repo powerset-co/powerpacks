@@ -2,6 +2,11 @@
 """Shared helpers for import/enrich contact stages.
 
 Changelog:
+  2026-07-23 (dead accounts.json registry): removed the account-registry readers
+    `account_channel`/`account_config`/`linked_gmail_accounts`/`linkedin_csv_path`/
+    `linkedin_source_user` — the `accounts.json` registry has no live writer of
+    the gmail/linkedin_csv config they read, so every caller was dead. Dropped the
+    now-unused `unique_strings`/`DEFAULT_BASE_DIR` imports with them.
   2026-07-23 (steps split): removed `load_gmail_import_steps` — the
     `importlib.util.spec_from_file_location` fossil that file-loaded
     gmail/import_steps.py as a synthetic module. `GmailImport` now lives in
@@ -38,11 +43,9 @@ from packs.ingestion.primitives.common.jsonio import (
     now_iso,
     read_json,
     sha256_file,
-    unique_strings,
     write_json,
 )
 from packs.ingestion.primitives.common.paths import (
-    DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_IMPORT_DIR,
 )
@@ -51,47 +54,6 @@ from packs.ingestion.primitives.imports.directory import (
     normalized_directory_row,
 )
 from packs.shared.csv_io import CsvIO
-
-
-def account_channel(accounts: dict[str, Any], name: str) -> dict[str, Any]:
-    group = accounts.get("accounts") if isinstance(accounts.get("accounts"), dict) else {}
-    return group.get(name) if isinstance(group.get(name), dict) else {}
-
-
-def account_config(accounts: dict[str, Any], name: str) -> dict[str, Any]:
-    channel = account_channel(accounts, name)
-    cfg = channel.get("config")
-    return cfg if isinstance(cfg, dict) else {}
-
-
-def linked_gmail_accounts(accounts: dict[str, Any]) -> list[str]:
-    cfg = account_config(accounts, "gmail")
-    channel = account_channel(accounts, "gmail")
-    return unique_strings(cfg.get("selected_accounts") or cfg.get("account_emails") or channel.get("usernames") or [])
-
-
-def linkedin_csv_path(accounts: dict[str, Any]) -> str:
-    cfg = account_config(accounts, "linkedin_csv")
-    channel = account_channel(accounts, "linkedin_csv")
-    value = cfg.get("csv_path") or ""
-    if not value and isinstance(channel.get("artifacts"), list) and channel["artifacts"]:
-        value = channel["artifacts"][0]
-    if value and Path(str(value)).exists():
-        return str(value)
-    repo_local = DEFAULT_BASE_DIR / "discover" / "linkedin" / "Connections.csv"
-    if repo_local.exists():
-        return str(repo_local)
-    return str(value or "")
-
-
-def linkedin_source_user(accounts: dict[str, Any]) -> str:
-    cfg = account_config(accounts, "linkedin_csv")
-    channel = account_channel(accounts, "linkedin_csv")
-    if cfg.get("source_label"):
-        return str(cfg["source_label"])
-    if isinstance(channel.get("usernames"), list) and channel["usernames"]:
-        return str(channel["usernames"][0])
-    return "local"
 
 
 def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -21,6 +21,13 @@ directory/queue transforms live alongside them in `steps/directory.py`.
 Exit 0 completed/skipped, 1 failed. No approval gate: nothing here spends.
 
 Changelog:
+  2026-07-23 (dead accounts.json registry): dropped the vestigial `--accounts`
+    read. The `accounts.json` gmail channel was never populated, so
+    `linked_gmail_accounts` always returned `[]`; removed the `read_accounts`/
+    `linked_gmail_accounts` calls, the `emails` var, and the always-empty
+    `gmail_account_emails`/`from_accounts` manifest-input fields, plus the
+    `--accounts` CLI arg. Directory apply + stored-resolution attach are
+    unchanged.
   2026-07-23 (steps split): `import_steps.py` and its file-loader
     (`imports.common.load_gmail_import_steps`) are gone. `GmailImport` moved
     here from `import_steps.py`, and the two step bodies were pieced out into
@@ -56,20 +63,17 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso  # noqa: E402
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
-    DEFAULT_ACCOUNTS,
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_IMPORT_DIR,
     DEFAULT_PROFILE_CACHE_DIR,
     source_import_dir,
 )
-from packs.ingestion.primitives.discover.common import read_accounts  # noqa: E402
 from packs.ingestion.primitives.imports.common import (  # noqa: E402
     copy_people_csv,
     csv_count,
     directory_source_account_quality,
     import_manifest_current,
-    linked_gmail_accounts,
     normalize_directory_source_accounts,
     write_manifest,
 )
@@ -137,9 +141,7 @@ class GmailImport:
         current = import_manifest_current("gmail", expected_input, import_dir=DEFAULT_IMPORT_DIR)
         if current and not getattr(args, "force", False):
             return current
-        accounts = read_accounts(args.accounts)
         import_dir = self.import_dir
-        emails = linked_gmail_accounts(accounts)
         self.state = {
             "primitive": "import_contacts_gmail",
             "source": "gmail",
@@ -147,8 +149,6 @@ class GmailImport:
             "artifact_dir": str(import_dir),
             "input": {
                 "operator_id": args.operator_id,
-                "from_accounts": str(args.accounts),
-                "gmail_account_emails": emails,
                 # Directory-only, always: this import applies the directory and any
                 # STORED resolutions; resolution + enrichment live in deep-context
                 # (migrate-legacy for the stored era, judged lookups for new people).
@@ -232,7 +232,6 @@ def build_parser() -> argparse.ArgumentParser:
     """CLI: one `run` command; `--force` bypasses the manifest no-op skip."""
     parser = argparse.ArgumentParser(description="Import discovered Gmail contacts (directory-only)")
     parser.add_argument("command", choices=["run"])
-    parser.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     parser.add_argument("--operator-id", default="local")
     parser.add_argument("--force", action="store_true", help="Re-run even if the import manifest is current (no no-op skip)")
     return parser

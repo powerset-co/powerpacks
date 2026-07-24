@@ -100,7 +100,11 @@ def profile_cache_index(cache_dir: Path | str | None) -> set[str]:
 
 
 def profile_cache_path(cache_dir: Path | str | None, public_identifier: str) -> Path | None:
-    slug = cache_slug_candidates(public_identifier)[0] if public_identifier else ""
+    # Use the SANITIZED slug for the write path — cache_slug_candidates[0] is the
+    # raw (only lowercased) identifier, so a value like "../bad/slug" would build a
+    # path-traversal cache/../bad/slug.json. safe_cache_slug leaves normal
+    # linkedin slugs unchanged (they are already [a-z0-9-_.]).
+    slug = safe_cache_slug(public_identifier) if public_identifier else ""
     if not cache_dir or not slug:
         return None
     return Path(cache_dir) / f"{slug}.json"
