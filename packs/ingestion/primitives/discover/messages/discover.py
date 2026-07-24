@@ -78,6 +78,9 @@ DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES = 0
 # First full backfill scales with history size (~3-year default window):
 # ~30 minutes on small accounts, a few hours on large ones. 3h hard cap.
 DEFAULT_WACLI_SYNC_TIMEOUT = 10800
+# The WhatsApp primitive may then spend up to 105 minutes on paced targeted
+# history requests. Keep the outer channel timeout above both native phases.
+DEFAULT_WACLI_DEPTH_TIMEOUT = 6300
 
 # Fixed per-stage output paths (the durable contract: each stage overwrites in
 # place at a stable path, so reruns are idempotent). Channels own these; they are
@@ -283,11 +286,9 @@ class WhatsAppChannel(MessageChannel):
         accounts_path: Path,
         other_enabled: bool,
         max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
-        sync_mode: str = "auto",
     ) -> None:
         super().__init__(accounts_path=accounts_path, other_enabled=other_enabled)
         self.max_messages = max_messages
-        self.sync_mode = sync_mode
 
     @property
     def contacts_csv(self) -> Path:
@@ -310,10 +311,9 @@ class WhatsAppChannel(MessageChannel):
             "--manifest", str(WHATSAPP_MANIFEST),
             "--progress-jsonl", str(WHATSAPP_PROGRESS_JSONL),
             "--max-messages", str(self.max_messages),
-            "--sync-mode", self.sync_mode,
             "--max-group-participants", "30",
             "--sync-timeout", str(DEFAULT_WACLI_SYNC_TIMEOUT),
-        ), timeout=DEFAULT_WACLI_SYNC_TIMEOUT + 900)
+        ), timeout=DEFAULT_WACLI_SYNC_TIMEOUT + DEFAULT_WACLI_DEPTH_TIMEOUT + 900)
         if code != 0 and payload.get("status") == "blocked_user_action":
             return blocked_child(
                 message=str(payload.get("message") or "WhatsApp needs a QR scan."),
@@ -352,7 +352,6 @@ class MessagesDiscovery:
         accounts_path: Path,
         out_dir: Path | None = None,
         wacli_max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
-        wacli_sync_mode: str = "auto",
     ) -> None:
         self.inputs = inputs
         # Read the module constant at call time (not as a default arg) so tests
@@ -368,7 +367,7 @@ class MessagesDiscovery:
         if inputs["include_whatsapp"]:
             self.channels.append(WhatsAppChannel(
                 accounts_path=accounts_path, other_enabled=inputs["include_imessage"],
-                max_messages=wacli_max_messages, sync_mode=wacli_sync_mode))
+                max_messages=wacli_max_messages))
 
     def run(self) -> dict[str, Any]:
         if not self.inputs["linked"]:
@@ -466,7 +465,6 @@ def discover(
     *,
     accounts_file: Path = DEFAULT_ACCOUNTS,
     wacli_max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
-    wacli_sync_mode: str = "auto",
     include_imessage: bool | None = None,
     include_whatsapp: bool | None = None,
 ) -> dict[str, Any]:
@@ -481,7 +479,6 @@ def discover(
         inputs=inputs,
         accounts_path=accounts_file,
         wacli_max_messages=wacli_max_messages,
-        wacli_sync_mode=wacli_sync_mode,
     ).run()
 
 
@@ -491,9 +488,6 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("discover", help="Discover message contacts")
     run.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     run.add_argument("--wacli-max-messages", type=int, default=DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES)
-    run.add_argument("--wacli-sync-mode", choices=("auto", "full", "incremental"), default="auto",
-                     help="auto: full WhatsApp backfill on first run, incremental after; "
-                          "full: force a full re-backfill; incremental: only new messages")
     run.add_argument("--include-imessage", action="store_true", default=None)
     run.add_argument("--include-whatsapp", action="store_true", default=None)
     return parser
@@ -505,7 +499,6 @@ def main() -> int:
         payload = discover(
             accounts_file=args.accounts,
             wacli_max_messages=args.wacli_max_messages,
-            wacli_sync_mode=args.wacli_sync_mode,
             include_imessage=args.include_imessage,
             include_whatsapp=args.include_whatsapp,
         )
