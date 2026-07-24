@@ -6,7 +6,19 @@ blank for channels that do not provide them. Canonical exports should be named
 `people.csv`; legacy-compatible aliases such as `people_harmonic_all.csv` may
 exist temporarily, but this module is provider-neutral.
 
+`PEOPLE_SCHEMA_COLUMNS` is the ONE home for the people-row column list. Stage
+schemas extend it (`QUEUE_COLUMNS`, `CACHE_COLUMNS`, `PROVIDER_COLUMNS`,
+`MERGED_COLUMNS`) — never re-declare it.
+
+Every column is optional on read: rows written before a column existed simply
+lack it, and `normalize_people_row` fills the gap with `""`.
+
 Changelog:
+  2026-07-24: added `enrichment_status` / `enrichment_error` (appended, so old
+    CSVs keep their column order) so a failed enrichment is an annotated row
+    instead of a deleted one. Written only by
+    `enrich/profile_transforms.stamp_enrichment_outcome`.
+
   2026-07-24 (identity re-derivation): `stable_linkedin_key` and
     `normalize_people_row` now agree on one rule, `row_public_identifier`: the
     slug is re-derived from `linkedin_url` when the row has one, and a stored
@@ -74,7 +86,21 @@ PEOPLE_SCHEMA_COLUMNS = [
     # timestamp across all channels.
     "interaction_counts",
     "last_interaction",
+    # Enrichment outcome, stamped by the enrich stage
+    # (`enrich/profile_transforms.stamp_enrichment_outcome` is the only writer).
+    # enrichment_status is "" | "enriched" | "failed" | "skipped"; enrichment_error
+    # carries the provider reason for a failed row and is blank otherwise. A row
+    # the provider could not hydrate keeps its identity columns and says so here
+    # instead of being dropped, so "we tried and got rate-limited" is
+    # distinguishable from "never attempted". Blank means no enrichment run has
+    # touched the row (including every people.csv written before 2026-07-24).
+    "enrichment_status",
+    "enrichment_error",
 ]
+
+ENRICHMENT_STATUS_ENRICHED = "enriched"
+ENRICHMENT_STATUS_FAILED = "failed"
+ENRICHMENT_STATUS_SKIPPED = "skipped"
 
 JSON_LIST_COLUMNS = {"work_experiences", "education"}
 JSON_OBJECT_COLUMNS = {"harmonic_response", "harmonic_location", "rapidapi_response", "twitter_response", "interaction_counts"}

@@ -46,13 +46,17 @@ Steps (run in order inside `run`):
 2. enrich_linkedin: fetches cache misses, hydrates hits + fetches into
    `provider_enriched.csv`, saves raw payloads to `raw_provider_responses/`.
 3. merge_people: merges profile data back into the input rows and writes
-   canonical `people.csv`.
+   canonical `people.csv` — every input row, each carrying the shared schema's
+   `enrichment_status` (`enriched` / `failed` / `skipped`) and, for a failure,
+   `enrichment_error`. Enrichment never deletes a row.
 
 Spend gate: cache hits never need approval. If prepare_queue finds RapidAPI
 cache misses (paid fetches) and `--approve-spend` was not passed, `run` writes a
 `needs_approval` manifest with the miss count + credit estimate and exits
 nonzero-but-clean (code 20) BEFORE any fetch. With `--approve-spend` it proceeds
-(and still fails clearly if no RAPIDAPI_* key is set).
+(and still fails clearly if no RAPIDAPI_* key is set). `estimated_credits` is a
+FLOOR (one credit per miss); `estimated_credits_max` is the worst case where
+every miss exhausts its retry attempts, each of which RapidAPI bills.
 
 Usage:
     enrich_people.py run --input .powerpacks/network-import/merged/people.csv [--approve-spend]
@@ -71,6 +75,13 @@ Cache seeding format is documented in `profile_cache.py`. Company identity
 field behavior is documented in `profile_transforms.py`.
 
 Changelog:
+  2026-07-24: merge_people stopped filtering people.csv down to confirmed rows.
+    A row the provider could not hydrate was previously written nowhere at all,
+    making a rate-limited fetch indistinguishable from "never attempted" — the
+    only trace was an aggregate count. Rows now survive with
+    `enrichment_status`/`enrichment_error`, and the summary reports
+    enriched/failed/skipped instead of `filtered_rows`. The spend gate also
+    quotes a credit RANGE, since each cache miss can bill once per retry.
   2026-07-23 (audit oo-cli): the CLI command handlers (command_run/status/
     check_keys) moved onto EnrichPeople so the class is the single entry point:
     command_run is a @classmethod that instantiates + runs the orchestrator;
@@ -144,20 +155,25 @@ from packs.ingestion.primitives.enrich.profile_cache import (  # noqa: E402
     read_usable_cached_profile,
 )
 from packs.ingestion.primitives.enrich.profile_transforms import (  # noqa: E402
-    confirmed_people_row,
     merge_provider_profile,
     normalize_rapidapi,
+    provider_failure_reason,
     route_row,
+    stamp_enrichment_outcome,
 )
 from packs.ingestion.primitives.enrich.rapidapi_client import (  # noqa: E402
     DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
     DEFAULT_RAPIDAPI_MAX_RPM,
     DEFAULT_RAPIDAPI_MAX_WORKERS,
+    DEFAULT_RAPIDAPI_RETRY_ATTEMPTS,
     RapidApiClient,
 )
 from packs.ingestion.schemas.company_identity import build_company_identity_lookup  # noqa: E402
 from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
+    ENRICHMENT_STATUS_ENRICHED,
+    ENRICHMENT_STATUS_FAILED,
+    ENRICHMENT_STATUS_SKIPPED,
     PEOPLE_SCHEMA_COLUMNS,
     extract_public_identifier,
     normalize_linkedin_url,
@@ -203,15 +219,24 @@ class EnrichPeople:
         self._timed("prepare_queue", self.prepare_queue)
         paid = int(self.counts.get("paid_call_count") or 0)
         if paid > 0 and not self.cfg.approve_spend:
+            # RapidAPI bills every REQUEST, and a cache miss retries up to
+            # DEFAULT_RAPIDAPI_RETRY_ATTEMPTS times on transient errors — so one
+            # credit per miss is the floor, not the worst case. Quote both.
+            attempts = max(1, DEFAULT_RAPIDAPI_RETRY_ATTEMPTS)
+            max_credits = paid * attempts
             return self._write(status="needs_approval", needs_approval={
                 "reason": "rapidapi_cache_misses",
                 "paid_call_count": paid,
                 "cache_hit_count": int(self.counts.get("cache_hit_count") or 0),
-                # RapidAPI bills one credit per profile fetch (cache misses only).
                 "estimated_credits": paid,
+                "estimated_credits_is_floor": True,
+                "estimated_credits_max": max_credits,
+                "retry_attempts": attempts,
                 "message": (
                     f"{paid} LinkedIn profiles are not cached and need paid RapidAPI "
-                    f"fetches (~{paid} credits). Re-run with --approve-spend to proceed."
+                    f"fetches: at least {paid} credits, up to {max_credits} if every "
+                    f"fetch exhausts its {attempts} retry attempts (RapidAPI bills each "
+                    f"request). Re-run with --approve-spend to proceed."
                 ),
             })
         if paid > 0 and not RapidApiClient.resolve_key():
@@ -527,33 +552,82 @@ class EnrichPeople:
         }
 
     def merge_people(self) -> dict[str, Any]:
-        """Merge provider profiles back into the input rows and write the
-        canonical people.csv (confirmed rows only)."""
+        """Merge provider profiles back into the input rows and write the canonical
+        people.csv — EVERY input row, each stamped with its enrichment outcome.
+
+        A row the provider could not hydrate keeps its identity columns and comes
+        out `enrichment_status=failed` with the provider reason in
+        `enrichment_error`, instead of being deleted. Deleting it made a
+        rate-limited fetch byte-identical to "never attempted", so a 429 storm
+        silently erased contacts. Rows suppressed by a cached prior failure are
+        stamped from `rapidapi_recent_failures.csv`; rows the provider never
+        looked at are `skipped`."""
         cfg = self.cfg
         original_rows = [normalize_people_row(row) for row in CsvIO.read_dict_rows(cfg.input_csv)]
         by_key: dict[str, dict[str, Any]] = {}
         for row in original_rows:
-            key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or short_hash(json.dumps(row, sort_keys=True))
-            by_key[key] = row
+            by_key[self._people_row_key(row)] = row
         provider_path = Path(self.artifacts.get("provider_enriched_csv") or self.artifacts.get("linkedin_enrichment_queue_csv"))
         enriched_rows = CsvIO.read_dict_rows(provider_path) if provider_path and provider_path.exists() else []
         company_lookup = build_company_identity_lookup([Path(p) for p in cfg.company_corpus_jsonl])
+        attempted_keys: set[str] = set()
         for row in enriched_rows:
             rapid_raw = json.loads(row["rapidapi_response_enriched"]) if row.get("rapidapi_response_enriched") else (json.loads(row["rapidapi_response"]) if row.get("rapidapi_response") else None)
             public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
             rapid = normalize_rapidapi(rapid_raw, public_identifier, row.get("linkedin_url", ""), company_lookup)
+            # merge_provider_profile stamps the enriched/failed outcome itself.
             merged = merge_provider_profile(row, rapid, rapid_raw)
-            key = row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or short_hash(json.dumps(row, sort_keys=True))
+            key = self._people_row_key(row)
+            attempted_keys.add(key)
             by_key[key] = merged
+        # Rows whose fetch was suppressed by a cached prior failure never reach the
+        # provider CSV: they were still attempted, so carry the cached reason over.
+        failures_path_text = self.artifacts.get("rapidapi_recent_failures_csv") or ""
+        failures_path = Path(failures_path_text) if failures_path_text else None
+        recent_failure_rows = CsvIO.read_dict_rows(failures_path) if failures_path and failures_path.exists() else []
+        for row in recent_failure_rows:
+            key = self._people_row_key(row)
+            target = by_key.get(key)
+            if target is None:
+                continue
+            attempted_keys.add(key)
+            stamp_enrichment_outcome(target, attempted=True, error=provider_failure_reason(row))
+        # Everything the provider never looked at this run is `skipped` — restamped
+        # from scratch, so a stale status carried in from the input never survives.
+        for key, row in by_key.items():
+            if key not in attempted_keys:
+                stamp_enrichment_outcome(row, attempted=False)
+        rows = list(by_key.values())
         output = self.artifact_dir / "people.csv"
-        unfiltered_rows = list(by_key.values())
-        rows = [row for row in unfiltered_rows if confirmed_people_row(row)]
         CsvIO.write_dict_rows(output, PEOPLE_SCHEMA_COLUMNS, rows)
+        statuses = [str(row.get("enrichment_status") or "") for row in rows]
+        enriched_count = statuses.count(ENRICHMENT_STATUS_ENRICHED)
+        failed_count = statuses.count(ENRICHMENT_STATUS_FAILED)
+        skipped_count = statuses.count(ENRICHMENT_STATUS_SKIPPED)
         self.artifacts["people_csv"] = str(output)
-        self.counts["people_rows"] = len(rows)
-        filtered_rows = len(unfiltered_rows) - len(rows)
-        emit_progress(f"Wrote people.csv with {len(rows)} confirmed rows.")
-        return {"rows": len(rows), "unfiltered_rows": len(unfiltered_rows), "filtered_rows": filtered_rows, "output_file": str(output)}
+        self.counts.update({
+            "people_rows": len(rows),
+            "enriched_rows": enriched_count,
+            "failed_rows": failed_count,
+            "skipped_rows": skipped_count,
+        })
+        emit_progress(
+            f"Wrote people.csv with {len(rows)} rows "
+            f"({enriched_count} enriched, {failed_count} failed, {skipped_count} skipped)."
+        )
+        return {
+            "rows": len(rows),
+            "enriched_rows": enriched_count,
+            "failed_rows": failed_count,
+            "skipped_rows": skipped_count,
+            "output_file": str(output),
+        }
+
+    @staticmethod
+    def _people_row_key(row: dict[str, Any]) -> str:
+        """Identity key used to fold provider/recent-failure rows back onto their
+        input row. Same recipe for every source so the three passes agree."""
+        return row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or short_hash(json.dumps(row, sort_keys=True))
 
     # ---- CLI command handlers ----
     # The class is the single entry point for running enrichment: `command_run`

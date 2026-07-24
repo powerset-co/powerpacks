@@ -147,20 +147,23 @@ class PipelinePhase13Tests(unittest.TestCase):
         sleep.assert_called_once_with(1.0)
         self.assertEqual(cached["attempts"], 2)
 
-    def test_rapidapi_profile_records_final_retry_failure(self):
+    def test_rapidapi_profile_does_not_cache_exhausted_transient_retries(self):
+        """A 429 that survives every retry is still TRANSIENT: it must be
+        reported to the caller but never written to the profile cache. Caching
+        it would suppress the next attempt for the whole failure-retry TTL, so a
+        rate-limit storm would drop these people from people.csv for a day."""
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_ATTEMPTS", 2), \
             mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 0.5), \
             mock.patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (429, {"message": "Too many requests"}, "")]) as http_json, \
             mock.patch.object(rapidapi_client.time, "sleep") as sleep:
             result = rapidapi_client.RapidApiClient("key").fetch_profile("ada", "https://www.linkedin.com/in/ada", cache_dir=tmp, refresh_cache=True)
-            cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
+            cache_written = (Path(tmp) / "ada.json").exists()
         self.assertEqual(result["status_code"], 429)
         self.assertEqual(result["attempts"], 2)
         self.assertEqual(http_json.call_count, 2)
         sleep.assert_called_once_with(0.5)
-        self.assertEqual(cached["status_code"], 429)
-        self.assertEqual(cached["attempts"], 2)
+        self.assertFalse(cache_written)
 
     def test_enrich_linkedin_reports_retry_summary_and_columns(self):
         with tempfile.TemporaryDirectory() as tmp:

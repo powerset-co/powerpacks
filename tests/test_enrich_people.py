@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.ingestion.primitives.enrich import profile_cache, profile_transforms, rapidapi_client
-from packs.ingestion.schemas.people_schema import generate_person_id
+from packs.ingestion.schemas.people_schema import generate_person_id, normalize_people_row
 from packs.shared.csv_io import CsvIO
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "packs/ingestion/primitives/enrich/enrich_people.py"
@@ -380,8 +380,17 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["recent_failure_count"], 1)
             self.assertTrue(Path(payload["artifacts"]["rapidapi_recent_failures_csv"]).exists())
             self.assertEqual(payload["status"], "completed")
+            # The TTL-suppressed row SURVIVES, annotated. It used to be written
+            # nowhere at all, which made a rate-limited fetch byte-identical to
+            # "never attempted" and silently deleted the contact.
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
-                self.assertEqual(list(CsvIO.dict_reader(handle)), [])
+                rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["public_identifier"], "jane-example")
+            self.assertEqual(rows[0]["enrichment_status"], "failed")
+            self.assertIn("not found", rows[0]["enrichment_error"])
+            self.assertEqual(payload["counts"]["failed_rows"], 1)
+            self.assertEqual(payload["counts"]["enriched_rows"], 0)
 
     def test_old_failed_cache_retries_after_ttl(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -412,6 +421,215 @@ class EnrichPeopleTests(unittest.TestCase):
             {"title": "Current", "company": "NewCo", "ends_at": None},
         ])
         self.assertEqual((title, company, legacy), ("Current", "NewCo", ""))
+
+    # ---- failure is annotated, never deleted -------------------------------
+
+    def test_enriched_rows_are_stamped_enriched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            self.write_people(people, rapidapi_response=self.profile())
+            code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out")])
+            self.assertEqual(code, 0)
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual(rows[0]["enrichment_status"], "enriched")
+            self.assertEqual(rows[0]["enrichment_error"], "")
+            self.assertEqual(payload["counts"]["enriched_rows"], 1)
+            self.assertEqual(payload["counts"]["failed_rows"], 0)
+
+    def test_failed_fetch_keeps_row_with_status_and_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            self.write_people(people)
+            cache_dir = Path(tmp) / "cache"
+            failed = {
+                "status_code": 429,
+                "data": None,
+                "error": "rate limit exceeded",
+                "from_cache": False,
+                "normalized_profile": {"success": False, "error": "rate limit exceeded"},
+                "attempts": 3,
+            }
+            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value=failed):
+                    code, payload = self.invoke([
+                        "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
+                        "--profile-cache-dir", str(cache_dir), "--approve-spend",
+                    ])
+            self.assertEqual(code, 0)
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["public_identifier"], "jane-example")
+            self.assertEqual(rows[0]["full_name"], "Jane Example")
+            self.assertEqual(rows[0]["enrichment_status"], "failed")
+            self.assertIn("rate limit exceeded", rows[0]["enrichment_error"])
+            self.assertEqual(payload["counts"]["failed_rows"], 1)
+
+    def test_row_without_linkedin_is_stamped_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            self.write_people_rows(people, [
+                {"id": "casey", "full_name": "Casey Delta", "primary_email": "casey@example.com"},
+            ])
+            code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out")])
+            self.assertEqual(code, 0)
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["enrichment_status"], "skipped")
+            self.assertEqual(rows[0]["enrichment_error"], "")
+            self.assertEqual(payload["counts"]["skipped_rows"], 1)
+
+    def test_reads_people_csv_written_before_the_new_columns(self):
+        """An existing people.csv predating enrichment_status/-_error has neither
+        column in its header. Reading it must not crash and must not invent a
+        status: DictReader simply omits the keys, normalize_people_row fills "",
+        and the run re-stamps the outcome from scratch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            legacy_fields = [c for c in enrich_people.PEOPLE_SCHEMA_COLUMNS
+                             if c not in {"enrichment_status", "enrichment_error"}]
+            self.assertNotIn("enrichment_status", legacy_fields)
+            row = {col: "" for col in legacy_fields}
+            row.update({
+                "id": "person-1",
+                "public_identifier": "jane-example",
+                "linkedin_url": "https://www.linkedin.com/in/jane-example",
+                "full_name": "Jane Example",
+                "rapidapi_response": json.dumps(self.profile()),
+            })
+            with people.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=legacy_fields)
+                writer.writeheader()
+                writer.writerow(row)
+            # The legacy row really is missing the keys, not merely blank.
+            raw_rows = CsvIO.read_dict_rows(people)
+            self.assertNotIn("enrichment_status", raw_rows[0])
+            self.assertNotIn("enrichment_error", raw_rows[0])
+            # Missing column -> "" through the shared normalizer, no KeyError.
+            self.assertEqual(normalize_people_row(raw_rows[0])["enrichment_status"], "")
+
+            code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out")])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual(rows[0]["full_name"], "Jane Example")
+            self.assertEqual(rows[0]["enrichment_status"], "enriched")
+
+    def test_stale_status_from_a_previous_run_is_recomputed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            self.write_people_rows(people, [{
+                "id": "person-1",
+                "public_identifier": "jane-example",
+                "linkedin_url": "https://www.linkedin.com/in/jane-example",
+                "full_name": "Jane Example",
+                "rapidapi_response": json.dumps(self.profile()),
+                "enrichment_status": "failed",
+                "enrichment_error": "stale reason from a previous run",
+            }])
+            code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out")])
+            self.assertEqual(code, 0)
+            with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                rows = list(CsvIO.dict_reader(handle))
+            self.assertEqual(rows[0]["enrichment_status"], "enriched")
+            self.assertEqual(rows[0]["enrichment_error"], "")
+
+    # ---- only PERMANENT failures are cached --------------------------------
+
+    def fetch_with_http(self, tmp: Path, response, *, refresh_cache=False):
+        with patch.object(rapidapi_client.RapidApiClient, "http_json", return_value=response):
+            return rapidapi_client.RapidApiClient("key", retry_attempts=1).fetch_profile(
+                "jane-example", "https://www.linkedin.com/in/jane-example",
+                cache_dir=tmp, refresh_cache=refresh_cache,
+            )
+
+    def test_permanent_http_failure_is_cached(self):
+        for status in sorted(rapidapi_client.PERMANENT_FAILURE_STATUS_CODES):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                self.fetch_with_http(Path(tmp), (status, None, "profile not found"))
+                cached_path = Path(tmp) / "jane-example.json"
+                self.assertTrue(cached_path.exists(), f"status {status} should be cached")
+                cached = json.loads(cached_path.read_text(encoding="utf-8"))
+                self.assertEqual(cached["status_code"], status)
+                self.assertFalse(cached["normalized_profile"]["success"])
+
+    def test_transient_failures_are_not_cached(self):
+        # 0 covers a network error AND a 200 whose body fails to parse as JSON —
+        # http_json funnels both into status 0.
+        for status in (0, 429, 500, 502, 503, 504):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                self.fetch_with_http(Path(tmp), (status, None, "transient"))
+                self.assertFalse(
+                    (Path(tmp) / "jane-example.json").exists(),
+                    f"status {status} is transient and must not be cached: caching it "
+                    f"suppresses the retry for the whole failure TTL",
+                )
+
+    def test_transient_failure_leaves_the_row_retryable_next_run(self):
+        """The end of the rate-limit-storm bug: a 429 must not classify as a
+        recent_failure on the next run — the person is still a cache MISS."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp) / "cache"
+            self.fetch_with_http(cache_dir, (429, None, "rate limited"))
+            status, reason, _path, _failure = profile_cache.classify_rapidapi_cache_status(
+                {"public_identifier": "jane-example", "linkedin_url": "https://www.linkedin.com/in/jane-example"},
+                cache_dir, False, 24.0, None,
+            )
+            self.assertEqual(status, "miss")
+            self.assertNotEqual(reason, "recent provider failure")
+
+    def test_provider_success_false_is_a_permanent_failure(self):
+        self.assertTrue(rapidapi_client.RapidApiClient.is_permanent_failure(200, {"success": False}))
+        self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(200, {"success": True}))
+        self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(429, {"success": False}))
+        self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(0, {"success": False}))
+
+    def test_failure_never_overwrites_an_existing_good_cache_entry(self):
+        """--refresh-cache skips the cache READ, so without a guard a transient
+        error during a refresh would destroy an already-paid-for profile."""
+        for status in (0, 429, 503, 404):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                cache_path = Path(tmp) / "jane-example.json"
+                cache_path.write_text(json.dumps(self.cache_entry()), encoding="utf-8")
+                before = cache_path.read_text(encoding="utf-8")
+                self.fetch_with_http(Path(tmp), (status, None, "boom"), refresh_cache=True)
+                self.assertEqual(cache_path.read_text(encoding="utf-8"), before,
+                                 f"status {status} clobbered a paid-for cache entry")
+                self.assertIsNotNone(profile_cache.read_usable_cached_profile(cache_path))
+
+    def test_successful_refresh_still_overwrites_the_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "jane-example.json"
+            cache_path.write_text(json.dumps(self.cache_entry()), encoding="utf-8")
+            fresh = self.profile()
+            fresh["headline"] = "CTO at Acme"
+            self.fetch_with_http(Path(tmp), (200, fresh, ""), refresh_cache=True)
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            self.assertEqual(cached["raw_response"]["headline"], "CTO at Acme")
+
+    # ---- spend gate --------------------------------------------------------
+
+    def test_needs_approval_quotes_a_credit_range_not_just_the_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            self.write_people(people)
+            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
+                with patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=AssertionError("network called")):
+                    code, payload = self.invoke([
+                        "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
+                        "--profile-cache-dir", str(Path(tmp) / "cache"),
+                    ])
+            self.assertEqual(code, enrich_people.NEEDS_APPROVAL_CODE)
+            gate = payload["needs_approval"]
+            attempts = rapidapi_client.DEFAULT_RAPIDAPI_RETRY_ATTEMPTS
+            self.assertEqual(gate["estimated_credits"], 1)
+            self.assertTrue(gate["estimated_credits_is_floor"])
+            self.assertEqual(gate["estimated_credits_max"], attempts)
+            self.assertEqual(gate["retry_attempts"], attempts)
+            self.assertIn(str(attempts), gate["message"])
 
     def test_check_keys_is_rapidapi_only(self):
         with patch.dict(os.environ, {"UNRELATED_PROVIDER_KEY": "x", "RAPIDAPI_KEY": "r"}, clear=True):

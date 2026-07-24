@@ -17,8 +17,12 @@ repo `.env` at import time without overriding the shell.
 - `client.fetch_profile(public_identifier, linkedin_url, *, cache_dir=None,
   refresh_cache=False, wait_for_attempt=None)` — serves a usable cache entry
   unless `refresh_cache`, otherwise fetches with exponential backoff on
-  429/5xx/network errors and writes the (success OR failure) result back to the
-  profile cache. Cache format and readers live in `profile_cache.py`.
+  429/5xx/network errors. A success is always cached. A failure is cached ONLY
+  when `is_permanent_failure` says so (404/410, or an HTTP 200 the provider
+  marked `success: false`) AND no usable successful entry is already on disk.
+  Cache format and readers live in `profile_cache.py`.
+- `RETRYABLE_STATUS_CODES` / `PERMANENT_FAILURE_STATUS_CODES` /
+  `is_permanent_failure` — the retry set and the cacheable-failure set.
 - `DEFAULT_RAPIDAPI_*` — env-tunable throughput/retry knobs (workers, RPM,
   failure-retry TTL, retry attempts/backoff), kept module-level so config-only
   consumers (models, network_import, run_linkedin) import them without the
@@ -29,6 +33,12 @@ repo `.env` at import time without overriding the shell.
   the enrichment orchestrator holds a reused `RapidApiClient` directly.
 
 Changelog:
+  2026-07-24: failure caching narrowed to PERMANENT failures only. Every
+    non-success path used to write an identical failure record, so a 429, a
+    timeout and a genuine 404 all earned the same 24h retry suppression and a
+    rate-limit storm silently erased contacts for a day. A failure write also
+    now refuses to overwrite an existing usable (already paid for) profile,
+    which `--refresh-cache` previously allowed.
   2026-07-23 (audit oo-client): the module internals became a RapidApiClient
     class (rapidapi_key -> resolve_key, rapidapi_profile -> fetch_profile,
     RAPIDAPI_BASE_URL -> BASE_URL, load_dotenv/http_json now staticmethods). The
@@ -68,6 +78,19 @@ DEFAULT_RAPIDAPI_MAX_RPM = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_MA
 DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_FAILURE_RETRY_HOURS", "24"))
 DEFAULT_RAPIDAPI_RETRY_ATTEMPTS = int(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_RETRY_ATTEMPTS", "3"))
 DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS = float(os.environ.get("POWERPACKS_RAPIDAPI_LINKEDIN_RETRY_BACKOFF_SECONDS", "1.0"))
+
+# HTTP statuses worth another attempt within a single fetch. 0 is our own
+# "no HTTP answer" code from `http_json` (network error, timeout, or a body that
+# failed to parse as JSON).
+RETRYABLE_STATUS_CODES = frozenset({0, 429, 500, 502, 503, 504})
+# The ONLY statuses whose failure is PERMANENT for a profile: the profile is gone
+# or withheld, so the next fetch buys the same answer. Everything else — 0, 429,
+# 5xx — is transient and must NOT be written to the failure cache: a cached
+# failure suppresses retries for DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS, which
+# turns a rate-limit storm into a day of unenrichable contacts. A provider
+# `success: false` body on an HTTP 200 counts as permanent too (see
+# `is_permanent_failure`) — that is the provider saying the profile is not there.
+PERMANENT_FAILURE_STATUS_CODES = frozenset({404, 410})
 
 
 class RapidApiClient:
@@ -165,7 +188,7 @@ class RapidApiClient:
                 params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
                 timeout=90,
             )
-            if status not in {0, 429, 500, 502, 503, 504} or attempt == attempts:
+            if status not in RETRYABLE_STATUS_CODES or attempt == attempts:
                 break
             sleep_for = self.retry_backoff_seconds * (2 ** (attempt - 1))
             time.sleep(sleep_for)
@@ -180,7 +203,11 @@ class RapidApiClient:
                 "normalized_profile": normalized,
                 "attempts": attempt,
             })
-        elif cache_path:
+        elif cache_path and self.is_permanent_failure(status, normalized) and not read_usable_cached_profile(cache_path):
+            # Only permanent failures are cached, and never over an entry we
+            # already paid for: `refresh_cache` skips the READ above, so without
+            # this guard one transient error during a refresh would overwrite a
+            # good profile with a failure record and bill us to get it back.
             checked_at = now_iso()
             write_json(cache_path, {
                 "fetched_at": checked_at,
@@ -194,6 +221,18 @@ class RapidApiClient:
                 "attempts": attempt,
             })
         return {"status_code": status, "data": data, "error": error, "from_cache": False, "normalized_profile": normalized, "attempts": attempt}
+
+    @staticmethod
+    def is_permanent_failure(status: int, normalized: dict[str, Any]) -> bool:
+        """True when a non-success result will not change on a later retry, i.e.
+        it is safe to remember as a cached failure. That is HTTP 404/410, or an
+        HTTP 200 whose body the provider marked `success: false` (no such
+        profile). Transient statuses — 0 (network/timeout/unparseable body), 429,
+        and 5xx — are never permanent, so they leave the cache untouched and the
+        next run retries instead of silently dropping the person."""
+        if status in PERMANENT_FAILURE_STATUS_CODES:
+            return True
+        return status == 200 and normalized.get("success") is False
 
 
 def rapidapi_key() -> str:

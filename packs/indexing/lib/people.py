@@ -5,6 +5,10 @@ read already-ingested Powerpacks people rows and derive the position-level
 people namespace records, Postgres person contract records, and hydrated profile
 artifacts without LLM or network calls.
 
+The people-row column list and its normalizers come from
+`packs.ingestion.schemas.people_schema` — the one home. `PEOPLE_CSV_COLUMNS` is a
+local alias of `PEOPLE_SCHEMA_COLUMNS`, never a second declaration.
+
 Changelog:
   2026-07-24 (one people schema): the `except Exception` "copied primitive
     bundle" fallback that redefined PEOPLE_CSV_COLUMNS/extract_public_identifier/

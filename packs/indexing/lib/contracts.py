@@ -17,9 +17,13 @@ CANONICAL_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 MERGE_COLUMNS = ["merge_key", "merge_confidence", "merge_sources", "merged_row_count", "needs_review"]
 # Columns newer than the oldest still-valid people.csv artifacts; absent
 # headers degrade to empty values via normalize_people_row, so their absence
-# is a warning rather than an error.
+# is a warning rather than an error. EVERY column appended to
+# PEOPLE_SCHEMA_COLUMNS belongs here — validate_people_csv hard-errors on a
+# schema column missing from the header otherwise, which would fail every
+# people.csv a user already has on disk.
 OPTIONAL_PEOPLE_SCHEMA_COLUMNS = {"interaction_counts", "last_interaction",
-                                  "superseded_person_ids"}
+                                  "superseded_person_ids",
+                                  "enrichment_status", "enrichment_error"}
 CANONICAL_PEOPLE_COLUMNS = PEOPLE_SCHEMA_COLUMNS + MERGE_COLUMNS
 
 
