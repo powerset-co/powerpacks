@@ -10,6 +10,11 @@ Writes the normalized JSONL (default
 it with row counts.
 
 Changelog:
+  2026-07-23 (cmd inline): the ``cmd_normalize`` dispatcher was inlined into
+    ``main`` — the single ``normalize`` subcommand constructs
+    ``ContactsNormalizer``, calls ``normalize``, and emits its manifest directly
+    (no ``set_defaults(func=)`` indirection). CLI subcommand, flags, and stdout
+    are unchanged.
   2026-07-23 (in-process): the normalize logic moved onto a ``ContactsNormalizer``
     class (``normalize(*, input, out_jsonl, manifest) -> dict`` returning the
     manifest with ``status: ok``). The message channels call it in-process instead
@@ -224,13 +229,6 @@ class ContactsNormalizer:
         return manifest_payload
 
 
-def cmd_normalize(args: argparse.Namespace) -> None:
-    """CLI wrapper: run ``ContactsNormalizer.normalize`` and print the manifest."""
-    emit(ContactsNormalizer().normalize(
-        input=args.input, out_jsonl=args.out_jsonl, manifest=args.manifest,
-    ))
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Normalize contact-exporter CSV output")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -238,9 +236,12 @@ def main() -> None:
     normalize.add_argument("--input", required=True)
     normalize.add_argument("--out-jsonl")
     normalize.add_argument("--manifest")
-    normalize.set_defaults(func=cmd_normalize)
     args = parser.parse_args()
-    args.func(args)
+
+    # Single subcommand: build the normalizer, run it, and emit the manifest.
+    emit(ContactsNormalizer().normalize(
+        input=args.input, out_jsonl=args.out_jsonl, manifest=args.manifest,
+    ))
 
 
 if __name__ == "__main__":

@@ -36,6 +36,14 @@ import chain's `run_gmail_apply_and_enrich` step
 and applies STORED resolutions only.
 
 Changelog:
+  2026-07-23 (cmd inline): the `_dispatch_msgvault_accounts`/`_dispatch_msgvault`/
+    `_dispatch_apply_resolutions` adapters were inlined into `main` (an
+    `if args.command in (...)` chain replaces `set_defaults(func=)` + `args.func`)
+    and deleted. `main` still constructs one `GmailExtractor` and calls the
+    matching method, wrapping ValueError -> exit 2 and KeyboardInterrupt -> exit
+    130 exactly as before; subcommand aliases (`msgvault-sources`,
+    `import-msgvault`) are matched explicitly since argparse stores the alias the
+    user typed. Subcommands, flags, payloads, and exit codes are unchanged.
   2026-07-23 (rename): `discover_engine.py` -> `extract_gmail.py` and the
     `GmailDiscoverEngine` class -> `GmailExtractor`, for naming parity with
     `messages/extract_imessage.py`'s `IMessageExtractor`/`WhatsAppExtractor`.
@@ -584,34 +592,6 @@ class GmailExtractor:
         )
 
 
-def _dispatch_msgvault_accounts(engine: GmailExtractor, args: argparse.Namespace) -> dict[str, Any]:
-    """`msgvault-accounts` CLI adapter -> GmailExtractor.list_msgvault_accounts."""
-    return engine.list_msgvault_accounts(db=args.db)
-
-
-def _dispatch_msgvault(engine: GmailExtractor, args: argparse.Namespace) -> dict[str, Any]:
-    """`msgvault` CLI adapter -> GmailExtractor.run_msgvault."""
-    return engine.run_msgvault(
-        db=args.db,
-        account_email=args.account_email,
-        output_dir=args.output_dir,
-        include_automated=bool(args.include_automated),
-        include_category_mail=bool(args.include_category_mail),
-        limit=args.limit,
-        exclude_labels=args.exclude_label,
-    )
-
-
-def _dispatch_apply_resolutions(engine: GmailExtractor, args: argparse.Namespace) -> dict[str, Any]:
-    """`apply-resolutions` CLI adapter -> GmailExtractor.apply_resolutions."""
-    return engine.apply_resolutions(
-        people_csv=args.people_csv,
-        resolutions_csv=args.resolutions_csv,
-        output_dir=args.output_dir,
-        min_confidence=args.min_confidence,
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
     """Build the argparse tree: msgvault-accounts, msgvault, apply-resolutions."""
     parser = argparse.ArgumentParser(description="Gmail discovery engine: msgvault metadata -> local network artifacts")
@@ -619,7 +599,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sources = sub.add_parser("msgvault-accounts", aliases=["msgvault-sources"], help="List Gmail source accounts in a local msgvault SQLite archive")
     sources.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
-    sources.set_defaults(func=_dispatch_msgvault_accounts)
 
     msgvault = sub.add_parser("msgvault", aliases=["import-msgvault"], help="Import Gmail contact metadata from a local msgvault SQLite archive")
     msgvault.add_argument("--db", default=str(DEFAULT_MSGVAULT_DB), help="Path to msgvault.db (default: $MSGVAULT_HOME/msgvault.db or ~/.msgvault/msgvault.db)")
@@ -629,14 +608,12 @@ def build_parser() -> argparse.ArgumentParser:
     msgvault.add_argument("--include-automated", action="store_true", help="Include noreply/automated service addresses")
     msgvault.add_argument("--exclude-label", action="append", default=[], help="Exclude messages with this msgvault/Gmail label name; may be repeated")
     msgvault.add_argument("--include-category-mail", action="store_true", help="Do not exclude default Gmail category labels: Social, Promotions, Forums, Updates")
-    msgvault.set_defaults(func=_dispatch_msgvault)
 
     apply = sub.add_parser("apply-resolutions", help="Apply LinkedIn resolution results to a Gmail/msgvault people.csv")
     apply.add_argument("--people-csv", required=True)
     apply.add_argument("--resolutions-csv", required=True)
     apply.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     apply.add_argument("--min-confidence", type=float, default=0.75)
-    apply.set_defaults(func=_dispatch_apply_resolutions)
 
     return parser
 
@@ -644,12 +621,34 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Parse args, construct the engine, dispatch to the matching method, emit its
     payload, and return the exit code: 0 on success, 2 on ValueError, 130 on
-    interrupt (the mapping the subprocess CLI has always exposed)."""
+    interrupt (the mapping the subprocess CLI has always exposed).
+
+    Aliases are matched explicitly (`msgvault-sources` for `msgvault-accounts`,
+    `import-msgvault` for `msgvault`): argparse stores the alias the user typed in
+    `args.command`, not the canonical subparser name."""
     parser = build_parser()
     args = parser.parse_args(argv)
     engine = GmailExtractor()
     try:
-        payload = args.func(engine, args)
+        if args.command in ("msgvault-accounts", "msgvault-sources"):
+            payload = engine.list_msgvault_accounts(db=args.db)
+        elif args.command in ("msgvault", "import-msgvault"):
+            payload = engine.run_msgvault(
+                db=args.db,
+                account_email=args.account_email,
+                output_dir=args.output_dir,
+                include_automated=bool(args.include_automated),
+                include_category_mail=bool(args.include_category_mail),
+                limit=args.limit,
+                exclude_labels=args.exclude_label,
+            )
+        else:  # apply-resolutions (no alias; required subparsers guarantee a match)
+            payload = engine.apply_resolutions(
+                people_csv=args.people_csv,
+                resolutions_csv=args.resolutions_csv,
+                output_dir=args.output_dir,
+                min_confidence=args.min_confidence,
+            )
     except ValueError as exc:
         emit({"status": "error", "error": str(exc)})
         return 2

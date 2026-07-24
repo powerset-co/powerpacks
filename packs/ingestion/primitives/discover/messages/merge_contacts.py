@@ -35,6 +35,11 @@ Per-phone merge rules (consistent with `normalize_contacts.py`):
   one whose `match_status` is matched > suggested > unmatched > empty.
 
 Changelog:
+  2026-07-23 (cmd inline): the ``cmd_merge`` dispatcher was inlined into
+    ``main`` — the single ``merge`` subcommand constructs ``ContactsMerger``,
+    calls ``merge``, and emits its manifest directly (no ``set_defaults(func=)``
+    indirection). CLI subcommand, flags, stdout, exit code (0), and the
+    schema-mismatch ``SystemExit`` are unchanged.
   2026-07-23 (in-process): the merge logic moved onto a ``ContactsMerger`` class
     (``merge(*, inputs, output, manifest) -> dict`` returning the manifest with
     ``status: ok``). ``MessagesDiscovery._merge`` calls it in-process instead of
@@ -363,16 +368,6 @@ class ContactsMerger:
         return manifest_payload
 
 
-def cmd_merge(args: argparse.Namespace) -> int:
-    """CLI wrapper: run ``ContactsMerger.merge`` and emit the manifest."""
-    emit(ContactsMerger().merge(
-        inputs=list(args.inputs),
-        output=args.output,
-        manifest=args.manifest if args.manifest else None,
-    ))
-    return 0
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Merge per-channel message-contact CSVs into one")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -381,9 +376,16 @@ def main() -> None:
                        help="Path to a per-channel CSV (use multiple --input flags to merge several)")
     merge.add_argument("--output", "-o", required=True, help="Path to write the unified contacts.csv")
     merge.add_argument("--manifest", help="Path to write the run manifest JSON")
-    merge.set_defaults(func=cmd_merge)
     args = parser.parse_args()
-    raise SystemExit(args.func(args))
+
+    # Single subcommand: build the merger, run it, and emit the manifest. A
+    # schema-mismatched input still raises SystemExit inside ContactsMerger.merge
+    # (via read_input_csv); the happy path exits 0.
+    emit(ContactsMerger().merge(
+        inputs=list(args.inputs),
+        output=args.output,
+        manifest=args.manifest if args.manifest else None,
+    ))
 
 
 if __name__ == "__main__":

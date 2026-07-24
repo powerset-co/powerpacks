@@ -9,6 +9,9 @@ run surfaces the non-blocking pre-full-sync re-link nudge on ``self.artifacts``.
 Metadata only — no message bodies.
 
 Changelog:
+  2026-07-23 (explicit-selection): dropped the ``accounts_path`` constructor
+    parameter — the QR-scan ``blocked_child`` no longer threads it (the continue
+    command is rebuilt from the include flags alone). Behavior otherwise unchanged.
   2026-07-23 (extractor split): ``extract()`` now calls
     ``WhatsAppExtractor().run(...)`` (imported from ``extract_whatsapp``) instead
     of ``WhatsAppWacli().run(...)`` — the WhatsApp discovery orchestrator was
@@ -73,11 +76,10 @@ class WhatsAppChannel(MessageChannel):
     def __init__(
         self,
         *,
-        accounts_path: Path,
         other_enabled: bool,
         max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
     ) -> None:
-        super().__init__(accounts_path=accounts_path, other_enabled=other_enabled)
+        super().__init__(other_enabled=other_enabled)
         self.max_messages = max_messages
         self.contacts_csv = WHATSAPP_CONTACTS
         self.normalized_jsonl = WHATSAPP_NORMALIZED_JSONL
@@ -96,7 +98,6 @@ class WhatsAppChannel(MessageChannel):
         if payload.get("status") == "blocked_user_action":
             return blocked_child(
                 message=str(payload.get("message") or "WhatsApp needs a QR scan."),
-                accounts_path=self.accounts_path,
                 detail=payload,
                 whatsapp_provider="wacli",
                 qr_page=str(payload.get("qr_page") or MESSAGES_OUT_DIR / "wacli-login-qr.html"),

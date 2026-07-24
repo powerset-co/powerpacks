@@ -10,6 +10,11 @@ still reach for it via this module); the cross-vertical json/proc/paths/
 contact-field helpers live in `packs.ingestion.primitives.common`.
 
 Changelog:
+  2026-07-23 (messages explicit-selection): deleted ``channel_is_linked`` — its
+    sole caller was messages discovery's accounts.json linkage read, which was
+    removed when message channel selection became explicit ``--include-*`` only.
+    ``account_channel``/``account_config`` remain (still used by discover callers
+    reading channel config groups).
   2026-07-23 (audit class-sharing): moved the typed-manifest contract
     (StagePayload, write_stage_manifest, and the collect/artifact/manifest
     fingerprint helpers) to common/manifests.py so non-discover stages can share
@@ -96,15 +101,6 @@ def account_config(accounts: dict[str, Any], name: str) -> dict[str, Any]:
     channel = account_channel(accounts, name)
     cfg = channel.get("config")
     return cfg if isinstance(cfg, dict) else {}
-
-
-def channel_is_linked(accounts: dict[str, Any], name: str) -> bool:
-    """True when a channel is linked (status == linked, or linked flag without skip)."""
-    channel = account_channel(accounts, name)
-    status = str(channel.get("status") or "").strip().lower()
-    if status == "linked":
-        return True
-    return bool(channel.get("linked") is True) and not bool(channel.get("skipped"))
 
 
 def ordered_unique(values: list[Any]) -> list[str]:

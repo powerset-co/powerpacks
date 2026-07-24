@@ -12,6 +12,12 @@ success or a blocked/failed child payload that short-circuits the discovery run.
 (and the store's merge) emit; they live here as the base's return-shape helpers.
 
 Changelog:
+  2026-07-23 (explicit-selection): dropped the ``accounts_path`` parameter from
+    ``MessageChannel.__init__`` and from ``blocked_child`` — message channel
+    selection is now explicit ``--include-*`` only, so nothing reads accounts.json.
+    The blocked/QR-resume ``continue_command`` is rebuilt from the include flags
+    alone (``discover.py discover [--include-imessage] [--include-whatsapp]``, no
+    ``--accounts``).
   2026-07-23 (in-process): ``normalize()`` now calls ``ContactsNormalizer().
     normalize(...)`` in-process instead of spawning ``normalize_contacts.py``;
     it branches on the returned payload's ``status`` (non-``ok`` -> failed).
@@ -51,7 +57,6 @@ from packs.ingestion.primitives.discover.messages.normalize_contacts import (  #
 def blocked_child(
     *,
     message: str,
-    accounts_path: Path,
     detail: Any = None,
     whatsapp_provider: str = "",
     qr_page: str = "",
@@ -60,11 +65,11 @@ def blocked_child(
 ) -> dict[str, Any]:
     """Build the ``blocked_user_action`` payload a channel returns when it needs
     a user step (Full Disk Access, a WhatsApp QR scan). Rebuilds an accurate
-    ``--include-*`` continue command so the skill can resume the same channels."""
+    ``--include-*`` continue command (no ``--accounts``) so the skill can resume
+    the same channels."""
     command = (
         "uv run --project . python "
-        "packs/ingestion/primitives/discover/messages/discover.py discover "
-        f"--accounts {accounts_path}"
+        "packs/ingestion/primitives/discover/messages/discover.py discover"
     )
     if include_imessage:
         command += " --include-imessage"
@@ -109,8 +114,7 @@ class MessageChannel:
     normalized_jsonl: Path
     normalized_manifest: Path
 
-    def __init__(self, *, accounts_path: Path, other_enabled: bool) -> None:
-        self.accounts_path = accounts_path
+    def __init__(self, *, other_enabled: bool) -> None:
         # Whether the OTHER channel is enabled — only used to rebuild an accurate
         # `--include-*` continue command when this channel blocks.
         self.other_enabled = other_enabled

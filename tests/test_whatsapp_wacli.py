@@ -375,20 +375,22 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             output_csv = tmp / "contacts.csv"
             output_jsonl = tmp / "contacts.jsonl"
             manifest = tmp / "manifest.json"
-            args = type("Args", (), {
-                "store": store,
-                "output_csv": output_csv,
-                "output_jsonl": output_jsonl,
-                "manifest": manifest,
-                "include_left_groups": False,
-                "max_group_participants": 30,
-                "name_fallback_csv": None,
-            })()
 
             stdout = io.StringIO()
+            # The `export` command body is inlined in `extract.main`; drive it via
+            # the CLI (empty --name-fallback-csv -> no fallback). `wacli_version`
+            # is looked up in the extractor module, so patch it there.
             with mock.patch.object(extract, "wacli_version", return_value={"path": "/tmp/wacli", "version": "wacli test"}), \
                     redirect_stdout(stdout):
-                rc = extract.cmd_export(args)
+                rc = extract.main([
+                    "export",
+                    "--store", str(store),
+                    "--output-csv", str(output_csv),
+                    "--output-jsonl", str(output_jsonl),
+                    "--manifest", str(manifest),
+                    "--max-group-participants", "30",
+                    "--name-fallback-csv", "",
+                ])
             self.assertEqual(rc, 0)
             payload = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(payload["status"], "completed")
@@ -1918,9 +1920,9 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "include_left_groups": False,
                     "max_group_participants": 30,
                 })()
-                # `cmd_run`/`WhatsAppExtractor.run` live in the extractor module
-                # and look these names up in ITS namespace (client functions
-                # imported into it + export defined there), so patch on `extract`.
+                # `WhatsAppExtractor.run` lives in the extractor module and looks
+                # these names up in ITS namespace (client functions imported into
+                # it + export defined there), so patch on `extract`.
                 with mock.patch.object(
                     extract,
                     "ensure_wacli_installed",
@@ -1976,7 +1978,26 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     "export_contacts_from_store",
                     return_value=({}, diagnostics),
                 ), redirect_stdout(io.StringIO()):
-                    rc = extract.cmd_run(args)
+                    # The `run` command body is inlined in `extract.main`; call the
+                    # extractor directly and map status -> exit code the same way.
+                    payload = extract.WhatsAppExtractor(store=args.store).run(
+                        output_csv=args.output_csv,
+                        output_jsonl=args.output_jsonl,
+                        manifest=args.manifest,
+                        progress_jsonl=args.progress_jsonl,
+                        max_messages=args.max_messages,
+                        max_group_participants=args.max_group_participants,
+                        sync_timeout=args.sync_timeout,
+                        name_fallback_csv=args.name_fallback_csv,
+                        idle_exit=args.idle_exit,
+                        auth_timeout=args.auth_timeout,
+                        group_info_timeout=args.group_info_timeout,
+                        group_info_interval=args.group_info_interval,
+                        include_left_groups=args.include_left_groups,
+                        no_install=args.no_install,
+                        no_open_qr_page=args.no_open_qr_page,
+                    )
+                    rc = extract.run_exit_code(payload)
 
                 self.assertEqual(rc, 0)
                 depth.assert_called_once()

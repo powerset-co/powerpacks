@@ -5,11 +5,13 @@ This module owns only local metadata discovery. Review, LinkedIn profile
 materialization, and enrichment live in imports/messages/importer.py.
 
 Shape:
-  MessagesDiscovery(accounts_file=..., include_imessage=..., include_whatsapp=...)
-  is the whole thing: the constructor resolves which channels are enabled (from
-  accounts.json, or the explicit --include-* override), creates the fixed output
-  dir, and builds the channels; .run() extracts each channel, merges, and writes
-  the stage manifest. main() constructs it and calls run() — no wrapper function.
+  MessagesDiscovery(include_imessage=..., include_whatsapp=...) is the whole
+  thing: channel selection is EXPLICIT — the --include-* flags ARE the selection,
+  with no accounts.json fallback. Neither enabled -> the skipped/messages_not_linked
+  manifest path (mirrors gmail's empty-selection -> skipped). The constructor
+  creates the fixed output dir and builds the enabled channels; .run() extracts
+  each channel, merges, and writes the stage manifest. main() constructs it and
+  calls run() — no wrapper function.
 
   Each source is a MessageChannel (channels/) that owns its own output paths and
   its extract -> normalize chain (both in-process calls into the leaf primitive
@@ -31,6 +33,16 @@ Shape:
   Metadata only: no bodies, no research, no upload.
 
 Changelog:
+  2026-07-23 (explicit-selection): channel selection is now EXPLICIT --include-*
+    only, mirroring gmail's --account-email model. Dropped the accounts_file
+    parameter, the --accounts CLI argument, and the messages_discovery_inputs
+    function (the accounts.json linkage read via channel_is_linked — now verified
+    dead since nothing writes the messages channel status to accounts.json and
+    $import-messages always passes --include-*). ``linked`` is just
+    ``include_imessage or include_whatsapp``; channels are constructed without
+    accounts_path, and the blocked/QR continue command drops --accounts. The
+    now-unused account_config/channel_is_linked/read_accounts/DEFAULT_ACCOUNTS
+    imports were removed; channel_is_linked was deleted from discover/common.py.
   2026-07-23 (in-process): MessagesDiscovery._merge now calls
     ``ContactsMerger().merge(...)`` in-process instead of spawning
     merge_contacts.py; the channels likewise call their leaf primitive classes
@@ -83,15 +95,11 @@ from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
 )
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
-    DEFAULT_ACCOUNTS,
     MESSAGES_OUT_DIR,
     discover_source_dir,
 )
 from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
-    account_config,
-    channel_is_linked,
-    read_accounts,
     read_csv_rows,
     write_csv_rows,
 )
@@ -120,28 +128,6 @@ MERGED_CONTACTS = MESSAGES_DIR / "contacts.csv"
 MERGED_CONTACTS_MANIFEST = MESSAGES_DIR / "contacts.csv.manifest.json"
 
 
-def messages_discovery_inputs(accounts_path: Path) -> dict[str, Any]:
-    """Resolve which message channels are enabled from accounts.json: messages
-    must be linked; iMessage is on unless explicitly skipped; WhatsApp is on when
-    linked or already authenticated."""
-    accounts = read_accounts(accounts_path)
-    cfg = account_config(accounts, "messages")
-    if not channel_is_linked(accounts, "messages"):
-        return {"linked": False, "include_imessage": False, "include_whatsapp": False}
-    imessage_cfg = cfg.get("imessage") if isinstance(cfg.get("imessage"), dict) else {}
-    whatsapp_cfg = cfg.get("whatsapp") if isinstance(cfg.get("whatsapp"), dict) else {}
-    include_imessage = str(imessage_cfg.get("status") or "").strip().lower() != "skipped"
-    include_whatsapp = (
-        str(whatsapp_cfg.get("status") or "").strip().lower() == "linked"
-        or whatsapp_cfg.get("authenticated") is True
-    )
-    return {
-        "linked": bool(include_imessage or include_whatsapp),
-        "include_imessage": include_imessage,
-        "include_whatsapp": include_whatsapp,
-    }
-
-
 # --- the store: owns the output dir, the run loop, the merge, the manifest ----
 
 class MessagesDiscovery:
@@ -153,22 +139,18 @@ class MessagesDiscovery:
     def __init__(
         self,
         *,
-        accounts_file: Path = DEFAULT_ACCOUNTS,
         out_dir: Path = DEFAULT_MESSAGES_OUTPUT_DIR,
         wacli_max_messages: int = DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
-        include_imessage: bool | None = None,
-        include_whatsapp: bool | None = None,
+        include_imessage: bool = False,
+        include_whatsapp: bool = False,
     ) -> None:
-        # Explicit --include-* flags override the accounts.json-derived set
-        # entirely; otherwise the enabled channels come from what's linked.
-        if include_imessage is not None or include_whatsapp is not None:
-            self.inputs = {
-                "linked": bool(include_imessage or include_whatsapp),
-                "include_imessage": bool(include_imessage),
-                "include_whatsapp": bool(include_whatsapp),
-            }
-        else:
-            self.inputs = messages_discovery_inputs(accounts_file)
+        # Channel selection is EXPLICIT: the --include-* flags ARE the selection
+        # (no accounts.json fallback). Neither enabled -> the skipped manifest path.
+        self.inputs = {
+            "linked": bool(include_imessage or include_whatsapp),
+            "include_imessage": bool(include_imessage),
+            "include_whatsapp": bool(include_whatsapp),
+        }
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
         self.contacts_csv = self.out_dir / "contacts.csv"
@@ -176,10 +158,10 @@ class MessagesDiscovery:
         self.channels: list[MessageChannel] = []
         if self.inputs["include_imessage"]:
             self.channels.append(IMessageChannel(
-                accounts_path=accounts_file, other_enabled=self.inputs["include_whatsapp"]))
+                other_enabled=self.inputs["include_whatsapp"]))
         if self.inputs["include_whatsapp"]:
             self.channels.append(WhatsAppChannel(
-                accounts_path=accounts_file, other_enabled=self.inputs["include_imessage"],
+                other_enabled=self.inputs["include_imessage"],
                 max_messages=wacli_max_messages))
 
     def run(self) -> dict[str, Any]:
@@ -283,15 +265,15 @@ class MessagesDiscovery:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the argparse surface: the single `discover` subcommand with the
-    accounts path, wacli max-messages, and the explicit --include-* overrides."""
+    """Build the argparse surface: the single `discover` subcommand with the wacli
+    max-messages and the explicit --include-* channel selection (the flags ARE the
+    selection; there is no --accounts file)."""
     parser = argparse.ArgumentParser(description="Discover iMessage/WhatsApp contacts")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("discover", help="Discover message contacts")
-    run.add_argument("--accounts", type=Path, default=DEFAULT_ACCOUNTS)
     run.add_argument("--wacli-max-messages", type=int, default=DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES)
-    run.add_argument("--include-imessage", action="store_true", default=None)
-    run.add_argument("--include-whatsapp", action="store_true", default=None)
+    run.add_argument("--include-imessage", action="store_true")
+    run.add_argument("--include-whatsapp", action="store_true")
     return parser
 
 
@@ -301,7 +283,6 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.command == "discover":
         payload = MessagesDiscovery(
-            accounts_file=args.accounts,
             wacli_max_messages=args.wacli_max_messages,
             include_imessage=args.include_imessage,
             include_whatsapp=args.include_whatsapp,

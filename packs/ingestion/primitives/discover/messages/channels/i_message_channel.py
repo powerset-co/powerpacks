@@ -9,6 +9,10 @@ inherited ``normalize()`` turns the CSV into canonical JSONL. Metadata only —
 never selects message body columns.
 
 Changelog:
+  2026-07-23 (explicit-selection): dropped the ``accounts_path`` constructor
+    parameter — the Full Disk Access ``blocked_child`` no longer threads it (the
+    continue command is rebuilt from the include flags alone). Behavior otherwise
+    unchanged.
   2026-07-23 (in-process): ``extract()`` now calls the ``IMessageExtractor`` class
     in-process (``check`` then ``extract``) instead of spawning
     ``extract_imessage.py`` as a subprocess; branches on the returned payload's
@@ -56,8 +60,8 @@ IMESSAGE_NORMALIZED_MANIFEST = MESSAGES_OUT_DIR / "imessage.contacts.normalized.
 class IMessageChannel(MessageChannel):
     name = "imessage"
 
-    def __init__(self, *, accounts_path: Path, other_enabled: bool) -> None:
-        super().__init__(accounts_path=accounts_path, other_enabled=other_enabled)
+    def __init__(self, *, other_enabled: bool) -> None:
+        super().__init__(other_enabled=other_enabled)
         self.contacts_csv = IMESSAGE_CONTACTS
         self.normalized_jsonl = IMESSAGE_NORMALIZED_JSONL
         self.normalized_manifest = IMESSAGE_NORMALIZED_MANIFEST
@@ -68,7 +72,6 @@ class IMessageChannel(MessageChannel):
         if check.get("status") != "ok":
             return blocked_child(
                 message="Enable macOS Full Disk Access / Contacts access for this terminal, then continue.",
-                accounts_path=self.accounts_path,
                 detail=check,
                 include_imessage=True,
                 include_whatsapp=self.other_enabled,

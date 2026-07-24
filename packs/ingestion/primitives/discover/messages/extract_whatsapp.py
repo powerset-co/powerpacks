@@ -25,6 +25,15 @@ WhatsApp channel. Readiness (`status`) and the re-link (`logout`) flows stay on
 the client (`whatsapp_wacli.py status`/`logout`).
 
 Changelog:
+- 2026-07-23 (cmd inline): the `cmd_run`/`cmd_export` dispatchers were inlined
+  into `main` (an `if args.command == ...` chain replaces `set_defaults(func=)` +
+  `args.func`). `run` constructs `WhatsAppExtractor`, calls `run`, emits, and
+  returns `run_exit_code(payload)`; `export` (which has no extractor method)
+  keeps its store→CSV/JSONL body inline. `main` gained an optional `argv`
+  parameter (parity with `extract_gmail.main`) so it can be driven in-process;
+  subcommands, flags, stdout JSON, and exit codes (completed 0, blocked 20,
+  failed 1) are unchanged. `run_exit_code` stays (it is a shared status→code
+  helper, not a dispatcher).
 - 2026-07-23 (extractor split): split out of `whatsapp_wacli.py`. The outer
   `run` entry (formerly the `WhatsAppWacli` class) is renamed `WhatsAppExtractor`
   and lives here with the `Contact` dataclass and the store→CSV parse/write
@@ -754,31 +763,69 @@ def run_exit_code(payload: dict[str, Any]) -> int:
     return 1
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    """CLI wrapper: run ``WhatsAppExtractor.run``, emit the payload, and map its
-    status to the exit code."""
-    payload = WhatsAppExtractor(store=args.store).run(
-        output_csv=args.output_csv,
-        output_jsonl=args.output_jsonl,
-        manifest=args.manifest,
-        progress_jsonl=args.progress_jsonl,
-        max_messages=args.max_messages,
-        max_group_participants=args.max_group_participants,
-        sync_timeout=args.sync_timeout,
-        name_fallback_csv=args.name_fallback_csv,
-        idle_exit=args.idle_exit,
-        auth_timeout=args.auth_timeout,
-        group_info_timeout=args.group_info_timeout,
-        group_info_interval=args.group_info_interval,
-        include_left_groups=args.include_left_groups,
-        no_install=args.no_install,
-        no_open_qr_page=args.no_open_qr_page,
-    )
-    emit(payload)
-    return run_exit_code(payload)
+def add_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--store", default=str(DEFAULT_STORE), help="wacli store directory")
 
 
-def cmd_export(args: argparse.Namespace) -> int:
+def add_output_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--output-csv", default=str(DEFAULT_OUTPUT_CSV))
+    parser.add_argument("--output-jsonl", default=str(DEFAULT_OUTPUT_JSONL))
+    parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
+    parser.add_argument("--include-left-groups", action="store_true", help="include groups wacli marks as left")
+    parser.add_argument("--max-group-participants", type=int, default=DEFAULT_MAX_GROUP_PARTICIPANTS,
+                        help="Export participants only for groups at or below this size; set <=0 to disable the cap")
+    parser.add_argument("--name-fallback-csv", default=str(DEFAULT_NAME_FALLBACK_CSV),
+                        help="Optional contacts CSV used only to fill missing names by phone")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Extract WhatsApp contact metadata through openclaw/wacli")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    run = sub.add_parser("run", help="install wacli if needed, authenticate, sync once, deepen recent history, and export metadata")
+    add_common_args(run)
+    add_output_args(run)
+    run.add_argument("--progress-jsonl", default=str(DEFAULT_PROGRESS_JSONL))
+    run.add_argument("--max-messages", type=int, default=DEFAULT_MAX_MESSAGES)
+    run.add_argument("--idle-exit", default=DEFAULT_IDLE_EXIT)
+    run.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
+    run.add_argument("--sync-timeout", type=int, default=DEFAULT_SYNC_TIMEOUT)
+    run.add_argument("--group-info-timeout", type=int, default=60)
+    run.add_argument("--group-info-interval", type=float, default=0.2)
+    run.add_argument("--no-install", action="store_true", help="deprecated no-op; the pinned wacli fork always auto-downloads when missing or stale")
+    run.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
+
+    export = sub.add_parser("export", help="export metadata from an existing wacli store without syncing")
+    add_common_args(export)
+    add_output_args(export)
+
+    args = parser.parse_args(argv)
+
+    if args.command == "run":
+        # Construct the extractor, run the full install/auth/sync/deepen/export
+        # pass, emit the payload, and map its status to the exit code.
+        payload = WhatsAppExtractor(store=args.store).run(
+            output_csv=args.output_csv,
+            output_jsonl=args.output_jsonl,
+            manifest=args.manifest,
+            progress_jsonl=args.progress_jsonl,
+            max_messages=args.max_messages,
+            max_group_participants=args.max_group_participants,
+            sync_timeout=args.sync_timeout,
+            name_fallback_csv=args.name_fallback_csv,
+            idle_exit=args.idle_exit,
+            auth_timeout=args.auth_timeout,
+            group_info_timeout=args.group_info_timeout,
+            group_info_interval=args.group_info_interval,
+            include_left_groups=args.include_left_groups,
+            no_install=args.no_install,
+            no_open_qr_page=args.no_open_qr_page,
+        )
+        emit(payload)
+        return run_exit_code(payload)
+
+    # args.command == "export": export metadata from an existing wacli store
+    # without syncing (no extractor method). completed -> 0, any error -> 1.
     started = time.time()
     store = Path(args.store)
     output_csv = Path(args.output_csv)
@@ -825,48 +872,6 @@ def cmd_export(args: argparse.Namespace) -> int:
         write_json(manifest, payload)
         emit(payload)
         return 1
-
-
-def add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--store", default=str(DEFAULT_STORE), help="wacli store directory")
-
-
-def add_output_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--output-csv", default=str(DEFAULT_OUTPUT_CSV))
-    parser.add_argument("--output-jsonl", default=str(DEFAULT_OUTPUT_JSONL))
-    parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
-    parser.add_argument("--include-left-groups", action="store_true", help="include groups wacli marks as left")
-    parser.add_argument("--max-group-participants", type=int, default=DEFAULT_MAX_GROUP_PARTICIPANTS,
-                        help="Export participants only for groups at or below this size; set <=0 to disable the cap")
-    parser.add_argument("--name-fallback-csv", default=str(DEFAULT_NAME_FALLBACK_CSV),
-                        help="Optional contacts CSV used only to fill missing names by phone")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Extract WhatsApp contact metadata through openclaw/wacli")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    run = sub.add_parser("run", help="install wacli if needed, authenticate, sync once, deepen recent history, and export metadata")
-    add_common_args(run)
-    add_output_args(run)
-    run.add_argument("--progress-jsonl", default=str(DEFAULT_PROGRESS_JSONL))
-    run.add_argument("--max-messages", type=int, default=DEFAULT_MAX_MESSAGES)
-    run.add_argument("--idle-exit", default=DEFAULT_IDLE_EXIT)
-    run.add_argument("--auth-timeout", type=int, default=DEFAULT_AUTH_TIMEOUT)
-    run.add_argument("--sync-timeout", type=int, default=DEFAULT_SYNC_TIMEOUT)
-    run.add_argument("--group-info-timeout", type=int, default=60)
-    run.add_argument("--group-info-interval", type=float, default=0.2)
-    run.add_argument("--no-install", action="store_true", help="deprecated no-op; the pinned wacli fork always auto-downloads when missing or stale")
-    run.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
-    run.set_defaults(func=cmd_run)
-
-    export = sub.add_parser("export", help="export metadata from an existing wacli store without syncing")
-    add_common_args(export)
-    add_output_args(export)
-    export.set_defaults(func=cmd_export)
-
-    args = parser.parse_args()
-    return int(args.func(args))
 
 
 if __name__ == "__main__":

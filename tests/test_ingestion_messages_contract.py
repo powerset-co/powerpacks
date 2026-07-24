@@ -239,7 +239,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
             extract_whatsapp.WhatsAppExtractor, "run", return_value={"status": "completed"},
         ) as run:
             channel = whats_app_channel.WhatsAppChannel(
-                accounts_path=Path("accounts.json"),
                 other_enabled=False,
                 max_messages=0,
             )
@@ -288,7 +287,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
                     mock.patch.object(extract_whatsapp.WhatsAppExtractor, "run", return_value={"status": "completed"}) as run:
                 result = whats_app_channel.WhatsAppChannel(
-                    accounts_path=Path(td) / "accounts.json",
                     other_enabled=False,
                     max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
                 ).extract()
@@ -309,7 +307,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
                     mock.patch.object(extract_whatsapp.WhatsAppExtractor, "run", return_value=payload):
                 channel = whats_app_channel.WhatsAppChannel(
-                    accounts_path=Path(td) / "accounts.json",
                     other_enabled=False,
                     max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
                 )
@@ -355,7 +352,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     mock.patch.object(extract_imessage.IMessageExtractor, "extract",
                                       return_value={"status": "completed"}) as imessage_extract:
                 result = i_message_channel.IMessageChannel(
-                    accounts_path=root / "accounts.json", other_enabled=False).extract()
+                    other_enabled=False).extract()
             self.assertIsNone(result)
             # The channel gates on check (Full Disk Access) then runs extract.
             self.assertEqual(imessage_check.call_count, 1)
@@ -366,7 +363,6 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     mock.patch.object(extract_whatsapp.WhatsAppExtractor, "run",
                                       return_value={"status": "completed"}) as whatsapp_run:
                 result = whats_app_channel.WhatsAppChannel(
-                    accounts_path=root / "accounts.json",
                     other_enabled=False,
                     max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
                 ).extract()

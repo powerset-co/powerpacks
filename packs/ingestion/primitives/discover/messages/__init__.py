@@ -6,6 +6,9 @@ modules (channels/i_message_channel.py, channels/whats_app_channel.py,
 messages/discover.py), never these package re-exports.
 
 Changelog:
+  2026-07-23 (explicit-selection): dropped the messages_discovery_inputs re-export —
+    the accounts.json-linkage resolver was deleted when channel selection became
+    explicit --include-* only.
   2026-07-23 (terse): dropped the discover()/resolve() re-exports — those wrapper
     functions were folded into MessagesDiscovery (construct + run()).
   2026-07-23 (channels split): the channel classes and their IMESSAGE_*/WHATSAPP_*
@@ -46,5 +49,4 @@ from packs.ingestion.primitives.discover.messages.discover import (  # noqa: F40
     MessagesDiscovery,
     build_parser,
     main,
-    messages_discovery_inputs,
 )

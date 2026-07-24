@@ -20,6 +20,14 @@ writes a manifest with diagnostics so the harness can continue and an agent
 can patch the primitive.
 
 Changelog:
+  2026-07-23 (cmd inline): the ``cmd_check``/``cmd_extract``/
+    ``cmd_open_privacy_settings`` dispatchers were inlined into ``main`` (an
+    ``if args.command == ...`` chain replaces ``set_defaults(func=)`` +
+    ``args.func``). ``check``/``extract`` construct ``IMessageExtractor`` and
+    call the matching method; ``open-privacy-settings`` (which has no class
+    method) keeps its System-Settings body inline. Subcommands, flags, stdout
+    JSON, and exit codes (check strict-fail -> 1, extract fail -> 2,
+    open-privacy-settings error -> 2) are unchanged.
   2026-07-23 (in-process): the check/extract logic moved onto an
     ``IMessageExtractor`` class (``check(strict=...) -> dict`` returning a
     ``status`` payload; ``extract(*, output_csv, output_jsonl, manifest, ...) ->
@@ -407,48 +415,6 @@ def write_jsonl(path: Path, contacts: list[Contact]) -> None:
             handle.write(json.dumps(contact_to_json(contact), sort_keys=True) + "\n")
 
 
-def cmd_check(args: argparse.Namespace) -> None:
-    """CLI wrapper: run ``IMessageExtractor.check``, print the result JSON, and
-    exit 1 when a strict check failed (the Full Disk Access / Contacts gate)."""
-    payload = IMessageExtractor(
-        chat_db=args.chat_db, addressbook_glob=args.addressbook_glob,
-    ).check(strict=args.strict)
-    emit(payload)
-    if payload["status"] != "ok":
-        raise SystemExit(1)
-
-
-def cmd_open_privacy_settings(args: argparse.Namespace) -> None:
-    targets = ["full-disk-access", "contacts"] if args.target == "both" else [args.target]
-    urls = [PRIVACY_SETTINGS_URLS[target] for target in targets]
-    result: dict[str, Any] = {
-        "primitive": "messages/extract_imessage",
-        "command": "open-privacy-settings",
-        "platform": sys.platform,
-        "targets": targets,
-        "urls": urls,
-        "opened": False,
-        "error": None,
-    }
-    if args.print_only:
-        print(json.dumps(result, indent=2, sort_keys=True))
-        return
-    if sys.platform != "darwin":
-        result["error"] = "privacy settings helper is macOS-only"
-        print(json.dumps(result, indent=2, sort_keys=True))
-        raise SystemExit(2)
-
-    try:
-        for url in urls:
-            subprocess.run(["open", url], check=True)
-        result["opened"] = True
-    except (OSError, subprocess.CalledProcessError) as exc:
-        result["error"] = f"{type(exc).__name__}: {exc}"
-        print(json.dumps(result, indent=2, sort_keys=True))
-        raise SystemExit(2)
-    print(json.dumps(result, indent=2, sort_keys=True))
-
-
 def failure_manifest(
     *,
     output_csv: Path,
@@ -614,23 +580,6 @@ class IMessageExtractor:
             return failure
 
 
-def cmd_extract(args: argparse.Namespace) -> None:
-    """CLI wrapper: run ``IMessageExtractor.extract``, print the manifest JSON,
-    and exit 2 when extraction failed."""
-    payload = IMessageExtractor(
-        chat_db=args.chat_db, addressbook_glob=args.addressbook_glob,
-    ).extract(
-        output_csv=args.output_csv,
-        output_jsonl=args.output_jsonl,
-        manifest=args.manifest,
-        include_contact_only=args.include_contact_only,
-        limit=args.limit,
-    )
-    emit(payload)
-    if payload["status"] != "completed":
-        raise SystemExit(2)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract iMessage contact metadata with stdlib Python")
     parser.add_argument("--chat-db", default=str(DEFAULT_CHAT_DB))
@@ -639,7 +588,6 @@ def main() -> None:
 
     check = sub.add_parser("check")
     check.add_argument("--strict", action="store_true")
-    check.set_defaults(func=cmd_check)
 
     privacy = sub.add_parser("open-privacy-settings", help="Open macOS privacy settings for Messages/Contacts access")
     privacy.add_argument(
@@ -649,7 +597,6 @@ def main() -> None:
         help="Privacy pane to open. Use contacts for AddressBook name matching.",
     )
     privacy.add_argument("--print-only", action="store_true", help="Print target URLs without opening System Settings")
-    privacy.set_defaults(func=cmd_open_privacy_settings)
 
     extract = sub.add_parser("extract")
     extract.add_argument("--output-csv", type=Path, default=DEFAULT_OUT_DIR / "imessage.contacts.csv")
@@ -668,10 +615,66 @@ def main() -> None:
         help="Only export phone handles that appear in iMessage history",
     )
     extract.add_argument("--limit", type=int)
-    extract.set_defaults(func=cmd_extract)
 
     args = parser.parse_args()
-    args.func(args)
+
+    if args.command == "check":
+        # Probe chat.db/AddressBook readability; strict-fail is the Full Disk
+        # Access / Contacts gate -> exit 1.
+        payload = IMessageExtractor(
+            chat_db=args.chat_db, addressbook_glob=args.addressbook_glob,
+        ).check(strict=args.strict)
+        emit(payload)
+        if payload["status"] != "ok":
+            raise SystemExit(1)
+        return
+
+    if args.command == "open-privacy-settings":
+        # macOS-only System Settings opener (no IMessageExtractor method) -> exit
+        # 2 on a non-darwin platform or if `open` fails.
+        targets = ["full-disk-access", "contacts"] if args.target == "both" else [args.target]
+        urls = [PRIVACY_SETTINGS_URLS[target] for target in targets]
+        result: dict[str, Any] = {
+            "primitive": "messages/extract_imessage",
+            "command": "open-privacy-settings",
+            "platform": sys.platform,
+            "targets": targets,
+            "urls": urls,
+            "opened": False,
+            "error": None,
+        }
+        if args.print_only:
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
+        if sys.platform != "darwin":
+            result["error"] = "privacy settings helper is macOS-only"
+            print(json.dumps(result, indent=2, sort_keys=True))
+            raise SystemExit(2)
+        try:
+            for url in urls:
+                subprocess.run(["open", url], check=True)
+            result["opened"] = True
+        except (OSError, subprocess.CalledProcessError) as exc:
+            result["error"] = f"{type(exc).__name__}: {exc}"
+            print(json.dumps(result, indent=2, sort_keys=True))
+            raise SystemExit(2)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    # args.command == "extract": export contact metadata; extraction failure
+    # (unreadable chat.db / raised) -> exit 2.
+    payload = IMessageExtractor(
+        chat_db=args.chat_db, addressbook_glob=args.addressbook_glob,
+    ).extract(
+        output_csv=args.output_csv,
+        output_jsonl=args.output_jsonl,
+        manifest=args.manifest,
+        include_contact_only=args.include_contact_only,
+        limit=args.limit,
+    )
+    emit(payload)
+    if payload["status"] != "completed":
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
