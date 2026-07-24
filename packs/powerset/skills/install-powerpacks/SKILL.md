@@ -24,6 +24,8 @@ Changelog:
 - 2026-07-10: Define the Powerset-environment route and provisioning API URL.
 - 2026-07-12: Hosted-config init is conditional on the user choosing Powerset;
   otherwise $setup Step 1 asks explicitly (own keys are the alternative).
+- 2026-07-24: A fresh clone is pinned to the newest published release via
+  bin/powerpacks-channel instead of being left on the default branch.
 -->
 
 One sentence installs everything:
@@ -67,11 +69,17 @@ Do the following, in order:
 
    ```bash
    git clone https://github.com/powerset-co/powerpacks.git ~/powerpacks
+   ~/powerpacks/bin/powerpacks-channel --checkout ~/powerpacks
    ```
 
-2. **Run the installer for THIS harness** from the repo root (it pulls latest main
-   when safe, sets up the Python env via uv, installs/refreshes every Powerpacks
-   skill, and cleans stale ones):
+   The second command moves a fresh clone off the unreleased tip of the default
+   branch onto the newest published release, which is what installs follow. Run
+   it only on a clone you just made — on a checkout that already existed, leave
+   the working tree alone and let `$update-powerpacks` move it.
+
+2. **Run the installer for THIS harness** from the repo root (it sets up the
+   Python env via uv, installs/refreshes every Powerpacks skill, and cleans
+   stale ones):
 
    ```bash
    ./install.sh claude-code   # Claude Code -> ~/.claude/skills

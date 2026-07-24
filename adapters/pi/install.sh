@@ -103,18 +103,7 @@ install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/S
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
 
-version="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["."])' "$REPO_ROOT/.release-please-manifest.json" 2>/dev/null || echo unknown)"
-commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-cat > "$SKILLS_DIR/.powerpacks-install.json" <<EOF
-{
-  "package": "powerpacks",
-  "version": "$version",
-  "commit": "$commit",
-  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "harness": "pi",
-  "repo_root": "$REPO_ROOT"
-}
-EOF
+"$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" pi "$SKILLS_DIR/.powerpacks-install.json"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
 printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'

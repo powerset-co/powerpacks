@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# One home for "which ref does this checkout's release channel point at?".
+#
+# Powerpacks installs follow a published release, not the tip of the default
+# branch, so an unreleased change on main cannot reach an installed user. This
+# script owns the whole resolution: which channel is in effect, and which ref
+# that channel currently names. `bin/update-powerpacks` resolves with it before
+# it stashes and switches; a fresh clone checks out with it.
+#
+# Created: 2026-07-24
+#
+# Channels: stable (newest release), rc (newest release candidate or release),
+# edge (unreleased tip of main). Precedence: POWERPACKS_REF (exact pin) >
+# POWERPACKS_CHANNEL > the channel branch the checkout is already on > stable.
+# The local branch name IS the channel memory — no extra state file, and a
+# checkout left on legacy `main` migrates to stable.
+#
+# Usage:
+#   powerpacks-channel [repo]              # print channel=/ref=/branch=
+#   powerpacks-channel --checkout [repo]   # also switch the checkout onto it
+set -euo pipefail
+
+MODE="resolve"
+if [[ "${1:-}" == "--checkout" ]]; then
+  MODE="checkout"
+  shift
+fi
+REPO="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+REPO="$(cd "$REPO" && pwd)"
+
+current_branch="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+
+CHANNEL="${POWERPACKS_CHANNEL:-}"
+if [[ -n "${POWERPACKS_REF:-}" ]]; then
+  CHANNEL="pinned"
+elif [[ -z "$CHANNEL" ]]; then
+  case "$current_branch" in
+    powerpacks-stable) CHANNEL="stable" ;;
+    powerpacks-rc) CHANNEL="rc" ;;
+    powerpacks-edge) CHANNEL="edge" ;;
+    *) CHANNEL="stable" ;;
+  esac
+fi
+
+# Newest release tag for a channel. Release candidates sort BELOW their own final
+# release (1.0.0 > 1.0.0-rc.2 > 1.0.0-rc.1), and the stable channel never sees an
+# rc at all. The anchored pattern is what excludes prereleases and the retired
+# `powerpacks-console-v*` tags — shell version sorting gets `-rc` backwards.
+newest_release_tag() {
+  # Tags arrive as argv, not on stdin: stdin is already carrying the program
+  # below. Tag names never contain whitespace, so the unquoted split is safe.
+  # shellcheck disable=SC2046
+  python3 - "$1" $(git -C "$REPO" tag --list 'powerpacks-v*') <<'PY'
+import re
+import sys
+
+channel = sys.argv[1]
+pattern = re.compile(r"^powerpacks-v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$")
+best = None
+for line in sys.argv[2:]:
+    match = pattern.match(line.strip())
+    if not match:
+        continue
+    major, minor, patch = (int(match.group(i)) for i in (1, 2, 3))
+    candidate = match.group(4)
+    if candidate is None:
+        key = (major, minor, patch, 1, 0)
+    elif channel == "rc":
+        key = (major, minor, patch, 0, int(candidate))
+    else:
+        continue
+    if best is None or key > best[0]:
+        best = (key, line.strip())
+print(best[1] if best else "")
+PY
+}
+
+case "$CHANNEL" in
+  pinned)
+    REF="$POWERPACKS_REF"
+    BRANCH="powerpacks-pinned"
+    ;;
+  stable|rc)
+    REF="$(newest_release_tag "$CHANNEL")"
+    BRANCH="powerpacks-$CHANNEL"
+    if [[ -z "$REF" ]]; then
+      echo "error: no $CHANNEL release tag found (expected powerpacks-vX.Y.Z); fetch tags first" >&2
+      exit 1
+    fi
+    ;;
+  edge)
+    REF="origin/main"
+    BRANCH="powerpacks-edge"
+    ;;
+  *)
+    echo "error: unknown POWERPACKS_CHANNEL '$CHANNEL' (want stable, rc, or edge)" >&2
+    exit 1
+    ;;
+esac
+
+if ! git -C "$REPO" rev-parse --verify --quiet "$REF^{commit}" >/dev/null; then
+  echo "error: cannot resolve $CHANNEL target '$REF'" >&2
+  exit 1
+fi
+
+printf 'channel=%s\nref=%s\nbranch=%s\n' "$CHANNEL" "$REF" "$BRANCH"
+
+if [[ "$MODE" == "checkout" ]]; then
+  # No --force here: this path is for a fresh clone. Discarding a dirty tree is
+  # update-powerpacks' job, and only after it has stashed the work.
+  git -C "$REPO" switch -C "$BRANCH" "$REF" >/dev/null
+  if [[ "$CHANNEL" == "edge" ]]; then
+    git -C "$REPO" branch --set-upstream-to=origin/main "$BRANCH" >/dev/null 2>&1 || true
+  else
+    git -C "$REPO" branch --unset-upstream "$BRANCH" >/dev/null 2>&1 || true
+  fi
+fi

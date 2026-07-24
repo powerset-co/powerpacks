@@ -37,6 +37,22 @@ To intentionally cut a Powerpacks minor release such as `0.2.0`, merge a PR with
 
 Manual release escape hatch: run the Release Please workflow/CLI with an appropriately scoped token only if automation is blocked. Prefer the normal release PR flow so versions, changelogs, manifests, and tags stay consistent.
 
+**Merging the release PR is the ship gate, not bookkeeping.** Installs follow
+published release tags, not `main`: `bin/powerpacks-channel` resolves the newest
+`powerpacks-vX.Y.Z` tag and `bin/update-powerpacks` moves the checkout onto it.
+So a fix that has landed on `main` reaches nobody until a release PR is merged —
+if releases sit unmerged for weeks, users sit on weeks-old code and it looks like
+the pipeline is broken when it is only unreleased.
+
+Channels are `stable` (newest release, the default), `rc` (newest candidate or
+release), and `edge` (unreleased tip of `main`, the pre-2026-07-24 behavior).
+The channel is remembered as the checkout's local branch name
+(`powerpacks-stable` / `-rc` / `-edge`), overridden per run by
+`POWERPACKS_CHANNEL`, and `POWERPACKS_REF=powerpacks-v0.18.0` pins one exact
+version for a rollback. To cut a release candidate, land a commit with a
+`Release-As: 1.1.0-rc.1` footer and merge the resulting release PR; the anchored
+tag pattern keeps candidates out of `stable` while `rc` testers pick them up.
+
 This file is the canonical bootup instruction sheet for any coding agent
 (Codex, Claude Code, NanoClaw, pi, etc.) working in the `powerpacks` repo.
 
