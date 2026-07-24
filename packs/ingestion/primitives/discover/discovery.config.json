@@ -1,5 +1,4 @@
 {
-  "accounts_json": ".powerpacks/ingestion/accounts.json",
   "sources": {
     "gmail": {
       "inputs": {

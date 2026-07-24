@@ -191,12 +191,10 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertEqual(discover_messages.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES, 0)
         # The message output paths are owned by the discover-messages primitive
         # now, not discovery.config.json — its imessage/whatsapp/messages source
-        # blocks were pruned (only the gmail block + top-level accounts_json are
-        # consumed). The top-level config keys the primitives still read stay.
+        # blocks were pruned (only the gmail block is consumed).
         config = json.loads(
             (INGESTION / "primitives/discover/discovery.config.json").read_text()
         )
-        self.assertEqual(config["accounts_json"], ".powerpacks/ingestion/accounts.json")
         self.assertNotIn("imessage", config["sources"])
         self.assertNotIn("whatsapp", config["sources"])
         self.assertNotIn("messages", config["sources"])

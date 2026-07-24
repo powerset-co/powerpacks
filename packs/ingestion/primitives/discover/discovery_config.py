@@ -4,11 +4,11 @@
 Changelog:
   2026-07-23 (account-email selection): gmail discovery stopped reading
     accounts.json for account selection, so the accounts_path() and state_value()
-    accessors (which served only that read) were removed. The top-level
-    accounts_json config key is kept (it is part of the config contract asserted
-    by the messages contract test). Remaining accessors — load_config,
-    source_config, config_path, output_path — still back the msgvault_db/sync_query
-    defaults and the gmail output paths.
+    accessors (which served only that read) were removed. The now-orphaned
+    top-level accounts_json config key was then pruned from discovery.config.json
+    too — nothing read it. Remaining accessors — load_config, source_config,
+    config_path, output_path — still back the msgvault_db/sync_query defaults and
+    the gmail output paths.
 """
 
 from __future__ import annotations
