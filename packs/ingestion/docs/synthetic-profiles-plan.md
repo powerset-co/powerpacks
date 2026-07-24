@@ -8,6 +8,11 @@
 _Created 2026-06-24._
 
 ## Changelog
+- 2026-07-24: Superseded detail — the section-4 "critical fix" below describes the
+  keep-filter as it was then (LinkedIn key **and** a valid `rapidapi_response`, relaxed
+  only for synthetic rows). `keep_people_csv_row` now admits any row with a LinkedIn key
+  **or** an email **or** a phone; the RapidAPI requirement is gone entirely. The synthetic
+  branch and its load-time `approved` gate are unchanged.
 - 2026-07-09: Picked back up. Confirmed: research runs on Parallel.ai (deep_research_contacts
   ParallelClient) — no Perplexity/Sonar dependency is ported. Added integration note: the fan-in
   no-op cache now fingerprints override files (PR #172), so `overrides/synthetic-people.csv` must

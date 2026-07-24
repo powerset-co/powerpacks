@@ -56,7 +56,10 @@ class MergeNetworkSourcesTests(unittest.TestCase):
             writer.writeheader()
             writer.writerow(out)
 
-    def test_overrides_detach_drops_person_and_verify_annotates(self):
+    def test_overrides_detach_clears_link_and_verify_annotates(self):
+        # A detach retracts a WRONG LinkedIn, it does not delete the human: the person
+        # stays in the network on their email identity, just without the bad link.
+        # Removing someone entirely is `exclude` / a worth no.
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
             os.chdir(tmp)
@@ -89,7 +92,10 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(payload["overrides_verified"], 1)
                 with (out_dir / "people.csv").open() as fh:
                     rows = {r["full_name"]: r for r in csv.DictReader(fh)}
-                self.assertNotIn("Bob Plumber", rows)                     # detached -> dropped
+                self.assertIn("Bob Plumber", rows)                        # detached -> kept
+                self.assertEqual(rows["Bob Plumber"]["linkedin_url"], "")  # ...minus the wrong link
+                self.assertEqual(rows["Bob Plumber"]["public_identifier"], "")
+                self.assertEqual(rows["Bob Plumber"]["primary_email"], "bob@x.com")
                 self.assertIn("Pat Lee", rows)
                 self.assertEqual(rows["Pat Lee"]["linkedin_verified"], "confirmed")
                 self.assertEqual(rows["Pat Lee"]["linkedin_verified_confidence"], "0.92")
@@ -498,13 +504,15 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 2)
                 self.assertEqual(payload["unfiltered_merged_rows"], 1)
-                self.assertEqual(payload["filtered_without_linkedin"], 1)
-                self.assertEqual(payload["filtered_people_csv_rows"], 1)
-                self.assertEqual(payload["merged_rows"], 0)
-                self.assertEqual(payload["filtered_without_rapidapi_payload"], 0)
+                # An email IS an identity: the person is kept, counted as contact-only.
+                self.assertEqual(payload["filtered_people_csv_rows"], 0)
+                self.assertEqual(payload["merged_rows"], 1)
+                self.assertEqual(payload["people_with_linkedin"], 0)
+                self.assertEqual(payload["people_contact_only"], 1)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
                     rows = list(CsvIO.dict_reader(handle))
-                self.assertEqual(rows, [])
+                self.assertEqual([row["full_name"] for row in rows], ["Jane Email"])
+                self.assertEqual([json.loads(row["all_emails"]) for row in rows], [["jane@example.com"]])
             finally:
                 os.chdir(old_cwd)
 
@@ -536,79 +544,168 @@ class MergeNetworkSourcesTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 2)
                 self.assertEqual(payload["unfiltered_merged_rows"], 1)
-                self.assertEqual(payload["filtered_without_linkedin"], 1)
-                self.assertEqual(payload["filtered_people_csv_rows"], 1)
-                self.assertEqual(payload["merged_rows"], 0)
-                self.assertEqual(payload["filtered_without_rapidapi_payload"], 0)
+                # A phone IS an identity: the person is kept, counted as contact-only.
+                self.assertEqual(payload["filtered_people_csv_rows"], 0)
+                self.assertEqual(payload["merged_rows"], 1)
+                self.assertEqual(payload["people_with_linkedin"], 0)
+                self.assertEqual(payload["people_contact_only"], 1)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
                     rows = list(CsvIO.dict_reader(handle))
-                self.assertEqual(rows, [])
+                self.assertEqual([row["full_name"] for row in rows], ["Jane Phone"])
+                self.assertEqual([json.loads(row["all_phones"]) for row in rows], [["+15551234567"]])
             finally:
                 os.chdir(old_cwd)
 
-    def test_filters_rows_without_usable_rapidapi_payload_from_people_csv(self):
+    def test_keeps_rows_on_any_identity_and_drops_only_identityless_rows(self):
+        """Admission is identity, not enrichment: a LinkedIn key OR an email OR a phone
+        keeps a person. Enrichment (a usable rapidapi payload) is decoration — its
+        absence, or an outright failed lookup, no longer deletes anybody. Only a row
+        with none of the three identities is dropped."""
         with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
             os.chdir(tmp)
             try:
-                enriched = Path(".powerpacks/network-import/linkedin/run-1/people.csv")
-                contact_only = Path(".powerpacks/network-import/gmail/run-1/people.csv")
-                rapidapi_without_linkedin = Path(".powerpacks/network-import/gmail/run-2/people.csv")
-                failed = Path(".powerpacks/network-import/linkedin/run-2/people.csv")
-                self.write_people_row(enriched, {
-                    "id": "linkedin:keep",
-                    "public_identifier": "keep-example",
-                    "linkedin_url": "https://www.linkedin.com/in/keep-example",
-                    "full_name": "Keep Example",
+                linkedin_only = Path(".powerpacks/network-import/linkedin/run-1/people.csv")
+                email_only = Path(".powerpacks/network-import/gmail/run-1/people.csv")
+                phone_only = Path(".powerpacks/network-import/messages/run-1/people.csv")
+                identityless = Path(".powerpacks/network-import/gmail/run-2/people.csv")
+                # A LinkedIn key whose enrichment lookup outright FAILED: kept anyway.
+                self.write_people_row(linkedin_only, {
+                    "id": "linkedin:jordan",
+                    "public_identifier": "jordan-bravo",
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                    "full_name": "Jordan Bravo",
                     "source_channels": "linkedin_csv",
+                    "rapidapi_response": json.dumps({"success": False, "message": "not found"}),
                 })
-                self.write_people_row(contact_only, {
-                    "id": "gmail:drop",
-                    "full_name": "Drop Contact",
-                    "primary_email": "drop@example.com",
+                self.write_people_row(email_only, {
+                    "id": "gmail:casey",
+                    "full_name": "Casey Delta",
+                    "primary_email": "casey@example.com",
                     "source_channels": "gmail_msgvault",
                     "rapidapi_response": "",
                 })
-                self.write_people_row(rapidapi_without_linkedin, {
-                    "id": "gmail:rapid-no-linkedin",
-                    "full_name": "Drop Rapid No LinkedIn",
-                    "primary_email": "rapid-no-linkedin@example.com",
-                    "source_channels": "gmail_msgvault",
+                self.write_people_row(phone_only, {
+                    "id": "message:river",
+                    "full_name": "River Echo",
+                    "primary_phone": "+15550100",
+                    "source_channels": "imessage",
                 })
-                self.write_people_row(failed, {
-                    "id": "linkedin:failed",
-                    "public_identifier": "failed-example",
-                    "linkedin_url": "https://www.linkedin.com/in/failed-example",
-                    "full_name": "Failed Example",
-                    "source_channels": "linkedin_csv",
-                    "rapidapi_response": json.dumps({"success": False, "message": "not found"}),
+                self.write_people_row(identityless, {
+                    "id": "gmail:nobody",
+                    "full_name": "Nameonly Foxtrot",
+                    "source_channels": "gmail_msgvault",
                 })
 
                 out_dir = Path(tmp) / "merged"
                 code, payload = self.invoke([
                     "run",
                     "--output-dir", str(out_dir),
-                    "--input", str(enriched),
-                    "--input", str(contact_only),
-                    "--input", str(rapidapi_without_linkedin),
-                    "--input", str(failed),
+                    "--input", str(linkedin_only),
+                    "--input", str(email_only),
+                    "--input", str(phone_only),
+                    "--input", str(identityless),
                 ])
 
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["input_rows"], 4)
                 self.assertEqual(payload["unfiltered_merged_rows"], 4)
-                self.assertEqual(payload["filtered_without_rapidapi_payload"], 2)
-                self.assertEqual(payload["filtered_without_linkedin"], 2)
-                self.assertEqual(payload["filtered_people_csv_rows"], 3)
-                self.assertEqual(payload["rapidapi_payload_rows"], 1)
-                self.assertEqual(payload["merged_rows"], 1)
+                self.assertEqual(payload["merged_rows"], 3)
+                self.assertEqual(payload["people_with_linkedin"], 1)
+                self.assertEqual(payload["people_contact_only"], 2)
+                self.assertEqual(payload["filtered_people_csv_rows"], 1)
+                # The retired enrichment counters are gone, not silently zeroed.
+                self.assertNotIn("filtered_without_rapidapi_payload", payload)
+                self.assertNotIn("rapidapi_payload_rows", payload)
+                self.assertNotIn("filtered_without_linkedin", payload)
                 with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
                     rows = list(CsvIO.dict_reader(handle))
-                self.assertEqual([row["full_name"] for row in rows], ["Keep Example"])
+                self.assertEqual(
+                    sorted(row["full_name"] for row in rows),
+                    ["Casey Delta", "Jordan Bravo", "River Echo"],
+                )
                 with Path(payload["network_contact_sources_csv"]).open(newline="", encoding="utf-8") as handle:
                     source_rows = list(CsvIO.dict_reader(handle))
-                self.assertEqual(len(source_rows), 1)
-                self.assertEqual(source_rows[0]["merge_key"], "linkedin:keep-example")
+                self.assertEqual(len(source_rows), 3)
+                self.assertNotIn("Nameonly Foxtrot", [row["display_name"] for row in source_rows])
+            finally:
+                os.chdir(old_cwd)
+
+    def test_superseded_person_ids_never_leak_into_primary_phone(self):
+        """superseded_person_ids is in LIST_VALUE_COLUMNS but has no paired primary
+        scalar. It must not seed from primary_phone, nor promote a person id into it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                left = Path(".powerpacks/network-import/gmail/run-1/people.csv")
+                right = Path(".powerpacks/network-import/messages/run-1/people.csv")
+                self.write_people_row(left, {
+                    "id": "gmail:jordan",
+                    "public_identifier": "jordan-bravo",
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                    "full_name": "Jordan Bravo",
+                    "primary_email": "jordan@example.com",
+                    "superseded_person_ids": json.dumps(["candidate:email:jordan@example.com"]),
+                    "source_channels": "gmail_msgvault",
+                })
+                self.write_people_row(right, {
+                    "id": "message:jordan",
+                    "public_identifier": "jordan-bravo",
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                    "full_name": "Jordan Bravo",
+                    "primary_phone": "+15550100",
+                    "superseded_person_ids": json.dumps(["candidate:phone:+15550100"]),
+                    "source_channels": "imessage",
+                })
+
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir),
+                    "--input", str(left), "--input", str(right)])
+
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["merged_rows"], 1)
+                with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                    row = list(CsvIO.dict_reader(handle))[0]
+                self.assertEqual(row["primary_phone"], "+15550100")
+                self.assertEqual(row["primary_email"], "jordan@example.com")
+                self.assertEqual(
+                    sorted(json.loads(row["superseded_person_ids"])),
+                    ["candidate:email:jordan@example.com", "candidate:phone:+15550100"],
+                )
+            finally:
+                os.chdir(old_cwd)
+
+    def test_superseded_person_id_never_promoted_into_empty_primary_phone(self):
+        """The promote-first-alias step must skip superseded_person_ids entirely: with
+        no phone anywhere in the group, primary_phone stays empty."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                people = Path(".powerpacks/network-import/gmail/run-1/people.csv")
+                self.write_people_row(people, {
+                    "id": "gmail:jordan",
+                    "public_identifier": "jordan-bravo",
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                    "full_name": "Jordan Bravo",
+                    "primary_email": "jordan@example.com",
+                    "superseded_person_ids": json.dumps(["candidate:email:jordan@example.com"]),
+                    "source_channels": "gmail_msgvault",
+                })
+
+                out_dir = Path(tmp) / "merged"
+                code, payload = self.invoke(["run", "--output-dir", str(out_dir), "--input", str(people)])
+
+                self.assertEqual(code, 0)
+                with Path(payload["people_csv"]).open(newline="", encoding="utf-8") as handle:
+                    row = list(CsvIO.dict_reader(handle))[0]
+                self.assertEqual(row["primary_phone"], "")
+                self.assertEqual(row["all_phones"], "")
+                self.assertEqual(
+                    json.loads(row["superseded_person_ids"]),
+                    ["candidate:email:jordan@example.com"],
+                )
             finally:
                 os.chdir(old_cwd)
 

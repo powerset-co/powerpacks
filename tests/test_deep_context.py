@@ -3310,8 +3310,12 @@ class TestSpamDropAtMerge(unittest.TestCase):
             self.assertTrue(merge.keep_people_csv_row(row))
         # a synthetic row without an identity never passes
         self.assertFalse(merge.keep_people_csv_row({"enrichment_provider": "synthetic"}))
-        # real rows still require LinkedIn + rapidapi — the relaxation is synthetic-only
-        self.assertFalse(merge.keep_people_csv_row({"public_identifier": "someone", "approved": "auto"}))
+        # real rows are admitted on identity alone (LinkedIn key / email / phone) —
+        # no enrichment payload required, and an identityless row still never passes
+        self.assertTrue(merge.keep_people_csv_row({"public_identifier": "someone"}))
+        self.assertTrue(merge.keep_people_csv_row({"primary_email": "casey@example.com"}))
+        self.assertTrue(merge.keep_people_csv_row({"primary_phone": "+15550100"}))
+        self.assertFalse(merge.keep_people_csv_row({"full_name": "Jordan Bravo"}))
 
 
 class TestNameMatchAttach(unittest.TestCase):
