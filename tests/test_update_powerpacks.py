@@ -10,6 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UPDATE_SCRIPT = ROOT / "bin/update-powerpacks"
+CHANNEL_SCRIPT = ROOT / "bin/powerpacks-channel"
+STAMP_SCRIPT = ROOT / "bin/powerpacks-install-stamp"
 SKILL = ROOT / "packs/powerset/skills/update-powerpacks/SKILL.md"
 
 
@@ -109,9 +111,12 @@ class UpdatePowerpacksTests(unittest.TestCase):
             write(publisher / ".gitignore", ".powerpacks/\n.env\n")
             write(publisher / "packs/.keep", "")
             write(publisher / "pyproject.toml", "[project]\nname='fixture'\nversion='0'\n")
+            write(publisher / ".release-please-manifest.json", '{".": "1.0.0"}\n')
             write(publisher / "tracked.txt", "remote-original\n")
             write(publisher / "version.txt", "old\n")
             write(publisher / "bin/update-powerpacks", UPDATE_SCRIPT.read_text(encoding="utf-8"), executable=True)
+            write(publisher / "bin/powerpacks-channel", CHANNEL_SCRIPT.read_text(encoding="utf-8"), executable=True)
+            write(publisher / "bin/powerpacks-install-stamp", STAMP_SCRIPT.read_text(encoding="utf-8"), executable=True)
             write(
                 publisher / "bin/sync-agent-files.sh",
                 '#!/usr/bin/env bash\nset -euo pipefail\nprintf "synced\\n" > "$POWERPACKS_TEST_SYNC_RECORD"\n',
@@ -133,8 +138,12 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             )
             run("git", "add", ".", cwd=publisher)
             run("git", "commit", "-m", "initial", cwd=publisher)
+            # The only published release. Everything committed after this tag is
+            # unreleased main, which a pinned install must NOT pick up.
+            run("git", "tag", "powerpacks-v1.0.0", cwd=publisher)
             run("git", "remote", "add", "origin", remote, cwd=publisher)
             run("git", "push", "-u", "origin", "main", cwd=publisher)
+            run("git", "push", "--tags", "origin", cwd=publisher)
             run("git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main", cwd=root)
             run("git", "clone", remote, checkout, cwd=root)
             run("git", "config", "user.email", "test@example.com", cwd=checkout)
@@ -168,12 +177,24 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
             )
             proc = run(installed_launcher, "codex", cwd=root, env=env)
 
-            self.assertEqual(run("git", "branch", "--show-current", cwd=checkout).stdout.strip(), "main")
             self.assertEqual(
+                run("git", "branch", "--show-current", cwd=checkout).stdout.strip(),
+                "powerpacks-stable",
+            )
+            self.assertEqual(
+                run("git", "rev-parse", "HEAD", cwd=checkout).stdout,
+                run("git", "rev-parse", "powerpacks-v1.0.0^{commit}", cwd=checkout).stdout,
+            )
+            # The whole point of the pin: unreleased main moved version.txt to
+            # "new", and the install stayed on the released content instead.
+            self.assertEqual((checkout / "version.txt").read_text(encoding="utf-8"), "old\n")
+            self.assertNotEqual(
                 run("git", "rev-parse", "HEAD", cwd=checkout).stdout,
                 run("git", "rev-parse", "origin/main", cwd=checkout).stdout,
             )
-            self.assertEqual((checkout / "version.txt").read_text(encoding="utf-8"), "new\n")
+            self.assertIn("channel=stable", proc.stdout)
+            self.assertIn("ref=powerpacks-v1.0.0", proc.stdout)
+            self.assertIn("version=1.0.0", proc.stdout)
             self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "remote-original\n")
             self.assertFalse((checkout / "notes.txt").exists())
             self.assertEqual((checkout / ".powerpacks/sentinel").read_text(encoding="utf-8"), "keep powerpacks state\n")
@@ -211,10 +232,14 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
                 run("git", "stash", "show", "--include-untracked", "--name-only", "stash@{0}", cwd=checkout).stdout,
             )
 
+            # The guard now names the release being moved to, so it has to be a
+            # tagged release that carries .env — not merely unreleased main.
             write(publisher / ".env", "REMOTE_ENV=unsafe\n")
             run("git", "add", "--force", ".env", cwd=publisher)
             run("git", "commit", "-m", "unsafe remote env", cwd=publisher)
+            run("git", "tag", "powerpacks-v1.1.0", cwd=publisher)
             run("git", "push", cwd=publisher)
+            run("git", "push", "--tags", "origin", cwd=publisher)
             unsafe_proc = subprocess.run(
                 [str(installed_launcher), "codex"],
                 cwd=root,
@@ -224,8 +249,135 @@ printf '{"repo_root":"%s","commit":"fixture","version":"0","installed_at":"now"}
                 text=True,
             )
             self.assertNotEqual(unsafe_proc.returncode, 0)
-            self.assertIn("origin/main tracks .env", unsafe_proc.stderr)
+            self.assertIn("powerpacks-v1.1.0 tracks .env", unsafe_proc.stderr)
             self.assertEqual((checkout / ".env").read_text(encoding="utf-8"), "KEEP_ENV=yes\n")
+
+
+class ReleaseChannelTests(unittest.TestCase):
+    """bin/powerpacks-channel decides which ref a release channel names."""
+
+    TAGS = (
+        "powerpacks-v0.9.0",
+        "powerpacks-v0.10.0",
+        "powerpacks-v1.0.0-rc.1",
+        "powerpacks-v1.0.0-rc.2",
+        "powerpacks-v1.0.0",
+        "powerpacks-v1.1.0-rc.1",
+        "powerpacks-console-v9.9.9",
+    )
+
+    def _repo(self, root: Path, tags: tuple[str, ...]) -> Path:
+        remote = root / "remote.git"
+        repo = root / "repo"
+        run("git", "init", "--bare", remote, cwd=root)
+        run("git", "init", "-b", "main", repo, cwd=root)
+        run("git", "config", "user.email", "test@example.com", cwd=repo)
+        run("git", "config", "user.name", "Powerpacks Test", cwd=repo)
+        write(repo / "README.md", "fixture\n")
+        run("git", "add", ".", cwd=repo)
+        run("git", "commit", "-m", "initial", cwd=repo)
+        # One commit per tag, the way release-please actually tags: every release
+        # is its own version-bump commit, so no two tags share a commit.
+        for tag in tags:
+            write(repo / "README.md", f"fixture {tag}\n")
+            run("git", "add", ".", cwd=repo)
+            run("git", "commit", "-m", f"release {tag}", cwd=repo)
+            run("git", "tag", tag, cwd=repo)
+        run("git", "remote", "add", "origin", remote, cwd=repo)
+        run("git", "push", "-u", "origin", "main", cwd=repo)
+        return repo
+
+    def _resolve(self, repo: Path, *args: str, **overrides: str) -> dict[str, str]:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("POWERPACKS_")}
+        env.update(overrides)
+        out = run(CHANNEL_SCRIPT, *args, repo, cwd=repo, env=env).stdout
+        return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+    def test_channels_select_the_right_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp), self.TAGS)
+
+            # stable skips every release candidate and the retired console tags,
+            # and orders 0.10.0 above 0.9.0 (a plain string sort would not).
+            self.assertEqual(self._resolve(repo)["ref"], "powerpacks-v1.0.0")
+            self.assertEqual(self._resolve(repo)["channel"], "stable")
+
+            # rc sees candidates too, so the unreleased 1.1.0 line wins.
+            self.assertEqual(
+                self._resolve(repo, POWERPACKS_CHANNEL="rc")["ref"],
+                "powerpacks-v1.1.0-rc.1",
+            )
+            self.assertEqual(
+                self._resolve(repo, POWERPACKS_CHANNEL="edge")["ref"],
+                "origin/main",
+            )
+            self.assertEqual(
+                self._resolve(repo, POWERPACKS_REF="powerpacks-v0.9.0"),
+                {
+                    "channel": "pinned",
+                    "ref": "powerpacks-v0.9.0",
+                    "branch": "powerpacks-pinned",
+                },
+            )
+
+    def test_final_release_outranks_its_own_candidates_on_rc(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(
+                Path(tmp),
+                ("powerpacks-v1.0.0-rc.1", "powerpacks-v1.0.0-rc.2", "powerpacks-v1.0.0"),
+            )
+            self.assertEqual(
+                self._resolve(repo, POWERPACKS_CHANNEL="rc")["ref"],
+                "powerpacks-v1.0.0",
+            )
+
+    def test_checkout_pins_the_branch_and_channel_sticks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp), self.TAGS)
+
+            self._resolve(repo, "--checkout", POWERPACKS_CHANNEL="rc")
+            self.assertEqual(
+                run("git", "branch", "--show-current", cwd=repo).stdout.strip(),
+                "powerpacks-rc",
+            )
+            self.assertEqual(
+                run("git", "rev-parse", "HEAD", cwd=repo).stdout,
+                run("git", "rev-parse", "powerpacks-v1.1.0-rc.1^{commit}", cwd=repo).stdout,
+            )
+            # The branch name is the channel memory: a later run with no
+            # environment at all stays on rc instead of falling back to stable.
+            self.assertEqual(self._resolve(repo)["channel"], "rc")
+
+    def test_unknown_channel_fails_loudly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(Path(tmp), self.TAGS)
+            env = {k: v for k, v in os.environ.items() if not k.startswith("POWERPACKS_")}
+            env["POWERPACKS_CHANNEL"] = "bogus"
+            proc = subprocess.run(
+                [str(CHANNEL_SCRIPT), str(repo)],
+                cwd=repo,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("unknown POWERPACKS_CHANNEL", proc.stderr)
+
+    def test_install_stamp_records_the_channel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = self._repo(root, self.TAGS)
+            write(repo / ".release-please-manifest.json", '{".": "1.0.0"}\n')
+
+            self._resolve(repo, "--checkout")
+            dest = root / "skills/.powerpacks-install.json"
+            run(STAMP_SCRIPT, repo, "claude-code", dest, cwd=repo)
+            stamp = json.loads(dest.read_text(encoding="utf-8"))
+
+            self.assertEqual(stamp["channel"], "stable")
+            self.assertEqual(stamp["ref"], "powerpacks-v1.0.0")
+            self.assertEqual(stamp["harness"], "claude-code")
 
 
 if __name__ == "__main__":

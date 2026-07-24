@@ -96,18 +96,7 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 
 # Install stamp: which Powerpacks these skills came from (auto-generated, never
 # hand-bumped). Lets update-powerpacks/doctor detect stale installs.
-version="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["."])' "$REPO_ROOT/.release-please-manifest.json" 2>/dev/null || echo unknown)"
-commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-cat > "$SKILLS_DIR/.powerpacks-install.json" <<EOF
-{
-  "package": "powerpacks",
-  "version": "$version",
-  "commit": "$commit",
-  "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "harness": "claude-code",
-  "repo_root": "$REPO_ROOT"
-}
-EOF
+"$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" claude-code "$SKILLS_DIR/.powerpacks-install.json"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
 echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks sales-nav-search build-outbound"

@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# One home for "which Powerpacks release is this checkout, and where did the
+# installed skills come from?".
+#
+# The three harness adapters call this to write `.powerpacks-install.json`
+# (previously a byte-identical heredoc in each of them) and update-powerpacks
+# calls `--print` for its summary. The release identity is read back off the
+# checkout itself — HEAD sitting exactly on a `powerpacks-v*` tag IS the proof
+# that a channel is pinned — so nothing here can drift from what is on disk.
+#
+# Created: 2026-07-24
+#
+# Usage:
+#   powerpacks-install-stamp <repo-root> <harness> <dest.json> [dest.json ...]
+#   powerpacks-install-stamp --print <repo-root>
+set -euo pipefail
+
+if [[ "${1:-}" == "--print" ]]; then
+  MODE="print"
+  REPO_ROOT="${2:-}"
+  shift 2 || true
+else
+  MODE="write"
+  REPO_ROOT="${1:-}"
+  HARNESS="${2:-}"
+  shift 2 || true
+fi
+
+if [[ -z "${REPO_ROOT:-}" ]]; then
+  echo "usage: powerpacks-install-stamp <repo-root> <harness> <dest.json>..." >&2
+  echo "       powerpacks-install-stamp --print <repo-root>" >&2
+  exit 2
+fi
+
+version="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["."])' \
+  "$REPO_ROOT/.release-please-manifest.json" 2>/dev/null || echo unknown)"
+commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+ref="$(git -C "$REPO_ROOT" describe --tags --exact-match --match 'powerpacks-v*' HEAD 2>/dev/null || echo "")"
+
+# The channel branch that powerpacks-channel checked out is the authoritative
+# answer. Fall back to reading the tag only for a checkout someone moved by
+# hand, where a release tag on HEAD still proves this is a published release
+# rather than a moving branch.
+case "$branch" in
+  powerpacks-stable) channel="stable" ;;
+  powerpacks-rc) channel="rc" ;;
+  powerpacks-edge) channel="edge" ;;
+  powerpacks-pinned) channel="pinned" ;;
+  *)
+    case "$ref" in
+      "") channel="edge" ;;
+      *-rc.*) channel="rc" ;;
+      *) channel="stable" ;;
+    esac
+    ;;
+esac
+[[ -n "$ref" ]] || ref="$branch"
+
+if [[ "$MODE" == "print" ]]; then
+  printf 'version=%s\ncommit=%s\nchannel=%s\nref=%s\n' "$version" "$commit" "$channel" "$ref"
+  exit 0
+fi
+
+if [[ -z "${HARNESS:-}" || "$#" -eq 0 ]]; then
+  echo "usage: powerpacks-install-stamp <repo-root> <harness> <dest.json>..." >&2
+  exit 2
+fi
+
+installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+for dest in "$@"; do
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest" <<EOF
+{
+  "package": "powerpacks",
+  "version": "$version",
+  "commit": "$commit",
+  "channel": "$channel",
+  "ref": "$ref",
+  "installed_at": "$installed_at",
+  "harness": "$HARNESS",
+  "repo_root": "$REPO_ROOT"
+}
+EOF
+done

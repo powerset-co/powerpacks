@@ -108,11 +108,32 @@ done
 
 git remote get-url origin >/dev/null
 OLD_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo "")"
+OLD_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
 git fetch --prune origin main
+git fetch --tags --force origin
+
+# Which release does this checkout follow? bin/powerpacks-channel owns the whole
+# answer (channel precedence + newest-tag selection) so the installer and this
+# updater can never disagree about it.
+CHANNEL=""
+TARGET_REF=""
+TARGET_BRANCH=""
+while IFS='=' read -r key value; do
+  case "$key" in
+    channel) CHANNEL="$value" ;;
+    ref) TARGET_REF="$value" ;;
+    branch) TARGET_BRANCH="$value" ;;
+  esac
+done < <("$REPO/bin/powerpacks-channel" "$REPO")
+
+if [[ -z "$CHANNEL" || -z "$TARGET_REF" || -z "$TARGET_BRANCH" ]]; then
+  echo "error: could not resolve a release channel for $REPO" >&2
+  exit 1
+fi
 
 for protected_path in .powerpacks .env; do
-  if git ls-tree -r --name-only origin/main -- "$protected_path" | grep -q .; then
-    echo "error: refusing to update because origin/main tracks $protected_path" >&2
+  if git ls-tree -r --name-only "$TARGET_REF" -- "$protected_path" | grep -q .; then
+    echo "error: refusing to update because $TARGET_REF tracks $protected_path" >&2
     exit 1
   fi
 done
@@ -124,13 +145,11 @@ if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
   stash_ref='stash@{0}'
 fi
 
-if git show-ref --verify --quiet refs/heads/main; then
-  git switch --force main >/dev/null
-else
-  git switch --track -c main origin/main >/dev/null
-fi
-git reset --hard origin/main >/dev/null
-git branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
+# The stash above already emptied the tree, so the plain (non-forcing) checkout
+# in powerpacks-channel is enough — and reusing it keeps the branch/upstream
+# handling in one place.
+"$REPO/bin/powerpacks-channel" --checkout "$REPO" >/dev/null
+git reset --hard "$TARGET_REF" >/dev/null
 
 "$REPO/bin/sync-agent-files.sh"
 
@@ -191,19 +210,31 @@ fi
 # Human summary FIRST: did anything change, and what. The key=value block
 # below stays for scripts that parse it.
 NEW_COMMIT="$(git rev-parse HEAD)"
+NEW_VERSION="$("$REPO/bin/powerpacks-install-stamp" --print "$REPO" | sed -n 's/^version=//p')"
 echo
 if [[ -n "$OLD_COMMIT" && "$OLD_COMMIT" != "$NEW_COMMIT" ]]; then
-  change_count="$(git rev-list --count "$OLD_COMMIT..$NEW_COMMIT" 2>/dev/null || echo "?")"
-  echo "✅ updated ${OLD_COMMIT:0:7} -> ${NEW_COMMIT:0:7} ($change_count new commit(s)):"
+  # left...right counts both directions: pinning to a release can legitimately
+  # move a checkout BACKWARDS off an unreleased main, and that must not be
+  # reported as "N new commits".
+  span="$(git rev-list --left-right --count "$OLD_COMMIT...$NEW_COMMIT" 2>/dev/null || echo "? ?")"
+  dropped="${span%%[[:space:]]*}"
+  gained="${span##*[[:space:]]}"
+  echo "✅ $CHANNEL $TARGET_REF (v$NEW_VERSION): ${OLD_COMMIT:0:7} -> ${NEW_COMMIT:0:7} (+$gained/-$dropped commit(s))"
   git log --oneline "$OLD_COMMIT..$NEW_COMMIT" 2>/dev/null | head -10 | sed 's/^/   /'
 else
-  echo "✅ already up to date at ${NEW_COMMIT:0:7} ($(git log -1 --format=%s HEAD))"
+  echo "✅ already on $CHANNEL $TARGET_REF (v$NEW_VERSION) at ${NEW_COMMIT:0:7}"
+fi
+if [[ -n "$OLD_BRANCH" && "$OLD_BRANCH" != "$TARGET_BRANCH" ]]; then
+  echo "   channel branch: $OLD_BRANCH -> $TARGET_BRANCH"
 fi
 echo
 echo "status=ok"
 echo "repo=$REPO"
 echo "harness=$HARNESS"
 echo "commit=$NEW_COMMIT"
+echo "channel=$CHANNEL"
+echo "ref=$TARGET_REF"
+echo "version=$NEW_VERSION"
 echo "stash_commit=${stash_commit:-none}"
 echo "stash_ref=$stash_ref"
 echo "stash_message=${stash_message:-none}"
