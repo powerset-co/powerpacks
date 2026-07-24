@@ -314,6 +314,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["whatsapp_pairing_state"], "pre_full_sync")
         self.assertIn("Re-link", result["whatsapp_pairing_notice"])
+        self.assertEqual(result["child"]["artifacts"]["contacts_csv"], str(merged))
 
     def test_existing_channel_exports_are_refreshed(self) -> None:
         with tempfile.TemporaryDirectory() as td:

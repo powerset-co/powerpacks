@@ -26,6 +26,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context import (
     apply_retargets as retargets,
     assemble_synthetic_profile as asp,
@@ -275,7 +276,7 @@ class TestCandidateBundlesInheritDownstream(unittest.TestCase):
             base = Path(d)
             raw, facts, dossiers = base / "raw", base / "facts", base / "dossiers"
             raw.mkdir(), facts.mkdir()
-            common.write_json(raw / f"{self.PID}.json", {
+            write_json(raw / f"{self.PID}.json", {
                 "person_id": self.PID, "full_name": "Cass Doe", "emails": ["cass@x.com"],
                 "phones": [], "source_channels": ["gmail_msgvault"],
                 "messages": [{"at": "2026-01-01T00:00:00Z", "channel": "gmail",
@@ -381,7 +382,7 @@ class TestMintingFromCandidateResearch(unittest.TestCase):
             base = Path(d)
             pools = _pools(base, [GMAIL_ROW], [])
             research = base / "research"
-            common.write_json(research / "cass-doe-parentab" / "01_research_parallel.json",
+            write_json(research / "cass-doe-parentab" / "01_research_parallel.json",
                               self._research_profile())
             queue = base / "research_queue.csv"
             with queue.open("w", newline="", encoding="utf-8") as fh:
@@ -434,7 +435,7 @@ class TestMintingFromCandidateResearch(unittest.TestCase):
             base = Path(d)
             handle = "cass-doe-parentab"
             research = base / "research"
-            common.write_json(research / handle / "01_research_parallel.json",
+            write_json(research / handle / "01_research_parallel.json",
                               self._research_profile())
             queue = base / "research_queue.csv"
             with queue.open("w", newline="", encoding="utf-8") as fh:
@@ -550,18 +551,18 @@ class TestStaleParentMergeCollapse(unittest.TestCase):
             },
         }
         path = base / "index.json"
-        common.write_json(path, idx)
+        write_json(path, idx)
         return path
 
     def _stale_research(self, base: Path) -> Path:
         """Two stale per-child research dirs (parent34, parent58) — the pre-merge keys."""
         research = base / "research"
-        common.write_json(research / "lukas-kroc-parent34" / "01_research_parallel.json",
+        write_json(research / "lukas-kroc-parent34" / "01_research_parallel.json",
                           self._profile("Lukas Kroc", "Prague",
                                         [{"title": "Consultant", "company_name": "Caspar.ai",
                                           "is_current": True}],
                                         [{"school_name": "CTU", "degree": "MSc"}], 0.9))
-        common.write_json(research / "lukas-kroc-parent58" / "01_research_parallel.json",
+        write_json(research / "lukas-kroc-parent58" / "01_research_parallel.json",
                           self._profile("Lukas Kroc", "Palo Alto",
                                         [], [{"school_name": "Stanford", "degree": "PhD"}], 0.6))
         return research
@@ -696,7 +697,7 @@ class TestStaleParentMergeCollapse(unittest.TestCase):
                 },
             }
             index_json = base / "index.json"
-            common.write_json(index_json, idx)
+            write_json(index_json, idx)
             out = base / "synthetic-people.csv"
             rows = self._assemble(base, out, index_json)
             self.assertEqual(len(rows), 2)                          # still two people
@@ -1147,7 +1148,7 @@ class TestAssembleWorthGate(unittest.TestCase):
 
     def _run(self, base: Path, pools: list[Path], review: Path) -> dict:
         research = base / "research"
-        common.write_json(research / "cass-doe-parentab" / "01_research_parallel.json", self._profile())
+        write_json(research / "cass-doe-parentab" / "01_research_parallel.json", self._profile())
         queue = base / "research_queue.csv"
         queue.write_text("handle,display_name,primary_email,phone_e164,source_channel\n"
                          "cass-doe-parentab,Cass Doe,cass@x.com,,email\n", encoding="utf-8")
@@ -1941,7 +1942,7 @@ class TestReviewUiDedupMergedParent(unittest.TestCase):
                "slugs": {"c-a": {"name": "Lukas Kroc", "person_id": self.PID_A},
                          "c-b": {"name": "Lukas Kroc", "person_id": self.PID_B}}}
         path = base / "index.json"
-        common.write_json(path, idx)
+        write_json(path, idx)
         return path
 
     def _load(self, base: Path, same_parent: bool) -> list[dict]:
@@ -1985,7 +1986,7 @@ class TestReviewUiDedupMergedParent(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             index_json = base / "index.json"
-            common.write_json(index_json, {"parents": {}, "slugs": {}})
+            write_json(index_json, {"parents": {}, "slugs": {}})
             parents = [
                 {"slug": "a", "name": "A", "person_ids": ["candidate:email:a@x.com"],
                  "candidates": [{"pub": "synth-a"}], "sources": ["gmail"]},
@@ -2033,7 +2034,7 @@ class TestStagedReviewUI(unittest.TestCase):
                     "source_candidate_public_identifier": "candidate:email:ada@example.com",
                 })
             notes = "Matched employer, school, and location with complete supporting evidence."
-            common.write_json(research / handle / "01_research_parallel.json", {
+            write_json(research / handle / "01_research_parallel.json", {
                 "person": {"full_name": "Ada Byron Lovelace"},
                 "headline": {"text": "Analytical Engine Pioneer"},
                 "location": {"raw": "London, United Kingdom"},
@@ -4081,7 +4082,7 @@ class TestMultiOptionDecideResolvesParent(unittest.TestCase):
                              "source_channels": "imessage",
                              "interaction_counts": json.dumps({"imessage": 9})})
         # index.json folds BOTH children under one current parent (post cluster_merge).
-        common.write_json(base / "index.json", {
+        write_json(base / "index.json", {
             "parents": {"lukas-kroc-parent06": {"children": ["c-a", "c-b"],
                                                 "name": "Lukas Kroc", "needs_review": []}},
             "slugs": {"c-a": {"name": "Lukas Kroc", "person_id": self.PID_A},

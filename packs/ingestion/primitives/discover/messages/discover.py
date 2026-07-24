@@ -425,6 +425,7 @@ class MessagesDiscovery:
 
     def _completed(self) -> dict[str, Any]:
         artifacts = self._artifacts()
+        artifacts["contacts_csv"] = str(MERGED_CONTACTS)
         child = {
             "primitive": "messages_discovery",
             "status": "selected_steps_completed",

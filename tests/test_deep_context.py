@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context import (
     build_parents as parents,
     cluster_merge_candidates as cluster,
@@ -750,7 +751,7 @@ class TestEndToEnd(unittest.TestCase):
     """compose -> cluster -> lookup over synthetic fixtures, detecting a duplicate."""
 
     def _write_person(self, raw_dir: Path, facts_dir: Path, pid: str, name: str, phone: str, email: str):
-        common.write_json(raw_dir / f"{pid}.json", {
+        write_json(raw_dir / f"{pid}.json", {
             "person_id": pid, "full_name": name, "emails": [email] if email else [],
             "phones": [phone] if phone else [], "source_channels": ["imessage"],
             "messages": [{"at": "2023-01-01", "channel": "imessage", "direction": "from_them", "subject": "", "text": "hi"}],
@@ -1450,7 +1451,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                     "relationship_to_owner": "former professor",
                     "network_worth": {"decision": "maybe", "reason": "profession unknown"},
                 }}) + "\n", encoding="utf-8")
-                common.write_json(raw / f"{person_id}.json", {
+                write_json(raw / f"{person_id}.json", {
                     "person_id": person_id,
                     "messages": [{
                         "at": "2020-01-01T00:00:00Z",
@@ -1648,7 +1649,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                 "network_worth": {"decision": "maybe",
                                   "reason": "real person but no professional context"},
             }}) + "\n", encoding="utf-8")
-            common.write_json(raw / f"{pid}.json", {"person_id": pid, "messages": [{
+            write_json(raw / f"{pid}.json", {"person_id": pid, "messages": [{
                 "at": "2020-01-01T00:00:00Z", "direction": "from_them",
                 "text": f"Good to connect, this is {handle}.",
             }]})
