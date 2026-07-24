@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.0.0...powerpacks-v1.1.0) (2026-07-24)
+
+
+### Features
+
+* **install:** installs follow published releases, not the tip of main ([#324](https://github.com/powerset-co/powerpacks/issues/324)) ([c6d39bb](https://github.com/powerset-co/powerpacks/commit/c6d39bb672c7eed79bbb71ab2a141010d163c9dd))
+
 ## [1.0.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v0.18.0...powerpacks-v1.0.0) (2026-07-24)
 
 
