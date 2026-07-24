@@ -25,6 +25,12 @@ Outputs under `.powerpacks/network-import/merged/`: canonical `people.csv`,
 `merge_manifest.json`.
 
 Changelog:
+  2026-07-24 (one pub rule): the local `row_public_identifier` (stored
+    `public_identifier` first, URL only as fallback) was deleted for
+    `people_schema.row_public_identifier`, which derives from `linkedin_url`
+    first. Same answer for the rows this stage sees — they arrive through
+    `normalize_people_row`, which now re-derives the slug — but the precedence
+    no longer disagrees with `stable_linkedin_key` on an unnormalized row.
   2026-07-23 (audit):
     - Dropped the local byte-identical read_csv/write_csv for the shared
       CsvIO.read_dict_rows / CsvIO.write_dict_rows (csv still used for an
@@ -63,6 +69,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     latest_interaction,
     merge_interaction_counts,
     normalize_people_row,
+    row_public_identifier,
     stable_linkedin_key,
     extract_public_identifier,
 )
@@ -247,11 +254,6 @@ def _row_emails(row: dict[str, Any]) -> set[str]:
 def _row_phones(row: dict[str, Any]) -> set[str]:
     return {_phone10(p) for p in [row.get("primary_phone", ""), *listish_values(row.get("all_phones", ""))]
             if _phone10(p)}
-
-
-def row_public_identifier(row: dict[str, Any]) -> str:
-    pub = (row.get("public_identifier") or "").strip().lower()
-    return pub or extract_public_identifier(row.get("linkedin_url") or "").lower()
 
 
 def load_overrides(path: Path | None) -> dict[str, dict[str, Any]]:

@@ -195,11 +195,13 @@ The examples are ingestion-flavored but the rules apply repo-wide.
   a move; update every call site (skills, tests, docs, bin, adapters,
   `py_cmd`-style path strings) and finish with a zero-stale-reference grep.
 - Deliberately divergent variants are PINNED and documented at the definition:
-  the non-percent-decoding LinkedIn-id pair in `extract_gmail`, the
-  source-tuned `normalize_name` match keys, the fingerprinted-LF vs plain
+  the source-tuned `normalize_name` match keys, the fingerprinted-LF vs plain
   writers, `bundle_evidence_fingerprint` (its serialization is a paid-cache
   key — changing it silently re-bills every dossier). Don't "unify" them; say
-  why they diverge where they live.
+  why they diverge where they live. A pin is not a licence to diverge on
+  IDENTITY: the LinkedIn slug/URL normalizers live once, in
+  `schemas/people_schema.py`. `extract_gmail` used to pin a non-percent-decoding
+  copy and it silently split people into two rows at the fan-in merge.
 
 ### Moving & deleting
 

@@ -36,6 +36,14 @@ import chain's `run_gmail_apply_and_enrich` step
 and applies STORED resolutions only.
 
 Changelog:
+  2026-07-24 (one LinkedIn normalizer): the local `extract_public_identifier`/
+    `normalize_linkedin_url` pair — pinned to NOT percent-decode the slug — was
+    deleted; both now come from `schemas/people_schema.py`, which decodes. The
+    pin split people: `apply_resolutions` stamped `public_identifier` with the
+    encoded slug while every other writer stored the decoded one, and
+    `stable_linkedin_key` trusted whatever was stored, so one person arrived at
+    the fan-in merge as two rows. Percent-encoded resolution URLs now resolve to
+    the same slug, person id, and merge key as everyone else's.
   2026-07-23 (cmd inline): the `_dispatch_msgvault_accounts`/`_dispatch_msgvault`/
     `_dispatch_apply_resolutions` adapters were inlined into `main` (an
     `if args.command in (...)` chain replaces `set_defaults(func=)` + `args.func`)
@@ -88,7 +96,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -121,8 +128,10 @@ from packs.ingestion.schemas.gmail_artifacts import (  # noqa: E402
 )
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS,
+    extract_public_identifier,
     generate_person_id as generate_linkedin_person_id,
     normalize_interaction_timestamp,
+    normalize_linkedin_url,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -184,33 +193,6 @@ TARGETED_COLUMNS = [
 ]
 ACCOUNT_COLUMNS = ["account_id", "account_email", "provider", "source", "added_at"]
 PEOPLE_COLUMNS = list(PEOPLE_SCHEMA_COLUMNS)
-
-
-def extract_public_identifier(linkedin_url: str) -> str:
-    """Extract the lowercase /in/ public identifier from a LinkedIn URL.
-
-    Kept local (NOT the people_schema version): this one does not
-    percent-decode the identifier, and the stored-resolution apply path is
-    pinned to that behavior."""
-    match = re.search(r"linkedin\.com/in/([^/?#]+)", linkedin_url or "", re.IGNORECASE)
-    return match.group(1).strip().rstrip("/").lower() if match else ""
-
-
-def normalize_linkedin_url(value: str) -> str:
-    """Canonicalize a LinkedIn URL to https://www.linkedin.com/in/<public_id>.
-
-    Kept local for the same no-percent-decoding reason as
-    extract_public_identifier above."""
-    url = (value or "").strip()
-    if not url:
-        return ""
-    if url.startswith("linkedin.com/"):
-        url = "https://www." + url
-    elif url.startswith("www.linkedin.com/"):
-        url = "https://" + url
-    url = url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
-    public_id = extract_public_identifier(url)
-    return f"https://www.linkedin.com/in/{public_id}" if public_id else url
 
 
 def people_rows_from_msgvault(rows: list[dict[str, Any]], source_artifacts: list[str]) -> list[dict[str, Any]]:

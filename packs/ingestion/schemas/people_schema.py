@@ -5,6 +5,18 @@ merge flows. It is intentionally a superset: source-specific columns may be
 blank for channels that do not provide them. Canonical exports should be named
 `people.csv`; legacy-compatible aliases such as `people_harmonic_all.csv` may
 exist temporarily, but this module is provider-neutral.
+
+Changelog:
+  2026-07-24 (identity re-derivation): `stable_linkedin_key` and
+    `normalize_people_row` now agree on one rule, `row_public_identifier`: the
+    slug is re-derived from `linkedin_url` when the row has one, and a stored
+    `public_identifier` is used (percent-decoded + lowercased) only when there
+    is no URL. Previously the key trusted a stored `public_identifier`
+    verbatim and `normalize_people_row` rewrote `linkedin_url` through the
+    percent-decoding normalizer while leaving an already-populated
+    `public_identifier` alone — so a row written with a percent-encoded slug
+    stayed self-contradictory and keyed differently from the same person's
+    decoded row, splitting them into two rows at the fan-in merge.
 """
 
 from __future__ import annotations
@@ -97,10 +109,32 @@ def normalize_linkedin_url(value: str) -> str:
     return f"https://www.linkedin.com/in/{public_id}" if public_id else url
 
 
+def row_public_identifier(row: dict[str, Any]) -> str:
+    """The row's canonical LinkedIn slug — derived from `linkedin_url` first.
+
+    `linkedin_url` is the identity a source actually observed, so the slug is
+    re-derived from it through `extract_public_identifier` whenever the row has
+    one. A stored `public_identifier` is trusted only when there is no URL to
+    derive from (resolution queues, review rows, and synthetic profiles carry a
+    slug and no URL); it goes through the same percent-decode + lowercase so a
+    URL-less row keys the same as the URL-bearing row for the same person.
+
+    Deriving rather than trusting is what keeps identity a property of the
+    profile instead of a property of whichever writer created the row: two rows
+    holding the same URL but differently-spelled stored slugs (percent-encoded
+    vs decoded) now collapse to one person instead of splitting at the fan-in."""
+
+    public_id = extract_public_identifier(row.get("linkedin_url") or "")
+    if public_id:
+        return public_id
+    stored = str(row.get("public_identifier") or "").strip().rstrip("/")
+    return urllib.parse.unquote(stored).lower()
+
+
 def stable_linkedin_key(row: dict[str, Any]) -> str:
-    public_id = (row.get("public_identifier") or "").strip().lower()
-    if not public_id:
-        public_id = extract_public_identifier(row.get("linkedin_url") or "")
+    """The `linkedin:<slug>` merge/join key, or "" for a row with no LinkedIn."""
+
+    public_id = row_public_identifier(row)
     return f"linkedin:{public_id}" if public_id else ""
 
 
@@ -139,8 +173,7 @@ def normalize_people_row(row: dict[str, Any]) -> dict[str, str]:
         else:
             normalized[col] = str(value)
     normalized["linkedin_url"] = normalize_linkedin_url(normalized.get("linkedin_url", ""))
-    if not normalized.get("public_identifier"):
-        normalized["public_identifier"] = extract_public_identifier(normalized.get("linkedin_url", ""))
+    normalized["public_identifier"] = row_public_identifier(normalized)
     return normalized
 
 

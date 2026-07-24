@@ -4,6 +4,15 @@ The functions in this module are intentionally local and deterministic: they
 read already-ingested Powerpacks people rows and derive the position-level
 people namespace records, Postgres person contract records, and hydrated profile
 artifacts without LLM or network calls.
+
+Changelog:
+  2026-07-24 (one people schema): the `except Exception` "copied primitive
+    bundle" fallback that redefined PEOPLE_CSV_COLUMNS/extract_public_identifier/
+    normalize_linkedin_url/normalize_people_row/parse_jsonish was deleted for a
+    plain import. It was unreachable — `packs.ingestion.schemas.company_identity`
+    is imported unguarded above it, so a tree where `packs.*` is missing raises
+    before the guarded import — and it had drifted: its slug helpers did not
+    percent-decode and its column list predated `superseded_person_ids`.
 """
 
 from __future__ import annotations
@@ -26,56 +35,13 @@ except ImportError:  # pragma: no cover
     from identity import canonical_person_key, position_uuid, stable_company_id, stable_person_id_from_key  # type: ignore
     from location_normalization import normalize_location_fields  # type: ignore
 
-try:
-    from packs.ingestion.schemas.people_schema import (
-        PEOPLE_SCHEMA_COLUMNS as PEOPLE_CSV_COLUMNS,
-        extract_public_identifier,
-        normalize_linkedin_url,
-        normalize_people_row,
-        parse_jsonish,
-    )
-except Exception:  # pragma: no cover - fallback for copied primitive bundles
-    PEOPLE_CSV_COLUMNS = [
-        "id", "public_identifier", "linkedin_url", "first_name", "last_name", "full_name",
-        "headline", "summary", "city", "state", "country", "location_raw", "profile_picture_url",
-        "work_experiences", "education", "current_title", "current_company", "current_company_urn",
-        "entity_urn", "enrichment_provider", "enriched_at", "harmonic_response", "harmonic_location",
-        "rapidapi_response", "twitter_handle", "twitter_response", "primary_email", "all_emails",
-        "primary_phone", "all_phones", "source_channels", "source_artifacts",
-        "interaction_counts", "last_interaction",
-    ]
-
-    def extract_public_identifier(linkedin_url: str) -> str:
-        match = re.search(r"linkedin\.com/in/([^/?#]+)", linkedin_url or "", re.IGNORECASE)
-        return match.group(1).strip().rstrip("/").lower() if match else ""
-
-    def normalize_linkedin_url(value: str) -> str:
-        url = (value or "").strip().split("?", 1)[0].split("#", 1)[0].rstrip("/")
-        if url.startswith("linkedin.com/"):
-            url = "https://www." + url
-        if url.startswith("www.linkedin.com/"):
-            url = "https://" + url
-        public_id = extract_public_identifier(url)
-        return f"https://www.linkedin.com/in/{public_id}" if public_id else url
-
-    def normalize_people_row(row: dict[str, Any]) -> dict[str, str]:
-        out = {column: "" for column in PEOPLE_CSV_COLUMNS}
-        for column in PEOPLE_CSV_COLUMNS:
-            value = row.get(column, "")
-            out[column] = "" if value is None else (json.dumps(value) if isinstance(value, (dict, list)) else str(value))
-        out["linkedin_url"] = normalize_linkedin_url(out.get("linkedin_url", ""))
-        out["public_identifier"] = out.get("public_identifier") or extract_public_identifier(out.get("linkedin_url", ""))
-        return out
-
-    def parse_jsonish(value: Any, default: Any) -> Any:
-        if value in (None, ""):
-            return default
-        if isinstance(value, (dict, list)):
-            return value
-        try:
-            return json.loads(str(value))
-        except Exception:
-            return default
+from packs.ingestion.schemas.people_schema import (
+    PEOPLE_SCHEMA_COLUMNS as PEOPLE_CSV_COLUMNS,
+    extract_public_identifier,
+    normalize_linkedin_url,
+    normalize_people_row,
+    parse_jsonish,
+)
 
 
 # Both column lists are derived from the canonical search contracts so the
