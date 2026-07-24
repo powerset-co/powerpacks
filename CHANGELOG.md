@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.1.0...powerpacks-v1.2.0) (2026-07-24)
+
+
+### Features
+
+* **discover/gmail:** rebuild contacts.csv when the output is empty or a full rerun is asked for ([#334](https://github.com/powerset-co/powerpacks/issues/334)) ([078819c](https://github.com/powerset-co/powerpacks/commit/078819c246928646533b4f5e330c4d678ff8f651))
+* **enrich:** annotate enrichment failures instead of deleting rows, and cache only permanent failures ([#331](https://github.com/powerset-co/powerpacks/issues/331)) ([71bb20f](https://github.com/powerset-co/powerpacks/commit/71bb20f0bd13c69fd60b5a5a7d205cf31fb1a165))
+* **ingestion:** a person with a LinkedIn key, an email, or a phone is a person ([#330](https://github.com/powerset-co/powerpacks/issues/330)) ([48852df](https://github.com/powerset-co/powerpacks/commit/48852dff8a2128469427c1e0d0d606def080f294))
+
+
+### Bug Fixes
+
+* **ingestion:** one LinkedIn slug normalizer, and a merge key that re-derives it ([#329](https://github.com/powerset-co/powerpacks/issues/329)) ([7b6a7d2](https://github.com/powerset-co/powerpacks/commit/7b6a7d2be699142ee22950966cf7cbc3e46b8110))
+* **install:** the release's own updater finishes the update ([#327](https://github.com/powerset-co/powerpacks/issues/327)) ([dbdb02f](https://github.com/powerset-co/powerpacks/commit/dbdb02f6c6b2484cc154cfb4d4398561fdef2737))
+
 ## [1.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.0.0...powerpacks-v1.1.0) (2026-07-24)
 
 
