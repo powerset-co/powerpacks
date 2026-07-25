@@ -14,8 +14,6 @@ from packs.ingestion.primitives.discover.gmail.util import (  # noqa: F401
     GMAIL_DISCOVERY_COLUMNS,
     DEFAULT_GMAIL_ESTIMATE_MAX_PAGES,
     GMAIL_CALCULATION_FULL_RECOUNT,
-    GMAIL_CALCULATION_INCREMENTAL_DELTA,
-    gmail_incremental_input_id,
     gmail_discovery_merge_plan,
     extract_gmail_base_dir,
 )

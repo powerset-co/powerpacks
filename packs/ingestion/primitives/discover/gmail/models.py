@@ -2,12 +2,16 @@
 gmail/discover.py may emit. New fields are added here, never invented inline.
 
 Changelog:
+  2026-07-24 (incremental deleted): DELETED GmailDiscoveryIncrementalMismatch and
+    GmailDiscoveryCompleted's applied_incremental_inputs /
+    skipped_incremental_inputs fields, along with the append-only merge path that
+    was their only writer. See discover.py's Changelog.
   2026-07-23 (audit):
     - Payloads discover.py previously assembled as inline dicts became these
       typed dataclasses.
   2026-07-23 (account-email selection): the selected_accounts field on
-    GmailDiscoveryIncrementalMismatch and GmailDiscoveryCompleted was renamed
-    account_emails, matching the single --account-email selection surface.
+    GmailDiscoveryCompleted was renamed account_emails, matching the single
+    --account-email selection surface.
 """
 
 from __future__ import annotations
@@ -56,22 +60,6 @@ class GmailDiscoveryFailed(StagePayload):
 
 
 @dataclass
-class GmailDiscoveryIncrementalMismatch(StagePayload):
-    """A full rewrite built from delta-only children would drop rows — loud failure."""
-    started_at: str = ""
-    duration_seconds: float = 0.0
-    accounts_timing: list[dict[str, Any]] = field(default_factory=list)
-    calculation_version: str = ""
-    calculation_mode: str = ""
-    calculation_reason: str = "full_rewrite_requires_full_recount_children"
-    account_emails: list[str] = field(default_factory=list)
-    child_calculation_modes: list[str] = field(default_factory=list)
-    children: list[dict[str, Any]] = field(default_factory=list)
-    status: str = "failed"
-    source: str = "gmail"
-
-
-@dataclass
 class GmailDiscoveryCompleted(StagePayload):
     started_at: str = ""
     duration_seconds: float = 0.0
@@ -80,8 +68,6 @@ class GmailDiscoveryCompleted(StagePayload):
     calculation_mode: str = ""
     calculation_reason: str = ""
     child_calculation_modes: list[str] = field(default_factory=list)
-    applied_incremental_inputs: list[str] = field(default_factory=list)
-    skipped_incremental_inputs: list[str] = field(default_factory=list)
     contacts_csv: str = ""
     linkedin_resolution_queue_csv: str = ""
     contacts: int = 0

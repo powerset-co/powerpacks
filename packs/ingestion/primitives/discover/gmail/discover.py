@@ -19,25 +19,29 @@ Shape (GmailDiscovery(...).run()):
     - call GmailExtractor().run_msgvault(...) in-process (no subprocess),
       which reads the synced store and writes this account's rows to the channel's
       FIXED queue_csv/people_csv (read back from there, never re-parsed out of the
-      returned payload). The engine declares its calculation_mode: full_recount (its
-      rows ARE the account's whole truth) | incremental_delta (only new rows,
-      appended once, deduped by incremental_input_id). It always declares
-      full_recount today — it re-derives from the whole archive, so the msgvault
-      resume window never makes its rows a delta (see extract_gmail's Changelog).
+      returned payload). The engine declares its calculation_mode, permanently
+      full_recount: it re-derives from the whole archive, so the msgvault resume
+      window never makes its rows a delta (see extract_gmail's Changelog).
     extract records what it contributed in self.artifacts; run() returns None on
     success or a GmailDiscoveryFailed payload that short-circuits the run.
 
-  GmailDiscovery loops the channels (stopping at the first failure), reads the
-  existing contacts.csv once, then gmail_discovery_merge_plan picks full_rewrite
-  (empty/missing output, --fresh full rerun, calc-version/account-set change, or
-  any full_recount -> rebuild contacts.csv from child rows) vs incremental_update
-  (populated output AND every child returned a delta -> keep existing rows +
-  append unapplied deltas, dedup by incremental_input_id). A full_rewrite fed
-  only deltas fails loudly (it would drop rows). It merges rows by primary
-  email -> writes contacts.csv +
+  GmailDiscovery loops the channels (stopping at the first failure), counts the
+  rows already in contacts.csv, and asks gmail_discovery_merge_plan to name the
+  reason for the rebuild (empty output, --fresh, calc-version/account-set change,
+  or the ordinary full recount). The children's rows are always the whole new
+  output. It merges those rows by primary email -> writes contacts.csv +
   linkedin_resolution_queue.csv (same rows) + a typed stage manifest (models.py).
 
 Changelog:
+  2026-07-24 (incremental deleted): the append-only delta path is gone, because no
+    producer ever fed it — extract_gmail permanently declares full_recount (#334)
+    and the owner has decided against building real incrementality. DELETED the
+    GmailDiscoveryIncrementalMismatch guard and payload, the channel's
+    incremental_input_id (plus its `output`/`record` fields), the
+    `incremental_update` branch with its applied_/skipped_incremental_inputs
+    manifest keys, and the existing-rows read that only that branch consumed (the
+    row COUNT still feeds the merge plan). Kept: #334's empty_output /
+    full_rerun_requested reasons and extract_gmail's calculation_mode declaration.
   2026-07-24 (merge policy + replay fix): gmail_discovery_merge_plan gained two
     branches ahead of the existing ones — `empty_output` (contacts.csv missing or
     zero rows) and `full_rerun_requested` (--fresh) — so the merge only appends
@@ -111,7 +115,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import gmail_discover_dir  # noqa: E402
 from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
@@ -128,17 +132,13 @@ from packs.ingestion.primitives.discover.gmail.extract_gmail import (  # noqa: E
 from packs.ingestion.primitives.discover.gmail.models import (  # noqa: E402
     GmailDiscoveryCompleted,
     GmailDiscoveryFailed,
-    GmailDiscoveryIncrementalMismatch,
     GmailDiscoverySkipped,
     GmailPrivacy,
 )
 from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
     GMAIL_DISCOVERY_COLUMNS,
     GMAIL_CALCULATION_FULL_RECOUNT,
-    GMAIL_CALCULATION_INCREMENTAL_DELTA,
-    _as_list,
     _merge_rows,
-    gmail_incremental_input_id,
     gmail_discovery_merge_plan,
     extract_gmail_base_dir,
     resolve_discovery_inputs,
@@ -156,13 +156,11 @@ class GmailAccountChannel:
     never re-parsed out of the returned payload, since the engine writes known paths.
 
     It records what it contributed on self:
-      artifacts             the fixed queue/people CSV paths it produced
-      mode                  the engine's calculation_mode (full_recount |
-                            incremental_delta)
-      rows                  the queue rows the engine wrote (empty when missing)
-      incremental_input_id  content-hash dedup key for the append-only path
-      record                the per-account entry the store puts in manifest.children
-      output                the incoming row the store feeds the merge
+      artifacts  the fixed queue/people CSV paths it produced
+      mode       the engine's declared calculation_mode (always full_recount)
+      rows       the queue rows the engine wrote (empty when missing)
+      record     the per-account entry the store puts in manifest.children
+      output     the incoming row the store feeds the merge
 
     run() returns None on success or a GmailDiscoveryFailed payload (failed sync
     or a non-completed engine payload) that short-circuits the discovery run."""
@@ -194,7 +192,6 @@ class GmailAccountChannel:
         # Populated by run(); defaults hold for a channel that never ran.
         self.mode: str = GMAIL_CALCULATION_FULL_RECOUNT
         self.rows: list[dict[str, Any]] = []
-        self.incremental_input_id: str = ""
         self.artifacts: dict[str, Any] = {}
         self.record: dict[str, Any] = {}
         self.timing: dict[str, Any] = {}
@@ -218,11 +215,10 @@ class GmailAccountChannel:
 
     @property
     def output(self) -> dict[str, Any]:
-        """The incoming row the store merges: account, calc mode, dedup id, rows."""
+        """The incoming row the store merges: account, calc mode, rows."""
         return {
             "account_email": self.account_email,
             "calculation_mode": self.mode,
-            "incremental_input_id": self.incremental_input_id,
             "rows": self.rows,
         }
 
@@ -278,12 +274,6 @@ class GmailAccountChannel:
         self.mode = str(payload.get("calculation_mode") or GMAIL_CALCULATION_FULL_RECOUNT)
         if self.queue_csv.is_file():
             _fields, self.rows = read_csv_rows(self.queue_csv)
-        # Replay-dedup key for the append-only path (see GmailDiscovery PHASE 3):
-        # incremental children only APPEND to the existing contacts/queue, so
-        # replaying the same child output (rerun, crash-resume) must not append the
-        # same rows twice. The id is a content hash of (account, calc version, rows);
-        # ids already recorded in the manifest are skipped when the store assembles.
-        self.incremental_input_id = gmail_incremental_input_id(self.account_email, self.rows)
         self.artifacts = {
             "linkedin_resolution_queue_csv": str(self.queue_csv),
             "people_csv": str(self.people_csv),
@@ -295,7 +285,6 @@ class GmailAccountChannel:
             "status": payload.get("status", ""),
             "contacts": payload.get("contacts") or payload.get("counts", {}).get("contacts_written", ""),
             "calculation_mode": self.mode,
-            "incremental_input_id": self.incremental_input_id if self.mode == GMAIL_CALCULATION_INCREMENTAL_DELTA else "",
             "rows_read": len(self.rows),
             "artifact_dir": str(self.discover_dir),
             "people_csv": self.artifacts["people_csv"],
@@ -326,22 +315,13 @@ class GmailDiscovery:
     filesystem side effects so the channels only sync + spawn + read their rows.
 
     Account selection is account_emails ONLY (the resolved --account-email list);
-    an empty list yields the skipped manifest. Merge modes (gmail_discovery_merge_plan
-    owns the policy; see it for the full ordered table):
-      full_rewrite       the existing contacts.csv is missing/empty, --fresh asked
-                         for a full rerun, the calc version or account-email set
-                         changed, or any child did a full recount -> rebuild
-                         contacts.csv from child rows.
-      incremental_update the output is populated AND every child returned a delta
-                         -> keep existing rows and append only unapplied deltas
-                         (dedup via incremental_input_id).
-    A full rewrite built from delta-only children would DROP every row the deltas
-    do not restate, so that combination fails loudly instead of losing contacts.
+    an empty list yields the skipped manifest.
 
-    NOTE: no producer currently returns incremental_delta — extract_gmail always
-    re-derives whole-store totals, so it honestly declares full_recount (see its
-    Changelog). The incremental branch is kept correct and guarded, but in
-    practice every run today takes full_rewrite."""
+    Every run is a full rewrite: extract_gmail re-derives whole-store totals from
+    the entire archive, so a child's rows always restate its account's whole truth
+    and the children alone are the new contacts.csv. gmail_discovery_merge_plan
+    only names the reason (empty output, --fresh, calc-version/account-set change,
+    or the ordinary full recount) for the manifest."""
 
     def __init__(
         self,
@@ -419,77 +399,32 @@ class GmailDiscovery:
         child_modes = [channel.mode for channel in self.channels]
         incoming_outputs = [channel.output for channel in self.channels]
 
-        # PHASE 2 — decide how to combine child outputs with what is on disk.
-        # ONE read of the existing output feeds both the plan (is there a
-        # populated baseline to append to?) and the incremental branch below.
+        # PHASE 2 — name the reason this run rebuilds contacts.csv. The existing
+        # output is read only for its ROW COUNT (is there anything there at all?);
+        # its rows are never carried forward, because each child's rows already
+        # restate its account's whole truth.
         existing_manifest = read_json(self.manifest_json, {}) or {}
-        existing_output: list[dict[str, Any]] = []
+        existing_rows = 0
         if self.contacts_csv.is_file():
             _existing_fields, existing_output = read_csv_rows(self.contacts_csv)
+            existing_rows = len(existing_output)
         merge_plan = gmail_discovery_merge_plan(
             existing_manifest,
             account_emails,
-            child_modes,
-            output_rows=len(existing_output),
+            output_rows=existing_rows,
             full_rerun_requested=self.full_rerun_requested,
         )
-        existing: list[dict[str, Any]] = []
-        incoming: list[dict[str, Any]] = []
-        applied_incremental_inputs = _as_list(existing_manifest.get("applied_incremental_inputs"))
-        applied_incremental_input_set = set(applied_incremental_inputs)
-        skipped_incremental_inputs: list[str] = []
-        incremental_outputs = [
-            output for output in incoming_outputs
-            if output.get("calculation_mode") == GMAIL_CALCULATION_INCREMENTAL_DELTA
-        ]
-        # Guard: a full rewrite built from delta-only children would DROP every row
-        # the deltas do not restate. Fail loudly instead of silently losing contacts.
-        if merge_plan["mode"] != "incremental_update" and incremental_outputs:
-            mismatch = GmailDiscoveryIncrementalMismatch(
-                started_at=started_at,
-                duration_seconds=round(time.monotonic() - started, 3),
-                accounts_timing=[channel.timing for channel in self.channels],
-                calculation_version=GMAIL_INTERACTION_CALCULATION_VERSION,
-                calculation_mode=merge_plan["mode"],
-                account_emails=account_emails,
-                child_calculation_modes=child_modes,
-                children=children,
-            ).to_payload()
-            write_json(self.manifest_json, mismatch)
-            return mismatch
 
-        # PHASE 3 — assemble the row set. Incremental: existing rows + each child's
-        # unapplied delta (skipping already-applied incremental_input_ids). Full
-        # rewrite: children's rows only.
-        if merge_plan["mode"] == "incremental_update":
-            # The plan only returns incremental_update when the existing output
-            # is populated, so there is always a baseline to append to. This
-            # branch is NOT gated on contacts.csv existing: gating it there sent
-            # a missing-output run to the full-rewrite else-branch, which applies
-            # the child rows WITHOUT recording their incremental_input_ids — the
-            # next run then replayed the same rows and _merge_rows summed the
-            # counts a second time.
-            existing = existing_output
-            for output in incoming_outputs:
-                input_id = str(output.get("incremental_input_id") or "")
-                if input_id and input_id in applied_incremental_input_set:
-                    skipped_incremental_inputs.append(input_id)
-                    continue
-                incoming.extend(output.get("rows") or [])
-                # Record on EVERY path that applies a delta's rows, so a replay
-                # of the same child output is always recognized and skipped.
-                if input_id:
-                    applied_incremental_inputs.append(input_id)
-                    applied_incremental_input_set.add(input_id)
-        else:
-            for output in incoming_outputs:
-                incoming.extend(output.get("rows") or [])
+        # PHASE 3 — assemble the row set: the children's rows, and only those.
+        incoming: list[dict[str, Any]] = []
+        for output in incoming_outputs:
+            incoming.extend(output.get("rows") or [])
 
         # PHASE 4 — merge by primary email (counts summed, newest last_interaction,
         # account lists unioned) and write BOTH stage outputs with the same rows:
         # contacts.csv is the aggregate; linkedin_resolution_queue.csv is the same
         # content republished as the import stage's work queue.
-        merged = _merge_rows([*existing, *incoming])
+        merged = _merge_rows(incoming)
         write_csv_rows(self.contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
         write_csv_rows(self.queue_csv, GMAIL_DISCOVERY_COLUMNS, merged)
         return write_stage_manifest(self.manifest_json, GmailDiscoveryCompleted(
@@ -500,8 +435,6 @@ class GmailDiscovery:
             calculation_mode=merge_plan["mode"],
             calculation_reason=merge_plan["reason"],
             child_calculation_modes=child_modes,
-            applied_incremental_inputs=applied_incremental_inputs,
-            skipped_incremental_inputs=skipped_incremental_inputs,
             contacts_csv=str(self.contacts_csv),
             linkedin_resolution_queue_csv=str(self.queue_csv),
             contacts=len(merged),
@@ -524,7 +457,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-msgvault-sync", action="store_true")
     parser.add_argument("--sync-after", default="", help="Window start YYYY-MM-DD (overrides resume inference)")
     parser.add_argument("--sync-before", default="", help="Window end YYYY-MM-DD")
-    parser.add_argument("--fresh", action="store_true", help="Full rerun: force --noresume so the whole window is rescanned, and rebuild contacts.csv from the children instead of appending")
+    parser.add_argument("--fresh", action="store_true", help="Full rerun: force --noresume so msgvault rescans the whole window (recorded as the calculation_reason)")
     parser.add_argument("--limit", type=int, default=0, help="Cap messages per account (testing safety)")
     parser.add_argument("--no-attachments", action="store_true", help="Skip attachment download when msgvault supports it")
     return parser

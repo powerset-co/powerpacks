@@ -1,6 +1,17 @@
-"""Gmail discovery utilities: tolerant parsers, row merge, incremental plan.
+"""Gmail discovery utilities: tolerant parsers, row merge, merge plan.
 
 Changelog:
+  2026-07-24 (incremental deleted): the append-only delta machinery is gone.
+    `aggregate_contacts` takes no date floor, so extract_gmail re-derives the
+    whole archive's totals on every run and permanently declares full_recount
+    (#334); no producer ever emitted `incremental_delta`, and the owner has
+    decided against building real incrementality. DELETED
+    GMAIL_CALCULATION_INCREMENTAL_DELTA, gmail_incremental_input_id (the
+    replay-dedup content hash) and the `children_returned_incremental_deltas`
+    branch, which also retired gmail_discovery_merge_plan's `child_modes`
+    parameter. Every branch now returns full_rewrite; the `mode` field is kept
+    constant so the stage manifest's calculation_mode/calculation_reason keys are
+    unchanged. #334's `empty_output` / `full_rerun_requested` branches stay.
   2026-07-24 (merge policy): gmail_discovery_merge_plan takes the caller's
     observed output state as keyword-only args (`output_rows`,
     `full_rerun_requested`) and checks two new branches FIRST — `empty_output`
@@ -29,7 +40,6 @@ from dataclasses import dataclass
 
 from pathlib import Path
 from typing import Any
-import hashlib
 import json
 import sys
 
@@ -71,10 +81,9 @@ GMAIL_DISCOVERY_COLUMNS = [
 DEFAULT_GMAIL_ESTIMATE_MAX_PAGES = 4
 
 
+# The one calculation mode extract_gmail can honestly declare: aggregate_contacts
+# takes no date floor, so its rows always restate the account's whole truth.
 GMAIL_CALCULATION_FULL_RECOUNT = "full_recount"
-
-
-GMAIL_CALCULATION_INCREMENTAL_DELTA = "incremental_delta"
 
 
 def _as_list(value: Any) -> list[str]:
@@ -129,27 +138,6 @@ def _merge_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
     return [{field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS} for _, row in sorted(keyed.items())]
 
 
-def gmail_incremental_input_id(account_email: str, rows: list[dict[str, Any]]) -> str:
-    """Return a stable manifest key for an incremental child output.
-
-    Incremental rows are additive, so replaying the same child output must not
-    be merged twice. This key is derived from the account and normalized child
-    CSV rows already produced by the command; it does not create any directories
-    or require a separate batch concept.
-    """
-    normalized_rows = [
-        {field: str(row.get(field) or "") for field in GMAIL_DISCOVERY_COLUMNS}
-        for row in rows
-    ]
-    payload = {
-        "account_email": str(account_email or "").strip().lower(),
-        "calculation_version": GMAIL_INTERACTION_CALCULATION_VERSION,
-        "rows": sorted(normalized_rows, key=lambda row: json.dumps(row, sort_keys=True, ensure_ascii=False)),
-    }
-    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _same_account_emails(left: Any, right: list[str]) -> bool:
     return sorted(_as_list(left)) == sorted(_as_list(right))
 
@@ -157,36 +145,29 @@ def _same_account_emails(left: Any, right: list[str]) -> bool:
 def gmail_discovery_merge_plan(
     existing_manifest: dict[str, Any],
     account_emails: list[str],
-    child_modes: list[str],
     *,
     output_rows: int,
     full_rerun_requested: bool = False,
 ) -> dict[str, str]:
-    """Decide how child outputs combine with the stage output already on disk.
+    """Explain how the child outputs became the stage output.
 
     Pure — every input is passed in, so the caller owns all filesystem reads.
     `output_rows` is the row count of the existing contacts.csv (0 when the file
     is missing or header-only); `full_rerun_requested` is the caller's explicit
     rescan request (`--fresh`).
 
-    Order, first match wins:
-      empty_output          nothing on disk to append to, so there is no
-                            baseline to preserve -> rebuild from the children.
-                            This is also what keeps the append path from
-                            replaying a delta onto an absent baseline and
-                            double-counting it (_merge_rows SUMS the counts).
-      full_rerun_requested  the caller asked for a full rescan; honor it over
-                            any incremental opportunity.
-      calculation_version_changed / account_emails_changed
-                            the rows on disk were computed under different rules
-                            or for a different account set -> they cannot be
-                            appended to.
-      children_returned_incremental_deltas
-                            EVERY child returned new-only rows -> keep the
-                            existing rows and append the unapplied deltas.
-      children_returned_full_recounts
-                            otherwise; a child's rows restate its whole truth,
-                            so the children alone are the new output.
+    `mode` is always `full_rewrite`: a child's rows restate its account's whole
+    truth (extract_gmail re-derives from the entire archive — see
+    GMAIL_CALCULATION_FULL_RECOUNT), so the children alone are always the new
+    output and nothing on disk is preserved. Only the diagnostic `reason` varies,
+    first match wins:
+      empty_output                    contacts.csv is missing or header-only.
+      full_rerun_requested            the caller passed --fresh.
+      calculation_version_changed     the rows on disk were computed under
+                                      different interaction-counting rules.
+      account_emails_changed          they were computed for a different account
+                                      set.
+      children_returned_full_recounts the ordinary case.
     """
     if output_rows <= 0:
         return {"mode": "full_rewrite", "reason": "empty_output"}
@@ -196,8 +177,6 @@ def gmail_discovery_merge_plan(
         return {"mode": "full_rewrite", "reason": "calculation_version_changed"}
     if not _same_account_emails(existing_manifest.get("account_emails"), account_emails):
         return {"mode": "full_rewrite", "reason": "account_emails_changed"}
-    if child_modes and all(mode == GMAIL_CALCULATION_INCREMENTAL_DELTA for mode in child_modes):
-        return {"mode": "incremental_update", "reason": "children_returned_incremental_deltas"}
     return {"mode": "full_rewrite", "reason": "children_returned_full_recounts"}
 
 
