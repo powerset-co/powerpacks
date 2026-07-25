@@ -20,6 +20,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
 )
 from packs.indexing.lib.people import build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
+from packs.ingestion.primitives.imports import merge_people as merge_mod  # noqa: E402
 
 
 def load_module(name: str, relative: str):
@@ -31,9 +32,6 @@ def load_module(name: str, relative: str):
     return module
 
 
-merge_mod = load_module(
-    "merge_network_sources_interactions", "packs/ingestion/primitives/imports/merge_network_sources.py"
-)
 gmail_mod = load_module(
     "gmail_import_interactions", "packs/ingestion/primitives/discover/gmail/extract_gmail.py"
 )
@@ -193,24 +191,14 @@ class MergeGroupTests(unittest.TestCase):
             json.loads(second["interaction_counts"]), json.loads(first["interaction_counts"])
         )
 
-    def test_message_row_to_people_carries_no_counts_without_approval_state(self):
-        """Raw contacts.csv has no approval concept, so the direct merge path
-        must not attribute interaction data; counts only enter through the
-        user-approved review rows."""
-        person = merge_mod.message_row_to_people(
-            {
-                "phone": "+14155550123",
-                "name": "Jane Doe",
-                "matched_person_id": "person-1",
-                "message_count": "96",
-                "imessage_message_count": "87",
-                "whatsapp_message_count": "9",
-                "last_message": "2026-06-01T05:44:31.758167+00:00",
-            },
-            Path("contacts.csv"),
+    def test_merge_group_mints_the_durable_person_id_from_the_key(self):
+        merged = merge_mod.merge_group("linkedin:janedoe", [self.person_row()])
+        self.assertEqual(merged["id"], merge_mod.generate_person_id("janedoe"))
+        contact = merge_mod.merge_group(
+            "candidate:email:casey@example.com",
+            [self.person_row(public_identifier="", linkedin_url="", primary_email="casey@example.com")],
         )
-        self.assertEqual(person["interaction_counts"], "")
-        self.assertEqual(person["last_interaction"], "")
+        self.assertEqual(contact["id"], "candidate:email:casey@example.com")
 
 
 class IndexProfileTests(unittest.TestCase):

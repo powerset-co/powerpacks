@@ -1,11 +1,10 @@
 import json
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from packs.indexing.lib.contracts import CANONICAL_PEOPLE_CSV, validate_people_csv
+from packs.ingestion.primitives.imports.merge_people import PeopleMerge
 from packs.shared.csv_io import CsvIO
 from packs.indexing.lib.identity import canonical_person_key
 from packs.indexing.lib.ledger import load_ledger, mark_step, next_pending_step, save_ledger
@@ -85,50 +84,38 @@ class IndexingScaffoldTests(unittest.TestCase):
             self.assertEqual(updated["artifacts"]["flattened_people"], "out.jsonl")
             self.assertIsNone(next_pending_step(load_ledger(path), ["flatten_people"]))
 
-    def test_merge_network_sources_emits_only_canonical_people_csv(self) -> None:
+    def test_merge_emits_only_people_csv_and_its_manifest(self) -> None:
+        """The merge's whole output surface: `people.csv` + `manifest.json`."""
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
-            input_dir = base / ".powerpacks/network-import/linkedin/run-1"
-            input_dir.mkdir(parents=True)
-            input_csv = input_dir / "people.csv"
-            input_csv.write_text(
-                "id,public_identifier,linkedin_url,first_name,last_name,full_name,source_channels,rapidapi_response\n"
-                "1,ada-lovelace,https://www.linkedin.com/in/ada-lovelace,Ada,Lovelace,Ada Lovelace,linkedin,\"{\"\"full_name\"\":\"\"Ada Lovelace\"\",\"\"experiences\"\":[{\"\"title\"\":\"\"Founder\"\"}]}\"\n",
+            header = ("id,public_identifier,linkedin_url,first_name,last_name,full_name,"
+                      "source_channels,rapidapi_response\n")
+            linkedin_csv = base / "import/linkedin/people.csv"
+            linkedin_csv.parent.mkdir(parents=True)
+            linkedin_csv.write_text(
+                header
+                + "1,jordan-bravo,https://www.linkedin.com/in/jordan-bravo,Jordan,Bravo,Jordan Bravo,"
+                  "linkedin_csv,\"{\"\"full_name\"\":\"\"Jordan Bravo\"\",\"\"experiences\"\":[{\"\"title\"\":\"\"Founder\"\"}]}\"\n",
                 encoding="utf-8",
             )
-            old_dir = base / ".powerpacks/network-import/twitter/run-old"
-            old_dir.mkdir(parents=True)
-            old_csv = old_dir / "people.csv"
-            old_csv.write_text(
-                "id,public_identifier,linkedin_url,first_name,last_name,full_name,source_channels,rapidapi_response\n"
-                "2,grace-hopper,https://www.linkedin.com/in/grace-hopper,Grace,Hopper,Grace Hopper,twitter,\"{\"\"full_name\"\":\"\"Grace Hopper\"\",\"\"experiences\"\":[{\"\"title\"\":\"\"Admiral\"\"}]}\"\n",
+            gmail_csv = base / "import/gmail/people.csv"
+            gmail_csv.parent.mkdir(parents=True)
+            gmail_csv.write_text(
+                header
+                + "2,casey-delta,https://www.linkedin.com/in/casey-delta,Casey,Delta,Casey Delta,"
+                  "gmail_msgvault,\"{\"\"full_name\"\":\"\"Casey Delta\"\",\"\"experiences\"\":[{\"\"title\"\":\"\"Admiral\"\"}]}\"\n",
                 encoding="utf-8",
             )
-            out_dir = base / ".powerpacks/network-import/merged"
-            out_dir.mkdir(parents=True)
-            proc = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "packs/ingestion/primitives/imports/merge_network_sources.py"),
-                    "run",
-                    "--output-dir",
-                    str(base / ".powerpacks/network-import/merged"),
-                    "--input",
-                    str(input_csv),
-                    "--input",
-                    str(old_csv),
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertTrue((out_dir / "people.csv").exists())
-            summary = json.loads(proc.stdout)
-            self.assertEqual(summary["output"], str(out_dir / "people.csv"))
-            self.assertEqual(summary["input_rows"], 2)
-            self.assertNotIn("review_output", summary)
+            out_dir = base / "merged"
+            payload = PeopleMerge(
+                inputs=[linkedin_csv, gmail_csv],
+                output_dir=out_dir,
+                directory_csv=base / "directory.csv",
+            ).run()
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["stats"]["input_rows_total"], 2)
+            self.assertEqual(payload["stats"]["rows"], 2)
+            self.assertEqual(sorted(p.name for p in out_dir.iterdir()), ["manifest.json", "people.csv"])
             self.assertTrue(validate_people_csv(out_dir / "people.csv").ok)
 
 

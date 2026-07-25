@@ -52,7 +52,7 @@ account linking / local source setup
 | Account linking / local source setup | source-specific onboarding | msgvault CLI, LinkedIn export UI, `$import-messages`, Twitter RapidAPI key checks | Establish source access; avoid provider/API work unless explicitly approved. |
 | Ingestion/source import | ingestion skills + primitives | `gmail/extract_gmail.py msgvault`, `linkedin/network_import.py`, `twitter/network_import.py`, messages primitives | Produces source-local normalized `people.csv` or message contacts artifacts. |
 | Enrichment / resolution | data processing + source-specific gates | `enrich_people.py`, Twitter `pre_resolve_linkedin`/`validate_linkedin`, future resolver queues | RapidAPI LinkedIn profile enrichment is centralized in `enrich_people` for LinkedIn-identified rows; Twitter still has source-specific validation. |
-| Merge | indexing fan-in | `merge_network_sources.py` (via `index_contacts_pipeline.py`) | Produces merged CSV contracts and contact/source provenance. |
+| Merge | indexing fan-in | `imports/merge_people.py` (in-process, via `index_contacts_pipeline.py`) | Produces the one canonical `merged/people.csv` + its `manifest.json`. |
 | Processing / indexing / search | data processing / indexing/search packs | indexing primitives consume merged artifacts | Should consume canonical CSVs/views, not source-specific raw dumps. |
 
 ## User-facing skills and runtime handlers
@@ -171,7 +171,7 @@ enrichment implementation.
 ```bash
 uv run --project . python -m unittest \
   tests/test_discover.py \
-  tests/test_merge_network_sources.py \
+  tests/test_merge_people.py \
   tests/test_enrich_people.py \
   tests/test_linkedin_import.py \
   tests/test_twitter_import.py \

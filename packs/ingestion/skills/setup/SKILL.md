@@ -253,8 +253,8 @@ cd "$REPO" && uv run --env-file .env --project . python packs/indexing/primitive
   --people-csv .powerpacks/network-import/merged/people.csv
 ```
 
-Writes `.powerpacks/network-import/merged/people.csv` (default
-`--include-existing-artifacts` picks up every imported source).
+Writes `.powerpacks/network-import/merged/people.csv` (every per-source
+`import/<source>/people.csv` on disk is merged in).
 
 ### Step 6 — Index the merged network
 

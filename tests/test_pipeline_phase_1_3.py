@@ -300,46 +300,6 @@ class PipelinePhase13Tests(unittest.TestCase):
                 directory.write_text("id\nchanged\n", encoding="utf-8")
                 self.assertIsNotNone(import_common.import_manifest_current("linkedin"))
 
-    def test_fan_in_excludes_canonical_merged_only_when_all_sources_exist(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            merged = root / ".powerpacks/network-import/merged/people.csv"
-            gmail = root / ".powerpacks/network-import/import/gmail/people.csv"
-            linkedin = root / ".powerpacks/network-import/import/linkedin/people.csv"
-            messages = root / ".powerpacks/network-import/import/messages/people.csv"
-            merged.parent.mkdir(parents=True)
-            gmail.parent.mkdir(parents=True)
-            linkedin.parent.mkdir(parents=True)
-            messages.parent.mkdir(parents=True)
-            merged.write_text("id\nmerged\n", encoding="utf-8")
-            gmail.write_text("id\ngmail\n", encoding="utf-8")
-            args = SimpleNamespace(include_existing_artifacts=True, input=[])
-            with mock.patch.object(index_contacts, "ROOT", root):
-                inputs = [str(path) for path in index_contacts.fan_in_input_paths(args)]
-                self.assertIn(".powerpacks/network-import/import/gmail/people.csv", inputs)
-                self.assertIn(".powerpacks/network-import/merged/people.csv", inputs)
-                linkedin.write_text("id\nlinkedin\n", encoding="utf-8")
-                messages.write_text("id\nmessages\n", encoding="utf-8")
-                inputs = [str(path) for path in index_contacts.fan_in_input_paths(args)]
-                self.assertNotIn(".powerpacks/network-import/merged/people.csv", inputs)
-                gmail.unlink()
-                linkedin.unlink()
-                messages.unlink()
-                inputs = [str(path) for path in index_contacts.fan_in_input_paths(args)]
-                self.assertEqual(inputs, [".powerpacks/network-import/merged/people.csv"])
-
-    def test_fan_in_currentness_accepts_legacy_canonical_merged_fingerprint(self):
-        current = {
-            ".powerpacks/network-import/import/gmail/people.csv": {"sha256": "a"},
-        }
-        legacy = {
-            ".powerpacks/network-import/merged/people.csv": {"sha256": "bootstrap"},
-            ".powerpacks/network-import/import/gmail/people.csv": {"sha256": "a"},
-        }
-        self.assertTrue(index_contacts.fan_in_fingerprints_match(legacy, current))
-        changed = {**legacy, ".powerpacks/network-import/import/gmail/people.csv": {"sha256": "b"}}
-        self.assertFalse(index_contacts.fan_in_fingerprints_match(changed, current))
-
     def test_discovery_stage_manifest_adopts_fingerprints_once_and_preserves_timestamp(self):
         with tempfile.TemporaryDirectory() as tmp:
             artifact = Path(tmp) / "contacts.csv"

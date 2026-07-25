@@ -12,8 +12,7 @@ here under separate names:
   bare 10-digit US number to `+1`. Used by the iMessage/WhatsApp contact rows.
 
 Vertical-specific variants stay in their own modules (WhatsApp's jid-aware phone
-canonicalizer, merge_network_sources' plus-preserving normalizer, the
-zero-default/tri-state parse_* in imports/messages/util.py).
+canonicalizer, the zero-default/tri-state parse_* in imports/messages/util.py).
 
 Changelog:
   2026-07-23 (audit consolidation): created; absorbs normalize_phone (directory

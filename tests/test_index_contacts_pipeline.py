@@ -14,15 +14,24 @@ index_contacts_pipeline = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
 spec.loader.exec_module(index_contacts_pipeline)
 
+PEOPLE_HEADER = "id,public_identifier,linkedin_url,full_name,source_channels\n"
+
+
+def write_source_people(base: Path, source: str, rows: str) -> Path:
+    path = base / ".powerpacks/network-import/import" / source / "people.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(PEOPLE_HEADER + rows, encoding="utf-8")
+    return path
+
 
 class IndexContactsPipelineTest(unittest.TestCase):
     def test_run_promotes_fan_in_then_runs_processing_after_cost_estimate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            final = tmp / ".powerpacks/network-import/final/merged"
-            final.mkdir(parents=True)
-            (final / "people.csv").write_text("id,linkedin_url,rapidapi_profile\np1,https://linkedin.com/in/a,{}\n", encoding="utf-8")
-            (final / "merge_manifest.json").write_text("{}\n", encoding="utf-8")
+            write_source_people(
+                tmp, "linkedin",
+                ",jordan-bravo,https://www.linkedin.com/in/jordan-bravo,Jordan Bravo,linkedin_csv\n",
+            )
 
             old_root = index_contacts_pipeline.ROOT
             index_contacts_pipeline.ROOT = tmp
@@ -31,12 +40,6 @@ class IndexContactsPipelineTest(unittest.TestCase):
             def fake_run_json_command(cmd: list[str], *, timeout: int, stream_stderr: bool = False):
                 calls.append(cmd)
                 joined = " ".join(cmd)
-                if "merge_network_sources.py" in joined:
-                    return 0, {
-                        "status": "completed",
-                        "people_csv": ".powerpacks/network-import/final/merged/people.csv",
-                        "manifest": ".powerpacks/network-import/final/merged/merge_manifest.json",
-                    }, ""
                 if "build_processing_pipeline.py" in joined and "--dry-run" in cmd:
                     return 0, {
                         "status": "dry_run",
@@ -62,8 +65,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
                 output_dir=".powerpacks/search-index",
                 artifact_dir=".powerpacks/network-import/index/contacts",
                 manifest=".powerpacks/network-import/index/contacts/manifest.json",
-                input=[".powerpacks/network-import/final/merged/people.csv"],
-                include_existing_artifacts=False,
+                input=[],
             )
 
             try:
@@ -74,21 +76,21 @@ class IndexContactsPipelineTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "ready")
-            self.assertTrue((tmp / ".powerpacks/network-import/merged/people.csv").exists())
-            self.assertEqual(payload["people_sha256"], index_contacts_pipeline.sha256_file(tmp / ".powerpacks/network-import/merged/people.csv"))
+            promoted = tmp / ".powerpacks/network-import/merged/people.csv"
+            self.assertTrue(promoted.exists())
+            self.assertEqual(payload["people_sha256"], index_contacts_pipeline.sha256_file(promoted))
             self.assertNotIn("network_duckdb", payload["fan_in"])
             manifest = json.loads((tmp / ".powerpacks/network-import/index/contacts/manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["status"], "ready")
-            self.assertTrue(any("merge_network_sources.py" in " ".join(cmd) for cmd in calls))
+            # The merge runs IN-PROCESS: no child python process for our own merge .py.
+            self.assertFalse(any("merge_people.py" in " ".join(cmd) for cmd in calls))
             self.assertFalse(any("build_network_duckdb.py" in " ".join(cmd) for cmd in calls))
             self.assertTrue(any("build-local-duckdb-shim.py" in " ".join(cmd) for cmd in calls))
 
     def test_fan_in_cache_only_requires_merged_people_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            source = tmp / ".powerpacks/network-import/import/linkedin/people.csv"
-            source.parent.mkdir(parents=True)
-            source.write_text("id\np1\n", encoding="utf-8")
+            write_source_people(tmp, "linkedin", ",jordan-bravo,,Jordan Bravo,linkedin_csv\n")
             merged = tmp / ".powerpacks/network-import/merged/people.csv"
             merged.parent.mkdir(parents=True)
             merged.write_text("id\np1\n", encoding="utf-8")
@@ -98,7 +100,6 @@ class IndexContactsPipelineTest(unittest.TestCase):
             args = argparse.Namespace(
                 manifest=".powerpacks/network-import/index/contacts/manifest.json",
                 input=[],
-                include_existing_artifacts=False,
                 openai_usage_tier=None,
             )
             old_root = index_contacts_pipeline.ROOT
@@ -108,9 +109,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
                 manifest.write_text(json.dumps({
                     "status": "completed",
                     "step": "fan_in",
-                    "input_fingerprints": index_contacts_pipeline.input_fingerprints(
-                        inputs + index_contacts_pipeline.FAN_IN_OVERRIDE_FILES
-                    ),
+                    "input_fingerprints": index_contacts_pipeline.input_fingerprints(inputs),
                     "artifacts": {
                         "merged_people_csv": ".powerpacks/network-import/merged/people.csv",
                         "duckdb": ".powerpacks/network-import/duckdb/network.duckdb",
@@ -121,7 +120,7 @@ class IndexContactsPipelineTest(unittest.TestCase):
                     "network_duckdb": {"status": "completed"},
                 }), encoding="utf-8")
 
-                with mock.patch.object(index_contacts_pipeline, "run_json_command") as run_command:
+                with mock.patch.object(index_contacts_pipeline, "run_merge") as run_merge:
                     payload, code = index_contacts_pipeline.run_fan_in(args)
             finally:
                 index_contacts_pipeline.ROOT = old_root
@@ -132,49 +131,43 @@ class IndexContactsPipelineTest(unittest.TestCase):
             self.assertNotIn("network_duckdb", payload)
             self.assertNotIn("duckdb", payload["artifacts"])
             self.assertNotIn("network_duckdb", payload["promoted"])
-            run_command.assert_not_called()
+            run_merge.assert_not_called()
 
 
-class FanInOverrideFingerprintTest(unittest.TestCase):
-    def test_override_file_change_invalidates_fan_in_cache(self) -> None:
+class FanInInputSelectionTest(unittest.TestCase):
+    """The fan-in feeds the merge SOURCE artifacts only."""
+
+    def test_merged_people_csv_is_never_a_fan_in_input(self) -> None:
+        # The retired --include-existing-artifacts self-feed let a re-run merge its
+        # own previous output back in, self-joining every person with themselves.
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            imports = tmp / ".powerpacks/network-import/import/linkedin"
-            imports.mkdir(parents=True)
-            (imports / "people.csv").write_text("id\np1\n", encoding="utf-8")
+            write_source_people(tmp, "linkedin", ",jordan-bravo,,Jordan Bravo,linkedin_csv\n")
+            merged = tmp / ".powerpacks/network-import/merged/people.csv"
+            merged.parent.mkdir(parents=True)
+            merged.write_text(PEOPLE_HEADER + ",casey-delta,,Casey Delta,gmail_msgvault\n", encoding="utf-8")
 
             old_root = index_contacts_pipeline.ROOT
             index_contacts_pipeline.ROOT = tmp
             try:
-                args = argparse.Namespace(input=[], include_existing_artifacts=False)
-                inputs = index_contacts_pipeline.fan_in_input_paths(args)
-                fingerprint_paths = inputs + index_contacts_pipeline.FAN_IN_OVERRIDE_FILES
-                existing = index_contacts_pipeline.input_fingerprints(fingerprint_paths)
-
-                # unchanged inputs + absent overrides -> cache hit
-                self.assertTrue(index_contacts_pipeline.fan_in_fingerprints_match(
-                    existing, index_contacts_pipeline.input_fingerprints(fingerprint_paths)))
-
-                # a newly approved retarget override must invalidate the no-op cache
-                overrides = tmp / ".powerpacks/network-import/overrides"
-                overrides.mkdir(parents=True)
-                (overrides / "retarget-people.csv").write_text("id\np2\n", encoding="utf-8")
-                current = index_contacts_pipeline.input_fingerprints(
-                    index_contacts_pipeline.fan_in_input_paths(args) + index_contacts_pipeline.FAN_IN_OVERRIDE_FILES)
-                self.assertFalse(index_contacts_pipeline.fan_in_fingerprints_match(existing, current))
-
-                # ... and a content edit to an existing override must too
-                stale = current
-                (overrides / "retarget-people.csv").write_text("id\np2\np3\n", encoding="utf-8")
-                edited = index_contacts_pipeline.input_fingerprints(
-                    index_contacts_pipeline.fan_in_input_paths(args) + index_contacts_pipeline.FAN_IN_OVERRIDE_FILES)
-                self.assertFalse(index_contacts_pipeline.fan_in_fingerprints_match(stale, edited))
-
-                # override files are fingerprint inputs only — never merge --input sources
-                self.assertFalse(set(map(str, index_contacts_pipeline.fan_in_input_paths(args)))
-                                 & set(map(str, index_contacts_pipeline.FAN_IN_OVERRIDE_FILES)))
+                inputs = index_contacts_pipeline.fan_in_input_paths(argparse.Namespace(input=[]))
             finally:
                 index_contacts_pipeline.ROOT = old_root
+            self.assertEqual([str(path) for path in inputs],
+                             [".powerpacks/network-import/import/linkedin/people.csv"])
+
+    def test_inputs_follow_merge_source_precedence_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            for source in ("messages", "gmail", "linkedin"):
+                write_source_people(tmp, source, f",jordan-bravo,,Jordan Bravo,{source}\n")
+            old_root = index_contacts_pipeline.ROOT
+            index_contacts_pipeline.ROOT = tmp
+            try:
+                inputs = index_contacts_pipeline.fan_in_input_paths(argparse.Namespace(input=[]))
+            finally:
+                index_contacts_pipeline.ROOT = old_root
+            self.assertEqual([path.parent.name for path in inputs], list(index_contacts_pipeline.MERGE_SOURCES))
 
 
 if __name__ == "__main__":

@@ -296,8 +296,8 @@ cd "$REPO" && uv run --project . python packs/indexing/primitives/index_contacts
   --people-csv .powerpacks/network-import/merged/people.csv
 ```
 
-Writes `.powerpacks/network-import/merged/people.csv` (default
-`--include-existing-artifacts` picks up every imported source).
+Writes `.powerpacks/network-import/merged/people.csv` (every per-source
+`import/<source>/people.csv` on disk is merged in).
 
 ### Step 6 — Suggest next sources & processing
 

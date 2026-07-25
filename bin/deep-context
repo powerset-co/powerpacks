@@ -67,7 +67,7 @@ usage: bin/deep-context <command> [args]
                --apply writes after .bkup backups)
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
   apply-retargets           enrich approved retargets -> retarget-people.csv
-  realize      fan-in merge applying your decisions (free, local)
+  realize      fan-in merge of the per-source import people files (free, local)
   lookup       fetch a person's dossier by name/phone/email
   probe        chat.db readability (Full Disk Access) check
   purge-raw    delete the ephemeral raw bundles
@@ -244,17 +244,19 @@ case "$cmd" in
     "${PY[@]}" "$PKG.reconcile_deep_research" "$@"
     ;;
   apply-retargets)
-    # Enrich + build re-attach rows for approved `retarget` decisions -> retarget-people.csv,
-    # which the fan-in merge auto-ingests. Cache-first (RapidAPI only on a miss).
+    # Enrich + build re-attach rows for approved `retarget` decisions -> retarget-people.csv.
+    # Cache-first (RapidAPI only on a miss). NOTE: the fan-in merge no longer ingests
+    # this file, so these rows do not yet reach merged/people.csv.
     "${PY[@]}" "$PKG.apply_retargets" "$@"
     ;;
   realize)
-    # Phase 4 (free, local): fan-in merge -> rebuilds merged/people.csv, auto-applying your
-    # decisions (overrides/review.csv + consolidate/retarget). Borrows $setup's fan-in.
+    # Phase 4 (free, local): fan-in merge -> rebuilds merged/people.csv from the per-source
+    # import people files. Borrows $setup's fan-in. The merge applies no decisions:
+    # overrides/{review,consolidate,retarget,synthetic}-people.csv are NOT read here.
     # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
     uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
       --people-csv .powerpacks/network-import/merged/people.csv "$@"
-    echo "✅ people.csv rebuilt with your decisions applied. Now rebuild search on Modal:" >&2
+    echo "✅ people.csv rebuilt from the per-source imports. Now rebuild search on Modal:" >&2
     echo "   uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people --people-csv .powerpacks/network-import/merged/people.csv" >&2
     ;;
   lookup)

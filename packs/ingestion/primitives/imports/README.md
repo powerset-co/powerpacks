@@ -2,12 +2,22 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-07-24 (merge rewrite): `merge_network_sources.py` is DELETED and replaced
+  by `merge_people.py`, written from the contract instead of inherited. The merge
+  now does exactly one thing — combine the per-source `people.csv`, stamp
+  LinkedIn from `directory.csv`, group by identity, write one output. Gone with
+  the old file: override application (`overrides/*.csv` are no longer read by any
+  merge), the `merged/people.csv` self-feed, the reader-less bookkeeping columns
+  (`merge_key`, `merge_confidence`, `merge_sources`, `merged_row_count`,
+  `needs_review`, `linkedin_verified*`), and the reader-less side outputs
+  (`network_contacts.csv`, `network_contact_sources.csv`,
+  `network_companies.csv`, `people_harmonic_all.merged.csv`). The index fan-in
+  calls the class in-process instead of shelling a child python.
 - 2026-07-24 (fan-in subtraction): the fan-in stopped pretending to do identity
   work. `possible_duplicates_review.csv` and the similar-name reviewer behind it
   are deleted (nothing read the file; `deep_context/cluster_merge_candidates.py`
   does the job properly), along with `--name-threshold` and the `review_pairs`
-  manifest key. `merge_network_sources.py`'s row is rewritten to say what it
-  actually is: the fan-in **and** the deep-context `realize` step.
+  manifest key.
 - 2026-07-23 (steps split): the file-loaded `gmail/import_steps.py` and its
   `imports/common.py` loader are gone. `GmailImport` now lives in
   `gmail/importer.py` (THE entry) and its two step functions in `gmail/steps/`
@@ -26,9 +36,10 @@ Changelog:
 Per-source import primitives. Each source's importer consumes the discover-stage
 artifacts, applies the shared identity `directory.csv` (and any STORED
 resolutions), and materializes a stable per-source `people.csv` plus a
-`candidates.csv` research lane. `merge_network_sources.py` fans the per-source
-`people.csv` files into one canonical `merged/people.csv`. Skills invoke each
-importer directly by file path; there is no orchestrator.
+`candidates.csv` research lane. `merge_people.py` fans the per-source
+`people.csv` files into one canonical `merged/people.csv` — that file plus its
+`manifest.json` is the merge's entire output. Skills invoke each importer
+directly by file path; there is no orchestrator.
 
 ## Data flow
 
@@ -51,10 +62,11 @@ flowchart LR
   MIMP --> MP["import/messages/<br/>people.csv + candidates.csv"]
   LIMP --> LP["discover/linkedin/people.csv"]
 
-  GP --> FANIN["merge_network_sources.py"]
+  GP --> FANIN["merge_people.py<br/>(PeopleMerge, in-process)"]
   MP --> FANIN
   LP --> FANIN
-  FANIN --> MERGED["merged/people.csv<br/>network_contacts.csv"]
+  DIR -. email/phone -> slug .-> FANIN
+  FANIN --> MERGED["merged/people.csv<br/>+ manifest.json"]
 ```
 
 ## Files
@@ -70,7 +82,7 @@ flowchart LR
 | [`messages/match_local_candidates.py`](messages/match_local_candidates.py) | Tiered local matcher (phone/email exact → exact name → same-last-name prefix/fuzzy tiers); annotates `contacts.csv` in place with `match_status`; tier-0 gated by `research_review.csv` approvals (no live producer — see importer Known gap) | `contacts.csv`, `merged/people.csv` (+ optional `--candidates`), `research_review.csv` | `contacts.csv` (in place), `*.match.manifest.json` |
 | [`linkedin/network_import.py`](linkedin/network_import.py) | LinkedIn `Connections.csv` import — the Modal-hosted convert+enrich exception; parses to the people schema, delegates enrichment to `enrich/enrich_people.py` (RapidAPI) | `Connections.csv`, profile cache, RapidAPI | `discover/linkedin/people.csv` + enrichment artifacts + ledger |
 | [`directory.py`](directory.py) | Cross-source `directory.csv` contract: `DIRECTORY_COLUMNS`, email/phone/name identity keys, row merge, `people.csv → directory` commit | `directory.csv`, per-source `people.csv` | `directory.csv` (via callers) |
-| [`merge_network_sources.py`](merge_network_sources.py) | Fan-in **and** the deep-context `realize` step: merge/dedupe explicit per-source `people.csv` by LinkedIn public id, then re-apply the durable override decisions (`apply_overrides`: worth drops, detach/retarget, verification). No person identity resolution — that is `deep_context/cluster_merge_candidates.py` | `--input` per-source `people.csv` files, `overrides/{review,retarget-people,consolidate-people,synthetic-people}.csv` | `merged/people.csv`, `network_contacts.csv`, `network_contact_sources.csv`, `network_companies.csv`, `merge_manifest.json` |
+| [`merge_people.py`](merge_people.py) | Fan-in **and** the deep-context `realize` step: `PeopleMerge` stamps LinkedIn from `directory.csv`, keys each row `linkedin:<slug>` or `candidate:<contact key>`, groups by that key and unions the fields. Applies NO human decisions and drops nobody with a keyable identity. No person identity resolution — that is `deep_context/cluster_merge_candidates.py` | `--input` per-source `people.csv` files (default: linkedin, gmail, messages — in precedence order), `directory.csv` | `merged/people.csv`, `merged/manifest.json` |
 | [`common.py`](common.py) | Shared import helpers: import-manifest read/write (`write_manifest`, `import_manifest_current`), `copy_people_csv`, directory source-account quality checks | import manifests | `import/<source>/manifest.json` |
 | [`status.py`](status.py) | Read-only per-source import status: discovery ran? import completed/current? row counts + merged summary — the presence check skills use to suggest missing sources | discover + import manifests, `merged/people.csv` | — (always exits 0) |
 
@@ -84,3 +96,11 @@ convert+enrich inside the Modal sandbox for `$setup`. Each importer overwrites a
 fixed `import/<source>/` directory (idempotent by path, no run ids or ledgers),
 and `directory.csv` is the reusable
 cross-source checkpoint — never fingerprinted as a per-source output.
+
+**The merge decides identity, not membership.** A merged person either carries a
+`public_identifier` or does not; that column is the only distinction, and the
+`candidate:<contact key>` id namespace is stable so paid per-person artifacts
+keep addressing the same human while no slug exists. Human decisions
+(`overrides/review.csv` worth marks and exclusions, `retarget-people.csv`,
+`consolidate-people.csv`, `synthetic-people.csv`) are NOT applied here — as of
+2026-07-24 no consumer applies them to `merged/people.csv`.
