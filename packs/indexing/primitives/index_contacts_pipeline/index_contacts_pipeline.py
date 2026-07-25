@@ -11,6 +11,18 @@ The lower-level record builders stay in build_processing_pipeline.py. This
 wrapper owns orchestration and writes a stable stage manifest.
 
 Changelog:
+  2026-07-24 (merge rewrite): the fan-in step calls `imports/merge_people.py`'s
+    `PeopleMerge` IN-PROCESS instead of shelling `sys.executable` at the retired
+    `merge_network_sources.py`. Dropped `--include-existing-artifacts` and the
+    `merged/people.csv` self-feed (the merge reads only the per-source import
+    files, so a re-run can no longer self-join its own output), the
+    `overrides/*.csv` fingerprints (the merge applies no decisions), and the
+    promotion of the reader-less side artifacts (`network_contacts.csv`,
+    `network_contact_sources.csv`, `network_companies.csv`,
+    `people_harmonic_all.merged.csv`, `possible_duplicates_review.csv`).
+    Fan-in inputs are now ordered by `MERGE_SOURCES` (linkedin, gmail, messages)
+    instead of gmail-first, so the curated LinkedIn export wins a scalar-field
+    tie over mailbox-derived names/headlines.
   2026-07-23 (dead accounts.json registry): dropped the vestigial `--accounts`
     CLI arg and its `DEFAULT_ACCOUNTS` constant. `args.accounts` was never read —
     not threaded into fan-in or any subcommand — so it was pure dead plumbing.
@@ -35,20 +47,10 @@ DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/search-index")
 DEFAULT_ARTIFACT_DIR = Path(".powerpacks/network-import/index/contacts")
 DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
-CANONICAL_MERGED_PEOPLE_CSV = ".powerpacks/network-import/merged/people.csv"
-# The fan-in merge auto-ingests these decision/override files (default paths defined in
-# packs/ingestion/primitives/imports/merge_network_sources.py). They must be
-# fingerprinted so an updated override invalidates the fan-in no-op cache, but they are
-# decisions, not people sources — never pass them as merge --input.
-FAN_IN_OVERRIDE_FILES = [
-    Path(".powerpacks/network-import/overrides/review.csv"),
-    Path(".powerpacks/network-import/overrides/retarget-people.csv"),
-    Path(".powerpacks/network-import/overrides/consolidate-people.csv"),
-    Path(".powerpacks/network-import/overrides/synthetic-people.csv"),
-]
 ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
 
 from packs.indexing.lib.openai_usage_tiers import openai_usage_tier_profile  # noqa: E402
+from packs.ingestion.primitives.imports.merge_people import MERGE_SOURCES, PeopleMerge  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
@@ -190,17 +192,12 @@ def command_text(cmd: list[str]) -> str:
     return " ".join(cmd)
 
 
-def merge_command(args: argparse.Namespace, input_paths: list[Path]) -> list[str]:
-    cmd = [
-        sys.executable,
-        "packs/ingestion/primitives/imports/merge_network_sources.py",
-        "run",
-        "--output-dir",
-        str(Path(args.artifact_dir) / "merged"),
-    ]
-    for input_path in input_paths:
-        cmd.extend(["--input", str(input_path)])
-    return cmd
+def run_merge(args: argparse.Namespace, input_paths: list[Path]) -> dict[str, Any]:
+    """Merge the per-source people files in-process; returns the merge payload."""
+    return PeopleMerge(
+        inputs=[ROOT / path if not path.is_absolute() else path for path in input_paths],
+        output_dir=ROOT / Path(args.artifact_dir) / "merged",
+    ).run()
 
 
 def processing_args(args: argparse.Namespace, *, dry_run: bool, allow_paid: bool) -> list[str]:
@@ -289,14 +286,7 @@ def promote_network_artifacts(artifacts: dict[str, Any]) -> dict[str, str]:
         source_dir = source_dir.parent
         dest_dir = ROOT / ".powerpacks/network-import/merged"
         dest_dir.mkdir(parents=True, exist_ok=True)
-        for name in [
-            "people.csv",
-            "people_harmonic_all.merged.csv",
-            "network_contacts.csv",
-            "network_contact_sources.csv",
-            "network_companies.csv",
-            "merge_manifest.json",
-        ]:
+        for name in ["people.csv", "manifest.json"]:
             src = source_dir / name
             if src.exists():
                 dst = dest_dir / name
@@ -341,20 +331,18 @@ def read_manifest_people_csv(path: Path) -> Path | None:
 
 
 def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
+    """The per-source people.csv files to merge, ROOT-relative and deduped.
+
+    Source artifacts only — the merge never reads its own `merged/people.csv`,
+    so a re-run cannot self-join its previous output."""
     base = ROOT / ".powerpacks/network-import"
     candidates: list[Path] = []
-    source_candidates: list[Path] = []
-    expected_source_people = [base / "import" / source / "people.csv" for source in ["gmail", "linkedin", "messages"]]
-    for source in ["gmail", "linkedin", "messages"]:
+    # MERGE_SOURCES order is the merge's precedence order — do not reorder here.
+    for source in MERGE_SOURCES:
         manifest_people = read_manifest_people_csv(base / "import" / source / "manifest.json")
         if manifest_people:
-            source_candidates.append(manifest_people)
-        source_candidates.append(base / "import" / source / "people.csv")
-    source_inputs = [path for path in source_candidates if path.exists()]
-    all_expected_sources_exist = all(path.exists() for path in expected_source_people)
-    candidates.extend(source_inputs)
-    if args.include_existing_artifacts and not all_expected_sources_exist:
-        candidates.append(base / "merged" / "people.csv")
+            candidates.append(manifest_people)
+        candidates.append(base / "import" / source / "people.csv")
     for path in getattr(args, "input", []) or []:
         candidates.append(ROOT / Path(str(path)))
     out: list[Path] = []
@@ -371,24 +359,19 @@ def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
     return out
 
 
-def fan_in_fingerprints_match(existing: Any, current: dict[str, Any]) -> bool:
-    if existing == current:
-        return True
-    if not isinstance(existing, dict):
-        return False
-    existing_keys = set(existing)
-    current_keys = set(current)
-    extra_existing = existing_keys - current_keys
-    if extra_existing and extra_existing != {CANONICAL_MERGED_PEOPLE_CSV}:
-        return False
-    return all(existing.get(key) == value for key, value in current.items())
+def root_relative(path_text: Any) -> str:
+    """A ROOT-relative string for a path the merge reported (absolute or not)."""
+    path = Path(str(path_text or ""))
+    if not path_text:
+        return ""
+    return str(path.relative_to(ROOT)) if path.is_absolute() and path.is_relative_to(ROOT) else str(path)
 
 
 def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progress_callback: ProgressCallback | None = None) -> tuple[dict[str, Any], int]:
     started_at = started_at or now_iso()
     manifest_path = Path(args.manifest)
     inputs = fan_in_input_paths(args)
-    fingerprints = input_fingerprints(inputs + FAN_IN_OVERRIDE_FILES)
+    fingerprints = input_fingerprints(inputs)
     existing = status_payload(argparse.Namespace(manifest=str(manifest_path)))
     existing_fan_in = existing if existing.get("step") == "fan_in" else existing.get("fan_in") if isinstance(existing.get("fan_in"), dict) else {}
     existing_fan_in = without_retired_contact_duckdb(existing_fan_in)
@@ -396,7 +379,7 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
     if (
         existing_fan_in.get("status") == "completed"
         and existing_fan_in.get("step") == "fan_in"
-        and fan_in_fingerprints_match(existing_fan_in.get("input_fingerprints"), fingerprints)
+        and existing_fan_in.get("input_fingerprints") == fingerprints
         and existing_artifacts.get("merged_people_csv")
         and (ROOT / Path(str(existing_artifacts.get("merged_people_csv")))).exists()
     ):
@@ -428,19 +411,17 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
         notify_progress(progress_callback, "merge_network", "No source people CSVs found to merge", status="failed", payload=payload)
         return payload, 0
 
-    merge_cmd = merge_command(args, inputs)
     notify_progress(progress_callback, "merge_network", "Merging source people CSVs", payload={"inputs": [str(path) for path in inputs]})
-    merge_code, merge_payload, merge_stderr = run_json_command(merge_cmd, timeout=60 * 60)
-    if merge_code != 0:
+    merge_payload = run_merge(args, inputs)
+    if merge_payload.get("status") != "completed":
         payload = {
             "status": "failed",
             "stage": "index_contacts_pipeline",
             "openai_usage_tier": selected_openai_usage_tier(args),
-            "step": "merge_network_sources",
-            "command": command_text(merge_cmd),
+            "step": "merge_people",
             "inputs": [str(path) for path in inputs],
             "merge": merge_payload,
-            "error": tail(merge_stderr) or merge_payload,
+            "error": merge_payload,
             "started_at": started_at,
             "updated_at": now_iso(),
         }
@@ -449,13 +430,8 @@ def run_fan_in(args: argparse.Namespace, *, started_at: str | None = None, progr
         return payload, 1
     notify_progress(progress_callback, "merge_network", "Source people CSVs are merged", status="completed", payload=merge_payload)
 
-    artifacts = {
-        "merged_people_csv": merge_payload.get("people_csv"),
-        "network_contacts_csv": merge_payload.get("network_contacts_csv"),
-        "network_contact_sources_csv": merge_payload.get("network_contact_sources_csv"),
-        "network_companies_csv": merge_payload.get("network_companies_csv"),
-        "merge_manifest": merge_payload.get("manifest"),
-    }
+    merge_artifacts = merge_payload.get("artifacts") if isinstance(merge_payload.get("artifacts"), dict) else {}
+    artifacts = {"merged_people_csv": root_relative(merge_artifacts.get("people_csv"))}
     promoted = promote_network_artifacts(artifacts)
     payload = {
         "status": "completed",
@@ -514,15 +490,16 @@ def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "local_education",
         "local_companies",
     ]
+    merge_stats = merge.get("stats") if isinstance(merge.get("stats"), dict) else {}
     merged_people_csv = str((fan_in.get("artifacts") if isinstance(fan_in.get("artifacts"), dict) else {}).get("merged_people_csv") or "")
-    fan_in_people_rows = int(merge.get("people_rows") or merge.get("output_rows") or 0)
+    fan_in_people_rows = int(merge_stats.get("rows") or 0)
     if not fan_in_people_rows and merged_people_csv:
         fan_in_people_rows = count_csv_rows(merged_people_csv)
     summary: dict[str, Any] = {
         "status": payload.get("status"),
         "step": payload.get("step") or "",
         "people_csv": payload.get("people_csv") or "",
-        "people": int(counts.get("total_people") or counts.get("people") or merge.get("people_rows") or merge.get("output_rows") or 0),
+        "people": int(counts.get("total_people") or counts.get("people") or merge_stats.get("rows") or 0),
         "pending_people_before_run": int(counts.get("pending_people") or counts.get("people") or 0),
         "estimated_cost_usd": estimated_cost_usd(estimate) or payload.get("estimated_cost_usd") or 0.0,
         "estimated_paid_calls": estimated_paid_calls(estimate),
@@ -531,9 +508,10 @@ def compact_run_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
     if merge:
         summary["fan_in"] = {
-            "input_rows": int(merge.get("input_rows") or 0),
+            "input_rows": int(merge_stats.get("input_rows_total") or 0),
             "people_rows": fan_in_people_rows,
-            "company_rows": int(merge.get("company_rows") or 0),
+            "linkedin_ids": int(merge_stats.get("linkedin_ids") or 0),
+            "candidate_ids": int(merge_stats.get("candidate_ids") or 0),
         }
     if tables:
         summary["duckdb_tables"] = {key: tables[key] for key in standard_tables if key in tables}
@@ -859,7 +837,6 @@ def plan_payload(args: argparse.Namespace) -> dict[str, Any]:
         "output_dir": str(args.output_dir),
         "fan_in_inputs": [str(path) for path in inputs],
         "commands": {
-            "fan_in_merge": command_text(merge_command(args, inputs)) if inputs else "",
             "processing_dry_run": command_text(processing_args(args, dry_run=True, allow_paid=False)),
             "processing_run": command_text(processing_args(args, dry_run=False, allow_paid=True)),
             "local_duckdb": command_text(duckdb_command(args)),
@@ -879,7 +856,6 @@ def build_parser() -> argparse.ArgumentParser:
         s.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
         s.add_argument("--openai-usage-tier", default=None)
         s.add_argument("--input", action="append", default=[], help="Additional people.csv input to include in fan-in.")
-        s.add_argument("--include-existing-artifacts", action=argparse.BooleanOptionalAction, default=True)
 
     run = sub.add_parser("run")
     add_common(run)

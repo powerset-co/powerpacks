@@ -21,7 +21,7 @@ Consumers:
 - Shared-library consumers (deep-context profile hydration/reconciliation,
   search's ``fetch_person_profile``) import the sibling modules directly.
 
-Input: a shared people schema CSV, usually merge_network_sources output.
+Input: a shared people schema CSV, usually the `imports/merge_people.py` output.
 Output: enriched people schema CSV plus raw provider responses.
 
 RapidAPI LinkedIn hydration runs directly when RAPIDAPI_LINKEDIN_KEY or
