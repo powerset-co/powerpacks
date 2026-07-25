@@ -177,18 +177,17 @@ class PipelinePhase13Tests(unittest.TestCase):
                 max_workers=1,
                 max_rpm=0,
             )
-            orchestrator = enrich_people.EnrichPeople(cfg)
-            hits = artifact_dir / "rapidapi_cache_hits.csv"
-            misses = artifact_dir / "rapidapi_cache_misses.csv"
-            CsvIO.write_dict_rows(hits, enrich_people.CACHE_COLUMNS, [])
-            CsvIO.write_dict_rows(misses, enrich_people.CACHE_COLUMNS, [{
+            # The step node reads its hand-off CSVs from its OWN fixed paths and
+            # derives the paid-call count from the misses file, so the fixture is
+            # just those two files — no orchestrator state to prime.
+            step = enrich_people.EnrichLinkedInProfiles(cfg)
+            CsvIO.write_dict_rows(step.cache_hits_csv, enrich_people.CACHE_COLUMNS, [])
+            CsvIO.write_dict_rows(step.cache_misses_csv, enrich_people.CACHE_COLUMNS, [{
                 "id": "p1",
                 "public_identifier": "ada",
                 "linkedin_url": "https://www.linkedin.com/in/ada",
                 "cache_status": "miss",
             }])
-            orchestrator.artifacts.update({"rapidapi_cache_hits_csv": str(hits), "rapidapi_cache_misses_csv": str(misses)})
-            orchestrator.counts["paid_call_count"] = 1
             rapid = {
                 "status_code": 200,
                 "data": {"public_identifier": "ada", "full_name": "Ada Lovelace"},
@@ -199,7 +198,7 @@ class PipelinePhase13Tests(unittest.TestCase):
             }
             with mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key", return_value="key"), \
                 mock.patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value=rapid):
-                summary = orchestrator.enrich_linkedin()
+                summary = step.run()
             rows = CsvIO.read_dict_rows(Path(summary["output_file"]))
         self.assertEqual(summary["retried"], 1)
         self.assertEqual(summary["retry_successes"], 1)

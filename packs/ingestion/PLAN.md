@@ -1,5 +1,10 @@
 <!--
 Changelog:
+- 2026-07-25 (declared contract): the enrichment Outputs list dropped
+  linkedin_enrichment_queue.csv, needs_resolution_queue.csv,
+  skipped_enrichment.csv and raw_provider_responses/*.json — all four had zero
+  readers and are no longer written — and dropped the ledger, which has had no
+  writer since the 2026-07-23 audit.
 - 2026-07-23 (audit): the Gmail reader moved to the gmail/msgvault/ package;
   the boundary row now names gmail/discover_engine (emission) over
   gmail/msgvault/store (reader).
@@ -108,13 +113,12 @@ Required/important fields:
 
 Outputs:
 
-- `people.csv`
+- `people.csv` — the stage output; every input row, stamped `enrichment_status`
 - `provider_enriched.csv`
-- `linkedin_enrichment_queue.csv`
-- `needs_resolution_queue.csv`
-- `skipped_enrichment.csv`
-- `raw_provider_responses/*.json`
-- ledger/manifest with row counts, provider flags, approval status, and legacy aliases if emitted
+- `rapidapi_cache_hits.csv` / `rapidapi_cache_misses.csv` /
+  `rapidapi_recent_failures.csv` — the hand-off files between the stage's steps
+- one `manifest.json` with row counts, provider flags, and approval status (no
+  ledger; the artifact dir is fixed and reruns overwrite in place)
 
 ### 2. Extract provider logic out of source importers
 
