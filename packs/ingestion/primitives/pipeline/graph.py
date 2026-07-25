@@ -21,6 +21,11 @@ Flow: import the converted node modules -> walk Node subclasses -> group
 declarations by path -> emit one JSON report.
 
 Changelog:
+  2026-07-25 (messages): registered the three messages-discovery nodes. They add
+    the graph's first reported CYCLE, and it is real: the WhatsApp extractor
+    reads the MERGED `.powerpacks/messages/contacts.csv` back as its
+    `name_fallback_csv`, so messages_whatsapp_extract and messages_stage_merge
+    each consume the other's output.
   2026-07-25: created with the declared-contract prototype.
 """
 
@@ -41,6 +46,7 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa:
 # The converted nodes. Importing them IS the registration (and would already have
 # raised TypeError if any declaration were incomplete).
 import packs.ingestion.primitives.discover.gmail.discover  # noqa: E402,F401
+import packs.ingestion.primitives.discover.messages.discover  # noqa: E402,F401
 import packs.ingestion.primitives.imports.merge_people  # noqa: E402,F401
 
 

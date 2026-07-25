@@ -20,7 +20,6 @@ from packs.shared.csv_io import CsvIO
 
 
 ROOT = Path(__file__).resolve().parents[1]
-NORMALIZE = ROOT / "packs/ingestion/primitives/discover/messages/normalize_contacts.py"
 IMESSAGE = ROOT / "packs/ingestion/primitives/discover/messages/extract_imessage.py"
 
 
@@ -29,106 +28,6 @@ class MessagesPackTests(unittest.TestCase):
         for path in (ROOT / "packs/ingestion/schemas").rglob("*.json"):
             with self.subTest(path=path):
                 json.loads(path.read_text())
-
-    def test_normalize_contact_exporter_csv(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            input_csv = tmp / "contacts.csv"
-            output_jsonl = tmp / "contacts.jsonl"
-            manifest = tmp / "manifest.json"
-            with input_csv.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=[
-                        "phone",
-                        "name",
-                        "source",
-                        "is_in_group_chats",
-                        "group_names",
-                        "message_count",
-                        "last_message",
-                        "skip",
-                        "match_status",
-                        "matched_person_id",
-                        "matched_name",
-                        "matched_linkedin_url",
-                        "match_confidence",
-                        "match_method",
-                        "match_reason",
-                    ],
-                )
-                writer.writeheader()
-                writer.writerow(
-                    {
-                        "phone": "(415) 555-0101",
-                        "name": "Jane Doe",
-                        "source": "imessage",
-                        "is_in_group_chats": "true",
-                        "group_names": "Founders | Board",
-                        "message_count": "12",
-                        "last_message": "2026-04-01T00:00:00+00:00",
-                        "skip": "",
-                        "match_status": "matched",
-                        "matched_person_id": "person-1",
-                        "matched_name": "Jane Doe",
-                        "matched_linkedin_url": "https://linkedin.com/in/jane",
-                        "match_confidence": "0.97",
-                        "match_method": "name_exact",
-                        "match_reason": "Unique exact match",
-                    }
-                )
-                writer.writerow(
-                    {
-                        "phone": "+14155550101",
-                        "name": "",
-                        "source": "whatsapp",
-                        "is_in_group_chats": "",
-                        "group_names": "Operators",
-                        "message_count": "20",
-                        "last_message": "2026-04-02T00:00:00+00:00",
-                        "skip": "yes",
-                        "match_status": "",
-                        "matched_person_id": "",
-                        "matched_name": "",
-                        "matched_linkedin_url": "",
-                        "match_confidence": "",
-                        "match_method": "",
-                        "match_reason": "",
-                    }
-                )
-
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(NORMALIZE),
-                    "normalize",
-                    "--input",
-                    str(input_csv),
-                    "--out-jsonl",
-                    str(output_jsonl),
-                    "--manifest",
-                    str(manifest),
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            summary = json.loads(result.stdout)
-            self.assertEqual(summary["counts"]["input_rows"], 2)
-            self.assertEqual(summary["counts"]["normalized_rows"], 1)
-            rows = [json.loads(line) for line in output_jsonl.read_text().splitlines()]
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["phone"], "+14155550101")
-            self.assertEqual(rows[0]["sources"], ["imessage", "whatsapp"])
-            self.assertEqual(rows[0]["message_count"], 32)
-            self.assertEqual(rows[0]["imessage_message_count"], 12)
-            self.assertEqual(rows[0]["whatsapp_message_count"], 20)
-            self.assertEqual(rows[0]["last_message"], "2026-04-02T00:00:00+00:00")
-            self.assertEqual(rows[0]["imessage_last_message"], "2026-04-01T00:00:00+00:00")
-            self.assertEqual(rows[0]["whatsapp_last_message"], "2026-04-02T00:00:00+00:00")
-            self.assertTrue(rows[0]["skip"])
-            self.assertIn("Operators", rows[0]["group_names"])
 
     def test_extract_imessage_from_sqlite_fixtures(self) -> None:
         with tempfile.TemporaryDirectory() as td:

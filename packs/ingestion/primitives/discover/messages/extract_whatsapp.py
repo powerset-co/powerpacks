@@ -24,6 +24,18 @@ the client this module composes; the extractor itself is called in-process by th
 WhatsApp channel. Readiness (`status`) and the re-link (`logout`) flows stay on
 the client (`whatsapp_wacli.py status`/`logout`).
 
+Known behaviors (declared, not fixed here):
+- This module's own CLI DEFAULTS differ from what the WhatsApp channel passes:
+  `--output-csv` defaults to `.powerpacks/messages/wacli.contacts.csv`, while the
+  channel passes `whatsapp.contacts.csv`. A hand-run of `run`/`export` therefore
+  leaves an orphan `wacli.contacts.*` copy that nothing in the pipeline reads.
+- `name_fallback_csv` defaults to `.powerpacks/messages/contacts.csv` — the
+  MERGED output of the stage this extractor feeds. It is a real feedback edge
+  (declared on the WhatsApp channel node, and the reason the declared graph
+  reports a cycle), used only to fill names wacli did not supply.
+- `whatsapp.contacts.raw.jsonl` has ZERO readers repo-wide (grep-verified); the
+  declared pipeline graph ignores it.
+
 Changelog:
 - 2026-07-24 (shared IO): the local raw-`csv.DictWriter` and hand-rolled JSONL
   writers were dropped for the shared ones — the CSV goes through the

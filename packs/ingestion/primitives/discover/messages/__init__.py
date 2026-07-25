@@ -6,6 +6,8 @@ modules (channels/i_message_channel.py, channels/whats_app_channel.py,
 messages/discover.py), never these package re-exports.
 
 Changelog:
+  2026-07-25 (normalize deleted): dropped the IMESSAGE_NORMALIZED_* /
+    WHATSAPP_NORMALIZED_* re-exports with the dead normalize_contacts primitive.
   2026-07-23 (dead accounts.json registry): dropped the DEFAULT_ACCOUNTS re-export —
     the accounts.json registry was deleted, and nothing imported the constant from
     this package.
@@ -27,8 +29,6 @@ from packs.ingestion.primitives.discover.messages.channels.message_channel_base 
 from packs.ingestion.primitives.discover.messages.channels.i_message_channel import (  # noqa: F401
     IMESSAGE_CONTACTS,
     IMESSAGE_MANIFEST,
-    IMESSAGE_NORMALIZED_JSONL,
-    IMESSAGE_NORMALIZED_MANIFEST,
     IMESSAGE_RAW_JSONL,
     IMessageChannel,
 )
@@ -37,8 +37,6 @@ from packs.ingestion.primitives.discover.messages.channels.whats_app_channel imp
     DEFAULT_WACLI_SYNC_TIMEOUT,
     WHATSAPP_CONTACTS,
     WHATSAPP_MANIFEST,
-    WHATSAPP_NORMALIZED_JSONL,
-    WHATSAPP_NORMALIZED_MANIFEST,
     WHATSAPP_PROGRESS_JSONL,
     WHATSAPP_RAW_JSONL,
     WhatsAppChannel,
