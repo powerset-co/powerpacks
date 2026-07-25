@@ -20,11 +20,27 @@ the recall net, never the decision. Pipeline:
   3. Only judge-confirmed pairs become edges -> connected components -> clusters.
 
 Writes a full verdict log (merge-verdicts.csv) incl. rejections for auditability.
-``--no-llm`` falls back to deterministic scoring (offline/tests only).
+Every row records WHICH judge decided it (`judge`: slam_dunk | llm | no_llm), because
+that file doubles as the incremental cache and only a real judgment may be reused.
+
+Two no-spend modes, deliberately different:
+
+  ``--deterministic-only``  the shipped free TIER 0. Settles the slam-dunk pairs in
+      code, carries every other pair's prior verdict forward untouched, and leaves
+      pairs nobody has judged UNJUDGED. Never invents identity, never poisons the
+      cache — the paid judge is the escalation for exactly what is left.
+  ``--no-llm``  the offline/test stub. Also stamps `deterministic_verdict` on the
+      unsettled pairs, which merges different-name pairs that merely share an
+      identifier (couples, front desks, role inboxes). Those rows are marked
+      `judge=no_llm` and are EXCLUDED from cache reuse, so a free run can never
+      stop the LLM from judging that pair later. Do not put it on a user path.
 
 Outputs: merge-candidates.csv / .md + a "Possible same person" section per dossier.
 
 Changelog:
+  2026-07-24: merge-verdicts.csv gained a `judge` provenance column; `--no-llm`
+    verdicts are no longer reusable as cache hits (they used to permanently
+    suppress the paid judge for unchanged pairs); added `--deterministic-only`.
   2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -68,6 +84,13 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 
 DEFAULT_CONFIDENCE = 0.7   # judge must be at least this confident to merge
+# Verdict provenance, recorded per row in merge-verdicts.csv. Only JUDGE_SLAM_DUNK
+# (identity equality decided in code) and JUDGE_LLM (a real judgment we paid for) may
+# be reused as cache hits; JUDGE_NO_LLM is the offline stub's guess.
+JUDGE_SLAM_DUNK = "slam_dunk"
+JUDGE_LLM = "llm"
+JUDGE_NO_LLM = "no_llm"
+REUSABLE_JUDGES = frozenset({JUDGE_SLAM_DUNK, JUDGE_LLM})
 GATE_NAME_SIM = 0.85       # below this (and no shared contact) a pair isn't worth a call
 SECTION_ANCHOR = "## Possible same person"
 SAMPLE_PER_DIRECTION = 6
@@ -472,6 +495,7 @@ def slam_dunk_verdict(pa: dict[str, Any], pb: dict[str, Any]) -> dict[str, Any] 
     shared = ", ".join([fmt_phone(d) for d in phones] + emails)
     return {"same_person": True, "confidence": 0.99,
             "tone_toward_a": "", "tone_toward_b": "", "tone_consistent": True,
+            "judge": JUDGE_SLAM_DUNK,
             "reason": f"deterministic: identical name + shared {shared}"}
 
 
@@ -526,12 +550,19 @@ def inject_section(path: Path, body: str) -> None:
 
 
 def deterministic_verdict(pa: dict[str, Any], pb: dict[str, Any]) -> dict[str, Any]:
-    """Offline/tests fallback (--no-llm): shared contact or near-exact name."""
+    """Offline/tests fallback (--no-llm): shared contact or near-exact name.
+
+    NOT a shippable tier: a shared identifier alone merges DIFFERENT-name pairs, which
+    is precisely the couples / front-desk / role-inbox case `slam_dunk_verdict` refuses
+    to decide without the judge. Marked `judge=no_llm` so it can never be reused as a
+    cache hit in place of a real judgment (`--deterministic-only` is the safe free tier).
+    """
     shared = bool(all_emails(pa) & all_emails(pb)) or bool(all_phones(pa) & all_phones(pb))
     nsim = jaro_winkler(pa["name_key"], pb["name_key"])
     same = shared or nsim >= 0.97
     return {"same_person": same, "confidence": 0.95 if shared else round(nsim, 2),
             "tone_toward_a": "", "tone_toward_b": "", "tone_consistent": same,
+            "judge": JUDGE_NO_LLM,
             "reason": "shared contact" if shared else f"name similarity {nsim:.2f}"}
 
 
@@ -564,7 +595,14 @@ def pair_sig(pa: dict[str, Any], pb: dict[str, Any]) -> str:
 
 def load_cached_verdicts(path: Path) -> dict[frozenset, tuple[str, dict[str, Any]]]:
     """Prior merge-verdicts.csv, keyed by the {slug_a, slug_b} pair -> (sig, verdict). Rows from an
-    older file that predates the slug/sig columns are skipped (they simply re-judge once)."""
+    older file that predates the slug/sig columns are skipped (they simply re-judge once).
+
+    Rows the OFFLINE STUB authored (`judge=no_llm`) are dropped: their sig is the current
+    one, so keeping them would let a single free `--no-llm` run permanently satisfy the
+    cache and stop the LLM from ever judging that pair. A row with no `judge` column
+    predates the provenance and is assumed judged (`--refresh` re-judges everything if
+    that assumption is ever wrong).
+    """
     cache: dict[frozenset, tuple[str, dict[str, Any]]] = {}
     if not path.exists():
         return cache
@@ -573,11 +611,15 @@ def load_cached_verdicts(path: Path) -> dict[frozenset, tuple[str, dict[str, Any
             sa, sb, sig = row.get("slug_a") or "", row.get("slug_b") or "", row.get("sig") or ""
             if not sa or not sb or not sig:
                 continue
+            judge = (row.get("judge") or "").strip().lower() or JUDGE_LLM
+            if judge not in REUSABLE_JUDGES:
+                continue
             cache[frozenset({sa, sb})] = (sig, {
                 "same_person": (row.get("same_person") or "").strip().lower() == "true",
                 "confidence": float(row.get("confidence") or 0),
                 "tone_consistent": (row.get("tone_consistent") or "").strip().lower() == "true",
                 "reason": row.get("reason", ""),
+                "judge": judge,
             })
     return cache
 
@@ -603,6 +645,8 @@ def load_legacy_verdicts(path: Path, people: list[dict[str, Any]]) -> dict[froze
         for row in csv.DictReader(fh):
             if (row.get("slug_a") or "") and (row.get("sig") or ""):
                 continue  # already a sig-keyed row; the precise cache owns it, don't second-guess here
+            if (row.get("judge") or "").strip().lower() == JUDGE_NO_LLM:
+                continue  # an offline stub's guess is never an already-paid verdict
             sa, sb = resolve(row.get("name_a", "")), resolve(row.get("name_b", ""))
             if not sa or not sb or sa == sb:
                 continue
@@ -611,6 +655,7 @@ def load_legacy_verdicts(path: Path, people: list[dict[str, Any]]) -> dict[froze
                 "confidence": float(row.get("confidence") or 0),
                 "tone_consistent": (row.get("tone_consistent") or "").strip().lower() == "true",
                 "reason": row.get("reason", ""),
+                "judge": JUDGE_LLM,   # a pre-sig row is a verdict we already paid for
             }
     return legacy
 
@@ -684,9 +729,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         {"a": a, "b": b, "sig": pair_sig(people[a], people[b]), **v} for a, b, v in slam
     ] + [{"a": a, "b": b, "sig": sig, **v} for a, b, sig, v in reused]
     usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-    use_llm = not getattr(args, "no_llm", False)
+    deterministic_only = getattr(args, "deterministic_only", False)
+    use_llm = not (deterministic_only or getattr(args, "no_llm", False))
+    unsettled = 0
 
-    if use_llm and to_judge:
+    if deterministic_only:
+        # TIER 0 only: the slam dunks above are decided; everything else keeps the verdict
+        # the last run recorded — VERBATIM, including its original sig, so a pair whose
+        # identity changed still re-judges on the next paid run — and pairs nobody has
+        # judged stay UNJUDGED. A free pass may add deterministic identity, never invent it
+        # and never drop an edge a paid run already established.
+        carry = load_cached_verdicts(cache_path)
+        for a, b, _sig in to_judge:
+            prior = carry.get(frozenset({people[a]["slug"], people[b]["slug"]}))
+            if prior:
+                verdicts.append({"a": a, "b": b, "sig": prior[0], **prior[1]})
+            else:
+                unsettled += 1
+    elif use_llm and to_judge:
         load_env()
         # Wall-time is bound by per-call high-reasoning latency, not local CPU — parallelize hard.
         concurrency = args.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
@@ -711,7 +771,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 res = results.get(i, {"verdict": {}, "usage": {}})
                 for k in usage_total:
                     usage_total[k] += res.get("usage", {}).get(k, 0)
-                verdicts.append({"a": a, "b": b, "sig": sig, **(res["verdict"] or {})})
+                verdicts.append({"a": a, "b": b, "sig": sig, "judge": JUDGE_LLM,
+                                 **(res["verdict"] or {})})
 
         asyncio.run(driver())
     else:
@@ -752,12 +813,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     manifest = {
         "source": "cluster_merge_candidates",
         "status": "completed",
-        "judge": "llm" if use_llm else "deterministic",
+        "judge": JUDGE_LLM if use_llm else ("tier0" if deterministic_only else "deterministic"),
         "people": len(people),
         "pairs_total": len(pairs),
         "pairs_deterministic": len(slam),  # merged in code (identical name + shared identifier)
-        "pairs_judged": len(to_judge),   # actually sent to the judge this run (rest reused from cache)
+        "pairs_judged": len(to_judge) if use_llm else 0,  # actually sent to the judge this run
         "pairs_reused": len(reused),
+        # Tier 0 only: pairs no judge has decided yet — what the paid escalation would cost.
+        "pairs_unsettled": unsettled,
         "pairs_legacy_adopted": adopted,  # reused from a pre-sig file by name match (upgraded in place)
         "candidate_pairs": len(confirmed),
         "clusters": len(clusters),
@@ -782,11 +845,12 @@ def _write_pairs_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _write_verdicts_csv(path: Path, people: list[dict[str, Any]], verdicts: list[dict[str, Any]]) -> None:
-    # slug_a/slug_b/sig make this file double as the incremental cache (see load_cached_verdicts).
+    # slug_a/slug_b/sig make this file double as the incremental cache, and `judge` says
+    # whether a row may be reused as one (see load_cached_verdicts).
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=["slug_a", "slug_b", "name_a", "name_b", "same_person",
-                                           "confidence", "tone_consistent", "reason", "sig"])
+                                           "confidence", "tone_consistent", "reason", "sig", "judge"])
         w.writeheader()
         for v in sorted(verdicts, key=lambda v: float(v.get("confidence") or 0), reverse=True):
             w.writerow({
@@ -794,7 +858,7 @@ def _write_verdicts_csv(path: Path, people: list[dict[str, Any]], verdicts: list
                 "name_a": people[v["a"]]["name"], "name_b": people[v["b"]]["name"],
                 "same_person": v.get("same_person"), "confidence": v.get("confidence"),
                 "tone_consistent": v.get("tone_consistent"), "reason": v.get("reason", ""),
-                "sig": v.get("sig", ""),
+                "sig": v.get("sig", ""), "judge": v.get("judge", JUDGE_LLM),
             })
 
 
@@ -827,7 +891,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=120)
     p.add_argument("--max-retries", type=int, default=6)
     p.add_argument("--dry-run", action="store_true", help="Count candidate pairs + estimate cost; no spend")
-    p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
+    p.add_argument("--deterministic-only", action="store_true",
+                   help="Free TIER 0: merge only the code-decided pairs (identical name + shared "
+                        "identifier), carry prior verdicts forward, leave the rest unjudged. No spend.")
+    p.add_argument("--no-llm", action="store_true",
+                   help="Offline/test stub: also guesses the unsettled pairs (not reusable as cache). "
+                        "Use --deterministic-only on a real network.")
     p.add_argument("--refresh", action="store_true",
                    help="Ignore the cached merge-verdicts.csv and re-judge every pair from scratch")
     return p

@@ -13,10 +13,18 @@ name-only candidates; here all cluster members are listed as *proposed*.
 
 Outputs:
   parents/<slug>.md     one merged canonical dossier per cluster
-  (backrefs injected into each child dossier; parents added to index.json)
+  (backrefs injected into each child dossier; `parents` written to index.json)
   parents/manifest.json
 
+This stage owns exactly ONE index.json key — `parents` — and never touches `slugs`
+(compose_dossier owns that). The by_email/by_phone/by_name maps are re-derived from
+both record maps on write; see the index contract in `common.py`.
+
 Changelog:
+  2026-07-24: writes index.json through common.write_index and no longer appends to
+    the by_* maps it does not own. A parent's emails/phones come from
+    common.parent_identifiers (the union of its children's index records), the same
+    projection the lookup maps use.
   2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio; normalize_email imports from common.contact_fields instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -41,10 +49,11 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     read_jsonl,
     emit,
+    load_index,
     load_owner,
-    normalize_name,
-    phone_digits,
+    parent_identifiers,
     slugify,
+    write_index,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.common.contact_fields import normalize_email
@@ -257,7 +266,7 @@ def inject_parent_backref(dossier_dir: Path, child_slug: str, parent_slug: str, 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
-    index = json.loads(Path(args.index_json).read_text(encoding="utf-8")) if Path(args.index_json).exists() else {}
+    index = load_index(Path(args.index_json))
     slugs_info = index.get("slugs", {})
     pairs = load_pairs(Path(args.merge_csv))
     pairs += superseded_pairs(Path(getattr(args, "people_csv", "") or DEFAULT_PEOPLE_CSV), slugs_info)
@@ -281,23 +290,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                    if _is_owner(info.get("person_id", ""), facts_dir)}
     owner_aliases_added = fold_owner_aliases(owner_slugs, slugs_info, raw_dir) if owner_slugs else []
     owner_excluded = 0
-
-    def index_parent(pslug: str, name: str, emails: list[str], phones: list[str]) -> None:
-        for e in emails:
-            index.setdefault("by_email", {}).setdefault(e.lower(), [])
-            if pslug not in index["by_email"][e.lower()]:
-                index["by_email"][e.lower()].append(pslug)
-        for ph in phones:
-            d = phone_digits(ph)
-            if d:
-                index.setdefault("by_phone", {}).setdefault(d, [])
-                if pslug not in index["by_phone"][d]:
-                    index["by_phone"][d].append(pslug)
-        nk = normalize_name(name)
-        if nk:
-            index.setdefault("by_name", {}).setdefault(nk, [])
-            if pslug not in index["by_name"][nk]:
-                index["by_name"][nk].append(pslug)
 
     def _pscore(row: dict[str, Any]) -> float:
         return float(row.get("confidence") or row.get("score") or 0)
@@ -332,21 +324,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         confirmed = [child_entry(s, "confirmed") for s in confirmed_slugs]
         review = [child_entry(s, "needs_review") for s in review_slugs]
 
-        # Merge facts + identity from CONFIRMED children only; needs-review are listed, not merged.
+        # Merge facts from CONFIRMED children only; needs-review are listed, not merged.
+        # Identity comes from the children's index records (one projection, shared with
+        # the derived lookup maps), so the parent dossier and index never disagree.
         all_records: list[dict[str, Any]] = []
-        emails: list[str] = []
-        phones: list[str] = []
         child_pids: list[str] = []
         for c in confirmed:
             child_pids.append(c["pid"])
             all_records.extend(read_jsonl(facts_dir / f"{c['pid']}.jsonl"))
-            bundle = _read_json(raw_dir / f"{c['pid']}.json")
-            for e in bundle.get("emails") or []:
-                if e not in emails:
-                    emails.append(e)
-            for ph in bundle.get("phones") or []:
-                if ph not in phones:
-                    phones.append(ph)
+        emails, phones = parent_identifiers(index, [c["slug"] for c in confirmed])
 
         merged = compose.merge_facts(all_records)
         name = merged.get("canonical_name") or confirmed[0]["name"]
@@ -364,7 +350,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         index["parents"][slug] = {"parent_id": parent_id, "name": name, "path": f"parents/{slug}.md",
                                   "children": [c["slug"] for c in confirmed],
                                   "needs_review": [c["slug"] for c in review]}
-        index_parent(slug, name, emails, phones)
 
     # Promote every UNMERGED person to a thin singleton parent (a pointer to its one
     # child), so `parents/` is ALWAYS the COMPLETE canonical layer: exactly one parent
@@ -376,10 +361,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             owner_excluded += 1
             continue
         pid = info["person_id"]
-        bundle = _read_json(raw_dir / f"{pid}.json")
         name = info.get("name", child_slug)
-        emails = bundle.get("emails") or []
-        phones = bundle.get("phones") or []
+        emails, phones = parent_identifiers(index, [child_slug])
         parent_id = parent_id_for([pid])
         pslug = slugify(name, parent_id)
         (parents_dir / f"{pslug}.md").write_text(
@@ -391,7 +374,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         inject_parent_backref(dossier_dir, child_slug, pslug, name)
         index["parents"][pslug] = {"parent_id": parent_id, "name": name, "path": f"parents/{pslug}.md",
                                    "children": [child_slug], "needs_review": [], "singleton": True}
-        index_parent(pslug, name, emails, phones)
 
     # Remove orphan parent files from earlier cluster runs (slug set changes when
     # clusters change); the dossier compose does the same for child dossiers.
@@ -401,7 +383,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             md.unlink()
             orphans += 1
 
-    write_json(Path(args.index_json), index)
+    write_index(Path(args.index_json), index)
     manifest = {
         "source": "build_parents",
         "status": "completed",
