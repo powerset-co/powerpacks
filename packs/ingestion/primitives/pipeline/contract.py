@@ -189,8 +189,7 @@ class Artifact(BaseModel):
                   is real, existing behavior (the merge tolerates an absent
                   per-source people.csv; the gmail extractor legitimately writes
                   no queue for an account with no matching mail).
-    consumers_optional  nothing is expected to read it, so the checker must not
-                  report it as a dead output."""
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -200,7 +199,6 @@ class Artifact(BaseModel):
     external: bool = False
     owns_columns: tuple[str, ...] = ()
     owns_rows_where: str = ""
-    consumers_optional: bool = False
     required: bool = True
 
 
@@ -231,7 +229,11 @@ class Node(ABC):
             errors.append("payload must be a StageManifest subclass")
         if not isinstance(getattr(cls, "manifest", None), str):
             errors.append('manifest must be a str ("" = reports into the parent stage manifest)')
-        if "run" in vars(cls):
+        # Resolve through the MRO, not vars(cls): a base listed BEFORE Node
+        # (a mixin like MessageChannel) shadows Node.run without ever putting
+        # "run" in the subclass's own __dict__, which silently skips every
+        # declared input/output check.
+        if cls.run is not Node.run:
             errors.append("run() is the template method and must not be overridden; implement execute()")
         if errors:
             raise TypeError(f"{cls.__name__} is not a valid Node: " + "; ".join(errors))

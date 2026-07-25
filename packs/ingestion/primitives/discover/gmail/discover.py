@@ -46,7 +46,6 @@ Changelog:
     `contacts.csv` (row count only) to name the merge reason — a node's own
     manifest/output is resume state, not an upstream artifact, and declaring it
     would make the graph a self-cycle. `contacts.csv` is declared
-    `consumers_optional=True`: it has one writer and zero readers.
   2026-07-24 (incremental deleted): the append-only delta path is gone, because no
     producer ever fed it — extract_gmail permanently declares full_recount (#334)
     and the owner has decided against building real incrementality. DELETED the
@@ -393,13 +392,15 @@ class GmailDiscovery(Node):
     outputs = (
         # contacts.csv is DEAD: one writer (here), zero readers — the import stage
         # reads only its byte-identical twin linkedin_resolution_queue.csv. Declared
-        # consumers_optional so the checker does not re-report a known-dead file;
         # deleting it is a separate, behavior-changing PR.
+        # Reported as a DEAD output, and that is correct: byte-identical to the
+        # queue below, with only an existence probe (imports/status.py) reading
+        # it. Declared rather than hidden -- deleting it is a separate cut that
+        # must also update the status surface.
         Artifact(
             path=str(output_path("gmail", "contacts_csv")),
             row_model=GmailContactRow,
             writes="full_rewrite",
-            consumers_optional=True,
         ),
         Artifact(
             path=str(output_path("gmail", "linkedin_resolution_queue_csv")),

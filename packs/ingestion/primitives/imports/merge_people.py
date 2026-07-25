@@ -269,7 +269,6 @@ class PeopleMerge(Node):
             row_model=PeopleRow,
             writes="full_rewrite",
             # Read by indexing / deep-context / search, none of them converted.
-            consumers_optional=False,
         ),
     )
     payload = MergePeopleManifest

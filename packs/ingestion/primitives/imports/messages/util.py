@@ -32,9 +32,13 @@ from packs.ingestion.primitives.pipeline.contract import row_model_for
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 from packs.ingestion.schemas.people_schema import latest_interaction
 
-# The declared row shape of `.powerpacks/messages/contacts.csv`, generated FROM
-# the schema's CSV_HEADERS so field order stays the on-disk header order.
-MessageContactRow = row_model_for("MessageContactRow", CSV_HEADERS)
+# The declared row shape of `.powerpacks/messages/contacts.csv`. Imported from
+# the DISCOVERY module that owns the file, never re-generated here: the graph
+# checker compares row models by IDENTITY, so an equal-but-separate class
+# reads as two nodes disagreeing about one file's schema.
+from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
+    MessageContactRow,
+)
 
 # The columns `match_local_candidates.py` writes, and the ONLY ones it writes.
 # It rewrites the whole file to update them (csv has no in-place cell write), so

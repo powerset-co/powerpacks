@@ -3,7 +3,7 @@
 
 Builds the graph from `Node` declarations (never from a run) and reports:
 
-  dead_outputs      an output no declared input reads, and not consumers_optional
+  dead_outputs      an output no declared input reads
   phantom_inputs    an input no node produces, and not external=True
   two_writer_conflicts  one path, two writers whose owned columns overlap (or a
                     writer that claims the whole file, or a full_rewrite next to
@@ -116,7 +116,7 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
         {"node": name, "path": path}
         for path, declared in producers.items()
         for name, item in declared
-        if not consumers.get(path) and not item.consumers_optional
+        if not consumers.get(path)
     ]
     phantom_inputs = [
         {"node": node.name, "path": item.path}

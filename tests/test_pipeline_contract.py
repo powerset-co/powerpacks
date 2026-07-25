@@ -193,7 +193,7 @@ class GraphCheckTests(unittest.TestCase):
             name = "messages_discovery"
             inputs = ()
             outputs = (Artifact(path=shared, row_model=ContactRow, writes="upsert",
-                                owns_columns=first_columns, consumers_optional=True),)
+                                owns_columns=first_columns),)
             payload = _Payload
             manifest = ""
 
@@ -204,7 +204,7 @@ class GraphCheckTests(unittest.TestCase):
             name = "messages_match"
             inputs = ()
             outputs = (Artifact(path=shared, row_model=ContactRow, writes="annotate",
-                                owns_columns=second_columns, consumers_optional=True),)
+                                owns_columns=second_columns),)
             payload = _Payload
             manifest = ""
 
@@ -249,13 +249,20 @@ class GraphCheckTests(unittest.TestCase):
             "node": "orphan",
             "path": ".powerpacks/network-import/discover/gmail/contacts.csv",
         }])
-        # The same declaration, admitted as dead on purpose, is not reported.
+        # There is no opt-out. A dead output is either deleted or it is reported;
+        # `consumers_optional` was removed because a flag describing a file that
+        # should not exist is code built around the problem, not a fix.
+        class Consumer(Node):
+            name = "consumer"
+            inputs = Orphan.outputs
+            outputs = ()
+            payload = _Payload
+            manifest = ""
 
-        class Documented(Orphan):
-            name = "documented"
-            outputs = (Artifact(path=".powerpacks/x/contacts.csv", consumers_optional=True),)
+            def execute(self) -> _Payload:
+                return _Payload()
 
-        self.assertEqual(check_graph([Documented])["dead_outputs"], [])
+        self.assertEqual(check_graph([Orphan, Consumer])["dead_outputs"], [])
 
     def test_an_input_with_no_producer_is_a_phantom_input(self) -> None:
         class Consumer(Node):
@@ -449,3 +456,34 @@ class RowModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunTemplateBypassTests(unittest.TestCase):
+    """A base listed BEFORE Node in the MRO must not be able to shadow run().
+
+    The first guard checked `"run" in vars(cls)`, which only inspects the
+    subclass's OWN __dict__ — so `class C(Mixin, Node)` where Mixin defines
+    run() passed, and every declared input/output check silently stopped
+    running. Messages discovery hit exactly this shape (MessageChannel, Node).
+    """
+
+    def test_a_mixin_cannot_shadow_the_run_template(self) -> None:
+        class Payload(StageManifest):
+            pass
+
+        class Mixin:
+            def run(self):  # noqa: ANN201 - deliberately shadows the template
+                return "bypassed"
+
+        with self.assertRaises(TypeError) as caught:
+            class Sneaky(Mixin, Node):
+                name = "sneaky"
+                inputs = ()
+                outputs = ()
+                payload = Payload
+                manifest = ""
+
+                def execute(self):  # noqa: ANN201
+                    return Payload()
+
+        self.assertIn("run() is the template method", str(caught.exception))
