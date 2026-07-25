@@ -267,10 +267,10 @@ does not send bodies, subjects, snippets, MIME, or attachments to identity provi
 ### Step 6 — Import Gmail contacts (free, local)
 
 Import applies the **local identity directory** to the discovered Gmail queues
-(people already resolved by prior imports attach immediately), writes
-`.powerpacks/network-import/import/gmail/people.csv`, and stages every
-still-unresolved contact worth researching in
-`.powerpacks/network-import/import/gmail/candidates.csv` for `$deep-context`.
+(people already resolved by prior imports attach immediately) and writes
+`.powerpacks/network-import/import/gmail/people.csv` — resolved people first,
+then every still-unresolved contact worth researching, carrying no
+`public_identifier` and a `candidate:` id for `$deep-context` to pick up.
 No Parallel.ai, no RapidAPI, no spend prompt:
 
 ```bash

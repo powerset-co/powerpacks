@@ -65,6 +65,8 @@ from packs.ingestion.primitives.common.proc import emit_progress  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.util import (  # noqa: E402
     GMAIL_IMPORT_PREFIX,
     artifact_dir_from_state,
+    gmail_account_queue_records,
+    gmail_stage_queue_csv,
 )
 from packs.ingestion.schemas.gmail_artifacts import LINKEDIN_RESOLUTION_COLUMNS  # noqa: E402
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url  # noqa: E402
@@ -299,11 +301,16 @@ def ordered_records(records: list[dict[str, Any]], account_order: list[str] | No
 
 
 def gmail_queue_records(artifacts: dict[str, Any]) -> list[dict[str, Any]]:
-    """Normalize the per-account Gmail queue records out of the run artifacts."""
-    queue_records = artifacts.get("gmail_linkedin_resolution_queue_csvs") or []
-    if not queue_records and artifacts.get("gmail_linkedin_resolution_queue_csv"):
-        queue_records = [{"account_email": "", "queue_csv": artifacts.get("gmail_linkedin_resolution_queue_csv"), "people_csv": artifacts.get("gmail_people_csv"), "slug": "all"}]
-    return [record for record in queue_records if isinstance(record, dict) and record.get("queue_csv")]
+    """Normalize the per-account Gmail queue records out of the run artifacts.
+
+    Falls back to a single synthetic record over the STAGE-level queue when no
+    per-account record survived discovery's schema check. The two keys differ by
+    one letter, so both reads go through the named accessors in `util.py`."""
+    queue_records = gmail_account_queue_records(artifacts)
+    stage_queue_csv = gmail_stage_queue_csv(artifacts)
+    if not queue_records and stage_queue_csv:
+        queue_records = [{"account_email": "", "queue_csv": stage_queue_csv, "people_csv": artifacts.get("gmail_people_csv"), "slug": "all"}]
+    return [record for record in queue_records if record.get("queue_csv")]
 
 
 def run_gmail_directory(imp: "GmailImport") -> bool:

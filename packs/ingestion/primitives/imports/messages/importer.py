@@ -21,7 +21,30 @@ producer since #315 retired the research-review flow, so on a fresh install
 every identifier match demotes to `suggested` until deep-context ships the
 replacement approval surface.
 
+Declared contract (`MessagesImport`, node `messages_import`):
+
+  reads   `.powerpacks/messages/contacts.csv` (match-annotated) + the matcher's
+          `*.match.manifest.json` gate
+  writes  `import/messages/people.csv`, and the `messages` ROW SLICE of the
+          shared `directory.csv` (`Artifact.owns_rows_where`) — every column of
+          its own rows, no column of anyone else's
+
+`directory.csv` is declared an OUTPUT only, never an input, even though
+`replace_messages_directory_rows` reads it: that read is the read half of a
+read-modify-write of a file this node already declares it owns a slice of, the
+same rule #340 applied to a node's own manifest. Gmail's import, by contrast,
+reads OTHER sources' directory rows to decide its own resolutions, so there it
+is a real input.
+
 Changelog:
+  2026-07-25 (declared contract): `MessagesImport` is a `pipeline/contract.py`
+    `Node` — it DECLARES its two inputs and two outputs instead of only opening
+    them, the gate sequence moved from `run()` to `execute()` (`run()` is the
+    inherited template), and the manifest payload the orchestrator used to
+    assemble as `**fields` is the typed `MessagesImportManifest`. The manifest is
+    still written by the import-stage `imports/common.py:write_manifest`, not the
+    Node template — see `MessagesImport.manifest`. people.csv and the directory
+    slice are byte-identical.
   2026-07-23 (dead accounts.json registry): removed the `read_accounts(self.args.
     accounts)` no-op (its return value was discarded) along with the `read_accounts`/
     `DEFAULT_ACCOUNTS` imports and the `--accounts` CLI arg. Nothing in this import
@@ -75,7 +98,6 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     parse_jsonish,
 )
 from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
-    CANDIDATES_SCHEMA_COLUMNS,
     candidate_key_for,
     normalize_candidate_row,
 )
@@ -92,9 +114,17 @@ from packs.ingestion.primitives.discover.common import (  # noqa: E402
 )
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     DIRECTORY_COLUMNS,
+    MESSAGES_DIRECTORY_ROWS,
+    DirectoryRow,
     directory_rows_from_people_csv,
     merge_directory_rows,
     normalized_directory_row,
+)
+from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
+    Artifact,
+    Node,
+    PeopleRow,
+    StageManifest,
 )
 from packs.ingestion.primitives.imports.common import (  # noqa: E402
     csv_count,
@@ -106,6 +136,7 @@ from packs.ingestion.primitives.imports.common import (  # noqa: E402
 )
 from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
     DEFAULT_MIN_MESSAGE_COUNT,
+    MessageContactRow,
     contact_floor_reason,
     contact_interaction_counts,
     contact_last_interaction,
@@ -463,25 +494,86 @@ def replace_messages_directory_rows(
     }
 
 
-class MessagesImport:
+class MessagesImportManifest(StageManifest):
+    """This stage's typed manifest payload — the pydantic successor to the
+    `**fields` dict `_manifest()` used to splat into `write_manifest`. Field order
+    IS the completed manifest's key order; the optional fields are dropped when
+    None exactly as the old per-path dicts omitted them. `reason` is `""` (not
+    None) on a completed run, as before."""
+
+    # No `stage` field: the import-stage writer already stamps `source`.
+    status: str = ""
+    reason: str | None = None
+    approval_type: str | None = None
+    message: str | None = None
+    blocked: dict[str, Any] | None = None
+    input: dict[str, Any] = {}
+    outputs: dict[str, Any] = {}
+    stats: dict[str, Any] = {}
+    diff: dict[str, Any] | None = None
+    materialized: dict[str, Any] | None = None
+    directory: dict[str, Any] | None = None
+
+
+class MessagesImport(Node):
     """Orchestrates the contacts-direct Messages import.
 
-    Owns the fixed import dir, its `people.csv` / `candidates.csv` outputs, the
-    floor knobs, the manifest input, and the gate sequence (schema/manifest
-    no-op -> contacts-present and matched prerequisites -> the --confirm-import
-    approval when the diff adds rows -> materialize people.csv + candidates.csv
-    -> replace the directory messages slice -> the import manifest). Stateless:
-    no run-state store, just the one fixed output dir and one manifest. The pure
-    row/floor/diff/directory transforms stay module-level functions the
-    orchestrator calls."""
+    Owns the fixed import dir, its `people.csv` output, the floor knobs, the
+    manifest input, and the gate sequence (schema/manifest no-op -> contacts-present
+    and matched prerequisites -> the --confirm-import approval when the diff adds
+    rows -> materialize people.csv -> replace the directory messages slice -> the
+    import manifest). Stateless: no run-state store, just the one fixed output dir
+    and one manifest. The pure row/floor/diff/directory transforms stay
+    module-level functions the orchestrator calls.
+
+    `execute()` is the gate sequence; `run()` is the inherited Node template."""
 
     source = "messages"
+
+    name = "messages_import"
+    inputs = (
+        # required=False on BOTH: absence is a handled, actionable state this node
+        # reports itself. Missing contacts.csv -> a `messages_contacts_missing`
+        # manifest naming the discover command to run; a missing match manifest ->
+        # `messages_contacts_not_matched` naming the matcher (or --allow-unmatched).
+        # A bare `not_ready` payload would throw both messages away.
+        Artifact(path=str(WORKING_CONTACTS_CSV), row_model=MessageContactRow, required=False),
+        Artifact(path=str(MATCH_MANIFEST_JSON), required=False),
+    )
+    outputs = (
+        Artifact(path=str(DEFAULT_IMPORT_DIR / source / "people.csv"), row_model=PeopleRow, writes="full_rewrite"),
+        # The messages ROW SLICE of the shared aggregate. `full_rewrite` is
+        # literal: replace_messages_directory_rows DELETES every `messages:`-keyed
+        # row and rewrites that slice from this run. `owns_rows_where` is what
+        # keeps that honest next to gmail's writer — see imports/directory.py.
+        Artifact(
+            path=str(DEFAULT_DIRECTORY_CSV),
+            row_model=DirectoryRow,
+            writes="full_rewrite",
+            owns_rows_where=MESSAGES_DIRECTORY_ROWS,
+        ),
+    )
+    payload = MessagesImportManifest
+    # "" is deliberate. This stage's manifest is written by the IMPORT-stage
+    # writer (`imports/common.py:write_manifest`), whose fingerprint chain
+    # `import_manifest_current` reads for the no-op gate and which
+    # `common/manifests.py` documents as divergent from `write_stage_manifest` on
+    # purpose. `execute()` writes it and parks the result on `self.written`; the
+    # Node template must not put a second, differently-fingerprinted manifest.json
+    # on top of it.
+    manifest = ""
 
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.import_dir = DEFAULT_IMPORT_DIR / self.source
         self.people_csv = self.import_dir / "people.csv"
         self.contacts_csv = WORKING_CONTACTS_CSV
+        self.directory_csv = DEFAULT_DIRECTORY_CSV
+        self.match_manifest_json = MATCH_MANIFEST_JSON
+        # The manifest dict `write_manifest` actually produced (it may return the
+        # unchanged existing one) — what the CLI emits, like the gmail discovery
+        # channel's `record`.
+        self.written: dict[str, Any] = {}
         self.min_message_count = int(getattr(args, "min_message_count", DEFAULT_MIN_MESSAGE_COUNT))
         self.include_group_only = bool(getattr(args, "include_group_only", False))
         self.expected_input = {
@@ -497,12 +589,29 @@ class MessagesImport:
             "discovery_manifest": str(DEFAULT_BASE_DIR / "discover" / self.source / "manifest.json"),
         }
 
-    def _manifest(self, **fields: Any) -> dict:
-        """Write this stage's single import manifest with the given payload fields."""
-        return write_manifest(self.source, fields, import_dir=DEFAULT_IMPORT_DIR)
+    def bindings(self) -> dict[str, str]:
+        """Declared path -> this instance's path. Every declared path is a module
+        default the tests patch (DEFAULT_IMPORT_DIR, WORKING_CONTACTS_CSV,
+        DEFAULT_DIRECTORY_CSV, MATCH_MANIFEST_JSON), so the binding is what makes
+        a temp-dir run validate against the declaration. Keys come from the
+        declaration itself, never a second read of the default."""
+        contacts_declared, match_declared = (item.path for item in self.inputs)
+        people_declared, directory_declared = (item.path for item in self.outputs)
+        return {
+            contacts_declared: str(self.contacts_csv),
+            match_declared: str(self.match_manifest_json),
+            people_declared: str(self.people_csv),
+            directory_declared: str(self.directory_csv),
+        }
 
-    def run(self) -> dict:
-        """Gate sequence -> materialization. Returns the manifest payload."""
+    def _manifest(self, payload: MessagesImportManifest) -> MessagesImportManifest:
+        """Write this stage's single import manifest, parking the writer's result
+        (which may be the unchanged existing manifest) on `self.written`."""
+        self.written = write_manifest(self.source, payload.to_payload(), import_dir=DEFAULT_IMPORT_DIR)
+        return payload
+
+    def execute(self) -> MessagesImportManifest:
+        """Gate sequence -> materialization. Returns the typed manifest payload."""
         # An existing people.csv predating the interaction-count columns is a code
         # change, not a data change, so the fingerprint no-op cannot catch it — a
         # stale schema forces a re-run.
@@ -513,9 +622,13 @@ class MessagesImport:
             import_dir=DEFAULT_IMPORT_DIR,
         )
         if current:
-            return current
+            # A no-op writes nothing, so there is no manifest body to type — the
+            # previous run's manifest IS the answer. Mirror only its status so the
+            # template still verifies the outputs it says are current.
+            self.written = current
+            return MessagesImportManifest(status=str(current.get("status") or ""))
         if not self.contacts_csv.exists():
-            return self._manifest(
+            return self._manifest(MessagesImportManifest(
                 status="failed",
                 reason="messages_contacts_missing",
                 message=(
@@ -526,9 +639,9 @@ class MessagesImport:
                 input=self.manifest_input,
                 outputs={},
                 stats={"people": 0, "candidates": 0},
-            )
-        if not MATCH_MANIFEST_JSON.exists() and not self.args.allow_unmatched:
-            return self._manifest(
+            ))
+        if not self.match_manifest_json.exists() and not self.args.allow_unmatched:
+            return self._manifest(MessagesImportManifest(
                 status="failed",
                 reason="messages_contacts_not_matched",
                 message=(
@@ -540,7 +653,7 @@ class MessagesImport:
                 input=self.manifest_input,
                 outputs={},
                 stats={"people": 0, "candidates": 0},
-            )
+            ))
         diff = messages_import_diff(
             self.contacts_csv,
             self.import_dir,
@@ -552,7 +665,7 @@ class MessagesImport:
                 f"Import Messages contacts: attach message activity to {diff['people_rows']} "
                 f"matched people and add {diff['candidate_rows']} research candidates?"
             )
-            return self._manifest(
+            return self._manifest(MessagesImportManifest(
                 status="blocked_approval",
                 approval_type="import_confirmation",
                 message=message,
@@ -570,10 +683,10 @@ class MessagesImport:
                     "candidates": diff["candidate_rows"],
                 },
                 diff=diff,
-            )
+            ))
         return self._materialize(diff)
 
-    def _materialize(self, diff: dict[str, Any]) -> dict:
+    def _materialize(self, diff: dict[str, Any]) -> MessagesImportManifest:
         """Split matched people vs candidates, write both CSVs, replace the
         directory messages slice, and write the completed/failed manifest."""
         materialized, people_rows, candidate_rows = selected_contacts_people(
@@ -590,12 +703,14 @@ class MessagesImport:
         if legacy_enrichment.exists():
             shutil.rmtree(legacy_enrichment)
         write_csv_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, people_rows + candidate_rows)
+        # Pre-#339 leftover: the candidate pool is folded into people.csv now, so
+        # this file has no writer. The unlink clears it from existing installs.
         (self.import_dir / "candidates.csv").unlink(missing_ok=True)
         directory_replacement = replace_messages_directory_rows(self.people_csv)
         directory_normalization = normalize_directory_source_accounts("messages")
         directory_quality = directory_source_account_quality("messages")
         status = "completed" if directory_quality["status"] == "ok" else "failed"
-        return self._manifest(
+        return self._manifest(MessagesImportManifest(
             status=status,
             reason="directory_source_account_quality_failed" if status == "failed" else "",
             input=self.manifest_input,
@@ -609,20 +724,26 @@ class MessagesImport:
             diff=diff,
             materialized=materialized,
             directory={
-                "path": str(DEFAULT_DIRECTORY_CSV),
+                "path": str(self.directory_csv),
                 "replacement": directory_replacement,
                 "normalization": directory_normalization,
                 "quality": directory_quality,
             },
-        )
+        ))
 
 
 def run(args: argparse.Namespace) -> dict:
     """The whole import, via the `MessagesImport` orchestrator: schema/fingerprint
     no-op checks -> prerequisite gates (contacts discovered; matched unless
     --allow-unmatched) -> the --confirm-import approval when the diff adds rows ->
-    materialize people.csv + candidates.csv -> replace the directory messages slice."""
-    return MessagesImport(args).run()
+    materialize people.csv -> replace the directory messages slice.
+
+    Returns the manifest `write_manifest` produced, not the Node template's typed
+    body: that manifest (with its `source`, `fingerprints`, `noop`) is the payload
+    the skills and the no-op gate read."""
+    imp = MessagesImport(args)
+    imp.run()
+    return imp.written
 
 
 def build_parser() -> argparse.ArgumentParser:

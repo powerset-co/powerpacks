@@ -29,13 +29,34 @@ Usage:
 
 `run` converts the CSV locally, then enriches. Artifacts (paths exposed in the
 manifest `artifacts` map; `people_csv` is the canonical interface):
-`connections_for_enrichment.csv`, `source_people.csv`,
-`linkedin_enrichment_queue.csv`, `rapidapi_cache_hits.csv`,
+`source_people.csv`, `linkedin_enrichment_queue.csv`, `rapidapi_cache_hits.csv`,
 `rapidapi_cache_misses.csv`, `rapidapi_recent_failures.csv`,
 `needs_resolution_queue.csv`, `skipped_enrichment.csv`,
 `provider_enriched.csv`, `raw_provider_responses/`, and `people.csv`.
 
+Declared contract (`LinkedInImport`, node `linkedin_import`):
+
+  reads   the LinkedIn `Connections.csv` export (external — the user downloads it)
+  writes  `discover/linkedin/people.csv` (via the enrichment delegate) + this
+          stage's `manifest.json`
+
+`source_people.csv` is not declared: it never crosses a node boundary — this node
+writes it and hands it straight to the in-process enrichment delegate.
+`import/linkedin/people.csv`, which the fan-in merge actually reads, is NOT
+written here: this primitive runs inside the Modal sandbox and
+`packs/indexing/modal/linkedin_modal_pipeline.py` downloads the enriched file to
+that path. Until the indexing pack is converted, the merge's linkedin input has
+no declared producer.
+
 Changelog:
+  2026-07-25 (declared contract): `LinkedInImport` is a `pipeline/contract.py`
+    `Node` — declared inputs/outputs, `run()` -> `execute()`, and
+    `LinkedInImportManifest` is now a pydantic `StageManifest` written by the Node
+    template (so it gains declared-output `fingerprints`) instead of a dataclass
+    handed to `write_json`. DELETED `connections_for_enrichment.csv` and its
+    `CONNECTION_COLUMNS` / `LinkedInConnection.row()` / `connections_csv` artifact
+    / `connections_total` count: measured 2026-07-25, the file had exactly one
+    accessor — the upsert that wrote it — and no reader anywhere in the repo.
   2026-07-23 (audit oo-cli): the CLI command handlers moved onto LinkedInImport
     (command_run is a @classmethod that instantiates + runs the orchestrator;
     status/check_keys are @staticmethods). build_parser/main dispatch to
@@ -76,7 +97,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -101,22 +122,21 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     normalize_people_row,
 )
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL, exit_code_for_status, manifest_emit_payload  # noqa: E402
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json  # noqa: E402
-from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_PROFILE_CACHE_DIR, resolve_discover_source_dir  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import (  # noqa: E402
+    DEFAULT_BASE_DIR,
+    DEFAULT_PROFILE_CACHE_DIR,
+    discover_source_dir,
+    resolve_discover_source_dir,
+)
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, PeopleRow, StageManifest  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
-CONNECTION_COLUMNS = [
-    "person_id",
-    "public_identifier",
-    "linkedin_url",
-    "first_name",
-    "last_name",
-    "source_user",
-    "linkedin_company",
-    "linkedin_position",
-    "linkedin_email",
-    "connected_on",
-]
+# The fixed discover dir this stage writes into, and the two declared paths under
+# it. An explicit `--output-dir` binds them per instance (see `bindings`).
+LINKEDIN_DISCOVER_DIR = discover_source_dir("linkedin")
+LINKEDIN_PEOPLE_CSV = LINKEDIN_DISCOVER_DIR / "people.csv"
+LINKEDIN_MANIFEST_JSON = LINKEDIN_DISCOVER_DIR / "manifest.json"
 # `run` exit code when paid RapidAPI cache-miss fetches are gated behind
 # --approve-spend. Value + status->code mapping live in common/gates.py; kept as a
 # module alias for the name callers/tests reach for.
@@ -139,20 +159,6 @@ class LinkedInConnection:
     public_identifier: str
     person_id: str
     source_user: str
-
-    def row(self) -> dict[str, str]:
-        return {
-            "person_id": self.person_id,
-            "public_identifier": self.public_identifier,
-            "linkedin_url": self.linkedin_url,
-            "first_name": self.first_name,
-            "last_name": self.last_name,
-            "source_user": self.source_user,
-            "linkedin_company": self.company,
-            "linkedin_position": self.position,
-            "linkedin_email": self.email_address,
-            "connected_on": self.connected_on,
-        }
 
     def people_row(self, source_csv: Path) -> dict[str, str]:
         full_name = f"{self.first_name} {self.last_name}".strip()
@@ -267,83 +273,93 @@ class LinkedInImportConfig:
         }
 
 
-@dataclass
-class LinkedInImportManifest:
+class LinkedInImportManifest(StageManifest):
     """Typed constructor for the LinkedIn import stage `manifest.json` — the whole
     durable state contract (status + per-step timing + counts + artifact paths).
-    No ledger, no run id: the discover dir is fixed so reruns overwrite here."""
+    No ledger, no run id: the discover dir is fixed so reruns overwrite here.
+    `needs_approval` / `error` are dropped when None, as `to_dict()` dropped them."""
 
-    status: str
-    artifact_dir: str
-    input: dict[str, Any]
-    counts: dict[str, Any] = field(default_factory=dict)
-    artifacts: dict[str, Any] = field(default_factory=dict)
-    steps: dict[str, Any] = field(default_factory=dict)
-    needs_approval: dict[str, Any] | None = None
-    error: str | None = None
+    primitive: str = "linkedin/network_import"
+    artifact_dir: str = ""
+    input: dict[str, Any] = {}
+    counts: dict[str, Any] = {}
+    artifacts: dict[str, Any] = {}
+    steps: dict[str, Any] = {}
     started_at: str = ""
     updated_at: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "primitive": "linkedin/network_import",
-            "status": self.status,
-            "artifact_dir": self.artifact_dir,
-            "input": self.input,
-            "counts": self.counts,
-            "artifacts": self.artifacts,
-            "steps": self.steps,
-            "started_at": self.started_at,
-            "updated_at": self.updated_at or now_iso(),
-        }
-        if self.needs_approval is not None:
-            payload["needs_approval"] = self.needs_approval
-        if self.error is not None:
-            payload["error"] = self.error
-        return payload
+    needs_approval: dict[str, Any] | None = None
+    error: str | None = None
 
 
-class LinkedInImport:
+class LinkedInImport(Node):
     """Idempotent LinkedIn Connections.csv import: convert -> delegated
     enrichment -> one manifest.json in a fixed discover dir. Owns the run dir,
     the two steps, and the manifest; the enrichment run is delegated in-process
     to enrich_people.EnrichPeople against the SAME dir so the enriched people.csv
     and provider artifacts land here. (EnrichPeople writes its own manifest.json
     first; this stage's manifest is written last and is the authoritative one for
-    the dir, embedding the enrichment counts + artifacts.)"""
+    the dir, embedding the enrichment counts + artifacts.)
+
+    `execute()` is convert -> enrich; `run()` is the inherited Node template,
+    which validates the declarations and writes the manifest."""
+
+    name = "linkedin_import"
+    # The user's downloaded export: genuinely external, and required=False so a
+    # missing/mistyped path keeps producing this node's own `failed` manifest
+    # naming the file — a bare `not_ready` would drop that message along with the
+    # artifact_dir/input the `status` command reads. `--csv` binds it per instance.
+    inputs = (Artifact(path="Connections.csv", external=True, required=False),)
+    # Written by the in-process enrichment delegate into this same dir.
+    # required=False: `--convert-only` completes without ever enriching.
+    outputs = (
+        Artifact(path=str(LINKEDIN_PEOPLE_CSV), row_model=PeopleRow, writes="upsert", required=False),
+    )
+    payload = LinkedInImportManifest
+    manifest = str(LINKEDIN_MANIFEST_JSON)
 
     def __init__(self, cfg: LinkedInImportConfig) -> None:
         self.cfg = cfg
         self.run_dir = cfg.run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
         self.manifest_path = self.run_dir / "manifest.json"
+        self.people_csv = self.run_dir / "people.csv"
         self.artifacts: dict[str, Any] = {}
         self.counts: dict[str, Any] = {}
         self.steps: dict[str, Any] = {}
         self.started_at = now_iso()
+        # The typed payload this run produced — what the CLI emits and exits on.
+        self.manifest_payload = LinkedInImportManifest(status="")
 
-    def run(self) -> LinkedInImportManifest:
+    def bindings(self) -> dict[str, str]:
+        """Declared path -> this instance's path, so an explicit `--csv` /
+        `--output-dir` still validates against the declaration."""
+        return {
+            self.inputs[0].path: str(self.cfg.csv),
+            self.outputs[0].path: str(self.people_csv),
+            self.manifest: str(self.manifest_path),
+        }
+
+    def execute(self) -> LinkedInImportManifest:
         try:
             convert = self._timed("convert", self.convert)
         except PipelineFailed as exc:
-            return self._write(status="failed", error=str(exc))
+            return self._build(status="failed", error=str(exc))
         self.counts.update({
             "connections_parsed": convert.get("parsed", 0),
-            "connections_total": convert.get("connections_total", 0),
             "source_people_total": convert.get("source_people_total", 0),
         })
         if self.cfg.convert_only:
-            return self._write(status="completed")
+            return self._build(status="completed")
         enrich = self.enrich()
         self.steps["enrich_people"] = {"status": enrich.status, "counts": enrich.counts, "steps": enrich.steps}
         self.artifacts.update(enrich.artifacts)
         for key in ("cache_hit_count", "paid_call_count", "queue_count", "recent_failure_count", "people_rows"):
             self.counts[key] = enrich.counts.get(key, 0)
         if enrich.status == "needs_approval":
-            return self._write(status="needs_approval", needs_approval=enrich.needs_approval)
+            return self._build(status="needs_approval", needs_approval=enrich.needs_approval)
         if enrich.status == "failed":
-            return self._write(status="failed", error=enrich.error or "enrich_people failed")
-        return self._write(status="completed")
+            return self._build(status="failed", error=enrich.error or "enrich_people failed")
+        return self._build(status="completed")
 
     def _timed(self, step_id: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         started = now_iso()
@@ -351,8 +367,9 @@ class LinkedInImport:
         self.steps[step_id] = {"status": "completed", "started_at": started, "finished_at": now_iso(), "summary": summary}
         return summary
 
-    def _write(self, *, status: str, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> LinkedInImportManifest:
-        manifest = LinkedInImportManifest(
+    def _build(self, *, status: str, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> LinkedInImportManifest:
+        """Assemble this stage's typed payload. The Node template writes it."""
+        self.manifest_payload = LinkedInImportManifest(
             status=status,
             artifact_dir=str(self.run_dir),
             input=self.cfg.manifest_input(),
@@ -364,39 +381,25 @@ class LinkedInImport:
             started_at=self.started_at,
             updated_at=now_iso(),
         )
-        write_json(self.manifest_path, manifest.to_dict())
-        return manifest
+        return self.manifest_payload
 
     def convert(self) -> dict[str, Any]:
-        """Parse the Connections.csv into connections + source-people CSVs,
-        upserted in place under the fixed discover dir."""
+        """Parse the Connections.csv into the source-people CSV, upserted in place
+        under the fixed discover dir."""
         inp = self.cfg.csv
         connections, stats = parse_connections_csv(inp, self.cfg.source_user, self.cfg.limit)
-        connection_rows = [conn.row() for conn in connections]
         people_rows = [conn.people_row(inp) for conn in connections]
-        connections_out = self.run_dir / "connections_for_enrichment.csv"
         people_out = self.run_dir / "source_people.csv"
-        merged_connections = CsvIO.upsert_dict_rows_priority(
-            connections_out,
-            CONNECTION_COLUMNS,
-            connection_rows,
-            ["public_identifier", "linkedin_url", "linkedin_email", "person_id"],
-        )
         merged_people = CsvIO.upsert_dict_rows_priority(
             people_out,
             PEOPLE_COLUMNS,
             people_rows,
             ["person_id", "public_identifier", "linkedin_url", "email"],
         )
-        self.artifacts.update({
-            "connections_csv": str(connections_out),
-            "source_people_csv": str(people_out),
-        })
+        self.artifacts.update({"source_people_csv": str(people_out)})
         return {
             **stats,
-            "connections_file": str(connections_out),
             "source_people_file": str(people_out),
-            "connections_total": len(merged_connections),
             "source_people_total": len(merged_people),
         }
 
@@ -449,9 +452,10 @@ class LinkedInImport:
             failure_retry_hours=args.failure_retry_hours,
             approve_spend=args.approve_spend,
         )
-        manifest = cls(cfg).run()
-        emit(manifest_emit_payload(manifest))
-        return exit_code_for_status(manifest.status)
+        node = cls(cfg)
+        node.run()  # the Node template: declared inputs -> execute -> outputs -> manifest
+        emit(manifest_emit_payload(node.manifest_payload))
+        return exit_code_for_status(node.manifest_payload.status)
 
     @staticmethod
     def command_status(args: argparse.Namespace) -> int:

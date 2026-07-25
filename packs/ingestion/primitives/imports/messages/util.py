@@ -1,13 +1,62 @@
-"""Messages-vertical utilities: tolerant field parsers + the deterministic
-"worth researching" candidate floor and message-contact field readers.
+"""Messages-vertical utilities: the `contacts.csv` row model and column
+ownership, tolerant field parsers, and the deterministic "worth researching"
+candidate floor plus message-contact field readers.
 
-CSV cells arrive as arbitrary user/state text; these never raise — they map
+CSV cells arrive as arbitrary user/state text; the parsers never raise — they map
 unparseable input to a neutral value (None / 0 / "") so row processing stays
-total."""
+total.
+
+`.powerpacks/messages/contacts.csv` has TWO writers, which is why the ownership
+constants live here rather than being implied by whoever wrote a column last:
+
+  discovery (`discover/messages/`)   emits all 19 columns and owns the VALUES of
+                                     the 11 metadata ones
+  the matcher (`match_local_candidates.py`)  owns the VALUES of the 7 in
+                                     MATCH_ANNOTATION_COLUMNS and rewrites only
+                                     those, in place
+  `skip`                             is owned by NEITHER — see USER_OWNED_COLUMNS
+
+Changelog:
+  2026-07-25 (declared contract): added `MessageContactRow`,
+    `MATCH_ANNOTATION_COLUMNS`, and `USER_OWNED_COLUMNS` so the two writers of
+    contacts.csv declare disjoint `owns_columns`. Moved the mid-file `import re`
+    and `latest_interaction` import into the top-of-file block.
+"""
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+from packs.ingestion.primitives.pipeline.contract import row_model_for
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS
+from packs.ingestion.schemas.people_schema import latest_interaction
+
+# The declared row shape of `.powerpacks/messages/contacts.csv`, generated FROM
+# the schema's CSV_HEADERS so field order stays the on-disk header order.
+MessageContactRow = row_model_for("MessageContactRow", CSV_HEADERS)
+
+# The columns `match_local_candidates.py` writes, and the ONLY ones it writes.
+# It rewrites the whole file to update them (csv has no in-place cell write), so
+# its declared `writes` mode is "annotate", not "full_rewrite".
+MATCH_ANNOTATION_COLUMNS = (
+    "match_status",
+    "matched_person_id",
+    "matched_name",
+    "matched_linkedin_url",
+    "match_confidence",
+    "match_method",
+    "match_reason",
+)
+
+# Owned by NEITHER writer, and deliberately in neither `owns_columns` tuple.
+# `skip` is documented in schemas/contacts-csv.md as "yes/true to exclude from
+# research" — a USER mark. The discovery extractors seed it empty/False and
+# merge_contacts ORs whatever it reads, but no code path anywhere sets it true
+# (verified 2026-07-25: 0 of 873 real rows carry a value). Its only reader is
+# `contact_floor_reason` below. Claiming it for a writer would be a lie that
+# lets a future writer clobber a user's mark.
+USER_OWNED_COLUMNS = ("skip",)
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 FALSY = {"0", "false", "no", "n", "off"}
@@ -45,11 +94,6 @@ def split_full_name(full_name: str) -> tuple[str, str]:
 def normalize_phoneish(value: str) -> str:
     """Digits only — the comparable core of a phone-shaped string."""
     return "".join(ch for ch in value or "" if ch.isdigit())
-
-
-import re  # noqa: E402
-
-from packs.ingestion.schemas.people_schema import latest_interaction  # noqa: E402
 
 
 DEFAULT_MIN_MESSAGE_COUNT = 1

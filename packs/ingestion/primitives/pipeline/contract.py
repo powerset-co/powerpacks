@@ -30,6 +30,12 @@ Flow (Node.run):
                                output present, header == its row model -> manifest
 
 Changelog:
+  2026-07-25 (import stage): `Artifact.owns_rows_where` added — the ROW-slice axis
+    `owns_columns` cannot express. `directory.csv` has two legitimate writers that
+    each own every column of their own source's rows (gmail, messages); on the
+    column axis they can only be described as two whole-file writers. The field is
+    declaration-only: the graph checker compares the predicate STRINGS and never
+    evaluates them.
   2026-07-25: created. pydantic v2 replaces the hand-rolled StagePayload dataclass
     (`to_payload` None-dropping is `model_dump(exclude_none=True)`) and the manual
     column dict-filling in `normalize_people_row`.
@@ -166,6 +172,15 @@ class Artifact(BaseModel):
                   (legitimate: discovery's 11 metadata columns vs the import
                   matcher's 8 match columns) and `index.json` before #337
                   (illegitimate: two whole-file writers, 494 duplicate rows).
+    owns_rows_where  the ROW slice this node writes, as a human-readable
+                  predicate over a row (`"source == 'messages'"`). Columns are
+                  the wrong axis for `directory.csv`: gmail and messages each
+                  own every column of their own source's rows and touch no other
+                  source's row, so `owns_columns` can only describe them as two
+                  whole-file writers. DECLARATION ONLY — the checker compares
+                  these strings for equality and never evaluates them, so two
+                  writers naming different slices are not a conflict and two
+                  naming the same slice are.
     external      no node in the graph produces it (a msgvault db, a LinkedIn
                   export). The graph checker only flags a producer-less input
                   when this is False.
@@ -184,6 +199,7 @@ class Artifact(BaseModel):
     writes: Literal["full_rewrite", "upsert", "append", "annotate"] | None = None
     external: bool = False
     owns_columns: tuple[str, ...] = ()
+    owns_rows_where: str = ""
     consumers_optional: bool = False
     required: bool = True
 
