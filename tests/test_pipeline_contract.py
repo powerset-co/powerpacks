@@ -319,6 +319,87 @@ class GraphCheckTests(unittest.TestCase):
         self.assertEqual(report["edges"]["gmail_stage_merge"], ["gmail_account_extract"])
 
 
+class MessagesSubsetTests(unittest.TestCase):
+    """`.powerpacks/messages/contacts.csv` is the first REAL two-writer file, so
+    the split has to hold against a stand-in for the other writer."""
+
+    @staticmethod
+    def _messages_nodes() -> list[type[Node]]:
+        from packs.ingestion.primitives.discover.messages.channels.i_message_channel import (
+            IMessageChannel,
+        )
+        from packs.ingestion.primitives.discover.messages.channels.whats_app_channel import (
+            WhatsAppChannel,
+        )
+        from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery
+
+        return [IMessageChannel, WhatsAppChannel, MessagesDiscovery]
+
+    def test_owned_columns_are_the_values_this_stage_computes(self) -> None:
+        from packs.ingestion.primitives.discover.messages.models import (
+            DISCOVERY_OWNED_COLUMNS,
+            MessageContactRow,
+        )
+        from packs.ingestion.schemas.message_contacts import CSV_HEADERS
+
+        self.assertEqual(MessageContactRow.columns(), CSV_HEADERS)
+        self.assertEqual(len(CSV_HEADERS), 19)
+        self.assertEqual(len(DISCOVERY_OWNED_COLUMNS), 11)
+        # `skip` is claimed by NEITHER writer: every producer writes it empty and
+        # only a human ever sets it, so discovery passes it through.
+        self.assertNotIn("skip", DISCOVERY_OWNED_COLUMNS)
+        unowned = [c for c in CSV_HEADERS if c not in DISCOVERY_OWNED_COLUMNS]
+        self.assertEqual(unowned[0], "skip")
+        self.assertTrue(all(c.startswith("match") for c in unowned[1:]))
+
+    def test_the_shared_contacts_csv_tolerates_the_import_matcher(self) -> None:
+        from packs.ingestion.primitives.discover.messages.discover import MERGED_CONTACTS
+        from packs.ingestion.primitives.discover.messages.models import MessageContactRow
+
+        # A stand-in for the OTHER writer, declaring the 8 match columns the
+        # matcher annotates. Same row-model object on purpose — an equal-but-
+        # distinct model is reported as a schema mismatch.
+        class Annotator(Node):
+            name = "messages_match_local_candidates"
+            inputs = ()
+            outputs = (Artifact(
+                path=str(MERGED_CONTACTS),
+                row_model=MessageContactRow,
+                writes="annotate",
+                owns_columns=(
+                    "match_status", "matched_person_id", "matched_name",
+                    "matched_linkedin_url", "match_confidence", "match_method",
+                    "match_reason",
+                ),
+            ),)
+            payload = _Payload
+            manifest = ""
+
+            def execute(self) -> _Payload:
+                return _Payload()
+
+        report = check_graph(self._messages_nodes() + [Annotator])
+        self.assertEqual(report["two_writer_conflicts"], [])
+        self.assertEqual(report["schema_mismatches"], [])
+
+    def test_the_whatsapp_name_fallback_is_a_declared_cycle(self) -> None:
+        # WhatsApp's extractor reads the MERGED contacts.csv back as its
+        # name_fallback_csv, so the two nodes consume each other's output. It is
+        # declared rather than hidden: the report is where that shows up.
+        report = check_graph(self._messages_nodes())
+        self.assertEqual(
+            sorted(report["cycles"]),
+            [
+                ["messages_stage_merge", "messages_whatsapp_extract", "messages_stage_merge"],
+                ["messages_whatsapp_extract", "messages_stage_merge", "messages_whatsapp_extract"],
+            ],
+        )
+        self.assertEqual(
+            report["edges"]["messages_stage_merge"],
+            ["messages_imessage_extract", "messages_whatsapp_extract"],
+        )
+
+
 class RowModelTests(unittest.TestCase):
     def test_an_older_csv_missing_recent_columns_reads_cleanly(self) -> None:
         # enrichment_status / enrichment_error were appended on 2026-07-24; a

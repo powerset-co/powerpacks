@@ -19,6 +19,16 @@ or `--target both`. If permissions or schema assumptions fail, `extract`
 writes a manifest with diagnostics so the harness can continue and an agent
 can patch the primitive.
 
+Known behaviors (declared, not fixed here):
+- A FAILED extract TRUNCATES a previously-good export. Both failure paths in
+  ``extract`` call ``write_csv(output_csv, [])`` / ``write_jsonl(output_jsonl,
+  [])`` before returning the failure manifest, so an unreadable chat.db replaces
+  yesterday's 811 rows with a header-only file. The channel does surface the
+  failure, but the data is already gone by then.
+- ``imessage.contacts.raw.jsonl`` has ZERO readers repo-wide (grep-verified). It
+  is written on every extract and opened by nothing; the declared pipeline graph
+  ignores it. Removing it means dropping ``--output-jsonl`` from this CLI.
+
 Changelog:
   2026-07-24 (shared IO): the local raw-``csv.writer`` and hand-rolled JSONL
     writers were dropped for the shared ones — the CSV goes through the

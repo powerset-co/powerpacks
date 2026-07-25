@@ -17,7 +17,18 @@ path instead of silently writing an empty merge. Output is sorted by
 to it records per-input row counts, the cross-channel (multi-source) phone
 count, and a `by_source` histogram.
 
-Per-phone merge rules (consistent with `normalize_contacts.py`):
+Column ownership (the declared `owns_columns` split on `contacts.csv`, which has
+TWO writers). This merger computes the VALUES of the 11 metadata columns; the 8
+`match_*` columns belong to the import matcher and are read here only so
+`_better_match` can RANK and PRESERVE them. `skip` belongs to neither: nothing in
+the pipeline ever sets it true, so it is a user-editable exclusion flag this
+merger ORs across channels and carries through.
+
+Caveat: `MessagesDiscovery._merge` passes only the per-channel CSVs, never the
+prior merged `contacts.csv`, so in practice `_better_match` has no annotated
+input to preserve and every rerun blanks the match block.
+
+Per-phone merge rules:
 
 - `name`: first non-empty value across inputs (later inputs do not overwrite
   an existing non-empty name)

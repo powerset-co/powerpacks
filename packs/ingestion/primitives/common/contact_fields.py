@@ -17,7 +17,7 @@ canonicalizer, the zero-default/tri-state parse_* in imports/messages/util.py).
 Changelog:
   2026-07-23 (audit consolidation): created; absorbs normalize_phone (directory
     / import_steps), canonicalize_phone (the 3 identical message copies),
-    parse_bool/parse_int/parse_float (merge_contacts / normalize_contacts),
+    parse_bool/parse_int/parse_float (merge_contacts),
     EMAIL_EXTRACT_RE (was EMAIL_RE), emails/phones_from_value/_row,
     normalize_name_key, and parse_groups / channel_counts_from_row /
     channel_last_messages_from_row / total_message_count / latest_message.

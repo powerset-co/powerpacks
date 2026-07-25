@@ -1,32 +1,48 @@
-"""MessageChannel base: the per-source extract -> normalize contract plus the
-channel return-shape payload builders (``blocked_child`` / ``failed_child``).
+"""MessageChannel base: the per-source extract contract plus the channel
+return-shape payload builders (``blocked_child`` / ``failed_child``).
 
 A channel is one message source (iMessage or WhatsApp). The concrete subclasses
-(``IMessageChannel`` / ``WhatsAppChannel``, in sibling modules) set their three
-fixed output paths (``contacts_csv``/``normalized_jsonl``/``normalized_manifest``)
-in their own ``__init__`` and own their extract -> normalize chain (both now
-in-process calls into the leaf primitive classes).
-``extract()``/``normalize()``/``run()`` return ``None`` on
-success or a blocked/failed child payload that short-circuits the discovery run.
+(``IMessageChannel`` / ``WhatsAppChannel``, in sibling modules) are
+``MessageChannel`` AND ``pipeline/contract.py:Node``: they DECLARE their inputs
+and outputs, set their fixed output paths in their own ``__init__``, and own
+their in-process call into the leaf extractor class. ``execute()`` — the Node
+template's one hook — runs ``extract()`` and returns the typed payload;
+``extract()`` returns ``None`` on success or a blocked/failed payload.
 ``blocked_child`` and ``failed_child`` are the shared return shapes both channels
 (and the store's merge) emit; they live here as the base's return-shape helpers.
 
+``MessageChannel`` itself is deliberately NOT a ``Node``: it is an abstract base
+with no contract of its own, and a Node subclass would have to declare
+name/inputs/outputs and would then show up in the declared graph as a phantom
+node. The concrete channels inherit ``(MessageChannel, Node)``.
+
 Changelog:
+  2026-07-25 (normalize deleted): ``normalize()`` and the whole
+    ``normalize_contacts.py`` primitive are GONE. Its output
+    (``*.contacts.normalized.jsonl``) was byte-for-byte identical to the
+    extractors' own ``*.contacts.raw.jsonl`` — verified sha256-equal on real
+    local data — and had zero readers repo-wide, so the step re-derived a file
+    nobody opened. The ``normalized_jsonl``/``normalized_manifest`` channel paths
+    and the ``IMESSAGE_NORMALIZED_*``/``WHATSAPP_NORMALIZED_*`` constants went
+    with it.
+  2026-07-25 (declared contract): ``run()`` was REMOVED and replaced by
+    ``execute()``. That is load-bearing, not cosmetic: the concrete channels now
+    inherit ``(MessageChannel, Node)``, and a ``run()`` on this base would shadow
+    the Node run template in the MRO — silently, because the template's
+    "do not override run()" guard only inspects the subclass's own ``__dict__``.
+    ``extract()`` now returns the TYPED channel payloads of ``models.py`` instead
+    of hand-built dicts, and the channel's source name moved from ``name`` to
+    ``channel`` because ``name`` is now the declared NODE name.
   2026-07-23 (explicit-selection): dropped the ``accounts_path`` parameter from
     ``MessageChannel.__init__`` and from ``blocked_child`` — message channel
     selection is now explicit ``--include-*`` only, so nothing reads accounts.json.
     The blocked/QR-resume ``continue_command`` is rebuilt from the include flags
     alone (``discover.py discover [--include-imessage] [--include-whatsapp]``, no
     ``--accounts``).
-  2026-07-23 (in-process): ``normalize()`` now calls ``ContactsNormalizer().
-    normalize(...)`` in-process instead of spawning ``normalize_contacts.py``;
-    it branches on the returned payload's ``status`` (non-``ok`` -> failed).
-    ``run_cmd``/``py_cmd`` are no longer imported here. The no-op-when-fresh and
-    empty-JSONL-when-missing shortcuts are unchanged.
   2026-07-23 (terse): dropped the ``@property``/``NotImplementedError`` path
-    accessors (contacts_csv/normalized_jsonl/normalized_manifest) that existed to
-    read module constants at call time for test patching; subclasses now set the
-    three fixed paths as plain attributes in their own ``__init__``.
+    accessors that existed to read module constants at call time for test
+    patching; subclasses now set their fixed paths as plain attributes in their
+    own ``__init__``.
   2026-07-23 (channels split): extracted from messages/discover.py into the
     channels/ subpackage — the ``MessageChannel`` base and the
     ``blocked_child``/``failed_child`` builders moved here;
@@ -46,9 +62,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import write_json  # noqa: E402
-from packs.ingestion.primitives.discover.messages.normalize_contacts import (  # noqa: E402
-    ContactsNormalizer,
+from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
+    MessageChannelBlocked,
+    MessageChannelExtracted,
+    MessageChannelFailed,
 )
 
 
@@ -62,11 +79,15 @@ def blocked_child(
     qr_page: str = "",
     include_imessage: bool = False,
     include_whatsapp: bool = False,
-) -> dict[str, Any]:
+) -> MessageChannelBlocked:
     """Build the ``blocked_user_action`` payload a channel returns when it needs
     a user step (Full Disk Access, a WhatsApp QR scan). Rebuilds an accurate
     ``--include-*`` continue command (no ``--accounts``) so the skill can resume
-    the same channels."""
+    the same channels.
+
+    The empty-string arguments become ``None`` on the payload so
+    ``to_payload()``'s ``exclude_none`` drops those keys — the same shape the
+    hand-rolled ``value not in (None, "")`` filter produced."""
     command = (
         "uv run --project . python "
         "packs/ingestion/primitives/discover/messages/discover.py discover"
@@ -75,44 +96,38 @@ def blocked_child(
         command += " --include-imessage"
     if include_whatsapp:
         command += " --include-whatsapp"
-    payload = {
-        "primitive": "messages_discovery",
-        "status": "blocked_user_action",
-        "message": message,
-        "detail": detail,
-        "whatsapp_provider": whatsapp_provider,
-        "qr_page": qr_page,
-        "continue_command": command,
-    }
-    return {key: value for key, value in payload.items() if value not in (None, "")}
+    return MessageChannelBlocked(
+        message=message,
+        detail=detail or None,
+        whatsapp_provider=whatsapp_provider or None,
+        qr_page=qr_page or None,
+        continue_command=command,
+    )
 
 
-def failed_child(step_id: str, payload: dict[str, Any], stderr: str) -> dict[str, Any]:
+def failed_child(step_id: str, payload: dict[str, Any], stderr: str) -> MessageChannelFailed:
     """Build the ``failed`` payload a channel (or the store's merge) returns when
-    a child subprocess exits non-zero; picks the most specific error text."""
+    a child step reports a non-success status; picks the most specific error text."""
     detail = payload.get("error") or payload.get("message") or payload or stderr or "child command failed"
-    return {
-        "primitive": "messages_discovery",
-        "status": "failed",
-        "step_id": step_id,
-        "error": detail,
-    }
+    return MessageChannelFailed(step_id=step_id, error=detail)
 
 
-# --- channels: each source owns its output paths + extract -> normalize -------
+# --- channels: each source owns its output paths + its extract step -----------
 
 class MessageChannel:
     """One message source (iMessage or WhatsApp). Owns its output paths and its
-    extract -> normalize subprocess chain, and records what it contributed in
-    ``artifacts``. extract()/normalize()/run() return None on success or a
-    blocked/failed child payload that short-circuits the discovery run."""
+    in-process call into the leaf extractor, and records what it contributed in
+    ``artifacts``. ``extract()`` returns None on success or a blocked/failed
+    payload; ``execute()`` (the Node template's hook) wraps it.
 
-    name = ""
+    Not a ``Node`` itself — see the module docstring."""
 
-    # A subclass sets these three fixed output paths in its __init__.
+    # The message SOURCE name, used to build step ids. The declared NODE name is
+    # the `name` ClassVar each concrete channel sets alongside its contract.
+    channel = ""
+
+    # A subclass sets this fixed output path in its __init__.
     contacts_csv: Path
-    normalized_jsonl: Path
-    normalized_manifest: Path
 
     def __init__(self, *, other_enabled: bool) -> None:
         # Whether the OTHER channel is enabled — only used to rebuild an accurate
@@ -120,39 +135,12 @@ class MessageChannel:
         self.other_enabled = other_enabled
         self.artifacts: dict[str, Any] = {}
 
-    def extract(self) -> dict[str, Any] | None:
+    def extract(self) -> MessageChannelBlocked | MessageChannelFailed | None:
         raise NotImplementedError
 
-    def normalize(self) -> dict[str, Any] | None:
-        """Normalize this channel's contacts CSV into JSONL. No-op when the JSONL
-        is already at least as new as the CSV; writes an empty JSONL + manifest
-        when the CSV is missing (a channel that produced no contacts)."""
-        input_csv, output_jsonl, manifest = self.contacts_csv, self.normalized_jsonl, self.normalized_manifest
-        if output_jsonl.exists() and (
-            not input_csv.exists()
-            or output_jsonl.stat().st_mtime_ns >= input_csv.stat().st_mtime_ns
-        ):
-            return None
-        if not input_csv.exists():
-            output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-            output_jsonl.write_text("", encoding="utf-8")
-            write_json(manifest, {
-                "primitive": "messages/normalize_contacts",
-                "status": "ok",
-                "reason": f"missing_input:{input_csv}",
-                "output": str(output_jsonl),
-                "counts": {"rows_written": 0},
-            })
-            return None
-        payload = ContactsNormalizer().normalize(
-            input=input_csv, out_jsonl=output_jsonl, manifest=manifest,
-        )
-        if payload.get("status") != "ok":
-            return failed_child(f"normalize_{self.name}", payload, "")
-        return None
-
-    def run(self) -> dict[str, Any] | None:
+    def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
+        """The Node template's hook: extract, and report what this channel is."""
         blocked = self.extract()
         if blocked is not None:
             return blocked
-        return self.normalize()
+        return MessageChannelExtracted(channel=self.channel, contacts_csv=str(self.contacts_csv))
