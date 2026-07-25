@@ -142,7 +142,7 @@ shallower or deeper pass.
 For full processing, candidates are always included:
 
 ```bash
-bin/deep-context collect --include-candidates --deep-cap 1600 --include-groups [--force]
+bin/deep-context collect --deep-cap 1600 --include-groups [--force]
 ```
 
 Collection is local/free. Preserve the exact approved flags through synthesis.

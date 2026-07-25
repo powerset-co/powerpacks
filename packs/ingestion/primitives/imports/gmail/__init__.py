@@ -13,6 +13,6 @@ from packs.ingestion.primitives.imports.gmail.importer import (  # noqa: F401
 )
 from packs.ingestion.primitives.imports.gmail.util import (  # noqa: F401
     gmail_artifacts_from_discovery,
+    gmail_candidate_people,
     queue_row_to_candidate,
-    write_gmail_candidates,
 )

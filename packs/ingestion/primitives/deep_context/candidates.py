@@ -1,13 +1,8 @@
-"""Research-candidate pool support for the deep-context pipeline.
+"""Candidate views over canonical merged people rows.
 
-Candidates are contacts the imports could NOT resolve to a LinkedIn identity;
-each import writes them to its own ``import/<source>/candidates.csv``
-(``packs/ingestion/schemas/candidates_schema.py``). They are absent from the
-merged people.csv, so this module adapts them onto the same ``Person`` model the
-pipeline already speaks — ``person_id = "candidate:<candidate_key>"`` — letting
-collect/synthesize/compose/parents process them unchanged. The raw CSV row stays
-retrievable by key so the mint stages (synthetic profiles, retargets) can carry
-the candidate's contact identity onto the people row they produce.
+An unresolved person is a normal merged row with a ``candidate:<contact-key>``
+id and no public LinkedIn identifier. This module keeps the candidate-oriented
+review and research callers working without a second import CSV contract.
 """
 from __future__ import annotations
 
@@ -28,9 +23,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 
 # Import-owned candidate pools (fixed paths, same relative style as common.py).
-GMAIL_CANDIDATES_CSV = Path(".powerpacks/network-import/import/gmail/candidates.csv")
-MESSAGES_CANDIDATES_CSV = Path(".powerpacks/network-import/import/messages/candidates.csv")
-CANDIDATE_CSVS = [GMAIL_CANDIDATES_CSV, MESSAGES_CANDIDATES_CSV]
+MERGED_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 
 PERSON_ID_PREFIX = "candidate:"
 
@@ -76,18 +69,17 @@ def candidate_channels(row: dict[str, str]) -> list[str]:
 
 
 def iter_candidate_rows() -> Iterator[dict[str, str]]:
-    """Raw candidate rows across every existing pool, deduped by key (first file wins)."""
-    seen: set[str] = set()
-    for path in CANDIDATE_CSVS:
-        if not path.exists():
-            continue
-        with path.open(newline="", encoding="utf-8") as fh:
-            for row in csv.DictReader(fh):
-                key = str(row.get("candidate_key") or "").strip()
-                if not key or key in seen:
-                    continue
-                seen.add(key)
-                yield row
+    """Merged people rows whose stable id is a candidate identity."""
+    if not MERGED_PEOPLE_CSV.exists():
+        return
+    with MERGED_PEOPLE_CSV.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            person_id = str(row.get("id") or "").strip()
+            if not is_candidate_id(person_id):
+                continue
+            row["candidate_key"] = candidate_key_of(person_id)
+            row["source"] = next(iter(str(row.get("source_channels") or "").split(",")), "")
+            yield row
 
 
 def load_candidates(*, limit: int = 0, candidate_key: str = "") -> Iterator[Person]:
@@ -109,7 +101,10 @@ def load_candidates(*, limit: int = 0, candidate_key: str = "") -> Iterator[Pers
             full_name=str(row.get("full_name") or "").strip(),
             emails=_collect_emails(row),
             phones=_collect_phones(row),
-            source_channels=candidate_channels(row),
+            source_channels=(
+                [channel for channel in str(row.get("source_channels") or "").split(",") if channel]
+                or candidate_channels(row)
+            ),
         )
         if not person.emails and not person.phones:
             continue
@@ -120,7 +115,7 @@ def load_candidates(*, limit: int = 0, candidate_key: str = "") -> Iterator[Pers
 
 
 def candidate_row(candidate_key: str) -> dict[str, str] | None:
-    """The raw candidates.csv row for a key (None when unknown)."""
+    """The canonical merged row for a candidate key (None when unknown)."""
     key = (candidate_key or "").strip()
     if not key:
         return None
@@ -140,7 +135,7 @@ def candidate_carry(row: dict[str, str]) -> dict[str, Any]:
         "all_phones": row.get("all_phones", ""),
         "interaction_counts": row.get("interaction_counts", ""),
         "last_interaction": row.get("last_interaction", ""),
-        "source_channels": ",".join(candidate_channels(row)),
+        "source_channels": row.get("source_channels", "") or ",".join(candidate_channels(row)),
     }
 
 

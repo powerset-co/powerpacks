@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Gmail import helpers shared across the importer and its step modules.
 
-Discovery-artifact collection (`gmail_artifacts_from_discovery`), candidate
-writing (`write_gmail_candidates`), and two tiny cross-cutting things the
+Discovery-artifact collection (`gmail_artifacts_from_discovery`), unresolved
+contact materialization (`gmail_candidate_people`), and two tiny cross-cutting things the
 `importer.py` orchestrator and both `steps/` modules lean on:
 `GMAIL_IMPORT_PREFIX` (the stderr progress tag they hand to
 `common.proc.emit_progress`) and `artifact_dir_from_state` (the
@@ -43,11 +43,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
-    CANDIDATES_SCHEMA_COLUMNS,
-    candidate_key_for,
-    normalize_candidate_row,
-)
+from packs.ingestion.schemas.candidates_schema import candidate_key_for, normalize_candidate_row  # noqa: E402
+from packs.ingestion.schemas.people_schema import normalize_people_row  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_DISCOVER_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
@@ -185,10 +182,8 @@ def queue_row_to_candidate(row: dict[str, str], *, cached_negative: bool) -> dic
     return normalize_candidate_row(candidate)
 
 
-def write_gmail_candidates(artifacts: dict[str, Any], import_dir: Path) -> dict[str, Any]:
-    """Union the post-directory unresolved (+ cached-negative, flagged) queues
-    into import/gmail/candidates.csv for the deep-context processing layer."""
-    candidates_csv = import_dir / "candidates.csv"
+def gmail_candidate_people(artifacts: dict[str, Any]) -> dict[str, Any]:
+    """Return unresolved Gmail contacts as ordinary no-LinkedIn people rows."""
     by_key: dict[str, dict[str, str]] = {}
     skipped = {"no_email": 0, "duplicate_email": 0}
     groups = (
@@ -215,12 +210,24 @@ def write_gmail_candidates(artifacts: dict[str, Any], import_dir: Path) -> dict[
                     skipped["duplicate_email"] += 1
                     continue
                 by_key[key] = candidate
-    rows = [by_key[key] for key in sorted(by_key)]
-    write_csv_rows(candidates_csv, CANDIDATES_SCHEMA_COLUMNS, rows)
+    rows = []
+    for key in sorted(by_key):
+        candidate = by_key[key]
+        rows.append(normalize_people_row({
+            "id": f"candidate:{key}",
+            "full_name": candidate.get("full_name", ""),
+            "primary_email": candidate.get("primary_email", ""),
+            "all_emails": candidate.get("all_emails", ""),
+            "primary_phone": candidate.get("primary_phone", ""),
+            "all_phones": candidate.get("all_phones", ""),
+            "summary": "selection=unresolved",
+            "source_channels": "gmail_msgvault",
+            "source_artifacts": "gmail resolution queue",
+            "interaction_counts": candidate.get("interaction_counts", ""),
+            "last_interaction": candidate.get("last_interaction", ""),
+        }))
     return {
-        "candidates_csv": str(candidates_csv),
+        "people": rows,
         "candidates": len(rows),
         "skipped": skipped,
     }
-
-

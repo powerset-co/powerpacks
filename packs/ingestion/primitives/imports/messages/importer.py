@@ -215,6 +215,31 @@ def contact_row_to_candidate(
     return normalize_candidate_row(candidate)
 
 
+def candidate_to_messages_person(candidate: dict[str, str], contacts_csv: Path) -> dict[str, str]:
+    """Represent an unresolved, floor-passing contact in the sole people schema.
+
+    An absent LinkedIn identifier is data, not a separate admission lane.  The
+    fan-in preserves this stable candidate id until directory evidence later
+    promotes the row to a LinkedIn key.
+    """
+    key = candidate.get("candidate_key", "")
+    evidence = parse_jsonish(candidate.get("evidence"), {})
+    channels = evidence.get("channels", []) if isinstance(evidence, dict) else []
+    return normalize_people_row({
+        "id": f"candidate:{key}",
+        "full_name": candidate.get("full_name", ""),
+        "primary_email": candidate.get("primary_email", ""),
+        "all_emails": candidate.get("all_emails", ""),
+        "primary_phone": candidate.get("primary_phone", ""),
+        "all_phones": candidate.get("all_phones", ""),
+        "summary": "selection=unresolved",
+        "source_channels": ",".join(channels),
+        "source_artifacts": str(contacts_csv),
+        "interaction_counts": candidate.get("interaction_counts", ""),
+        "last_interaction": candidate.get("last_interaction", ""),
+    })
+
+
 def merge_matched_people_rows(
     existing: dict[str, str],
     incoming: dict[str, str],
@@ -338,7 +363,7 @@ def selected_contacts_people(
         if key in candidates_by_key:
             skip("duplicate_phone")
             continue
-        candidates_by_key[key] = candidate_row
+        candidates_by_key[key] = candidate_to_messages_person(candidate_row, contacts_csv)
         selection_counts["phone_only"] = selection_counts.get("phone_only", 0) + 1
 
     people_rows = [people_by_key[key] for key in sorted(people_by_key)]
@@ -380,19 +405,14 @@ def messages_import_diff(
         include_group_only=include_group_only,
     )
     people_ids = {row.get("id", "") for row in people_rows if row.get("id")}
-    candidate_keys = {
-        row.get("candidate_key", "") for row in candidate_rows if row.get("candidate_key")
-    }
+    candidate_ids = {row.get("id", "") for row in candidate_rows if row.get("id")}
     existing_people_ids = existing_csv_column(import_dir / "people.csv", "id")
-    existing_candidate_keys = existing_csv_column(
-        import_dir / "candidates.csv", "candidate_key"
-    )
     new_people = len(people_ids - existing_people_ids)
-    new_candidates = len(candidate_keys - existing_candidate_keys)
+    new_candidates = len(candidate_ids - existing_people_ids)
     return {
         "materialized": materialized,
         "people_rows": len(people_ids),
-        "candidate_rows": len(candidate_keys),
+        "candidate_rows": len(candidate_ids),
         "new_people": new_people,
         "new_candidates": new_candidates,
         "new_rows": new_people + new_candidates,
@@ -461,7 +481,6 @@ class MessagesImport:
         self.args = args
         self.import_dir = DEFAULT_IMPORT_DIR / self.source
         self.people_csv = self.import_dir / "people.csv"
-        self.candidates_csv = self.import_dir / "candidates.csv"
         self.contacts_csv = WORKING_CONTACTS_CSV
         self.min_message_count = int(getattr(args, "min_message_count", DEFAULT_MIN_MESSAGE_COUNT))
         self.include_group_only = bool(getattr(args, "include_group_only", False))
@@ -570,8 +589,8 @@ class MessagesImport:
         legacy_enrichment = self.import_dir / "enrichment"
         if legacy_enrichment.exists():
             shutil.rmtree(legacy_enrichment)
-        write_csv_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, people_rows)
-        write_csv_rows(self.candidates_csv, CANDIDATES_SCHEMA_COLUMNS, candidate_rows)
+        write_csv_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, people_rows + candidate_rows)
+        (self.import_dir / "candidates.csv").unlink(missing_ok=True)
         directory_replacement = replace_messages_directory_rows(self.people_csv)
         directory_normalization = normalize_directory_source_accounts("messages")
         directory_quality = directory_source_account_quality("messages")
@@ -582,11 +601,10 @@ class MessagesImport:
             input=self.manifest_input,
             outputs={
                 "people_csv": str(self.people_csv),
-                "candidates_csv": str(self.candidates_csv),
             },
             stats={
                 "people": csv_count(str(self.people_csv)),
-                "candidates": csv_count(str(self.candidates_csv)),
+                "candidates": len(candidate_rows),
             },
             diff=diff,
             materialized=materialized,
