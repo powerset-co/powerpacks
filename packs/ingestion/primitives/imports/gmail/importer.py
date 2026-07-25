@@ -83,8 +83,10 @@ from packs.ingestion.primitives.common.proc import emit_progress  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.util import (  # noqa: E402
     GMAIL_IMPORT_PREFIX,
     gmail_artifacts_from_discovery,
-    write_gmail_candidates,
+    gmail_candidate_people,
 )
+from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, normalize_people_row  # noqa: E402
+from packs.shared.csv_io import CsvIO  # noqa: E402
 
 GMAIL_IMPORT_CONTRACT = "gmail-directory-only-v2"
 
@@ -132,7 +134,7 @@ class GmailImport:
     def run(self) -> dict[str, Any]:
         """The whole import: fingerprint no-op check -> build transient state -> the
         two step functions (directory match, then apply + people materialization)
-        -> candidates + directory quality checks -> the import manifest."""
+        -> one people.csv + directory quality checks -> the import manifest."""
         args = self.args
         (self.import_dir / "ledger.json").unlink(missing_ok=True)
         expected_input = {
@@ -181,7 +183,12 @@ class GmailImport:
                 }, import_dir=DEFAULT_IMPORT_DIR)
         state["status"] = "completed"
         people_csv = copy_people_csv("gmail", str(state.get("artifacts", {}).get("gmail_merged_people_csv") or state.get("artifacts", {}).get("gmail_people_csv") or ""), import_dir=DEFAULT_IMPORT_DIR)
-        candidates = write_gmail_candidates(state.get("artifacts", {}), import_dir)
+        candidates = gmail_candidate_people(state.get("artifacts", {}))
+        if people_csv:
+            resolved_rows = CsvIO.read_dict_rows(Path(people_csv))
+            all_rows = [normalize_people_row(row) for row in resolved_rows] + candidates["people"]
+            CsvIO.write_dict_rows(Path(people_csv), PEOPLE_SCHEMA_COLUMNS, all_rows)
+        (import_dir / "candidates.csv").unlink(missing_ok=True)
         directory_normalization = normalize_directory_source_accounts("gmail")
         directory_quality = directory_source_account_quality("gmail")
         if directory_quality["status"] != "ok":
@@ -209,7 +216,6 @@ class GmailImport:
             },
             "outputs": {
                 "people_csv": people_csv,
-                "candidates_csv": candidates["candidates_csv"],
                 "directory_csv": str(DEFAULT_DIRECTORY_CSV),
             },
             "stats": {

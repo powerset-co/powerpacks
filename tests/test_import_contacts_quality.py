@@ -68,7 +68,7 @@ class GmailCandidatesTests(unittest.TestCase):
         self.assertTrue(json.loads(candidate["evidence"])["cached_negative"])
         self.assertIsNone(gmail_import_util.queue_row_to_candidate({"primary_email": ""}, cached_negative=False))
 
-    def test_write_gmail_candidates_unions_and_dedups_queues(self) -> None:
+    def test_gmail_candidate_people_unions_and_dedups_queues(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             unresolved = tmp / "unresolved.csv"
@@ -89,21 +89,15 @@ class GmailCandidatesTests(unittest.TestCase):
                     {"queue_csv": str(negative), "account_email": "me@gmail.com"},
                 ],
             }
-            import_dir = tmp / "import" / "gmail"
-            import_dir.mkdir(parents=True)
-            result = gmail_import_util.write_gmail_candidates(artifacts, import_dir)
+            result = gmail_import_util.gmail_candidate_people(artifacts)
             self.assertEqual(result["candidates"], 3)
             self.assertEqual(result["skipped"], {"no_email": 0, "duplicate_email": 1})
-            with (import_dir / "candidates.csv").open(newline="", encoding="utf-8") as handle:
-                rows = list(CsvIO.dict_reader(handle))
-            by_key = {row["candidate_key"]: row for row in rows}
+            by_key = {row["id"]: row for row in result["people"]}
             self.assertEqual(
                 sorted(by_key),
-                ["email:a@x.com", "email:b@x.com", "email:c@x.com"],
+                ["candidate:email:a@x.com", "candidate:email:b@x.com", "candidate:email:c@x.com"],
             )
-            # First-seen (unresolved) wins the dedup: b@x.com is not cached-negative.
-            self.assertFalse(json.loads(by_key["email:b@x.com"]["evidence"])["cached_negative"])
-            self.assertTrue(json.loads(by_key["email:c@x.com"]["evidence"])["cached_negative"])
+            self.assertEqual(by_key["candidate:email:b@x.com"]["source_channels"], "gmail_msgvault")
 
 
 class ImportContactsQualityTests(unittest.TestCase):

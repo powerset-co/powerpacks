@@ -593,10 +593,9 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             completed = self.run_import(env, confirm=True)
             self.assertEqual(completed["status"], "completed")
             people_csv = env["import_dir"] / "people.csv"
-            candidates_csv = env["import_dir"] / "candidates.csv"
-            self.assertEqual(self.csv_count(people_csv), 1)
-            self.assertEqual(self.csv_count(candidates_csv), 1)
-            self.assertEqual(completed["stats"], {"people": 1, "candidates": 1})
+            self.assertEqual(self.csv_count(people_csv), 2)
+            self.assertFalse((env["import_dir"] / "candidates.csv").exists())
+            self.assertEqual(completed["stats"], {"people": 2, "candidates": 1})
             self.assertEqual(
                 completed["materialized"]["skipped"].get("bad_name"), 1
             )
@@ -606,16 +605,15 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             self.assertFalse((env["import_dir"] / "people.input.csv").exists())
             self.assertFalse((env["import_dir"] / "enrichment").exists())
 
-            person = self.csv_rows(people_csv)[0]
+            person, candidate = self.csv_rows(people_csv)
             self.assertEqual(person["id"], "net-1")
             self.assertEqual(person["linkedin_url"], "https://www.linkedin.com/in/jane-doe")
             self.assertEqual(person["enrichment_provider"], "")
             self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 87})
-            candidate = self.csv_rows(candidates_csv)[0]
-            self.assertEqual(candidate["candidate_key"], "phone:+14155550999")
-            self.assertEqual(candidate["source"], "whatsapp")
+            self.assertEqual(candidate["id"], "candidate:phone:+14155550999")
+            self.assertEqual(candidate["source_channels"], "whatsapp")
             self.assertEqual(candidate["full_name"], "John Smith")
-            derived_text = people_csv.read_text() + candidates_csv.read_text()
+            derived_text = people_csv.read_text()
             self.assertNotIn(sentinel, derived_text)
 
             noop = self.run_import(env, confirm=False)
@@ -633,7 +631,6 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             self.assertEqual(refreshed["status"], "completed")
             person = self.csv_rows(people_csv)[0]
             self.assertEqual(json.loads(person["interaction_counts"]), {"imessage": 120})
-            self.assertEqual(self.csv_count(candidates_csv), 0)
 
             self.write_contacts(env, [
                 self.contact_row(phone="+14155550777", name="AAA", message_count="4"),
@@ -641,7 +638,6 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             removed = self.run_import(env, confirm=True)
             self.assertEqual(removed["status"], "completed")
             self.assertEqual(self.csv_count(people_csv), 0)
-            self.assertEqual(self.csv_count(candidates_csv), 0)
             directory_rows = self.csv_rows(env["directory"])
             self.assertEqual([row["source"] for row in directory_rows], ["gmail_msgvault"])
 
@@ -709,12 +705,8 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             self.assertEqual(people_rows, [])
             self.assertEqual(len(candidate_rows), 1)
             self.assertEqual(summary["skipped"].get("suggested_not_attached"), 1)
-            evidence = json.loads(candidate_rows[0]["evidence"])
-            self.assertEqual(evidence["suggested_person_id"], "net-9")
-            self.assertEqual(
-                evidence["suggested_linkedin_url"],
-                "https://www.linkedin.com/in/maybe-jane",
-            )
+            self.assertEqual(candidate_rows[0]["id"], "candidate:phone:+14155550123")
+            self.assertEqual(candidate_rows[0]["summary"], "selection=unresolved")
 
     def test_unmatched_whatsapp_dm_in_group_becomes_candidate(self) -> None:
         with self.sandbox() as env:
@@ -738,14 +730,14 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             completed = self.run_import(env, confirm=True)
 
             self.assertEqual(completed["status"], "completed")
-            self.assertEqual(completed["stats"], {"people": 0, "candidates": 1})
+            self.assertEqual(completed["stats"], {"people": 1, "candidates": 1})
             self.assertNotIn(
                 "group_only_low_signal", completed["materialized"]["skipped"]
             )
-            candidate = self.csv_rows(env["import_dir"] / "candidates.csv")[0]
-            self.assertEqual(candidate["candidate_key"], "phone:+15550100123")
+            candidate = self.csv_rows(env["import_dir"] / "people.csv")[0]
+            self.assertEqual(candidate["id"], "candidate:phone:+15550100123")
             self.assertEqual(candidate["full_name"], "Jordan Bravo")
-            self.assertEqual(candidate["source"], "whatsapp")
+            self.assertEqual(candidate["source_channels"], "whatsapp")
 
             # A pre-fix manifest must not make the corrected import a no-op.
             manifest_path = env["import_dir"] / "manifest.json"

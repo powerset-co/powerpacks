@@ -28,16 +28,10 @@ import csv
 import json
 import sys
 import time
-from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
 from packs.ingestion.primitives.deep_context import sources
-from packs.ingestion.primitives.deep_context.candidates import (
-    candidate_key_of,
-    is_candidate_id,
-    load_candidates,
-)
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     RAW_DIR,
@@ -135,21 +129,8 @@ def _retained_group_policy(out_dir: Path) -> tuple[int, int]:
 
 
 def selected_people(args: argparse.Namespace, people_csv: Path) -> Iterator[Person]:
-    """People to collect. Default: exactly the merged people.csv selection. With
-    ``--include-candidates`` the unresolved research candidates chain after the
-    people (one shared ``--limit`` across the union; ``--person candidate:<key>``
-    selects a single candidate)."""
-    if not getattr(args, "include_candidates", False):
-        yield from load_people(people_csv, limit=args.limit, person_id=args.person)
-        return
-
-    def union() -> Iterator[Person]:
-        yield from load_people(people_csv, person_id=args.person)
-        if args.person and not is_candidate_id(args.person):
-            return  # a people.csv id can never name a candidate
-        yield from load_candidates(candidate_key=candidate_key_of(args.person))
-
-    yield from islice(union(), args.limit or None)
+    """Every keyable merged person is collectable, including candidate:<key> rows."""
+    yield from load_people(people_csv, limit=args.limit, person_id=args.person)
 
 
 def collect_one(
@@ -377,8 +358,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--deep-cap", type=int, default=DEFAULT_DEEP_CAP, help="Max messages pooled per person (raise = costs more at synthesis)")
     p.add_argument("--include-groups", action="store_true", help="Opt-in: also read iMessage GROUP bodies from small shared groups (costs more)")
     p.add_argument("--max-group-size", type=int, default=25, help="Skip groups larger than this many participants")
-    p.add_argument("--include-candidates", action="store_true",
-                   help="Also collect the unresolved import candidates (import/*/candidates.csv)")
     p.add_argument("--limit", type=int, default=0, help="Limit people (0 = all)")
     p.add_argument("--person", default="", help="Only this person id (candidate:<key> selects a candidate)")
     p.add_argument("--force", action="store_true", help="Rebuild bundles even if present")

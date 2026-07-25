@@ -102,6 +102,19 @@ def run_gmail_apply_and_enrich(imp: "GmailImport") -> bool:
         commit_gmail_resolutions_to_directory(input_cfg, artifacts, raw_resolution_records)
     resolution_records = combine_gmail_resolution_records(raw_resolution_records, artifact_dir_from_state(imp.state))
     if not resolution_records:
+        # A lack of LinkedIn resolutions is not a lack of people. Preserve the
+        # discovered account rows so the fan-in can mint candidate:<contact-key>
+        # identities for Deep Context.
+        people_csvs = [str(record.get("people_csv")) for record in ordered_records(
+            artifacts.get("gmail_people_records") or [],
+            unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")),
+        ) if record.get("people_csv") and Path(str(record["people_csv"])).exists()]
+        gmail_merge = materialize_gmail_merged_people_csv(
+            people_csvs, DEFAULT_BASE_DIR / "gmail" / "people.gmail.csv"
+        )
+        if gmail_merge.get("status") == "completed" and gmail_merge.get("people_csv"):
+            artifacts["gmail_merged_people_csv"] = gmail_merge["people_csv"]
+            artifacts["gmail_people_csv"] = gmail_merge["people_csv"]
         imp._mark_step("gmail_apply_enrich", "skipped", reason="no gmail resolutions")
         return True
     resolution_records = ordered_records(resolution_records, unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))

@@ -670,7 +670,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 json.loads(by_public["network-person"]["all_phones"]),
                 ["+14155550100", "+14155550106"],
             )
-            self.assertEqual(candidate_rows[0]["candidate_key"], "phone:+14155550101")
+            self.assertEqual(candidate_rows[0]["id"], "candidate:phone:+14155550101")
 
     def test_commit_people_csv_to_directory_records_source_identity(self) -> None:
         with tempfile.TemporaryDirectory() as td:
