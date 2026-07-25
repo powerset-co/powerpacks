@@ -747,6 +747,12 @@ class TestParents(unittest.TestCase):
         self.assertNotEqual(parents.parent_id_for(["p1", "p2"]), parents.parent_id_for(["p1", "p3"]))
 
 
+def _verdict_rows(path: Path) -> list[dict[str, str]]:
+    """merge-verdicts.csv rows (closing the file)."""
+    with path.open(newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
 class TestEndToEnd(unittest.TestCase):
     """compose -> cluster -> lookup over synthetic fixtures, detecting a duplicate."""
 
@@ -824,54 +830,239 @@ class TestEndToEnd(unittest.TestCase):
             self.assertTrue(any(s.endswith(pman_slug := list(idx2["parents"])[0]) or s == pman_slug
                                 for s in idx2["by_phone"]["4155551234"]))
 
-    def test_merge_cache_reuses_unchanged_pairs(self):
-        # A rerun must NOT re-judge pairs whose inputs are unchanged: it reuses the prior
-        # merge-verdicts.csv, so the incremental cost is ~0 until the network actually changes.
+    def test_recompose_preserves_the_parents_build_parents_owns(self):
+        # THE regression: compose used to write a FRESH index document, silently deleting
+        # `parents`. Everything keyed on the parent grouping (one row per person, merged-away
+        # candidate suppression, the review collapse) then read an empty map, so one human
+        # split back into one row per identity and already-merged people became paid-research
+        # eligible again. Compose after parents must be a no-op for `parents`.
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             raw, facts, dossiers = base / "raw", base / "facts", base / "dossiers"
             raw.mkdir(); facts.mkdir()
             index_json, index_md = base / "index.json", base / "index.md"
-            merge_csv, merge_md = base / "merge.csv", base / "merge.md"
-            verdicts_csv = merge_csv.with_name("merge-verdicts.csv")
+            par_dir = base / "parents"
+            self._write_person(raw, facts, "p1", "Jordan Bravo", "+15550100", "jordan@example.com")
+            self._write_person(raw, facts, "p2", "Jordan Bravo", "+15550100", "jb@example.net")
+            self._write_person(raw, facts, "p3", "Casey Delta", "+15550111", "casey@example.com")
 
-            self._write_person(raw, facts, "p1", "Jonathan Smith", "+14155551234", "jon@acme.test")
-            self._write_person(raw, facts, "p2", "Jon Smith", "+14155551234", "jon.smith@example.com")
-            self._write_person(raw, facts, "p3", "Maria Garcia", "+13105550000", "maria@example.net")
+            def run_compose(person=""):
+                return compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                                       index_json=index_json, index_md=index_md, person=person))
+
+            run_compose()
+            cluster.run(_ns(dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
+                            out_csv=base / "merge.csv", out_md=base / "merge.md", confidence=0.7,
+                            no_llm=False, deterministic_only=True, model="m",
+                            reasoning_effort="medium", concurrency=1, timeout=10, max_retries=0))
+            parents.run(_ns(merge_csv=base / "merge.csv", index_json=index_json, dossier_dir=dossiers,
+                            facts_dir=facts, raw_dir=raw, parents_dir=par_dir, confirm_threshold=0.85))
+            after_parents = json.loads(index_json.read_text())
+            self.assertEqual(len(after_parents["parents"]), 2)  # 1 merged pair + 1 singleton
+
+            # ...compose again (the documented flow reruns it): parents survive untouched, and
+            # because the lookup maps are DERIVED the whole document is reproduced exactly.
+            run_compose()
+            after_recompose = json.loads(index_json.read_text())
+            self.assertEqual(after_recompose["parents"], after_parents["parents"])
+            self.assertEqual(after_recompose, after_parents)
+
+            # A parent is still resolvable by the identifiers it inherited from its children.
+            merged_slug = next(s for s, p in after_recompose["parents"].items()
+                               if not p.get("singleton"))
+            self.assertIn(merged_slug, after_recompose["by_phone"]["15550100"])
+            self.assertIn(merged_slug, after_recompose["by_email"]["jb@example.net"])
+
+    def test_compose_scoped_to_one_person_keeps_the_rest_of_the_index(self):
+        # `compose --person X` skipped everyone else but still wrote the fresh dict, so the
+        # index ended up holding ONE person while every other dossier stayed on disk —
+        # lookups returned nothing for people whose dossier was right there.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw, facts, dossiers = base / "raw", base / "facts", base / "dossiers"
+            raw.mkdir(); facts.mkdir()
+            index_json, index_md = base / "index.json", base / "index.md"
+            self._write_person(raw, facts, "p1", "Jordan Bravo", "+15550100", "jordan@example.com")
+            self._write_person(raw, facts, "p2", "Casey Delta", "+15550111", "casey@example.com")
+
+            def run_compose(person=""):
+                return compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                                       index_json=index_json, index_md=index_md, person=person))
+
+            run_compose()
+            full = json.loads(index_json.read_text())
+            scoped = run_compose(person="p1")
+            self.assertEqual(scoped["dossiers_written"], 1)
+            after = json.loads(index_json.read_text())
+            self.assertEqual(set(after["slugs"]), set(full["slugs"]))
+            self.assertEqual(len(list(dossiers.glob("*.md"))), 2)
+            self.assertEqual(lookup.find_slugs(after, name="Casey Delta", phone="", email=""),
+                             full["by_name"]["casey delta"])
+
+    def test_a_renamed_person_leaves_exactly_one_index_record(self):
+        # One human, one record: a changed canonical_name yields a new slug, and the stale
+        # entry for the same person_id must go — including on a scoped rerun.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw, facts, dossiers = base / "raw", base / "facts", base / "dossiers"
+            raw.mkdir(); facts.mkdir()
+            index_json, index_md = base / "index.json", base / "index.md"
+            self._write_person(raw, facts, "p1", "Jordan Bravo", "+15550100", "jordan@example.com")
             compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=index_md, person=""))
+            self._write_person(raw, facts, "p1", "Jordan Bravado", "+15550100", "jordan@example.com")
+            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                            index_json=index_json, index_md=index_md, person="p1"))
+            after = json.loads(index_json.read_text())
+            self.assertEqual([info["person_id"] for info in after["slugs"].values()], ["p1"])
+            self.assertEqual(after["by_phone"]["15550100"], list(after["slugs"]))
 
-            def cluster_run(**over):
-                kw = dict(dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
-                          out_csv=merge_csv, out_md=merge_md, confidence=0.7, no_llm=True, model="m",
-                          reasoning_effort="medium", concurrency=1, timeout=10, max_retries=0)
-                kw.update(over)
-                return cluster.run(_ns(**kw))
+    def _cluster_fixture(self, base: Path):
+        """Three synthetic people (one duplicate pair sharing a phone) composed into an index."""
+        raw, facts, dossiers = base / "raw", base / "facts", base / "dossiers"
+        raw.mkdir(); facts.mkdir()
+        index_json, index_md = base / "index.json", base / "index.md"
+        self._write_person(raw, facts, "p1", "Jonathan Smith", "+15550100", "jon@acme.test")
+        self._write_person(raw, facts, "p2", "Jon Smith", "+15550100", "jon.smith@example.com")
+        self._write_person(raw, facts, "p3", "Maria Garcia", "+15550111", "maria@example.net")
+        compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                        index_json=index_json, index_md=index_md, person=""))
+
+        def cluster_run(**over):
+            kw = dict(dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
+                      out_csv=base / "merge.csv", out_md=base / "merge.md", confidence=0.7,
+                      no_llm=True, model="m", reasoning_effort="medium", concurrency=1,
+                      timeout=10, max_retries=0)
+            kw.update(over)
+            return cluster.run(_ns(**kw))
+
+        return cluster_run
+
+    @staticmethod
+    def _fake_pair_judge(same: bool = True):
+        """Stand-in for the paid pair judge: every pair gets a real (llm-authored) verdict."""
+        async def judge(client, pa, pb, *, model, effort, semaphore, max_retries):
+            return {"verdict": {"same_person": same, "confidence": 0.95,
+                                "tone_toward_a": "", "tone_toward_b": "",
+                                "tone_consistent": True, "reason": "fake judge"},
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "reasoning_tokens": 0},
+                    "error": ""}
+        return judge
+
+    def _judged(self, cluster_run, **over):
+        """Run cluster with the judge stubbed out (no network, verdicts marked llm)."""
+        class _Client:
+            async def close(self):
+                return None
+
+        with mock.patch.object(cluster, "judge_pair", self._fake_pair_judge()), \
+                mock.patch.object(cluster, "make_async_client", lambda **kw: _Client()), \
+                mock.patch.object(cluster, "load_env", lambda: None):
+            return cluster_run(no_llm=False, **over)
+
+    def test_merge_cache_reuses_unchanged_pairs(self):
+        # A rerun must NOT re-judge pairs whose inputs are unchanged: it reuses the prior
+        # merge-verdicts.csv, so the incremental cost is ~0 until the network actually changes.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            cluster_run = self._cluster_fixture(base)
+            verdicts_csv = base / "merge-verdicts.csv"
 
             # 1) First run: nothing cached -> judges everything and writes the cache.
-            m1 = cluster_run()
-            total = m1["pairs_total"]
-            self.assertGreaterEqual(total, 1)
+            m1 = self._judged(cluster_run)
+            judgeable = m1["pairs_total"] - m1["pairs_deterministic"]
+            self.assertGreaterEqual(judgeable, 1)
             self.assertEqual(m1["pairs_reused"], 0)
-            self.assertEqual(m1["pairs_judged"], total)
+            self.assertEqual(m1["pairs_judged"], judgeable)
             self.assertTrue(verdicts_csv.exists())
 
             # 2) Dry-run now sees the cache -> nothing left to judge, zero estimated spend.
             dry = cluster_run(dry_run=True)
             self.assertEqual(dry["candidate_pairs_to_judge"], 0)
-            self.assertEqual(dry["cached_reused"], total)
+            self.assertEqual(dry["cached_reused"], judgeable)
             self.assertEqual(dry["estimated_cost_usd_high"], 0)
 
             # 3) Second real run reuses every verdict and yields the same clusters.
-            m2 = cluster_run()
+            m2 = self._judged(cluster_run)
             self.assertEqual(m2["pairs_judged"], 0)
-            self.assertEqual(m2["pairs_reused"], total)
+            self.assertEqual(m2["pairs_reused"], judgeable)
             self.assertEqual(m2["clusters"], m1["clusters"])
 
             # 4) --refresh bypasses the cache -> everything is judged again.
             refreshed = cluster_run(dry_run=True, refresh=True)
-            self.assertEqual(refreshed["candidate_pairs_to_judge"], total)
+            self.assertEqual(refreshed["candidate_pairs_to_judge"], judgeable)
             self.assertEqual(refreshed["cached_reused"], 0)
+
+    def test_no_llm_verdicts_never_satisfy_the_cache(self):
+        # THE cache-poisoning guard: a free `--no-llm` run stamps the CURRENT pair sig, so
+        # without provenance it would permanently convince every later paid run that those
+        # pairs are already decided — the LLM would never see them.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            cluster_run = self._cluster_fixture(base)
+
+            free = cluster_run()                       # --no-llm: guesses the unsettled pairs
+            judgeable = free["pairs_total"] - free["pairs_deterministic"]
+            self.assertGreaterEqual(judgeable, 1)
+            self.assertEqual(free["judge"], "deterministic")
+            self.assertEqual(free["pairs_judged"], 0)
+            rows = _verdict_rows(base / "merge-verdicts.csv")
+            self.assertEqual({r["judge"] for r in rows}, {cluster.JUDGE_NO_LLM})
+
+            # The paid run must still judge all of them, and its own verdicts ARE reusable.
+            paid = self._judged(cluster_run)
+            self.assertEqual(paid["pairs_reused"], 0)
+            self.assertEqual(paid["pairs_judged"], judgeable)
+            again = cluster_run(dry_run=True)
+            self.assertEqual(again["cached_reused"], judgeable)
+
+    def test_deterministic_only_settles_tier0_and_leaves_the_rest_alone(self):
+        # The shipped free tier: merge only what code can prove, never guess, never drop an
+        # edge the paid judge already established.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            cluster_run = self._cluster_fixture(base)
+            merge_csv = base / "merge.csv"
+
+            tier0 = cluster_run(no_llm=False, deterministic_only=True)
+            self.assertEqual(tier0["judge"], "tier0")
+            self.assertEqual(tier0["pairs_judged"], 0)
+            # p1/p2 share a phone but their NAMES differ, so tier 0 must not merge them.
+            self.assertEqual(tier0["pairs_deterministic"], 0)
+            self.assertEqual(tier0["pairs_unsettled"], tier0["pairs_total"])
+            self.assertEqual(tier0["clusters"], 0)
+            # Nothing was invented: no verdict row exists for an unsettled pair.
+            self.assertEqual(_verdict_rows(base / "merge-verdicts.csv"), [])
+
+            # After the paid judge merges them, a tier-0 rerun CARRIES that edge forward.
+            paid = self._judged(cluster_run)
+            self.assertEqual(paid["clusters"], 1)
+            carried = cluster_run(no_llm=False, deterministic_only=True)
+            self.assertEqual(carried["clusters"], 1)
+            self.assertEqual(carried["pairs_unsettled"], 0)
+            self.assertTrue(merge_csv.read_text().count("\n") > 1)
+
+    def test_tier0_merges_an_identical_name_sharing_an_identifier(self):
+        # What tier 0 IS for: identity equality decided in code, no judge, no spend.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw, facts, dossiers = base / "raw", base / "facts", base / "dossiers"
+            raw.mkdir(); facts.mkdir()
+            index_json = base / "index.json"
+            self._write_person(raw, facts, "p1", "Jordan Bravo", "+15550100", "jordan@example.com")
+            self._write_person(raw, facts, "p2", "Jordan Bravo", "+15550100", "jb@example.net")
+            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                            index_json=index_json, index_md=base / "index.md", person=""))
+            manifest = cluster.run(_ns(
+                dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
+                out_csv=base / "merge.csv", out_md=base / "merge.md", confidence=0.7,
+                no_llm=False, deterministic_only=True, model="m", reasoning_effort="medium",
+                concurrency=1, timeout=10, max_retries=0))
+            self.assertEqual(manifest["pairs_deterministic"], 1)
+            self.assertEqual(manifest["pairs_unsettled"], 0)
+            self.assertEqual(manifest["clusters"], 1)
+            rows = _verdict_rows(base / "merge-verdicts.csv")
+            self.assertEqual([r["judge"] for r in rows], [cluster.JUDGE_SLAM_DUNK])
 
 
 def _verdict(verdict, conf, **kw):
@@ -1245,8 +1436,72 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self.assertTrue((rdir / "applied.csv").exists())
             # people.csv is NOT mutated by reconcile anymore (the merge applies the override).
             with people_csv.open() as fh:
-                self.assertNotIn("linkedin_verified", next(__import__("csv").reader(fh)))
+                self.assertNotIn("linkedin_verified", next(csv.reader(fh)))
             self.assertIn("LinkedIn identity", (pdir / "alice-p.md").read_text())
+
+    def test_contact_only_people_are_reviewable_but_never_research_eligible(self):
+        # A real person with no attached LinkedIn used to be stripped out of verdicts.jsonl, so
+        # they appeared in NO queue — the review model builds its rows from that file. They must
+        # be reviewable, and must NOT become paid-research subjects: their free verdict always
+        # carries linkedin_plausibly_absent, which include_plausibly_absent accepts with no
+        # worth or recommend gate.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts, raw, cache, pdir, rdir = (base / "facts", base / "raw", base / "cache",
+                                             base / "parents", base / "reconcile")
+            for p in (facts, raw, cache, pdir, rdir):
+                p.mkdir()
+            self._facts(facts, "pa", "Jordan Bravo")
+            self._facts(facts, "pc", "Casey Delta")
+            for slug, name in (("jordan-p", "Jordan Bravo"), ("casey-p", "Casey Delta")):
+                (pdir / f"{slug}.md").write_text(f"---\nname: {name}\n---\n\n# {name} (canonical)\n",
+                                                 encoding="utf-8")
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": {"jordan-c": {"person_id": "pa"}, "casey-c": {"person_id": "pc"}},
+                "parents": {"jordan-p": {"name": "Jordan Bravo", "children": ["jordan-c"]},
+                            "casey-p": {"name": "Casey Delta", "children": ["casey-c"]}}}),
+                encoding="utf-8")
+            people_csv = base / "people.csv"
+            self._people_csv(people_csv, [
+                {"id": "pa", "public_identifier": "jordanbravo",
+                 "linkedin_url": "https://www.linkedin.com/in/jordanbravo", "headline": "Eng",
+                 "work_experiences": json.dumps([{"title": "Eng", "company_name": "Acme"}])},
+                # Casey is the PR #330 shape: admitted on contact fields alone, no LinkedIn.
+                {"id": "pc", "public_identifier": "", "linkedin_url": "",
+                 "full_name": "Casey Delta", "primary_email": "casey@example.com",
+                 "primary_phone": "+15550100"}])
+            review_csv = rdir / "review.csv"
+            reconcile.run(_ns(
+                index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
+                facts_dir=facts, raw_dir=raw, parents_dir=pdir,
+                verdicts_jsonl=rdir / "verdicts.jsonl", verdicts_csv=rdir / "verdicts.csv",
+                overrides_csv=review_csv,
+                consolidate_people_csv=rdir / "consolidate-people.csv",
+                confirm_threshold=0.85, model="m", reasoning_effort="high", concurrency=1,
+                timeout=10, max_retries=0, dry_run=False, no_overrides=False, no_llm=True))
+
+            verdicts = list(common.read_jsonl(rdir / "verdicts.jsonl"))
+            by_parent = {r["parent_slug"]: r for r in verdicts}
+            self.assertEqual(set(by_parent), {"jordan-p", "casey-p"})   # Casey is IN the artifact
+            casey = by_parent["casey-p"]
+            self.assertTrue(casey["no_link"])
+            self.assertTrue(casey["verdict"]["linkedin_plausibly_absent"])
+            self.assertEqual(casey["match_emails"], ["casey@example.com"])
+
+            # The flat identity CSV stays identity-only (a no-link row has no LinkedIn columns).
+            with (rdir / "verdicts.csv").open(newline="", encoding="utf-8") as fh:
+                self.assertEqual([r["parent_slug"] for r in csv.DictReader(fh)], ["jordan-p"])
+
+            # Reviewable: the review model renders a card for Casey.
+            model_parents, _ = web_model.build_parents(rdir / "verdicts.jsonl", review_csv)
+            self.assertIn("casey-p", {p["slug"] for p in model_parents})
+
+            # NOT research-eligible, even on the synthetic (include_plausibly_absent) path.
+            for include_absent in (False, True):
+                subset = dresearch.eligible_subset(verdicts, 0.85, {},
+                                                   include_plausibly_absent=include_absent)
+                self.assertNotIn("casey-p", {r.get("parent_slug") for r in subset})
 
     def test_dry_run_estimates_without_writing(self):
         with tempfile.TemporaryDirectory() as d:

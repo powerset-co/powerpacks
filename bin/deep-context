@@ -36,7 +36,12 @@ usage: bin/deep-context <command> [args]
   collect      gather message bodies into raw bundles (free, local)
   synthesize   build per-person facts from bundles (spends OpenAI)
   compose      render dossiers from facts (free)
-  cluster      LLM-judge same-person merge (spends OpenAI)
+  dedupe       FREE tier-0 same-person merge: identical name + a shared phone/email
+               is identity equality, decided in code. No LLM, no spend, and pairs it
+               cannot settle are left unjudged for the paid escalation below.
+               (= `cluster --deterministic-only`)
+  cluster      LLM-judge the same-person pairs tier 0 could not settle (spends
+               OpenAI; run `cluster --dry-run` first for a free estimate)
   parents      build canonical parent dossiers (free)
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
@@ -134,6 +139,11 @@ case "$cmd" in
     ;;
   compose)
     "${PY[@]}" "$PKG.compose_dossier" "$@"
+    ;;
+  dedupe)
+    # Tier 0 of identity resolution: free, deterministic, unconditional. Runs right
+    # after compose so one human is one record before anything paid is considered.
+    "${PY[@]}" "$PKG.cluster_merge_candidates" --deterministic-only "$@"
     ;;
   cluster)
     "${PY[@]}" "$PKG.cluster_merge_candidates" "$@"

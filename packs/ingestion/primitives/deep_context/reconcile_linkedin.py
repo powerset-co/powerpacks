@@ -32,7 +32,16 @@ Outputs:
   overrides/review.csv  the ONE file to EDIT (approved column; every judged row)
   (a "## LinkedIn identity" section injected into each parent markdown)
 
+A person with NO attached LinkedIn still gets a task (`no_link`) and still lands in
+verdicts.jsonl. That file is what the review model builds its rows from, so dropping
+them — as this stage used to — made every contact-only person (email/phone, no link)
+invisible to the whole review, with no way to keep or reject them. They are reviewable
+but never research-eligible; the worth-gated candidate path owns paid lookups.
+
 Changelog:
+  2026-07-24: `no_link` tasks are no longer stripped from verdicts.jsonl (they carry
+    their contact keys and stay out of the paid-research subset), so contact-only
+    people are reviewable. The flat verdicts.csv stays identity-only.
   2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio; normalize_email imports from common.contact_fields instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -399,10 +408,15 @@ def build_tasks(index: dict[str, Any], people: dict[str, dict[str, str]],
                     "from_connections": False,
                 })
                 continue
+            # A person with no LinkedIn at all is still a reviewable person: carry their
+            # contact keys so the review card shows WHO this is (their email/phone is the
+            # only identity they have).
+            emails, phones = _contact_keys(child_pids, people)
             tasks.append({"parent_slug": pslug, "name": pinfo.get("name", pslug),
                           "candidate_key": "", "person_ids": child_pids, "conflict": False,
                           "parent_person_ids": child_pids,
-                          "no_link": True, "dossier": dossier, "linkedin": {}})
+                          "no_link": True, "dossier": dossier, "linkedin": {},
+                          "match_emails": emails, "match_phones": phones})
             continue
         for key, pids in by_key.items():
             row = people[pids[0]]
@@ -1275,7 +1289,9 @@ def write_summary(path: Path, tasks: list[dict[str, Any]], override_path: Path,
         if len(pending_other) > 15:
             lines.append(f"  - …and {len(pending_other) - 15} more (in the decisions table)")
     if no_link:
-        lines.append(f"- **{no_link} person(s) with no LinkedIn** — nothing to act on (left as-is).")
+        lines.append(f"- **{no_link} person(s) with no LinkedIn** — no link to verify; they are "
+                     "reviewable in the people queue (keep or reject) and are not queued for "
+                     "paid research.")
     if not total_review:
         lines.append("_Nothing — every decision was high-confidence._")
 
@@ -1315,7 +1331,12 @@ def _flat(r: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_verdicts(jsonl_path: Path, csv_path: Path, results: list[dict[str, Any]]) -> None:
+def write_verdicts(jsonl_path: Path, csv_path: Path, results: list[dict[str, Any]],
+                   csv_results: list[dict[str, Any]] | None = None) -> None:
+    """The durable JSONL (every task, the review model's input) plus the flat CSV.
+
+    `csv_results` narrows only the human-facing CSV — the JSONL is the contract and
+    must stay complete, or a person who is in it nowhere is invisible everywhere."""
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     with jsonl_path.open("w", encoding="utf-8") as fh:
         for r in results:
@@ -1325,10 +1346,11 @@ def write_verdicts(jsonl_path: Path, csv_path: Path, results: list[dict[str, Any
                      if k in r}, ensure_ascii=False) + "\n")
     fields = ["parent_slug", "name", "linkedin_url", "verdict", "confidence", "conflict",
               "linkedin_plausibly_absent", "recommend_deep_research", "supporting", "contradicting", "reason"]
+    rows = results if csv_results is None else csv_results
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()
-        for r in sorted(results, key=lambda r: float((r.get("verdict") or {}).get("confidence") or 0), reverse=True):
+        for r in sorted(rows, key=lambda r: float((r.get("verdict") or {}).get("confidence") or 0), reverse=True):
             w.writerow(_flat(r))
 
 
@@ -1486,11 +1508,16 @@ def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict
     """Shared tail: decide -> verdicts/review/applied outputs -> parent injection -> manifest."""
     out_dir = Path(args.verdicts_jsonl).parent
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Worth-only Gmail tasks persist their machine result in review.csv. They are
-    # not LinkedIn candidates and must not appear in the LinkedIn verdict/display
-    # artifact, where they would duplicate candidate/synthetic review rows.
-    identity_tasks = [task for task in tasks if not task.get("no_link")]
-    write_verdicts(Path(args.verdicts_jsonl), Path(args.verdicts_csv), identity_tasks)
+    # EVERY task is written, including `no_link` (a real person with no LinkedIn attached).
+    # Stripping them made contact-only people unreachable: the review model builds its rows
+    # from this file, so a person with only an email/phone appeared in no queue at all and
+    # no decision could be made about them. They carry a free deterministic verdict
+    # (needs_review + linkedin_plausibly_absent) and are REVIEWABLE but NOT research-eligible
+    # — reconcile_deep_research.eligible_subset skips them; the worth-gated candidate path is
+    # the only door to paid research. The flat CSV stays identity-only (a no-link row has no
+    # LinkedIn columns to fill).
+    write_verdicts(Path(args.verdicts_jsonl), Path(args.verdicts_csv), tasks,
+                   csv_results=[task for task in tasks if not task.get("no_link")])
 
     decide_actions(tasks, args.confirm_threshold, getattr(args, "detach_threshold", DEFAULT_DETACH))   # one authoritative decision pass
     parents_dir = Path(args.parents_dir)

@@ -6,13 +6,16 @@ dependency-light (stdlib + repo schema helpers) so every stage imports the same
 identity logic and nothing drifts.
 
 Changelog:
+  2026-07-24: added the index.json document contract (load_index / write_index /
+    derive_lookup_maps) so compose_dossier and build_parents each own exactly one
+    key and the three by_* lookup maps are a pure projection of both. write_json is
+    re-imported for that internal use.
   2026-07-23 (audit dedup): now_iso / write_json / plain normalize_email deleted
     here and moved to the canonical common.jsonio / common.contact_fields homes.
     normalize_email is re-imported (used internally by _collect_emails); now_iso
     is re-imported purely so the off-limits review_web modules can keep importing
-    it from here. write_json has no such consumer and is not re-exported. The
-    compact `emit` (single-line JSON) is intentionally NOT folded — it differs
-    from jsonio's pretty emit.
+    it from here. The compact `emit` (single-line JSON) is intentionally NOT
+    folded — it differs from jsonio's pretty emit.
 """
 from __future__ import annotations
 
@@ -33,7 +36,7 @@ from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 from packs.ingestion.primitives.common.contact_fields import normalize_email  # noqa: E402
 # now_iso is re-exported here so review_web/ (off-limits) keeps importing it from
 # deep_context.common; the canonical home is common.jsonio.
-from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402,F401
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402,F401
 
 # --- Fixed output layout (one dir, overwrite in place; no ledgers, no run ids) ---
 ROOT = Path(".powerpacks/deep-context")
@@ -151,6 +154,101 @@ def parse_list(value: Any) -> list[str]:
         if text and text not in out:
             out.append(text)
     return out
+
+
+# --- The lookup index document (index.json) ---------------------------------
+# ONE writer per key, so the two stages that touch this file cannot race:
+#
+#   slugs    OWNED BY compose_dossier   one entry per child dossier
+#   parents  OWNED BY build_parents     one entry per canonical person
+#   by_email / by_phone / by_name       DERIVED from slugs + parents, never appended to
+#
+# A writer loads the whole document, replaces ONLY the key it owns, and re-derives
+# the lookup maps from the merged result, so ordering stops mattering: compose after
+# parents and parents after compose produce the same document. This is why the maps
+# are not stored incrementally — the previous append-then-overwrite arrangement had
+# compose reset the document (dropping `parents`) while build_parents appended to
+# maps it did not own.
+#
+# Each `slugs` entry therefore carries its own identity (`emails`, `phones`, `name`,
+# `full_name`); a parent's identifiers are the union of its children's, so the whole
+# projection reads only this file and survives `purge-raw`.
+
+LOOKUP_MAPS = ("by_email", "by_phone", "by_name")
+
+
+def derive_lookup_maps(index: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
+    """The three by_* lookup maps as a pure projection of `slugs` + `parents`.
+
+    A child contributes its stored emails/phones plus both of its name keys (the
+    canonical name and the raw contact name); a parent contributes the UNION of its
+    children's identifiers under its own name. Slugs come before parents and every
+    list is append-once, so the same document always yields the same maps.
+    """
+    slugs = index.get("slugs") or {}
+    maps: dict[str, dict[str, list[str]]] = {name: {} for name in LOOKUP_MAPS}
+
+    def add(target: dict[str, list[str]], key: str, slug: str) -> None:
+        if key and slug not in target.setdefault(key, []):
+            target[key].append(slug)
+
+    def add_record(slug: str, emails: list[str], phones: list[str], name_keys: list[str]) -> None:
+        for email in emails:
+            add(maps["by_email"], str(email or "").strip().lower(), slug)
+        for phone in phones:
+            add(maps["by_phone"], phone_digits(str(phone or "")), slug)
+        for name_key in name_keys:
+            add(maps["by_name"], name_key, slug)
+
+    for slug, record in slugs.items():
+        add_record(slug, record.get("emails") or [], record.get("phones") or [],
+                   sorted({normalize_name(record.get("name") or ""),
+                           normalize_name(record.get("full_name") or "")}))
+    for parent_slug, parent in (index.get("parents") or {}).items():
+        emails: list[str] = []
+        phones: list[str] = []
+        for child in parent.get("children") or []:
+            child_record = slugs.get(child) or {}
+            emails += [e for e in (child_record.get("emails") or []) if e not in emails]
+            phones += [p for p in (child_record.get("phones") or []) if p not in phones]
+        add_record(parent_slug, emails, phones, [normalize_name(parent.get("name") or "")])
+    return maps
+
+
+def parent_identifiers(index: dict[str, Any], child_slugs: list[str]) -> tuple[list[str], list[str]]:
+    """(emails, phones) a parent inherits from its children — the same union
+    `derive_lookup_maps` projects, so a parent dossier and the lookup maps can never
+    disagree about which addresses belong to that person."""
+    slugs = index.get("slugs") or {}
+    emails: list[str] = []
+    phones: list[str] = []
+    for child in child_slugs:
+        record = slugs.get(child) or {}
+        emails += [e for e in (record.get("emails") or []) if e not in emails]
+        phones += [p for p in (record.get("phones") or []) if p not in phones]
+    return emails, phones
+
+
+def load_index(path: Path) -> dict[str, Any]:
+    """The whole index document ({} when absent or unreadable)."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def write_index(path: Path, index: dict[str, Any]) -> None:
+    """Write the index with its lookup maps re-derived from the two record maps."""
+    document = {
+        "slugs": index.get("slugs") or {},
+        "parents": index.get("parents") or {},
+        **{key: value for key, value in index.items()
+           if key not in {"slugs", "parents", *LOOKUP_MAPS}},
+        **derive_lookup_maps(index),
+    }
+    write_json(path, document)
 
 
 # --- Person model + reader --------------------------------------------------

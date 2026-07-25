@@ -22,6 +22,11 @@ Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
   manifest.json          subset size, estimated cost, gate decision, run status
 
 Changelog:
+  2026-07-24: `eligible_subset` skips `no_link` verdict rows. They are now kept in
+    verdicts.jsonl so contact-only people are reviewable, and their free verdict always
+    carries `linkedin_plausibly_absent` — which the include_plausibly_absent branch
+    accepts with no worth or recommend gate, so without this guard every
+    LinkedIn-less person in the network would become a paid research subject.
   2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -174,7 +179,16 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
     User-touched rows, excluded links, and existing (non-rejected) retargets are skipped.
     A judge-rejected, un-approved retarget does NOT count as decided (re-research is cheap once
     completed). `linkedin_plausibly_absent` people are skipped by default (no profile exists is a
-    valid answer) and included only with include_plausibly_absent=True — the synthetic path."""
+    valid answer) and included only with include_plausibly_absent=True — the synthetic path.
+
+    `no_link` rows are NEVER eligible here. They are in verdicts.jsonl so the review model can
+    show them (a contact-only person must be decidable), but they had no link to recover and
+    their free verdict always carries `linkedin_plausibly_absent`, which the
+    include_plausibly_absent branch accepts without any worth or recommend gate — so treating
+    them as detach-recovery subjects would silently queue every LinkedIn-less person in the
+    network for paid research. The worth-gated `candidate_subset` is the only research door for
+    people who never had a link.
+    """
     overrides = overrides or {}
     has_retarget = {pub for pub, r in overrides.items()
                     if (r.get("action") or "").strip().lower() == "retarget"
@@ -191,6 +205,8 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for r in verdicts:
+        if r.get("no_link"):
+            continue  # reviewable, never a research subject (see the docstring)
         v = r.get("verdict") or {}
         pub = (r.get("candidate_key") or "").strip().lower()
         if pub and (pub in seen or pub in has_retarget or pub in excluded or pub in user_decided):

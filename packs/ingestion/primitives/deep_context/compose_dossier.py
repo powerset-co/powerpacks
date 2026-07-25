@@ -9,10 +9,18 @@ the ``## Summary`` prose afterward; the structured sections below stand on their
 
 Outputs:
   <dossier-dir>/<slug>.md   one dossier per person
-  index.json                lookup map (phone digits / email / name -> slug)
+  index.json                `slugs` (this stage OWNS it) + the derived lookup maps
   index.md                  human-readable catalog
 
+This stage owns exactly ONE index.json key — `slugs` — and never touches
+`parents` (build_parents owns that). The by_email/by_phone/by_name maps are
+re-derived from both record maps on write; see the index contract in `common.py`.
+
 Changelog:
+  2026-07-24: writes index.json through common.write_index, so `parents` survives a
+    recompose and the lookup maps are derived rather than appended. Each `slugs`
+    entry now carries its own emails/phones/full_name, and `--person` updates that
+    one entry in place instead of replacing the whole document with a single person.
   2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -32,10 +40,11 @@ from packs.ingestion.primitives.deep_context.common import (
     INDEX_MD,
     RAW_DIR,
     emit,
+    load_index,
     read_jsonl,
-    normalize_name,
     phone_digits,
     slugify,
+    write_index,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 
@@ -264,7 +273,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     dossier_dir = Path(args.dossier_dir)
     dossier_dir.mkdir(parents=True, exist_ok=True)
 
-    index = {"slugs": {}, "by_phone": {}, "by_email": {}, "by_name": {}}
+    # Load the whole document so `parents` (build_parents' key) survives, then replace
+    # only `slugs`. A full run rebuilds `slugs` from scratch — it is authoritative for
+    # every composed person; `--person` keeps the other entries and refreshes one.
+    index = load_index(Path(args.index_json))
+    slugs: dict[str, Any] = dict(index.get("slugs") or {}) if args.person else {}
+    index["slugs"] = slugs
     catalog: list[tuple[str, str, str]] = []  # (name, headline, slug)
     written_slugs: set[str] = set()
     written = 0
@@ -290,17 +304,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         written_slugs.add(slug)
         written += 1
 
-        rel_path = f"dossiers/{slug}.md"
-        index["slugs"][slug] = {"person_id": person_id, "name": name, "path": rel_path, "headline": headline(merged)}
-        for email in meta.get("emails") or []:
-            index["by_email"].setdefault(email.lower(), []).append(slug)
-        for phone in meta.get("phones") or []:
-            digits = phone_digits(phone)
-            if digits:
-                index["by_phone"].setdefault(digits, []).append(slug)
-        for nm in {normalize_name(name), normalize_name(meta.get("full_name") or "")}:
-            if nm:
-                index["by_name"].setdefault(nm, []).append(slug)
+        # A renamed person gets a NEW slug; drop the stale entry for the same
+        # person_id so `--person` cannot leave two records for one human.
+        for stale in [s for s, info in slugs.items()
+                      if s != slug and (info or {}).get("person_id") == person_id]:
+            slugs.pop(stale)
+        # The record carries its own identity: the lookup maps are derived from it,
+        # so they stay correct even after the raw bundles are purged.
+        slugs[slug] = {"person_id": person_id, "name": name, "path": f"dossiers/{slug}.md",
+                       "headline": headline(merged),
+                       "full_name": str(meta.get("full_name") or ""),
+                       "emails": list(meta.get("emails") or []),
+                       "phones": list(meta.get("phones") or [])}
         catalog.append((name, headline(merged), slug))
 
     # Remove orphan dossiers from earlier runs (a changed canonical_name yields a
@@ -312,7 +327,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 md.unlink()
                 orphans += 1
 
-    write_json(Path(args.index_json), index)
+    write_index(Path(args.index_json), index)
+    # Scoped runs only refresh the one person; the catalog stays whole-network.
+    if args.person:
+        catalog = [(info.get("name") or slug, info.get("headline") or "", slug)
+                   for slug, info in slugs.items()]
     _write_catalog(Path(args.index_md), catalog)
 
     manifest = {

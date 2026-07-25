@@ -151,7 +151,7 @@ button and cannot be blocked by the Done page.
 | Readiness and owner | Checks source availability, Full Disk Access, merged people, unresolved candidates, and required keys. Owner context supplies the operator's school, work, and location history for identity disambiguation. | Readiness JSON and `owner.json` |
 | Collection | Reads Gmail and message bodies into bounded per-person bundles. Candidates are included in full processing. The default depth is `--deep-cap 1600`; small iMessage groups are optional. | `raw/<person_id>.json` and `raw/manifest.json` |
 | Synthesis | Sends bounded message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn, and is mirrored into `review.csv`. Normal reruns rejudge missing/Maybe verdicts. | `facts/<person_id>.jsonl`, `overrides/review.csv` |
-| Composition | Deterministically renders facts into Markdown dossiers and name/email/phone lookup indexes. | `dossiers/*.md`, `index.json`, `index.md` |
+| Composition | Deterministically renders facts into Markdown dossiers and name/email/phone lookup indexes. Owns `index.json`'s `slugs` only; `parents` belongs to the parent stage and the `by_*` maps are derived from both. | `dossiers/*.md`, `index.json`, `index.md` |
 | Duplicate resolution | Generates plausible same-person pairs, judges them with OpenAI, and builds transitive canonical parents. A candidate merged into an existing person contributes its contact metadata and skips standalone review/research. | Merge audit CSVs and `parents/*.md` |
 | Reconcile | Before the browser opens, compares message-derived dossiers with attached LinkedIn profiles for identity only. It may verify, detach, or request human review; it never reads or writes worth. | `reconcile/verdicts.jsonl`, identity fields in `overrides/review.csv` |
 | People review | Shows only model Maybe contacts in the main binary queue. The paginated Yes and No tables remain editable. Finishing the last Maybe completes the People gate and moves directly to an animated agent-handoff state on Enrich Contacts. | Updated `review.csv` and `review/manifest.json` |
@@ -174,8 +174,9 @@ bin/deep-context dry
 bin/deep-context synthesize
 bin/deep-context compose
 bin/deep-context validate
-bin/deep-context cluster --dry-run
-bin/deep-context cluster
+bin/deep-context dedupe            # tier 0: free deterministic same-person merge
+bin/deep-context cluster --dry-run # tier 1 estimate
+bin/deep-context cluster           # tier 1: the LLM judge on what tier 0 left
 bin/deep-context parents
 bin/deep-context reconcile --dry-run
 bin/deep-context reconcile

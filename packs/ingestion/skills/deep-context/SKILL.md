@@ -193,6 +193,22 @@ bin/deep-context validate
 
 ### 4. Duplicate people
 
+Identity resolves in tiers, cheapest first, so one human is one record = one
+review = one dossier as early and as cheaply as possible.
+
+**Tier 0 — free, deterministic, run it unconditionally.** Identical name plus a
+shared phone/email is identity equality; it is settled in code, needs no
+approval, and calls no provider:
+
+```bash
+bin/deep-context dedupe
+```
+
+Report `pairs_deterministic` (merged for free) and `pairs_unsettled` (what only
+the judge can decide). It never guesses — a pair it cannot settle is left
+unjudged — and it carries forward every merge a paid run already established.
+
+**Tier 1 — the paid LLM judge, for exactly what tier 0 could not settle.**
 Preview first:
 
 ```bash
@@ -207,6 +223,12 @@ Then inspect its audit output and run:
 ```bash
 bin/deep-context parents
 ```
+
+`parents` is free and idempotent — run it after whichever tier you reached, so
+the canonical layer always matches the merges that exist. Never pass `--no-llm`
+to `cluster` on a real network: that flag is the offline test stub and guesses
+the pairs it cannot settle, merging different people who happen to share a family
+email or a front-desk number. `dedupe` is the free path.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
 with message context before any paid identity lookup. A candidate merged into an
@@ -252,8 +274,12 @@ or more** do you pause: `Checking LinkedIn matches will cost $<floor>–$<ceilin
 Approve?` and wait for a yes. This happens before People review so the UI can
 incorporate current attached-identity judgments. Reconcile is identity-only:
 it compares a message-derived dossier to an attached LinkedIn and may verify,
-detach, or request human review. It never judges, refreshes, or writes worth,
-and no-link people create no reconcile task.
+detach, or request human review. It never judges, refreshes, or writes worth, and
+it never sends a person with no attached LinkedIn to the judge (there is nothing
+to reconcile) — but those people are still recorded, so a contact-only person
+(email/phone only, no LinkedIn) shows up in the review and can be kept or
+rejected. They are never queued for paid research; only the worth-gated candidate
+path spends on a lookup.
 
 Launch the local UI once in a background terminal:
 
