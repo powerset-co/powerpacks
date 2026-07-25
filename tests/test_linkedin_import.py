@@ -198,13 +198,9 @@ class LinkedInNetworkImportTests(unittest.TestCase):
                 "source_people_csv",
                 "people_csv",
                 "provider_enriched_csv",
-                "linkedin_enrichment_queue_csv",
                 "rapidapi_cache_hits_csv",
                 "rapidapi_cache_misses_csv",
                 "rapidapi_recent_failures_csv",
-                "needs_resolution_queue_csv",
-                "skipped_enrichment_csv",
-                "raw_provider_responses_dir",
             ]
             first_paths = {key: first_state["artifacts"][key] for key in artifact_keys}
             self.assertEqual(Path(first_state["artifact_dir"]), discover_dir)

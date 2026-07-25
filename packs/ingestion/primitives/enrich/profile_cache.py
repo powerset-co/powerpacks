@@ -22,10 +22,12 @@ only after the TTL (`recent_cached_failure`).
 - `cached_profile_from_row` — a successful payload embedded in a people row's
   `rapidapi_response*` columns.
 - `classify_rapidapi_cache_status` — hit / miss / recent_failure for one row.
-- `count_rapidapi_cache_misses` — row count of a cache-misses CSV (spend gate
-  estimates).
 
 Changelog:
+  2026-07-25 (declared contract): deleted `count_rapidapi_cache_misses`. Its
+    docstring claimed the spend gate used it; the gate reads the miss count the
+    prepare step already returns, and a repo-wide grep found no caller outside
+    one test assertion.
   2026-07-23 (audit decomposition): split out of enrich_people.py verbatim,
     minus dead weight: `cached_profile_from_row` dropped its two unused
     public_identifier/linkedin_url parameters.
@@ -48,7 +50,6 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
 from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
 from packs.ingestion.schemas.people_schema import extract_public_identifier, parse_jsonish  # noqa: E402
-from packs.shared.csv_io import CsvIO  # noqa: E402
 
 
 def parse_iso(value: str) -> datetime | None:
@@ -196,9 +197,3 @@ def classify_rapidapi_cache_status(
     if cached_file_exists:
         return "miss", "cache entry unusable", cache_path, None
     return "miss", "no usable cache", cache_path, None
-
-
-def count_rapidapi_cache_misses(cache_misses_csv: Path) -> int:
-    if not cache_misses_csv.exists():
-        return 0
-    return len(CsvIO.read_dict_rows(cache_misses_csv))
