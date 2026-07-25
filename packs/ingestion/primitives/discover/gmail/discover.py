@@ -33,6 +33,20 @@ Shape (GmailDiscovery(...).run()):
   linkedin_resolution_queue.csv (same rows) + a typed stage manifest (models.py).
 
 Changelog:
+  2026-07-25 (declared contract): both classes are `pipeline/contract.py:Node`s —
+    `GmailAccountChannel` declares the node `gmail_account_extract` and
+    `GmailDiscovery` the node `gmail_stage_merge`. Each DECLARES its inputs and
+    outputs as `Artifact`s (the per-account paths as `{account_slug}` templates,
+    bound to the concrete slug per instance) and returns a typed payload from
+    `execute()`; `run()` is the inherited template (validate inputs -> execute ->
+    validate outputs -> manifest). The channel's `run()` therefore returns the
+    payload BODY (a dict) instead of `GmailDiscoveryFailed | None`, and the store
+    branches on `status == "failed"`. Two things are deliberately NOT declared as
+    inputs: this stage reads its own prior `manifest.json` and its own prior
+    `contacts.csv` (row count only) to name the merge reason — a node's own
+    manifest/output is resume state, not an upstream artifact, and declaring it
+    would make the graph a self-cycle. `contacts.csv` is declared
+    `consumers_optional=True`: it has one writer and zero readers.
   2026-07-24 (incremental deleted): the append-only delta path is gone, because no
     producer ever fed it — extract_gmail permanently declares full_recount (#334)
     and the owner has decided against building real incrementality. DELETED the
@@ -116,8 +130,11 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json  # noqa: E402
-from packs.ingestion.primitives.common.paths import gmail_discover_dir  # noqa: E402
-from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
+from packs.ingestion.primitives.common.paths import (  # noqa: E402
+    DEFAULT_DISCOVER_DIR,
+    DEFAULT_MSGVAULT_DB,
+    gmail_discover_dir,
+)
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     GMAIL_INTERACTION_CALCULATION_VERSION,
     read_csv_rows,
@@ -130,11 +147,14 @@ from packs.ingestion.primitives.discover.gmail.extract_gmail import (  # noqa: E
     GmailExtractor,
 )
 from packs.ingestion.primitives.discover.gmail.models import (  # noqa: E402
+    GmailAccountExtracted,
+    GmailContactRow,
     GmailDiscoveryCompleted,
     GmailDiscoveryFailed,
     GmailDiscoverySkipped,
     GmailPrivacy,
 )
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, PeopleRow  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.util import (  # noqa: E402
     GMAIL_DISCOVERY_COLUMNS,
     GMAIL_CALCULATION_FULL_RECOUNT,
@@ -147,8 +167,15 @@ from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: E
     sync_msgvault_account,
 )
 
+# Declared paths. The per-account ones are TEMPLATES: one node declaration covers
+# every selected account, and each instance binds `{account_slug}` to its own
+# `source_slug(account_email)` directory (see GmailAccountChannel.bindings).
+GMAIL_ACCOUNT_DIR_TEMPLATE = str(DEFAULT_DISCOVER_DIR / "gmail" / "{account_slug}")
+GMAIL_ACCOUNT_QUEUE_CSV = f"{GMAIL_ACCOUNT_DIR_TEMPLATE}/linkedin_resolution_queue.csv"
+GMAIL_ACCOUNT_PEOPLE_CSV = f"{GMAIL_ACCOUNT_DIR_TEMPLATE}/people.csv"
 
-class GmailAccountChannel:
+
+class GmailAccountChannel(Node):
     """One selected Gmail account. Owns its FIXED per-account output dir
     (gmail_discover_dir), its msgvault sync step, and its in-process
     GmailExtractor.run_msgvault call. run() syncs (unless skipped), runs the
@@ -162,8 +189,26 @@ class GmailAccountChannel:
       record     the per-account entry the store puts in manifest.children
       output     the incoming row the store feeds the merge
 
-    run() returns None on success or a GmailDiscoveryFailed payload (failed sync
-    or a non-completed engine payload) that short-circuits the discovery run."""
+    run() (the Node template) returns the payload body: GmailAccountExtracted on
+    success, or GmailDiscoveryFailed (failed sync or a non-completed engine
+    payload) which short-circuits the discovery run. `manifest = ""` because this
+    node has no manifest.json of its own — the store publishes `record` in the
+    stage manifest's `children` list. `record` stays the persisted shape: it also
+    carries the ENGINE's status/code, which is not this node's status."""
+
+    name = "gmail_account_extract"
+    # The msgvault sqlite store is genuinely external (the msgvault binary owns
+    # it) and absent until the first sync, so it is not required to be present.
+    inputs = (Artifact(path=str(DEFAULT_MSGVAULT_DB), external=True, required=False),)
+    # required=False on both: an account whose archive yields no rows legitimately
+    # leaves the engine writing nothing (locked by
+    # test_gmail_discovery_ignores_missing_child_queue_instead_of_reading_dot).
+    outputs = (
+        Artifact(path=GMAIL_ACCOUNT_QUEUE_CSV, row_model=GmailContactRow, writes="full_rewrite", required=False),
+        Artifact(path=GMAIL_ACCOUNT_PEOPLE_CSV, row_model=PeopleRow, writes="full_rewrite", required=False),
+    )
+    payload = GmailAccountExtracted
+    manifest = ""
 
     def __init__(
         self,
@@ -196,8 +241,21 @@ class GmailAccountChannel:
         self.record: dict[str, Any] = {}
         self.timing: dict[str, Any] = {}
 
+    def bindings(self) -> dict[str, str]:
+        """Bind the `{account_slug}` templates to THIS account's directory."""
+        return {
+            GMAIL_ACCOUNT_QUEUE_CSV: str(self.queue_csv),
+            GMAIL_ACCOUNT_PEOPLE_CSV: str(self.people_csv),
+            str(DEFAULT_MSGVAULT_DB): str(self.msgvault_db),
+        }
+
     # Path accessors are computed from the module-level gmail_discover_dir at call
     # time so the child does not choose its own output — the store reads these.
+    # NOTE: the ground rules say a channel's fixed output paths are plain instance
+    # attributes set in __init__, never @property. These are @property (and the
+    # store's are call-time output_path reads). Left as found: tests write to
+    # channel.queue_csv before run(), and switching to __init__ attributes would
+    # change when the path is resolved. Flagged, not silently "fixed".
     @property
     def discover_dir(self) -> Path:
         """The child's fixed per-account output directory."""
@@ -244,9 +302,9 @@ class GmailAccountChannel:
             no_attachments=self.no_attachments,
         )
 
-    def run(self) -> GmailDiscoveryFailed | None:
+    def execute(self) -> GmailAccountExtracted | GmailDiscoveryFailed:
         """Sync then run the engine in-process, recording the contribution on self.
-        Returns None on success or a GmailDiscoveryFailed payload that stops the run."""
+        Returns the typed per-account payload, or GmailDiscoveryFailed."""
         started = time.monotonic()
         sync = self._sync()
         if sync["status"] == "failed":
@@ -295,7 +353,14 @@ class GmailAccountChannel:
             self._finish_timing(started, sync)
             return GmailDiscoveryFailed(account_email=self.account_email, error=payload)
         self._finish_timing(started, sync)
-        return None
+        return GmailAccountExtracted(
+            account_email=self.account_email,
+            calculation_mode=self.mode,
+            rows_read=len(self.rows),
+            artifact_dir=str(self.discover_dir),
+            people_csv=self.artifacts["people_csv"],
+            linkedin_resolution_queue_csv=self.artifacts["linkedin_resolution_queue_csv"],
+        )
 
     def _finish_timing(self, started: float, sync: dict[str, Any]) -> None:
         """Record this account's monotonic elapsed time and optional sync count."""
@@ -307,7 +372,7 @@ class GmailAccountChannel:
             self.timing["messages_added"] = sync["messages_added"]
 
 
-class GmailDiscovery:
+class GmailDiscovery(Node):
     """Store/orchestrator for one Gmail discovery run. The constructor resolves
     config ONCE (resolve_discovery_inputs) and owns everything else: the fixed
     output dir (the one mkdir), the per-account channels, the run loop (stop at the
@@ -322,6 +387,28 @@ class GmailDiscovery:
     and the children alone are the new contacts.csv. gmail_discovery_merge_plan
     only names the reason (empty output, --fresh, calc-version/account-set change,
     or the ordinary full recount) for the manifest."""
+
+    name = "gmail_stage_merge"
+    inputs = (Artifact(path=GMAIL_ACCOUNT_QUEUE_CSV, row_model=GmailContactRow, required=False),)
+    outputs = (
+        # contacts.csv is DEAD: one writer (here), zero readers — the import stage
+        # reads only its byte-identical twin linkedin_resolution_queue.csv. Declared
+        # consumers_optional so the checker does not re-report a known-dead file;
+        # deleting it is a separate, behavior-changing PR.
+        Artifact(
+            path=str(output_path("gmail", "contacts_csv")),
+            row_model=GmailContactRow,
+            writes="full_rewrite",
+            consumers_optional=True,
+        ),
+        Artifact(
+            path=str(output_path("gmail", "linkedin_resolution_queue_csv")),
+            row_model=GmailContactRow,
+            writes="full_rewrite",
+        ),
+    )
+    payload = GmailDiscoveryCompleted
+    manifest = str(output_path("gmail", "manifest_json"))
 
     def __init__(
         self,
@@ -339,7 +426,8 @@ class GmailDiscovery:
         # ONE resolution point for configuration (see resolve_discovery_inputs):
         # explicit overrides > discovery.config defaults. account_emails IS the
         # selection (no accounts.json fallback). Nothing below consults config.
-        self.inputs = resolve_discovery_inputs(
+        # Named `config`, not `inputs`: `inputs` is now the declared Artifact tuple.
+        self.config = resolve_discovery_inputs(
             account_emails=account_emails,
             msgvault_db=msgvault_db,
             sync_query=sync_query,
@@ -360,8 +448,8 @@ class GmailDiscovery:
             GmailAccountChannel(
                 account_email=email,
                 output_base=child_output_base,
-                msgvault_db=self.inputs.msgvault_db,
-                sync_query=self.inputs.sync_query,
+                msgvault_db=self.config.msgvault_db,
+                sync_query=self.config.sync_query,
                 skip_msgvault_sync=skip_msgvault_sync,
                 sync_after=sync_after,
                 sync_before=sync_before,
@@ -369,32 +457,54 @@ class GmailDiscovery:
                 limit=limit,
                 no_attachments=no_attachments,
             )
-            for email in self.inputs.account_emails
+            for email in self.config.account_emails
         ]
 
-    def run(self) -> dict[str, Any]:
+    def bindings(self) -> dict[str, str]:
+        """Bind the declared stage paths to this instance's call-time
+        `output_path` reads, and the per-account input template to a channel's
+        concrete queue path (the input is not required, so one is enough).
+
+        The keys come from the DECLARATION (self.outputs / self.manifest), never
+        from a second `output_path` read: a test that patches `output_path` would
+        otherwise produce binding keys that no declared path matches, and the
+        template would validate the unpatched `.powerpacks/` path instead."""
+        contacts_declared, queue_declared = (item.path for item in self.outputs)
+        bound = {
+            contacts_declared: str(self.contacts_csv),
+            queue_declared: str(self.queue_csv),
+            self.manifest: str(self.manifest_json),
+        }
+        if self.channels:
+            bound[GMAIL_ACCOUNT_QUEUE_CSV] = str(self.channels[0].queue_csv)
+        return bound
+
+    def execute(self) -> GmailDiscoveryCompleted | GmailDiscoveryFailed | GmailDiscoverySkipped:
         started_at = now_iso()
         started = time.monotonic()
-        account_emails = list(self.inputs.account_emails)
+        account_emails = list(self.config.account_emails)
         if not account_emails:
-            return write_stage_manifest(self.manifest_json, GmailDiscoverySkipped(
+            return GmailDiscoverySkipped(
                 started_at=started_at,
                 duration_seconds=round(time.monotonic() - started, 3),
                 accounts_timing=[],
                 reason="no_account_emails",
                 contacts_csv=str(self.contacts_csv),
                 linkedin_resolution_queue_csv=str(self.queue_csv),
-            ))
+            )
 
         # PHASE 1 — per selected account: sync msgvault (unless skipped), then run
         # the in-process gmail/extract_gmail.py extractor. Stop at the first failed channel.
         for channel in self.channels:
-            failed = channel.run()
-            if failed is not None:
-                failed.started_at = started_at
-                failed.duration_seconds = round(time.monotonic() - started, 3)
-                failed.accounts_timing = [item.timing for item in self.channels if item.timing]
-                return write_stage_manifest(self.manifest_json, failed)
+            outcome = channel.run()
+            if outcome.get("status") == "failed":
+                return GmailDiscoveryFailed(
+                    started_at=started_at,
+                    duration_seconds=round(time.monotonic() - started, 3),
+                    accounts_timing=[item.timing for item in self.channels if item.timing],
+                    account_email=str(outcome.get("account_email") or ""),
+                    error=outcome.get("error"),
+                )
         children = [channel.record for channel in self.channels]
         child_modes = [channel.mode for channel in self.channels]
         incoming_outputs = [channel.output for channel in self.channels]
@@ -427,7 +537,7 @@ class GmailDiscovery:
         merged = _merge_rows(incoming)
         write_csv_rows(self.contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
         write_csv_rows(self.queue_csv, GMAIL_DISCOVERY_COLUMNS, merged)
-        return write_stage_manifest(self.manifest_json, GmailDiscoveryCompleted(
+        return GmailDiscoveryCompleted(
             started_at=started_at,
             duration_seconds=round(time.monotonic() - started, 3),
             accounts_timing=[channel.timing for channel in self.channels],
@@ -439,11 +549,11 @@ class GmailDiscovery:
             linkedin_resolution_queue_csv=str(self.queue_csv),
             contacts=len(merged),
             account_emails=account_emails,
-            msgvault_db=self.inputs.msgvault_db,
+            msgvault_db=self.config.msgvault_db,
             updated_at=now_iso(),
             privacy=GmailPrivacy(gmail_sync_ran=not self.skip_msgvault_sync),
             children=children,
-        ))
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:

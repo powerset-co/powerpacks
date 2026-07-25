@@ -24,6 +24,12 @@ matches by on-disk existence rather than absolute-path prefix) and a source-deri
 manifest path — and are NOT this contract; do not fold them together.
 
 Changelog:
+  2026-07-25 (declared contract): `write_stage_manifest` also accepts the pydantic
+    `StageManifest` payloads of `pipeline/contract.py` (anything with
+    `to_payload()`), and both it and `manifest_fingerprints` take an optional
+    `output_paths` — a converted Node passes its DECLARED output paths instead of
+    letting `collect_artifact_paths` sniff strings and consult a key allowlist.
+    `StagePayload` stays for the unconverted verticals (messages, twitter).
   2026-07-23 (audit class-sharing): moved here from discover/common.py so stages
     outside discover can share the typed-manifest base without a cross-stage import.
     discover/common.py now re-exports StagePayload + write_stage_manifest.
@@ -81,19 +87,31 @@ def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None)
     return {"path": str(path), "exists": True, "size": stat.st_size, "mtime_ns": mtime_ns, "sha256": sha256_file(path)}
 
 
-def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Fingerprint a stage manifest's input and output artifact paths."""
+def manifest_fingerprints(
+    payload: dict[str, Any],
+    existing: dict[str, Any] | None = None,
+    output_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fingerprint a stage manifest's input and output artifact paths.
+
+    `output_paths` is the DECLARED output list (see
+    `pipeline/contract.py:Artifact`) and is used verbatim when given. Without it
+    the outputs are guessed out of the payload — any string under `artifacts`
+    plus a hardcoded allowlist of key names — so a stage whose output key is not
+    on that list goes silently unfingerprinted. Converted nodes pass the
+    declaration; unconverted stages keep the guessing path."""
     existing = existing or {}
     existing_inputs = existing.get("input_artifacts") if isinstance(existing.get("input_artifacts"), dict) else {}
     existing_outputs = existing.get("output_artifacts") if isinstance(existing.get("output_artifacts"), dict) else {}
     input_paths = collect_artifact_paths(payload.get("input") or {})
-    output_paths = collect_artifact_paths({
-        "artifacts": payload.get("artifacts") or {},
-        "contacts_csv": payload.get("contacts_csv"),
-        "linkedin_resolution_queue_csv": payload.get("linkedin_resolution_queue_csv"),
-        "source_csv": payload.get("source_csv"),
-        "review_csv": payload.get("review_csv"),
-    })
+    if output_paths is None:
+        output_paths = collect_artifact_paths({
+            "artifacts": payload.get("artifacts") or {},
+            "contacts_csv": payload.get("contacts_csv"),
+            "linkedin_resolution_queue_csv": payload.get("linkedin_resolution_queue_csv"),
+            "source_csv": payload.get("source_csv"),
+            "review_csv": payload.get("review_csv"),
+        })
     return {
         "input_artifacts": {path: artifact_fingerprint(path, existing_inputs.get(path) if isinstance(existing_inputs, dict) else None) for path in input_paths},
         "output_artifacts": {path: artifact_fingerprint(path, existing_outputs.get(path) if isinstance(existing_outputs, dict) else None) for path in output_paths},
@@ -120,16 +138,22 @@ def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
     return signature
 
 
-def write_stage_manifest(path: Path, payload: "dict[str, Any] | StagePayload") -> dict[str, Any]:
+def write_stage_manifest(
+    path: Path,
+    payload: "dict[str, Any] | StagePayload | Any",
+    output_paths: list[str] | None = None,
+) -> dict[str, Any]:
     """Write one stage's manifest (fingerprinted, no-op when unchanged).
 
-    Accepts the vertical's typed StagePayload (preferred — see
-    <vertical>/models.py) or its dict form."""
-    if isinstance(payload, StagePayload):
+    Accepts the vertical's typed payload — the pydantic `StageManifest` of
+    `pipeline/contract.py` (preferred) or the older `StagePayload` dataclass — or
+    its dict form. `output_paths` carries a converted node's DECLARED outputs
+    through to `manifest_fingerprints`."""
+    if isinstance(payload, StagePayload) or hasattr(payload, "to_payload"):
         payload = payload.to_payload()
     existing = read_json(path, {}) or {}
     payload = dict(payload)
-    payload["fingerprints"] = payload.get("fingerprints") or manifest_fingerprints(payload, existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else None)
+    payload["fingerprints"] = payload.get("fingerprints") or manifest_fingerprints(payload, existing.get("fingerprints") if isinstance(existing.get("fingerprints"), dict) else None, output_paths)
     if existing and stable_manifest_signature(existing) == stable_manifest_signature(payload):
         return existing
     payload["updated_at"] = payload.get("updated_at") or now_iso()

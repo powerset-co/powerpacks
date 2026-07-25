@@ -1,7 +1,13 @@
-"""Typed stage-manifest payloads for gmail discovery — the ONLY shapes
-gmail/discover.py may emit. New fields are added here, never invented inline.
+"""Typed stage-manifest payloads and row models for gmail discovery — the ONLY
+shapes gmail/discover.py may emit. New fields are added here, never invented inline.
 
 Changelog:
+  2026-07-25 (declared contract): the payloads are pydantic `StageManifest`
+    models (`pipeline/contract.py`) instead of `StagePayload` dataclasses — same
+    field names, same defaults, same None-dropping in `to_payload()`. Added
+    `GmailAccountExtracted` (the per-account node's payload; it has no
+    manifest.json of its own and is embedded in the stage manifest's `children`)
+    and `GmailContactRow`, the row model both gmail discovery CSVs declare.
   2026-07-24 (incremental deleted): DELETED GmailDiscoveryIncrementalMismatch and
     GmailDiscoveryCompleted's applied_incremental_inputs /
     skipped_incremental_inputs fields, along with the append-only merge path that
@@ -17,30 +23,35 @@ Changelog:
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.manifests import StagePayload  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.util import GMAIL_DISCOVERY_COLUMNS  # noqa: E402
+from packs.ingestion.primitives.pipeline.contract import StageManifest, row_model_for  # noqa: E402
+
+# Both gmail discovery CSVs (contacts.csv and its byte-identical twin
+# linkedin_resolution_queue.csv) carry these columns, generated from the one
+# column constant so a declaration cannot drift from the writer.
+GmailContactRow = row_model_for("GmailContactRow", GMAIL_DISCOVERY_COLUMNS)
 
 
-@dataclass
-class GmailPrivacy:
+class GmailPrivacy(BaseModel):
     message_bodies_read: bool = False
     gmail_sync_ran: bool = False
     parallel_called: bool = False
     rapidapi_called: bool = False
 
 
-@dataclass
-class GmailDiscoverySkipped(StagePayload):
+class GmailDiscoverySkipped(StageManifest):
     started_at: str = ""
     duration_seconds: float = 0.0
-    accounts_timing: list[dict[str, Any]] = field(default_factory=list)
+    accounts_timing: list[dict[str, Any]] = Field(default_factory=list)
     reason: str = ""
     contacts_csv: str = ""
     linkedin_resolution_queue_csv: str = ""
@@ -48,33 +59,45 @@ class GmailDiscoverySkipped(StagePayload):
     source: str = "gmail"
 
 
-@dataclass
-class GmailDiscoveryFailed(StagePayload):
+class GmailDiscoveryFailed(StageManifest):
     started_at: str = ""
     duration_seconds: float = 0.0
-    accounts_timing: list[dict[str, Any]] = field(default_factory=list)
+    accounts_timing: list[dict[str, Any]] = Field(default_factory=list)
     account_email: str = ""
     error: Any = None
     status: str = "failed"
     source: str = "gmail"
 
 
-@dataclass
-class GmailDiscoveryCompleted(StagePayload):
+class GmailAccountExtracted(StageManifest):
+    """One account's contribution. The per-account node reports into the STAGE
+    manifest's `children` list (it has no manifest.json of its own), so these are
+    the record fields the store already published there."""
+
+    account_email: str = ""
+    calculation_mode: str = ""
+    rows_read: int = 0
+    artifact_dir: str = ""
+    people_csv: str = ""
+    linkedin_resolution_queue_csv: str = ""
+    status: str = "completed"
+
+
+class GmailDiscoveryCompleted(StageManifest):
     started_at: str = ""
     duration_seconds: float = 0.0
-    accounts_timing: list[dict[str, Any]] = field(default_factory=list)
+    accounts_timing: list[dict[str, Any]] = Field(default_factory=list)
     calculation_version: str = ""
     calculation_mode: str = ""
     calculation_reason: str = ""
-    child_calculation_modes: list[str] = field(default_factory=list)
+    child_calculation_modes: list[str] = Field(default_factory=list)
     contacts_csv: str = ""
     linkedin_resolution_queue_csv: str = ""
     contacts: int = 0
-    account_emails: list[str] = field(default_factory=list)
+    account_emails: list[str] = Field(default_factory=list)
     msgvault_db: str = ""
     updated_at: str = ""
-    privacy: GmailPrivacy = field(default_factory=GmailPrivacy)
-    children: list[dict[str, Any]] = field(default_factory=list)
+    privacy: GmailPrivacy = Field(default_factory=GmailPrivacy)
+    children: list[dict[str, Any]] = Field(default_factory=list)
     status: str = "completed"
     source: str = "gmail"

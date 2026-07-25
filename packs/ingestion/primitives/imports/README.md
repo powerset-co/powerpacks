@@ -2,6 +2,12 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-07-25 (declared contract): `merge_people.py`'s `PeopleMerge` is a
+  `pipeline/contract.py:Node` — it declares its four inputs and its one output as
+  `Artifact`s (row model `PeopleRow`), `execute()` does the merge, and the
+  inherited `run()` template validates the declarations and writes the now-typed
+  `MergePeopleManifest` (the raw manifest dict is gone). `merged/people.csv` is
+  byte-identical and every stat keeps its name and value.
 - 2026-07-24 (merge rewrite): `merge_network_sources.py` is DELETED and replaced
   by `merge_people.py`, written from the contract instead of inherited. The merge
   now does exactly one thing — combine the per-source `people.csv`, stamp

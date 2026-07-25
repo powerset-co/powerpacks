@@ -2,6 +2,14 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-07-25 (declared contract): `gmail/discover.py`'s two classes are
+  `pipeline/contract.py:Node`s (`gmail_account_extract`, `gmail_stage_merge`):
+  they DECLARE their inputs/outputs as `Artifact`s and implement `execute()`,
+  while `run()` is the inherited template (validate inputs → execute → validate
+  outputs → manifest). `GmailAccountChannel.run()` therefore returns the typed
+  payload BODY instead of `GmailDiscoveryFailed | None`. `contacts.csv` is
+  declared `consumers_optional` — one writer, zero readers. Reads/writes and the
+  manifest contents are unchanged.
 - 2026-07-23 (oop): `gmail/discover.py` dropped the thin `discover()` wrapper —
   callers now construct `GmailDiscovery(...).run()` directly — and account
   selection is `--account-email` (repeatable) only: the

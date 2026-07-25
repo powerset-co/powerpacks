@@ -508,7 +508,12 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", fake_run_msgvault):
                     result = channel.run()
 
-            self.assertIsNone(result)
+            # The channel is a pipeline Node: run() returns the typed payload body
+            # (it has no manifest.json of its own — the store publishes `record`).
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["account_email"], "me@example.com")
+            self.assertEqual(result["rows_read"], 1)
+            self.assertEqual(result["linkedin_resolution_queue_csv"], str(channel.queue_csv))
             sync_mock.assert_called_once()
             self.assertEqual(channel.mode, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT)
             self.assertEqual([row["primary_email"] for row in channel.rows], ["jane@example.com"])
@@ -536,9 +541,9 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault") as run_msgvault_mock:
                 result = channel.run()
 
-        self.assertIsInstance(result, discover_gmail.GmailDiscoveryFailed)
-        self.assertEqual(result.account_email, "me@example.com")
-        self.assertEqual(result.error, failed_sync)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["account_email"], "me@example.com")
+        self.assertEqual(result["error"], failed_sync)
         run_msgvault_mock.assert_not_called()
 
     def test_gmail_discovery_store_loops_channels_and_writes_outputs(self) -> None:
