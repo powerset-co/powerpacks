@@ -18,6 +18,12 @@ comes from `imports/directory.py`; `emit_progress` from `common/proc.py` and its
 `imports/gmail/util.py`.
 
 Changelog:
+  2026-07-25 (declared contract): this step now records the people file it
+    actually materialized on the orchestrator as `imp.gmail_people_csv` (one
+    plain attribute, like the gmail discovery channel's `record`). The importer
+    reads that instead of guessing between the `gmail_merged_people_csv` and
+    `gmail_people_csv` state keys. The keys are still written — they are part of
+    the manifest `artifacts` blob — but nothing READS them by guessing anymore.
   2026-07-23 (rename): the in-process apply-resolutions call moved from
     `GmailDiscoverEngine` (`gmail/discover_engine.py`) to `GmailExtractor`
     (`gmail/extract_gmail.py`). Behavior unchanged.
@@ -115,6 +121,7 @@ def run_gmail_apply_and_enrich(imp: "GmailImport") -> bool:
         if gmail_merge.get("status") == "completed" and gmail_merge.get("people_csv"):
             artifacts["gmail_merged_people_csv"] = gmail_merge["people_csv"]
             artifacts["gmail_people_csv"] = gmail_merge["people_csv"]
+            imp.gmail_people_csv = Path(str(gmail_merge["people_csv"]))
         imp._mark_step("gmail_apply_enrich", "skipped", reason="no gmail resolutions")
         return True
     resolution_records = ordered_records(resolution_records, unique_strings(input_cfg.get("gmail_account_emails") or input_cfg.get("gmail_account_email")))
@@ -157,6 +164,11 @@ def run_gmail_apply_and_enrich(imp: "GmailImport") -> bool:
         result = {"account_email": record.get("account_email", ""), "slug": slug, "apply": payload, "people_csv": resolved_people}
         final_people_csvs.append(resolved_people)
         artifacts["gmail_people_csv"] = resolved_people
+        # Fallback source for the import's people.csv when the merge below writes
+        # nothing (no account produced a row): the LAST account's resolved file,
+        # which is what the old `gmail_merged_people_csv or gmail_people_csv or ""`
+        # chain fell through to. Overwritten by the merge output when it completes.
+        imp.gmail_people_csv = Path(str(resolved_people))
         result["final_people_csv"] = resolved_people
         by_slug[slug] = result
         results.append(result)
@@ -168,6 +180,7 @@ def run_gmail_apply_and_enrich(imp: "GmailImport") -> bool:
         artifacts["gmail_merged_people_csv"] = gmail_merge.get("people_csv")
         artifacts["gmail_final_people_csvs"] = [str(gmail_merge.get("people_csv"))]
         artifacts["gmail_people_csv"] = str(gmail_merge.get("people_csv"))
+        imp.gmail_people_csv = Path(str(gmail_merge.get("people_csv")))
     imp._mark_step("gmail_apply_enrich", "completed", payload={"results": results, "gmail_merged_people": gmail_merge})
     emit_progress("Gmail LinkedIn matches applied and enrichment completed.", GMAIL_IMPORT_PREFIX)
     return True

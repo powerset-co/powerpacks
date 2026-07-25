@@ -264,10 +264,10 @@ a research candidate.)
 
 Materialize the matched contacts into this source's canonical
 `.powerpacks/network-import/import/messages/people.csv` (attaching message
-`interaction_counts` to people you already have) and the unmatched contacts that
-pass the deterministic "worth researching" floor into
-`.powerpacks/network-import/import/messages/candidates.csv` for `$deep-context`.
-The floor is pre-LLM and free: a plausibly-real saved contact name, a real
+`interaction_counts` to people you already have), followed in that same file by
+the unmatched contacts that pass the deterministic "worth researching" floor —
+they carry no `public_identifier` and a `candidate:` id, and `$deep-context`
+picks them up from there. The floor is pre-LLM and free: a plausibly-real saved contact name, a real
 10–15 digit phone, and at least one DM message; group-only low-signal contacts
 are excluded by default. `suggested` matches are never auto-attached — they go
 to candidates with the suggestion recorded.
