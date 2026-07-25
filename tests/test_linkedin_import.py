@@ -194,7 +194,8 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             first_state = json.loads(manifest_path.read_text(encoding="utf-8"))
             artifact_keys = [
-                "connections_csv",
+                # `connections_csv` is gone: connections_for_enrichment.csv had a
+                # writer and no reader, so the declared-contract pass deleted it.
                 "source_people_csv",
                 "people_csv",
                 "provider_enriched_csv",

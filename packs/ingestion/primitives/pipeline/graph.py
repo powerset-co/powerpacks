@@ -8,7 +8,10 @@ Builds the graph from `Node` declarations (never from a run) and reports:
   two_writer_conflicts  one path, two writers whose owned columns overlap (or a
                     writer that claims the whole file, or a full_rewrite next to
                     any other writer) — the `index.json` shape that cost 494
-                    duplicate review rows in #337
+                    duplicate review rows in #337. Two writers that declare
+                    DIFFERENT `owns_rows_where` slices are not a conflict:
+                    `directory.csv`'s gmail and messages writers each own only
+                    their own source's rows.
   schema_mismatches one path declared with two different row models, or an owned
                     column that is not in the row model
   cycles            a producer/consumer loop
@@ -21,6 +24,10 @@ Flow: import the converted node modules -> walk Node subclasses -> group
 declarations by path -> emit one JSON report.
 
 Changelog:
+  2026-07-25 (import stage): the four import-stage nodes joined the graph
+    (`gmail_import`, `messages_import`, `messages_match_local`,
+    `linkedin_import`), and the two-writer check learned the row-slice axis
+    (`Artifact.owns_rows_where`) that `directory.csv`'s two writers need.
   2026-07-25: created with the declared-contract prototype.
 """
 
@@ -41,7 +48,11 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa:
 # The converted nodes. Importing them IS the registration (and would already have
 # raised TypeError if any declaration were incomplete).
 import packs.ingestion.primitives.discover.gmail.discover  # noqa: E402,F401
+import packs.ingestion.primitives.imports.gmail.importer  # noqa: E402,F401
+import packs.ingestion.primitives.imports.linkedin.network_import  # noqa: E402,F401
 import packs.ingestion.primitives.imports.merge_people  # noqa: E402,F401
+import packs.ingestion.primitives.imports.messages.importer  # noqa: E402,F401
+import packs.ingestion.primitives.imports.messages.match_local_candidates  # noqa: E402,F401
 
 
 def node_subclasses(root: type[Node] = Node) -> list[type[Node]]:
@@ -53,8 +64,35 @@ def node_subclasses(root: type[Node] = Node) -> list[type[Node]]:
     return found
 
 
-def _writes_whole_file(item: Artifact) -> bool:
+def _claims_all_columns(item: Artifact) -> bool:
+    """No column scope (or a full_rewrite, which overwrites every column anyway)."""
     return not item.owns_columns or item.writes == "full_rewrite"
+
+
+def _claims_all_rows(item: Artifact) -> bool:
+    """No row scope, so this declaration covers every row in the file."""
+    return not item.owns_rows_where
+
+
+def _scopes_intersect(first: Artifact, second: Artifact) -> bool:
+    """Two writers of one path collide when their (rows x columns) scopes overlap.
+
+    Rows and columns are independent axes and BOTH must intersect for a conflict:
+    `contacts.csv`'s writers share every row but own disjoint columns, and
+    `directory.csv`'s writers own every column but disjoint rows. Row predicates
+    are compared as STRINGS — `owns_rows_where` is a declaration and this checker
+    never evaluates it — so two writers naming the same slice still conflict."""
+    rows_intersect = (
+        _claims_all_rows(first)
+        or _claims_all_rows(second)
+        or first.owns_rows_where == second.owns_rows_where
+    )
+    columns_intersect = (
+        _claims_all_columns(first)
+        or _claims_all_columns(second)
+        or bool(set(first.owns_columns) & set(second.owns_columns))
+    )
+    return rows_intersect and columns_intersect
 
 
 def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
@@ -86,12 +124,18 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
         for index, (name, item) in enumerate(declared):
             for other_name, other in declared[index + 1:]:
                 overlap = sorted(set(item.owns_columns) & set(other.owns_columns))
-                if overlap or _writes_whole_file(item) or _writes_whole_file(other):
+                if _scopes_intersect(item, other):
+                    if overlap:
+                        reason = "overlapping owned columns"
+                    elif item.owns_rows_where and other.owns_rows_where:
+                        reason = "two writers own the same row slice"
+                    else:
+                        reason = "a writer claims the whole file"
                     two_writer_conflicts.append({
                         "path": path,
                         "nodes": [name, other_name],
                         "overlapping_columns": overlap,
-                        "reason": "overlapping owned columns" if overlap else "a writer claims the whole file",
+                        "reason": reason,
                     })
                 if item.row_model is not other.row_model:
                     schema_mismatches.append({
