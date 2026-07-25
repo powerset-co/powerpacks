@@ -139,7 +139,7 @@ SYSTEM_PROMPT = (
     "evidence against a match. For these, geography, school, mutual-friend / social context, or "
     "a plausible timeline IS sufficient corroboration.\n\n"
     "For WORK contacts: a contact EMAIL whose DOMAIN matches the LinkedIn employer — current OR "
-    "past — (e.g. mmasse@riotgames.com against a Riot Games profile) is NEAR-DECISIVE identity "
+    "past — (e.g. casey@acme.com against an Acme Corp profile) is NEAR-DECISIVE identity "
     "proof: confirmed, high confidence (0.9+). A work email at a company means they work/worked "
     "there. And do NOT withhold a confirm or lower confidence because a GRANULAR sub-detail from "
     "my messages (a specific internal team, project, product line, or exact title) isn't on the "
@@ -499,7 +499,7 @@ def connection_verdict() -> dict[str, Any]:
 
 def _name_compatible(name: str, pub: str) -> bool:
     """True if a LinkedIn slug shares a real name token with the contact — guards against a
-    THIRD party's URL the contact merely mentioned (e.g. an intro: 'meet Brandon, /brandonmoak')."""
+    THIRD party's URL the contact merely mentioned (e.g. an intro: 'meet Jordan, /jordanbravo')."""
     name_tokens = {t for t in re.findall(r"[a-z]+", (name or "").lower()) if len(t) >= 3}
     pub_tokens = {t for t in re.findall(r"[a-z]+", (pub or "").lower()) if len(t) >= 3}
     return bool(name_tokens & pub_tokens)
@@ -518,7 +518,7 @@ def self_reported_retargets(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]
             continue
         # Only recover a WRONG attachment. If the attached link is already right — a ground-truth
         # connection, or a confirmed verdict — keep it; a LinkedIn merely mentioned in the messages
-        # must not override it (that's how Ben Taft, a real connection, got a third party's URL).
+        # must not override it (that's how Jordan Bravo, a real connection, got a third party's URL).
         if t.get("from_connections") or (t.get("verdict") or {}).get("verdict") == "confirmed":
             continue
         d = t.get("dossier") or {}

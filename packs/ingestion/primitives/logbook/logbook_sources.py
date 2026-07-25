@@ -436,7 +436,7 @@ def resolve_imessage_groups(person: Person, chat_db: Path, name_map: dict[str, s
     """Group chats (guid + title) the person belongs to. Empty without --include-groups.
 
     Unnamed groups (no display/room name) are titled by their members joined with
-    ' - ' (e.g. 'Amir Moazami - Jake Zeller'), resolved via ``name_map``."""
+    ' - ' (e.g. 'Jordan Bravo - Casey Delta'), resolved via ``name_map``."""
     name_map = name_map or {}
     con = _open_chat_db(chat_db)
     if con is None:
