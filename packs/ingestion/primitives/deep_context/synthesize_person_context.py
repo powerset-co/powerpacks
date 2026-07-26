@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 import time
@@ -66,6 +67,7 @@ DEFAULT_SATURATION_ROUNDS = 2      # ...or after this many batches add nothing n
 DEFAULT_MAX_BATCHES = 20           # ...or this many batches (~1600 msgs) — hard ceiling
 DEFAULT_MAX_RETRIES = 6
 DEFAULT_CHUNK_PEOPLE = 200         # people loaded into memory at once (streaming bound)
+SYNTHESIS_CONTRACT_VERSION = "owned-identifiers-v1"
 # Calibrated from real runs: ~10 chunks/s wall at high concurrency (ranged 6.7
 # on flex tier to 11.7 on default tier). Used only for the --dry-run ETA; actual
 # rate scales with --concurrency and your OpenAI usage tier.
@@ -81,6 +83,12 @@ SYSTEM_PROMPT = (
     "rough dates, and any identifiers (emails, phones, social handles, URLs). Prefer "
     "specific, evidence-backed facts over guesses; set low confidence when the signal is "
     "thin. Leave a field empty rather than inventing it.\n\n"
+    "`identifiers` is the complete list of useful identifiers mentioned in the dossier. "
+    "Separately fill `owned_identifiers` with ONLY identifiers clearly owned by the CONTACT: "
+    "an email/phone/URL they use, present in a signature, or explicitly identify as theirs. "
+    "A third party\'s contact card, referral, booking number, quoted number, or a number merely "
+    "mentioned in conversation is NEVER owned by the CONTACT. Do not treat the supplied Known "
+    "phones as message evidence; those are already source-record identifiers.\n\n"
     "Also decide `network_worth`: is this contact worth adding to (or keeping in) my "
     "network? Use only the message dossier and the contact identifiers supplied with it. "
     "Never use or infer a LinkedIn profile. This is primarily a human-vs-noise filter, "
@@ -154,6 +162,16 @@ FACT_SCHEMA: dict[str, Any] = {
             },
         },
         "identifiers": {"type": "array", "items": {"type": "string"}},
+        "owned_identifiers": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "emails": {"type": "array", "items": {"type": "string"}},
+                "phones": {"type": "array", "items": {"type": "string"}},
+                "urls": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["emails", "phones", "urls"],
+        },
         "shared_context": {
             "type": "array",
             "items": {
@@ -181,10 +199,18 @@ FACT_SCHEMA: dict[str, Any] = {
     },
     "required": [
         "canonical_name", "aliases", "employers", "title", "school", "field_of_study",
-        "location", "relationship_to_owner", "topics", "notable_events", "identifiers",
+        "location", "relationship_to_owner", "topics", "notable_events", "identifiers", "owned_identifiers",
         "shared_context", "confidence", "is_owner", "network_worth",
     ],
 }
+
+# Facts are a cache. Bump the explicit contract for an intentional semantic change;
+# the prompt/schema fingerprint catches accidental drift alongside it.
+SYNTHESIS_VERSION = hashlib.sha1(json.dumps({
+    "contract": SYNTHESIS_CONTRACT_VERSION,
+    "prompt": SYSTEM_PROMPT,
+    "schema": FACT_SCHEMA,
+}, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
 def owner_identity_block(owner: dict[str, Any]) -> str:
@@ -307,6 +333,9 @@ def fact_keys(facts: dict[str, Any]) -> set[str]:
         keys.add(f"topic:{str(topic).lower()}")
     for ident in facts.get("identifiers") or []:
         keys.add(f"id:{str(ident).lower()}")
+    for kind in ("emails", "phones", "urls"):
+        for ident in (facts.get("owned_identifiers") or {}).get(kind) or []:
+            keys.add(f"owned:{kind}:{str(ident).lower()}")
     return keys
 
 
@@ -436,9 +465,10 @@ def pending_target_paths(
     bodies one chunk at a time. The 'has messages' check is deferred to load time.
 
     Normal runs are monotonic: keep terminal machine Yes/No and human Yes/No,
-    while retrying missing/Maybe verdicts. ``rejudge`` deliberately ignores both
-    caches and evaluates every dossier; the review writer still preserves the
-    human-owned column."""
+    while retrying missing/Maybe verdicts. A facts record from an earlier
+    synthesis contract is stale even with a terminal worth decision, so a
+    contract bump automatically rebuilds it. ``rejudge`` deliberately ignores
+    both caches; the review writer still preserves the human-owned column."""
     paths: list[Path] = []
     rows = review_rows or {}
     for path in sorted(raw_dir.glob("*.json")):
@@ -448,6 +478,10 @@ def pending_target_paths(
         if person_id and pid != person_id:
             continue
         if not force and not rejudge:
+            facts_path = facts_dir / f"{pid}.jsonl"
+            if _facts_version(facts_path) != SYNTHESIS_VERSION:
+                paths.append(path)
+                continue
             if has_human_worth(rows, pid):
                 continue
             existing = llm_network_worth(pid, facts_dir).get("decision", "")
@@ -455,6 +489,15 @@ def pending_target_paths(
                 continue
         paths.append(path)
     return paths
+
+
+def _facts_version(path: Path) -> str:
+    """Version stamped on the latest fixed-path facts artifact, if readable."""
+    try:
+        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(records[-1].get("synthesis_version") or "") if records else ""
 
 
 def _load_bundle(path: Path) -> dict[str, Any]:
@@ -519,6 +562,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "people": people,
             "batches_ceiling": ceiling_batches,
             "model": args.model,
+            "synthesis_version": SYNTHESIS_VERSION,
             "reasoning_effort": reasoning_effort(args.reasoning_effort),
             "owner_context": bool(owner),
             "rejudge": bool(args.rejudge),
@@ -548,6 +592,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "stop_reasons": {},
             "errors": 0,
             "model": args.model,
+            "synthesis_version": SYNTHESIS_VERSION,
             "reasoning_effort": reasoning_effort(args.reasoning_effort),
             "owner_context": bool(owner),
             "rejudge": bool(args.rejudge),
@@ -578,6 +623,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         pid = result["person_id"]
         rec = {
             "chunk_index": 0,
+            "synthesis_version": SYNTHESIS_VERSION,
             "facts": result["facts"],
             "usage": result["usage"],
             "batches_used": result["batches_used"],
@@ -639,6 +685,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "stop_reasons": stop_reasons,
         "errors": counter["errors"],
         "model": args.model,
+        "synthesis_version": SYNTHESIS_VERSION,
         "reasoning_effort": effort,
         "owner_context": bool(owner),
         "rejudge": bool(args.rejudge),

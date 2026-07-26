@@ -583,6 +583,31 @@ class TestSynthesize(unittest.TestCase):
         c = dict(b, topics=["x", "y"])
         self.assertTrue(synth.fact_keys(c) - synth.fact_keys(a))
 
+    def test_owned_identifier_is_part_of_fact_progress(self):
+        before = _facts()
+        after = _facts(owned_identifiers={"emails": [], "phones": ["+14155550100"], "urls": []})
+        self.assertTrue(synth.fact_keys(after) - synth.fact_keys(before))
+
+    def test_schema_requires_owned_identifiers(self):
+        self.assertIn("owned_identifiers", synth.FACT_SCHEMA["required"])
+
+    def test_contract_version_requeues_stale_terminal_facts(self):
+        with tempfile.TemporaryDirectory() as d:
+            raw, facts = Path(d) / "raw", Path(d) / "facts"
+            raw.mkdir(); facts.mkdir()
+            bundle = raw / "p1.json"
+            bundle.write_text('{"messages": [{"text": "hello"}]}', encoding="utf-8")
+            (facts / "p1.jsonl").write_text(json.dumps({
+                "synthesis_version": "old-contract",
+                "facts": _facts(network_worth={"decision": "yes", "reason": "real person"}),
+            }) + "\n", encoding="utf-8")
+            self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id="", review_rows={}), [bundle])
+            (facts / "p1.jsonl").write_text(json.dumps({
+                "synthesis_version": synth.SYNTHESIS_VERSION,
+                "facts": _facts(network_worth={"decision": "yes", "reason": "real person"}),
+            }) + "\n", encoding="utf-8")
+            self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id="", review_rows={}), [])
+
 
 class TestMergeFacts(unittest.TestCase):
     def test_merges_employers_and_picks_confident_scalars(self):
@@ -603,6 +628,7 @@ class TestMergeFacts(unittest.TestCase):
         self.assertEqual(set(merged["topics"]), {"ml", "hiring"})
         self.assertEqual(merged["school"], "MIT")
         self.assertIn("longtime", merged["relationship_to_owner"])
+        self.assertEqual(merged["owned_identifiers"], {"emails": [], "phones": [], "urls": []})
 
     def test_headline(self):
         self.assertEqual(
@@ -3718,9 +3744,7 @@ class TestNameMatchAttach(unittest.TestCase):
 
 
 class TestMergeIdentifierEmails(unittest.TestCase):
-    """Same-person recall: an email a contact used only in the MESSAGES (facts.identifiers) widens
-    the candidate net, so a record whose registered address matches it gets proposed to the judge —
-    but first-name local-parts and the owner's address never leak in as false links."""
+    """Same-person recall uses only CONTACT-owned message emails, never a third-party mention."""
 
     def _p(self, name, emails=(), extra=(), phones=()):
         return {"name": name, "name_key": cluster.normalize_name(name), "emails": list(emails),
@@ -3732,8 +3756,8 @@ class TestMergeIdentifierEmails(unittest.TestCase):
             "https://meet.google.com/abc", "Jordan", "+1 (415) 555-1212", "JORDAN.C@Work.EXAMPLE"])
         self.assertEqual(got, {"jordan.chen@example.net", "jordan.c@work.example"})
 
-    def test_message_email_pairs_with_its_registered_owner(self):
-        # Yale's message-email IS Chen's registered address -> proposed, despite different
+    def test_owned_message_email_pairs_with_its_registered_owner(self):
+        # Yale's owned message-email IS Chen's registered address -> proposed, despite different
         # surnames. An unrelated third record is not dragged in.
         people = [
             self._p("Morgan Yale", emails=["morgan.yale@example.com"], extra=["jordan.chen@example.net"]),
@@ -3755,14 +3779,13 @@ class TestMergeIdentifierEmails(unittest.TestCase):
         ]
         self.assertEqual(cluster.generate_pairs(people), set())
 
-    def test_shared_message_email_is_proposed_for_the_judge(self):
-        # Two records that both only SAW team@shared.example in messages (identifier x identifier)
-        # ARE proposed — the code widens recall; the LLM judge decides alias vs group-CC third party.
+    def test_shared_owned_message_email_is_proposed_for_the_judge(self):
+        # Two records that both own team@shared.example are proposed for the LLM judge.
         people = [self._p("Alice Smith", emails=["a@example.com"], extra=["team@shared.example"]),
                   self._p("Bob Jones", emails=["c@example.org"], extra=["team@shared.example"])]
         self.assertIn((0, 1), cluster.generate_pairs(people))
 
-    def test_owner_email_is_excluded_from_message_identifiers(self):
+    def test_owner_email_is_excluded_from_owned_message_identifiers(self):
         import tempfile as _tf
         with _tf.TemporaryDirectory() as d:
             base = Path(d)
@@ -3775,7 +3798,8 @@ class TestMergeIdentifierEmails(unittest.TestCase):
                 '---\nname: "Kai"\nemails: ["kai@work.example"]\nphones: []\n---\n<!-- x -->\n', encoding="utf-8")
             (raw / f"{pid}.json").write_text(json.dumps({"messages": []}), encoding="utf-8")
             (facts / f"{pid}.jsonl").write_text(json.dumps({"chunk_index": 0, "facts": {
-                "canonical_name": "Kai", "identifiers": ["me@owner.example", "kai.alt@home.example"]}, "usage": {}}) + "\n",
+                "canonical_name": "Kai", "identifiers": ["me@owner.example", "kai.alt@home.example"],
+                "owned_identifiers": {"emails": ["me@owner.example", "kai.alt@home.example"], "phones": [], "urls": []}}, "usage": {}}) + "\n",
                 encoding="utf-8")
             index = {"slugs": {"kai-c": {"person_id": pid}}, "by_phone": {}}
             (person,) = cluster.load_people(index, dossiers, raw, facts)
