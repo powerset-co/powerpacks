@@ -27,6 +27,11 @@ distinction the merge makes, and it is a column — not a second file, not an
 admission decision.
 
 Changelog:
+  2026-07-26 (external linkedin input): `import/linkedin/people.csv` is declared
+    `external=True`. It is the honest answer to a `phantom_input` report: no node
+    in `packs/ingestion` writes that path — the LinkedIn import runs in the Modal
+    sandbox and the indexing pack's `linkedin_modal_pipeline.py` downloads the
+    enriched people.csv to it.
   2026-07-25 (declared contract): `PeopleMerge` is a `pipeline/contract.py:Node`.
     It DECLARES its four inputs and its one output (`Artifact`, with `PeopleRow`
     as the row model) instead of only opening them, `run()` is the inherited
@@ -250,15 +255,23 @@ class PeopleMerge(Node):
     declared inputs -> `execute()` -> declared outputs -> manifest)."""
 
     name = "merge_people"
-    # The three per-source people.csv files are written by the per-source
-    # importers and directory.csv by the directory step; none of those stages is
-    # converted yet, so `external=False` is the honest declaration and the graph
-    # checker reports them as producer-less. `required=False` because this merge
-    # deliberately tolerates an absent source (it merges whatever is present and
-    # reports `not_ready` only when NO source file was readable).
+    # The gmail and messages people.csv files are their importers' declared
+    # outputs; `import/linkedin/people.csv` is `external=True` because NOTHING in
+    # `packs/ingestion` writes it: the LinkedIn import runs in the Modal sandbox
+    # and `packs/indexing/modal/linkedin_modal_pipeline.py` downloads the enriched
+    # file to that path (see `imports/linkedin/network_import.py`, which says so at
+    # the top and declares `discover/linkedin/people.csv` as its own output).
+    # `required=False` because this merge deliberately tolerates an absent source
+    # (it merges whatever is present and reports `not_ready` only when NO source
+    # file was readable).
     inputs = tuple(
         [
-            Artifact(path=str(DEFAULT_IMPORT_DIR / source / "people.csv"), row_model=PeopleRow, required=False)
+            Artifact(
+                path=str(DEFAULT_IMPORT_DIR / source / "people.csv"),
+                row_model=PeopleRow,
+                external=source == "linkedin",
+                required=False,
+            )
             for source in MERGE_SOURCES
         ]
         + [Artifact(path=str(DEFAULT_DIRECTORY_CSV), required=False)]
@@ -269,7 +282,6 @@ class PeopleMerge(Node):
             row_model=PeopleRow,
             writes="full_rewrite",
             # Read by indexing / deep-context / search, none of them converted.
-            consumers_optional=False,
         ),
     )
     payload = MergePeopleManifest
@@ -403,8 +415,8 @@ def main() -> int:
         output_dir=Path(args.output_dir),
         directory_csv=Path(args.directory_csv),
     ).run()
-    emit(payload)
-    return 0 if payload.get("status") == "completed" else 1
+    emit(payload.to_payload())
+    return 0 if payload.status == "completed" else 1
 
 
 if __name__ == "__main__":

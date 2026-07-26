@@ -3,8 +3,12 @@
 
 Builds the graph from `Node` declarations (never from a run) and reports:
 
-  dead_outputs      an output no declared input reads, and not consumers_optional
-  phantom_inputs    an input no node produces, and not external=True
+  dead_outputs      an output no declared input reads
+  phantom_inputs    an input no node produces, and not external=True. A node's
+                    declared `manifest` counts as produced: two nodes read another
+                    node's manifest (the gmail import takes the account selection
+                    from discovery's; the messages import gates on the matcher's),
+                    and that is a real edge, not a missing producer.
   two_writer_conflicts  one path, two writers whose owned columns overlap (or a
                     writer that claims the whole file, or a full_rewrite next to
                     any other writer) — the `index.json` shape that cost 494
@@ -16,14 +20,28 @@ Builds the graph from `Node` declarations (never from a run) and reports:
                     column that is not in the row model
   cycles            a producer/consumer loop
 
-Most of the pipeline is NOT converted yet, so a dead output or phantom input here
-usually means "its producer/consumer is an unconverted stage" — the converted
-subset's boundary, not a bug. That is exactly why this is not a CI gate.
+Four of the five findings are empty as of 2026-07-26. `dead_outputs` is not, and
+both entries are the LinkedIn enrichment's people.csv under its two bindings
+(`enrichment/people.csv` when the enrich stage runs standalone,
+`discover/linkedin/people.csv` when the LinkedIn import runs it against its own
+dir): their reader is the unconverted indexing pack, whose
+`linkedin_modal_pipeline.py` downloads that file to `import/linkedin/people.csv`.
+A dead output whose consumer is an unconverted stage is the converted subset's
+boundary, not a bug — which is why this is a report and not a CI gate.
 
 Flow: import the converted node modules -> walk Node subclasses -> group
 declarations by path -> emit one JSON report.
 
 Changelog:
+  2026-07-26 (manifests are produced; enrich store registered): a node's declared
+    `manifest` path now counts as a producer for `phantom_inputs` and `edges` —
+    the two manifests another node reads (gmail discovery's, the messages
+    matcher's) were reported as producer-less only because a manifest is declared
+    as `manifest`, not as an `Artifact`. Manifests are deliberately NOT scored for
+    dead outputs or two-writer conflicts (see check_graph). `EnrichPeople` joined
+    the node list, and the graph's 23 cycles are gone with the two defaults that
+    caused them (the matcher's `merged/people.csv` catalog and the WhatsApp
+    extractor's `name_fallback_csv`).
   2026-07-25 (messages): registered the three messages-discovery nodes. They add
     the graph's first reported CYCLE, and it is real: the WhatsApp extractor
     reads the MERGED `.powerpacks/messages/contacts.csv` back as its
@@ -111,18 +129,26 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
             producers.setdefault(item.path, []).append((node.name, item))
         for item in node.inputs:
             consumers.setdefault(item.path, []).append(node.name)
+    # A node's declared `manifest` is a path it writes too, so a node that reads
+    # ANOTHER node's manifest (gmail's import reads discovery's for the account
+    # selection; the messages import gates on the matcher's) has a real producer,
+    # not a phantom. Manifests are kept out of `producers` because they are the
+    # stage's state contract rather than pipeline data: every one of them is read
+    # by a status surface outside the graph, so scoring them as dead outputs would
+    # report every converted stage as dead.
+    manifest_producers = {node.manifest: node.name for node in nodes if node.manifest}
 
     dead_outputs = [
         {"node": name, "path": path}
         for path, declared in producers.items()
         for name, item in declared
-        if not consumers.get(path) and not item.consumers_optional
+        if not consumers.get(path)
     ]
     phantom_inputs = [
         {"node": node.name, "path": item.path}
         for node in nodes
         for item in node.inputs
-        if not producers.get(item.path) and not item.external
+        if not producers.get(item.path) and item.path not in manifest_producers and not item.external
     ]
 
     two_writer_conflicts: list[dict[str, Any]] = []
@@ -166,7 +192,10 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
         node.name: sorted({
             name
             for item in node.inputs
-            for name, _artifact in producers.get(item.path, [])
+            for name in (
+                [producer for producer, _artifact in producers.get(item.path, [])]
+                + ([manifest_producers[item.path]] if item.path in manifest_producers else [])
+            )
             if name != node.name
         })
         for node in nodes

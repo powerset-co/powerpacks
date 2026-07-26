@@ -36,6 +36,12 @@ combined resolution CSVs, and `.powerpacks/network-import/gmail/people.gmail.csv
 — all written and read inside this one node.
 
 Changelog:
+  2026-07-26 (declaration owns the path): the discovery paths this import reads are
+    gmail discovery's declared constants (`GMAIL_STAGE_QUEUE_CSV`,
+    `GMAIL_STAGE_MANIFEST_JSON`) instead of local rebuilds of the same strings, and
+    the deleted `discover/gmail/contacts.csv` is gone from the manifest `input`
+    block (it was fingerprinted for the no-op gate as a byte-identical twin of the
+    queue beside it).
   2026-07-25 (declared contract): `GmailImport` is a `pipeline/contract.py`
     `Node`. The flow moved from `run()` to `execute()` (`run()` is the inherited
     template) and the manifest payload is the typed `GmailImportManifest`, still
@@ -88,7 +94,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso  # noqa: E402
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
-    DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_IMPORT_DIR,
     DEFAULT_PROFILE_CACHE_DIR,
@@ -105,8 +110,9 @@ from packs.ingestion.primitives.imports.common import (  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.discover import (  # noqa: E402
     GMAIL_ACCOUNT_PEOPLE_CSV,
     GMAIL_ACCOUNT_QUEUE_CSV,
+    GMAIL_STAGE_MANIFEST_JSON,
+    GMAIL_STAGE_QUEUE_CSV,
 )
-from packs.ingestion.primitives.discover.discovery_config import output_path  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.models import GmailContactRow  # noqa: E402
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     GMAIL_DIRECTORY_ROWS,
@@ -132,10 +138,10 @@ from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, normali
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 GMAIL_IMPORT_CONTRACT = "gmail-directory-only-v2"
-# Where gmail discovery published the account selection this import reads. Its
-# producer declares it as a `manifest`, not an `Artifact`, so the graph checker
-# cannot attribute it and reports it as a phantom input — see the PR notes.
-GMAIL_DISCOVERY_MANIFEST = DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json"
+# Where gmail discovery published the account selection this import reads — its
+# DECLARED manifest path, imported from the producer. The graph checker attributes
+# a node's declared `manifest` to that node, so this is a real edge, not a phantom.
+GMAIL_DISCOVERY_MANIFEST = Path(GMAIL_STAGE_MANIFEST_JSON)
 
 
 class GmailImportManifest(StageManifest):
@@ -185,13 +191,9 @@ class GmailImport(Node):
         # The STAGE-level merged queue (singular key). Read only on the fallback
         # path — when no per-account record survived discovery's schema check,
         # `gmail_queue_records` synthesizes one record over this file and splits it
-        # against the directory. Same `output_path` call gmail discovery declares
-        # it with, so the graph matches on one string.
-        Artifact(
-            path=str(output_path("gmail", "linkedin_resolution_queue_csv")),
-            row_model=GmailContactRow,
-            required=False,
-        ),
+        # against the directory. The same declared constant gmail discovery names,
+        # so the graph matches on one string.
+        Artifact(path=GMAIL_STAGE_QUEUE_CSV, row_model=GmailContactRow, required=False),
         # The account selection. required=False because its absence is a handled,
         # reported state: a `skipped` manifest with reason "no Gmail discovery
         # queue" (locked by test_gmail_import_removes_legacy_ledger_and_writes_manifest).
@@ -373,8 +375,7 @@ class GmailImport(Node):
             input={
                 **expected_input,
                 "discovery_manifest": str(GMAIL_DISCOVERY_MANIFEST),
-                "contacts_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "contacts.csv"),
-                "linkedin_resolution_queue_csv": str(DEFAULT_BASE_DIR / "discover" / "gmail" / "linkedin_resolution_queue.csv"),
+                "linkedin_resolution_queue_csv": GMAIL_STAGE_QUEUE_CSV,
             },
             outputs={
                 "people_csv": people_csv,

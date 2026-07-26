@@ -121,6 +121,19 @@ class CsvIO:
             return next(cls.reader(handle), [])
 
     @classmethod
+    def count_rows(cls, path: Path) -> int:
+        """Count a CSV's data rows (header excluded; ``0`` for a missing file).
+
+        Streams — the other cheap half of :meth:`read_dict_rows`, for the callers
+        that want the row COUNT and not the 11MB of rows under it: the pipeline
+        contract's per-node row stats and ``imports/common.py:csv_count``."""
+        if not path.is_file():
+            return 0
+        cls.ensure_field_limit()
+        with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+            return sum(1 for _ in csv.DictReader(handle))
+
+    @classmethod
     def write_dict_rows(cls, path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
         r"""Write dict rows to a CSV file — byte-for-byte like the per-module
         ``write_csv(path, fieldnames, rows)`` copies it replaces.

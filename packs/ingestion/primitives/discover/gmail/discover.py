@@ -26,13 +26,24 @@ Shape (GmailDiscovery(...).run()):
     success or a GmailDiscoveryFailed payload that short-circuits the run.
 
   GmailDiscovery loops the channels (stopping at the first failure), counts the
-  rows already in contacts.csv, and asks gmail_discovery_merge_plan to name the
-  reason for the rebuild (empty output, --fresh, calc-version/account-set change,
-  or the ordinary full recount). The children's rows are always the whole new
-  output. It merges those rows by primary email -> writes contacts.csv +
-  linkedin_resolution_queue.csv (same rows) + a typed stage manifest (models.py).
+  rows already in linkedin_resolution_queue.csv, and asks
+  gmail_discovery_merge_plan to name the reason for the rebuild (empty output,
+  --fresh, calc-version/account-set change, or the ordinary full recount). The
+  children's rows are always the whole new output. It merges those rows by primary
+  email -> writes linkedin_resolution_queue.csv + a typed stage manifest
+  (models.py).
 
 Changelog:
+  2026-07-26 (contacts.csv deleted): the stage writes ONE output. `contacts.csv`
+    was byte-identical to `linkedin_resolution_queue.csv` and its only reader was
+    `imports/status.py`, which counted its rows; status now reads the queue's row
+    count out of this manifest's per-node stats (`fingerprints.output_artifacts`),
+    so the file, its declaration, its `contacts_csv` manifest field, and its
+    `discovery.config.json` output key are all gone. The merge plan's row count and
+    the child output base come off the queue instead. `bindings()` is keyed by the
+    two declared path CONSTANTS (GMAIL_STAGE_QUEUE_CSV /
+    GMAIL_STAGE_MANIFEST_JSON) rather than by tuple position, which is what broke
+    when the outputs tuple shrank.
   2026-07-25 (declared contract): both classes are `pipeline/contract.py:Node`s —
     `GmailAccountChannel` declares the node `gmail_account_extract` and
     `GmailDiscovery` the node `gmail_stage_merge`. Each DECLARES its inputs and
@@ -46,7 +57,6 @@ Changelog:
     `contacts.csv` (row count only) to name the merge reason — a node's own
     manifest/output is resume state, not an upstream artifact, and declaring it
     would make the graph a self-cycle. `contacts.csv` is declared
-    `consumers_optional=True`: it has one writer and zero readers.
   2026-07-24 (incremental deleted): the append-only delta path is gone, because no
     producer ever fed it — extract_gmail permanently declares full_recount (#334)
     and the owner has decided against building real incrementality. DELETED the
@@ -173,6 +183,13 @@ from packs.ingestion.primitives.discover.gmail.msgvault.sync import (  # noqa: E
 GMAIL_ACCOUNT_DIR_TEMPLATE = str(DEFAULT_DISCOVER_DIR / "gmail" / "{account_slug}")
 GMAIL_ACCOUNT_QUEUE_CSV = f"{GMAIL_ACCOUNT_DIR_TEMPLATE}/linkedin_resolution_queue.csv"
 GMAIL_ACCOUNT_PEOPLE_CSV = f"{GMAIL_ACCOUNT_DIR_TEMPLATE}/people.csv"
+# The two stage-level declared paths, resolved from discovery.config.json ONCE at
+# import. One home for each string: the declaration below, `bindings()`, and the
+# gmail import's declaration of the same queue all name these, so a `bindings()`
+# key cannot drift from the declared path it is supposed to rebind (and a test
+# that patches `output_path` cannot produce keys the template will not match).
+GMAIL_STAGE_QUEUE_CSV = str(output_path("gmail", "linkedin_resolution_queue_csv"))
+GMAIL_STAGE_MANIFEST_JSON = str(output_path("gmail", "manifest_json"))
 
 
 class GmailAccountChannel(Node):
@@ -390,25 +407,15 @@ class GmailDiscovery(Node):
 
     name = "gmail_stage_merge"
     inputs = (Artifact(path=GMAIL_ACCOUNT_QUEUE_CSV, row_model=GmailContactRow, required=False),)
+    # ONE stage output. `contacts.csv` was byte-identical to the queue below and
+    # its only reader was an existence probe + row count in `imports/status.py`,
+    # which now reads this artifact's row count out of the manifest instead — so
+    # the file is gone rather than declared dead.
     outputs = (
-        # contacts.csv is DEAD: one writer (here), zero readers — the import stage
-        # reads only its byte-identical twin linkedin_resolution_queue.csv. Declared
-        # consumers_optional so the checker does not re-report a known-dead file;
-        # deleting it is a separate, behavior-changing PR.
-        Artifact(
-            path=str(output_path("gmail", "contacts_csv")),
-            row_model=GmailContactRow,
-            writes="full_rewrite",
-            consumers_optional=True,
-        ),
-        Artifact(
-            path=str(output_path("gmail", "linkedin_resolution_queue_csv")),
-            row_model=GmailContactRow,
-            writes="full_rewrite",
-        ),
+        Artifact(path=GMAIL_STAGE_QUEUE_CSV, row_model=GmailContactRow, writes="full_rewrite"),
     )
     payload = GmailDiscoveryCompleted
-    manifest = str(output_path("gmail", "manifest_json"))
+    manifest = GMAIL_STAGE_MANIFEST_JSON
 
     def __init__(
         self,
@@ -439,11 +446,10 @@ class GmailDiscovery(Node):
         self.full_rerun_requested = bool(fresh)
         # Read output_path at call time (not import) so tests can patch the module
         # global and the store honors it.
-        self.contacts_csv = output_path("gmail", "contacts_csv")
         self.queue_csv = output_path("gmail", "linkedin_resolution_queue_csv")
         self.manifest_json = output_path("gmail", "manifest_json")
-        self.contacts_csv.parent.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
-        child_output_base = extract_gmail_base_dir(self.contacts_csv)
+        self.queue_csv.parent.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
+        child_output_base = extract_gmail_base_dir(self.queue_csv)
         self.channels: list[GmailAccountChannel] = [
             GmailAccountChannel(
                 account_email=email,
@@ -468,12 +474,12 @@ class GmailDiscovery(Node):
         The keys come from the DECLARATION (self.outputs / self.manifest), never
         from a second `output_path` read: a test that patches `output_path` would
         otherwise produce binding keys that no declared path matches, and the
-        template would validate the unpatched `.powerpacks/` path instead."""
-        contacts_declared, queue_declared = (item.path for item in self.outputs)
+        template would validate the unpatched `.powerpacks/` path instead. Keyed
+        by declared PATH, not by tuple position, so a declaration that gains or
+        loses an artifact cannot silently rebind the wrong file."""
         bound = {
-            contacts_declared: str(self.contacts_csv),
-            queue_declared: str(self.queue_csv),
-            self.manifest: str(self.manifest_json),
+            GMAIL_STAGE_QUEUE_CSV: str(self.queue_csv),
+            GMAIL_STAGE_MANIFEST_JSON: str(self.manifest_json),
         }
         if self.channels:
             bound[GMAIL_ACCOUNT_QUEUE_CSV] = str(self.channels[0].queue_csv)
@@ -489,7 +495,6 @@ class GmailDiscovery(Node):
                 duration_seconds=round(time.monotonic() - started, 3),
                 accounts_timing=[],
                 reason="no_account_emails",
-                contacts_csv=str(self.contacts_csv),
                 linkedin_resolution_queue_csv=str(self.queue_csv),
             )
 
@@ -497,26 +502,26 @@ class GmailDiscovery(Node):
         # the in-process gmail/extract_gmail.py extractor. Stop at the first failed channel.
         for channel in self.channels:
             outcome = channel.run()
-            if outcome.get("status") == "failed":
+            if isinstance(outcome, GmailDiscoveryFailed):
                 return GmailDiscoveryFailed(
                     started_at=started_at,
                     duration_seconds=round(time.monotonic() - started, 3),
                     accounts_timing=[item.timing for item in self.channels if item.timing],
-                    account_email=str(outcome.get("account_email") or ""),
-                    error=outcome.get("error"),
+                    account_email=outcome.account_email,
+                    error=outcome.error,
                 )
         children = [channel.record for channel in self.channels]
         child_modes = [channel.mode for channel in self.channels]
         incoming_outputs = [channel.output for channel in self.channels]
 
-        # PHASE 2 — name the reason this run rebuilds contacts.csv. The existing
+        # PHASE 2 — name the reason this run rebuilds the queue. The existing
         # output is read only for its ROW COUNT (is there anything there at all?);
         # its rows are never carried forward, because each child's rows already
         # restate its account's whole truth.
         existing_manifest = read_json(self.manifest_json, {}) or {}
         existing_rows = 0
-        if self.contacts_csv.is_file():
-            _existing_fields, existing_output = read_csv_rows(self.contacts_csv)
+        if self.queue_csv.is_file():
+            _existing_fields, existing_output = read_csv_rows(self.queue_csv)
             existing_rows = len(existing_output)
         merge_plan = gmail_discovery_merge_plan(
             existing_manifest,
@@ -531,11 +536,9 @@ class GmailDiscovery(Node):
             incoming.extend(output.get("rows") or [])
 
         # PHASE 4 — merge by primary email (counts summed, newest last_interaction,
-        # account lists unioned) and write BOTH stage outputs with the same rows:
-        # contacts.csv is the aggregate; linkedin_resolution_queue.csv is the same
-        # content republished as the import stage's work queue.
+        # account lists unioned) and write the ONE stage output: the aggregate,
+        # published as the import stage's work queue.
         merged = _merge_rows(incoming)
-        write_csv_rows(self.contacts_csv, GMAIL_DISCOVERY_COLUMNS, merged)
         write_csv_rows(self.queue_csv, GMAIL_DISCOVERY_COLUMNS, merged)
         return GmailDiscoveryCompleted(
             started_at=started_at,
@@ -545,7 +548,6 @@ class GmailDiscovery(Node):
             calculation_mode=merge_plan["mode"],
             calculation_reason=merge_plan["reason"],
             child_calculation_modes=child_modes,
-            contacts_csv=str(self.contacts_csv),
             linkedin_resolution_queue_csv=str(self.queue_csv),
             contacts=len(merged),
             account_emails=account_emails,
@@ -575,7 +577,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     """CLI dispatch: construct GmailDiscovery from the parsed args, run it, emit
-    the payload, and map a failed status to exit code 1."""
+    the typed payload's dict form, and map a failed status to exit code 1."""
     args = build_parser().parse_args()
     payload = GmailDiscovery(
         account_emails=args.account_email or None,
@@ -588,8 +590,8 @@ def main() -> int:
         limit=args.limit,
         no_attachments=args.no_attachments,
     ).run()
-    emit(payload)
-    return 1 if payload.get("status") == "failed" else 0
+    emit(payload.to_payload())
+    return 1 if payload.status == "failed" else 0
 
 
 if __name__ == "__main__":

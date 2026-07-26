@@ -17,6 +17,15 @@ central source of truth the fan-in and the review flow read); new lookups run
 through deep-context's judged, budget-gated stages.
 
 Changelog:
+  2026-07-26 (declaration owns the path): `gmail_artifacts_from_discovery` no
+    longer asks the discovery manifest WHERE the stage queue is (a
+    `manifest.get(...) or <hardcoded default>` pair) — the path is gmail
+    discovery's declared output, imported as `GMAIL_STAGE_QUEUE_CSV`, and the
+    manifest it reads is `GMAIL_STAGE_MANIFEST_JSON` for the same reason. Both are
+    keyword parameters defaulting to those declarations, so a caller runs it
+    against its own directory instead of patching `DEFAULT_BASE_DIR` (which this
+    module no longer imports). The `gmail_contacts_csv` artifact key went with
+    `contacts.csv` itself; it had zero readers.
   2026-07-25 (declared contract): added `gmail_account_queue_records` /
     `gmail_stage_queue_csv`, the two named readers for the artifact keys that
     differ by one letter (`..._csvs` vs `..._csv`). Every caller now goes through
@@ -49,10 +58,14 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.schemas.candidates_schema import candidate_key_for, normalize_candidate_row  # noqa: E402
 from packs.ingestion.schemas.people_schema import normalize_people_row  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
-from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_DISCOVER_DIR  # noqa: E402
+from packs.ingestion.primitives.common.paths import DEFAULT_DISCOVER_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     read_csv_rows,
     source_slug,
+)
+from packs.ingestion.primitives.discover.gmail.discover import (  # noqa: E402
+    GMAIL_STAGE_MANIFEST_JSON,
+    GMAIL_STAGE_QUEUE_CSV,
 )
 
 # stderr progress tag for the gmail import chain. The importer and both steps/
@@ -122,21 +135,28 @@ def _valid_gmail_people_csv(path_text: Any) -> bool:
     return "primary_email" in fields and "interaction_counts" in fields
 
 
-def gmail_artifacts_from_discovery() -> dict[str, Any]:
+def gmail_artifacts_from_discovery(
+    *,
+    manifest_json: Path | None = None,
+    queue_csv: Path | None = None,
+) -> dict[str, Any]:
     """Collect the import's inputs from the gmail DISCOVERY manifest.
 
-    Reads only `.powerpacks/network-import/discover/gmail/manifest.json` (plus
-    existence checks on the files it names) and returns per-account queue and
-    people records; children with an invalid/missing people CSV are reported
-    under `gmail_invalid_discovery_records` instead of being silently dropped."""
-    manifest = read_json(DEFAULT_BASE_DIR / "discover" / "gmail" / "manifest.json", {}) or {}
+    The manifest is read for ONE thing: the per-account children (which accounts
+    discovery ran, and where each one's queue/people CSV landed). It is not asked
+    where anything IS — both fixed paths default to gmail discovery's DECLARED
+    ones, imported from it, so the two stages name one string each and a manifest
+    written by an older version cannot point this import at a different file. The
+    two parameters exist so a caller (a test) can run this against its own
+    directory without patching a module global. Children with an invalid/missing
+    people CSV are reported under `gmail_invalid_discovery_records` instead of
+    being silently dropped."""
+    manifest_json = manifest_json or Path(GMAIL_STAGE_MANIFEST_JSON)
+    queue_csv = queue_csv or Path(GMAIL_STAGE_QUEUE_CSV)
+    manifest = read_json(manifest_json, {}) or {}
     artifacts: dict[str, Any] = {}
-    contacts_csv = str(manifest.get("contacts_csv") or DEFAULT_BASE_DIR / "discover" / "gmail" / "contacts.csv")
-    stable_queue_csv = str(manifest.get("linkedin_resolution_queue_csv") or DEFAULT_BASE_DIR / "discover" / "gmail" / "linkedin_resolution_queue.csv")
-    if Path(contacts_csv).exists():
-        artifacts["gmail_contacts_csv"] = contacts_csv
-    if Path(stable_queue_csv).exists():
-        artifacts[GMAIL_STAGE_QUEUE_CSV_KEY] = stable_queue_csv
+    if queue_csv.exists():
+        artifacts[GMAIL_STAGE_QUEUE_CSV_KEY] = str(queue_csv)
     queue_records: list[dict[str, Any]] = []
     people_records: list[dict[str, Any]] = []
     invalid_records: list[dict[str, Any]] = []

@@ -395,7 +395,6 @@ class MatchLocalTests(unittest.TestCase):
                 ["python3", str(MATCH_LOCAL), "match",
                  "--contacts", str(contacts),
                  "--candidates", str(candidates),
-                 "--no-local-people",
                  "--review", str(tmp / "missing-review.csv")],
                 cwd=ROOT, capture_output=True, text=True, timeout=10, check=True,
             )
@@ -445,7 +444,6 @@ class MatchLocalTests(unittest.TestCase):
                 ["python3", str(MATCH_LOCAL), "match",
                  "--contacts", str(contacts),
                  "--candidates", str(candidates),
-                 "--no-local-people",
                  "--review", str(tmp / "missing-review.csv")],
                 cwd=ROOT, capture_output=True, text=True, timeout=10,
             )

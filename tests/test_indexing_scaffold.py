@@ -111,7 +111,7 @@ class IndexingScaffoldTests(unittest.TestCase):
                 inputs=[linkedin_csv, gmail_csv],
                 output_dir=out_dir,
                 directory_csv=base / "directory.csv",
-            ).run()
+            ).run().to_payload()
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["stats"]["input_rows_total"], 2)
             self.assertEqual(payload["stats"]["rows"], 2)

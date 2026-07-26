@@ -49,6 +49,22 @@ class CsvIOTests(unittest.TestCase):
         CsvIO.ensure_field_limit()
         self.assertGreater(csv.field_size_limit(), 131072)
 
+    def test_count_rows_counts_data_rows_and_tolerates_a_missing_file(self) -> None:
+        # The pipeline contract's per-node row stats and imports/common.csv_count
+        # both come through here, so the header must never be counted and a
+        # missing file must be 0 rather than an exception.
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "people.csv"
+            self.assertEqual(CsvIO.count_rows(path), 0)
+            path.write_text("id,full_name\r\n", encoding="utf-8")
+            self.assertEqual(CsvIO.count_rows(path), 0)
+            CsvIO.write_dict_rows(path, ["id", "full_name"], [
+                {"id": "1", "full_name": "Jordan Bravo"},
+                {"id": "2", "full_name": "Casey Example"},
+            ])
+            self.assertEqual(CsvIO.count_rows(path), 2)
+            self.assertEqual(CsvIO.count_rows(Path(td)), 0)  # a directory, not a file
+
     def test_write_dict_rows_strict_rejects_extra_keys_and_fills_missing_values(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "nested" / "strict.csv"

@@ -37,15 +37,16 @@ is no ledger, no `continue`, no per-step state store. Reruns are idempotent
 because the output path is stable. The manifest holds status, per-step timing,
 counts, and the artifact paths.
 
-Flow (EnrichPeople.run):
+Flow (EnrichPeople.execute, under the Node run template):
   enrich_prepare_queue -> paid cache misses & no --approve-spend? -> stop at a
   needs_approval manifest BEFORE any client or fetch -> enrich_linkedin_profiles
   -> enrich_merge_people -> one manifest.json
 
-Steps — each is a `pipeline/contract.py:Node` that DECLARES the files it reads
-and writes, so the hand-offs between them are checkable without a run. All
-three declare `manifest = ""`: the stage has ONE manifest.json and EnrichPeople
-writes it, embedding each step's typed payload as its `summary`.
+The store AND its three steps are `pipeline/contract.py:Node`s that DECLARE the
+files they read and write, so the hand-offs between them are checkable without a
+run. The three steps declare `manifest = ""`: the stage has ONE manifest.json,
+written by the store's run template, embedding each step's typed payload as its
+`summary`.
 
 1. enrich_prepare_queue: routes rows with LinkedIn URLs/public identifiers and
    profile gaps, then splits them by the local profile cache into
@@ -87,6 +88,14 @@ Cache seeding format is documented in `profile_cache.py`. Company identity
 field behavior is documented in `profile_transforms.py`.
 
 Changelog:
+  2026-07-26 (the store is a Node too): `EnrichPeople` is a
+    `pipeline/contract.py:Node`. What blocked it was `Node.run()` returning a dict
+    while `imports/linkedin/network_import.py` consumes this stage's typed
+    `EnrichManifest` by attribute; the template returns the typed payload now, so
+    the store fits. `run()` -> `execute()`, `_write()` -> `_build()` (the template
+    writes the manifest, which therefore gains this stage's declared IO stats), and
+    `EnrichManifest` became a pydantic `StageManifest` (see models.py). Same
+    statuses, same spend gate, same manifest keys.
   2026-07-25 (declared contract): the three steps became `pipeline/contract.py`
     Nodes — `EnrichQueuePrepare`, `EnrichLinkedInProfiles`, `EnrichedPeopleMerge`
     — each DECLARING its inputs/outputs as `Artifact`s and returning a typed
@@ -95,10 +104,10 @@ Changelog:
     steps read their hand-off CSVs from their own FIXED paths instead of from
     the orchestrator's `self.artifacts` dict, and EnrichLinkedInProfiles derives
     the paid-call count from the misses CSV it was given rather than being told.
-    EnrichPeople stays the store (it owns the artifact dir, the spend gate, and
-    the one manifest.json) and is deliberately NOT a Node: `Node.run()` returns
+    EnrichPeople stayed the store (it owns the artifact dir, the spend gate, and
+    the one manifest.json) and was NOT a Node at that point: `Node.run()` returned
     a dict and `imports/linkedin/network_import.py` consumes the typed
-    `EnrichManifest` by attribute, so converting the store is that caller's
+    `EnrichManifest` by attribute, so converting the store was that caller's
     change to make. The store now stops at the first non-completed step payload
     (the store pattern), which turns a missing input CSV from a FileNotFoundError
     traceback into a typed failed manifest. CLI: `command_run`/`command_status`
@@ -164,7 +173,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL, exit_code_for_status, manifest_emit_payload  # noqa: E402
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
 from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress  # noqa: E402
 from packs.ingestion.primitives.enrich.models import (  # noqa: E402
@@ -682,23 +691,31 @@ class EnrichedPeopleMerge(Node):
         return row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or short_hash(json.dumps(row, sort_keys=True))
 
 
-class EnrichPeople:
+class EnrichPeople(Node):
     """Idempotent RapidAPI people-enrichment run — the STORE for the three step
     nodes. Owns the fixed artifact dir (the one mkdir), the run order, the spend
     gate, and the single manifest.json. Each step node reports its counts and
-    artifact paths, and `run` records per-step timing and writes the manifest
-    exactly once.
+    artifact paths, and `execute()` records per-step timing; the Node template
+    writes the manifest exactly once, with this stage's declared IO stats.
 
     Cache hits never need approval. A run that would fetch RapidAPI cache misses
     without `cfg.approve_spend` stops at a `needs_approval` manifest before any
     client is constructed and before any fetch; with approval it proceeds (and
     fails clearly if no RAPIDAPI_* key).
 
-    This class is deliberately NOT a `Node`: `Node.run()` returns the manifest
-    BODY as a dict, and `imports/linkedin/network_import.py` consumes the typed
-    `EnrichManifest` returned here by attribute (`.status`, `.counts`, `.steps`,
-    `.artifacts`, `.needs_approval`, `.error`). Converting the store is that
-    caller's change to make, not this stage's."""
+    It declares the stage BOUNDARY input (the fan-in merge's people.csv) and no
+    outputs: the three step nodes declare the files, and `people.csv` in
+    particular is step 3's write — a second declaration of that path here would be
+    a two-writer conflict describing one write. `required=False` on the input for
+    the same reason the importers use it: step 1 reports a missing input as a
+    typed failure naming the path, and a store-level `not_ready` would throw that
+    message away."""
+
+    name = "enrich_people"
+    inputs = (Artifact(path=DEFAULT_INPUT_PEOPLE_CSV, row_model=PeopleRow, required=False),)
+    outputs = ()
+    payload = EnrichManifest
+    manifest = str(DEFAULT_ARTIFACT_DIR / MANIFEST_FILE)
 
     def __init__(self, cfg: EnrichConfig) -> None:
         self.cfg = cfg
@@ -710,10 +727,19 @@ class EnrichPeople:
         self.steps: dict[str, Any] = {}
         self.started_at = now_iso()
 
-    def run(self) -> EnrichManifest:
+    def bindings(self) -> dict[str, str]:
+        """Declared path -> this run's path, so a run against another artifact dir
+        (linkedin/network_import's discover dir, a test's temp dir) still validates
+        and stats the same declared contract."""
+        return {
+            DEFAULT_INPUT_PEOPLE_CSV: str(self.cfg.input_csv),
+            self.manifest: str(self.manifest_path),
+        }
+
+    def execute(self) -> EnrichManifest:
         prepare = self._step("prepare_queue", EnrichQueuePrepare(self.cfg))
         if prepare.get("status") != STATUS_COMPLETED:
-            return self._write(status="failed", error=self._step_error("prepare_queue", prepare))
+            return self._build(status="failed", error=self._step_error("prepare_queue", prepare))
         paid = int(self.counts.get("paid_call_count") or 0)
         if paid > 0 and not self.cfg.approve_spend:
             # RapidAPI bills every REQUEST, and a cache miss retries up to
@@ -721,7 +747,7 @@ class EnrichPeople:
             # credit per miss is the floor, not the worst case. Quote both.
             attempts = max(1, DEFAULT_RAPIDAPI_RETRY_ATTEMPTS)
             max_credits = paid * attempts
-            return self._write(status="needs_approval", needs_approval={
+            return self._build(status="needs_approval", needs_approval={
                 "reason": "rapidapi_cache_misses",
                 "paid_call_count": paid,
                 "cache_hit_count": int(self.counts.get("cache_hit_count") or 0),
@@ -737,7 +763,7 @@ class EnrichPeople:
                 ),
             })
         if paid > 0 and not RapidApiClient.resolve_key():
-            return self._write(status="failed", error="RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
+            return self._build(status="failed", error="RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
         try:
             for step_id, node in (
                 ("enrich_linkedin", EnrichLinkedInProfiles(self.cfg)),
@@ -745,17 +771,20 @@ class EnrichPeople:
             ):
                 body = self._step(step_id, node)
                 if body.get("status") != STATUS_COMPLETED:
-                    return self._write(status="failed", error=self._step_error(step_id, body))
+                    return self._build(status="failed", error=self._step_error(step_id, body))
         except PipelineFailed as exc:
-            return self._write(status="failed", error=str(exc))
-        return self._write(status="completed")
+            return self._build(status="failed", error=str(exc))
+        return self._build(status="completed")
 
     def _step(self, step_id: str, node: Node) -> dict[str, Any]:
         """Run one step node, absorb its counts + artifact paths, and record its
-        timing and typed payload in the stage manifest's `steps` block."""
+        timing and typed payload in the stage manifest's `steps` block.
+
+        Returns the step payload's DICT form: it is embedded verbatim as the step's
+        `summary`, and the store only ever branches on its `status`."""
         started = now_iso()
         clock = time.monotonic()
-        body = node.run()
+        body = node.run().to_payload()
         self.artifacts.update(node.artifacts)
         self.counts.update(node.counts)
         self.steps[step_id] = {
@@ -774,8 +803,9 @@ class EnrichPeople:
         detail = ", ".join(body.get("missing_inputs") or ()) or str(body.get("reason") or "")
         return f"{step_id} {body.get('status', 'did not complete')}" + (f": {detail}" if detail else "")
 
-    def _write(self, *, status: str, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> EnrichManifest:
-        manifest = EnrichManifest(
+    def _build(self, *, status: str, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> EnrichManifest:
+        """Assemble this stage's typed payload. The Node template writes it."""
+        return EnrichManifest(
             status=status,
             artifact_dir=str(self.artifact_dir),
             input=self.cfg.manifest_input(),
@@ -787,8 +817,6 @@ class EnrichPeople:
             started_at=self.started_at,
             updated_at=now_iso(),
         )
-        write_json(self.manifest_path, manifest.to_dict())
-        return manifest
 
     @staticmethod
     def command_check_keys(_: argparse.Namespace) -> int:

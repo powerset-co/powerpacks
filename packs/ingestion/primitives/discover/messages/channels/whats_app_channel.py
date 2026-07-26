@@ -13,16 +13,8 @@ Declared contract:
   reads   ``.powerpacks/messages/wacli/wacli.db`` — the wacli GO BINARY's own
           SQLite store: ``external=True`` (no node in the graph produces it) and
           ``required=False`` (absent until the first successful pairing + sync,
-          which is exactly the blocked path this node reports).
-          ``.powerpacks/messages/contacts.csv`` — the MERGED output of the
-          downstream ``messages_stage_merge`` node, read back as
-          ``name_fallback_csv`` to fill names wacli did not supply. This is a
-          real, previously-undocumented FEEDBACK EDGE and the declared graph
-          reports it as a cycle (messages_whatsapp_extract ->
-          messages_stage_merge -> messages_whatsapp_extract). It is declared
-          rather than hidden because it is a genuine cross-node read, not a
-          node's own resume state; `required=False` because it is absent on the
-          first run.
+          which is exactly the blocked path this node reports). That is the ONE
+          input: wacli's contact store is the name authority.
   writes  ``whatsapp.contacts.csv`` — the whole file, all 19 columns, sole writer.
 
 NOT declared, deliberately: ``whatsapp.contacts.raw.jsonl``,
@@ -37,6 +29,13 @@ hand-run of that CLI therefore leaves an orphan copy in
 ``.powerpacks/messages/`` that nothing reads.
 
 Changelog:
+  2026-07-26 (feedback edge removed): DROPPED the ``name_fallback_csv`` input. It
+    was the merged ``.powerpacks/messages/contacts.csv`` this channel FEEDS — the
+    graph's WhatsApp cycle — and it was redundant: it only fills names wacli did
+    not supply, the downstream merge already unions names across channels, and on
+    real local data it supplied 0 of the 90 named WhatsApp contacts.
+    ``extract_whatsapp`` no longer defaults to it (see its Changelog), so this
+    channel reads the wacli store alone.
   2026-07-25 (declared contract): now a ``(MessageChannel, Node)`` — declares the
     node ``messages_whatsapp_extract`` with its wacli-store and name-fallback
     inputs and its contacts.csv output, and ``extract()`` returns the typed
@@ -80,7 +79,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.messages.extract_whatsapp import (  # noqa: E402
-    DEFAULT_NAME_FALLBACK_CSV,
     WhatsAppExtractor,
 )
 from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
@@ -120,12 +118,7 @@ class WhatsAppChannel(MessageChannel, Node):
     channel = "whatsapp"
 
     name = "messages_whatsapp_extract"
-    inputs = (
-        Artifact(path=str(WACLI_DB), external=True, required=False),
-        Artifact(
-            path=str(DEFAULT_NAME_FALLBACK_CSV), row_model=MessageContactRow, required=False,
-        ),
-    )
+    inputs = (Artifact(path=str(WACLI_DB), external=True, required=False),)
     outputs = (
         Artifact(path=str(WHATSAPP_CONTACTS), row_model=MessageContactRow, writes="full_rewrite"),
     )

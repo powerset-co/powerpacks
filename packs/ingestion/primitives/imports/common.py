@@ -191,11 +191,8 @@ def copy_people_csv(source: str, people_csv: str, import_dir: Path | None = None
 
 
 def csv_count(path_text: str) -> int:
-    path = Path(str(path_text or ""))
-    if not path_text or not path.exists() or not path.is_file():
-        return 0
-    with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
-        return sum(1 for _ in CsvIO.dict_reader(handle))
+    """Data rows in the CSV at `path_text` (0 for "" or a missing file)."""
+    return CsvIO.count_rows(Path(str(path_text or "")))
 
 
 def directory_row_matches_source(row: dict[str, str], source: str) -> bool:

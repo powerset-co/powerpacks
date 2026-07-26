@@ -1,15 +1,19 @@
 """The import stage's DECLARATIONS must keep saying what the code does.
 
-These lock the three declarations that were argued about, so a later edit that
-quietly changes one fails here instead of in a user's directory.csv:
+These lock the declarations that were argued about, so a later edit that quietly
+changes one fails here instead of in a user's directory.csv:
 
   * `directory.csv` has two legitimate writers and they own ROW SLICES, not
     columns — the axis `owns_columns` cannot express.
   * `contacts.csv` has two legitimate writers and they own COLUMNS, disjointly,
     with `skip` owned by neither.
-  * the matcher's default catalog is `merged/people.csv`, which IS a cycle. It is
-    declared honestly and the checker reports it; nobody may "fix" it by calling
-    merged/people.csv external.
+  * the matcher has NO default people catalog. It used to default to
+    `merged/people.csv` — the fan-in merge's own output — which made the graph
+    cyclic; the catalog is an explicit caller argument now, and nobody may bring
+    the default back.
+  * `import/linkedin/people.csv` is `external=True` because the Modal indexing
+    pipeline writes it, not any node here — and the merge's OTHER two inputs are
+    not, so the flag cannot be used to silence a phantom-input report.
 """
 
 from __future__ import annotations
@@ -33,7 +37,6 @@ from packs.ingestion.primitives.imports.linkedin.network_import import LinkedInI
 from packs.ingestion.primitives.imports.merge_people import PeopleMerge  # noqa: E402
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport  # noqa: E402
 from packs.ingestion.primitives.imports.messages.match_local_candidates import (  # noqa: E402
-    DEFAULT_LOCAL_PEOPLE,
     ContactsMatch,
 )
 from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
@@ -130,19 +133,24 @@ class DeclaredGraphTests(unittest.TestCase):
         self.assertEqual(report["two_writer_conflicts"], [])
         self.assertEqual(report["schema_mismatches"], [])
 
-    def test_the_matcher_default_catalog_is_declared_and_makes_a_real_cycle(self) -> None:
-        # match_local_candidates.py's DEFAULT_LOCAL_PEOPLE is the merge's own
-        # output. Declared as-is, that closes a loop, and the checker must say so.
-        catalog = declared(ContactsMatch, str(DEFAULT_LOCAL_PEOPLE), where="inputs")
-        self.assertFalse(catalog.external, "merged/people.csv has a producer; calling it external hides the cycle")
-        # `edges` maps a consumer to its producers, so the reported path reads
-        # "merge_people consumes from messages_import, which consumes from
-        # messages_match_local, which consumes from merge_people".
-        cycles = check_graph(IMPORT_STAGE)["cycles"]
-        self.assertIn(
-            ["merge_people", "messages_import", "messages_match_local", "merge_people"],
-            cycles,
-        )
+    def test_the_matcher_declares_no_people_catalog_and_the_stage_is_acyclic(self) -> None:
+        # `--local-people` USED to default to the fan-in merge's own output, which
+        # closed a loop (merge_people -> messages_match_local -> messages_import ->
+        # merge_people). It has no default now: the catalog is a caller argument
+        # with no fixed path, like `--candidates`, so it is not declared at all —
+        # and nobody may reinstate the default by declaring merged/people.csv here.
+        merged_people = ".powerpacks/network-import/merged/people.csv"
+        self.assertEqual([item.path for item in ContactsMatch.inputs if item.path == merged_people], [])
+        self.assertEqual(check_graph(IMPORT_STAGE)["cycles"], [])
+
+    def test_only_the_linkedin_people_input_is_external(self) -> None:
+        # `import/linkedin/people.csv` has no writer in packs/ingestion: the
+        # LinkedIn import runs in the Modal sandbox and the indexing pack's
+        # linkedin_modal_pipeline.py downloads the enriched file to that path.
+        # gmail's and messages' come from their importers, so they are NOT external
+        # — the flag states a fact about the producer, it does not silence a report.
+        external = [item.path for item in PeopleMerge.inputs if item.external]
+        self.assertEqual(external, [".powerpacks/network-import/import/linkedin/people.csv"])
 
     def test_every_import_node_declares_a_payload_and_its_manifest_home(self) -> None:
         for node in IMPORT_STAGE:

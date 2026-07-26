@@ -19,17 +19,34 @@ both DECLARATIONS, checkable without running anything:
             the subclass's `execute()` -> validate declared outputs -> write the
             typed manifest. Subclasses may not override it. A node that fails to
             declare name/inputs/outputs/payload/manifest raises TypeError at
-            IMPORT time, not on the run that would have needed it.
+            IMPORT time, not on the run that would have needed it. `run()`
+            returns the TYPED payload; a caller that wants the dict form calls
+            `to_payload()`.
 
-Nothing here caches, ids, or sequences a run: the declaration is compile-time and
-the only durable artifacts stay each stage's outputs plus its one manifest.json.
+Per-node IO stats: the manifest's `fingerprints` block is computed HERE, from the
+declarations — `input_artifacts` is what the node read, `output_artifacts` what it
+wrote, both keyed by declared path, and each entry of a `row_model` artifact
+carries `rows`. That is what a consumer reads instead of opening an output file to
+count it (`imports/status.py`), so a file that existed only to be counted can be
+deleted. Nothing here caches, ids, or sequences a run: the declaration is
+compile-time and the only durable artifacts stay each stage's outputs plus its one
+manifest.json.
 
 Flow (Node.run):
   declared inputs readable? -> no  -> typed NotReady payload (never an exception)
                             -> yes -> execute() -> completed? -> every declared
-                               output present, header == its row model -> manifest
+                               output present, header == its row model -> stats
+                               from the declarations -> manifest
 
 Changelog:
+  2026-07-26 (per-node IO stats): `Node.run()` returns the typed `StageManifest`
+    instead of the written manifest dict (which unblocked converting the enrich
+    stage's store, whose caller consumes the payload by attribute), and
+    `artifact_stats()` computes the manifest's `fingerprints` block from the
+    DECLARATIONS — including a `rows` count per row-model artifact. The
+    `output_paths` parameter this used to pass into
+    `common/manifests.write_stage_manifest` went with it: the block arrives
+    precomputed now, so the parameter had no caller left.
   2026-07-25 (import stage): `Artifact.owns_rows_where` added — the ROW-slice axis
     `owns_columns` cannot express. `directory.csv` has two legitimate writers that
     each own every column of their own source's rows (gmail, messages); on the
@@ -57,7 +74,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
+from packs.ingestion.primitives.common.manifests import artifact_fingerprint, write_stage_manifest  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS,
     normalize_linkedin_url,
@@ -189,8 +207,7 @@ class Artifact(BaseModel):
                   is real, existing behavior (the merge tolerates an absent
                   per-source people.csv; the gmail extractor legitimately writes
                   no queue for an account with no matching mail).
-    consumers_optional  nothing is expected to read it, so the checker must not
-                  report it as a dead output."""
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -200,7 +217,6 @@ class Artifact(BaseModel):
     external: bool = False
     owns_columns: tuple[str, ...] = ()
     owns_rows_where: str = ""
-    consumers_optional: bool = False
     required: bool = True
 
 
@@ -231,7 +247,11 @@ class Node(ABC):
             errors.append("payload must be a StageManifest subclass")
         if not isinstance(getattr(cls, "manifest", None), str):
             errors.append('manifest must be a str ("" = reports into the parent stage manifest)')
-        if "run" in vars(cls):
+        # Resolve through the MRO, not vars(cls): a base listed BEFORE Node
+        # (a mixin like MessageChannel) shadows Node.run without ever putting
+        # "run" in the subclass's own __dict__, which silently skips every
+        # declared input/output check.
+        if cls.run is not Node.run:
             errors.append("run() is the template method and must not be overridden; implement execute()")
         if errors:
             raise TypeError(f"{cls.__name__} is not a valid Node: " + "; ".join(errors))
@@ -250,15 +270,24 @@ class Node(ABC):
     def execute(self) -> StageManifest:
         """Do the work and return the typed payload. Writes only declared outputs."""
 
-    def run(self) -> dict[str, Any]:
-        """Template: validate inputs -> execute -> validate outputs -> manifest."""
+    def run(self) -> StageManifest:
+        """Template: validate inputs -> execute -> validate outputs -> manifest.
+
+        Returns the TYPED payload, not the written manifest dict: a caller that
+        branches on `status` reads an attribute, and a caller that needs the dict
+        (to nest the payload in a parent manifest, or to emit it) calls
+        `to_payload()`. Returning the dict is what kept the enrich stage's store
+        out of this template — its caller consumes `.status`/`.counts`/`.artifacts`
+        off the typed manifest."""
         missing = [item.path for item in self.resolved(self.inputs) if item.required and not _readable(item.path)]
         if missing:
-            return self._write(NotReady(stage=self.name, missing_inputs=tuple(missing)))
-        payload = self.execute()
-        if payload.status == STATUS_COMPLETED:
-            self.verify_outputs()
-        return self._write(payload)
+            payload: StageManifest = NotReady(stage=self.name, missing_inputs=tuple(missing))
+        else:
+            payload = self.execute()
+            if payload.status == STATUS_COMPLETED:
+                self.verify_outputs()
+        self._write(payload)
+        return payload
 
     def verify_outputs(self) -> None:
         """Every declared output exists and its header still matches its model."""
@@ -282,15 +311,57 @@ class Node(ABC):
                     f"unexpected={_brief([c for c in header if c not in item.row_model.columns()])}"
                 )
 
-    def _write(self, payload: StageManifest) -> dict[str, Any]:
-        """Write the one manifest, fingerprinting the DECLARED output paths."""
-        body = payload.to_payload()
+    def artifact_stats(self, manifest_path: Path) -> dict[str, Any]:
+        """This node's IO stats: what it read and what it wrote, per DECLARED path.
+
+        The manifest's `fingerprints` block, and the reason a consumer never has to
+        open an output file to count it. Each entry is
+        `common/manifests.artifact_fingerprint` (size/mtime/sha256, reusing the
+        prior entry when the file has not changed) plus `rows` for an artifact that
+        declares a `row_model` — the count is taken in the same pass and carried
+        forward with the reused fingerprint, so an unchanged 11MB people.csv is
+        neither re-hashed nor re-counted. An artifact with no row model (a sqlite
+        store, a JSON gate file) has no `rows`, and neither does one that is not on
+        disk."""
+        existing = (read_json(manifest_path, {}) or {}).get("fingerprints") or {}
+        return {
+            "input_artifacts": self._stats(self.inputs, existing.get("input_artifacts")),
+            "output_artifacts": self._stats(self.outputs, existing.get("output_artifacts")),
+        }
+
+    def _stats(self, artifacts: tuple[Artifact, ...], existing: Any) -> dict[str, Any]:
+        existing = existing if isinstance(existing, dict) else {}
+        stats: dict[str, Any] = {}
+        for item in self.resolved(artifacts):
+            # An unbound per-account TEMPLATE (gmail's `{account_slug}`) names no
+            # file, so there is nothing to stat: a run with no selected account
+            # would otherwise record a literal "{account_slug}" path.
+            if "{" in item.path:
+                continue
+            stats[item.path] = _artifact_stat(item.path, existing.get(item.path), item.row_model)
+        return stats
+
+    def _write(self, payload: StageManifest) -> None:
+        """Write the one manifest, with this node's declared IO stats."""
         manifest_path = self.bindings().get(self.manifest, self.manifest)
         if not manifest_path:
-            return body
-        return write_stage_manifest(
-            Path(manifest_path), body, output_paths=[item.path for item in self.resolved(self.outputs)]
-        )
+            return
+        body = payload.to_payload()
+        body["fingerprints"] = self.artifact_stats(Path(manifest_path))
+        write_stage_manifest(Path(manifest_path), body)
+
+
+def _artifact_stat(path_text: str, existing: dict[str, Any] | None, row_model: type[RowModel] | None) -> dict[str, Any]:
+    """One artifact's fingerprint, plus `rows` when it declares a row model.
+
+    `artifact_fingerprint` returns the PRIOR entry verbatim when size and mtime
+    still match, so `"rows" in stat` is exactly "the count was carried forward" —
+    and its absence is either a fresh/changed file or a manifest written before
+    row counts existed. Both cases count."""
+    stat = artifact_fingerprint(path_text, existing)
+    if row_model is None or not stat.get("exists") or "rows" in stat:
+        return stat
+    return {**stat, "rows": CsvIO.count_rows(Path(stat["path"]))}
 
 
 def _brief(columns: list[str], limit: int = 5) -> str:
