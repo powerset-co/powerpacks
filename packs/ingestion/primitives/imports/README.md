@@ -2,6 +2,18 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-07-26 (per-node IO stats): `status.py`'s DISCOVER half reads the stage
+  manifest only — presence from `status`, the contact count from the declared
+  output's `fingerprints.output_artifacts[...].rows` — so the two staged
+  `contacts.csv` files it used to open are deleted. Its IMPORT half still counts
+  `import/<source>/people.csv` and `candidates.csv`, deliberately: the LinkedIn one
+  is `external=True` (the Modal indexing pipeline writes it, which is also why
+  `merge_people` declares it external) and `candidates.csv` has had no writer since
+  #339, so no node could record a count for either. `match_local_candidates.py`'s
+  `--local-people` lost its `merged/people.csv` default (the graph's 18-of-23
+  cycle) and is a caller argument now, like `--candidates`; `--no-local-people`
+  went with it. `gmail_artifacts_from_discovery` takes the discovery paths from
+  gmail discovery's declarations instead of asking the manifest where they are.
 - 2026-07-25 (declared contract, import stage): the other four import primitives
   became `pipeline/contract.py:Node`s — `gmail_import`, `messages_import`,
   `messages_match_local`, and `linkedin_import`. Each DECLARES its inputs and
@@ -14,9 +26,11 @@ Changelog:
   - `contacts.csv` has two writers that own disjoint COLUMNS: discovery's 11
     metadata values, the matcher's 7 `match_*` values, and `skip` owned by
     neither (it is a user mark — see `messages/util.py:USER_OWNED_COLUMNS`).
-  - `match_local_candidates.py`'s default catalog is `merged/people.csv`, i.e.
-    the merge's own output, so the declared graph has a CYCLE. Declared honestly;
-    the canonical `$import-messages` flow passes `--local-people` and is acyclic.
+  - `match_local_candidates.py`'s default catalog was `merged/people.csv`, i.e.
+    the merge's own output, so the declared graph had a CYCLE. Declared honestly
+    rather than hidden; the default is gone now (see the entry above), which is
+    what the canonical `$import-messages` flow already did by passing
+    `--local-people`.
   DELETED with this pass: `linkedin/network_import.py`'s
   `connections_for_enrichment.csv` (one writer, zero readers repo-wide).
   `import/<source>/candidates.csv` was already gone in #339 — both importers only

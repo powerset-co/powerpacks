@@ -2,14 +2,24 @@
 
 Created: 2026-07-23
 Changelog:
+- 2026-07-26 (per-node IO stats): both stages write ONE output.
+  `discover/gmail/contacts.csv` and `discover/messages/contacts.csv` are DELETED —
+  the first was byte-identical to `linkedin_resolution_queue.csv`, the second a
+  copy of the merged `.powerpacks/messages/contacts.csv`, and their only reader
+  (`imports/status.py`) counted their rows. Each node now records its declared
+  artifacts' row counts in its manifest (`fingerprints.{input,output}_artifacts`,
+  see `pipeline/contract.py:Node.artifact_stats`) and status reads that. The
+  WhatsApp channel also stopped declaring the merged `contacts.csv` as a
+  `name_fallback_csv` input — the graph's WhatsApp cycle, measured at 0 names
+  contributed on real data.
 - 2026-07-25 (declared contract): `gmail/discover.py`'s two classes are
   `pipeline/contract.py:Node`s (`gmail_account_extract`, `gmail_stage_merge`):
   they DECLARE their inputs/outputs as `Artifact`s and implement `execute()`,
   while `run()` is the inherited template (validate inputs → execute → validate
   outputs → manifest). `GmailAccountChannel.run()` therefore returns the typed
-  payload BODY instead of `GmailDiscoveryFailed | None`. `contacts.csv` is
-  declared `consumers_optional` — one writer, zero readers. Reads/writes and the
-  manifest contents are unchanged.
+  payload BODY instead of `GmailDiscoveryFailed | None`. `contacts.csv` was
+  declared as a dead output — one writer, zero readers (it is deleted now; see
+  the entry above). Reads/writes and the manifest contents are unchanged.
 - 2026-07-23 (oop): `gmail/discover.py` dropped the thin `discover()` wrapper —
   callers now construct `GmailDiscovery(...).run()` directly — and account
   selection is `--account-email` (repeatable) only: the
