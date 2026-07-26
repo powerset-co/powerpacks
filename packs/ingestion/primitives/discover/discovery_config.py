@@ -2,6 +2,9 @@
 """Static discovery input/output contract.
 
 Changelog:
+  2026-07-26 (contacts.csv deleted): the gmail `outputs.contacts_csv` key went
+    with the file — the stage writes `linkedin_resolution_queue_csv` only, so
+    nothing called `output_path("gmail", "contacts_csv")` anymore.
   2026-07-23 (account-email selection): gmail discovery stopped reading
     accounts.json for account selection, so the accounts_path() and state_value()
     accessors (which served only that read) were removed. The now-orphaned

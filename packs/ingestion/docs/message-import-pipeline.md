@@ -234,7 +234,6 @@ approval gates there.
 
 .powerpacks/network-import/
 |-- discover/messages/
-|   |-- contacts.csv
 |   `-- manifest.json
 |-- import/messages/
 |   |-- people.csv
@@ -245,8 +244,10 @@ approval gates there.
 ```
 
 Message discovery has one fixed stage directory:
-`.powerpacks/network-import/discover/messages/`. Its durable state is only
-`contacts.csv` plus `manifest.json`; there is no discovery run ID or step ledger.
+`.powerpacks/network-import/discover/messages/`. Its durable state there is only
+`manifest.json` (the contact rows live in `.powerpacks/messages/contacts.csv`, and
+the manifest carries that file's row count in its per-node stats); there is no
+discovery run ID or step ledger.
 Permission and QR failures are recorded as structured user-action status in the
 manifest, and rerunning the same command continues at the fixed paths. Each
 explicit discovery run refreshes every selected channel export before merging.

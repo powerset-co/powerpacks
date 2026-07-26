@@ -198,7 +198,7 @@ class PipelinePhase13Tests(unittest.TestCase):
             }
             with mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key", return_value="key"), \
                 mock.patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value=rapid):
-                summary = step.run()
+                summary = step.run().to_payload()
             rows = CsvIO.read_dict_rows(Path(summary["output_file"]))
         self.assertEqual(summary["retried"], 1)
         self.assertEqual(summary["retry_successes"], 1)

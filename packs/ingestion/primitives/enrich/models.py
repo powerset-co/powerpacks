@@ -28,6 +28,11 @@ construction and serialization.
 - `PipelineFailed` — a hard, non-recoverable step failure.
 
 Changelog:
+  2026-07-26 (enrich store is a Node): `EnrichManifest` is a pydantic
+    `StageManifest` instead of a dataclass with a hand-written `to_dict()`, so it
+    can be the declared payload of the `EnrichPeople` node. `to_payload()` replaces
+    `to_dict()` (same keys, same None-dropping; `write_json` sorts keys, so the
+    file is unchanged) and the `primitive: "enrich_people"` stamp is a field.
   2026-07-25 (declared contract): added the three `RowModel`s and the three step
     `StageManifest` payloads for the enrich stage's `Node` conversion. The row
     models are generated from the existing column constants, so the constants
@@ -38,7 +43,7 @@ Changelog:
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +53,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.primitives.enrich.rapidapi_client import (  # noqa: E402
     DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
     DEFAULT_RAPIDAPI_MAX_RPM,
@@ -202,37 +206,24 @@ def build_config(
     )
 
 
-@dataclass
-class EnrichManifest:
+class EnrichManifest(StageManifest):
     """Typed constructor for the enrichment stage `manifest.json` — the entire
     durable state contract (status + per-step timing + counts + artifact paths).
-    No ledger, no run id: the artifact dir is fixed so reruns overwrite here."""
+    No ledger, no run id: the artifact dir is fixed so reruns overwrite here.
 
-    status: str
-    artifact_dir: str
-    input: dict[str, Any]
-    counts: dict[str, Any] = field(default_factory=dict)
-    artifacts: dict[str, Any] = field(default_factory=dict)
-    steps: dict[str, Any] = field(default_factory=dict)
+    A `StageManifest`, so it is the payload the stage's `EnrichPeople` Node
+    returns; `to_payload()` drops `needs_approval`/`error` when None exactly as the
+    hand-written `to_dict()` did, and `write_json` sorts keys, so the manifest on
+    disk is unchanged."""
+
+    primitive: str = "enrich_people"
+    status: str = ""
+    artifact_dir: str = ""
+    input: dict[str, Any] = {}
+    counts: dict[str, Any] = {}
+    artifacts: dict[str, Any] = {}
+    steps: dict[str, Any] = {}
     needs_approval: dict[str, Any] | None = None
     error: str | None = None
     started_at: str = ""
     updated_at: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "primitive": "enrich_people",
-            "status": self.status,
-            "artifact_dir": self.artifact_dir,
-            "input": self.input,
-            "counts": self.counts,
-            "artifacts": self.artifacts,
-            "steps": self.steps,
-            "started_at": self.started_at,
-            "updated_at": self.updated_at or now_iso(),
-        }
-        if self.needs_approval is not None:
-            payload["needs_approval"] = self.needs_approval
-        if self.error is not None:
-            payload["error"] = self.error
-        return payload

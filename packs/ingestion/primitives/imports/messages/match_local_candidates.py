@@ -18,11 +18,11 @@ Tiers (highest precedence first):
 7. Fuzzy ratio ≥ 0.80 → suggested
 8. Otherwise unmatched
 
-Candidates come from the local merged people CSV (`--local-people`) by default;
-the canonical `$import-messages` flow supplies already-imported Gmail and
-LinkedIn `people.csv` rows through it, and no external candidate catalog is
-loaded otherwise. Callers may deliberately union an additional catalog with
-`--candidates`.
+Candidates come from the people CSVs the CALLER names — `--local-people` and the
+optional `--candidates` — and from nowhere else. There is no default catalog: the
+canonical `$import-messages` flow concatenates the already-imported Gmail and
+LinkedIn `people.csv` rows into `.powerpacks/messages/_local_people.csv` and
+passes that. Omitting both means every contact comes back `unmatched`.
 
 Usage:
     match_local_candidates.py match \
@@ -53,23 +53,30 @@ match_confidence / match_method / match_reason` columns.
 
 Declared contract (`ContactsMatch`, node `messages_match_local`):
 
-  reads   contacts.csv (all 19 columns), merged/people.csv (the DEFAULT catalog),
-          research_review.csv (external — no producer since #315)
+  reads   contacts.csv (all 19 columns), research_review.csv (external — no
+          producer since #315)
   writes  contacts.csv, `annotate` mode, owning ONLY the 7 columns in
           `util.MATCH_ANNOTATION_COLUMNS`; `skip` and discovery's 11 metadata
           columns are not this node's to write. The whole file is rewritten
           because csv cannot update a cell in place — the DECLARATION, not the
           write call, is what says which values are ours.
 
-The `merged/people.csv` default makes this node a CYCLE in the declared graph
-(merge_people -> messages_match_local -> messages_import -> merge_people) and it
-is declared that way on purpose: labelling it `external` would hide a real
-producer. The canonical `$import-messages` flow does not take that edge — the
-skill concatenates `import/{gmail,linkedin}/people.csv` into
-`.powerpacks/messages/_local_people.csv` and passes `--local-people`, which is
-acyclic. The cycle is the module DEFAULT disagreeing with its only real caller.
+`--local-people` and `--candidates` are NOT declared, for the same reason: they
+are caller-chosen catalogs with no fixed path, so they have no name in a graph
+keyed by fixed paths. That is also why `--local-people` no longer defaults to
+`merged/people.csv` — a default pointing at the file this node's own downstream
+merge produces was the graph's 18-of-23 cycle (merge_people ->
+messages_match_local -> messages_import -> merge_people), and it contradicted the
+only real caller, which passes `import/{gmail,linkedin}/people.csv` concatenated.
 
 Changelog:
+  2026-07-26 (cyclic default removed): `--local-people` has NO default. It was
+    `.powerpacks/network-import/merged/people.csv` — the fan-in merge's own output,
+    fed by this node's own downstream import — which made the declared graph cyclic
+    while the canonical `$import-messages` invocation (Step 3, explicit
+    `--local-people`) was already acyclic. The catalog is an explicit caller
+    argument now, like `--candidates`, and `--no-local-people` went with the
+    default it existed to suppress.
   2026-07-25 (declared contract): `cmd_match(args)` + `set_defaults(func=...)`
     became the `ContactsMatch` Node — construct-and-run, declared inputs/outputs,
     and the run manifest written by the Node template (so it gains `status` and
@@ -109,7 +116,7 @@ from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
     MATCH_ANNOTATION_COLUMNS,
     MessageContactRow,
 )
-from packs.ingestion.primitives.pipeline.contract import Artifact, Node, PeopleRow, StageManifest  # noqa: E402
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest  # noqa: E402
 from packs.ingestion.schemas.message_contacts import (  # noqa: E402
     CSV_HEADERS,
     REQUIRED_INPUT_HEADERS,
@@ -122,7 +129,6 @@ from packs.shared.csv_io import CsvIO  # noqa: E402
 DEFAULT_CONTACTS_CSV = MESSAGES_OUT_DIR / "contacts.csv"
 # The matcher's own output, and the gate the messages import checks for.
 DEFAULT_MATCH_MANIFEST = MESSAGES_OUT_DIR / "contacts.csv.match.manifest.json"
-DEFAULT_LOCAL_PEOPLE = Path(".powerpacks/network-import/merged/people.csv")
 DEFAULT_REVIEW_CSV = Path(".powerpacks/messages/research_review.csv")
 
 
@@ -575,20 +581,17 @@ class ContactsMatch(Node):
 
     name = "messages_match_local"
     inputs = (
-        # Written by discover/messages (not converted yet, so the checker reports
-        # it as producer-less). Required: there is nothing to match without it.
+        # Written by discover/messages. Required: there is nothing to match without it.
         Artifact(path=str(DEFAULT_CONTACTS_CSV), row_model=MessageContactRow),
-        # THE CYCLE. merge_people writes this and this node feeds, transitively,
-        # back into merge_people. required=False because an absent catalog is a
-        # real, handled state: every contact comes back `unmatched`.
-        Artifact(path=str(DEFAULT_LOCAL_PEOPLE), row_model=PeopleRow, required=False),
         # The user's approvals. `external`: its producer (the research-review flow)
         # was retired in #315 and nothing replaced it, so on a fresh install this
         # file never exists and every tier-0 identifier match demotes to
         # `suggested` (the Known gap above).
         Artifact(path=str(DEFAULT_REVIEW_CSV), external=True, required=False),
-        # NOT declared: `--candidates`. It is an explicit, caller-chosen catalog
-        # with no default path, so it has no name in a graph keyed by fixed paths.
+        # NOT declared: `--local-people` and `--candidates`. Both are explicit,
+        # caller-chosen catalogs with no default path, so neither has a name in a
+        # graph keyed by fixed paths. `--local-people` USED to default to
+        # `merged/people.csv` and was declared — that default was the cycle.
     )
     outputs = (
         Artifact(
@@ -607,14 +610,13 @@ class ContactsMatch(Node):
         contacts: Path,
         candidates: Path | None = None,
         local_people: Path | None = None,
-        no_local_people: bool = False,
         review: Path | None = None,
         manifest_path: Path | None = None,
     ) -> None:
         self.contacts_csv = Path(contacts)
         self.candidates_csv = Path(candidates) if candidates else None
-        self.local_people_csv = Path(local_people) if local_people else DEFAULT_LOCAL_PEOPLE
-        self.no_local_people = no_local_people
+        # No default: the catalog is the caller's to name (see the module docstring).
+        self.local_people_csv = Path(local_people) if local_people else None
         self.review_csv = Path(review) if review else DEFAULT_REVIEW_CSV
         self.manifest_json = Path(manifest_path) if manifest_path else self.contacts_csv.with_suffix(
             self.contacts_csv.suffix + ".match.manifest.json"
@@ -622,14 +624,13 @@ class ContactsMatch(Node):
 
     def bindings(self) -> dict[str, str]:
         """Declared path -> this instance's path, so an explicit --contacts /
-        --local-people / --review / --manifest still validates against the
-        declaration. Keys come from the declaration, never a second default read."""
-        contacts_declared, local_people_declared, review_declared = (item.path for item in self.inputs)
+        --review / --manifest still validates against the declaration. Keys come
+        from the module path constants the declaration itself names, never from
+        tuple position or a second default read."""
         return {
-            contacts_declared: str(self.contacts_csv),
-            local_people_declared: str(self.local_people_csv),
-            review_declared: str(self.review_csv),
-            self.manifest: str(self.manifest_json),
+            str(DEFAULT_CONTACTS_CSV): str(self.contacts_csv),
+            str(DEFAULT_REVIEW_CSV): str(self.review_csv),
+            str(DEFAULT_MATCH_MANIFEST): str(self.manifest_json),
         }
 
     def execute(self) -> MatchManifest:
@@ -639,7 +640,7 @@ class ContactsMatch(Node):
         rows = read_contacts(self.contacts_csv)
         candidates = load_candidates(self.candidates_csv) if self.candidates_csv else []
         local_candidates: list[Candidate] = []
-        if not self.no_local_people:
+        if self.local_people_csv:
             known_ids = {c.id for c in candidates}
             known_identifiers = {(c.public_identifier or "").lower() for c in candidates if c.public_identifier}
             local_candidates = load_people_candidates(self.local_people_csv, known_ids, known_identifiers)
@@ -670,9 +671,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--contacts", required=True, help="Path to the message-contacts CSV")
     parser.add_argument("--candidates",
                         help="Optional additional candidate CSV; omitted by the canonical local-only flow")
-    parser.add_argument("--local-people", help="Local merged people CSV to union into the candidate catalog "
-                        f"(default: {DEFAULT_LOCAL_PEOPLE} when present)")
-    parser.add_argument("--no-local-people", action="store_true", help="Match only against an explicit --candidates catalog")
+    parser.add_argument("--local-people", help="People CSV to union into the candidate catalog "
+                        "(no default; $import-messages passes the concatenated gmail + linkedin import people)")
     parser.add_argument("--review", help="Research review CSV holding the user's in_network approvals "
                         f"(default: {DEFAULT_REVIEW_CSV} when present)")
     parser.add_argument("--manifest", help="Path to write the run manifest JSON")
@@ -686,12 +686,11 @@ def main() -> int:
         contacts=Path(args.contacts),
         candidates=Path(args.candidates) if args.candidates else None,
         local_people=Path(args.local_people) if args.local_people else None,
-        no_local_people=args.no_local_people,
         review=Path(args.review) if args.review else None,
         manifest_path=Path(args.manifest) if args.manifest else None,
     ).run()
-    emit(payload)
-    return 0 if payload.get("status") == "completed" else 1
+    emit(payload.to_payload())
+    return 0 if payload.status == "completed" else 1
 
 
 if __name__ == "__main__":

@@ -179,10 +179,9 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover/mess
 
 (Drop `--include-imessage` or `--include-whatsapp` if that channel wasn't
 picked. WhatsApp account sync and per-chat depth are selected automatically.)
-It writes `.powerpacks/messages/contacts.csv` and stages the discovery artifact
-at `.powerpacks/network-import/discover/messages/contacts.csv`, with status and
-counts in that fixed stage directory's `manifest.json`. It does not create a run
-directory or a step ledger. WhatsApp runs also overwrite
+It writes `.powerpacks/messages/contacts.csv`, with status and counts in the fixed
+stage directory `.powerpacks/network-import/discover/messages/manifest.json`. It
+does not create a run directory or a step ledger. WhatsApp runs also overwrite
 `.powerpacks/messages/history-depth/results.csv`, `progress.jsonl`, and
 `manifest.json`; those artifacts store hashed chat references and aggregate
 counters only. The manifest also stores one privacy-safe digest of direct-chat

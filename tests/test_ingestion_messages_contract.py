@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.ingestion.primitives.discover.common import write_csv_rows
+from packs.ingestion.primitives.discover.messages.models import MessagesDiscoveryCompleted
 from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 from packs.shared.csv_io import CsvIO
@@ -342,7 +343,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     mock.patch.object(discover_messages.WhatsAppChannel, "extract", fake_extract), \
                     mock.patch.object(discover_messages.MessagesDiscovery, "_merge", lambda self: None):
                 result = discover_messages.MessagesDiscovery(
-                    include_imessage=False, include_whatsapp=True, out_dir=out).run()
+                    include_imessage=False, include_whatsapp=True, out_dir=out).run().to_payload()
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["whatsapp_pairing_state"], "pre_full_sync")
         self.assertIn("Re-link", result["whatsapp_pairing_notice"])
@@ -443,7 +444,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         }
         for status, expected in cases.items():
             fake_store = mock.Mock()
-            fake_store.run.return_value = {"status": status}
+            fake_store.run.return_value = MessagesDiscoveryCompleted(status=status)
             with self.subTest(status=status), \
                     mock.patch.object(discover_messages, "MessagesDiscovery", return_value=fake_store), \
                     mock.patch.object(sys, "argv", ["messages.py", "discover"]), \

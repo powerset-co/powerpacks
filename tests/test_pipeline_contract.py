@@ -7,6 +7,7 @@ fewer columns still reads, and `PeopleRow` reproduces `normalize_people_row`.
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -156,18 +157,49 @@ class RunTemplateTests(unittest.TestCase):
                     raise AssertionError("execute() must not run without its input")
 
             payload = Waiting().run()
-            self.assertEqual(payload["status"], "not_ready")
-            self.assertEqual(payload["reason"], "missing_inputs")
-            self.assertEqual(payload["missing_inputs"], (str(missing),))
+            self.assertEqual(payload.status, "not_ready")
+            self.assertEqual(payload.reason, "missing_inputs")
+            self.assertEqual(payload.missing_inputs, (str(missing),))
 
-    def test_declared_outputs_drive_the_manifest_fingerprints(self) -> None:
+    def test_run_returns_the_typed_payload_not_the_written_manifest(self) -> None:
+        # The store of a stage consumes its steps' payloads by attribute
+        # (enrich_people), so the template hands back the typed object; the dict
+        # form is one `to_payload()` away.
         with tempfile.TemporaryDirectory() as td:
-            out = Path(td) / "people.csv"
             manifest_json = Path(td) / "manifest.json"
+
+            class Quiet(Node):
+                name = "quiet"
+                inputs = ()
+                outputs = ()
+                payload = _Payload
+                manifest = str(manifest_json)
+
+                def execute(self) -> _Payload:
+                    return _Payload()
+
+            payload = Quiet().run()
+            self.assertIsInstance(payload, _Payload)
+            self.assertEqual(payload.to_payload(), {"status": "completed"})
+            # The manifest on disk is the one with the stats block.
+            self.assertIn("fingerprints", json.loads(manifest_json.read_text(encoding="utf-8")))
+
+    def test_declared_artifacts_drive_the_manifest_stats_including_row_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "upstream.csv"
+            out = Path(td) / "people.csv"
+            store = Path(td) / "store.db"
+            manifest_json = Path(td) / "manifest.json"
+            CsvIO.write_dict_rows(source, PEOPLE_SCHEMA_COLUMNS, [{"id": "0"}])
+            store.write_bytes(b"not a csv")
 
             class Writer(Node):
                 name = "writer"
-                inputs = ()
+                inputs = (
+                    Artifact(path=str(source), row_model=PeopleRow),
+                    # No row model: a sqlite store has no rows to count.
+                    Artifact(path=str(store), external=True),
+                )
                 # A key name no allowlist knows about: string-sniffing would have
                 # missed this output entirely.
                 outputs = (Artifact(path=str(out), row_model=PeopleRow, writes="full_rewrite"),)
@@ -175,13 +207,48 @@ class RunTemplateTests(unittest.TestCase):
                 manifest = str(manifest_json)
 
                 def execute(self) -> _Payload:
-                    CsvIO.write_dict_rows(out, PEOPLE_SCHEMA_COLUMNS, [{"id": "1"}])
+                    CsvIO.write_dict_rows(out, PEOPLE_SCHEMA_COLUMNS, [{"id": "1"}, {"id": "2"}])
                     return _Payload()
 
-            payload = Writer().run()
-            fingerprinted = payload["fingerprints"]["output_artifacts"]
-            self.assertEqual(list(fingerprinted), [str(out)])
-            self.assertTrue(fingerprinted[str(out)]["sha256"])
+            Writer().run()
+            stats = json.loads(manifest_json.read_text(encoding="utf-8"))["fingerprints"]
+            self.assertEqual(list(stats["output_artifacts"]), [str(out)])
+            self.assertTrue(stats["output_artifacts"][str(out)]["sha256"])
+            # THE point of the stats: a consumer reads the row count instead of
+            # opening the file, so a file that existed only to be counted can go.
+            self.assertEqual(stats["output_artifacts"][str(out)]["rows"], 2)
+            self.assertEqual(stats["input_artifacts"][str(source)]["rows"], 1)
+            self.assertNotIn("rows", stats["input_artifacts"][str(store)])
+
+    def test_an_unchanged_output_carries_its_row_count_forward(self) -> None:
+        # artifact_fingerprint reuses the prior entry when size + mtime match, so
+        # the count must ride along with it rather than being recomputed — and a
+        # manifest written before row counts existed must still gain one.
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "people.csv"
+            manifest_json = Path(td) / "manifest.json"
+
+            class Once(Node):
+                name = "once"
+                inputs = ()
+                outputs = (Artifact(path=str(out), row_model=PeopleRow, writes="full_rewrite"),)
+                payload = _Payload
+                manifest = str(manifest_json)
+
+                def execute(self) -> _Payload:
+                    if not out.exists():
+                        CsvIO.write_dict_rows(out, PEOPLE_SCHEMA_COLUMNS, [{"id": "1"}, {"id": "2"}, {"id": "3"}])
+                    return _Payload()
+
+            node = Once()
+            node.run()
+            # A manifest from before this field existed: same fingerprint, no rows.
+            legacy = json.loads(manifest_json.read_text(encoding="utf-8"))
+            legacy["fingerprints"]["output_artifacts"][str(out)].pop("rows")
+            manifest_json.write_text(json.dumps(legacy), encoding="utf-8")
+
+            stats = node.artifact_stats(manifest_json)
+            self.assertEqual(stats["output_artifacts"][str(out)]["rows"], 3)
 
 
 class GraphCheckTests(unittest.TestCase):
@@ -326,6 +393,50 @@ class GraphCheckTests(unittest.TestCase):
         self.assertEqual(report["edges"]["gmail_stage_merge"], ["gmail_account_extract"])
 
 
+class WholeDeclaredGraphTests(unittest.TestCase):
+    """The report for EVERY converted node, not a hand-picked subset.
+
+    Four of the five findings must stay empty. `dead_outputs` is the exception and
+    it is listed here on purpose: both entries are the LinkedIn enrichment output
+    under its two bindings, whose consumer is the unconverted indexing pack
+    (`packs/indexing/modal/linkedin_modal_pipeline.py` downloads
+    `discover/linkedin/people.csv` to `import/linkedin/people.csv`). If the
+    indexing pack is converted, this list shrinks — it must not GROW quietly."""
+
+    @staticmethod
+    def _declared_nodes() -> list[type[Node]]:
+        # graph.py's imports ARE the registration; filter to shipped modules so a
+        # deliberately-broken fixture from another test module cannot join in.
+        import packs.ingestion.primitives.pipeline.graph as graph_module
+
+        return [node for node in graph_module.node_subclasses() if node.__module__.startswith("packs.")]
+
+    def test_no_conflicts_no_phantoms_no_cycles(self) -> None:
+        report = check_graph(self._declared_nodes())
+        self.assertEqual(report["two_writer_conflicts"], [])
+        self.assertEqual(report["schema_mismatches"], [])
+        self.assertEqual(report["phantom_inputs"], [])
+        self.assertEqual(report["cycles"], [])
+
+    def test_the_only_dead_outputs_are_the_linkedin_enrichment_people_csv(self) -> None:
+        report = check_graph(self._declared_nodes())
+        self.assertEqual(
+            sorted((item["node"], item["path"]) for item in report["dead_outputs"]),
+            [
+                ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
+                ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
+            ],
+        )
+
+    def test_a_manifest_another_node_reads_is_produced_not_phantom(self) -> None:
+        # A node's `manifest` is a path it writes; the gmail import takes the
+        # account selection from discovery's manifest and the messages import gates
+        # on the matcher's, and both are real edges.
+        report = check_graph(self._declared_nodes())
+        self.assertIn("gmail_stage_merge", report["edges"]["gmail_import"])
+        self.assertIn("messages_match_local", report["edges"]["messages_import"])
+
+
 class MessagesSubsetTests(unittest.TestCase):
     """`.powerpacks/messages/contacts.csv` is the first REAL two-writer file, so
     the split has to hold against a stand-in for the other writer."""
@@ -389,21 +500,27 @@ class MessagesSubsetTests(unittest.TestCase):
         self.assertEqual(report["two_writer_conflicts"], [])
         self.assertEqual(report["schema_mismatches"], [])
 
-    def test_the_whatsapp_name_fallback_is_a_declared_cycle(self) -> None:
-        # WhatsApp's extractor reads the MERGED contacts.csv back as its
-        # name_fallback_csv, so the two nodes consume each other's output. It is
-        # declared rather than hidden: the report is where that shows up.
+    def test_the_whatsapp_name_fallback_edge_is_gone(self) -> None:
+        # The WhatsApp extractor used to read the MERGED contacts.csv back as its
+        # `name_fallback_csv` default, so the two nodes consumed each other's
+        # output and the graph reported a cycle. The default is gone (it supplied 0
+        # of the 90 named contacts on real data, and the downstream merge already
+        # unions names across channels), so the extractor reads the wacli store
+        # alone and the messages subset is acyclic.
         report = check_graph(self._messages_nodes())
-        self.assertEqual(
-            sorted(report["cycles"]),
-            [
-                ["messages_stage_merge", "messages_whatsapp_extract", "messages_stage_merge"],
-                ["messages_whatsapp_extract", "messages_stage_merge", "messages_whatsapp_extract"],
-            ],
-        )
+        self.assertEqual(report["cycles"], [])
         self.assertEqual(
             report["edges"]["messages_stage_merge"],
             ["messages_imessage_extract", "messages_whatsapp_extract"],
+        )
+        self.assertEqual(report["edges"]["messages_whatsapp_extract"], [])
+        from packs.ingestion.primitives.discover.messages.channels.whats_app_channel import (
+            WhatsAppChannel,
+        )
+
+        self.assertEqual(
+            [item.path for item in WhatsAppChannel.inputs],
+            [".powerpacks/messages/wacli/wacli.db"],
         )
 
 

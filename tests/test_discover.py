@@ -175,7 +175,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
     def test_gmail_cli_returns_nonzero_when_discovery_fails(self) -> None:
         fake_store = mock.Mock()
-        fake_store.run.return_value = {"status": "failed"}
+        fake_store.run.return_value = discover_gmail.GmailDiscoveryFailed()
         with mock.patch.object(discover_gmail, "GmailDiscovery", return_value=fake_store):
             with mock.patch.object(discover_gmail, "emit"):
                 with mock.patch.object(sys, "argv", ["gmail.py", "discover"]):
@@ -220,7 +220,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             )
 
             paths = {
-                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
                 ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
                 ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
             }
@@ -243,7 +242,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com", "messages_added": 4}):
                     with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", fake_run_msgvault):
-                        payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
+                        payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run().to_payload()
 
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["contacts"], 1)
@@ -252,7 +251,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["accounts_timing"][0]["email"], "me@example.com")
             self.assertEqual(payload["accounts_timing"][0]["messages_added"], 4)
             self.assertGreaterEqual(payload["accounts_timing"][0]["duration_seconds"], 0)
-            self.assertEqual(payload["contacts_csv"], str(paths[("gmail", "contacts_csv")]))
+            self.assertNotIn("contacts_csv", payload)  # deleted with the file
             self.assertEqual(payload["linkedin_resolution_queue_csv"], str(paths[("gmail", "linkedin_resolution_queue_csv")]))
             manifest = json.loads(paths[("gmail", "manifest_json")].read_text(encoding="utf-8"))
             self.assertNotIn("payload", manifest["children"][0])
@@ -273,7 +272,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             with mock.patch.object(discover_gmail, "output_path", side_effect=fake_output_path):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
                     with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", fake_run_msgvault):
-                        payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
+                        payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run().to_payload()
 
             self.assertEqual(payload["status"], "completed")
             with paths[("gmail", "linkedin_resolution_queue_csv")].open(newline="", encoding="utf-8") as handle:
@@ -375,18 +374,17 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", fake_run_msgvault):
                     return discover_gmail.GmailDiscovery(
                         account_emails=["me@example.com"], fresh=fresh,
-                    ).run()
+                    ).run().to_payload()
 
     @staticmethod
     def _gmail_paths(tmp: Path) -> dict:
         return {
-            ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
             ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
             ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
         }
 
     def test_gmail_empty_or_missing_output_forces_full_rewrite(self) -> None:
-        """A surviving manifest is not enough to append to: with contacts.csv gone
+        """A surviving manifest is not enough to append to: with the queue CSV gone
         or header-only, the plan must rebuild rather than treat deltas as new."""
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -397,10 +395,10 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
                 total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
             )
-            self.assertTrue(paths[("gmail", "contacts_csv")].exists())
+            self.assertTrue(paths[("gmail", "linkedin_resolution_queue_csv")].exists())
 
-            # contacts.csv deleted, manifest.json survives.
-            paths[("gmail", "contacts_csv")].unlink()
+            # The queue CSV deleted, manifest.json survives.
+            paths[("gmail", "linkedin_resolution_queue_csv")].unlink()
             payload = self._run_gmail_discovery(
                 tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
                 total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
@@ -408,8 +406,8 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["calculation_mode"], "full_rewrite")
             self.assertEqual(payload["calculation_reason"], "empty_output")
 
-            # Header-only contacts.csv counts as empty too.
-            write_csv(paths[("gmail", "contacts_csv")], discover_gmail.GMAIL_DISCOVERY_COLUMNS, [])
+            # A header-only queue CSV counts as empty too.
+            write_csv(paths[("gmail", "linkedin_resolution_queue_csv")], discover_gmail.GMAIL_DISCOVERY_COLUMNS, [])
             payload = self._run_gmail_discovery(
                 tmp, paths, discover_gmail.GMAIL_CALCULATION_FULL_RECOUNT,
                 total_messages="10", thread_count="3", last_interaction="2026-01-02T00:00:00Z",
@@ -449,7 +447,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             paths = {
-                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
                 ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
                 ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
             }
@@ -457,7 +454,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}):
                     with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", return_value={"status": "completed", "artifacts": {}}):
-                        payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run()
+                        payload = discover_gmail.GmailDiscovery(account_emails=["me@example.com"]).run().to_payload()
 
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["contacts"], 0)
@@ -506,7 +503,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value={"status": "completed", "account_email": "me@example.com"}) as sync_mock:
                 with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", fake_run_msgvault):
-                    result = channel.run()
+                    result = channel.run().to_payload()
 
             # The channel is a pipeline Node: run() returns the typed payload body
             # (it has no manifest.json of its own — the store publishes `record`).
@@ -539,7 +536,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         failed_sync = {"status": "failed", "account_email": "me@example.com", "error": "boom"}
         with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value=failed_sync):
             with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault") as run_msgvault_mock:
-                result = channel.run()
+                result = channel.run().to_payload()
 
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["account_email"], "me@example.com")
@@ -571,7 +568,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 }],
             )
             paths = {
-                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
                 ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
                 ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
             }
@@ -584,7 +580,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                     with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", fake_run_msgvault):
                         store = discover_gmail.GmailDiscovery(
                             account_emails=["me@example.com"], msgvault_db=str(tmp / "msgvault.db"), sync_query="")
-                        payload = store.run()
+                        payload = store.run().to_payload()
 
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["contacts"], 1)
@@ -599,13 +595,12 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             paths = {
-                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
                 ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
                 ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
             }
             with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
                 store = discover_gmail.GmailDiscovery(account_emails=[])
-                payload = store.run()
+                payload = store.run().to_payload()
 
             self.assertEqual(payload["status"], "skipped")
             self.assertEqual(payload["reason"], "no_account_emails")
@@ -619,7 +614,6 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             paths = {
-                ("gmail", "contacts_csv"): tmp / "discover/gmail/contacts.csv",
                 ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
                 ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
             }
@@ -632,7 +626,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
                 with mock.patch.object(discover_gmail, "sync_msgvault_account", return_value=failed_sync):
                     payload = discover_gmail.GmailDiscovery(
-                        account_emails=["me@example.com"], msgvault_db=str(tmp / "msgvault.db"), sync_query="").run()
+                        account_emails=["me@example.com"], msgvault_db=str(tmp / "msgvault.db"), sync_query="").run().to_payload()
 
             self.assertEqual(payload["status"], "failed")
             datetime.fromisoformat(payload["started_at"].replace("Z", "+00:00"))

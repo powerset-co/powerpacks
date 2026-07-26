@@ -69,8 +69,8 @@ flowchart LR
   WA --> MDISC
   TW --> TDISC["twitter/network_import.py"]
 
-  GDISC --> GOUT["discover/gmail/<br/>contacts.csv,<br/>linkedin_resolution_queue.csv,<br/>manifest.json<br/>(+ per-account subdirs)"]
-  MDISC --> MOUT["discover/messages/contacts.csv,<br/>manifest.json<br/>(+ .powerpacks/messages/ working CSVs)"]
+  GDISC --> GOUT["discover/gmail/<br/>linkedin_resolution_queue.csv,<br/>manifest.json<br/>(+ per-account subdirs)"]
+  MDISC --> MOUT[".powerpacks/messages/contacts.csv,<br/>discover/messages/manifest.json<br/>(+ .powerpacks/messages/ working CSVs)"]
   TDISC --> TOUT["discover/twitter/&lt;handle&gt;/<br/>people.csv, followers_dump.csv,<br/>moe_evaluated.csv, ..., manifest.json"]
 ```
 
@@ -78,14 +78,14 @@ flowchart LR
 
 | File | Role | Reads | Writes |
 | --- | --- | --- | --- |
-| [`gmail/discover.py`](gmail/discover.py) | CLI entry: constructs `GmailDiscovery(...).run()` (no `discover()` wrapper) over one `GmailAccountChannel` per `--account-email` — per-account msgvault sync → spawn engine → read fixed queue → merge plan → typed manifest | `discovery.config.json`, prior `discover/gmail/manifest.json` | `discover/gmail/contacts.csv`, `linkedin_resolution_queue.csv`, `manifest.json` |
+| [`gmail/discover.py`](gmail/discover.py) | CLI entry: constructs `GmailDiscovery(...).run()` (no `discover()` wrapper) over one `GmailAccountChannel` per `--account-email` — per-account msgvault sync → spawn engine → read fixed queue → merge plan → typed manifest | `discovery.config.json`, prior `discover/gmail/manifest.json` | `discover/gmail/linkedin_resolution_queue.csv`, `manifest.json` |
 | [`gmail/util.py`](gmail/util.py) | Tolerant parsers, row merge (`_merge_rows`), incremental merge plan (`gmail_discovery_merge_plan`), column/const defs | prior `manifest.json` (applied-inputs state) | — (pure helpers) |
 | [`gmail/models.py`](gmail/models.py) | Typed stage-manifest dataclasses — the only payload shapes `discover.py` may emit | — | — |
 | [`gmail/msgvault/store.py`](gmail/msgvault/store.py) | Canonical read-only access layer over the msgvault archive (`MsgvaultStore` + its SQL): metadata aggregation for discovery, plus body reads reserved for deep-context/logbook | msgvault SQLite (read-only) | — |
 | [`gmail/msgvault/util.py`](gmail/msgvault/util.py) | Pure msgvault/email helpers (no connection): address parsing, name/domain classification, label normalization, canonical-message identity, `DEFAULT_MSGVAULT_DB` | — | — (pure helpers) |
 | [`gmail/msgvault/sync.py`](gmail/msgvault/sync.py) | msgvault sync + incremental resume: `infer_msgvault_sync_after` (last-sync marker) and `sync_msgvault_account` (`msgvault sync-full --after ...`) | msgvault SQLite (read-only, for the resume marker) | msgvault DB (via `msgvault` subprocess); progress → stderr |
 | [`gmail/extract_gmail.py`](gmail/extract_gmail.py) | In-process extractor (also a CLI) called by `discover.py`: msgvault metadata aggregation → local artifacts; also `apply-resolutions` for the import chain | msgvault SQLite (via `msgvault/store`) | `discover/gmail/<account>/`: `accounts.csv`, `gmail_threads.csv`, `gmail_contacts_aggregated.csv`, `targeted_emails.csv`, `linkedin_resolution_queue.csv`, `people.csv`, `manifest.json` |
-| [`messages/discover.py`](messages/discover.py) | CLI entry (declared node `messages_stage_merge`): iMessage/WhatsApp extract → merge → typed manifest; stops at the first blocked/failed channel | `--include-imessage`/`--include-whatsapp` flags (the CLI flags ARE the channel selection; no `accounts.json`) | `discover/messages/contacts.csv`, `manifest.json` (orchestrates children that write `.powerpacks/messages/`) |
+| [`messages/discover.py`](messages/discover.py) | CLI entry (declared node `messages_stage_merge`): iMessage/WhatsApp extract → merge → typed manifest; stops at the first blocked/failed channel | `--include-imessage`/`--include-whatsapp` flags (the CLI flags ARE the channel selection; no `accounts.json`) | `.powerpacks/messages/contacts.csv`, `discover/messages/manifest.json` (orchestrates children that write `.powerpacks/messages/`) |
 | [`messages/extract_imessage.py`](messages/extract_imessage.py) | Stdlib iMessage extractor (Full Disk Access gated); metadata only, never selects body columns | `~/Library/Messages/chat.db` + AddressBook SQLite (read-only) | `.powerpacks/messages/imessage.contacts.csv`, `.raw.jsonl`, `.manifest.json` |
 | [`messages/extract_whatsapp.py`](messages/extract_whatsapp.py) | In-process WhatsApp extractor (also a CLI, `run`/`export`) composing the wacli client: install → auth → sync → deepen → export local metadata; metadata only, never selects body columns | wacli SQLite under `.powerpacks/messages/wacli` (via the client) | `.powerpacks/messages/whatsapp.contacts.csv`, `.raw.jsonl`, manifest, progress jsonl |
 | [`messages/whatsapp_wacli.py`](messages/whatsapp_wacli.py) | wacli binary CLIENT (parallels `gmail/msgvault/sync.py`): download pinned binary, auth + login QR, sync, history-depth, group info; standalone `status`/`auth`/`ensure-wacli`/`logout` subcommands | wacli SQLite under `.powerpacks/messages/wacli` (read-only) | wacli store (via `wacli` subprocess), QR page, history-depth artifacts |

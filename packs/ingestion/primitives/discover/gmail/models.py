@@ -2,6 +2,11 @@
 shapes gmail/discover.py may emit. New fields are added here, never invented inline.
 
 Changelog:
+  2026-07-26 (contacts.csv deleted): DROPPED `contacts_csv` from
+    GmailDiscoveryCompleted / GmailDiscoverySkipped with the file itself — it was
+    byte-identical to `linkedin_resolution_queue_csv` and existed only for
+    `imports/status.py` to count, which now reads the queue's row count out of the
+    manifest's per-node stats.
   2026-07-25 (declared contract): the payloads are pydantic `StageManifest`
     models (`pipeline/contract.py`) instead of `StagePayload` dataclasses — same
     field names, same defaults, same None-dropping in `to_payload()`. Added
@@ -53,7 +58,6 @@ class GmailDiscoverySkipped(StageManifest):
     duration_seconds: float = 0.0
     accounts_timing: list[dict[str, Any]] = Field(default_factory=list)
     reason: str = ""
-    contacts_csv: str = ""
     linkedin_resolution_queue_csv: str = ""
     status: str = "skipped"
     source: str = "gmail"
@@ -91,7 +95,6 @@ class GmailDiscoveryCompleted(StageManifest):
     calculation_mode: str = ""
     calculation_reason: str = ""
     child_calculation_modes: list[str] = Field(default_factory=list)
-    contacts_csv: str = ""
     linkedin_resolution_queue_csv: str = ""
     contacts: int = 0
     account_emails: list[str] = Field(default_factory=list)

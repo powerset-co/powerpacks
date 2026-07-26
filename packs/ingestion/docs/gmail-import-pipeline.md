@@ -161,7 +161,6 @@ transient errors and never trigger forced reauthorization.
 |   |-- people.csv
 |   `-- manifest.json
 |-- discover/gmail/
-|   |-- contacts.csv
 |   |-- linkedin_resolution_queue.csv
 |   `-- manifest.json
 |-- directory.csv

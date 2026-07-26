@@ -7,6 +7,25 @@ existing `outputs.people_csv`), whether it is still current (fingerprints
 match), and row counts — plus the merged people.csv summary. This is the
 presence check the import skills use to suggest missing sources. It writes
 nothing and always exits 0.
+
+The DISCOVER half reads the stage manifest and nothing else: `status` says whether
+discovery ran, and the declared output's row count comes from the per-node IO
+stats the node recorded (`fingerprints.output_artifacts[<declared path>].rows`,
+see `pipeline/contract.py:Node.artifact_stats`). It used to open a CSV and count
+it, and that was the only reason `discover/gmail/contacts.csv` and
+`discover/messages/contacts.csv` existed — both are deleted now.
+
+The IMPORT half still counts its two files, deliberately: `import/linkedin/
+people.csv` is declared `external=True` (the Modal indexing pipeline downloads it,
+no node in this graph writes it) and `candidates.csv` has had no writer since #339
+folded the candidate pool into `people.csv`. Neither has a node that could record
+a row count, so opening them IS the only honest source.
+
+Changelog:
+  2026-07-26 (per-node IO stats): `discover_status` reads the manifest's declared
+    output stats instead of opening a CSV; the two staged `contacts.csv` files it
+    used to count are gone, and the declared path per source is imported from the
+    producing node rather than rebuilt here.
 """
 
 from __future__ import annotations
@@ -24,28 +43,44 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_IMPORT_DIR  # noqa: E402
+from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery  # noqa: E402
+from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery  # noqa: E402
 from packs.ingestion.primitives.imports.common import (  # noqa: E402
     csv_count,
     import_manifest_current,
 )
+from packs.ingestion.primitives.imports.linkedin.network_import import LinkedInImport  # noqa: E402
 
 
 FAN_IN_SOURCES = ["gmail", "linkedin", "messages"]
 CANONICAL_MERGED_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 
+# The node that publishes each source's discovery manifest. Its ONE declared
+# output is the artifact whose row count IS that source's contact count, and it is
+# read from the declaration so this report and the producer name one path string:
+# gmail's `linkedin_resolution_queue.csv`, the merged
+# `.powerpacks/messages/contacts.csv`, and linkedin's `discover/linkedin/people.csv`.
+DISCOVERY_NODES = {
+    "gmail": GmailDiscovery,
+    "linkedin": LinkedInImport,
+    "messages": MessagesDiscovery,
+}
+
 
 def discover_status(source: str, base_dir: Path) -> dict[str, Any]:
-    discover_dir = base_dir / "discover" / source
-    manifest_path = discover_dir / "manifest.json"
+    """This source's discovery state, from its stage manifest ONLY (no file reads)."""
+    manifest_path = base_dir / "discover" / source / "manifest.json"
     manifest = read_json(manifest_path, {}) or {}
-    contacts_csv = str(manifest.get("contacts_csv") or discover_dir / "contacts.csv")
-    present = bool(manifest) and Path(contacts_csv).exists()
+    declared = DISCOVERY_NODES[source].outputs[0].path
+    outputs = (manifest.get("fingerprints") or {}).get("output_artifacts") or {}
+    stat = outputs.get(declared) if isinstance(outputs, dict) else {}
+    stat = stat if isinstance(stat, dict) else {}
     return {
         "manifest": str(manifest_path),
-        "present": present,
+        "present": manifest.get("status") == "completed",
         "status": str(manifest.get("status") or ""),
-        "contacts_csv": contacts_csv if Path(contacts_csv).exists() else "",
-        "contacts": csv_count(contacts_csv),
+        "contacts_csv": declared if stat.get("exists") else "",
+        "contacts": int(stat.get("rows") or 0),
         "updated_at": str(manifest.get("updated_at") or ""),
     }
 

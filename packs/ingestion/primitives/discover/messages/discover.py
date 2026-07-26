@@ -24,16 +24,15 @@ Shape:
       wacli, auth, sync, deepen, export local metadata) ->
       whatsapp.contacts.csv. Missing QR -> blocked_user_action; surfaces the
       pre-full-sync re-link nudge.
-  A channel's run() returns its payload body; anything but ``completed``
+  A channel's run() returns its typed payload; anything but ``completed``
   short-circuits the discovery run. MessagesDiscovery then merges the enabled
-  per-channel CSVs by canonical phone -> .powerpacks/messages/contacts.csv,
-  copies it to discover/messages/contacts.csv, and writes a typed manifest
-  (contact count, channels, privacy=bodies-never-read, WhatsApp pre-full-sync
-  nudge). Metadata only: no bodies, no research, no upload.
+  per-channel CSVs by canonical phone -> .powerpacks/messages/contacts.csv, and
+  writes a typed manifest (contact count, channels, privacy=bodies-never-read,
+  WhatsApp pre-full-sync nudge). Metadata only: no bodies, no research, no upload.
 
 Flow:
   --include-* selection -> per-channel extract (stop at the first blocked/failed)
-  -> merge by canonical phone -> copy to the staged discover dir -> one manifest
+  -> merge by canonical phone -> one manifest
 
 Known behaviors this stage DECLARES rather than fixes:
   - ``_merge`` feeds the merger only the per-channel CSVs, never the prior merged
@@ -51,6 +50,14 @@ Known behaviors this stage DECLARES rather than fixes:
     channels selected on THIS run, not of everything ever discovered.
 
 Changelog:
+  2026-07-26 (staged copy deleted): the stage writes ONE output.
+    ``discover/messages/contacts.csv`` was a ``shutil.copyfile`` of the merged
+    ``.powerpacks/messages/contacts.csv`` and its only reader was
+    ``imports/status.py``, which counted its rows; status now reads the merged
+    file's row count out of this manifest's per-node stats
+    (``fingerprints.output_artifacts``), so the copy and its declaration are gone.
+    ``self.contacts_csv`` is the merged path now, so the payload's ``contacts_csv``
+    names the file that exists. ``out_dir`` still owns the manifest.
   2026-07-25 (declared contract): ``MessagesDiscovery`` is a
     ``pipeline/contract.py:Node`` (``messages_stage_merge``), as are the two
     channels. It DECLARES the two per-channel CSVs it reads and the two CSVs it
@@ -99,7 +106,6 @@ Changelog:
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -172,6 +178,11 @@ class MessagesDiscovery(Node):
         Artifact(path=str(IMESSAGE_CONTACTS), row_model=MessageContactRow, required=False),
         Artifact(path=str(WHATSAPP_CONTACTS), row_model=MessageContactRow, required=False),
     )
+    # ONE stage output. The staged copy under the discover dir
+    # (`discover/messages/contacts.csv`) was a `shutil.copyfile` of this file whose
+    # only reader was `imports/status.py`, which counted its rows; status now reads
+    # this artifact's row count out of the manifest's per-node stats, so the copy
+    # is gone rather than declared dead.
     outputs = (
         # The SHARED file: this stage and the import matcher both write it.
         # `writes="upsert"` + `owns_columns` is what makes that legal — a
@@ -186,14 +197,6 @@ class MessagesDiscovery(Node):
             row_model=MessageContactRow,
             writes="upsert",
             owns_columns=DISCOVERY_OWNED_COLUMNS,
-        ),
-        # The staged copy under the discover dir. Sole writer, whole file. Its
-        # one reader is `imports/status.py`, which counts its rows for the
-        # "which sources are present" report.
-        Artifact(
-            path=str(DEFAULT_MESSAGES_OUTPUT_DIR / "contacts.csv"),
-            row_model=MessageContactRow,
-            writes="full_rewrite",
         ),
     )
     payload = MessagesDiscoveryCompleted
@@ -217,7 +220,10 @@ class MessagesDiscovery(Node):
         }
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
-        self.contacts_csv = self.out_dir / "contacts.csv"
+        # This stage's ONE output (the merged, shared message-contacts CSV) as a
+        # plain instance attribute, read from the module global once here so a test
+        # that patches it still gets a store pointed at its own temp file.
+        self.contacts_csv = MERGED_CONTACTS
         self.manifest_json = self.out_dir / "manifest.json"
         self.channels: list[MessageChannel] = []
         if self.selection["include_imessage"]:
@@ -235,10 +241,8 @@ class MessagesDiscovery(Node):
         second read of a module constant — a patched constant would otherwise
         produce keys no declared path matches, and the template would validate
         the unpatched `.powerpacks/` path instead."""
-        merged_declared, staged_declared = (item.path for item in self.outputs)
         bound = {
-            merged_declared: str(MERGED_CONTACTS),
-            staged_declared: str(self.contacts_csv),
+            self.outputs[0].path: str(self.contacts_csv),
             self.manifest: str(self.manifest_json),
         }
         # This store's declared inputs ARE the channels' declared outputs, so each
@@ -258,8 +262,9 @@ class MessagesDiscovery(Node):
             )
         for channel in self.channels:
             child = channel.run()
-            if child.get("status") != "completed":
-                return self._not_completed(child)
+            if child.status != "completed":
+                # The child's DICT form: the stage manifest embeds it verbatim.
+                return self._not_completed(child.to_payload())
         failed = self._merge()
         if failed is not None:
             return self._not_completed(failed.to_payload())
@@ -307,10 +312,10 @@ class MessagesDiscovery(Node):
         )
 
     def _completed(self) -> MessagesDiscoveryCompleted:
-        """Copy the merged CSV to the fixed output dir and build the completed
-        stage payload (contact count, channels, privacy, pre-full-sync nudge)."""
+        """Build the completed stage payload from the merged CSV (contact count,
+        channels, privacy, pre-full-sync nudge)."""
         artifacts = self._artifacts()
-        artifacts["contacts_csv"] = str(MERGED_CONTACTS)
+        artifacts["contacts_csv"] = str(self.contacts_csv)
         child = {
             "primitive": "messages_discovery",
             "status": "selected_steps_completed",
@@ -326,10 +331,6 @@ class MessagesDiscovery(Node):
                 "cloud_upload_ran": False,
             },
         }
-        if MERGED_CONTACTS.exists():
-            shutil.copyfile(MERGED_CONTACTS, self.contacts_csv)
-        else:
-            write_csv_rows(self.contacts_csv, CSV_HEADERS, [])
         _, rows = read_csv_rows(self.contacts_csv)
         # The pairing fields hoist the non-blocking pre-full-sync nudge to the top
         # level so a fast-path run surfaces it without digging into child.artifacts.
@@ -361,8 +362,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """CLI dispatch: run discover() and emit the payload; map status to the exit
-    code (20 blocked, 1 failed, else 0)."""
+    """CLI dispatch: run the store and emit the typed payload's dict form; map
+    status to the exit code (20 blocked, 1 failed, else 0)."""
     args = build_parser().parse_args()
     if args.command == "discover":
         payload = MessagesDiscovery(
@@ -370,10 +371,10 @@ def main() -> int:
             include_imessage=args.include_imessage,
             include_whatsapp=args.include_whatsapp,
         ).run()
-        emit(payload)
-        if payload.get("status") in {"blocked_user_action", "blocked_approval"}:
+        emit(payload.to_payload())
+        if payload.status in {"blocked_user_action", "blocked_approval"}:
             return 20
-        return 1 if payload.get("status") == "failed" else 0
+        return 1 if payload.status == "failed" else 0
     return 2
 
 
