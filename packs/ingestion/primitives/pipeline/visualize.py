@@ -51,6 +51,9 @@ def short(path: str) -> str:
     (curly braces from the per-account template would end a Mermaid node)."""
     text = path.replace(".powerpacks/network-import/", "").replace(".powerpacks/", "")
     text = text.replace(str(Path.home()), "~")
+    # Rendered inside double-quoted Mermaid labels, which tolerate every other
+    # character these paths contain; braces still end a quoted label on some
+    # renderers, so the per-account template stays substituted.
     return text.replace("{", "(").replace("}", ")")
 
 
@@ -98,20 +101,20 @@ def mermaid(nodes: list[type[Node]], report: dict) -> str:
             continue
         lines.append(f"  subgraph {stage}")
         for node in sorted(members, key=lambda n: n.name):
-            lines.append(f"    {_mermaid_id(node.name)}[{node.name}]")
+            lines.append(f'    {_mermaid_id(node.name)}["{node.name}"]')
         lines.append("  end")
     for path, consumers in sorted(external_inputs.items()):
         ext_id = "ext_" + _mermaid_id(short(path))
-        lines.append(f"  {ext_id}[({short(path)})]")
+        lines.append(f'  {ext_id}[("{short(path)}")]')
         for consumer in sorted(set(consumers)):
             lines.append(f"  {ext_id} --> {_mermaid_id(consumer)}")
     for (producer, consumer), paths in sorted(artifact_edges.items()):
-        lines.append(f"  {_mermaid_id(producer)} -->|{_label(paths)}| {_mermaid_id(consumer)}")
+        lines.append(f'  {_mermaid_id(producer)} -->|"{_label(paths)}"| {_mermaid_id(consumer)}')
     for (producer, consumer), paths in sorted(manifest_edges.items()):
-        lines.append(f"  {_mermaid_id(producer)} -.->|{_label(paths)}| {_mermaid_id(consumer)}")
+        lines.append(f'  {_mermaid_id(producer)} -.->|"{_label(paths)}"| {_mermaid_id(consumer)}')
     for dead in report["dead_outputs"]:
         leaf_id = "dead_" + _mermaid_id(short(dead["path"]))
-        lines.append(f"  {leaf_id}[/{short(dead['path'])} - no reader yet/]")
+        lines.append(f'  {leaf_id}[/"{short(dead["path"])} - no reader yet"/]')
         lines.append(f"  {_mermaid_id(dead['node'])} --> {leaf_id}")
     return "\n".join(lines)
 

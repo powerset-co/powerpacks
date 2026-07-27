@@ -38,8 +38,8 @@ class VisualizeTests(unittest.TestCase):
         # messages/contacts.csv has two declared writers (discovery merge +
         # matcher); a last-wins producer map dropped the first writer's edges
         # once. Both must emit.
-        self.assertIn("messages_stage_merge -->|messages/contacts.csv| messages_match_local", self.document)
-        self.assertIn("messages_stage_merge -->|messages/contacts.csv| messages_import", self.document)
+        self.assertIn('messages_stage_merge -->|"messages/contacts.csv"| messages_match_local', self.document)
+        self.assertIn('messages_stage_merge -->|"messages/contacts.csv"| messages_import', self.document)
 
     def test_dead_outputs_are_rendered_as_leaves(self) -> None:
         self.assertIn("no reader yet", self.document)
