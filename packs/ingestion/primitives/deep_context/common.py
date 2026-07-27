@@ -63,13 +63,13 @@ REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # fixed completion signal fo
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 # RapidAPI LinkedIn lookup cache (one JSON per public_identifier) — the "linkedin lookups".
 PROFILE_CACHE_DIR = Path(".powerpacks/network-import/profile_cache_v2")
-# Durable self-heal override: reconcile writes it, the fan-in merge re-applies it every run
-# (a merge INPUT, not a deep-context output — so it survives re-merges/index rebuilds).
+# Durable Deep Context review decisions. Realized identities are persisted from
+# this file to directory.csv before fan-in, so they survive source re-imports.
 OVERRIDES_DIR = Path(".powerpacks/network-import/overrides")
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
-# Enriched re-attach rows (retargets), auto-ingested by the fan-in merge.
+# Enriched re-attach rows (retargets), persisted to directory.csv at realization.
 RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"
-# Contact-only rows that fold a parent's children onto its kept LinkedIn (auto-ingested).
+# Contact-only rows that fold a parent's children onto its kept LinkedIn, persisted at realization.
 CONSOLIDATE_PEOPLE_CSV = OVERRIDES_DIR / "consolidate-people.csv"
 OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning anchor
 

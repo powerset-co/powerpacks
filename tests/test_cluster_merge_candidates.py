@@ -7,7 +7,10 @@ paired by blocking, merged in code when the names are identical, and surfaced
 to the judge as a computed SHARED IDENTIFIERS section when they are not.
 All names/identifiers here are synthetic.
 """
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from packs.ingestion.primitives.deep_context import cluster_merge_candidates as cmc
 from packs.ingestion.primitives.deep_context.common import normalize_name
@@ -79,7 +82,7 @@ class TestSharedIdentifierNote(unittest.TestCase):
         note = cmc.shared_identifier_note(a, b)
         self.assertIn("SHARED IDENTIFIERS", note)
         self.assertIn("+1 (914) 555-0466", note)
-        self.assertIn("A: seen in messages", note)
+        self.assertIn("A: owned message evidence", note)
         self.assertIn("B: contact record", note)
 
     def test_no_overlap_renders_nothing(self):
@@ -96,7 +99,7 @@ class TestSharedIdentifierNote(unittest.TestCase):
 
 
 class TestPairGeneration(unittest.TestCase):
-    def test_message_discovered_phone_pairs_across_different_names(self):
+    def test_owned_message_phone_pairs_across_different_names(self):
         people = [
             person("Jordan Bravo", extra_phones=["9145550466"]),
             person("JB", phones=["9145550466"]),
@@ -106,10 +109,47 @@ class TestPairGeneration(unittest.TestCase):
         self.assertIn((0, 1), pairs)
         self.assertNotIn((0, 2), pairs)
 
-    def test_person_sig_changes_when_a_mined_phone_appears(self):
+    def test_person_sig_changes_when_an_owned_phone_appears(self):
         before = cmc._person_sig(person("Jordan Bravo"))
         after = cmc._person_sig(person("Jordan Bravo", extra_phones=["9145550466"]))
         self.assertNotEqual(before, after)
+
+
+class TestOwnedIdentifierLoading(unittest.TestCase):
+    """Only ownership-qualified message identifiers may create an identity edge."""
+
+    def _load(self, facts):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            dossiers, raw, facts_dir = base / "dossiers", base / "raw", base / "facts"
+            for path in (dossiers, raw, facts_dir):
+                path.mkdir()
+            for slug, person_id, name in (("jordan-a", "a", "Jordan Alpha"), ("casey-b", "b", "Casey Bravo")):
+                (dossiers / f"{slug}.md").write_text(
+                    f'---\nname: "{name}"\nemails: []\nphones: []\n---\n', encoding="utf-8")
+                (raw / f"{person_id}.json").write_text('{"messages": []}', encoding="utf-8")
+            (facts_dir / "a.jsonl").write_text(json.dumps({"facts": facts}) + "\n", encoding="utf-8")
+            index = {
+                "slugs": {"jordan-a": {"person_id": "a"}, "casey-b": {"person_id": "b"}},
+                "by_phone": {"4155550100": ["casey-b"]},
+            }
+            return cmc.load_people(index, dossiers, raw, facts_dir)
+
+    def test_third_party_phone_in_untyped_identifiers_does_not_pair(self):
+        people = self._load({
+            "identifiers": ["Contact: Casey +1 415 555 0100"],
+            "owned_identifiers": {"emails": [], "phones": [], "urls": []},
+        })
+        self.assertEqual(people[0]["extra_phones"], [])
+        self.assertNotIn((0, 1), cmc.generate_pairs(people))
+
+    def test_owned_message_phone_still_pairs_with_contact_record(self):
+        people = self._load({
+            "identifiers": ["+1 415 555 0100"],
+            "owned_identifiers": {"emails": [], "phones": ["+1 415 555 0100"], "urls": []},
+        })
+        self.assertEqual(people[0]["extra_phones"], ["4155550100"])
+        self.assertIn((0, 1), cmc.generate_pairs(people))
 
 
 class TestJudgeSystemRule(unittest.TestCase):

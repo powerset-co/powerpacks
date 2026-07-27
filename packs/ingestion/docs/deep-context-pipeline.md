@@ -67,7 +67,7 @@ flowchart TD
     Q --> R{"LinkedIn review complete"}
     R --> R1["Agent's wait returns realize"]
     R1 --> S{"Approve RapidAPI cache misses for retargets"}
-    S --> T["Apply retargets + rebuild merged people.csv"]
+    S --> T["Apply retargets + persist reviewed identities to directory.csv + rebuild merged people.csv"]
     T --> U{"Approve Modal upload/build"}
     U --> V["Build and validate search index"]
 
@@ -159,7 +159,7 @@ button and cannot be blocked by the Done page.
 | Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
 | Profile prefetch | The review app runs `profile-prefetch --fetch` automatically after research completes (RapidAPI is credits-based, one call per person ever; summaries are nano-priced). The UI stays cache-only. | Shared profile cache and `profile-prefetch/manifest.json` |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
-| Realization | Approved replacement URLs are hydrated cache-first, then fan-in reapplies worth, identity, retarget, and consolidation decisions to the fixed merged people CSV. | `.powerpacks/network-import/merged/people.csv` |
+| Realization | Approved real-LinkedIn verify, retarget, and consolidation decisions persist to `directory.csv`; fan-in then rebuilds the fixed merged people CSV. Synthetic profiles remain outside the directory because they have no real LinkedIn identity. | `directory.csv`, `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
 
 ## Commands and approval boundaries
@@ -202,6 +202,7 @@ After LinkedIn review:
 
 ```bash
 bin/deep-context apply-retargets
+bin/deep-context persist-review-identities
 bin/deep-context realize
 
 uv run --project . python packs/indexing/modal/linkedin_modal_pipeline.py index-people \
@@ -383,6 +384,9 @@ finished. Dossiers persist synthesized facts, not verbatim messages.
 |-- consolidate-people.csv
 |-- retarget-people.csv
 `-- synthetic-people.csv
+
+.powerpacks/network-import/
+`-- directory.csv
 
 .powerpacks/network-import/merged/
 `-- people.csv

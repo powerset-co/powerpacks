@@ -120,7 +120,8 @@ def upsert_consolidation_row(path: Path, kept_pub: str, kept_url: str,
     public_identifier, carrying the union of the parent's contacts.
 
     Mirrors ``write_consolidations`` (same people-schema contact-only shape) so the
-    fan-in auto-ingests it and unions the sibling contacts onto the real kept profile —
+    realization persistence stage writes its contacts to directory.csv before fan-in
+    unions the sibling contacts onto the real kept profile —
     the equivalent carry-forward when the picked option is a real LinkedIn rather than a
     synthetic row. Keyed upsert: re-picking replaces the row for that pub (idempotent)."""
     kept_pub = (kept_pub or "").strip().lower()

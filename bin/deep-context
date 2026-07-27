@@ -67,6 +67,7 @@ usage: bin/deep-context <command> [args]
                --apply writes after .bkup backups)
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
   apply-retargets           enrich approved retargets -> retarget-people.csv
+  persist-review-identities persist approved real LinkedIn identities -> directory.csv
   realize      fan-in merge of the per-source import people files (free, local)
   lookup       fetch a person's dossier by name/phone/email
   probe        chat.db readability (Full Disk Access) check
@@ -244,14 +245,16 @@ case "$cmd" in
     ;;
   apply-retargets)
     # Enrich + build re-attach rows for approved `retarget` decisions -> retarget-people.csv.
-    # Cache-first (RapidAPI only on a miss). NOTE: the fan-in merge no longer ingests
-    # this file, so these rows do not yet reach merged/people.csv.
+    # `realize` persists the reviewed identity mappings before fan-in.
     "${PY[@]}" "$PKG.apply_retargets" "$@"
     ;;
+  persist-review-identities)
+    "${PY[@]}" "$PKG.persist_review_identities" "$@"
+    ;;
   realize)
-    # Phase 4 (free, local): fan-in merge -> rebuilds merged/people.csv from the per-source
-    # import people files. Borrows $setup's fan-in. The merge applies no decisions:
-    # overrides/{review,consolidate,retarget,synthetic}-people.csv are NOT read here.
+    # Phase 4 (free, local): durable reviewed identities -> directory.csv, then fan-in rebuilds
+    # merged/people.csv from source people files. Synthetic profiles remain deliberately separate.
+    "${PY[@]}" "$PKG.persist_review_identities"
     # Then rebuild search on Modal yourself: linkedin_modal_pipeline.py index-people (spend, ~5-30m).
     uv run --project . python packs/indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py fan-in \
       --people-csv .powerpacks/network-import/merged/people.csv "$@"

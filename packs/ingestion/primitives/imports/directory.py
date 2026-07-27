@@ -196,6 +196,8 @@ def directory_source_kind(path: Path) -> str:
 
 
 def directory_source_priority(source: str, url_col: str) -> int:
+    if source == "deep_context_review":
+        return 100
     if source == "directory":
         return 85
     if url_col in {"confirmed_linkedin_url", "human_confirmed_linkedin"}:

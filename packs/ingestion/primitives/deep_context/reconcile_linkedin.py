@@ -1174,8 +1174,9 @@ def write_consolidations(path: Path, tasks: list[dict[str, Any]], people_csv: Pa
     For each parent with a kept (`confirm`) link and either a detached sibling or
     an unresolved candidate child, emit ONE contact-only people row keyed by the
     kept `public_identifier` carrying the UNION of every child's emails / phones /
-    per-channel interaction_counts / source_channels. The fan-in merge auto-ingests it;
-    because it shares the kept LinkedIn key it unions onto the real row (which supplies the
+    per-channel interaction_counts / source_channels. The realization persistence stage
+    writes its contact mappings to directory.csv before fan-in; the shared kept LinkedIn key
+    unions them onto the real row (which supplies the
     profile), so the surviving person keeps the correct profile AND all the contacts of its
     siblings — while the sibling rows still detach/drop. Per-channel counts are preserved
     (merge_interaction_counts is channel-wise, never summed)."""

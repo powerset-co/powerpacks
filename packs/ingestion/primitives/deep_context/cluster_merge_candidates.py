@@ -84,6 +84,7 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 
 DEFAULT_CONFIDENCE = 0.7   # judge must be at least this confident to merge
+IDENTITY_CONTRACT_VERSION = "owned-identifiers-v1"
 # Verdict provenance, recorded per row in merge-verdicts.csv. Only JUDGE_SLAM_DUNK
 # (identity equality decided in code) and JUDGE_LLM (a real judgment we paid for) may
 # be reused as cache hits; JUDGE_NO_LLM is the offline stub's guess.
@@ -112,11 +113,10 @@ JUDGE_SYSTEM = (
     "- TONE/REGISTER, only WHEN available: consistent register supports same person; a clear "
     "formal-vs-intimate mismatch can indicate different people. If one record has NO messages "
     "from me, you simply cannot use tone — treat its absence as neutral, never as evidence.\n"
-    "- SHARED EMAIL SEEN IN MESSAGES: an address marked '[also seen in messages]' was found in "
-    "the conversation, not on the contact's own record. It is strong same-person evidence ONLY if "
-    "it is plausibly THIS person's own alias — e.g. a near-1:1 thread where they wrote from it, or "
-    "it matches their name. If it looks like a co-participant in a GROUP thread (several different "
-    "people/addresses), do NOT treat merely sharing it as proof they are the same person.\n"
+    "- SHARED IDENTIFIERS: an identifier in the SHARED IDENTIFIERS section is either on a contact "
+    "record or was explicitly classified from the message context as owned by that contact. A "
+    "third-party contact card, referral, booking number, or quoted identifier never enters that "
+    "section.\n"
     "- SHARED PHONE NUMBER: when the prompt carries a SHARED IDENTIFIERS section listing a phone "
     "on BOTH records, the numbers are literally identical after code normalization — never "
     "re-derive or doubt that equality. A personal number belongs to one human: treat the pair as "
@@ -245,9 +245,12 @@ def _profile(facts_path: Path) -> dict[str, Any]:
         "school": str(fa.get("school") or ""),
         "location": str(fa.get("location") or ""),
         "topics": list(fa.get("topics") or [])[:8],
-        # Emails/phones/URLs the synthesis pulled out of the CONVERSATION — a person may reveal a
-        # second address here that never made it onto their contact record (see identifier_contacts).
+        # Retain the complete display/context list separately from identity-safe identifiers.
         "identifiers": [str(i) for i in (fa.get("identifiers") or [])],
+        "owned_identifiers": {
+            kind: [str(value) for value in ((fa.get("owned_identifiers") or {}).get(kind) or [])]
+            for kind in ("emails", "phones", "urls")
+        },
     }
 
 
@@ -266,16 +269,14 @@ def load_people(index: dict[str, Any], dossier_dir: Path, raw_dir: Path, facts_d
         msgs = bundle.get("messages") or []
         profile = _profile(facts_dir / f"{pid}.jsonl")
         emails = [e.lower() for e in (meta.get("emails") or [])]
-        # Emails the synthesis found in the MESSAGES (facts.identifiers), minus this person's own
-        # registered ones and the owner's (who is in every thread, so is pure noise). These only
-        # WIDEN the candidate net as a full address (never local-parts — a shared first name isn't
-        # identity). Whether a shared message-email actually means SAME PERSON (their own alias) vs
-        # a co-CC'd third party in a group thread is the LLM judge's call, not the gate's.
-        extra_emails = sorted(identifier_emails(profile.get("identifiers") or []) - set(emails) - owner_emails)
+        # Only an identifier the synthesizer classified as CONTACT-owned can widen identity
+        # matching. `identifiers` remains useful dossier context, but may include a third party.
+        owned = profile.get("owned_identifiers") or {}
+        extra_emails = sorted(identifier_emails(owned.get("emails") or []) - set(emails) - owner_emails)
         record_phones = [d for d, slugs in by_phone.items() if slug in slugs]
-        # Phones the synthesis found in the MESSAGES (signatures, "text me at ..."), minus the
-        # record's own and the owner's — same widening role as extra_emails, phone edition.
-        extra_phones = sorted(identifier_phones(profile.get("identifiers") or [])
+        # Source-record phones remain authoritative. Only CONTACT-owned message phones can add an
+        # identity edge; a phone merely mentioned in the conversation cannot.
+        extra_phones = sorted(identifier_phones(owned.get("phones") or [])
                               - set(record_phones) - owner_phones)
         people.append({
             "slug": slug,
@@ -302,20 +303,12 @@ def _looks_like_email(value: str) -> bool:
 
 
 def identifier_emails(identifiers: list[str]) -> set[str]:
-    """Email addresses the synthesis pulled out of the CONVERSATION (facts.identifiers). URLs and
-    handles are dropped — only full emails, and only for FULL-address matching (never local-parts),
-    so a linking address a contact used in messages can still pair them with a record that has it
-    registered."""
+    """Full emails from the ownership-qualified message identifier list."""
     return {s.lower() for s in (str(i).strip() for i in identifiers or []) if _looks_like_email(s)}
 
 
 def identifier_phones(identifiers: list[str]) -> set[str]:
-    """Phone numbers the synthesis pulled out of the CONVERSATION (facts.identifiers), as
-    comparable digit keys. Only phone-shaped strings count — emails and anything domain-like are
-    skipped — and normalization is pure code (phone_digits), so a signature's
-    '(m)/(c) 914-555-0466' meets a record's '+19145550466' as the same key. Whether a shared
-    number is the person's own line or a shared/company one stays the judge's call for
-    different-name pairs; identical-name pairs merge deterministically (slam_dunk_verdict)."""
+    """Ownership-qualified message phones as comparable digit keys."""
     out: set[str] = set()
     for raw in identifiers or []:
         s = str(raw).strip()
@@ -340,12 +333,12 @@ def _owner_phones(base: Path) -> set[str]:
 
 
 def all_emails(p: dict[str, Any]) -> set[str]:
-    """Record emails + message-discovered ones (owner already excluded at load)."""
+    """Record emails + ownership-qualified message emails (owner excluded at load)."""
     return set(p["emails"]) | set(p.get("extra_emails") or [])
 
 
 def all_phones(p: dict[str, Any]) -> set[str]:
-    """Record phone digit keys + message-discovered ones (owner already excluded at load)."""
+    """Record phone keys + ownership-qualified message phones (owner excluded at load)."""
     return set(p["phone_digits"]) | set(p.get("extra_phones") or [])
 
 
@@ -397,9 +390,9 @@ def generate_pairs(people: list[dict[str, Any]]) -> set[tuple[int, int]]:
     LLM calls to genuinely ambiguous pairs."""
     buckets: dict[str, list[int]] = {}
     for idx, p in enumerate(people):
-        # Full-address keys include message-discovered `extra_emails`; local-part keys do NOT
+        # Full-address keys include ownership-qualified `extra_emails`; local-part keys do NOT
         # (a shared first-name local-part is not evidence two people are the same).
-        # Phone keys include message-discovered `extra_phones` — a signature number must be able
+        # Phone keys include ownership-qualified `extra_phones` — a signature number must be able
         # to pair a record with the same number registered, whatever the names look like.
         keys = {f"email:{e}" for e in all_emails(p)}
         keys |= {f"local:{lp}" for lp in email_localparts(p["emails"])}
@@ -444,10 +437,9 @@ def _render_side(label: str, p: dict[str, Any]) -> str:
     me = "\n".join(f"  me→them: {t}" for t in p["from_me"]) or "  (no messages from me — tone unavailable)"
     them = "\n".join(f"  them→me: {t}" for t in p["from_them"]) or "  (no messages from them)"
     emails = ", ".join(p["emails"]) or "none"
-    # Addresses seen only in the conversation (identifiers) — surface them so the judge can weigh a
-    # shared one, but label them so a shared address isn't mistaken for the person's own contact.
+    # Ownership-qualified addresses seen only in messages supplement the contact record.
     extra = ", ".join(p.get("extra_emails") or [])
-    extra_line = f"  [also seen in messages: {extra}]\n" if extra else ""
+    extra_line = f"  [owned identifier seen in messages: {extra}]\n" if extra else ""
     return (f"CONTACT {label} — {p['name']}  [emails: {emails}]\n{extra_line}"
             f"{facts_block}\nMessages:\n{me}\n{them}")
 
@@ -457,10 +449,10 @@ def shared_identifier_note(pa: dict[str, Any], pb: dict[str, Any]) -> str:
     code (phone_digits / lowercased emails), so the judge is TOLD the values are identical —
     a match can never hide behind '(914) 555-0466' vs '+19145550466' formatting again."""
     def phone_prov(p: dict[str, Any], d: str) -> str:
-        return "contact record" if d in set(p["phone_digits"]) else "seen in messages"
+        return "contact record" if d in set(p["phone_digits"]) else "owned message evidence"
 
     def email_prov(p: dict[str, Any], e: str) -> str:
-        return "contact record" if e in set(p["emails"]) else "seen in messages"
+        return "contact record" if e in set(p["emails"]) else "owned message evidence"
 
     lines = [f"- phone {fmt_phone(d)} is in BOTH records "
              f"(A: {phone_prov(pa, d)}; B: {phone_prov(pb, d)})"
@@ -581,8 +573,9 @@ def _person_sig(p: dict[str, Any]) -> str:
     ])
 
 
-# Bumps automatically when the judge's system prompt changes, so a prompt edit re-judges everyone.
-_JUDGE_VERSION = hashlib.sha1(JUDGE_SYSTEM.encode("utf-8")).hexdigest()[:8]
+# Bump the explicit contract for identity semantics. The prompt hash also invalidates a verdict
+# cache when the judge instructions drift.
+_JUDGE_VERSION = hashlib.sha1(f"{IDENTITY_CONTRACT_VERSION}\x1e{JUDGE_SYSTEM}".encode("utf-8")).hexdigest()[:8]
 
 
 def pair_sig(pa: dict[str, Any], pb: dict[str, Any]) -> str:

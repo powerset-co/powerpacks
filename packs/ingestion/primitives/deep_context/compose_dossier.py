@@ -90,6 +90,7 @@ def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     aliases: list[str] = []
     topics: list[str] = []
     identifiers: list[str] = []
+    owned_identifiers = {"emails": [], "phones": [], "urls": []}
     for f in facts:
         for value in f.get("aliases") or []:
             v = str(value).strip()
@@ -103,6 +104,11 @@ def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
             v = str(value).strip()
             if v and v.lower() not in {i.lower() for i in identifiers}:
                 identifiers.append(v)
+        for kind in owned_identifiers:
+            for value in (f.get("owned_identifiers") or {}).get(kind) or []:
+                v = str(value).strip()
+                if v and v.lower() not in {i.lower() for i in owned_identifiers[kind]}:
+                    owned_identifiers[kind].append(v)
 
     events: dict[tuple[str, str], dict[str, str]] = {}
     for f in facts:
@@ -148,6 +154,7 @@ def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
         "topics": topics[:MAX_TOPICS],
         "notable_events": sorted(events.values(), key=lambda e: e["date"] or "9999"),
         "identifiers": identifiers,
+        "owned_identifiers": owned_identifiers,
         "shared_context": list(shared.values()),
         "network_worth": worth,
         "confidence": max((f.get("confidence") or 0.0 for f in facts), default=0.0),
