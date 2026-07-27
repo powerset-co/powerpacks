@@ -744,6 +744,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -800,6 +801,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -865,6 +867,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     "run",
                     "--backend",
                     "local",
+                    "--search-only",
                     "--db",
                     str(db),
                     "--ledger",
