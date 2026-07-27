@@ -25,6 +25,8 @@ extrasaction-ignore write, default CRLF, no fingerprint). The fingerprinted
 LF writer that skips unchanged rewrites stays in ``discover/common.py``.
 
 Changelog:
+  2026-07-25: added read_header (header row only, no row scan) for the pipeline
+    contract's header-drift check.
   2026-07-23 (audit): added read_dict_rows / write_dict_rows so the ingestion
     stages stop each defining a byte-identical local read_csv/write_csv.
   2026-07-23 (audit): added write_dict_rows_strict (the loud extrasaction="raise"
@@ -105,6 +107,31 @@ class CsvIO:
         cls.ensure_field_limit()
         with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
             return list(csv.DictReader(handle))
+
+    @classmethod
+    def read_header(cls, path: Path) -> list[str]:
+        """Read ONLY a CSV's header row (``[]`` for a missing or empty file).
+
+        The cheap half of :meth:`read_dict_rows` for callers that need the column
+        list and not the 11MB of rows under it — the pipeline contract's
+        header-drift check."""
+        if not path.exists():
+            return []
+        with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+            return next(cls.reader(handle), [])
+
+    @classmethod
+    def count_rows(cls, path: Path) -> int:
+        """Count a CSV's data rows (header excluded; ``0`` for a missing file).
+
+        Streams — the other cheap half of :meth:`read_dict_rows`, for the callers
+        that want the row COUNT and not the 11MB of rows under it: the pipeline
+        contract's per-node row stats and ``imports/common.py:csv_count``."""
+        if not path.is_file():
+            return 0
+        cls.ensure_field_limit()
+        with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
+            return sum(1 for _ in csv.DictReader(handle))
 
     @classmethod
     def write_dict_rows(cls, path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:

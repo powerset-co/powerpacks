@@ -11,6 +11,11 @@ The lower-level record builders stay in build_processing_pipeline.py. This
 wrapper owns orchestration and writes a stable stage manifest.
 
 Changelog:
+  2026-07-26 (declaration owns the path): DELETED `read_manifest_people_csv`. The
+    fan-in used to read each `import/<source>/manifest.json` to learn where that
+    source's people.csv was, then append the hardcoded path anyway — two answers
+    for one file. The declared per-source input path (`PeopleMerge.inputs`) is the
+    one answer, and it is the same path every import writes.
   2026-07-24 (merge rewrite): the fan-in step calls `imports/merge_people.py`'s
     `PeopleMerge` IN-PROCESS instead of shelling `sys.executable` at the retired
     `merge_network_sources.py`. Dropped `--include-existing-artifacts` and the
@@ -193,11 +198,12 @@ def command_text(cmd: list[str]) -> str:
 
 
 def run_merge(args: argparse.Namespace, input_paths: list[Path]) -> dict[str, Any]:
-    """Merge the per-source people files in-process; returns the merge payload."""
+    """Merge the per-source people files in-process; returns the merge payload's
+    dict form (`Node.run()` hands back the typed manifest)."""
     return PeopleMerge(
         inputs=[ROOT / path if not path.is_absolute() else path for path in input_paths],
         output_dir=ROOT / Path(args.artifact_dir) / "merged",
-    ).run()
+    ).run().to_payload()
 
 
 def processing_args(args: argparse.Namespace, *, dry_run: bool, allow_paid: bool) -> list[str]:
@@ -315,23 +321,14 @@ def without_retired_contact_duckdb(payload: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
-def read_manifest_people_csv(path: Path) -> Path | None:
-    if not path.exists():
-        return None
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    outputs = manifest.get("outputs") if isinstance(manifest.get("outputs"), dict) else {}
-    value = outputs.get("people_csv")
-    if not value:
-        return None
-    candidate = ROOT / Path(str(value))
-    return candidate if candidate.exists() else None
-
-
 def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
     """The per-source people.csv files to merge, ROOT-relative and deduped.
+
+    The paths are the merge's DECLARED per-source inputs (`PeopleMerge.inputs`,
+    `import/<source>/people.csv`), not a lookup of `outputs.people_csv` in each
+    import manifest: a declaration is where a path lives, so asking a manifest
+    where a file is — and then falling back to the very path the declaration
+    names — was indirection with two answers and no tiebreaker.
 
     Source artifacts only — the merge never reads its own `merged/people.csv`,
     so a re-run cannot self-join its previous output."""
@@ -339,9 +336,6 @@ def fan_in_input_paths(args: argparse.Namespace) -> list[Path]:
     candidates: list[Path] = []
     # MERGE_SOURCES order is the merge's precedence order — do not reorder here.
     for source in MERGE_SOURCES:
-        manifest_people = read_manifest_people_csv(base / "import" / source / "manifest.json")
-        if manifest_people:
-            candidates.append(manifest_people)
         candidates.append(base / "import" / source / "people.csv")
     for path in getattr(args, "input", []) or []:
         candidates.append(ROOT / Path(str(path)))

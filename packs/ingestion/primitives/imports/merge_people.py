@@ -13,7 +13,8 @@ Flow:
      lookups from its confident `found` rows
   3. for a row with no slug: look it up by email, then by phone, and stamp
      `public_identifier` + `linkedin_url`
-  4. key = `linkedin:<slug>` when a slug is known, else
+  4. key = `linkedin:<slug>` when a slug is known; else the row's own
+     `candidate:` id verbatim when it already carries one; else
      `candidate:<candidate_key_for(primary_email, primary_phone)>`
   5. group by key, union the fields (first non-empty wins per scalar column;
      alias lists / channels / artifacts set-union; interaction counts take the
@@ -27,6 +28,24 @@ distinction the merge makes, and it is a column — not a second file, not an
 admission decision.
 
 Changelog:
+  2026-07-26 (existing candidate ids are kept): `group_key` uses a no-slug row's
+    own `candidate:` id verbatim instead of recomputing `candidate_key_for`
+    (whose email-wins precedence silently re-keyed a phone-keyed person to
+    `candidate:email:...` the moment a merge gained their email — the same
+    stranding shape as the retired `message-linkedin:` ids: facts/ files and
+    review rows left addressing an id nothing produces anymore).
+  2026-07-26 (external linkedin input): `import/linkedin/people.csv` is declared
+    `external=True`. It is the honest answer to a `phantom_input` report: no node
+    in `packs/ingestion` writes that path — the LinkedIn import runs in the Modal
+    sandbox and the indexing pack's `linkedin_modal_pipeline.py` downloads the
+    enriched people.csv to it.
+  2026-07-25 (declared contract): `PeopleMerge` is a `pipeline/contract.py:Node`.
+    It DECLARES its four inputs and its one output (`Artifact`, with `PeopleRow`
+    as the row model) instead of only opening them, `run()` is the inherited
+    template (validate inputs -> `execute()` -> validate outputs -> manifest), and
+    the manifest payload `_manifest()` used to build as a raw dict is now the
+    typed `MergePeopleManifest`. Same stats, same names, same values; the merged
+    CSV is byte-identical.
   2026-07-24: created, replacing `merge_network_sources.py`. The merged CSV
     contract changed: the merge no longer applies `overrides/*.csv` decisions,
     no longer re-reads its own `merged/people.csv` output, and no longer emits
@@ -43,7 +62,6 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
@@ -57,11 +75,16 @@ from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
     phones_from_row,
 )
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, unique_strings  # noqa: E402
-from packs.ingestion.primitives.common.manifests import write_stage_manifest  # noqa: E402
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
     DEFAULT_IMPORT_DIR,
+)
+from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
+    Artifact,
+    Node,
+    PeopleRow,
+    StageManifest,
 )
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     merge_jsonish_lists,
@@ -80,6 +103,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     parse_jsonish,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
 # Source order is precedence order: on a scalar-field tie the earlier source's
 # value is kept, so the curated LinkedIn export beats mailbox-derived text.
@@ -140,11 +164,20 @@ def directory_slug_for(row: dict[str, str], emails: dict[str, str], phones: dict
 def group_key(row: dict[str, str]) -> str:
     """The identity this row belongs to: its LinkedIn slug, else its contact key.
 
+    A no-slug row that already carries a `candidate:` id keeps that key VERBATIM.
+    The id is a durable identity that `facts/` files and review rows already
+    address, and recomputing `candidate_key_for` (email wins over phone) would
+    silently re-key a phone-keyed person to `candidate:email:...` the moment a
+    fold gives them an email — stranding everything written under the phone key.
+
     Empty only when the row has neither a slug nor an email/phone, which makes it
     unkeyable — there is no identity to merge it onto or to mint an id from."""
     slug = str(row.get("public_identifier") or "").strip().lower()
     if slug:
         return f"{LINKEDIN_KEY_PREFIX}{slug}"
+    existing_id = str(row.get("id") or "").strip()
+    if existing_id.startswith(CANDIDATE_KEY_PREFIX):
+        return existing_id
     contact_key = candidate_key_for(row.get("primary_email", ""), row.get("primary_phone", ""))
     return f"{CANDIDATE_KEY_PREFIX}{contact_key}" if contact_key else ""
 
@@ -194,11 +227,81 @@ def merge_group(key: str, members: list[dict[str, str]]) -> dict[str, str]:
     return merged
 
 
-class PeopleMerge:
+class MergePeopleInput(BaseModel):
+    """The `input` block: what this run was pointed at."""
+    people_csvs: list[str]
+    directory_csv: str
+
+
+class MergePeopleArtifacts(BaseModel):
+    """The `artifacts` block: the one output this stage owns."""
+    people_csv: str
+
+
+class MergePeopleStats(BaseModel):
+    """Every stat the raw-dict manifest emitted, same names, same values."""
+    input_rows: dict[str, int]
+    input_rows_total: int
+    rows: int
+    linkedin_ids: int
+    candidate_ids: int
+    directory_stamped: int
+    dropped_unkeyable: int
+    groups_by_size: dict[str, int]
+
+
+class MergePeopleManifest(StageManifest):
+    """This stage's typed manifest payload. `_manifest()` used to assemble a raw
+    dict and hand it to write_stage_manifest, which is exactly the "a stage
+    cannot invent fields on the fly" discipline the typed payload exists for."""
+    stage: str = "merge_people"
+    input: MergePeopleInput
+    artifacts: MergePeopleArtifacts
+    stats: MergePeopleStats
+    started_at: str = ""
+    # Dropped from the manifest when absent, like the old `if reason:` guard.
+    reason: str | None = None
+
+
+class PeopleMerge(Node):
     """Merges the per-source import people files into `merged/people.csv`.
 
     Owns its fixed output paths, the directory lookup, and the one manifest.
-    Construct with explicit inputs/paths and call `run()`."""
+    Construct with explicit inputs/paths and call `run()` (the Node template:
+    declared inputs -> `execute()` -> declared outputs -> manifest)."""
+
+    name = "merge_people"
+    # The gmail and messages people.csv files are their importers' declared
+    # outputs; `import/linkedin/people.csv` is `external=True` because NOTHING in
+    # `packs/ingestion` writes it: the LinkedIn import runs in the Modal sandbox
+    # and `packs/indexing/modal/linkedin_modal_pipeline.py` downloads the enriched
+    # file to that path (see `imports/linkedin/network_import.py`, which says so at
+    # the top and declares `discover/linkedin/people.csv` as its own output).
+    # `required=False` because this merge deliberately tolerates an absent source
+    # (it merges whatever is present and reports `not_ready` only when NO source
+    # file was readable).
+    inputs = tuple(
+        [
+            Artifact(
+                path=str(DEFAULT_IMPORT_DIR / source / "people.csv"),
+                row_model=PeopleRow,
+                external=source == "linkedin",
+                required=False,
+            )
+            for source in MERGE_SOURCES
+        ]
+        + [Artifact(path=str(DEFAULT_DIRECTORY_CSV), required=False)]
+    )
+    outputs = (
+        Artifact(
+            path=str(DEFAULT_OUTPUT_DIR / "people.csv"),
+            row_model=PeopleRow,
+            writes="full_rewrite",
+            # Read by indexing / deep-context / search, none of them converted.
+        ),
+    )
+    payload = MergePeopleManifest
+    manifest = str(DEFAULT_OUTPUT_DIR / "manifest.json")
 
     def __init__(
         self,
@@ -207,21 +310,37 @@ class PeopleMerge:
         output_dir: Path | None = None,
         directory_csv: Path | None = None,
     ) -> None:
-        self.inputs = [Path(path) for path in (inputs if inputs is not None else default_input_paths())]
+        # `source_csvs`, not `inputs`: `inputs` is now the declared Artifact tuple
+        # (the contract); this is the path list THIS run was constructed with.
+        self.source_csvs = [Path(path) for path in (inputs if inputs is not None else default_input_paths())]
         self.output_dir = Path(output_dir or DEFAULT_OUTPUT_DIR)
         self.people_csv = self.output_dir / "people.csv"
         self.manifest_json = self.output_dir / "manifest.json"
         self.directory_csv = Path(directory_csv or DEFAULT_DIRECTORY_CSV)
 
-    def run(self) -> dict[str, Any]:
-        """Merge every present input, then write people.csv + manifest.json."""
+    def bindings(self) -> dict[str, str]:
+        """Declared path -> this instance's path, so an explicit `--output-dir` /
+        `--input` list still validates against the declaration. Keys come from the
+        declaration itself, never from a second read of a default."""
+        bound = {
+            self.outputs[0].path: str(self.people_csv),
+            self.manifest: str(self.manifest_json),
+            self.inputs[-1].path: str(self.directory_csv),
+        }
+        for declared, actual in zip(self.inputs, self.source_csvs):
+            bound[declared.path] = str(actual)
+        return bound
+
+    def execute(self) -> MergePeopleManifest:
+        """Merge every present input, then write people.csv (the Node template
+        writes the manifest)."""
         started_at = now_iso()
         email_slugs, phone_slugs = directory_slug_lookups(self.directory_csv)
         groups: dict[str, list[dict[str, str]]] = {}
         input_rows: dict[str, int] = {}
         stamped = 0
         unkeyable = 0
-        for path in self.inputs:
+        for path in self.source_csvs:
             if not path.exists():
                 continue
             rows = [normalize_people_row(raw) for raw in CsvIO.read_dict_rows(path)]
@@ -239,7 +358,7 @@ class PeopleMerge:
                     continue
                 groups.setdefault(key, []).append(row)
         if not input_rows:
-            return self._manifest(
+            return self._payload(
                 status="not_ready", reason="missing_import_people_csvs", started_at=started_at,
                 input_rows=input_rows, rows=0, stamped=stamped, unkeyable=unkeyable, groups={},
             )
@@ -247,12 +366,12 @@ class PeopleMerge:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         CsvIO.write_dict_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, merged)
         progress(f"merged {sum(input_rows.values())} source rows into {len(merged)} people")
-        return self._manifest(
+        return self._payload(
             status="completed", reason="", started_at=started_at, input_rows=input_rows,
             rows=len(merged), stamped=stamped, unkeyable=unkeyable, groups=groups,
         )
 
-    def _manifest(
+    def _payload(
         self,
         *,
         status: str,
@@ -263,35 +382,32 @@ class PeopleMerge:
         stamped: int,
         unkeyable: int,
         groups: dict[str, list[dict[str, str]]],
-    ) -> dict[str, Any]:
-        """Write this stage's single manifest and return its payload."""
+    ) -> MergePeopleManifest:
+        """This stage's typed manifest payload (the Node template writes it)."""
         sizes: dict[str, int] = {}
         for members in groups.values():
             bucket = str(len(members))
             sizes[bucket] = sizes.get(bucket, 0) + 1
-        payload: dict[str, Any] = {
-            "stage": "merge_people",
-            "status": status,
-            "input": {
-                "people_csvs": [str(path) for path in self.inputs],
-                "directory_csv": str(self.directory_csv),
-            },
-            "artifacts": {"people_csv": str(self.people_csv)},
-            "stats": {
-                "input_rows": input_rows,
-                "input_rows_total": sum(input_rows.values()),
-                "rows": rows,
-                "linkedin_ids": sum(1 for key in groups if key.startswith(LINKEDIN_KEY_PREFIX)),
-                "candidate_ids": sum(1 for key in groups if key.startswith(CANDIDATE_KEY_PREFIX)),
-                "directory_stamped": stamped,
-                "dropped_unkeyable": unkeyable,
-                "groups_by_size": sizes,
-            },
-            "started_at": started_at,
-        }
-        if reason:
-            payload["reason"] = reason
-        return write_stage_manifest(self.manifest_json, payload)
+        return MergePeopleManifest(
+            status=status,
+            input=MergePeopleInput(
+                people_csvs=[str(path) for path in self.source_csvs],
+                directory_csv=str(self.directory_csv),
+            ),
+            artifacts=MergePeopleArtifacts(people_csv=str(self.people_csv)),
+            stats=MergePeopleStats(
+                input_rows=input_rows,
+                input_rows_total=sum(input_rows.values()),
+                rows=rows,
+                linkedin_ids=sum(1 for key in groups if key.startswith(LINKEDIN_KEY_PREFIX)),
+                candidate_ids=sum(1 for key in groups if key.startswith(CANDIDATE_KEY_PREFIX)),
+                directory_stamped=stamped,
+                dropped_unkeyable=unkeyable,
+                groups_by_size=sizes,
+            ),
+            started_at=started_at,
+            reason=reason or None,
+        )
 
 
 def progress(message: str) -> None:
@@ -315,8 +431,8 @@ def main() -> int:
         output_dir=Path(args.output_dir),
         directory_csv=Path(args.directory_csv),
     ).run()
-    emit(payload)
-    return 0 if payload.get("status") == "completed" else 1
+    emit(payload.to_payload())
+    return 0 if payload.status == "completed" else 1
 
 
 if __name__ == "__main__":

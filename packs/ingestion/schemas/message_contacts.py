@@ -2,7 +2,7 @@
 
 The ONE home for the constants that define the iMessage/WhatsApp message-contact
 CSV shape. The discover message primitives (extract_imessage, extract_whatsapp,
-merge_contacts, normalize_contacts), the discovery orchestrator (discover), the
+merge_contacts), the discovery orchestrator (discover), the
 imports matcher (match_local_candidates), and the shared contact-field helpers
 (common/contact_fields) each carried a hand-copied, byte-identical copy of these;
 they now import from here so the contract has a single definition.

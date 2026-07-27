@@ -24,7 +24,30 @@ the client this module composes; the extractor itself is called in-process by th
 WhatsApp channel. Readiness (`status`) and the re-link (`logout`) flows stay on
 the client (`whatsapp_wacli.py status`/`logout`).
 
+Known behaviors (declared, not fixed here):
+- This module's own CLI DEFAULTS differ from what the WhatsApp channel passes:
+  `--output-csv` defaults to `.powerpacks/messages/wacli.contacts.csv`, while the
+  channel passes `whatsapp.contacts.csv`. A hand-run of `run`/`export` therefore
+  leaves an orphan `wacli.contacts.*` copy that nothing in the pipeline reads.
+- `whatsapp.contacts.raw.jsonl` has ZERO readers repo-wide (grep-verified); the
+  declared pipeline graph ignores it.
+
 Changelog:
+- 2026-07-26 (--no-install means it): the flag is no longer a documented no-op —
+  `whatsapp_wacli.ensure_wacli_installed(install=False)` uses the installed
+  binary as-is and blocks (never downloads) when none is present; the help text
+  here says so.
+- 2026-07-26 (feedback edge removed): `name_fallback_csv` no longer DEFAULTS to
+  `.powerpacks/messages/contacts.csv`, the merged output of the stage this
+  extractor feeds. That default was the graph's WhatsApp cycle
+  (messages_whatsapp_extract -> messages_stage_merge -> messages_whatsapp_extract),
+  and it was redundant twice over: it only fills names wacli did not supply, and
+  the downstream merge already unions names across channels
+  (`merge_contacts._merge`: `name = existing["name"] or new["name"] or ""`).
+  Measured on real local data (97 WhatsApp contacts, 90 named): the fallback
+  supplied 0 of those names — every one came from wacli's own contact store. The
+  parameter and `--name-fallback-csv` flag stay for a caller with an explicit
+  name source; the default is now no fallback.
 - 2026-07-24 (shared IO): the local raw-`csv.DictWriter` and hand-rolled JSONL
   writers were dropped for the shared ones — the CSV goes through the
   discover-stage `write_csv_rows` (LF terminators, unchanged-bytes writes
@@ -118,7 +141,6 @@ from packs.ingestion.primitives.discover.messages.whatsapp_wacli import (  # noq
 
 
 DEFAULT_MAX_GROUP_PARTICIPANTS = int(os.environ.get("POWERPACKS_WACLI_MAX_GROUP_PARTICIPANTS", "30"))
-DEFAULT_NAME_FALLBACK_CSV = DEFAULT_OUT_DIR / "contacts.csv"
 DEFAULT_OUTPUT_CSV = DEFAULT_OUT_DIR / "wacli.contacts.csv"
 DEFAULT_OUTPUT_JSONL = DEFAULT_OUT_DIR / "wacli.contacts.jsonl"
 DEFAULT_MANIFEST = DEFAULT_OUTPUT_CSV.with_suffix(DEFAULT_OUTPUT_CSV.suffix + ".manifest.json")
@@ -312,7 +334,10 @@ def export_contacts_from_store(
     *,
     include_left_groups: bool = False,
     max_group_participants: int = DEFAULT_MAX_GROUP_PARTICIPANTS,
-    name_fallback_csv: Path | None = DEFAULT_NAME_FALLBACK_CSV,
+    # No default name source: wacli's own contact store is the name authority, and
+    # the merged contacts.csv this stage FEEDS used to be the default (the graph's
+    # WhatsApp cycle). A caller with a name source passes it explicitly.
+    name_fallback_csv: Path | None = None,
 ) -> tuple[dict[str, Contact], dict[str, Any]]:
     conn = open_wacli_db(store)
     try:
@@ -607,7 +632,7 @@ class WhatsAppExtractor:
         max_messages: int,
         max_group_participants: int = DEFAULT_MAX_GROUP_PARTICIPANTS,
         sync_timeout: int = DEFAULT_SYNC_TIMEOUT,
-        name_fallback_csv: str | Path | None = DEFAULT_NAME_FALLBACK_CSV,
+        name_fallback_csv: str | Path | None = None,
         idle_exit: str = DEFAULT_IDLE_EXIT,
         auth_timeout: int = DEFAULT_AUTH_TIMEOUT,
         group_info_timeout: int = 60,
@@ -797,8 +822,9 @@ def add_output_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--include-left-groups", action="store_true", help="include groups wacli marks as left")
     parser.add_argument("--max-group-participants", type=int, default=DEFAULT_MAX_GROUP_PARTICIPANTS,
                         help="Export participants only for groups at or below this size; set <=0 to disable the cap")
-    parser.add_argument("--name-fallback-csv", default=str(DEFAULT_NAME_FALLBACK_CSV),
-                        help="Optional contacts CSV used only to fill missing names by phone")
+    parser.add_argument("--name-fallback-csv", default="",
+                        help="Optional contacts CSV used only to fill names wacli did not supply; "
+                             "off by default (the merged contacts.csv this stage feeds is not a name source)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -815,7 +841,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--sync-timeout", type=int, default=DEFAULT_SYNC_TIMEOUT)
     run.add_argument("--group-info-timeout", type=int, default=60)
     run.add_argument("--group-info-interval", type=float, default=0.2)
-    run.add_argument("--no-install", action="store_true", help="deprecated no-op; the pinned wacli fork always auto-downloads when missing or stale")
+    run.add_argument("--no-install", action="store_true", help="never download the pinned wacli binary; use the installed one, or block if none is present")
     run.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
 
     export = sub.add_parser("export", help="export metadata from an existing wacli store without syncing")

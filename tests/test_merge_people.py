@@ -70,6 +70,19 @@ class KeyAndIdTests(unittest.TestCase):
         row = person(primary_email="casey@example.com", primary_phone="+15550100")
         self.assertEqual(group_key(row), "candidate:email:casey@example.com")
 
+    def test_an_existing_candidate_id_is_kept_verbatim_not_recomputed(self) -> None:
+        # A row already addressed as candidate:phone:... must not be re-keyed to
+        # candidate:email:... the moment it gains an email — that silently changes
+        # its person_id and strands its facts/ file and review row.
+        row = person(id="candidate:phone:+15550100",
+                     primary_email="casey@example.com", primary_phone="+15550100")
+        self.assertEqual(group_key(row), "candidate:phone:+15550100")
+        self.assertEqual(person_id_for(group_key(row)), "candidate:phone:+15550100")
+        # A slug still outranks the carried id: promotion to LinkedIn is the
+        # one legitimate re-key.
+        promoted = person(id="candidate:phone:+15550100", public_identifier="jordan-bravo")
+        self.assertEqual(group_key(promoted), "linkedin:jordan-bravo")
+
     def test_a_row_with_no_slug_email_or_phone_is_unkeyable(self) -> None:
         self.assertEqual(group_key(person(full_name="Jordan Bravo")), "")
 
@@ -127,7 +140,7 @@ class DirectoryStampTests(unittest.TestCase):
                 inputs=[base / "linkedin.csv", base / "gmail.csv"],
                 output_dir=base / "out",
                 directory_csv=base / "directory.csv",
-            ).run()
+            ).run().to_payload()
             rows = CsvIO.read_dict_rows(base / "out" / "people.csv")
         self.assertEqual(payload["stats"]["directory_stamped"], 1)
         self.assertEqual(payload["stats"]["rows"], 1)
@@ -200,7 +213,7 @@ class MergeRunTests(unittest.TestCase):
             base = Path(td)
             out = base / "merged"
             payload = PeopleMerge(inputs=self._inputs(base), output_dir=out,
-                                  directory_csv=base / "directory.csv").run()
+                                  directory_csv=base / "directory.csv").run().to_payload()
             self.assertEqual(sorted(p.name for p in out.iterdir()), ["manifest.json", "people.csv"])
             header = list(CsvIO.read_dict_rows(out / "people.csv")[0])
         self.assertEqual(header, PEOPLE_SCHEMA_COLUMNS)
@@ -214,7 +227,7 @@ class MergeRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             payload = PeopleMerge(inputs=self._inputs(base), output_dir=base / "merged",
-                                  directory_csv=base / "directory.csv").run()
+                                  directory_csv=base / "directory.csv").run().to_payload()
         stats = payload["stats"]
         self.assertEqual(stats["input_rows_total"], 5)
         self.assertEqual(stats["rows"], 3)               # jordan (x2 rows), casey, rowan
@@ -227,7 +240,7 @@ class MergeRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             PeopleMerge(inputs=self._inputs(base), output_dir=base / "merged",
-                        directory_csv=base / "directory.csv").run()
+                        directory_csv=base / "directory.csv").run().to_payload()
             rows = CsvIO.read_dict_rows(base / "merged" / "people.csv")
         by_id = {row["id"]: row for row in rows}
         self.assertIn("candidate:email:casey@example.com", by_id)
@@ -258,7 +271,7 @@ class MergeRunTests(unittest.TestCase):
                 "id,public_identifier,approved\ncandidate:email:synth@example.com,synth,yes\n",
                 encoding="utf-8")
             PeopleMerge(inputs=self._inputs(base), output_dir=base / "merged",
-                        directory_csv=base / "directory.csv").run()
+                        directory_csv=base / "directory.csv").run().to_payload()
             rows = CsvIO.read_dict_rows(base / "merged" / "people.csv")
         pubs = {row["public_identifier"] for row in rows}
         self.assertIn("jordan-bravo", pubs)   # the "no" mark did not drop them
@@ -268,7 +281,7 @@ class MergeRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             payload = PeopleMerge(inputs=[base / "missing.csv"], output_dir=base / "merged",
-                                  directory_csv=base / "directory.csv").run()
+                                  directory_csv=base / "directory.csv").run().to_payload()
         self.assertEqual(payload["status"], "not_ready")
         self.assertEqual(payload["reason"], "missing_import_people_csvs")
         self.assertFalse((base / "merged" / "people.csv").exists())

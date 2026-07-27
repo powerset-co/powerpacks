@@ -106,7 +106,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(payload["counts"]["cache_hit_count"], 0)
             self.assertIsNone(payload.get("needs_approval"))
             self.assertTrue(Path(payload["manifest"]).exists())
-            for artifact in ("linkedin_enrichment_queue_csv", "rapidapi_cache_misses_csv", "rapidapi_cache_hits_csv"):
+            for artifact in ("rapidapi_cache_misses_csv", "rapidapi_cache_hits_csv"):
                 self.assertTrue(Path(payload["artifacts"][artifact]).exists())
             with Path(payload["artifacts"]["rapidapi_cache_misses_csv"]).open(newline="", encoding="utf-8") as handle:
                 rows = list(CsvIO.dict_reader(handle))
@@ -298,7 +298,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 self.assertEqual(payload["counts"]["queue_count"], 2)
                 self.assertEqual(payload["counts"]["cache_hit_count"], 1)
                 self.assertEqual(payload["counts"]["paid_call_count"], 1)
-                self.assertEqual(profile_cache.count_rapidapi_cache_misses(Path(payload["artifacts"]["rapidapi_cache_misses_csv"])), 1)
+                self.assertEqual(len(CsvIO.read_dict_rows(Path(payload["artifacts"]["rapidapi_cache_misses_csv"]))), 1)
             self.assertEqual(code, 0)
             self.assertEqual(mocked.call_count, 1)
             with Path(payload["artifacts"]["people_csv"]).open(newline="", encoding="utf-8") as handle:

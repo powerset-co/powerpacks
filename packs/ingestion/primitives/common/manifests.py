@@ -24,6 +24,18 @@ matches by on-disk existence rather than absolute-path prefix) and a source-deri
 manifest path — and are NOT this contract; do not fold them together.
 
 Changelog:
+  2026-07-26 (per-node IO stats): the `output_paths` parameter added below is gone
+    again. A converted node now computes its whole `fingerprints` block from its
+    declarations (`pipeline/contract.py:Node.artifact_stats`, which also counts
+    `rows` per row-model artifact) and passes it in as `payload["fingerprints"]`,
+    so nothing was left calling the parameter. The row-model knowledge stays in
+    `contract.py`; this module stays generic.
+  2026-07-25 (declared contract): `write_stage_manifest` also accepts the pydantic
+    `StageManifest` payloads of `pipeline/contract.py` (anything with
+    `to_payload()`), and both it and `manifest_fingerprints` took an optional
+    `output_paths` — a converted Node passed its DECLARED output paths instead of
+    letting `collect_artifact_paths` sniff strings and consult a key allowlist.
+    `StagePayload` stays for the unconverted verticals (messages, twitter).
   2026-07-23 (audit class-sharing): moved here from discover/common.py so stages
     outside discover can share the typed-manifest base without a cross-stage import.
     discover/common.py now re-exports StagePayload + write_stage_manifest.
@@ -82,7 +94,15 @@ def artifact_fingerprint(path_text: str, existing: dict[str, Any] | None = None)
 
 
 def manifest_fingerprints(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Fingerprint a stage manifest's input and output artifact paths."""
+    """Fingerprint a stage manifest's input and output artifact paths.
+
+    The outputs are GUESSED out of the payload — any string under `artifacts` plus
+    a hardcoded allowlist of key names — so a stage whose output key is not on that
+    list goes silently unfingerprinted. That is the price of not declaring: a
+    converted `pipeline/contract.py:Node` computes the block from its declared
+    inputs/outputs (`Node.artifact_stats`, which also counts rows) and passes it in
+    as `payload["fingerprints"]`, and only the unconverted stages (twitter, the
+    wacli leaf) still land here."""
     existing = existing or {}
     existing_inputs = existing.get("input_artifacts") if isinstance(existing.get("input_artifacts"), dict) else {}
     existing_outputs = existing.get("output_artifacts") if isinstance(existing.get("output_artifacts"), dict) else {}
@@ -120,12 +140,15 @@ def stable_manifest_signature(payload: dict[str, Any]) -> dict[str, Any]:
     return signature
 
 
-def write_stage_manifest(path: Path, payload: "dict[str, Any] | StagePayload") -> dict[str, Any]:
+def write_stage_manifest(path: Path, payload: "dict[str, Any] | StagePayload | Any") -> dict[str, Any]:
     """Write one stage's manifest (fingerprinted, no-op when unchanged).
 
-    Accepts the vertical's typed StagePayload (preferred — see
-    <vertical>/models.py) or its dict form."""
-    if isinstance(payload, StagePayload):
+    Accepts the vertical's typed payload — the pydantic `StageManifest` of
+    `pipeline/contract.py` (preferred) or the older `StagePayload` dataclass — or
+    its dict form. A payload that already carries `fingerprints` keeps them: that
+    is how a converted node's declaration-driven stats (`Node.artifact_stats`)
+    reach the manifest instead of the guessed block below."""
+    if isinstance(payload, StagePayload) or hasattr(payload, "to_payload"):
         payload = payload.to_payload()
     existing = read_json(path, {}) or {}
     payload = dict(payload)

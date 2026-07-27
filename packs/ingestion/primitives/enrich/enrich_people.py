@@ -4,11 +4,12 @@
 Self-contained Powerpacks RapidAPI enrichment implementation. No imports from
 the legacy app or hosted search API.
 
-This file is the orchestrator + CLI only. The stage is decomposed into sibling
-modules, one concern each — import from the defining module, not through here:
+This file holds the three step NODES, the stage orchestrator, and the CLI. The
+rest of the stage is decomposed into sibling modules, one concern each — import
+from the defining module, not through here:
 
 - `models.py` — EnrichConfig/build_config, EnrichManifest, the stage CSV
-  columns, PipelineFailed.
+  columns + row models, the step payloads, PipelineFailed.
 - `rapidapi_client.py` — the RapidApiClient class: key/env handling, http_json,
   retry/backoff, the cache-aware `fetch_profile`, DEFAULT_RAPIDAPI_* knobs.
 - `profile_cache.py` — profile-cache slugs/paths/reads, failure TTL,
@@ -22,7 +23,7 @@ Consumers:
   search's ``fetch_person_profile``) import the sibling modules directly.
 
 Input: a shared people schema CSV, usually the `imports/merge_people.py` output.
-Output: enriched people schema CSV plus raw provider responses.
+Output: enriched people schema CSV plus the two provider hand-off CSVs.
 
 RapidAPI LinkedIn hydration runs directly when RAPIDAPI_LINKEDIN_KEY or
 RAPIDAPI_KEY is present (checked in that order). Missing keys fail clearly
@@ -36,27 +37,39 @@ is no ledger, no `continue`, no per-step state store. Reruns are idempotent
 because the output path is stable. The manifest holds status, per-step timing,
 counts, and the artifact paths.
 
-Steps (run in order inside `run`):
-1. prepare_queue: routes rows with LinkedIn URLs/public identifiers and
-   profile gaps to `linkedin_enrichment_queue.csv`, splits them by the local
-   profile cache into `rapidapi_cache_hits.csv`, `rapidapi_cache_misses.csv`,
-   and `rapidapi_recent_failures.csv`; rows without LinkedIn go to
-   `needs_resolution_queue.csv`, complete-looking rows to
-   `skipped_enrichment.csv`.
-2. enrich_linkedin: fetches cache misses, hydrates hits + fetches into
-   `provider_enriched.csv`, saves raw payloads to `raw_provider_responses/`.
-3. merge_people: merges profile data back into the input rows and writes
+Flow (EnrichPeople.execute, under the Node run template):
+  enrich_prepare_queue -> paid cache misses & no --approve-spend? -> stop at a
+  needs_approval manifest BEFORE any client or fetch -> enrich_linkedin_profiles
+  -> enrich_merge_people -> one manifest.json
+
+The store AND its three steps are `pipeline/contract.py:Node`s that DECLARE the
+files they read and write, so the hand-offs between them are checkable without a
+run. The three steps declare `manifest = ""`: the stage has ONE manifest.json,
+written by the store's run template, embedding each step's typed payload as its
+`summary`.
+
+1. enrich_prepare_queue: routes rows with LinkedIn URLs/public identifiers and
+   profile gaps, then splits them by the local profile cache into
+   `rapidapi_cache_hits.csv`, `rapidapi_cache_misses.csv`, and
+   `rapidapi_recent_failures.csv`. Rows without LinkedIn, and complete-looking
+   rows, are COUNTED (`unresolved_rows` / `skipped_rows`) but not written to a
+   file of their own — they come out of step 3 in `people.csv` carrying
+   `enrichment_status=skipped`.
+2. enrich_linkedin_profiles: hydrates the hits and fetches the misses into
+   `provider_enriched.csv`.
+3. enrich_merge_people: merges profile data back into the input rows and writes
    canonical `people.csv` — every input row, each carrying the shared schema's
    `enrichment_status` (`enriched` / `failed` / `skipped`) and, for a failure,
    `enrichment_error`. Enrichment never deletes a row.
 
-Spend gate: cache hits never need approval. If prepare_queue finds RapidAPI
-cache misses (paid fetches) and `--approve-spend` was not passed, `run` writes a
-`needs_approval` manifest with the miss count + credit estimate and exits
-nonzero-but-clean (code 20) BEFORE any fetch. With `--approve-spend` it proceeds
-(and still fails clearly if no RAPIDAPI_* key is set). `estimated_credits` is a
-FLOOR (one credit per miss); `estimated_credits_max` is the worst case where
-every miss exhausts its retry attempts, each of which RapidAPI bills.
+Spend gate: cache hits never need approval. If enrich_prepare_queue finds
+RapidAPI cache misses (paid fetches) and `--approve-spend` was not passed, `run`
+writes a `needs_approval` manifest with the miss count + credit estimate and
+exits nonzero-but-clean (code 20) BEFORE any client is constructed and before
+any fetch. With `--approve-spend` it proceeds (and still fails clearly if no
+RAPIDAPI_* key is set). `estimated_credits` is a FLOOR (one credit per miss);
+`estimated_credits_max` is the worst case where every miss exhausts its retry
+attempts, each of which RapidAPI bills.
 
 Usage:
     enrich_people.py run --input .powerpacks/network-import/merged/people.csv [--approve-spend]
@@ -75,6 +88,41 @@ Cache seeding format is documented in `profile_cache.py`. Company identity
 field behavior is documented in `profile_transforms.py`.
 
 Changelog:
+  2026-07-26 (the store is a Node too): `EnrichPeople` is a
+    `pipeline/contract.py:Node`. What blocked it was `Node.run()` returning a dict
+    while `imports/linkedin/network_import.py` consumes this stage's typed
+    `EnrichManifest` by attribute; the template returns the typed payload now, so
+    the store fits. `run()` -> `execute()`, `_write()` -> `_build()` (the template
+    writes the manifest, which therefore gains this stage's declared IO stats), and
+    `EnrichManifest` became a pydantic `StageManifest` (see models.py). Same
+    statuses, same spend gate, same manifest keys.
+  2026-07-25 (declared contract): the three steps became `pipeline/contract.py`
+    Nodes — `EnrichQueuePrepare`, `EnrichLinkedInProfiles`, `EnrichedPeopleMerge`
+    — each DECLARING its inputs/outputs as `Artifact`s and returning a typed
+    payload from `execute()`; `run()` is the inherited template (validate
+    declared inputs -> execute -> validate declared outputs -> payload). The
+    steps read their hand-off CSVs from their own FIXED paths instead of from
+    the orchestrator's `self.artifacts` dict, and EnrichLinkedInProfiles derives
+    the paid-call count from the misses CSV it was given rather than being told.
+    EnrichPeople stayed the store (it owns the artifact dir, the spend gate, and
+    the one manifest.json) and was NOT a Node at that point: `Node.run()` returned
+    a dict and `imports/linkedin/network_import.py` consumes the typed
+    `EnrichManifest` by attribute, so converting the store was that caller's
+    change to make. The store now stops at the first non-completed step payload
+    (the store pattern), which turns a missing input CSV from a FileNotFoundError
+    traceback into a typed failed manifest. CLI: `command_run`/`command_status`
+    dispatchers and `set_defaults(func=...)` are gone, dispatched inline in
+    main(); `command_check_keys` is KEPT because network_import calls it.
+  2026-07-25 (dead outputs deleted): `linkedin_enrichment_queue.csv`,
+    `needs_resolution_queue.csv`, `skipped_enrichment.csv`, and the
+    `raw_provider_responses/` JSON dump are no longer written — a repo-wide grep
+    for real readers found none (the queue CSV's only reader was an unreachable
+    fallback here, since enrich_linkedin_profiles always writes
+    provider_enriched.csv). Their counts stay in the manifest and every row they
+    described still comes out in people.csv, stamped. The raw dump duplicated
+    data already held three times over (the profile cache, provider_enriched's
+    `rapidapi_response_enriched`, people.csv's `rapidapi_response`) and cost one
+    file write per profile per run.
   2026-07-24: merge_people stopped filtering people.csv down to confirmed rows.
     A row the provider could not hydrate was previously written nowhere at all,
     making a rate-limited fetch indistinguishable from "never attempted" — the
@@ -83,12 +131,9 @@ Changelog:
     enriched/failed/skipped instead of `filtered_rows`. The spend gate also
     quotes a credit RANGE, since each cache miss can bill once per retry.
   2026-07-23 (audit oo-cli): the CLI command handlers (command_run/status/
-    check_keys) moved onto EnrichPeople so the class is the single entry point:
-    command_run is a @classmethod that instantiates + runs the orchestrator;
-    status/check_keys are @staticmethods. build_parser/main dispatch to
-    EnrichPeople.command_*. RapidAPI access is now through the RapidApiClient
-    class (resolve_key/fetch_profile) instead of the module rapidapi_key/
-    rapidapi_profile functions.
+    check_keys) moved onto EnrichPeople so the class is the single entry point.
+    RapidAPI access is now through the RapidApiClient class (resolve_key/
+    fetch_profile) instead of the module rapidapi_key/rapidapi_profile functions.
   2026-07-23 (audit decomposition): split the module into models.py /
     rapidapi_client.py / profile_cache.py / profile_transforms.py, keeping only
     the EnrichPeople orchestrator, its progress knobs, and the CLI here. The
@@ -101,19 +146,13 @@ Changelog:
     credit-gate shape (reason/paid_call_count/cache_hit_count/estimated_credits/
     message), distinct from twitter's step-gate shape, so it does not use the
     shared step-gate builder.
-  2026-07-23 (audit): replaced the per-step ledger runner (load_ledger/
-    save_ledger/mark_step/next_pending_step/approval_id/is_approved/
-    block_for_approval/PIPELINE_STEPS/execute_step/ensure_keys/
-    run_until_blocked_or_done/command_continue/command_approve) with an
-    EnrichPeople orchestrator that owns the fixed artifact dir, the three
-    steps, and one manifest.json. Spend is now gated by an explicit
-    `--approve-spend` flag (a needs_approval manifest + clean nonzero exit on
-    cache misses) instead of the dead approval machinery; `continue`/`approve`
-    are gone. The pure helpers and the cache seeding / failure-TTL behavior are
-    unchanged.
+  2026-07-23 (audit): replaced the per-step ledger runner with an EnrichPeople
+    orchestrator that owns the fixed artifact dir, the three steps, and one
+    manifest.json. Spend is now gated by an explicit `--approve-spend` flag (a
+    needs_approval manifest + clean nonzero exit on cache misses) instead of the
+    dead approval machinery; `continue`/`approve` are gone.
   2026-07-23 (audit): dropped the local byte-identical read_csv/write_csv for
-    the shared CsvIO.read_dict_rows / CsvIO.write_dict_rows; `import csv`
-    dropped with them.
+    the shared CsvIO.read_dict_rows / CsvIO.write_dict_rows.
   2026-07-23 (audit): enrich_people.README.md sidecar folded into this
     docstring; fixed its stale worker default (10 -> 64).
 """
@@ -127,23 +166,28 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.gates import EXIT_NEEDS_APPROVAL, exit_code_for_status, manifest_emit_payload  # noqa: E402
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, short_hash  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
 from packs.ingestion.primitives.common.proc import emit_progress as _emit_progress  # noqa: E402
 from packs.ingestion.primitives.enrich.models import (  # noqa: E402
     CACHE_COLUMNS,
+    EnrichCacheRow,
     EnrichConfig,
+    EnrichLinkedInSummary,
     EnrichManifest,
+    EnrichMergeSummary,
+    EnrichProviderRow,
+    EnrichRecentFailureRow,
     PROVIDER_COLUMNS,
     PipelineFailed,
-    QUEUE_COLUMNS,
+    PrepareQueueSummary,
     RECENT_FAILURE_COLUMNS,
     build_config,
 )
@@ -168,6 +212,12 @@ from packs.ingestion.primitives.enrich.rapidapi_client import (  # noqa: E402
     DEFAULT_RAPIDAPI_RETRY_ATTEMPTS,
     RapidApiClient,
 )
+from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
+    STATUS_COMPLETED,
+    Artifact,
+    Node,
+    PeopleRow,
+)
 from packs.ingestion.schemas.company_identity import build_company_identity_lookup  # noqa: E402
 from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
@@ -189,108 +239,88 @@ DEFAULT_PROGRESS_INTERVAL_ROWS = int(os.environ.get("POWERPACKS_RAPIDAPI_PROGRES
 # kept here as a module alias for the name callers/tests already reach for.
 NEEDS_APPROVAL_CODE = EXIT_NEEDS_APPROVAL
 
+# The stage's artifact FILE NAMES live here once; both the declared default paths
+# below and each node's instance paths are built from them, so a rename cannot
+# leave a declaration pointing at a file nothing writes.
+CACHE_HITS_FILE = "rapidapi_cache_hits.csv"
+CACHE_MISSES_FILE = "rapidapi_cache_misses.csv"
+RECENT_FAILURES_FILE = "rapidapi_recent_failures.csv"
+PROVIDER_ENRICHED_FILE = "provider_enriched.csv"
+PEOPLE_FILE = "people.csv"
+MANIFEST_FILE = "manifest.json"
+
+# The DECLARED paths: what the stage reads and writes when nobody overrides the
+# artifact dir. The input is the fan-in merge's output — declaring that exact
+# path is what puts the enrich steps downstream of `merge_people` in the graph.
+# Every instance rebinds these through `bindings()` (linkedin/network_import runs
+# enrichment against its own discover dir, and tests against a temp dir).
+DEFAULT_ARTIFACT_DIR = DEFAULT_BASE_DIR / "enrichment"
+DEFAULT_INPUT_PEOPLE_CSV = str(DEFAULT_BASE_DIR / "merged" / PEOPLE_FILE)
+CACHE_HITS_CSV = str(DEFAULT_ARTIFACT_DIR / CACHE_HITS_FILE)
+CACHE_MISSES_CSV = str(DEFAULT_ARTIFACT_DIR / CACHE_MISSES_FILE)
+RECENT_FAILURES_CSV = str(DEFAULT_ARTIFACT_DIR / RECENT_FAILURES_FILE)
+PROVIDER_ENRICHED_CSV = str(DEFAULT_ARTIFACT_DIR / PROVIDER_ENRICHED_FILE)
+ENRICHED_PEOPLE_CSV = str(DEFAULT_ARTIFACT_DIR / PEOPLE_FILE)
+
 
 def emit_progress(message: str) -> None:
     """Write one progress line to stderr, tagged for the enrich-people chain."""
     _emit_progress(message, "[enrich-people]")
 
 
-class EnrichPeople:
-    """Idempotent RapidAPI people-enrichment run. Owns the fixed artifact dir,
-    the prepare_queue -> enrich_linkedin -> merge_people steps, the spend gate,
-    and the single manifest.json. The steps mutate self.artifacts / self.counts;
-    `run` records per-step timing and writes the manifest exactly once.
+class EnrichQueuePrepare(Node):
+    """Step 1. Route the input rows, then split the LinkedIn-provider ones by
+    local profile-cache state into hits / misses / recent failures.
 
-    Cache hits never need approval. A run that would fetch RapidAPI cache misses
-    without `cfg.approve_spend` stops at a `needs_approval` manifest before any
-    fetch; with approval it proceeds (and fails clearly if no RAPIDAPI_* key)."""
+    Owns its three fixed output paths and records what it contributed on
+    `self.artifacts` / `self.counts` for the store's manifest. The miss count IS
+    the spend estimate: it is the number of RapidAPI fetches step 2 would bill
+    for, and the store reads it before constructing any client.
+
+    Rows that route to `needs_resolution` (no LinkedIn identifier) or to a
+    `skip_*` reason are counted, not written to a file of their own — every one
+    of them still comes out of step 3 in people.csv, stamped `skipped`."""
+
+    name = "enrich_prepare_queue"
+    inputs = (Artifact(path=DEFAULT_INPUT_PEOPLE_CSV, row_model=PeopleRow),)
+    outputs = (
+        Artifact(path=CACHE_HITS_CSV, row_model=EnrichCacheRow, writes="full_rewrite"),
+        Artifact(path=CACHE_MISSES_CSV, row_model=EnrichCacheRow, writes="full_rewrite"),
+        Artifact(path=RECENT_FAILURES_CSV, row_model=EnrichRecentFailureRow, writes="full_rewrite"),
+    )
+    payload = PrepareQueueSummary
+    manifest = ""  # reports into EnrichPeople's one stage manifest.json
 
     def __init__(self, cfg: EnrichConfig) -> None:
         self.cfg = cfg
         self.artifact_dir = cfg.artifact_dir
-        self.artifact_dir.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
-        self.manifest_path = self.artifact_dir / "manifest.json"
+        self.cache_hits_csv = self.artifact_dir / CACHE_HITS_FILE
+        self.cache_misses_csv = self.artifact_dir / CACHE_MISSES_FILE
+        self.recent_failures_csv = self.artifact_dir / RECENT_FAILURES_FILE
         self.artifacts: dict[str, Any] = {}
         self.counts: dict[str, Any] = {}
-        self.steps: dict[str, Any] = {}
-        self.started_at = now_iso()
 
-    def run(self) -> EnrichManifest:
-        self._timed("prepare_queue", self.prepare_queue)
-        paid = int(self.counts.get("paid_call_count") or 0)
-        if paid > 0 and not self.cfg.approve_spend:
-            # RapidAPI bills every REQUEST, and a cache miss retries up to
-            # DEFAULT_RAPIDAPI_RETRY_ATTEMPTS times on transient errors — so one
-            # credit per miss is the floor, not the worst case. Quote both.
-            attempts = max(1, DEFAULT_RAPIDAPI_RETRY_ATTEMPTS)
-            max_credits = paid * attempts
-            return self._write(status="needs_approval", needs_approval={
-                "reason": "rapidapi_cache_misses",
-                "paid_call_count": paid,
-                "cache_hit_count": int(self.counts.get("cache_hit_count") or 0),
-                "estimated_credits": paid,
-                "estimated_credits_is_floor": True,
-                "estimated_credits_max": max_credits,
-                "retry_attempts": attempts,
-                "message": (
-                    f"{paid} LinkedIn profiles are not cached and need paid RapidAPI "
-                    f"fetches: at least {paid} credits, up to {max_credits} if every "
-                    f"fetch exhausts its {attempts} retry attempts (RapidAPI bills each "
-                    f"request). Re-run with --approve-spend to proceed."
-                ),
-            })
-        if paid > 0 and not RapidApiClient.resolve_key():
-            return self._write(status="failed", error="RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
-        try:
-            self._timed("enrich_linkedin", self.enrich_linkedin)
-            self._timed("merge_people", self.merge_people)
-        except PipelineFailed as exc:
-            return self._write(status="failed", error=str(exc))
-        return self._write(status="completed")
-
-    def _timed(self, step_id: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-        started = now_iso()
-        clock = time.monotonic()
-        summary = fn()
-        self.steps[step_id] = {
-            "status": "completed",
-            "started_at": started,
-            "finished_at": now_iso(),
-            "duration_seconds": round(time.monotonic() - clock, 3),
-            "summary": summary,
+    def bindings(self) -> dict[str, str]:
+        """Declared path -> this run's path. Keys come from the DECLARATION, so a
+        run against another artifact dir still validates the same contract."""
+        return {
+            DEFAULT_INPUT_PEOPLE_CSV: str(self.cfg.input_csv),
+            CACHE_HITS_CSV: str(self.cache_hits_csv),
+            CACHE_MISSES_CSV: str(self.cache_misses_csv),
+            RECENT_FAILURES_CSV: str(self.recent_failures_csv),
         }
-        return summary
 
-    def _write(self, *, status: str, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> EnrichManifest:
-        manifest = EnrichManifest(
-            status=status,
-            artifact_dir=str(self.artifact_dir),
-            input=self.cfg.manifest_input(),
-            counts=self.counts,
-            artifacts=self.artifacts,
-            steps=self.steps,
-            needs_approval=needs_approval,
-            error=error,
-            started_at=self.started_at,
-            updated_at=now_iso(),
-        )
-        write_json(self.manifest_path, manifest.to_dict())
-        return manifest
-
-    def prepare_queue(self) -> dict[str, Any]:
-        """Route input rows and split the LinkedIn-provider rows by local cache
-        state into queue / cache_hits / cache_misses / recent_failures CSVs;
-        record counts (incl. paid_call_count = cache misses) and artifact paths."""
+    def execute(self) -> PrepareQueueSummary:
         cfg = self.cfg
         rows = [normalize_people_row(row) for row in CsvIO.read_dict_rows(cfg.input_csv)]
         if cfg.limit:
             rows = rows[: int(cfg.limit)]
-        queue: list[dict[str, Any]] = []
         cache_hits: list[dict[str, Any]] = []
         cache_misses: list[dict[str, Any]] = []
         recent_failures: list[dict[str, Any]] = []
-        skipped: list[dict[str, Any]] = []
-        unresolved: list[dict[str, Any]] = []
+        queue_count = 0
+        skipped_count = 0
+        unresolved_count = 0
         route_counts: dict[str, int] = {}
         profile_cache_dir = cfg.profile_cache_dir
         refresh_cache = cfg.refresh_cache
@@ -317,7 +347,7 @@ class EnrichPeople:
         classification_iter = iter(classifications)
         for route, row in routed:
             if route == "linkedin_provider":
-                queue.append(row)
+                queue_count += 1
                 status, cache_reason, cache_path, recent_failure = next(classification_iter)
                 cache_row = dict(row)
                 cache_row.update({"cache_status": status, "cache_path": str(cache_path or ""), "cache_reason": cache_reason})
@@ -335,80 +365,98 @@ class EnrichPeople:
                 else:
                     cache_misses.append(cache_row)
             elif route == "needs_resolution":
-                unresolved.append(row)
+                unresolved_count += 1
             else:
-                skipped.append(row)
-        run_dir = self.artifact_dir
-        queue_path = run_dir / "linkedin_enrichment_queue.csv"
-        cache_hits_path = run_dir / "rapidapi_cache_hits.csv"
-        cache_misses_path = run_dir / "rapidapi_cache_misses.csv"
-        recent_failures_path = run_dir / "rapidapi_recent_failures.csv"
-        unresolved_path = run_dir / "needs_resolution_queue.csv"
-        skipped_path = run_dir / "skipped_enrichment.csv"
-        CsvIO.write_dict_rows(queue_path, QUEUE_COLUMNS, queue)
-        CsvIO.write_dict_rows(cache_hits_path, CACHE_COLUMNS, cache_hits)
-        CsvIO.write_dict_rows(cache_misses_path, CACHE_COLUMNS, cache_misses)
-        CsvIO.write_dict_rows(recent_failures_path, RECENT_FAILURE_COLUMNS, recent_failures)
-        CsvIO.write_dict_rows(unresolved_path, QUEUE_COLUMNS, unresolved)
-        CsvIO.write_dict_rows(skipped_path, QUEUE_COLUMNS, skipped)
+                skipped_count += 1
+        CsvIO.write_dict_rows(self.cache_hits_csv, CACHE_COLUMNS, cache_hits)
+        CsvIO.write_dict_rows(self.cache_misses_csv, CACHE_COLUMNS, cache_misses)
+        CsvIO.write_dict_rows(self.recent_failures_csv, RECENT_FAILURE_COLUMNS, recent_failures)
         self.artifacts.update({
-            "linkedin_enrichment_queue_csv": str(queue_path),
-            "rapidapi_cache_hits_csv": str(cache_hits_path),
-            "rapidapi_cache_misses_csv": str(cache_misses_path),
-            "rapidapi_recent_failures_csv": str(recent_failures_path),
-            "needs_resolution_queue_csv": str(unresolved_path),
-            "skipped_enrichment_csv": str(skipped_path),
+            "rapidapi_cache_hits_csv": str(self.cache_hits_csv),
+            "rapidapi_cache_misses_csv": str(self.cache_misses_csv),
+            "rapidapi_recent_failures_csv": str(self.recent_failures_csv),
         })
         self.counts.update({
             "input_rows": len(rows),
-            "queue_count": len(queue),
+            "queue_count": queue_count,
             "cache_hit_count": len(cache_hits),
             "paid_call_count": len(cache_misses),
             "recent_failure_count": len(recent_failures),
-            "unresolved_rows": len(unresolved),
-            "skipped_rows": len(skipped),
+            "unresolved_rows": unresolved_count,
+            "skipped_rows": skipped_count,
         })
         emit_progress(
             "Prepared LinkedIn enrichment queue: "
-            f"{len(queue)} total, {len(cache_hits)} cached, {len(cache_misses)} RapidAPI fetches, "
+            f"{queue_count} total, {len(cache_hits)} cached, {len(cache_misses)} RapidAPI fetches, "
             f"{len(recent_failures)} recent failures."
         )
+        return PrepareQueueSummary(
+            input_rows=len(rows),
+            queue_rows=queue_count,
+            cache_hit_rows=len(cache_hits),
+            paid_call_rows=len(cache_misses),
+            recent_failure_rows=len(recent_failures),
+            unresolved_rows=unresolved_count,
+            skipped_rows=skipped_count,
+            route_counts=route_counts,
+        )
+
+
+class EnrichLinkedInProfiles(Node):
+    """Step 2. Hydrate the cache hits and fetch the cache misses (rate-limited
+    thread pool) into `provider_enriched.csv`.
+
+    The paid-call count is DERIVED from the misses CSV this step was handed, not
+    passed in: that file is exactly the rows step 1 classified as misses, so the
+    two can never disagree. The store still gates on step 1's count before this
+    node is constructed — the guard here only stops a direct caller from
+    spending against a missing key."""
+
+    name = "enrich_linkedin_profiles"
+    inputs = (
+        Artifact(path=CACHE_HITS_CSV, row_model=EnrichCacheRow),
+        Artifact(path=CACHE_MISSES_CSV, row_model=EnrichCacheRow),
+    )
+    outputs = (Artifact(path=PROVIDER_ENRICHED_CSV, row_model=EnrichProviderRow, writes="full_rewrite"),)
+    payload = EnrichLinkedInSummary
+    manifest = ""  # reports into EnrichPeople's one stage manifest.json
+
+    def __init__(self, cfg: EnrichConfig) -> None:
+        self.cfg = cfg
+        self.artifact_dir = cfg.artifact_dir
+        self.cache_hits_csv = self.artifact_dir / CACHE_HITS_FILE
+        self.cache_misses_csv = self.artifact_dir / CACHE_MISSES_FILE
+        self.provider_enriched_csv = self.artifact_dir / PROVIDER_ENRICHED_FILE
+        self.artifacts: dict[str, Any] = {}
+        self.counts: dict[str, Any] = {}
+
+    def bindings(self) -> dict[str, str]:
         return {
-            "input_rows": len(rows),
-            "queue_rows": len(queue),
-            "cache_hit_rows": len(cache_hits),
-            "paid_call_rows": len(cache_misses),
-            "recent_failure_rows": len(recent_failures),
-            "unresolved_rows": len(unresolved),
-            "skipped_rows": len(skipped),
-            "route_counts": route_counts,
+            CACHE_HITS_CSV: str(self.cache_hits_csv),
+            CACHE_MISSES_CSV: str(self.cache_misses_csv),
+            PROVIDER_ENRICHED_CSV: str(self.provider_enriched_csv),
         }
 
-    def enrich_linkedin(self) -> dict[str, Any]:
-        """Hydrate cache hits + fetch cache misses (rate-limited thread pool) into
-        provider_enriched.csv, saving raw payloads under raw_provider_responses/."""
+    def execute(self) -> EnrichLinkedInSummary:
         cfg = self.cfg
-        hit_path_text = self.artifacts.get("rapidapi_cache_hits_csv") or ""
-        miss_path_text = self.artifacts.get("rapidapi_cache_misses_csv") or ""
-        hit_path = Path(hit_path_text) if hit_path_text else None
-        miss_path = Path(miss_path_text) if miss_path_text else None
-        rows = []
-        if hit_path and hit_path.is_file():
-            rows.extend(CsvIO.read_dict_rows(hit_path))
-        if miss_path and miss_path.is_file():
-            rows.extend(CsvIO.read_dict_rows(miss_path))
+        hit_rows = CsvIO.read_dict_rows(self.cache_hits_csv)
+        miss_rows = CsvIO.read_dict_rows(self.cache_misses_csv)
+        rows = hit_rows + miss_rows
+        self.artifacts["provider_enriched_csv"] = str(self.provider_enriched_csv)
         if not rows:
-            out_path = self.artifact_dir / "provider_enriched.csv"
-            CsvIO.write_dict_rows(out_path, PROVIDER_COLUMNS, [])
-            self.artifacts["provider_enriched_csv"] = str(out_path)
+            CsvIO.write_dict_rows(self.provider_enriched_csv, PROVIDER_COLUMNS, [])
             emit_progress("No LinkedIn enrichment work needed.")
-            return {"processed": 0, "cached": 0, "fetched": 0, "output_file": str(out_path), "providers": {"rapidapi": False}}
+            return EnrichLinkedInSummary(
+                processed=0, cached=0, fetched=0,
+                output_file=str(self.provider_enriched_csv), providers={"rapidapi": False},
+            )
 
-        paid_call_count = int(self.counts.get("paid_call_count") or 0)
+        paid_call_count = len(miss_rows)
         client = RapidApiClient()
-        # Defensive: run() gates on this before calling us, but keep the guard so
-        # a direct caller cannot silently spend against a missing key. One client
-        # is shared across the pool below (it is stateless beyond its key/retry).
+        # Defensive: EnrichPeople.run gates on this before constructing us, but
+        # keep the guard so a direct caller cannot silently spend against a
+        # missing key. One client is shared across the pool below (it is
+        # stateless beyond its key/retry).
         if paid_call_count > 0 and not client.api_key:
             raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
 
@@ -418,8 +466,6 @@ class EnrichPeople:
         max_rpm = cfg.max_rpm
         sleep_seconds = cfg.sleep_seconds
         rate_limiter = StartRateLimiter(max_rpm, sleep_seconds)
-        raw_dir = self.artifact_dir / "raw_provider_responses"
-        raw_dir.mkdir(parents=True, exist_ok=True)
         cache_rows = sum(1 for row in rows if row.get("cache_status") == "hit")
         emit_progress(
             "Starting LinkedIn profile enrichment: "
@@ -427,7 +473,7 @@ class EnrichPeople:
             f"max {max_workers} workers, {max_rpm:g} rpm."
         )
 
-        def enrich_one(row: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any], bool, int, str]:
+        def enrich_one(row: dict[str, str]) -> tuple[dict[str, Any], bool, int, str]:
             public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
             linkedin_url = normalize_linkedin_url(row.get("linkedin_url") or (f"https://www.linkedin.com/in/{public_identifier}" if public_identifier else ""))
             if not public_identifier and linkedin_url:
@@ -484,11 +530,9 @@ class EnrichPeople:
                 "rapidapi_from_cache": "true" if rapid.get("from_cache") else "false",
                 "provider_enriched_at": now_iso(),
             })
-            raw_payload = {"input": row, "rapidapi": rapid, "cache_hit": bool(rapid.get("from_cache"))}
-            return out, raw_payload, is_cache_hit, attempts, retry_outcome
+            return out, is_cache_hit, attempts, retry_outcome
 
         enriched_by_index: dict[int, dict[str, Any]] = {}
-        raw_by_index: dict[int, dict[str, Any]] = {}
         cached_count = 0
         fetched_count = 0
         retried_count = 0
@@ -500,9 +544,8 @@ class EnrichPeople:
             future_to_index = {executor.submit(enrich_one, row): index for index, row in enumerate(rows)}
             for future in concurrent.futures.as_completed(future_to_index):
                 index = future_to_index[future]
-                out, raw_payload, was_cache_hit, attempts, retry_outcome = future.result()
+                out, was_cache_hit, attempts, retry_outcome = future.result()
                 enriched_by_index[index] = out
-                raw_by_index[index] = raw_payload
                 if was_cache_hit:
                     cached_count += 1
                 else:
@@ -526,49 +569,71 @@ class EnrichPeople:
                         f"({cached_count} cached, {fetched_count} fetched)."
                     )
                     last_progress = now
-        enriched: list[dict[str, Any]] = []
-        for index in range(len(rows)):
-            out = enriched_by_index[index]
-            raw_payload = raw_by_index[index]
-            public_identifier = out.get("public_identifier") or extract_public_identifier(out.get("linkedin_url") or "")
-            write_json(raw_dir / f"{public_identifier or short_hash(out.get('linkedin_url') or out.get('id',''))}.json", raw_payload)
-            enriched.append(out)
-        out_path = self.artifact_dir / "provider_enriched.csv"
-        CsvIO.write_dict_rows(out_path, PROVIDER_COLUMNS, enriched)
-        self.artifacts.update({"provider_enriched_csv": str(out_path), "raw_provider_responses_dir": str(raw_dir)})
+        enriched = [enriched_by_index[index] for index in range(len(rows))]
+        CsvIO.write_dict_rows(self.provider_enriched_csv, PROVIDER_COLUMNS, enriched)
         self.counts["provider_processed"] = len(enriched)
         emit_progress(f"LinkedIn profile enrichment finished: {len(enriched)} profiles processed.")
+        return EnrichLinkedInSummary(
+            processed=len(enriched),
+            cached=cached_count,
+            fetched=fetched_count,
+            output_file=str(self.provider_enriched_csv),
+            providers={"rapidapi": True},
+            max_workers=max_workers,
+            max_rpm=max_rpm,
+            retried=retried_count,
+            retry_successes=retry_success_count,
+            retry_failures=retry_failure_count,
+        )
+
+
+class EnrichedPeopleMerge(Node):
+    """Step 3. Merge provider profiles back into the input rows and write the
+    canonical `people.csv` — EVERY input row, each stamped with its enrichment
+    outcome.
+
+    A row the provider could not hydrate keeps its identity columns and comes out
+    `enrichment_status=failed` with the provider reason in `enrichment_error`,
+    instead of being deleted. Deleting it made a rate-limited fetch
+    byte-identical to "never attempted", so a 429 storm silently erased contacts.
+    Rows suppressed by a cached prior failure are stamped from
+    `rapidapi_recent_failures.csv`; rows the provider never looked at are
+    `skipped`."""
+
+    name = "enrich_merge_people"
+    inputs = (
+        Artifact(path=DEFAULT_INPUT_PEOPLE_CSV, row_model=PeopleRow),
+        Artifact(path=PROVIDER_ENRICHED_CSV, row_model=EnrichProviderRow),
+        Artifact(path=RECENT_FAILURES_CSV, row_model=EnrichRecentFailureRow),
+    )
+    outputs = (Artifact(path=ENRICHED_PEOPLE_CSV, row_model=PeopleRow, writes="full_rewrite"),)
+    payload = EnrichMergeSummary
+    manifest = ""  # reports into EnrichPeople's one stage manifest.json
+
+    def __init__(self, cfg: EnrichConfig) -> None:
+        self.cfg = cfg
+        self.artifact_dir = cfg.artifact_dir
+        self.provider_enriched_csv = self.artifact_dir / PROVIDER_ENRICHED_FILE
+        self.recent_failures_csv = self.artifact_dir / RECENT_FAILURES_FILE
+        self.people_csv = self.artifact_dir / PEOPLE_FILE
+        self.artifacts: dict[str, Any] = {}
+        self.counts: dict[str, Any] = {}
+
+    def bindings(self) -> dict[str, str]:
         return {
-            "processed": len(enriched),
-            "cached": cached_count,
-            "fetched": fetched_count,
-            "output_file": str(out_path),
-            "providers": {"rapidapi": True},
-            "max_workers": max_workers,
-            "max_rpm": max_rpm,
-            "retried": retried_count,
-            "retry_successes": retry_success_count,
-            "retry_failures": retry_failure_count,
+            DEFAULT_INPUT_PEOPLE_CSV: str(self.cfg.input_csv),
+            PROVIDER_ENRICHED_CSV: str(self.provider_enriched_csv),
+            RECENT_FAILURES_CSV: str(self.recent_failures_csv),
+            ENRICHED_PEOPLE_CSV: str(self.people_csv),
         }
 
-    def merge_people(self) -> dict[str, Any]:
-        """Merge provider profiles back into the input rows and write the canonical
-        people.csv — EVERY input row, each stamped with its enrichment outcome.
-
-        A row the provider could not hydrate keeps its identity columns and comes
-        out `enrichment_status=failed` with the provider reason in
-        `enrichment_error`, instead of being deleted. Deleting it made a
-        rate-limited fetch byte-identical to "never attempted", so a 429 storm
-        silently erased contacts. Rows suppressed by a cached prior failure are
-        stamped from `rapidapi_recent_failures.csv`; rows the provider never
-        looked at are `skipped`."""
+    def execute(self) -> EnrichMergeSummary:
         cfg = self.cfg
         original_rows = [normalize_people_row(row) for row in CsvIO.read_dict_rows(cfg.input_csv)]
         by_key: dict[str, dict[str, Any]] = {}
         for row in original_rows:
             by_key[self._people_row_key(row)] = row
-        provider_path = Path(self.artifacts.get("provider_enriched_csv") or self.artifacts.get("linkedin_enrichment_queue_csv"))
-        enriched_rows = CsvIO.read_dict_rows(provider_path) if provider_path and provider_path.exists() else []
+        enriched_rows = CsvIO.read_dict_rows(self.provider_enriched_csv)
         company_lookup = build_company_identity_lookup([Path(p) for p in cfg.company_corpus_jsonl])
         attempted_keys: set[str] = set()
         for row in enriched_rows:
@@ -582,10 +647,7 @@ class EnrichPeople:
             by_key[key] = merged
         # Rows whose fetch was suppressed by a cached prior failure never reach the
         # provider CSV: they were still attempted, so carry the cached reason over.
-        failures_path_text = self.artifacts.get("rapidapi_recent_failures_csv") or ""
-        failures_path = Path(failures_path_text) if failures_path_text else None
-        recent_failure_rows = CsvIO.read_dict_rows(failures_path) if failures_path and failures_path.exists() else []
-        for row in recent_failure_rows:
+        for row in CsvIO.read_dict_rows(self.recent_failures_csv):
             key = self._people_row_key(row)
             target = by_key.get(key)
             if target is None:
@@ -598,13 +660,12 @@ class EnrichPeople:
             if key not in attempted_keys:
                 stamp_enrichment_outcome(row, attempted=False)
         rows = list(by_key.values())
-        output = self.artifact_dir / "people.csv"
-        CsvIO.write_dict_rows(output, PEOPLE_SCHEMA_COLUMNS, rows)
+        CsvIO.write_dict_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, rows)
         statuses = [str(row.get("enrichment_status") or "") for row in rows]
         enriched_count = statuses.count(ENRICHMENT_STATUS_ENRICHED)
         failed_count = statuses.count(ENRICHMENT_STATUS_FAILED)
         skipped_count = statuses.count(ENRICHMENT_STATUS_SKIPPED)
-        self.artifacts["people_csv"] = str(output)
+        self.artifacts["people_csv"] = str(self.people_csv)
         self.counts.update({
             "people_rows": len(rows),
             "enriched_rows": enriched_count,
@@ -615,13 +676,13 @@ class EnrichPeople:
             f"Wrote people.csv with {len(rows)} rows "
             f"({enriched_count} enriched, {failed_count} failed, {skipped_count} skipped)."
         )
-        return {
-            "rows": len(rows),
-            "enriched_rows": enriched_count,
-            "failed_rows": failed_count,
-            "skipped_rows": skipped_count,
-            "output_file": str(output),
-        }
+        return EnrichMergeSummary(
+            rows=len(rows),
+            enriched_rows=enriched_count,
+            failed_rows=failed_count,
+            skipped_rows=skipped_count,
+            output_file=str(self.people_csv),
+        )
 
     @staticmethod
     def _people_row_key(row: dict[str, Any]) -> str:
@@ -629,48 +690,139 @@ class EnrichPeople:
         input row. Same recipe for every source so the three passes agree."""
         return row.get("id") or row.get("public_identifier") or row.get("linkedin_url") or short_hash(json.dumps(row, sort_keys=True))
 
-    # ---- CLI command handlers ----
-    # The class is the single entry point for running enrichment: `command_run`
-    # builds a config and instantiates + runs this orchestrator; `command_status`
-    # and `command_check_keys` are read-only queries that need no instance. The
-    # module `build_parser`/`main` wire argparse to these.
-    @classmethod
-    def command_run(cls, args: argparse.Namespace) -> int:
-        artifact_dir = Path(args.artifact_dir) if args.artifact_dir else Path(args.output_dir) / "enrichment"
-        cfg = build_config(
-            input_csv=args.input,
-            artifact_dir=artifact_dir,
-            profile_cache_dir=args.profile_cache_dir,
-            limit=args.limit,
-            force=args.force,
-            refresh_cache=args.refresh_cache,
-            company_corpus_jsonl=args.company_corpus_jsonl,
-            sleep_seconds=args.sleep_seconds,
-            max_workers=args.max_workers,
-            max_rpm=args.max_rpm,
-            failure_retry_hours=args.failure_retry_hours,
-            approve_spend=args.approve_spend,
-        )
-        manifest = cls(cfg).run()
-        emit(manifest_emit_payload(manifest))
-        return exit_code_for_status(manifest.status)
+
+class EnrichPeople(Node):
+    """Idempotent RapidAPI people-enrichment run — the STORE for the three step
+    nodes. Owns the fixed artifact dir (the one mkdir), the run order, the spend
+    gate, and the single manifest.json. Each step node reports its counts and
+    artifact paths, and `execute()` records per-step timing; the Node template
+    writes the manifest exactly once, with this stage's declared IO stats.
+
+    Cache hits never need approval. A run that would fetch RapidAPI cache misses
+    without `cfg.approve_spend` stops at a `needs_approval` manifest before any
+    client is constructed and before any fetch; with approval it proceeds (and
+    fails clearly if no RAPIDAPI_* key).
+
+    It declares the stage BOUNDARY input (the fan-in merge's people.csv) and no
+    outputs: the three step nodes declare the files, and `people.csv` in
+    particular is step 3's write — a second declaration of that path here would be
+    a two-writer conflict describing one write. `required=False` on the input for
+    the same reason the importers use it: step 1 reports a missing input as a
+    typed failure naming the path, and a store-level `not_ready` would throw that
+    message away."""
+
+    name = "enrich_people"
+    inputs = (Artifact(path=DEFAULT_INPUT_PEOPLE_CSV, row_model=PeopleRow, required=False),)
+    outputs = ()
+    payload = EnrichManifest
+    manifest = str(DEFAULT_ARTIFACT_DIR / MANIFEST_FILE)
+
+    def __init__(self, cfg: EnrichConfig) -> None:
+        self.cfg = cfg
+        self.artifact_dir = cfg.artifact_dir
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
+        self.manifest_path = self.artifact_dir / MANIFEST_FILE
+        self.artifacts: dict[str, Any] = {}
+        self.counts: dict[str, Any] = {}
+        self.steps: dict[str, Any] = {}
+        self.started_at = now_iso()
+
+    def bindings(self) -> dict[str, str]:
+        """Declared path -> this run's path, so a run against another artifact dir
+        (linkedin/network_import's discover dir, a test's temp dir) still validates
+        and stats the same declared contract."""
+        return {
+            DEFAULT_INPUT_PEOPLE_CSV: str(self.cfg.input_csv),
+            self.manifest: str(self.manifest_path),
+        }
+
+    def execute(self) -> EnrichManifest:
+        prepare = self._step("prepare_queue", EnrichQueuePrepare(self.cfg))
+        if prepare.get("status") != STATUS_COMPLETED:
+            return self._build(status="failed", error=self._step_error("prepare_queue", prepare))
+        paid = int(self.counts.get("paid_call_count") or 0)
+        if paid > 0 and not self.cfg.approve_spend:
+            # RapidAPI bills every REQUEST, and a cache miss retries up to
+            # DEFAULT_RAPIDAPI_RETRY_ATTEMPTS times on transient errors — so one
+            # credit per miss is the floor, not the worst case. Quote both.
+            attempts = max(1, DEFAULT_RAPIDAPI_RETRY_ATTEMPTS)
+            max_credits = paid * attempts
+            return self._build(status="needs_approval", needs_approval={
+                "reason": "rapidapi_cache_misses",
+                "paid_call_count": paid,
+                "cache_hit_count": int(self.counts.get("cache_hit_count") or 0),
+                "estimated_credits": paid,
+                "estimated_credits_is_floor": True,
+                "estimated_credits_max": max_credits,
+                "retry_attempts": attempts,
+                "message": (
+                    f"{paid} LinkedIn profiles are not cached and need paid RapidAPI "
+                    f"fetches: at least {paid} credits, up to {max_credits} if every "
+                    f"fetch exhausts its {attempts} retry attempts (RapidAPI bills each "
+                    f"request). Re-run with --approve-spend to proceed."
+                ),
+            })
+        if paid > 0 and not RapidApiClient.resolve_key():
+            return self._build(status="failed", error="RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
+        try:
+            for step_id, node in (
+                ("enrich_linkedin", EnrichLinkedInProfiles(self.cfg)),
+                ("merge_people", EnrichedPeopleMerge(self.cfg)),
+            ):
+                body = self._step(step_id, node)
+                if body.get("status") != STATUS_COMPLETED:
+                    return self._build(status="failed", error=self._step_error(step_id, body))
+        except PipelineFailed as exc:
+            return self._build(status="failed", error=str(exc))
+        return self._build(status="completed")
+
+    def _step(self, step_id: str, node: Node) -> dict[str, Any]:
+        """Run one step node, absorb its counts + artifact paths, and record its
+        timing and typed payload in the stage manifest's `steps` block.
+
+        Returns the step payload's DICT form: it is embedded verbatim as the step's
+        `summary`, and the store only ever branches on its `status`."""
+        started = now_iso()
+        clock = time.monotonic()
+        body = node.run().to_payload()
+        self.artifacts.update(node.artifacts)
+        self.counts.update(node.counts)
+        self.steps[step_id] = {
+            "status": body.get("status", ""),
+            "started_at": started,
+            "finished_at": now_iso(),
+            "duration_seconds": round(time.monotonic() - clock, 3),
+            "summary": body,
+        }
+        return body
 
     @staticmethod
-    def command_status(args: argparse.Namespace) -> int:
-        artifact_dir = Path(args.artifact_dir) if args.artifact_dir else Path(args.output_dir) / "enrichment"
-        manifest = read_json(artifact_dir / "manifest.json", {}) or {}
-        emit({
-            "status": manifest.get("status", "unknown"),
-            "artifact_dir": str(artifact_dir),
-            "counts": manifest.get("counts", {}),
-            "artifacts": manifest.get("artifacts", {}),
-            "steps": manifest.get("steps", {}),
-            "needs_approval": manifest.get("needs_approval"),
-        })
-        return 0
+    def _step_error(step_id: str, body: dict[str, Any]) -> str:
+        """One line naming the step that did not complete and why (the Node
+        template's `not_ready` payload carries the missing input paths)."""
+        detail = ", ".join(body.get("missing_inputs") or ()) or str(body.get("reason") or "")
+        return f"{step_id} {body.get('status', 'did not complete')}" + (f": {detail}" if detail else "")
+
+    def _build(self, *, status: str, needs_approval: dict[str, Any] | None = None, error: str | None = None) -> EnrichManifest:
+        """Assemble this stage's typed payload. The Node template writes it."""
+        return EnrichManifest(
+            status=status,
+            artifact_dir=str(self.artifact_dir),
+            input=self.cfg.manifest_input(),
+            counts=self.counts,
+            artifacts=self.artifacts,
+            steps=self.steps,
+            needs_approval=needs_approval,
+            error=error,
+            started_at=self.started_at,
+            updated_at=now_iso(),
+        )
 
     @staticmethod
     def command_check_keys(_: argparse.Namespace) -> int:
+        """Report which RAPIDAPI_* keys are configured. Kept as a class surface
+        (not folded into main) because `imports/linkedin/network_import.py`
+        delegates its own `check-keys` command straight to it."""
         emit({
             "status": "ok",
             "provider": "rapidapi",
@@ -699,22 +851,49 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-rpm", type=float, default=DEFAULT_RAPIDAPI_MAX_RPM)
     run.add_argument("--failure-retry-hours", type=float, default=DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS)
     run.add_argument("--limit", type=int, help=argparse.SUPPRESS)
-    run.set_defaults(func=EnrichPeople.command_run)
 
     status = sub.add_parser("status")
     status.add_argument("--output-dir", default=str(DEFAULT_BASE_DIR))
     status.add_argument("--artifact-dir", default="", help=argparse.SUPPRESS)
-    status.set_defaults(func=EnrichPeople.command_status)
 
-    keys = sub.add_parser("check-keys")
-    keys.set_defaults(func=EnrichPeople.command_check_keys)
+    sub.add_parser("check-keys")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse, construct, run, emit; map the manifest status to an exit code."""
     args = build_parser().parse_args(argv)
     try:
-        return args.func(args)
+        if args.command == "check-keys":
+            return EnrichPeople.command_check_keys(args)
+        artifact_dir = Path(args.artifact_dir) if args.artifact_dir else Path(args.output_dir) / "enrichment"
+        if args.command == "status":
+            manifest = read_json(artifact_dir / MANIFEST_FILE, {}) or {}
+            emit({
+                "status": manifest.get("status", "unknown"),
+                "artifact_dir": str(artifact_dir),
+                "counts": manifest.get("counts", {}),
+                "artifacts": manifest.get("artifacts", {}),
+                "steps": manifest.get("steps", {}),
+                "needs_approval": manifest.get("needs_approval"),
+            })
+            return 0
+        manifest = EnrichPeople(build_config(
+            input_csv=args.input,
+            artifact_dir=artifact_dir,
+            profile_cache_dir=args.profile_cache_dir,
+            limit=args.limit,
+            force=args.force,
+            refresh_cache=args.refresh_cache,
+            company_corpus_jsonl=args.company_corpus_jsonl,
+            sleep_seconds=args.sleep_seconds,
+            max_workers=args.max_workers,
+            max_rpm=args.max_rpm,
+            failure_retry_hours=args.failure_retry_hours,
+            approve_spend=args.approve_spend,
+        )).run()
+        emit(manifest_emit_payload(manifest))
+        return exit_code_for_status(manifest.status)
     except ValueError as exc:
         emit({"status": "error", "error": str(exc)})
         return 2

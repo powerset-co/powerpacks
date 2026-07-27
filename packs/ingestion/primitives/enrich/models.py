@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Models for the enrichment stage: config, manifest, columns, failure type.
+"""Models for the enrichment stage: config, manifest, columns, rows, payloads.
 
 The typed contracts the enrich_people orchestrator (and its in-process callers
 like linkedin/network_import) build and exchange — no behavior beyond
@@ -13,17 +13,37 @@ construction and serialization.
   No ledger, no run id: the artifact dir is fixed so reruns overwrite in place.
 - `QUEUE_COLUMNS` / `CACHE_COLUMNS` / `RECENT_FAILURE_COLUMNS` /
   `PROVIDER_COLUMNS` — the stage CSV schemas, layered on the shared people
-  schema.
+  schema. `QUEUE_COLUMNS` is the shared BASE the other three extend; no artifact
+  is written with it directly.
+- `EnrichCacheRow` / `EnrichRecentFailureRow` / `EnrichProviderRow` — the
+  `pipeline/contract.py:RowModel`s generated FROM those column constants, so the
+  declared row shape cannot drift from the CSV each step actually writes.
+- `PrepareQueueSummary` / `EnrichLinkedInSummary` / `EnrichMergeSummary` — the
+  typed `StageManifest` payload each enrich step node returns from `execute()`.
+  They are the step `summary` blocks the stage manifest already carried, now
+  declared instead of assembled as raw dicts. Optional fields are `None` by
+  default and `to_payload()` drops them, which is how the enrich step keeps its
+  two historical summary shapes (the no-work early return omits the throughput /
+  retry keys) byte-for-byte.
 - `PipelineFailed` — a hard, non-recoverable step failure.
 
 Changelog:
+  2026-07-26 (enrich store is a Node): `EnrichManifest` is a pydantic
+    `StageManifest` instead of a dataclass with a hand-written `to_dict()`, so it
+    can be the declared payload of the `EnrichPeople` node. `to_payload()` replaces
+    `to_dict()` (same keys, same None-dropping; `write_json` sorts keys, so the
+    file is unchanged) and the `primitive: "enrich_people"` stamp is a field.
+  2026-07-25 (declared contract): added the three `RowModel`s and the three step
+    `StageManifest` payloads for the enrich stage's `Node` conversion. The row
+    models are generated from the existing column constants, so the constants
+    stay the single home for CSV order.
   2026-07-23 (audit decomposition): split out of enrich_people.py verbatim.
 """
 
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,11 +53,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.primitives.enrich.rapidapi_client import (  # noqa: E402
     DEFAULT_RAPIDAPI_FAILURE_RETRY_HOURS,
     DEFAULT_RAPIDAPI_MAX_RPM,
     DEFAULT_RAPIDAPI_MAX_WORKERS,
+)
+from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
+    STATUS_COMPLETED,
+    StageManifest,
+    row_model_for,
 )
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS  # noqa: E402
 
@@ -53,6 +77,59 @@ PROVIDER_COLUMNS = QUEUE_COLUMNS + [
     "rapidapi_from_cache",
     "provider_enriched_at",
 ]
+
+# Row models generated FROM the column constants above — one home for the order.
+EnrichCacheRow = row_model_for("EnrichCacheRow", CACHE_COLUMNS)
+EnrichRecentFailureRow = row_model_for("EnrichRecentFailureRow", RECENT_FAILURE_COLUMNS)
+EnrichProviderRow = row_model_for("EnrichProviderRow", PROVIDER_COLUMNS)
+
+
+class PrepareQueueSummary(StageManifest):
+    """`enrich_prepare_queue`'s payload: how the input rows routed and how the
+    LinkedIn-provider rows split across the local profile cache.
+
+    `paid_call_rows` is the number the spend gate reads: it is the cache-MISS
+    count, i.e. the RapidAPI fetches this run would bill for."""
+
+    status: str = STATUS_COMPLETED
+    input_rows: int
+    queue_rows: int
+    cache_hit_rows: int
+    paid_call_rows: int
+    recent_failure_rows: int
+    unresolved_rows: int
+    skipped_rows: int
+    route_counts: dict[str, int]
+
+
+class EnrichLinkedInSummary(StageManifest):
+    """`enrich_linkedin_profiles`'s payload. The throughput/retry fields default
+    to None and are dropped by `to_payload()`, which reproduces the shorter
+    summary the no-work early return has always emitted."""
+
+    status: str = STATUS_COMPLETED
+    processed: int
+    cached: int
+    fetched: int
+    output_file: str
+    providers: dict[str, bool]
+    max_workers: int | None = None
+    max_rpm: float | None = None
+    retried: int | None = None
+    retry_successes: int | None = None
+    retry_failures: int | None = None
+
+
+class EnrichMergeSummary(StageManifest):
+    """`enrich_merge_people`'s payload: every input row survives, counted by the
+    terminal `enrichment_status` it was stamped with."""
+
+    status: str = STATUS_COMPLETED
+    rows: int
+    enriched_rows: int
+    failed_rows: int
+    skipped_rows: int
+    output_file: str
 
 
 class PipelineFailed(Exception):
@@ -129,37 +206,24 @@ def build_config(
     )
 
 
-@dataclass
-class EnrichManifest:
+class EnrichManifest(StageManifest):
     """Typed constructor for the enrichment stage `manifest.json` — the entire
     durable state contract (status + per-step timing + counts + artifact paths).
-    No ledger, no run id: the artifact dir is fixed so reruns overwrite here."""
+    No ledger, no run id: the artifact dir is fixed so reruns overwrite here.
 
-    status: str
-    artifact_dir: str
-    input: dict[str, Any]
-    counts: dict[str, Any] = field(default_factory=dict)
-    artifacts: dict[str, Any] = field(default_factory=dict)
-    steps: dict[str, Any] = field(default_factory=dict)
+    A `StageManifest`, so it is the payload the stage's `EnrichPeople` Node
+    returns; `to_payload()` drops `needs_approval`/`error` when None exactly as the
+    hand-written `to_dict()` did, and `write_json` sorts keys, so the manifest on
+    disk is unchanged."""
+
+    primitive: str = "enrich_people"
+    status: str = ""
+    artifact_dir: str = ""
+    input: dict[str, Any] = {}
+    counts: dict[str, Any] = {}
+    artifacts: dict[str, Any] = {}
+    steps: dict[str, Any] = {}
     needs_approval: dict[str, Any] | None = None
     error: str | None = None
     started_at: str = ""
     updated_at: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "primitive": "enrich_people",
-            "status": self.status,
-            "artifact_dir": self.artifact_dir,
-            "input": self.input,
-            "counts": self.counts,
-            "artifacts": self.artifacts,
-            "steps": self.steps,
-            "started_at": self.started_at,
-            "updated_at": self.updated_at or now_iso(),
-        }
-        if self.needs_approval is not None:
-            payload["needs_approval"] = self.needs_approval
-        if self.error is not None:
-            payload["error"] = self.error
-        return payload

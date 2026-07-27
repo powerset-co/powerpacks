@@ -179,10 +179,9 @@ cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover/mess
 
 (Drop `--include-imessage` or `--include-whatsapp` if that channel wasn't
 picked. WhatsApp account sync and per-chat depth are selected automatically.)
-It writes `.powerpacks/messages/contacts.csv` and stages the discovery artifact
-at `.powerpacks/network-import/discover/messages/contacts.csv`, with status and
-counts in that fixed stage directory's `manifest.json`. It does not create a run
-directory or a step ledger. WhatsApp runs also overwrite
+It writes `.powerpacks/messages/contacts.csv`, with status and counts in the fixed
+stage directory `.powerpacks/network-import/discover/messages/manifest.json`. It
+does not create a run directory or a step ledger. WhatsApp runs also overwrite
 `.powerpacks/messages/history-depth/results.csv`, `progress.jsonl`, and
 `manifest.json`; those artifacts store hashed chat references and aggregate
 counters only. The manifest also stores one privacy-safe digest of direct-chat
@@ -264,10 +263,10 @@ a research candidate.)
 
 Materialize the matched contacts into this source's canonical
 `.powerpacks/network-import/import/messages/people.csv` (attaching message
-`interaction_counts` to people you already have) and the unmatched contacts that
-pass the deterministic "worth researching" floor into
-`.powerpacks/network-import/import/messages/candidates.csv` for `$deep-context`.
-The floor is pre-LLM and free: a plausibly-real saved contact name, a real
+`interaction_counts` to people you already have), followed in that same file by
+the unmatched contacts that pass the deterministic "worth researching" floor —
+they carry no `public_identifier` and a `candidate:` id, and `$deep-context`
+picks them up from there. The floor is pre-LLM and free: a plausibly-real saved contact name, a real
 10–15 digit phone, and at least one DM message; group-only low-signal contacts
 are excluded by default. `suggested` matches are never auto-attached — they go
 to candidates with the suggestion recorded.

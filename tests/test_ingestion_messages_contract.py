@@ -12,7 +12,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.ingestion.primitives.discover.common import write_csv_rows
+from packs.ingestion.primitives.discover.messages.models import MessagesDiscoveryCompleted
 from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
+from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 from packs.shared.csv_io import CsvIO
 
 
@@ -188,7 +190,10 @@ class IngestionMessagesContractTests(unittest.TestCase):
         self.assertIn("MESSAGES_DIR = MESSAGES_OUT_DIR", text)
         self.assertEqual(discover_messages.MESSAGES_DIR, Path(".powerpacks/messages"))
         self.assertIn('self.manifest_json = self.out_dir / "manifest.json"', text)
-        self.assertIn("write_stage_manifest(self.manifest_json", text)
+        # One stage manifest, now DECLARED rather than written by hand: the Node
+        # run template writes `manifest` after validating the declared outputs.
+        self.assertIn('manifest = str(DEFAULT_MESSAGES_OUTPUT_DIR / "manifest.json")', text)
+        self.assertNotIn("write_stage_manifest(", text)
 
         for token in (
             '"ledger.json"',
@@ -224,7 +229,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
 
         for relative in (
             "primitives/discover/messages/extract_imessage.py",
-            "primitives/discover/messages/normalize_contacts.py",
+            "primitives/discover/messages/merge_contacts.py",
         ):
             primitive_text = (INGESTION / relative).read_text(encoding="utf-8").lower()
             for token in ("run_id", "run-id", "uuid"):
@@ -318,21 +323,27 @@ class IngestionMessagesContractTests(unittest.TestCase):
     def test_discover_hoists_pre_full_sync_nudge_to_top_level(self) -> None:
         # A fast-path completed run must surface the nudge at the top level, not
         # bury it under child.artifacts where a happy-path agent won't look.
+        # The channel and store are declared nodes now, so their run templates
+        # verify the DECLARED outputs on a completed run — hence the stubbed
+        # extract/merge still have to leave those two CSVs on disk.
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "discover"
-            merged = Path(td) / "merged-contacts.csv"  # absent -> empty contacts.csv
+            whatsapp = Path(td) / "whatsapp.contacts.csv"
+            merged = Path(td) / "merged-contacts.csv"
+            write_csv_rows(whatsapp, CSV_HEADERS, [])
+            write_csv_rows(merged, CSV_HEADERS, [])
 
             def fake_extract(self):
                 self.artifacts["whatsapp_pairing_state"] = "pre_full_sync"
                 self.artifacts["whatsapp_pairing_notice"] = "Re-link to pull years more history."
                 return None
 
-            with mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
+            with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", whatsapp), \
+                    mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
                     mock.patch.object(discover_messages.WhatsAppChannel, "extract", fake_extract), \
-                    mock.patch.object(discover_messages.MessageChannel, "normalize", lambda self: None), \
                     mock.patch.object(discover_messages.MessagesDiscovery, "_merge", lambda self: None):
                 result = discover_messages.MessagesDiscovery(
-                    include_imessage=False, include_whatsapp=True, out_dir=out).run()
+                    include_imessage=False, include_whatsapp=True, out_dir=out).run().to_payload()
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["whatsapp_pairing_state"], "pre_full_sync")
         self.assertIn("Re-link", result["whatsapp_pairing_notice"])
@@ -433,7 +444,7 @@ class IngestionMessagesContractTests(unittest.TestCase):
         }
         for status, expected in cases.items():
             fake_store = mock.Mock()
-            fake_store.run.return_value = {"status": status}
+            fake_store.run.return_value = MessagesDiscoveryCompleted(status=status)
             with self.subTest(status=status), \
                     mock.patch.object(discover_messages, "MessagesDiscovery", return_value=fake_store), \
                     mock.patch.object(sys, "argv", ["messages.py", "discover"]), \

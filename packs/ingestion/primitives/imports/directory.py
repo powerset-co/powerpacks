@@ -7,7 +7,25 @@ row merge, and the people.csv → directory commit path. This is import-stage
 code: it has no discover-stage consumers — only `imports/common.py`,
 `imports/messages/importer.py`, and tests import it.
 
+Declared contract: `DirectoryRow` is this file's row model and
+`GMAIL_DIRECTORY_ROWS` / `MESSAGES_DIRECTORY_ROWS` are the row-slice predicates
+its two writers declare (`Artifact.owns_rows_where`). The write path itself stays
+here: `commit_directory_rows` upserts a source's rows by `source_key` and
+`imports/messages/importer.py:replace_messages_directory_rows` deletes-and-rewrites
+the `messages` slice. Neither ever touches another source's rows.
+
+Known dead code (measured 2026-07-25, deletion is a separate PR): the
+`build_directory_checkpoint` import path can never import anything —
+`linkedin_directory_source_csvs` has no writer and `default_directory_source_paths`
+returns `[]` unconditionally — so `directory_rows_from_resolutions` and
+`directory_rows_from_candidates` are unreachable, and the only caller of
+`commit_people_csv_to_directory` is a test. `build_directory_checkpoint` itself is
+still live: it re-normalizes and rewrites `directory.csv` in place.
+
 Changelog:
+  2026-07-25 (declared contract): added `DirectoryRow` (generated from
+    DIRECTORY_COLUMNS) plus the two row-slice predicate constants. No behavior
+    change: nothing here reads them.
   2026-07-23 (audit): LINKEDIN_RESOLUTION_COLUMNS now comes from the shared
     `schemas/gmail_artifacts.py` instead of a local byte-identical copy.
   2026-07-23 (audit batch 21): relocated discover/directory.py → imports/directory.py.
@@ -70,6 +88,7 @@ from packs.ingestion.primitives.common.contact_fields import (  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import now_iso, unique_strings  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV  # noqa: E402
 from packs.ingestion.primitives.discover.common import read_csv_rows, write_csv_rows  # noqa: E402
+from packs.ingestion.primitives.pipeline.contract import row_model_for  # noqa: E402
 
 DIRECTORY_COLUMNS = [
     "source",
@@ -91,6 +110,19 @@ DIRECTORY_COLUMNS = [
     "source_artifact",
     "updated_at",
 ]
+# The declared row shape of `directory.csv`, generated FROM DIRECTORY_COLUMNS so
+# field order stays the on-disk header order and the column list keeps one home.
+# `_priority` is deliberately absent: normalized_directory_row carries it as an
+# in-memory ranking hint and merge_directory_rows drops it before writing.
+DirectoryRow = row_model_for("DirectoryRow", DIRECTORY_COLUMNS)
+
+# The row SLICE each source's writer owns, as declared by `Artifact.owns_rows_where`
+# (declaration only — the graph checker compares these strings, never evaluates
+# them). directory.csv is a cross-source aggregate: every writer writes every
+# column, of its own source's rows only, so columns are the wrong ownership axis.
+GMAIL_DIRECTORY_ROWS = "source == 'gmail_msgvault'"
+MESSAGES_DIRECTORY_ROWS = "source == 'messages'"
+
 RESOLUTION_FOUND_STATUSES = {"found", "completed", "success"}
 RESOLUTION_NEGATIVE_STATUSES = {"not_found", "not-found", "missing", "failed", "error"}
 LINKEDIN_URL_COLUMNS = [

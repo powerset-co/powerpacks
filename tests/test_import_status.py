@@ -86,6 +86,33 @@ class ImportStatusTests(unittest.TestCase):
             self.assertEqual(payload["merged"]["people"], 2)
             self.assertTrue(payload["merged"]["exists"])
 
+    def test_linkedin_discover_reports_the_connections_export_not_a_node(self) -> None:
+        # LinkedIn has no discover-stage node: the export the user downloaded IS
+        # the discover artifact, and its people arrive externally (Modal) into
+        # import/linkedin/people.csv. No fabricated contacts count.
+        with self.sandbox() as state:
+            payload = import_status.status_payload(["linkedin"])
+            absent = payload["sources"]["linkedin"]["discover"]
+            self.assertFalse(absent["present"])
+            self.assertEqual(absent["connections"], 0)
+            self.assertNotIn("contacts", absent)
+
+            export = state / "discover" / "linkedin" / "Connections.csv"
+            export.parent.mkdir(parents=True, exist_ok=True)
+            export.write_text(
+                "Notes:\n"
+                '"When exporting your connection data, you may notice some missing emails."\n'
+                "\n"
+                "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                "Jordan,Bravo,https://www.linkedin.com/in/jordan-bravo,casey@example.com,Example,Founder,01 Jan 2026\n"
+                "Casey,Delta,https://www.linkedin.com/in/casey-delta,,Example,Engineer,02 Jan 2026\n",
+                encoding="utf-8",
+            )
+            found = import_status.status_payload(["linkedin"])["sources"]["linkedin"]["discover"]
+            self.assertTrue(found["present"])
+            self.assertEqual(found["connections_csv"], str(export))
+            self.assertEqual(found["connections"], 2)
+
     def test_incomplete_manifest_is_not_imported(self) -> None:
         with self.sandbox() as state:
             import_dir = state / "import" / "messages"

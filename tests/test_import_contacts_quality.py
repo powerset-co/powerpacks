@@ -107,12 +107,10 @@ class ImportContactsQualityTests(unittest.TestCase):
             base = tmp / ".powerpacks/network-import"
             discover_gmail = base / "discover/gmail"
             discover_gmail.mkdir(parents=True)
-            contacts = discover_gmail / "contacts.csv"
             queue = discover_gmail / "linkedin_resolution_queue.csv"
             account_dir = discover_gmail / "operator-example-com"
             account_people = account_dir / "people.csv"
             account_queue = account_dir / "linkedin_resolution_queue.csv"
-            contacts.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
             queue.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
             account_dir.mkdir(parents=True)
             account_queue.write_text("handle,primary_email,total_messages\njane@example.com,jane@example.com,2\n", encoding="utf-8")
@@ -125,9 +123,9 @@ class ImportContactsQualityTests(unittest.TestCase):
                     "interaction_counts": json.dumps({"gmail": 2}),
                     "last_interaction": "2026-01-02T00:00:00Z",
                 })
+            # The manifest is read for its CHILDREN only; the stage-level queue
+            # path comes from gmail discovery's declaration, not from this file.
             (discover_gmail / "manifest.json").write_text(json.dumps({
-                "contacts_csv": str(contacts),
-                "linkedin_resolution_queue_csv": str(queue),
                 "children": [{
                     "account_email": "operator@example.com",
                     "artifacts": {
@@ -137,8 +135,9 @@ class ImportContactsQualityTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            with mock.patch.object(gmail_import_util, "DEFAULT_BASE_DIR", base):
-                artifacts = gmail_import_util.gmail_artifacts_from_discovery()
+            artifacts = gmail_import_util.gmail_artifacts_from_discovery(
+                manifest_json=discover_gmail / "manifest.json", queue_csv=queue,
+            )
 
             self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csv"], str(queue))
             self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csvs"], [{
@@ -159,15 +158,13 @@ class ImportContactsQualityTests(unittest.TestCase):
             base = tmp / ".powerpacks/network-import"
             discover_gmail = base / "discover/gmail"
             discover_gmail.mkdir(parents=True)
-            contacts = discover_gmail / "contacts.csv"
             queue = discover_gmail / "linkedin_resolution_queue.csv"
             stale_people = tmp / "stale-people.csv"
-            contacts.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
             queue.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
             stale_people.write_text("primary_email,full_name\njane@example.com,Jane\n", encoding="utf-8")
+            # The manifest is read for its CHILDREN only; the stage-level queue
+            # path comes from gmail discovery's declaration, not from this file.
             (discover_gmail / "manifest.json").write_text(json.dumps({
-                "contacts_csv": str(contacts),
-                "linkedin_resolution_queue_csv": str(queue),
                 "children": [{
                     "account_email": "operator@example.com",
                     "artifacts": {
@@ -177,8 +174,9 @@ class ImportContactsQualityTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            with mock.patch.object(gmail_import_util, "DEFAULT_BASE_DIR", base):
-                artifacts = gmail_import_util.gmail_artifacts_from_discovery()
+            artifacts = gmail_import_util.gmail_artifacts_from_discovery(
+                manifest_json=discover_gmail / "manifest.json", queue_csv=queue,
+            )
 
             self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csv"], str(queue))
             self.assertNotIn("gmail_linkedin_resolution_queue_csvs", artifacts)
@@ -199,7 +197,7 @@ class ImportContactsQualityTests(unittest.TestCase):
                         payload = gmail_import.GmailImport(
                             args=args,
                             contract=gmail_import.GMAIL_IMPORT_CONTRACT,
-                        ).run()
+                        ).run().to_payload()
 
             self.assertEqual(payload["status"], "skipped")
             self.assertTrue((import_dir / "manifest.json").is_file())
