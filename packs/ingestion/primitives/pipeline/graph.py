@@ -33,6 +33,10 @@ Flow: import the converted node modules -> walk Node subclasses -> group
 declarations by path -> emit one JSON report.
 
 Changelog:
+  2026-07-26 (cycles canonicalized): `find_cycles` rotates each found cycle to
+    start at its lexicographically-smallest node and dedups, so a loop is one
+    entry instead of one entry per member and path variant (the historical two
+    back-edge defaults rendered as 23 entries). The report list is sorted.
   2026-07-26 (manifests are produced; enrich store registered): a node's declared
     `manifest` path now counts as a producer for `phantom_inputs` and `edges` —
     the two manifests another node reads (gmail discovery's, the messages
@@ -213,11 +217,15 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
 
 
 def find_cycles(edges: dict[str, list[str]]) -> list[list[str]]:
-    """Every cycle reachable by DFS, as `[a, b, a]` paths.
+    """Every DISTINCT cycle reachable by DFS, canonicalized, as `[a, b, a]` paths.
 
-    Hand-rolled rather than networkx: this is 12 lines, networkx is not in the
-    lockfile, and a dependency that exists to replace 12 lines of DFS is the kind
-    of machinery the ground rules tell us not to add."""
+    The DFS finds each loop once per member (every node on the cycle is also a
+    DFS start that reports it), so each found cycle is rotated to start at its
+    lexicographically-smallest node and deduped; the result is sorted so the
+    report is deterministic. Hand-rolled rather than networkx: this is 16 lines,
+    networkx is not in the lockfile, and a dependency that exists to replace 16
+    lines of DFS is the kind of machinery the ground rules tell us not to add."""
+    seen: set[tuple[str, ...]] = set()
     cycles: list[list[str]] = []
     for start in edges:
         stack: list[tuple[str, list[str]]] = [(start, [start])]
@@ -225,10 +233,14 @@ def find_cycles(edges: dict[str, list[str]]) -> list[list[str]]:
             node, path = stack.pop()
             for nxt in edges.get(node, []):
                 if nxt == start:
-                    cycles.append(path + [start])
+                    pivot = path.index(min(path))
+                    canonical = tuple(path[pivot:] + path[:pivot])
+                    if canonical not in seen:
+                        seen.add(canonical)
+                        cycles.append([*canonical, canonical[0]])
                 elif nxt not in path:
                     stack.append((nxt, path + [nxt]))
-    return cycles
+    return sorted(cycles)
 
 
 def main() -> int:
