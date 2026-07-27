@@ -4,8 +4,9 @@ The file mixes LinkedIn identity decisions with network-worth decisions, but the
 two producers remain independent:
 
 * LinkedIn reconciliation owns action/approved/link fields.
-* Message synthesis owns llm_worth/llm_worth_reason.
-* The human alone owns network_worth.
+* Message synthesis owns child llm_worth/llm_worth_reason.
+* Parent construction mirrors the aggregated machine verdict into one parent row.
+* The human alone owns that parent row's network_worth.
 
 Keeping the tiny CSV contract here prevents either LLM stage from becoming the
 other stage's fallback writer.
@@ -16,6 +17,7 @@ Changelog:
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,9 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 
 OVERRIDE_COLUMNS = [
     "public_identifier",
+    # Canonical membership for parent-level worth rows. Identity/link rows
+    # leave this blank. Membership lets human decisions survive reclustering.
+    "worth_person_ids",
     "action",
     "approved",
     "new_linkedin_url",
@@ -57,6 +62,29 @@ OVERRIDE_COLUMNS = [
 HUMAN_WORTH_VALUES = {"yes", "no"}
 MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}
 USER_APPROVED = {"yes", "no"}
+PARENT_WORTH_PREFIX = "parent-worth:"
+
+
+def parent_worth_key(parent_id: str) -> str:
+    """The one review.csv key for a canonical parent's worth decision."""
+    value = str(parent_id or "").strip().lower()
+    return f"{PARENT_WORTH_PREFIX}{value}" if value else ""
+
+
+def parent_id_from_worth_key(key: str) -> str:
+    value = str(key or "").strip().lower()
+    return value.removeprefix(PARENT_WORTH_PREFIX) if value.startswith(PARENT_WORTH_PREFIX) else ""
+
+
+def is_parent_worth_row(row: dict[str, Any], key: str = "") -> bool:
+    return bool(
+        parent_id_from_worth_key(key or str(row.get("public_identifier") or ""))
+    )
+
+
+def parse_worth_person_ids(row: dict[str, Any]) -> list[str]:
+    raw = str(row.get("worth_person_ids") or "")
+    return sorted({value.strip().lower() for value in raw.split("|") if value.strip()})
 
 # The deep-research judge's confirm bar (reconcile_deep_research --confirm-threshold
 # defaults to this). Doing double duty is the point: research_reject_fields stamps
@@ -152,7 +180,35 @@ def row_keys_for_person(rows: dict[str, dict[str, str]], person_id: str) -> list
     ]
 
 
-def has_human_worth(rows: dict[str, dict[str, str]], person_id: str) -> bool:
+def parent_ids_by_person(index_json: Path) -> dict[str, str]:
+    """Map current child person ids to canonical parent ids."""
+    try:
+        index = json.loads(index_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    slugs = index.get("slugs") or {}
+    out: dict[str, str] = {}
+    for parent in (index.get("parents") or {}).values():
+        parent_id = str(parent.get("parent_id") or "").strip().lower()
+        if not parent_id:
+            continue
+        for child in parent.get("children") or []:
+            person_id = str((slugs.get(child) or {}).get("person_id") or "").strip().lower()
+            if person_id:
+                out[person_id] = parent_id
+    return out
+
+
+def has_human_worth(
+    rows: dict[str, dict[str, str]],
+    person_id: str,
+    parent_ids: dict[str, str] | None = None,
+) -> bool:
+    pid = str(person_id or "").strip().lower()
+    parent_id = (parent_ids or {}).get(pid, "")
+    parent_row = rows.get(parent_worth_key(parent_id)) or {}
+    if (parent_row.get("network_worth") or "").strip().lower() in HUMAN_WORTH_VALUES:
+        return True
     return any(
         (rows[key].get("network_worth") or "").strip().lower() in HUMAN_WORTH_VALUES
         for key in row_keys_for_person(rows, person_id)
@@ -176,6 +232,7 @@ def mirror_facts_worth(
     from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
 
     rows = load_override_rows(review_path)
+    parent_ids = parent_ids_by_person(facts_dir.parent / "index.json")
     synced_people = synced_rows = skipped_human = without_worth = cleared_legacy_spam = 0
 
     for facts_path in sorted(facts_dir.glob("*.jsonl")):
@@ -187,10 +244,7 @@ def mirror_facts_worth(
             continue
 
         keys = row_keys_for_person(rows, person_id)
-        if not include_human_rows and any(
-            (rows[key].get("network_worth") or "").strip().lower() in HUMAN_WORTH_VALUES
-            for key in keys
-        ):
+        if not include_human_rows and has_human_worth(rows, person_id, parent_ids):
             skipped_human += 1
             continue
 

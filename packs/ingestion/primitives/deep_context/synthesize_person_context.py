@@ -64,6 +64,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     has_human_worth,
     load_override_rows,
     mirror_facts_worth,
+    parent_ids_by_person,
 )
 
 DEFAULT_CHUNK_CHARS = 9000
@@ -476,6 +477,7 @@ def pending_target_paths(
     both caches; the review writer still preserves the human-owned column."""
     paths: list[Path] = []
     rows = review_rows or {}
+    parent_ids = parent_ids_by_person(facts_dir.parent / "index.json")
     for path in sorted(raw_dir.glob("*.json")):
         if path.name == "manifest.json":
             continue
@@ -487,7 +489,7 @@ def pending_target_paths(
             if _facts_version(facts_path) != SYNTHESIS_VERSION:
                 paths.append(path)
                 continue
-            if has_human_worth(rows, pid):
+            if has_human_worth(rows, pid, parent_ids):
                 continue
             existing = llm_network_worth(pid, facts_dir).get("decision", "")
             if existing in {"yes", "no"}:

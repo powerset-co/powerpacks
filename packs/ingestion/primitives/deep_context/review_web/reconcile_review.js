@@ -87,6 +87,12 @@ function applyProgress(progress) {
   setTabCount("review", progress.worth_pending);
   setTabCount("yes", progress.worth_yes);
   setTabCount("no", progress.worth_no);
+  const worthContinue = document.querySelector("[data-worth-continue]");
+  if (worthContinue) {
+    const pending = Math.max(0, Number(progress.worth_pending) || 0);
+    worthContinue.textContent = `Continue with ${pending} undecided`;
+    worthContinue.hidden = pending === 0;
+  }
   const steps = document.querySelectorAll(".stepper .step");
   updateStepCount(steps[0], progress.worth_pending);
   updateStepCount(steps[2], progress.linkedin_pending);

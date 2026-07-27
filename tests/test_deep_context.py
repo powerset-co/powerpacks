@@ -41,6 +41,7 @@ from packs.ingestion.primitives.deep_context.review_web import (
 )
 from packs.ingestion.primitives.deep_context.review_store import (
     load_override_rows as load_rows,
+    parent_worth_key,
     write_override_rows as write_rows,
 )
 
@@ -2841,7 +2842,8 @@ class TestReviewWeb(unittest.TestCase):
             web_decisions.apply_worth_decision(review, retired, "yes")
             rows = worth_view.load(facts, review, index)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["key"], "jordan-parent")
+        self.assertEqual(rows[0]["parent_slug"], "jordan-parent")
+        self.assertTrue(rows[0]["key"].startswith("parent-worth:parent-"))
         self.assertEqual(set(rows[0]["person_ids"]), {retired, phone_id})
         self.assertEqual(rows[0]["human"]["decision"], "yes")
         self.assertEqual(worth_view.counts(rows)["pending"], 0)
@@ -2871,8 +2873,596 @@ class TestReviewWeb(unittest.TestCase):
             }})
             rows = worth_view.load(facts, review, index)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["key"], "casey-parent")
+        self.assertEqual(rows[0]["parent_slug"], "casey-parent")
+        self.assertTrue(rows[0]["key"].startswith("parent-worth:parent-"))
         self.assertEqual(set(rows[0]["person_ids"]), {retired, durable})
+
+    def test_parent_machine_worth_uses_yes_then_maybe_then_no_priority(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            people = {
+                "candidate:email:jordan@example.com": ("yes", "real correspondence"),
+                "candidate:phone:+15550100": ("no", "automated traffic"),
+                "candidate:email:alias@example.com": ("maybe", "sparse context"),
+            }
+            slugs = {}
+            for index, (pid, (decision, reason)) in enumerate(people.items()):
+                (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                    "canonical_name": "Jordan Bravo",
+                    "network_worth": {"decision": decision, "reason": reason},
+                }}) + "\n", encoding="utf-8")
+                slugs[f"child-{index}"] = {"person_id": pid}
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": slugs,
+                "parents": {
+                    "jordan-parent": {
+                        "parent_id": "parent-fixture",
+                        "name": "Jordan Bravo",
+                        "children": list(slugs),
+                    },
+                },
+            }), encoding="utf-8")
+
+            row = worth_view.load(facts, base / "review.csv", index_json)[0]
+            self.assertEqual(row["key"], parent_worth_key("parent-fixture"))
+            self.assertEqual(row["machine"]["decision"], "yes")
+            self.assertEqual(row["machine"]["reason"], "real correspondence")
+
+            yes_path = facts / "candidate:email:jordan@example.com.jsonl"
+            yes_path.write_text(json.dumps({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "network_worth": {"decision": "no", "reason": "fixture changed"},
+            }}) + "\n", encoding="utf-8")
+            row = worth_view.load(facts, base / "review.csv", index_json)[0]
+            self.assertEqual(row["machine"]["decision"], "maybe")
+            self.assertEqual(row["machine"]["reason"], "sparse context")
+
+    def test_parent_worth_sync_migrates_legacy_human_mark_once(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            first = "candidate:email:jordan@example.com"
+            second = "candidate:phone:+15550100"
+            for pid, decision in ((first, "maybe"), (second, "no")):
+                (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                    "canonical_name": "Jordan Bravo",
+                    "network_worth": {"decision": decision, "reason": "fixture"},
+                }}) + "\n", encoding="utf-8")
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": {
+                    "jordan-email": {"person_id": first},
+                    "jordan-phone": {"person_id": second},
+                },
+                "parents": {
+                    "jordan-parent": {
+                        "parent_id": "parent-fixture",
+                        "name": "Jordan Bravo",
+                        "children": ["jordan-email", "jordan-phone"],
+                    },
+                },
+            }), encoding="utf-8")
+            review = base / "review.csv"
+            write_rows(review, {
+                first: {
+                    "public_identifier": first,
+                    "person_id": first,
+                    "network_worth": "yes",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+                second: {
+                    "public_identifier": second,
+                    "person_id": second,
+                    "action": "exclude",
+                    "approved": "yes",
+                    "updated_at": "2025-01-01T00:00:00Z",
+                },
+            })
+
+            stats = worth_view.sync_parent_worth_rows(review, facts, index_json)
+            self.assertEqual(stats["parent_rows"], 1)
+            self.assertEqual(stats["human_migrated"], 1)
+            rows = load_rows(review)
+            parent = rows[parent_worth_key("parent-fixture")]
+            self.assertEqual(
+                set(parent["worth_person_ids"].split("|")),
+                {first, second},
+            )
+            self.assertEqual(parent["network_worth"], "yes")
+            self.assertEqual(parent["llm_worth"], "maybe")
+            self.assertEqual(rows[first]["network_worth"], "")
+            self.assertEqual(rows[second]["action"], "")
+            self.assertEqual(rows[second]["approved"], "")
+            first_bytes = review.read_bytes()
+
+            rerun = worth_view.sync_parent_worth_rows(review, facts, index_json)
+            self.assertEqual(rerun["human_migrated"], 0)
+            self.assertEqual(review.read_bytes(), first_bytes)
+            effective = worth_view.load(facts, review, index_json)[0]
+            self.assertEqual(effective["human"]["decision"], "yes")
+            self.assertEqual(effective["effective"], "yes")
+
+    def test_parent_worth_follows_members_across_merge_and_split(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            person_ids = [
+                "candidate:email:jordan@example.com",
+                "candidate:phone:+15550100",
+                "candidate:email:alias@example.com",
+            ]
+            for pid in person_ids:
+                (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                    "canonical_name": "Jordan Bravo",
+                    "network_worth": {"decision": "maybe", "reason": "fixture"},
+                }}) + "\n", encoding="utf-8")
+            index_json = base / "index.json"
+
+            def write_index(parent_rows):
+                slugs = {
+                    f"child-{offset}": {"person_id": pid}
+                    for offset, pid in enumerate(person_ids)
+                }
+                index_json.write_text(json.dumps({
+                    "slugs": slugs,
+                    "parents": parent_rows,
+                }), encoding="utf-8")
+
+            write_index({
+                "jordan-old": {
+                    "parent_id": "parent-old",
+                    "name": "Jordan Bravo",
+                    "children": ["child-0", "child-1"],
+                },
+                "alias-old": {
+                    "parent_id": "parent-alias",
+                    "name": "Jordan Alias",
+                    "children": ["child-2"],
+                },
+            })
+            review = base / "review.csv"
+            write_rows(review, {
+                person_ids[0]: {
+                    "public_identifier": person_ids[0],
+                    "person_id": person_ids[0],
+                    "network_worth": "yes",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+
+            write_index({
+                "jordan-merged": {
+                    "parent_id": "parent-merged",
+                    "name": "Jordan Bravo",
+                    "children": ["child-0", "child-1", "child-2"],
+                },
+            })
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+            merged = load_rows(review)
+            self.assertNotIn(parent_worth_key("parent-old"), merged)
+            self.assertEqual(
+                merged[parent_worth_key("parent-merged")]["network_worth"],
+                "yes",
+            )
+            self.assertEqual(
+                set(merged[parent_worth_key("parent-merged")]["worth_person_ids"].split("|")),
+                set(person_ids),
+            )
+
+            write_index({
+                "jordan-split": {
+                    "parent_id": "parent-split-a",
+                    "name": "Jordan Bravo",
+                    "children": ["child-0"],
+                },
+                "alias-split": {
+                    "parent_id": "parent-split-b",
+                    "name": "Jordan Alias",
+                    "children": ["child-1", "child-2"],
+                },
+            })
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+            split = load_rows(review)
+            self.assertNotIn(parent_worth_key("parent-merged"), split)
+            self.assertEqual(
+                split[parent_worth_key("parent-split-a")]["network_worth"],
+                "yes",
+            )
+            self.assertEqual(
+                split[parent_worth_key("parent-split-b")]["network_worth"],
+                "yes",
+            )
+
+    def test_parent_worth_migration_retires_legacy_exclude(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            pid = "candidate:email:jordan@example.com"
+            (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "network_worth": {"decision": "maybe", "reason": "fixture"},
+            }}) + "\n", encoding="utf-8")
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": {"jordan-child": {"person_id": pid}},
+                "parents": {
+                    "jordan-parent": {
+                        "parent_id": "parent-fixture",
+                        "children": ["jordan-child"],
+                    },
+                },
+            }), encoding="utf-8")
+            review = base / "review.csv"
+            write_rows(review, {
+                pid: {
+                    "public_identifier": pid,
+                    "person_id": pid,
+                    "action": "exclude",
+                    "approved": "yes",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+            migrated = load_rows(review)
+            key = parent_worth_key("parent-fixture")
+            self.assertEqual(migrated[key]["network_worth"], "no")
+            self.assertEqual(migrated[pid]["action"], "")
+            self.assertEqual(migrated[pid]["approved"], "")
+
+            web_decisions.apply_worth_decision(review, key, "")
+            restored = worth_view.load(facts, review, index_json)[0]
+            self.assertEqual(restored["human"], None)
+            self.assertEqual(restored["effective"], "maybe")
+
+    def test_current_parent_worth_wins_timestamp_tie_with_legacy_child(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            pid = "candidate:email:jordan@example.com"
+            (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "network_worth": {"decision": "maybe", "reason": "fixture"},
+            }}) + "\n", encoding="utf-8")
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": {"jordan-child": {"person_id": pid}},
+                "parents": {
+                    "jordan-parent": {
+                        "parent_id": "parent-fixture",
+                        "children": ["jordan-child"],
+                    },
+                },
+            }), encoding="utf-8")
+            key = parent_worth_key("parent-fixture")
+            review = base / "review.csv"
+            write_rows(review, {
+                key: {
+                    "public_identifier": key,
+                    "worth_person_ids": pid,
+                    "network_worth": "yes",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+                pid: {
+                    "public_identifier": pid,
+                    "person_id": pid,
+                    "network_worth": "no",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+            rows = load_rows(review)
+            self.assertEqual(rows[key]["network_worth"], "yes")
+            self.assertEqual(rows[pid]["network_worth"], "")
+
+    def test_parent_worth_survives_temporarily_missing_facts(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            pid = "candidate:email:jordan@example.com"
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": {"jordan-child": {"person_id": pid}},
+                "parents": {
+                    "jordan-parent": {
+                        "parent_id": "parent-fixture",
+                        "children": ["jordan-child"],
+                    },
+                },
+            }), encoding="utf-8")
+            key = parent_worth_key("parent-fixture")
+            review = base / "review.csv"
+            write_rows(review, {
+                key: {
+                    "public_identifier": key,
+                    "worth_person_ids": pid,
+                    "network_worth": "yes",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+            self.assertEqual(load_rows(review)[key]["network_worth"], "yes")
+
+            (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "network_worth": {"decision": "maybe", "reason": "fixture"},
+            }}) + "\n", encoding="utf-8")
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+            self.assertEqual(load_rows(review)[key]["network_worth"], "yes")
+
+    def test_parent_worth_preserves_absent_members_during_partial_recluster(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            first = "candidate:email:jordan@example.com"
+            second = "candidate:phone:+15550100"
+            (facts / f"{first}.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "network_worth": {"decision": "maybe", "reason": "fixture"},
+            }}) + "\n", encoding="utf-8")
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": {"first-child": {"person_id": first}},
+                "parents": {
+                    "first-parent": {
+                        "parent_id": "parent-first",
+                        "children": ["first-child"],
+                    },
+                },
+            }), encoding="utf-8")
+            old_key = parent_worth_key("parent-old")
+            review = base / "review.csv"
+            write_rows(review, {
+                old_key: {
+                    "public_identifier": old_key,
+                    "worth_person_ids": f"{first}|{second}",
+                    "network_worth": "yes",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            })
+
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+            partial = load_rows(review)
+            self.assertEqual(
+                partial[parent_worth_key("parent-first")]["network_worth"],
+                "yes",
+            )
+            self.assertEqual(partial[old_key]["worth_person_ids"], second)
+
+            (facts / f"{second}.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": "Jordan Alias",
+                "network_worth": {"decision": "maybe", "reason": "fixture"},
+            }}) + "\n", encoding="utf-8")
+            index_json.write_text(json.dumps({
+                "slugs": {
+                    "first-child": {"person_id": first},
+                    "second-child": {"person_id": second},
+                },
+                "parents": {
+                    "first-parent": {
+                        "parent_id": "parent-first",
+                        "children": ["first-child"],
+                    },
+                    "second-parent": {
+                        "parent_id": "parent-second",
+                        "children": ["second-child"],
+                    },
+                },
+            }), encoding="utf-8")
+            worth_view.sync_parent_worth_rows(review, facts, index_json)
+            restored = load_rows(review)
+            self.assertNotIn(old_key, restored)
+            self.assertEqual(
+                restored[parent_worth_key("parent-second")]["network_worth"],
+                "yes",
+            )
+
+    def test_candidate_research_uses_parent_human_worth(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            pid = "candidate:email:jordan@example.com"
+            (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": "Jordan Bravo",
+                "network_worth": {"decision": "maybe", "reason": "sparse context"},
+            }}) + "\n", encoding="utf-8")
+            index_json = base / "index.json"
+            index_json.write_text(json.dumps({
+                "slugs": {"jordan-child": {"person_id": pid}},
+                "parents": {
+                    "jordan-parent": {
+                        "parent_id": "parent-fixture",
+                        "name": "Jordan Bravo",
+                        "children": ["jordan-child"],
+                    },
+                },
+            }), encoding="utf-8")
+            parent_key = parent_worth_key("parent-fixture")
+            overrides = {
+                parent_key: {
+                    "public_identifier": parent_key,
+                    "worth_person_ids": pid,
+                    "network_worth": "yes",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            }
+            candidate = mock.Mock(
+                person_id=pid,
+                full_name="Jordan Bravo",
+                emails=["jordan@example.com"],
+                phones=[],
+            )
+            with mock.patch.object(dresearch, "load_candidates", return_value=[candidate]):
+                selected = dresearch.candidate_subset(
+                    facts,
+                    overrides,
+                    resolved_candidates=set(),
+                    index_json=index_json,
+                )
+                self.assertEqual([row["candidate_key"] for row in selected], [pid])
+                overrides[parent_key]["network_worth"] = "no"
+                self.assertEqual(
+                    dresearch.candidate_subset(
+                        facts,
+                        overrides,
+                        resolved_candidates=set(),
+                        index_json=index_json,
+                    ),
+                    [],
+                )
+
+    @staticmethod
+    def _maybe_parent() -> dict:
+        pid = "candidate:email:jordan@example.com"
+        key = parent_worth_key("parent-fixture")
+        machine = {"decision": "maybe", "reason": "sparse context", "source": "llm"}
+        return {
+            "slug": "jordan-parent",
+            "dossier_slug": "jordan-parent",
+            "name": "Jordan Bravo",
+            "person_ids": [pid],
+            "sources": ["gmail"],
+            "candidates": [{
+                "pub": pid,
+                "full_name": "Jordan Bravo",
+                "import_candidate": True,
+                "worth_key": key,
+                "worth": {"decision": "maybe", "source": "llm", "reason": "sparse context"},
+                "machine_worth": machine,
+            }],
+            "worth": {"decision": "maybe", "source": "llm", "reason": "sparse context"},
+            "machine_worth": machine,
+            "worth_row": {
+                "key": key,
+                "parent_id": "parent-fixture",
+                "parent_slug": "jordan-parent",
+                "person_ids": [pid],
+                "machine": machine,
+                "human": None,
+                "effective": "maybe",
+                "source": "llm",
+            },
+        }
+
+    def test_people_manifest_can_complete_with_unresolved_maybes(self):
+        progress = web_workflow.review_progress([self._maybe_parent()])
+        with tempfile.TemporaryDirectory() as dd:
+            manifest = Path(dd) / "review" / "manifest.json"
+            result = web_workflow.write_review_manifest(
+                "worth",
+                "completed",
+                progress,
+                path=manifest,
+                review_path=Path(dd) / "review.csv",
+                synthetic_path=Path(dd) / "synthetic.csv",
+            )
+            self.assertIn("worth", result["completed_stages"])
+            self.assertEqual(result["counts"]["pending"], 1)
+            self.assertTrue(web_workflow.phase_is_completed("worth", progress, manifest))
+
+            with self.assertRaisesRegex(ValueError, "decisions still need an answer"):
+                web_workflow.write_review_manifest(
+                    "linkedin",
+                    "completed",
+                    {**progress, "linkedin_total": 1, "linkedin_pending": 1},
+                    path=manifest,
+                    review_path=Path(dd) / "review.csv",
+                    synthetic_path=Path(dd) / "synthetic.csv",
+                )
+
+    def test_unresolved_maybe_stays_out_of_lookup_after_people_completion(self):
+        maybe = self._maybe_parent()
+        yes = json.loads(json.dumps(maybe))
+        yes["slug"] = "casey-parent"
+        yes["dossier_slug"] = "casey-parent"
+        yes["name"] = "Casey Delta"
+        yes["person_ids"] = ["candidate:email:casey@example.com"]
+        yes["worth_row"]["key"] = parent_worth_key("parent-casey")
+        yes["worth_row"]["parent_id"] = "parent-casey"
+        yes["worth_row"]["parent_slug"] = "casey-parent"
+        yes["worth_row"]["person_ids"] = list(yes["person_ids"])
+        yes["worth_row"]["effective"] = "yes"
+        yes["worth_row"]["source"] = "user"
+        yes["worth_row"]["human"] = {
+            "decision": "yes",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        yes["worth"]["decision"] = "yes"
+        yes["worth"]["source"] = "user"
+        yes["candidates"][0]["pub"] = yes["person_ids"][0]
+        yes["candidates"][0]["worth_key"] = yes["worth_row"]["key"]
+        yes["candidates"][0]["worth"] = dict(yes["worth"])
+
+        with tempfile.TemporaryDirectory() as dd:
+            manifest = Path(dd) / "review" / "manifest.json"
+            progress = web_workflow.review_progress([yes, maybe])
+            web_workflow.write_review_manifest(
+                "worth",
+                "completed",
+                progress,
+                path=manifest,
+                review_path=Path(dd) / "review.csv",
+                synthetic_path=Path(dd) / "synthetic.csv",
+            )
+            selection = web_workflow.worth_selection_from_parents(
+                [yes, maybe],
+                manifest_path=manifest,
+            )
+
+        self.assertEqual(progress["lookup_ready"], 1)
+        self.assertEqual(selection["yes"], 1)
+        self.assertEqual(selection["maybe"], 1)
+
+    def test_worth_page_can_continue_with_pending_parent(self):
+        parent = self._maybe_parent()
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            html = web_rendering.page_html(
+                [parent],
+                {"stage": ["worth"], "view": ["review"]},
+                base / "review.csv",
+                parents_dir=base / "parents",
+                dossier_dir=base / "dossiers",
+                manifest_path=base / "review" / "manifest.json",
+                enrichment_manifest_path=base / "research" / "manifest.json",
+            ).decode("utf-8")
+            self.assertIn("Jordan Bravo", html)
+            self.assertIn("data-complete='worth'", html)
+            self.assertIn("Continue with 1 undecided", html)
+
+            progress = web_workflow.review_progress([parent])
+            web_workflow.write_review_manifest(
+                "worth",
+                "completed",
+                progress,
+                path=base / "review" / "manifest.json",
+                review_path=base / "review.csv",
+                synthetic_path=base / "synthetic.csv",
+            )
+            completed = web_rendering.page_html(
+                [parent],
+                {"stage": ["worth"], "view": ["review"]},
+                base / "review.csv",
+                parents_dir=base / "parents",
+                dossier_dir=base / "dossiers",
+                manifest_path=base / "review" / "manifest.json",
+                enrichment_manifest_path=base / "research" / "manifest.json",
+            ).decode("utf-8")
+            self.assertIn("Jordan Bravo", completed)
+            self.assertNotIn("Continue with 1 undecided", completed)
 
     def test_serve_initial_snapshot_uses_every_custom_artifact_path(self):
         with tempfile.TemporaryDirectory() as dd:

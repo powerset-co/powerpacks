@@ -780,27 +780,48 @@ def hydrate_proposed_profiles(parents: list[dict[str, Any]], *,
 def annotate_worth(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
                    facts_dir: Path, connections: set[str] | None = None,
                    index_json: Path | None = None) -> None:
-    """Attach the effective network-worth (user review.csv mark / approved exclude >
-    synthesis-mirrored review.csv llm_worth > default 'maybe') to EVERY row — verdict,
-    candidate, and synthetic alike — plus the machine's own view (for the secondary
-    text and the unified Rejected grouping). The mark's review.csv key is the primary
-    candidate's LinkedIn pub for verdict rows, else the row's person_id.
-
-    Also stamps each parent with its worth_view row (``parent["worth_row"]``) —
-    the single worth-section truth (see worth_view.py's header). Every worth
-    predicate/count reads the stamp; nothing else may decide worth visibility."""
-    by_pid = worth_view.rows_by_person_id(worth_view.rows_from(
+    """Attach one canonical parent worth row to every representation of that person."""
+    worth_rows = worth_view.rows_from(
         facts_dir, overrides,
-        index_json if index_json is not None else worth_view.INDEX_JSON))
+        index_json if index_json is not None else worth_view.INDEX_JSON)
+    by_pid = worth_view.rows_by_person_id(worth_rows)
+    by_slug = {str(row.get("parent_slug") or ""): row for row in worth_rows}
     for p in parents:
-        p["worth_row"] = next(
+        row = by_slug.get(str(p.get("slug") or "")) or next(
             (by_pid[str(pid or "").lower()] for pid in p.get("person_ids") or []
-             if str(pid or "").lower() in by_pid), None)
+             if str(pid or "").lower() in by_pid),
+            None,
+        )
+        p["worth_row"] = row
+        if row is not None:
+            machine = row.get("machine") or {
+                "decision": "maybe", "reason": "", "source": "default",
+            }
+            human = row.get("human") or {}
+            worth = {
+                "decision": str(row.get("effective") or "maybe"),
+                "reason": (
+                    str(human.get("reason") or "")
+                    if row.get("source") == "user"
+                    else str(machine.get("reason") or "")
+                ),
+                "source": str(row.get("source") or "default"),
+            }
+            p["worth"], p["machine_worth"] = worth, machine
+            p["connection"] = any(
+                str(pid or "").lower() in (connections or set())
+                for pid in p.get("person_ids") or []
+            )
     for p in parents:
         cands = p["candidates"]
         if not cands:
             continue
         primary = min(cands, key=_cand_rank) if len(cands) > 1 else cands[0]
+        if p.get("worth_row") is not None:
+            primary["worth"] = p["worth"]
+            primary["machine_worth"] = p["machine_worth"]
+            primary["worth_key"] = str(p["worth_row"]["key"])
+            continue
         excluded = next((cand for cand in cands
                          if str(cand.get("action") or "").strip().lower() == "exclude"
                          and str(cand.get("approved") or "").strip().lower() in APPLIED_APPROVED), None)
@@ -1069,6 +1090,9 @@ def extend_and_annotate(parents: list[dict[str, Any]], overrides: dict[str, dict
 
 
 def _worth_key(parent: dict[str, Any]) -> str:
+    row = parent.get("worth_row") or {}
+    if row.get("key"):
+        return str(row["key"])
     primary = _primary_candidate(parent)
     return str(primary.get("worth_key") or (parent.get("person_ids") or [""])[0] or "")
 

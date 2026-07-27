@@ -43,6 +43,7 @@ from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     FACTS_DIR,
     INDEX_JSON,
+    LINKEDIN_OVERRIDES_CSV,
     MERGE_CSV,
     OWNER_JSON,
     PARENTS_DIR,
@@ -383,7 +384,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             md.unlink()
             orphans += 1
 
-    write_index(Path(args.index_json), index)
+    index_json = Path(args.index_json)
+    write_index(index_json, index)
+    # Parent construction is the first point where canonical membership exists.
+    # Mirror child synthesis worth and migrate legacy human marks into one
+    # parent-owned review.csv row while those memberships are authoritative.
+    from packs.ingestion.primitives.deep_context.worth_view import sync_parent_worth_rows
+
+    review_csv = str(getattr(args, "review_csv", "") or "").strip()
+    worth_sync = (
+        sync_parent_worth_rows(Path(review_csv), facts_dir, index_json)
+        if review_csv
+        else {
+            "parent_rows": 0,
+            "human_migrated": 0,
+            "legacy_marks_cleared": 0,
+            "stale_parent_rows_removed": 0,
+        }
+    )
     manifest = {
         "source": "build_parents",
         "status": "completed",
@@ -394,6 +412,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "owner_excluded": owner_excluded,
         "owner_aliases_added": owner_aliases_added,
         "orphans_removed": orphans,
+        "worth_parent_rows": worth_sync["parent_rows"],
+        "worth_human_migrated": worth_sync["human_migrated"],
+        "worth_legacy_marks_cleared": worth_sync["legacy_marks_cleared"],
+        "worth_stale_parent_rows_removed": worth_sync["stale_parent_rows_removed"],
         "parents_dir": str(parents_dir),
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "updated_at": now_iso(),
@@ -429,6 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--facts-dir", default=str(FACTS_DIR))
     p.add_argument("--raw-dir", default=str(RAW_DIR))
     p.add_argument("--parents-dir", default=str(PARENTS_DIR))
+    p.add_argument("--review-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     p.add_argument("--confirm-threshold", type=float, default=0.85,
                    help="Min judge confidence to merge a child into the parent (else listed as needs-review)")
     return p

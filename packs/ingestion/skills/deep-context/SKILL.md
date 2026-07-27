@@ -161,11 +161,14 @@ common case) — just run it, keep this cost gate out of the user-facing task co
 Only when the ceiling is **$25 or more** do you pause: show the contact count and
 cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
-printed by `dry` — do not invent a different scope. Synthesis also produces an initial `network_worth`
-recommendation and reason, then always mirrors that machine verdict into
-`review.csv.llm_worth` / `llm_worth_reason` unless that person already has a
-human Yes/No. Normal repeated synthesis rejudges only missing/Maybe machine
-verdicts; machine Yes/No and human Yes/No are stable.
+printed by `dry` — do not invent a different scope. Synthesis also produces an
+initial `network_worth` recommendation and reason in each
+`facts/<person_id>.jsonl`, then mirrors that child machine verdict into
+`review.csv.llm_worth` / `llm_worth_reason`. After canonicalization, `parents`
+aggregates child verdicts in priority order (`Yes > Maybe > No`) into one
+parent-keyed worth row in the same `review.csv`. Human review writes only that
+row's authoritative `network_worth`. Normal repeated synthesis rejudges only
+missing/Maybe machine verdicts; machine Yes/No and human Yes/No are stable.
 
 Worth uses message context and contact identifiers only — never LinkedIn:
 
@@ -335,10 +338,12 @@ The main Review tab shows only people the model marked `maybe`, one at a time
 with Yes/No. The Yes and No tabs are paginated, editable tables with one action
 per row: No from the Yes table and Yes from the No table.
 Model Yes starts in Yes; model No, user No, and legacy Exclude share No.
-When the final maybe is answered, the server writes People completion
-automatically and the browser goes straight to Enrich Contacts, where an
-indeterminate "Preparing enrichment" bar remains visible until the next
-manifest state arrives.
+When the final Maybe is answered, the server writes People completion
+automatically. The user may also click **Continue with N undecided** at any
+time. Those unresolved parents remain Maybe and stay reviewable, but they do
+not block the workflow and are excluded from the Yes-only enrichment selection.
+The browser then opens Enrich Contacts, where an indeterminate "Preparing
+enrichment" bar remains visible until the next manifest state arrives.
 
 The wait command is the read-only deterministic primitive — it reads
 CSVs/manifests and emits one `next_action`; it does not mutate files, open a

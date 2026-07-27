@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.apply_retargets import CARRY_COLUMNS
+from packs.ingestion.primitives.deep_context import worth_view
 from packs.ingestion.primitives.deep_context.candidates import (
     candidate_carry,
     candidate_person_id,
@@ -39,6 +40,7 @@ from packs.ingestion.primitives.deep_context.candidates import (
 )
 from packs.ingestion.primitives.deep_context.common import (
     ENRICH_MANIFEST,
+    FACTS_DIR,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     VERDICTS_JSONL,
@@ -355,6 +357,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     ap.add_argument("--index-json", default=str(INDEX_JSON),
                     help="Deep-context index.json (child->current-parent membership) for re-keying merged parents")
+    ap.add_argument("--facts-dir", default=str(FACTS_DIR))
     ap.add_argument("--auto-completeness", type=float, default=DEFAULT_AUTO_COMPLETENESS,
                     help="Research completeness at/above this auto-approves the row (default %(default)s)")
     ap.add_argument("--manifest", help="Fixed Enrich Contacts manifest (defaults on the canonical research path)")
@@ -375,6 +378,9 @@ def main(argv: list[str] | None = None) -> None:
     existing = load_rows(Path(args.out))
     verdict_provenance = load_verdict_provenance(Path(args.verdicts_jsonl))
     overrides = load_override_rows(LINKEDIN_OVERRIDES_CSV)
+    parent_worth = worth_view.rows_by_person_id(
+        worth_view.rows_from(Path(args.facts_dir), overrides, Path(args.index_json))
+    )
 
     # The output is fixed and overwrite-in-place. Rebuild machine-owned rows
     # only from this queue; otherwise an old model-Yes synthetic could survive
@@ -490,7 +496,13 @@ def main(argv: list[str] | None = None) -> None:
             if crow:
                 original = candidate_carry(crow)
                 person_id = candidate_person_id(crow.get("candidate_key", ""))
-        if is_candidate_id(person_id) and effective_network_worth(person_id, overrides)["decision"] == "no":
+        worth_row = parent_worth.get(str(person_id).lower())
+        worth_decision = (
+            str(worth_row.get("effective") or "maybe")
+            if worth_row is not None
+            else effective_network_worth(person_id, overrides)["decision"]
+        )
+        if is_candidate_id(person_id) and worth_decision == "no":
             worth_no += 1  # user/LLM said not worth adding — never mint a synthetic row
             continue
         row = build_synthetic_row(
