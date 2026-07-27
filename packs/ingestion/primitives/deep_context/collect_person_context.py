@@ -3,7 +3,8 @@
 For each person in the merged people.csv who has any message channel, stream a
 recent, adaptively-sampled window of their actual message BODIES into one
 ephemeral JSON bundle per person. Only people with >= 1 message produce a bundle;
-zero-interaction contacts are skipped.
+zero-interaction contacts are skipped. A full run removes bundles whose people
+left the current merged input; scoped runs never prune unrelated bundles.
 
 Reads message bodies - that deep inspection is the whole point. iMessage and
 WhatsApp read DMs by default. The explicit ``--include-groups`` option also reads
@@ -19,6 +20,7 @@ Outputs (fixed dir, overwrite in place):
   <out-dir>/manifest.json      counts/status/privacy
 
 Changelog:
+  2026-07-27: full collection removes raw bundles absent from the current people input.
   2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -238,11 +240,13 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     with_context = 0
     capped = 0
     skipped_existing = 0
+    selected_person_ids: set[str] = set()
     channel_counts = {"gmail": 0, "imessage": 0, "whatsapp": 0}
     total_messages = 0
     try:
         for person in selected_people(args, people_csv):
             people_total += 1
+            selected_person_ids.add(person.person_id)
             bundle_path = out_dir / f"{person.person_id}.json"
             if bundle_path.exists() and not args.force and not args.dry_run:
                 existing = _load_bundle(bundle_path)
@@ -299,6 +303,14 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         if store is not None:
             store.close()
 
+    orphan_bundles_removed = 0
+    if not args.dry_run and not args.person and not args.limit:
+        for bundle_path in out_dir.glob("*.json"):
+            if bundle_path.name == "manifest.json" or bundle_path.stem in selected_person_ids:
+                continue
+            bundle_path.unlink()
+            orphan_bundles_removed += 1
+
     elapsed_s = max(time.monotonic() - started, 1e-6)
     retained_group_messages, retained_max_group_size = _retained_group_policy(out_dir)
     group_access_requested = bool(args.include_groups)
@@ -321,6 +333,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "groups_included": bool(args.include_groups),
         "max_group_size": args.max_group_size,
         "bundles_purged_for_scope": bundles_purged_for_scope,
+        "orphan_bundles_removed": orphan_bundles_removed,
         "msgvault_available": store is not None or msgvault_db.exists(),
         "chat_db_available": chat_db.exists(),
         "chat_db_probe": chat_probe,

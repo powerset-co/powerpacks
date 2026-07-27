@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context import (
     restart_review,
     sources,
     synthesize_person_context as synth,
+    worth_view,
 )
 from packs.ingestion.primitives.deep_context.review_web import (
     REVIEW_CSS,
@@ -391,6 +392,49 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
             self.assertEqual(manifest["privacy"]["group_source"], "imessage")
             self.assertEqual(manifest["privacy"]["max_group_size"], 12)
 
+    def test_full_collection_removes_bundles_outside_current_people(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw = base / "raw"
+            raw.mkdir()
+            (raw / "retired-person.json").write_text(
+                '{"person_id":"retired-person","messages":[{"text":"old"}],'
+                '"collection_policy":{"deep_cap":10,"include_groups":false,"max_group_size":0}}',
+                encoding="utf-8",
+            )
+            (raw / "manifest.json").write_text(json.dumps({
+                "privacy_schema_version": 2,
+                "privacy": {"group_bodies_present": False},
+            }), encoding="utf-8")
+            people = base / "people.csv"
+            people.write_text(
+                "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n"
+                "current-person,Jordan Bravo,,,+15550100,,imessage\n",
+                encoding="utf-8",
+            )
+            message = {
+                "channel": "imessage", "at": "2026-07-13T00:00:00Z",
+                "direction": "from_them", "text": "hello",
+            }
+            with mock.patch.object(collect, "collect_one", return_value=([message], 1)):
+                manifest = collect.build(_ns(
+                    out_dir=raw,
+                    chat_db=base / "missing-chat.db",
+                    wacli_db=base / "missing-wacli.db",
+                    people_csv=people,
+                    msgvault_db=base / "missing-msgvault.db",
+                    dry_run=False,
+                    limit=0,
+                    person="",
+                    force=False,
+                    deep_cap=10,
+                    include_groups=False,
+                    max_group_size=25,
+                ))
+            self.assertFalse((raw / "retired-person.json").exists())
+            self.assertTrue((raw / "current-person.json").exists())
+            self.assertEqual(manifest["orphan_bundles_removed"], 1)
+
     def test_default_collection_rebuilds_retained_group_bundles(self):
         from unittest import mock
 
@@ -607,6 +651,23 @@ class TestSynthesize(unittest.TestCase):
                 "facts": _facts(network_worth={"decision": "yes", "reason": "real person"}),
             }) + "\n", encoding="utf-8")
             self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id="", review_rows={}), [])
+
+    def test_completed_collection_prunes_orphan_facts_but_scoped_run_does_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            raw, facts = Path(d) / "raw", Path(d) / "facts"
+            raw.mkdir()
+            facts.mkdir()
+            (raw / "current.json").write_text('{"messages":[{"text":"hello"}]}', encoding="utf-8")
+            (raw / "manifest.json").write_text('{"status":"completed"}', encoding="utf-8")
+            (facts / "current.jsonl").write_text("{}\n", encoding="utf-8")
+            orphan = facts / "retired.jsonl"
+            orphan.write_text("{}\n", encoding="utf-8")
+            self.assertEqual(
+                synth.prune_orphan_facts(raw, facts, scoped=True, dry_run=False), 0)
+            self.assertTrue(orphan.exists())
+            self.assertEqual(
+                synth.prune_orphan_facts(raw, facts, scoped=False, dry_run=False), 1)
+            self.assertFalse(orphan.exists())
 
 
 class TestMergeFacts(unittest.TestCase):
@@ -2729,6 +2790,89 @@ class TestUnsilencedNameMatch(unittest.TestCase):
 
 class TestReviewWeb(unittest.TestCase):
     """The parent-grouped review UI: join verdicts.jsonl + review.csv, and decision writes."""
+
+    def test_recent_messages_dedupes_same_evidence_across_merged_children(self):
+        with tempfile.TemporaryDirectory() as dd:
+            raw = Path(dd)
+            duplicate = {
+                "channel": "whatsapp", "at": "2026-01-02T00:00:00Z",
+                "direction": "from_them", "subject": "", "text": "Friendly hello",
+            }
+            write_json(raw / "child-a.json", {"messages": [duplicate]})
+            write_json(raw / "child-b.json", {"messages": [duplicate, {
+                **duplicate, "at": "2026-01-01T00:00:00Z",
+            }]})
+            html = web_rendering._recent_messages_html(
+                {"person_ids": ["child-a", "child-b"]}, raw)
+        self.assertEqual(html.count("Friendly hello"), 2)
+        self.assertEqual(html.count("2026-01-02"), 1)
+        self.assertEqual(html.count("2026-01-01"), 1)
+
+    def test_current_parent_membership_beats_legacy_message_alias(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            pub = "jordan-bravo"
+            retired = worth_view.legacy_message_linkedin_id(pub)
+            phone_id = "candidate:phone:+15550100"
+            for pid, decision in ((retired, "yes"), (phone_id, "maybe")):
+                (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                    "canonical_name": "Jordan Bravo",
+                    "network_worth": {"decision": decision, "reason": "fixture"},
+                }}) + "\n", encoding="utf-8")
+            index = base / "index.json"
+            index.write_text(json.dumps({
+                "slugs": {
+                    "jordan-linked": {"person_id": retired},
+                    "jordan-phone": {"person_id": phone_id},
+                },
+                "parents": {
+                    "jordan-parent": {
+                        "children": ["jordan-linked", "jordan-phone"],
+                    },
+                },
+            }), encoding="utf-8")
+            review = base / "review.csv"
+            reconcile._write_override_rows(review, {pub: {
+                "public_identifier": pub,
+                "person_id": retired,
+            }})
+            web_decisions.apply_worth_decision(review, retired, "yes")
+            rows = worth_view.load(facts, review, index)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["key"], "jordan-parent")
+        self.assertEqual(set(rows[0]["person_ids"]), {retired, phone_id})
+        self.assertEqual(rows[0]["human"]["decision"], "yes")
+        self.assertEqual(worth_view.counts(rows)["pending"], 0)
+
+    def test_legacy_message_alias_still_falls_back_to_durable_parent(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            facts = base / "facts"
+            facts.mkdir()
+            pub = "casey-delta"
+            retired = worth_view.legacy_message_linkedin_id(pub)
+            durable = worth_view.generate_person_id(pub)
+            for pid in (retired, durable):
+                (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                    "canonical_name": "Casey Delta",
+                    "network_worth": {"decision": "yes", "reason": "fixture"},
+                }}) + "\n", encoding="utf-8")
+            index = base / "index.json"
+            index.write_text(json.dumps({
+                "slugs": {"casey-child": {"person_id": durable}},
+                "parents": {"casey-parent": {"children": ["casey-child"]}},
+            }), encoding="utf-8")
+            review = base / "review.csv"
+            reconcile._write_override_rows(review, {pub: {
+                "public_identifier": pub,
+                "person_id": retired,
+            }})
+            rows = worth_view.load(facts, review, index)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["key"], "casey-parent")
+        self.assertEqual(set(rows[0]["person_ids"]), {retired, durable})
 
     def test_serve_initial_snapshot_uses_every_custom_artifact_path(self):
         with tempfile.TemporaryDirectory() as dd:

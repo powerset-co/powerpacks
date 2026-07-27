@@ -19,9 +19,10 @@ The whole logic:
      is shown (see the _build comments).
   2. Identities under the same index.json parent are ONE person -> ONE row
      (never multiple cards for the same human). An identity keyed by the
-     RETIRED message-linkedin recipe folds into its durable sibling (the
-     recipe is a pure function of the review row's pub — an exact key
-     migration, see _legacy_aliases). The newest facts file supplies
+     RETIRED message-linkedin recipe keeps its current indexed parent when
+     present, otherwise it folds into its durable sibling (the recipe is a pure
+     function of the review row's pub — an exact key migration, see
+     _legacy_aliases). The newest facts file supplies
      the machine verdict; ties break by person_id sort.
   3. The human decision is review.csv `network_worth` (an approved `exclude`
      action is also a human no) on ANY of the person's identities; the newest
@@ -189,7 +190,11 @@ def _build(facts_dir: Path, humans: dict[str, tuple[str, str]],
         # A retired-key identity groups AS its durable sibling (rule 2: one
         # person, one row) — via the sibling's index parent when it has one.
         canon = aliases.get(pid.lower(), pid)
-        key = groups.get(canon.lower(), canon)
+        # Current parent membership is authoritative.  A retired
+        # message-linkedin identity may still be a real child of the current
+        # parent; only fall back to its generated durable-id alias when that
+        # retired key is absent from the index.
+        key = groups.get(pid.lower()) or groups.get(canon.lower(), canon)
         person = people.setdefault(key, {"key": key, "person_ids": [], "machine": None,
                                          "_machine_mtime": -1, "name": "", "_owner": False})
         person["person_ids"].append(pid)
