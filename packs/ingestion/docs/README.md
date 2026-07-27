@@ -26,8 +26,8 @@ Each source import writes the same fixed contracts:
 `.powerpacks/network-import/import/<source>/people.csv` (resolved identities)
 and, for gmail/messages, `.../candidates.csv` (the research pool). Shared
 fan-in through `index_contacts_pipeline.py fan-in` merges the people files;
-`$deep-context` consumes the candidate pools, mints approved identities back
-through the override files the merge auto-ingests, and owns the single Modal
+`$deep-context` consumes the candidate pools, persists approved real identities
+from its review artifacts into `directory.csv` before fan-in, and owns the single Modal
 index rebuild. `$setup` (LinkedIn first run) is the one import that still
 builds an index so search works out of the box.
 

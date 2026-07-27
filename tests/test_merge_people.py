@@ -137,6 +137,22 @@ class DirectoryStampTests(unittest.TestCase):
         self.assertEqual(rows[0]["primary_email"], "casey@example.com")  # gained from gmail
         self.assertEqual(json.loads(rows[0]["interaction_counts"]), {"gmail": 12})
 
+    def test_approved_deep_context_mapping_retargets_an_attached_source_row(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            write_directory(base / "directory.csv", [
+                directory_row(source="deep_context_review", email="casey@example.com",
+                              linkedin_url="https://www.linkedin.com/in/casey-correct"),
+            ])
+            write_people(base / "gmail.csv", [
+                {"public_identifier": "casey-wrong", "full_name": "Casey Delta",
+                 "primary_email": "casey@example.com", "linkedin_url": "https://www.linkedin.com/in/casey-wrong"},
+            ])
+            PeopleMerge(inputs=[base / "gmail.csv"], output_dir=base / "out",
+                        directory_csv=base / "directory.csv").run()
+            (row,) = CsvIO.read_dict_rows(base / "out" / "people.csv")
+        self.assertEqual(row["public_identifier"], "casey-correct")
+
 
 class MergeGroupTests(unittest.TestCase):
     def test_first_non_empty_wins_per_scalar_column(self) -> None:

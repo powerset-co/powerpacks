@@ -126,6 +126,37 @@ def directory_slug_lookups(directory_csv: Path) -> tuple[dict[str, str], dict[st
     return emails, phones
 
 
+def deep_context_slug_lookups(directory_csv: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Final review mappings from the shared directory.
+
+    Unlike ordinary directory rows, an approved Deep Context decision is allowed
+    to replace a source row's already-attached slug: that is the purpose of a
+    reviewed retarget.  Other directory sources retain the historical
+    fill-only behavior below.
+    """
+    emails: dict[str, str] = {}
+    phones: dict[str, str] = {}
+    if not directory_csv.exists():
+        return emails, phones
+    for row in CsvIO.read_dict_rows(directory_csv):
+        if str(row.get("source") or "").strip().lower() != "deep_context_review":
+            continue
+        slug = extract_public_identifier(str(row.get("linkedin_url") or "")) or str(
+            row.get("public_identifier") or ""
+        ).strip().lower()
+        if not slug or str(row.get("status") or "").strip().lower() != "found":
+            continue
+        if parse_confidence(row.get("confidence"), 0.0) < MIN_DIRECTORY_CONFIDENCE:
+            continue
+        email = str(row.get("email") or "").strip().lower()
+        if email:
+            emails[email] = slug
+        phone = normalize_phone(row.get("phone") or "")
+        if phone:
+            phones[phone] = slug
+    return emails, phones
+
+
 def directory_slug_for(row: dict[str, str], emails: dict[str, str], phones: dict[str, str]) -> str:
     """The directory's slug for a row's identifiers — every email first, then phones."""
     for email in emails_from_row(row):
@@ -217,6 +248,7 @@ class PeopleMerge:
         """Merge every present input, then write people.csv + manifest.json."""
         started_at = now_iso()
         email_slugs, phone_slugs = directory_slug_lookups(self.directory_csv)
+        review_emails, review_phones = deep_context_slug_lookups(self.directory_csv)
         groups: dict[str, list[dict[str, str]]] = {}
         input_rows: dict[str, int] = {}
         stamped = 0
@@ -227,7 +259,12 @@ class PeopleMerge:
             rows = [normalize_people_row(raw) for raw in CsvIO.read_dict_rows(path)]
             input_rows[str(path)] = len(rows)
             for row in rows:
-                if not row["public_identifier"]:
+                reviewed_slug = directory_slug_for(row, review_emails, review_phones)
+                if reviewed_slug and row["public_identifier"] != reviewed_slug:
+                    row["public_identifier"] = reviewed_slug
+                    row["linkedin_url"] = f"https://www.linkedin.com/in/{reviewed_slug}"
+                    stamped += 1
+                elif not row["public_identifier"]:
                     slug = directory_slug_for(row, email_slugs, phone_slugs)
                     if slug:
                         row["public_identifier"] = slug

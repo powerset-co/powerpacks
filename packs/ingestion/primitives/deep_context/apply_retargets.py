@@ -8,7 +8,9 @@ valid people-schema row. This step does exactly that for every approved retarget
   1. Enrich `new_linkedin_url` cache-first (profile_cache_v2; RapidAPI only on a miss — auto).
   2. Build a people row (valid rapidapi_response + work_experiences/education) and CARRY the
      original contact's emails/phones/interaction_counts so the merge keeps the person whole.
-  3. Write all rows to overrides/retarget-people.csv — which the fan-in merge auto-ingests.
+  3. Write all rows to overrides/retarget-people.csv.  At realization,
+     persist-review-identities writes their approved contact mappings to directory.csv
+     before fan-in merges the sources.
 
 Only rows with action=retarget AND approved ∈ {auto, yes} are applied (a user `no`/pending
 retarget is skipped). Enrichment is automatic (RapidAPI is cache-first + effectively free).
@@ -115,7 +117,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     by_pub, by_id = load_people_index(Path(args.people_csv))
 
     # Marker lifecycle: retarget-people.csv is overwritten each run and the
-    # fan-in merge consumes it, so nothing used to close out the SOURCE row —
+    # realization persistence stage consumes it, so nothing used to close out the SOURCE row —
     # applied retargets kept reading as "pending" forever (and re-enriched on
     # later runs), while proposals whose old identity left the review model
     # became invisible limbo. Reconcile both here, before selecting work:
