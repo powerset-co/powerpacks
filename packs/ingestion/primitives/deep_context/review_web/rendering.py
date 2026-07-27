@@ -838,33 +838,22 @@ def worth_pending_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]
 def worth_search_html(
     view: str,
     pending: list[dict[str, str]] | None = None,
-    *,
-    pending_count: int = 0,
-    allow_incomplete: bool = False,
 ) -> str:
     """The ONE live-search input shared by all worth views (filters as you type;
     never a Search button). The Yes/No tables hide non-matching rows client-side
     with an "N of M" count; the Review card view (``pending`` given) gets a
     typeahead dropdown over the embedded pending queue that jumps straight to a
-    picked person's card via /api/worth-card?pick=. An unfinished Review also
-    offers an explicit handoff that leaves unresolved people as Maybe."""
+    picked person's card via /api/worth-card?pick=."""
     extras = ""
     if pending is not None:
         payload = json.dumps(pending, ensure_ascii=False).replace("<", "\\u003c")
         extras = (f"<script type='application/json' data-worth-pending>{payload}</script>"
                   "<ul class='worth-search-list' data-search-list role='listbox' hidden></ul>")
-    continue_button = ""
-    if allow_incomplete and pending_count > 0:
-        continue_button = (
-            "<button class='button button-outline worth-continue' "
-            "data-complete='worth' data-worth-continue>"
-            f"Continue with {pending_count} undecided</button>"
-        )
     return (f"<div class='worth-search' data-worth-search data-search-view='{esc(view)}'>"
             "<input class='worth-search-input' type='search' placeholder='Search people…' "
             "aria-label='Search people by name' autocomplete='off' spellcheck='false'>"
             "<span class='worth-search-count' data-search-count hidden></span>"
-            f"{continue_button}{extras}</div>")
+            f"{extras}</div>")
 
 
 def render_decision_tabs(progress: dict[str, int], active: str, *, preview: bool = False) -> str:
@@ -1160,16 +1149,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
             # The typeahead lives OUTSIDE the swap panel so card swaps never
             # touch it; its pending queue is embedded once at page render.
             pending = worth_pending_entries(parents)
-            search = (
-                worth_search_html(
-                    "review",
-                    pending,
-                    pending_count=progress["worth_pending"],
-                    allow_incomplete=not worth_complete and not preview,
-                )
-                if pending
-                else ""
-            )
+            search = worth_search_html("review", pending) if pending else ""
         else:
             # Legacy ?page= URLs still land here; the infinite-scroll list always
             # starts from the top and streams the rest via /api/decision-rows.

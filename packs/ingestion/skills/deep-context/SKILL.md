@@ -339,11 +339,10 @@ with Yes/No. The Yes and No tabs are paginated, editable tables with one action
 per row: No from the Yes table and Yes from the No table.
 Model Yes starts in Yes; model No, user No, and legacy Exclude share No.
 When the final Maybe is answered, the server writes People completion
-automatically. The user may also click **Continue with N undecided** at any
-time. Those unresolved parents remain Maybe and stay reviewable, but they do
-not block the workflow and are excluded from the Yes-only enrichment selection.
-The browser then opens Enrich Contacts, where an indeterminate "Preparing
-enrichment" bar remains visible until the next manifest state arrives.
+automatically. The completion endpoint does not reject unresolved Maybes, but
+the UI adds no separate skip control. The browser then opens Enrich Contacts,
+where an indeterminate "Preparing enrichment" bar remains visible until the
+next manifest state arrives.
 
 The wait command is the read-only deterministic primitive — it reads
 CSVs/manifests and emits one `next_action`; it does not mutate files, open a

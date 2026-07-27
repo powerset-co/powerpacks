@@ -3426,7 +3426,7 @@ class TestReviewWeb(unittest.TestCase):
         self.assertEqual(selection["yes"], 1)
         self.assertEqual(selection["maybe"], 1)
 
-    def test_worth_page_can_continue_with_pending_parent(self):
+    def test_worth_page_does_not_add_pending_continue_button(self):
         parent = self._maybe_parent()
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
@@ -3440,29 +3440,8 @@ class TestReviewWeb(unittest.TestCase):
                 enrichment_manifest_path=base / "research" / "manifest.json",
             ).decode("utf-8")
             self.assertIn("Jordan Bravo", html)
-            self.assertIn("data-complete='worth'", html)
-            self.assertIn("Continue with 1 undecided", html)
-
-            progress = web_workflow.review_progress([parent])
-            web_workflow.write_review_manifest(
-                "worth",
-                "completed",
-                progress,
-                path=base / "review" / "manifest.json",
-                review_path=base / "review.csv",
-                synthetic_path=base / "synthetic.csv",
-            )
-            completed = web_rendering.page_html(
-                [parent],
-                {"stage": ["worth"], "view": ["review"]},
-                base / "review.csv",
-                parents_dir=base / "parents",
-                dossier_dir=base / "dossiers",
-                manifest_path=base / "review" / "manifest.json",
-                enrichment_manifest_path=base / "research" / "manifest.json",
-            ).decode("utf-8")
-            self.assertIn("Jordan Bravo", completed)
-            self.assertNotIn("Continue with 1 undecided", completed)
+            self.assertNotIn("data-complete='worth'", html)
+            self.assertNotIn("Continue with", html)
 
     def test_serve_initial_snapshot_uses_every_custom_artifact_path(self):
         with tempfile.TemporaryDirectory() as dd:

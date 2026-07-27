@@ -640,7 +640,6 @@ input::placeholder { color: var(--muted); }
   white-space: nowrap;
 }
 
-.worth-continue { white-space: nowrap; }
 
 .worth-search-list {
   position: absolute;
