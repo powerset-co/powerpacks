@@ -8,6 +8,14 @@ operations this primitive uses and returns plain dicts in the shapes the rest of
 the module consumes.
 
 Changelog:
+- 2026-07-27: research reuse keys on the researched IDENTITY, not the caller's
+  handle. Result directories are named for the deep-context parent slug, which
+  changes whenever cluster membership changes (parent_id is a digest of the
+  sorted child person-ids) — so a handle-keyed existence check stopped seeing
+  work already paid for and re-submitted it. `filter_already_done` now first
+  re-homes prior results by identity (`adopt_completed_research`). Measured on a
+  real store: 215 completed results, 99 of them unreachable under current slugs,
+  18 people already researched two or three times over.
 - 2026-07-23: Replaced the hand-rolled stdlib (urllib) Parallel HTTP client with the
   official `parallel-web` SDK. Public helpers (PROCESSOR_PRICING_USD,
   filter_already_done, build_input, parallel_to_research_json, …), the CLI surface
@@ -44,6 +52,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -62,6 +71,9 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.shared.csv_io import CsvIO  # noqa: E402
 from packs.ingestion.primitives.imports.common import write_manifest  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
+# The pipeline's canonical phone comparison key — reused so research identity
+# cannot drift from how every other stage compares the same number.
+from packs.ingestion.primitives.deep_context.common import phone_digits  # noqa: E402
 
 
 def load_dotenv(path: Path) -> None:
@@ -571,7 +583,117 @@ def load_queue(path: Path) -> list[dict[str, str]]:
         return list(reader)
 
 
-def filter_already_done(rows: list[dict[str, str]], output_dir: Path) -> tuple[list[dict[str, str]], int]:
+RESULT_FILENAME = "01_research_parallel.json"
+RAW_FILENAME = "00_parallel_raw.json"
+
+
+def research_identity_key(value: str) -> str:
+    """The reuse key for one contact identifier: an email, else a phone digest.
+
+    Deliberately the same normalization on both sides of the reuse check — the
+    queue row's `primary_email`/`phone_e164` and the stored result's
+    `metadata.source_identifier` — because `source_identifier` IS the row value
+    that was researched (`row.primary_email or row.phone_e164 or handle`).
+
+    Phones go through the pipeline's canonical `phone_digits` (which drops a US
+    country code so +1NXX and NXX compare equal) rather than a local rule, so a
+    person cannot key one way here and another way in the dossier layer. The
+    7-digit floor is `normalize_phone`'s: below it a value is not a phone, and
+    keying on it would let junk collide two different people onto one paid
+    result. A slug fallback keys to "" for the same reason — the whole point is
+    to stop keying identity on a mutable slug."""
+    text = str(value or "").strip().lower()
+    if "@" in text:
+        return text
+    digits = phone_digits(text)
+    return digits if len(digits) >= 7 else ""
+
+
+def completed_research_by_identity(output_dir: Path) -> dict[str, Path]:
+    """identity key -> the directory holding that person's PAID research result.
+
+    A result directory is named for the caller's `handle`, which in the
+    deep-context flow is the canonical parent slug — and a parent slug changes
+    whenever its cluster membership changes (`parent_id` is a digest of the
+    sorted child person-ids), or whenever the slug scheme itself changes. A
+    handle-keyed existence check therefore silently stops recognizing work that
+    was already paid for, and the person gets re-submitted.
+
+    The result records the identity it was researched against, so reuse keys on
+    THAT. First directory wins per identity; ties are the same person's result
+    stored under two slugs, which is exactly the duplicate this prevents."""
+    found: dict[str, Path] = {}
+    if not output_dir.exists():
+        return found
+    for person_dir in sorted(output_dir.iterdir()):
+        result = person_dir / RESULT_FILENAME
+        if not person_dir.is_dir() or not result.is_file():
+            continue
+        try:
+            profile = json.loads(result.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        metadata = profile.get("metadata") or {}
+        social = profile.get("social") or {}
+        for value in (metadata.get("source_identifier"), social.get("primary_email"),
+                      social.get("primary_phone")):
+            key = research_identity_key(value)
+            if key:
+                found.setdefault(key, person_dir)
+    return found
+
+
+def adopt_completed_research(rows: list[dict[str, str]], output_dir: Path) -> int:
+    """Copy already-paid results to the handles THIS run will look under.
+
+    Returns how many rows were served from a differently-keyed prior result.
+
+    Copy, never move: the paid artifact keeps its original location too, so a
+    stale reference (an older queue CSV, a verdict row) still resolves and no
+    paid data can be lost by a rename. Copying also makes this idempotent —
+    a second run finds the result already in place and does nothing.
+
+    Materializing the file (rather than only skipping the row) is what keeps the
+    four independent readers of `<handle>/01_research_parallel.json` working:
+    the retarget proposer, the synthetic assembler, the review app's pending
+    count, and this module's own submit path."""
+    index = completed_research_by_identity(output_dir)
+    if not index:
+        return 0
+    adopted = 0
+    for row in rows:
+        handle = candidate_handle(row)
+        target = output_dir / handle
+        if (target / RESULT_FILENAME).is_file():
+            continue
+        source = next(
+            (index[key] for key in
+             (research_identity_key(row.get("primary_email") or ""),
+              research_identity_key(row.get("phone_e164") or ""))
+             if key and key in index),
+            None,
+        )
+        if source is None or source == target:
+            continue
+        target.mkdir(parents=True, exist_ok=True)
+        for name in (RESULT_FILENAME, RAW_FILENAME):
+            if (source / name).is_file() and not (target / name).exists():
+                shutil.copy2(source / name, target / name)
+        adopted += 1
+    return adopted
+
+
+def filter_already_done(rows: list[dict[str, str]], output_dir: Path,
+                        *, adopt: bool = True) -> tuple[list[dict[str, str]], int]:
+    """Split the queue into (still to research, already done).
+
+    `adopt` first re-homes results whose handle changed since they were paid
+    for, so re-clustering a person never re-bills them. It defaults on for every
+    caller — estimate, submit, run, and the deep-context orchestrator — because
+    a single path that skips it is a path that spends money on work already
+    done. Pass `adopt=False` only to observe raw handle-keyed state."""
+    if adopt:
+        adopt_completed_research(rows, output_dir)
     todo: list[dict[str, str]] = []
     skipped = 0
     seen: set[str] = set()
@@ -580,7 +702,7 @@ def filter_already_done(rows: list[dict[str, str]], output_dir: Path) -> tuple[l
         if handle in seen:
             continue
         seen.add(handle)
-        if (output_dir / handle / "01_research_parallel.json").exists():
+        if (output_dir / handle / RESULT_FILENAME).exists():
             skipped += 1
             continue
         copy = dict(row)
