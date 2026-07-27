@@ -37,8 +37,19 @@ Flow (Node.run):
                             -> yes -> execute() -> completed? -> every declared
                                output present, header == its row model -> stats
                                from the declarations -> manifest
+  execute() raises          -> typed Failed manifest written, exception re-raised
+                               (the process still exits nonzero)
 
 Changelog:
+  2026-07-26 (failed manifest): `run()` catches `Exception` and `SystemExit` from
+    `execute()` (and from output validation), writes a typed `Failed` manifest
+    (`status: "failed"`, `stage`, `error`), then RE-RAISES. Before this, a raise
+    left the PREVIOUS run's manifest in place presenting as success — verified
+    with a corrupt/missing msgvault db, whose `MsgvaultStore.connect` raises
+    `SystemExit` past discover's `except ValueError`, after which
+    `gmail_artifacts_from_discovery` happily read the stale manifest. The db is
+    declared `required=False` (legitimately absent before first sync), so the
+    NotReady precheck cannot catch it.
   2026-07-26 (per-node IO stats): `Node.run()` returns the typed `StageManifest`
     instead of the written manifest dict (which unblocked converting the enrich
     stage's store, whose caller consumes the payload by attribute), and
@@ -85,6 +96,7 @@ from packs.shared.csv_io import CsvIO  # noqa: E402
 
 STATUS_COMPLETED = "completed"
 STATUS_NOT_READY = "not_ready"
+STATUS_FAILED = "failed"
 
 
 class ContractError(RuntimeError):
@@ -114,6 +126,17 @@ class NotReady(StageManifest):
     status: str = STATUS_NOT_READY
     reason: str = "missing_inputs"
     missing_inputs: tuple[str, ...] = ()
+
+
+class Failed(StageManifest):
+    """The manifest `Node.run()` writes when `execute()` (or output validation)
+    raises — so a crashed run leaves `status: "failed"` on disk instead of
+    silently keeping the previous run's manifest. Written, never returned:
+    `run()` re-raises the exception after writing it."""
+
+    stage: str = ""
+    status: str = STATUS_FAILED
+    error: str = ""
 
 
 class RowModel(BaseModel):
@@ -278,14 +301,24 @@ class Node(ABC):
         (to nest the payload in a parent manifest, or to emit it) calls
         `to_payload()`. Returning the dict is what kept the enrich stage's store
         out of this template — its caller consumes `.status`/`.counts`/`.artifacts`
-        off the typed manifest."""
+        off the typed manifest.
+
+        A raise from `execute()` writes a typed `Failed` manifest and RE-RAISES:
+        the previous run's manifest must not stay on disk presenting as success
+        (a corrupt msgvault db raises `SystemExit` from `MsgvaultStore.connect`,
+        which nothing below catches), and the caller must still see the traceback
+        and a nonzero exit."""
         missing = [item.path for item in self.resolved(self.inputs) if item.required and not _readable(item.path)]
         if missing:
             payload: StageManifest = NotReady(stage=self.name, missing_inputs=tuple(missing))
         else:
-            payload = self.execute()
-            if payload.status == STATUS_COMPLETED:
-                self.verify_outputs()
+            try:
+                payload = self.execute()
+                if payload.status == STATUS_COMPLETED:
+                    self.verify_outputs()
+            except (Exception, SystemExit) as exc:
+                self._write(Failed(stage=self.name, error=str(exc) or type(exc).__name__))
+                raise
         self._write(payload)
         return payload
 

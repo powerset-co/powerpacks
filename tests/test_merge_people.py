@@ -70,6 +70,19 @@ class KeyAndIdTests(unittest.TestCase):
         row = person(primary_email="casey@example.com", primary_phone="+15550100")
         self.assertEqual(group_key(row), "candidate:email:casey@example.com")
 
+    def test_an_existing_candidate_id_is_kept_verbatim_not_recomputed(self) -> None:
+        # A row already addressed as candidate:phone:... must not be re-keyed to
+        # candidate:email:... the moment it gains an email — that silently changes
+        # its person_id and strands its facts/ file and review row.
+        row = person(id="candidate:phone:+15550100",
+                     primary_email="casey@example.com", primary_phone="+15550100")
+        self.assertEqual(group_key(row), "candidate:phone:+15550100")
+        self.assertEqual(person_id_for(group_key(row)), "candidate:phone:+15550100")
+        # A slug still outranks the carried id: promotion to LinkedIn is the
+        # one legitimate re-key.
+        promoted = person(id="candidate:phone:+15550100", public_identifier="jordan-bravo")
+        self.assertEqual(group_key(promoted), "linkedin:jordan-bravo")
+
     def test_a_row_with_no_slug_email_or_phone_is_unkeyable(self) -> None:
         self.assertEqual(group_key(person(full_name="Jordan Bravo")), "")
 

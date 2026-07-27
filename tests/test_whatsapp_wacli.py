@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -503,6 +504,17 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(mod.WACLI_PINNED_VERSION, "v0.14.0-fullsync")
         self.assertIn("powerset-co/wacli/releases/download", mod.WACLI_RELEASE_BASE)
 
+    def test_every_asset_of_the_pinned_version_has_a_sha256_pin(self) -> None:
+        pins = mod.WACLI_ASSET_SHA256["v0.14.0-fullsync"]
+        self.assertEqual(
+            sorted(pins),
+            ["wacli-darwin-amd64", "wacli-darwin-arm64",
+             "wacli-linux-amd64", "wacli-linux-arm64"],
+        )
+        for asset, value in pins.items():
+            with self.subTest(asset=asset):
+                self.assertRegex(value, r"^[0-9a-f]{64}$")
+
     def test_wacli_asset_name_and_download_url_by_platform(self) -> None:
         with mock.patch.object(mod.platform, "system", return_value="Darwin"), \
              mock.patch.object(mod.platform, "machine", return_value="arm64"):
@@ -555,30 +567,31 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 with mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"):
                     self.assertFalse(mod.wacli_pinned_current())
 
-    def test_ensure_wacli_auto_downloads_even_with_no_install(self) -> None:
-        # The pinned fork is our own component, so it auto-downloads regardless of
-        # the --no-install flag (which only ever gated the old brew path).
+    def test_ensure_wacli_with_no_install_never_downloads(self) -> None:
+        # status/logout are report-only surfaces: install=False must never pull
+        # the ~33MB release asset (it used to — the flag was a documented no-op,
+        # so a bare `status` on a fresh machine downloaded the binary).
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
             binp, stamp = self._fake_install(td)
             stamp.write_text("v0.13.0-fullsync\n")  # installed = old pin (stale)
-            got = {}
-
-            def fake_download(url, dest, *, timeout=120):
-                got["url"] = url
-                Path(dest).write_text("#!/bin/sh\n")
-
             with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
                  mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
                  mock.patch.object(mod, "WACLI_BIN_DIR", td), \
                  mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
-                 mock.patch.object(mod.platform, "system", return_value="Darwin"), \
-                 mock.patch.object(mod.platform, "machine", return_value="arm64"), \
-                 mock.patch.object(mod, "download_file", side_effect=fake_download), \
-                 mock.patch.object(mod, "wacli_version", return_value={"path": str(binp), "version": "0.14.0", "pinned": True}):
-                mod.ensure_wacli_installed(install=False)  # --no-install still auto-downloads
-            self.assertTrue(got["url"].endswith("/v0.14.0-fullsync/wacli-darwin-arm64"))
-            self.assertEqual(stamp.read_text().strip(), "v0.14.0-fullsync")
+                 mock.patch.object(mod, "download_file") as download, \
+                 mock.patch.object(mod, "wacli_version", return_value={"path": str(binp), "version": "0.13.0", "pinned": True}):
+                # A stale-pin binary is reported as-is, not refreshed.
+                out = mod.ensure_wacli_installed(install=False)
+                self.assertEqual(out["version"], "0.13.0")
+                self.assertEqual(stamp.read_text().strip(), "v0.13.0-fullsync")
+                # A missing binary is reported as blocked, not fetched.
+                with mock.patch.object(mod, "WACLI_PINNED_BIN", td / "absent"), \
+                     mock.patch.object(mod.shutil, "which", return_value=None):
+                    with self.assertRaises(mod.PrimitiveBlocked) as ctx:
+                        mod.ensure_wacli_installed(install=False)
+            download.assert_not_called()
+            self.assertIn("wacli is not installed", ctx.exception.payload["message"])
 
     def test_ensure_wacli_blocks_on_unsupported_platform(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -590,10 +603,10 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                  mock.patch.object(mod.platform, "system", return_value="Windows"), \
                  mock.patch.object(mod.platform, "machine", return_value="AMD64"):
                 with self.assertRaises(mod.PrimitiveBlocked) as ctx:
-                    mod.ensure_wacli_installed(install=False)
+                    mod.ensure_wacli_installed(install=True)
             self.assertIn("No prebuilt wacli", ctx.exception.payload["message"])
 
-    def test_ensure_wacli_downloads_on_pin_bump_and_restamps(self) -> None:
+    def test_ensure_wacli_downloads_on_pin_bump_verifies_and_restamps(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
             binp, stamp = self._fake_install(td)
@@ -604,10 +617,14 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 got["url"] = url
                 Path(dest).write_text("#!/bin/sh\n")
 
+            pins = {"v0.14.0-fullsync": {
+                "wacli-linux-amd64": hashlib.sha256(b"#!/bin/sh\n").hexdigest(),
+            }}
             with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
                  mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
                  mock.patch.object(mod, "WACLI_BIN_DIR", td), \
                  mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
+                 mock.patch.object(mod, "WACLI_ASSET_SHA256", pins), \
                  mock.patch.object(mod.platform, "system", return_value="Linux"), \
                  mock.patch.object(mod.platform, "machine", return_value="x86_64"), \
                  mock.patch.object(mod, "download_file", side_effect=fake_download), \
@@ -616,6 +633,36 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertTrue(got["url"].endswith("/v0.14.0-fullsync/wacli-linux-amd64"))
             self.assertEqual(stamp.read_text().strip(), "v0.14.0-fullsync")
             self.assertEqual(out["version"], "0.14.0")
+
+    def test_a_checksum_mismatch_deletes_the_download_and_blocks(self) -> None:
+        # The integrity gate sits between download and trust: a corrupted or
+        # tampered asset is deleted before it can be chmod +x'd or run, the
+        # stamp is not written, and the failure names both hashes.
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            binp = td / "wacli"
+            stamp = td / ".wacli-version"
+            pins = {"v0.14.0-fullsync": {
+                "wacli-darwin-arm64": hashlib.sha256(b"the release asset").hexdigest(),
+            }}
+            with mock.patch.object(mod, "WACLI_PINNED_BIN", binp), \
+                 mock.patch.object(mod, "WACLI_VERSION_STAMP", stamp), \
+                 mock.patch.object(mod, "WACLI_BIN_DIR", td), \
+                 mock.patch.object(mod, "WACLI_PINNED_VERSION", "v0.14.0-fullsync"), \
+                 mock.patch.object(mod, "WACLI_ASSET_SHA256", pins), \
+                 mock.patch.object(mod.platform, "system", return_value="Darwin"), \
+                 mock.patch.object(mod.platform, "machine", return_value="arm64"), \
+                 mock.patch.object(mod, "download_file",
+                                   side_effect=lambda url, dest, *, timeout=120: Path(dest).write_bytes(b"tampered")), \
+                 mock.patch.object(mod, "wacli_version") as version:
+                with self.assertRaises(mod.PrimitiveBlocked) as ctx:
+                    mod.ensure_wacli_installed(install=True)
+            version.assert_not_called()  # never ran the untrusted file
+            self.assertFalse(binp.exists())  # deleted on mismatch
+            self.assertFalse(stamp.exists())  # not stamped -> next run retries
+            message = ctx.exception.payload["message"]
+            self.assertIn("failed sha256 verification", message)
+            self.assertIn(hashlib.sha256(b"tampered").hexdigest(), message)
 
     def test_ensure_wacli_command_reports_action_and_version(self) -> None:
         # already current -> action "current"
@@ -662,6 +709,39 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         payload = json.loads(buf.getvalue())
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(payload["error"], "RuntimeError: boom")
+
+    def test_status_exit_reflects_payload_status_not_pairing(self) -> None:
+        # A healthy install that simply is not paired yet says "ok" in the
+        # payload and must exit 0 (the pairing state is IN the payload); it used
+        # to exit 1, making "installed, needs QR" look like a failure.
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td)
+            buf = io.StringIO()
+            with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "status", "--store", str(store)]), \
+                 mock.patch.object(mod, "ensure_wacli_installed", return_value={"pinned": True}), \
+                 mock.patch.object(mod, "auth_status", return_value={"authenticated": False}), \
+                 mock.patch.object(mod, "wacli_json", return_value={}), \
+                 redirect_stdout(buf):
+                rc = mod.main()
+            self.assertEqual(rc, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["status"], "ok")
+            self.assertFalse(payload["auth"]["authenticated"])
+
+    def test_status_on_a_machine_without_wacli_reports_blocked_never_downloads(self) -> None:
+        blocked = mod.PrimitiveBlocked({"status": "blocked_user_action", "message": "wacli is not installed"})
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td)
+            buf = io.StringIO()
+            with mock.patch.object(mod.sys, "argv", ["whatsapp_wacli.py", "status", "--store", str(store)]), \
+                 mock.patch.object(mod, "ensure_wacli_installed", side_effect=blocked) as ensure, \
+                 mock.patch.object(mod, "download_file") as download, \
+                 redirect_stdout(buf):
+                rc = mod.main()
+            ensure.assert_called_once_with(install=False)
+            download.assert_not_called()
+            self.assertEqual(rc, 20)
+            self.assertEqual(json.loads(buf.getvalue())["status"], "blocked_user_action")
 
     def test_pairing_full_sync_status_detects_pre_full_sync_session(self) -> None:
         with tempfile.TemporaryDirectory() as td:

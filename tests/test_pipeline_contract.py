@@ -142,6 +142,32 @@ class RunTemplateTests(unittest.TestCase):
             self.assertIn("header drifted from PeopleRow", message)
             self.assertIn("unexpected=['nickname']", message)
 
+    def test_a_raising_execute_leaves_a_failed_manifest_and_still_raises(self) -> None:
+        # The verified failure mode: MsgvaultStore.connect raises SystemExit on a
+        # corrupt/missing db (declared required=False, so the NotReady precheck
+        # cannot catch it), nothing below run() caught it, and the PREVIOUS run's
+        # manifest stayed on disk presenting as success.
+        with tempfile.TemporaryDirectory() as td:
+            manifest_json = Path(td) / "manifest.json"
+
+            class Crasher(Node):
+                name = "crasher"
+                inputs = ()
+                outputs = ()
+                payload = _Payload
+                manifest = str(manifest_json)
+
+                def execute(self) -> _Payload:
+                    raise SystemExit("msgvault database not found: corrupt.db")
+
+            with self.assertRaises(SystemExit) as caught:
+                Crasher().run()
+            self.assertIn("msgvault database not found", str(caught.exception))
+            written = json.loads(manifest_json.read_text(encoding="utf-8"))
+            self.assertEqual(written["status"], "failed")
+            self.assertEqual(written["stage"], "crasher")
+            self.assertIn("msgvault database not found", written["error"])
+
     def test_missing_required_input_is_not_ready_not_an_exception(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "upstream.csv"
@@ -376,7 +402,27 @@ class GraphCheckTests(unittest.TestCase):
                 return _Payload()
 
         report = check_graph([First, Second])
-        self.assertEqual(sorted(report["cycles"]), [["first", "second", "first"], ["second", "first", "second"]])
+        # One loop, ONE entry: the cycle is canonicalized (rotated to its
+        # lexicographically-smallest member), not reported once per start node.
+        self.assertEqual(report["cycles"], [["first", "second", "first"]])
+
+    def test_two_back_edges_collapse_to_exactly_two_cycles(self) -> None:
+        from packs.ingestion.primitives.pipeline.graph import find_cycles
+
+        # The historical shape: two real 2-cycles (the matcher's merged-catalog
+        # default and the WhatsApp extractor's name-fallback default), which the
+        # un-canonicalized DFS rendered once per member and path variant — 2
+        # back-edges as 23 report entries. Canonicalized: one entry per loop.
+        edges = {
+            "match": ["merge"],
+            "merge": ["im_extract", "match", "wa_extract"],
+            "wa_extract": ["merge"],
+            "im_extract": [],
+        }
+        self.assertEqual(find_cycles(edges), [
+            ["match", "merge", "match"],
+            ["merge", "wa_extract", "merge"],
+        ])
 
     def test_the_converted_subset_reports_no_conflicts_or_cycles(self) -> None:
         from packs.ingestion.primitives.discover.gmail.discover import (

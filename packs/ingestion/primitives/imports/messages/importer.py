@@ -37,6 +37,13 @@ reads OTHER sources' directory rows to decide its own resolutions, so there it
 is a real input.
 
 Changelog:
+  2026-07-26 (dead minting branch deleted): the `legacy_message_linkedin_id`
+    fallback in `contact_row_to_messages_people` was unreachable — the only
+    caller (`selected_contacts_people`) guards on a non-empty
+    `matched_person_id`, so the `or` always short-circuited — and its comment
+    described a case the guard makes impossible. Deleted; the matched-row id is
+    `matched_person_id or generate_person_id(pub)`. The recipe's definition in
+    `people_schema` and worth_view's folding of already-stranded ids stay.
   2026-07-25 (declared contract): `MessagesImport` is a `pipeline/contract.py`
     `Node` — it DECLARES its two inputs and two outputs instead of only opening
     them, the gate sequence moved from `run()` to `execute()` (`run()` is the
@@ -91,7 +98,6 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     extract_public_identifier,
     generate_person_id,
     latest_interaction,
-    legacy_message_linkedin_id,
     merge_interaction_counts,
     normalize_linkedin_url,
     normalize_people_row,
@@ -169,12 +175,15 @@ def contact_row_to_messages_people(
     interaction_counts = contact_interaction_counts(row)
     people = {
         # The durable directory id is a pure function of the pub, so a matched
-        # contact gets its FINAL key on first sight. The legacy recipe applies
-        # only for a match whose URL yields no pub, where no durable key
-        # exists to take.
+        # contact gets its FINAL key on first sight. The fallback is for direct
+        # callers only: the one production caller (`selected_contacts_people`)
+        # guards on a non-empty matched_person_id, so it always short-circuits
+        # there — which is also why the retired `message-linkedin:` minting
+        # branch that used to sit behind it was unreachable and was deleted
+        # (2026-07-26; `people_schema.legacy_message_linkedin_id` survives
+        # solely so worth_view can FOLD already-stranded ids).
         "id": (row.get("matched_person_id") or "").strip()
-        or (generate_person_id(public_identifier) if public_identifier
-            else legacy_message_linkedin_id(public_identifier, linkedin_url)),
+        or generate_person_id(public_identifier),
         "public_identifier": public_identifier,
         "linkedin_url": linkedin_url,
         "first_name": first_name,

@@ -13,7 +13,8 @@ Flow:
      lookups from its confident `found` rows
   3. for a row with no slug: look it up by email, then by phone, and stamp
      `public_identifier` + `linkedin_url`
-  4. key = `linkedin:<slug>` when a slug is known, else
+  4. key = `linkedin:<slug>` when a slug is known; else the row's own
+     `candidate:` id verbatim when it already carries one; else
      `candidate:<candidate_key_for(primary_email, primary_phone)>`
   5. group by key, union the fields (first non-empty wins per scalar column;
      alias lists / channels / artifacts set-union; interaction counts take the
@@ -27,6 +28,12 @@ distinction the merge makes, and it is a column — not a second file, not an
 admission decision.
 
 Changelog:
+  2026-07-26 (existing candidate ids are kept): `group_key` uses a no-slug row's
+    own `candidate:` id verbatim instead of recomputing `candidate_key_for`
+    (whose email-wins precedence silently re-keyed a phone-keyed person to
+    `candidate:email:...` the moment a merge gained their email — the same
+    stranding shape as the retired `message-linkedin:` ids: facts/ files and
+    review rows left addressing an id nothing produces anymore).
   2026-07-26 (external linkedin input): `import/linkedin/people.csv` is declared
     `external=True`. It is the honest answer to a `phantom_input` report: no node
     in `packs/ingestion` writes that path — the LinkedIn import runs in the Modal
@@ -157,11 +164,20 @@ def directory_slug_for(row: dict[str, str], emails: dict[str, str], phones: dict
 def group_key(row: dict[str, str]) -> str:
     """The identity this row belongs to: its LinkedIn slug, else its contact key.
 
+    A no-slug row that already carries a `candidate:` id keeps that key VERBATIM.
+    The id is a durable identity that `facts/` files and review rows already
+    address, and recomputing `candidate_key_for` (email wins over phone) would
+    silently re-key a phone-keyed person to `candidate:email:...` the moment a
+    fold gives them an email — stranding everything written under the phone key.
+
     Empty only when the row has neither a slug nor an email/phone, which makes it
     unkeyable — there is no identity to merge it onto or to mint an id from."""
     slug = str(row.get("public_identifier") or "").strip().lower()
     if slug:
         return f"{LINKEDIN_KEY_PREFIX}{slug}"
+    existing_id = str(row.get("id") or "").strip()
+    if existing_id.startswith(CANDIDATE_KEY_PREFIX):
+        return existing_id
     contact_key = candidate_key_for(row.get("primary_email", ""), row.get("primary_phone", ""))
     return f"{CANDIDATE_KEY_PREFIX}{contact_key}" if contact_key else ""
 
