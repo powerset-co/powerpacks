@@ -33,6 +33,10 @@ Known behaviors (declared, not fixed here):
   declared pipeline graph ignores it.
 
 Changelog:
+- 2026-07-26 (--no-install means it): the flag is no longer a documented no-op —
+  `whatsapp_wacli.ensure_wacli_installed(install=False)` uses the installed
+  binary as-is and blocks (never downloads) when none is present; the help text
+  here says so.
 - 2026-07-26 (feedback edge removed): `name_fallback_csv` no longer DEFAULTS to
   `.powerpacks/messages/contacts.csv`, the merged output of the stage this
   extractor feeds. That default was the graph's WhatsApp cycle
@@ -837,7 +841,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--sync-timeout", type=int, default=DEFAULT_SYNC_TIMEOUT)
     run.add_argument("--group-info-timeout", type=int, default=60)
     run.add_argument("--group-info-interval", type=float, default=0.2)
-    run.add_argument("--no-install", action="store_true", help="deprecated no-op; the pinned wacli fork always auto-downloads when missing or stale")
+    run.add_argument("--no-install", action="store_true", help="never download the pinned wacli binary; use the installed one, or block if none is present")
     run.add_argument("--no-open-qr-page", action="store_true", help="render QR artifacts without opening the local browser page")
 
     export = sub.add_parser("export", help="export metadata from an existing wacli store without syncing")
