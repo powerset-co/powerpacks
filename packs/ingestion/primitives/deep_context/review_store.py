@@ -12,6 +12,10 @@ Keeping the tiny CSV contract here prevents either LLM stage from becoming the
 other stage's fallback writer.
 
 Changelog:
+  2026-07-27 (declared contract): `ReviewRow` — the pydantic row model generated
+    from OVERRIDE_COLUMNS. The synthesize and reconcile nodes both declare
+    `review.csv` with disjoint `owns_columns` slices, and the graph checker
+    requires one shared row-model OBJECT, so it lives here with the column list.
   2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -22,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.pipeline.contract import row_model_for
 
 
 OVERRIDE_COLUMNS = [
@@ -58,6 +63,12 @@ OVERRIDE_COLUMNS = [
     # Human-owned worth. Machine writers must never change it.
     "network_worth",
 ]
+
+# The declared row shape of review.csv, generated FROM OVERRIDE_COLUMNS so the
+# column list keeps one home. Both writer nodes (synthesize, reconcile) must
+# reference THIS object — the graph checker treats two different row-model
+# objects on one path as a schema mismatch.
+ReviewRow = row_model_for("ReviewRow", OVERRIDE_COLUMNS)
 
 HUMAN_WORTH_VALUES = {"yes", "no"}
 MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}
