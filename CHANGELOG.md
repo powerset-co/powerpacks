@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.2.1...powerpacks-v1.3.0) (2026-07-27)
+
+
+### Features
+
+* **ingestion:** convert deep-context to the declared pipeline contract ([#351](https://github.com/powerset-co/powerpacks/issues/351)) ([b9ea71c](https://github.com/powerset-co/powerpacks/commit/b9ea71c2e1938b8eba2084618150c325429558a5))
+
 ## [1.2.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.2.0...powerpacks-v1.2.1) (2026-07-27)
 
 
