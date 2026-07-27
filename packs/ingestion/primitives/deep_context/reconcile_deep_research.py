@@ -57,7 +57,7 @@ from packs.ingestion.primitives.deep_context.enrichment_contract import (
 )
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
-from packs.ingestion.primitives.deep_context import compose_dossier as compose
+from packs.ingestion.primitives.deep_context import compose_dossier as compose, worth_view
 from packs.ingestion.primitives.deep_context.build_parents import parent_id_for
 from packs.ingestion.primitives.deep_context.candidates import (
     candidate_carry,
@@ -73,6 +73,7 @@ from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     ENRICH_MANIFEST,
     FACTS_DIR,
+    INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     RAW_DIR,
     VERDICTS_JSONL,
@@ -235,7 +236,8 @@ def candidate_subset(facts_dir: Path,
                      overrides: dict[str, dict[str, str]] | None = None,
                      *,
                      worth_skipped: list[str] | None = None,
-                     resolved_candidates: set[str] | None = None) -> list[dict[str, Any]]:
+                     resolved_candidates: set[str] | None = None,
+                     index_json: Path = INDEX_JSON) -> list[dict[str, Any]]:
     """Dossier-bearing import candidates as research subjects (opt-in via
     --include-candidates). Candidates have no resolved LinkedIn by definition;
     eligibility means their facts file exists — the facts ARE the dossier context
@@ -256,12 +258,24 @@ def candidate_subset(facts_dir: Path,
                    and not _is_rejected_retarget(r))
                or (r.get("approved") or "").strip().lower() in USER_APPROVED}
     out: list[dict[str, Any]] = []
+    parent_worth = worth_view.rows_by_person_id(
+        worth_view.rows_from(facts_dir, overrides, index_json)
+    )
     for person in load_candidates():
         pid = person.person_id
         if (pid.lower() in decided or pid.lower() in resolved_candidates
                 or not (facts_dir / f"{pid}.jsonl").exists()):
             continue
-        worth = effective_network_worth(pid, overrides, facts_dir)
+        parent_row = parent_worth.get(pid.lower())
+        worth = (
+            {
+                "decision": str(parent_row.get("effective") or "maybe"),
+                "reason": str((parent_row.get("machine") or {}).get("reason") or ""),
+                "source": str(parent_row.get("source") or "default"),
+            }
+            if parent_row is not None
+            else effective_network_worth(pid, overrides, facts_dir)
+        )
         if worth["decision"] != "yes":
             if worth_skipped is not None:
                 worth_skipped.append(pid)
@@ -662,7 +676,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     worth_skipped: list[str] = []
     candidates = (candidate_subset(
         Path(args.facts_dir), overrides, worth_skipped=worth_skipped,
-        resolved_candidates=resolved_candidates)
+        resolved_candidates=resolved_candidates, index_json=Path(args.index_json))
                   if getattr(args, "include_candidates", False) else [])
     subset += candidates
     people = load_people_rows(Path(args.people_csv))
@@ -841,6 +855,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV))
     p.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     p.add_argument("--facts-dir", default=str(FACTS_DIR))
+    p.add_argument("--index-json", default=str(INDEX_JSON))
     p.add_argument("--raw-dir", default=str(RAW_DIR))
     p.add_argument("--manifest", default=str(ENRICH_MANIFEST),
                    help="Fixed Enrich Contacts progress manifest")

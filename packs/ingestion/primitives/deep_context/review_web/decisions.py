@@ -191,15 +191,17 @@ def carry_forward_multi_option_contacts(
             "emails": contacts["emails"], "phones": contacts["phones"]}
 
 
-def apply_worth_decision(review_path: Path, pub: str, worth: str,
-                         rows: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
-    """Upsert the USER-owned `network_worth` mark for one review.csv row (keyed by the
-    row's key — a verdict row's pub, a candidate/synthetic row's person_id). '' clears
-    the mark (back to the LLM's judgment). Never touches action/approved — with ONE
-    exception: a worth-Yes on an excluded row clears the exclude (an approved exclude
-    IS a user no, so the rescue must clear both stores). ``rows`` lets a caller pass
-    already-parsed override rows (mutated in place) so a hot decision path does not
-    re-read a large review.csv per click."""
+def apply_worth_decision(
+    review_path: Path,
+    pub: str,
+    worth: str,
+    rows: dict[str, dict[str, str]] | None = None,
+    *,
+    person_ids: list[str] | None = None,
+    llm_worth: str = "",
+    llm_worth_reason: str = "",
+) -> dict[str, str]:
+    """Upsert the USER-owned ``network_worth`` on one canonical parent row."""
     pub = (pub or "").strip().lower()
     worth = (worth or "").strip().lower()
     if not pub:
@@ -210,10 +212,19 @@ def apply_worth_decision(review_path: Path, pub: str, worth: str,
         rows = load_override_rows(review_path)
     row = rows.get(pub) or {k: "" for k in OVERRIDE_COLUMNS}
     row["public_identifier"] = pub
+    if person_ids is not None:
+        row["worth_person_ids"] = "|".join(sorted({
+            str(person_id or "").strip().lower()
+            for person_id in person_ids
+            if str(person_id or "").strip()
+        }))
+    if llm_worth in NETWORK_WORTH_VALUES:
+        row["llm_worth"] = llm_worth
+        row["llm_worth_reason"] = llm_worth_reason
     row["network_worth"] = worth
     if worth == "yes" and (row.get("action") or "").strip().lower() == "exclude":
         row["action"], row["approved"] = "", ""
-    row["source"] = row.get("source") or "deep-context-review"
+    row["source"] = row.get("source") or "deep-context-parent-worth"
     row["updated_at"] = now_iso()
     rows[pub] = row
     _write_override_rows(review_path, rows)

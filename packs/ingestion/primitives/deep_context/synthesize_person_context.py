@@ -12,11 +12,16 @@ add no new facts we stop spending. Persons are processed concurrently through a
 bounded pool (``drain_pool``), checkpointed per person so a crash/interrupt
 resumes cleanly.
 
+After a completed full collection, facts without a remaining raw bundle are
+removed before selection so obsolete identities cannot be re-billed. Scoped and
+dry runs never prune the paid cache.
+
 Outputs (fixed dir):
   <out-dir>/<person_id>.jsonl   one line per chunk: {chunk_index, facts, usage}
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-07-27: prune orphan facts only after an authoritative full collection.
   2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -59,6 +64,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     has_human_worth,
     load_override_rows,
     mirror_facts_worth,
+    parent_ids_by_person,
 )
 
 DEFAULT_CHUNK_CHARS = 9000
@@ -471,6 +477,7 @@ def pending_target_paths(
     both caches; the review writer still preserves the human-owned column."""
     paths: list[Path] = []
     rows = review_rows or {}
+    parent_ids = parent_ids_by_person(facts_dir.parent / "index.json")
     for path in sorted(raw_dir.glob("*.json")):
         if path.name == "manifest.json":
             continue
@@ -482,7 +489,7 @@ def pending_target_paths(
             if _facts_version(facts_path) != SYNTHESIS_VERSION:
                 paths.append(path)
                 continue
-            if has_human_worth(rows, pid):
+            if has_human_worth(rows, pid, parent_ids):
                 continue
             existing = llm_network_worth(pid, facts_dir).get("decision", "")
             if existing in {"yes", "no"}:
@@ -507,6 +514,32 @@ def _load_bundle(path: Path) -> dict[str, Any]:
         return {}
 
 
+def prune_orphan_facts(raw_dir: Path, facts_dir: Path, *, scoped: bool, dry_run: bool) -> int:
+    """Drop facts whose source bundle left a completed full collection.
+
+    Facts are a paid cache, so an absent or incomplete collection manifest is
+    never authority to delete them. Scoped and dry runs are non-authoritative.
+    """
+    if scoped or dry_run:
+        return 0
+    try:
+        manifest = json.loads((raw_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    if manifest.get("status") != "completed":
+        return 0
+    current_ids = {
+        path.stem for path in raw_dir.glob("*.json") if path.name != "manifest.json"
+    }
+    removed = 0
+    for facts_path in facts_dir.glob("*.jsonl"):
+        if facts_path.stem in current_ids:
+            continue
+        facts_path.unlink()
+        removed += 1
+    return removed
+
+
 def _chunked(seq: list[Any], size: int) -> Any:
     for i in range(0, len(seq), max(1, size)):
         yield seq[i:i + size]
@@ -517,6 +550,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     raw_dir = Path(args.raw_dir)
     facts_dir = Path(args.out_dir)
     facts_dir.mkdir(parents=True, exist_ok=True)
+    orphan_facts_removed = prune_orphan_facts(
+        raw_dir, facts_dir, scoped=bool(args.person), dry_run=bool(args.dry_run))
     encoder = tiktoken.get_encoding("o200k_base")
 
     owner = load_owner() if not args.no_owner else None
@@ -565,6 +600,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "synthesis_version": SYNTHESIS_VERSION,
             "reasoning_effort": reasoning_effort(args.reasoning_effort),
             "owner_context": bool(owner),
+            "orphan_facts_removed": orphan_facts_removed,
             "rejudge": bool(args.rejudge),
             "target_confidence": args.target_confidence,
             "max_batches": args.max_batches,
@@ -595,6 +631,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "synthesis_version": SYNTHESIS_VERSION,
             "reasoning_effort": reasoning_effort(args.reasoning_effort),
             "owner_context": bool(owner),
+            "orphan_facts_removed": orphan_facts_removed,
             "rejudge": bool(args.rejudge),
             "target_confidence": args.target_confidence,
             "max_batches": args.max_batches,
@@ -688,6 +725,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "synthesis_version": SYNTHESIS_VERSION,
         "reasoning_effort": effort,
         "owner_context": bool(owner),
+        "orphan_facts_removed": orphan_facts_removed,
         "rejudge": bool(args.rejudge),
         "target_confidence": args.target_confidence,
         "max_batches": args.max_batches,

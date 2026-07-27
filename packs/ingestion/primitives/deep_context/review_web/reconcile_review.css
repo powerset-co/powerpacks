@@ -640,6 +640,7 @@ input::placeholder { color: var(--muted); }
   white-space: nowrap;
 }
 
+
 .worth-search-list {
   position: absolute;
   top: calc(100% + 6px);

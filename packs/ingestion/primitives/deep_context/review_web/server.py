@@ -276,12 +276,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         return hits[0] if hits else None
 
     def worth_parent_in_snapshot(key: str, parent_slug: str = "") -> dict[str, Any] | None:
-        """The cached parent this decision was rendered from. The card/row
-        sends its parent slug (unique), because a worth KEY is not unique:
-        two split parents can share one pub with DISTINCT worth_row dicts,
-        and first-hit-by-key patched the wrong twin — leaving an unkillable
-        pending zombie in the live model (the disk write was always right;
-        only a restart cleared it). Slug match first, key fallback."""
+        """The cached canonical parent this decision was rendered from."""
         slug_lower = parent_slug.strip().lower()
         if slug_lower:
             for parent in cached_parents:
@@ -556,8 +551,11 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         # cache, so `review-status` can never disagree.
                         current_parents = refresh_parents_from_disk()
                         progress = review_progress(current_parents)
-                        pending_key = {"worth": "worth_pending",
-                                       "linkedin": "linkedin_pending"}.get(stage)
+                        # People review may be completed with unresolved Maybe
+                        # rows; they remain Maybe and are excluded from the
+                        # existing Yes-only lookup eligibility. LinkedIn
+                        # completion stays strict.
+                        pending_key = {"linkedin": "linkedin_pending"}.get(stage)
                         if pending_key and progress[pending_key]:
                             self.send_bytes(
                                 (f"{progress[pending_key]} people still need review — "
@@ -597,32 +595,78 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         parents_now()
                         target_parent = worth_parent_in_snapshot(
                             pub, (form.get("parent_slug") or [""])[0])
+                        if target_parent is None:
+                            raise ValueError("stale or unknown parent worth card")
                         rows_now = review_rows_now()
-                        # The posted pub is the QUEUE key; the durable mark must
-                        # land on a row worth_view ATTACHES to the parent the
-                        # user decided (row key or row.person_id inside that
-                        # parent's identities). Split twins can share a queue
-                        # key naming a row whose person_id belongs to the OTHER
-                        # twin — writing there decides the wrong person, and the
-                        # served twin re-derives pending on every rebuild: an
-                        # undecidable zombie no click could ever clear.
-                        write_key = pub.strip().lower()
-                        target_ids = {str(value or "").strip().lower()
-                                      for value in (target_parent or {}).get("person_ids") or []}
-                        target_ids.discard("")
-                        if target_parent and target_ids:
-                            posted_row = rows_now.get(write_key) or {}
-                            posted_pid = str(posted_row.get("person_id") or "").strip().lower()
-                            if write_key not in target_ids and posted_pid not in target_ids:
-                                write_key = sorted(target_ids)[0]
-                        result = apply_worth_decision(review_path, write_key, stored_worth,
-                                                      rows=rows_now)
+                        # The queue key is the canonical parent-worth row. Child
+                        # ids are evidence/membership only and never own the
+                        # human decision.
+                        model_row = target_parent.get("worth_row") or {}
+                        write_key = str(model_row.get("key") or pub).strip().lower()
+                        machine = model_row.get("machine") or {}
+                        target_ids = {
+                            str(value or "").strip().lower()
+                            for value in target_parent.get("person_ids") or []
+                        } - {""}
+                        if stored_worth == "yes":
+                            # Parent Yes supersedes any legacy child Exclude.
+                            for key, legacy_row in rows_now.items():
+                                legacy_pid = str(
+                                    legacy_row.get("person_id") or ""
+                                ).strip().lower()
+                                if (
+                                    (key in target_ids or legacy_pid in target_ids)
+                                    and str(legacy_row.get("action") or "").strip().lower()
+                                    == "exclude"
+                                    and str(legacy_row.get("approved") or "").strip().lower()
+                                    == "yes"
+                                ):
+                                    legacy_row["action"] = ""
+                                    legacy_row["approved"] = ""
+                        result = apply_worth_decision(
+                            review_path,
+                            write_key,
+                            stored_worth,
+                            rows=rows_now,
+                            person_ids=list(model_row.get("person_ids") or []),
+                            llm_worth=str(machine.get("decision") or ""),
+                            llm_worth_reason=str(machine.get("reason") or ""),
+                        )
                         accept_rows_write()
-                        gate = sync_synthetic_gate(synthetic_path, write_key, stored_worth)
-                        state = effective_no_for_key(
-                            write_key, rows_now, facts_dir,
-                            keepish=(gate["approved"] == "yes") if gate else None,
-                            connections=connection_keys)
+                        gate_key = str(
+                            (target_parent.get("person_ids") or [""])[0]
+                        ).strip().lower()
+                        gate = sync_synthetic_gate(synthetic_path, gate_key, stored_worth)
+                        machine_decision = str(machine.get("decision") or "maybe")
+                        effective = stored_worth or machine_decision
+                        source = "user" if stored_worth else str(
+                            machine.get("source") or "llm"
+                        )
+                        worth_state = {
+                            "decision": effective,
+                            "reason": (
+                                "user decision"
+                                if stored_worth
+                                else str(machine.get("reason") or "")
+                            ),
+                            "source": source,
+                        }
+                        keepish = bool(gate and gate.get("approved") == "yes") or any(
+                            str(candidate.get("approved") or "").strip().lower() == "yes"
+                            and str(candidate.get("action") or "").strip().lower()
+                            not in {"detach", "exclude"}
+                            for candidate in target_parent.get("candidates") or []
+                        )
+                        connected = bool(target_parent.get("connection"))
+                        state = {
+                            "worth": worth_state,
+                            "machine": machine,
+                            "connected": connected,
+                            "rejected": (
+                                effective == "no"
+                                and (source == "user" or (not keepish and not connected))
+                            ),
+                        }
                         row_now = rows_now.get(write_key) or {}
                         decided = gate or {
                             "action": (row_now.get("action") or "").strip().lower(),
@@ -638,20 +682,20 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             model_primary = _primary_candidate(model_parent)
                             model_primary["worth"] = state["worth"]
                             model_primary["machine_worth"] = state["machine"]
-                            model_row = model_parent.get("worth_row")
-                            if model_row is None:
+                            parent_row = model_parent.get("worth_row")
+                            if parent_row is None:
                                 return
-                            machine_dec = (model_row.get("machine") or {}).get("decision") or ""
+                            machine_dec = (parent_row.get("machine") or {}).get("decision") or ""
                             if stored_worth:
-                                model_row["human"] = {"decision": stored_worth,
-                                                      "updated_at": now_iso()}
-                                model_row["effective"] = stored_worth
-                                model_row["source"] = "user"
+                                parent_row["human"] = {"decision": stored_worth,
+                                                       "updated_at": now_iso()}
+                                parent_row["effective"] = stored_worth
+                                parent_row["source"] = "user"
                             else:  # restore: back to the machine's verdict
-                                model_row["human"] = None
-                                model_row["effective"] = machine_dec or "maybe"
-                                model_row["source"] = ("llm" if machine_dec
-                                                       else "default")
+                                parent_row["human"] = None
+                                parent_row["effective"] = machine_dec or "maybe"
+                                parent_row["source"] = ("llm" if machine_dec
+                                                        else "default")
 
                         if target_parent:
                             patch_worth_state(target_parent)
@@ -670,23 +714,16 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             if gate and primary.get("synthetic"):
                                 primary["action"] = gate["action"]
                                 primary["approved"] = gate["approved"]
-                            # A FRESH rebuild derives every parent the written
-                            # row ATTACHES to (worth_view rule 3: row key or
-                            # row.person_id inside the person's identities) —
-                            # so the cache must patch exactly that same set, no
-                            # more (an unrelated twin sharing only the queue
-                            # key stays independently decidable) and no less
-                            # (a merged parent sharing the identity must flip,
-                            # or it keeps the queue serving a decided person).
-                            written_pid = str((rows_now.get(write_key) or {})
-                                              .get("person_id") or "").strip().lower()
-                            attach_keys = {write_key, written_pid} - {""}
+                            # Canonical parent keys are unique, so no sibling
+                            # propagation or identity aliasing is necessary.
+                            attach_keys = {write_key}
                             for sibling in cached_parents:
                                 if sibling is target_parent:
                                     continue
-                                sibling_ids = {str(value or "").strip().lower()
-                                               for value in sibling.get("person_ids") or []}
-                                if sibling_ids & attach_keys:
+                                sibling_key = str(
+                                    ((sibling.get("worth_row") or {}).get("key") or "")
+                                ).strip().lower()
+                                if sibling_key in attach_keys:
                                     patch_worth_state(sibling)
                         accept_local_write()
                         current_parents = cached_parents

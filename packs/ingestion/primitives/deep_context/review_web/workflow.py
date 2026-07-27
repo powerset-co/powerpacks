@@ -68,7 +68,6 @@ def is_worth_subject(parent: dict[str, Any]) -> bool:
     return is_import_candidate_parent(parent) or (
         bool(person_ids)
         and all(is_candidate_id(person_id) for person_id in person_ids)
-        and is_candidate_id(_worth_key(parent))
     )
 
 
@@ -238,7 +237,7 @@ def worth_selection_from_parents(
 ) -> dict[str, Any]:
     decisions = [
         {"person_id": _worth_key(parent),
-         "decision": str((parent.get("worth") or {}).get("decision") or "maybe")}
+         "decision": str((parent.get("worth_row") or {}).get("effective") or "maybe")}
         for parent in parents if is_worth_subject(parent) and _worth_key(parent)
     ]
     decisions.sort(key=lambda row: row["person_id"])
@@ -355,7 +354,10 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
     if stage == "enrich":
         raise ValueError("Enrich completion must be written from the enrichment manifest")
     counts = phase_counts(progress, stage)
-    if status == "completed" and counts["pending"]:
+    # People review is explicitly skippable: unresolved Maybe rows stay Maybe
+    # and only effective Yes rows feed enrichment. LinkedIn remains strict
+    # because realization needs every in-scope identity decision settled.
+    if status == "completed" and counts["pending"] and stage != "worth":
         raise ValueError(f"{counts['pending']} decisions still need an answer")
     existing = read_review_manifest(path)
     completed = {str(value) for value in existing.get("completed_stages") or []

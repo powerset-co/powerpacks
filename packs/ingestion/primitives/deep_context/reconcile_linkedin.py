@@ -100,6 +100,7 @@ from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.review_store import (
     OVERRIDE_COLUMNS,
     USER_APPROVED,
+    is_parent_worth_row,
     load_override_rows,
     row_keys_for_person,
     write_override_rows,
@@ -1063,7 +1064,8 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = F
 
 def count_pending(path: Path) -> int:
     """Rows awaiting the user's decision (pending or rejected-but-revisitable)."""
-    return sum(1 for r in load_override_rows(path).values()
+    return sum(1 for key, r in load_override_rows(path).items()
+               if not is_parent_worth_row(r, key)
                if (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no"))
 
 

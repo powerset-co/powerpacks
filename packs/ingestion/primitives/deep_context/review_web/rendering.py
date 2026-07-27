@@ -340,10 +340,12 @@ def _recent_messages_html(parent: dict[str, Any], raw_dir: Path = RAW_DIR) -> st
     one-click a "maybe" like a 2021 one-way 'which number should I use' text:
     the card SHOWS the evidence instead of hiding the person. A stale callout
     flags threads older than the sync default, since a full WhatsApp backfill
-    happily surfaces half-decade-old fragments."""
+    happily surfaces half-decade-old fragments. Identical evidence shared by
+    merged child bundles is displayed once."""
     person_ids = list(parent.get("person_ids") or []) or \
         list((parent.get("worth_row") or {}).get("person_ids") or [])
     messages: list[dict[str, Any]] = []
+    seen_messages: set[tuple[str, str, str, str, str]] = set()
     for pid in person_ids:
         bundle_path = raw_dir / f"{pid}.json"
         try:
@@ -351,8 +353,22 @@ def _recent_messages_html(parent: dict[str, Any], raw_dir: Path = RAW_DIR) -> st
         except (OSError, json.JSONDecodeError):
             continue
         for msg in bundle.get("messages") or []:
-            if isinstance(msg, dict) and str(msg.get("text") or "").strip():
-                messages.append(msg)
+            if not isinstance(msg, dict):
+                continue
+            text = str(msg.get("text") or "").strip()
+            if not text:
+                continue
+            identity = (
+                str(msg.get("channel") or "").strip().lower(),
+                str(msg.get("at") or "").strip(),
+                str(msg.get("direction") or "").strip().lower(),
+                str(msg.get("subject") or "").strip(),
+                text,
+            )
+            if identity in seen_messages:
+                continue
+            seen_messages.add(identity)
+            messages.append(msg)
     if not messages:
         return ""
     messages.sort(key=lambda m: str(m.get("at") or ""), reverse=True)
@@ -819,7 +835,10 @@ def worth_pending_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]
             for parent in queue]
 
 
-def worth_search_html(view: str, pending: list[dict[str, str]] | None = None) -> str:
+def worth_search_html(
+    view: str,
+    pending: list[dict[str, str]] | None = None,
+) -> str:
     """The ONE live-search input shared by all worth views (filters as you type;
     never a Search button). The Yes/No tables hide non-matching rows client-side
     with an "N of M" count; the Review card view (``pending`` given) gets a
