@@ -18,6 +18,12 @@ Then test local search with:
 
   POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb \
     uv run --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py ...
+
+Changelog:
+- 2026-07-26: an external --records-dir that ships person_profiles.records.parquet
+  keeps its own profiles; the implicit .powerpacks merged-people.csv fallback no
+  longer overrides caller-provided profile records (it still refreshes profiles
+  when records_dir is the run dir itself, i.e. the incremental contacts flow).
 """
 from __future__ import annotations
 
@@ -1319,7 +1325,7 @@ def write_manifest(run_dir: Path, args: argparse.Namespace, db_path: Path, table
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=str(DEFAULT_SOURCE), help="Input people CSV; defaults to people_harmonic_all.csv")
-    parser.add_argument("--person-profiles-csv", help="One-row-per-person CSV used to populate local_person_profiles; defaults to --source, then .powerpacks/network-import/merged/people.csv when present")
+    parser.add_argument("--person-profiles-csv", help="One-row-per-person CSV used to populate local_person_profiles; defaults to --source, then .powerpacks/network-import/merged/people.csv when present. An external --records-dir that already contains person_profiles.records.parquet keeps its own profiles instead of these fallbacks.")
     parser.add_argument("--derive-positions-from-person-profiles", action="store_true", help="Rebuild records/people.records.parquet deterministically from the same CSV used for local_person_profiles; no vectors or provider calls")
     parser.add_argument("--records-dir", help="Existing normal pipeline run root or records/ directory containing *.records.parquet; skips people.csv pipeline build")
     parser.add_argument("--aleph-output-dir", help="Copied Aleph pipeline_output directory; converts Aleph upload artifacts to local records without API calls")
@@ -1373,7 +1379,18 @@ def main() -> None:
         person_profiles_csv = Path(args.person_profiles_csv) if args.person_profiles_csv else None
         if person_profiles_csv and not person_profiles_csv.is_absolute():
             person_profiles_csv = ROOT / person_profiles_csv
-        if not person_profiles_csv:
+        # An external records dir that ships its own person_profiles records is
+        # the caller's explicit profiles input; the implicit CSV fallbacks below
+        # must not override it with unrelated checkout state. When records_dir
+        # IS the run dir (the incremental contacts flow), a person_profiles
+        # artifact there is this shim's own previous output, so the fallback
+        # still refreshes it from the current merged people.csv.
+        records_dir_owns_profiles = (
+            mode == "records"
+            and records_dir.resolve() != run_dir.resolve()
+            and record_source_path(records_dir, PERSON_PROFILE_RECORD) is not None
+        )
+        if not person_profiles_csv and not records_dir_owns_profiles:
             source_candidate = Path(args.source)
             if not source_candidate.is_absolute():
                 source_candidate = ROOT / source_candidate

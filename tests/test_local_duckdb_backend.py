@@ -31,6 +31,7 @@ def load_module(name: str, path: Path):
 
 
 local_backend = load_module("local_search_backend", LOCAL / "local_search_backend.py")
+local_search_verticals = load_module("local_search_verticals", LOCAL / "local_search_verticals.py")
 search_common = load_module("search_common", SHARED / "search_common.py")
 turbopuffer_client = load_module("turbopuffer_search_backend", TURBOPUFFER / "turbopuffer_search_backend.py")
 local_filter_eval = load_module("local_filter_eval", LOCAL / "local_filter_eval.py")
@@ -1193,13 +1194,21 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
 
     def test_execute_role_search_local_payload_candidate_shape(self) -> None:
         original_hybrid_role_rows = local_backend.hybrid_role_rows
+        original_vertical_embedding = local_search_verticals.embedding
 
         async def fake_hybrid_role_rows(payload, filters, *, top_k, include_attributes):
             local_payload = dict(payload)
             local_payload["query_embedding"] = [0.0, 1.0, 0.0]
             return await local_backend.local_store().hybrid_role_rows(local_payload, filters, top_k, include_attributes)
 
+        async def fake_vertical_embedding(text):
+            # The summary/company-signal verticals embed the semantic query
+            # independently of hybrid_role_rows; stub that call site too so the
+            # test never reaches OpenAI.
+            return [0.0, 1.0, 0.0]
+
         local_backend.hybrid_role_rows = fake_hybrid_role_rows
+        local_search_verticals.embedding = fake_vertical_embedding
         try:
             out = asyncio.run(execute_role_search.run(SimpleNamespace(
                 state=None,
@@ -1212,6 +1221,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
             )))
         finally:
             local_backend.hybrid_role_rows = original_hybrid_role_rows
+            local_search_verticals.embedding = original_vertical_embedding
 
         self.assertEqual(out["candidate_ids"][0], "person-engineer")
         candidate = out["candidates"][0]
