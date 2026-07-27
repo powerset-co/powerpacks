@@ -48,7 +48,23 @@ INDEX_JSON = ROOT / "index.json"  # lookup map: phone/email/name -> slug
 INDEX_MD = ROOT / "index.md"      # human catalog
 MERGE_CSV = ROOT / "merge-candidates.csv"
 MERGE_MD = ROOT / "merge-candidates.md"
+MERGE_VERDICTS_CSV = ROOT / "merge-verdicts.csv"  # full judge log incl. rejections
 PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to children)
+
+# Declared-contract path templates (`pipeline/contract.py`). Per-person files are
+# unenumerable at declaration time, so the graph names them as `{person_id}` /
+# `{slug}` templates — same mechanism as gmail discovery's `{account_slug}`.
+# Producer and consumer must use the SAME constant: graph edges are string
+# equality on the declared path.
+RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{person_id}.json")
+RAW_MANIFEST = RAW_DIR / "manifest.json"
+FACTS_TEMPLATE = str(FACTS_DIR / "{person_id}.jsonl")
+FACTS_MANIFEST = FACTS_DIR / "manifest.json"
+DOSSIER_TEMPLATE = str(DOSSIER_DIR / "{slug}.md")
+DOSSIERS_MANIFEST = DOSSIER_DIR / "manifest.json"
+MERGE_MANIFEST = DOSSIER_DIR / "merge_manifest.json"
+PARENT_TEMPLATE = str(PARENTS_DIR / "{slug}.md")
+PARENTS_MANIFEST = PARENTS_DIR / "manifest.json"
 
 # Phase 3 — reconcile parents against their attached LinkedIn profile ("self-heal").
 RECONCILE_DIR = ROOT / "reconcile"
@@ -63,6 +79,9 @@ REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # fixed completion signal fo
 DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
 # RapidAPI LinkedIn lookup cache (one JSON per public_identifier) — the "linkedin lookups".
 PROFILE_CACHE_DIR = Path(".powerpacks/network-import/profile_cache_v2")
+# Declared-contract template for the cache (prefetch writes it; reconcile,
+# apply-retargets, and the review UI read it).
+PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
 # Durable Deep Context review decisions. Realized identities are persisted from
 # this file to directory.csv before fan-in, so they survive source re-imports.
 OVERRIDES_DIR = Path(".powerpacks/network-import/overrides")

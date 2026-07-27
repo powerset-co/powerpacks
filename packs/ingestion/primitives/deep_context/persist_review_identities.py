@@ -12,6 +12,13 @@ Flow:
 
 Detached and synthetic identities are intentionally excluded: neither is a
 confirmed real-LinkedIn identity to cache in the shared directory.
+
+Changelog:
+  2026-07-27 (declared contract): `PersistReviewIdentities` is a
+    `pipeline/contract.py:Node` declaring the `deep_context_review` row slice of
+    the shared `directory.csv` (`owns_rows_where`) — the third declared writer,
+    after the gmail and messages importers. No manifest file (declaration-only,
+    `manifest=""`); same CLI, same payload.
 """
 from __future__ import annotations
 
@@ -23,6 +30,7 @@ from typing import Any
 
 from packs.ingestion.primitives.common.contact_fields import emails_from_row, phones_from_row
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV
 from packs.ingestion.primitives.deep_context.common import (
     CONSOLIDATE_PEOPLE_CSV,
     DEFAULT_PEOPLE_CSV,
@@ -31,9 +39,12 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
 )
 from packs.ingestion.primitives.imports.directory import (
+    DEEP_CONTEXT_DIRECTORY_ROWS,
+    DirectoryRow,
     commit_directory_rows,
     directory_identity_key,
 )
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 from packs.shared.csv_io import CsvIO
 
@@ -163,28 +174,100 @@ def rows_from_people_artifact(path: Path, *, reason: str) -> tuple[list[dict[str
     return rows, people
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    review_rows, review_stats = rows_from_review(Path(args.review_csv), Path(args.people_csv))
-    consolidated, consolidation_people = rows_from_people_artifact(
-        Path(args.consolidate_people_csv), reason="Approved Deep Context consolidation",
+class PersistReviewIdentitiesManifest(StageManifest):
+    """Typed payload — the raw dict's keys verbatim. The `commit_directory_rows`
+    extras are None on a dry run and dropped by `to_payload()`."""
+    source: str = "persist_review_identities"
+    review_considered: int = 0
+    review_persisted: int = 0
+    review_unanchored: int = 0
+    consolidated_people: int = 0
+    retarget_people: int = 0
+    identity_rows: int = 0
+    directory_csv: str = ""
+    existing_rows: int | None = None
+    imported_rows: int | None = None
+    rows: int | None = None
+
+
+class PersistReviewIdentities(Node):
+    """Persists approved review/consolidation/retarget identities into the
+    `deep_context_review` row slice of the shared `directory.csv`."""
+
+    name = "deep_persist_review"
+    # All optional: an absent review artifact simply contributes zero rows —
+    # the pre-review pipeline state, not an error. `consolidate-people.csv` is
+    # external: the review app (human decisions, not a batch node) writes it.
+    inputs = (
+        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
+        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
+        Artifact(path=str(CONSOLIDATE_PEOPLE_CSV), external=True, required=False),
+        Artifact(path=str(RETARGET_PEOPLE_CSV), required=False),
     )
-    retargeted, retarget_people = rows_from_people_artifact(
-        Path(args.retarget_people_csv), reason="Approved Deep Context retarget",
+    outputs = (
+        Artifact(
+            path=str(DEFAULT_DIRECTORY_CSV),
+            row_model=DirectoryRow,
+            writes="upsert",
+            owns_rows_where=DEEP_CONTEXT_DIRECTORY_ROWS,
+        ),
     )
-    rows = review_rows + consolidated + retargeted
-    payload = {
-        "source": "persist_review_identities",
-        "status": "dry_run" if args.dry_run else "completed",
-        **review_stats,
-        "consolidated_people": consolidation_people,
-        "retarget_people": retarget_people,
-        "identity_rows": len(rows),
-    }
-    if args.dry_run:
-        payload["directory_csv"] = str(args.directory_csv)
+    payload = PersistReviewIdentitiesManifest
+    # Declaration-only node: no manifest file today, and none invented — the
+    # payload is emitted by the CLI and the durable output is the directory slice.
+    manifest = ""
+
+    def __init__(
+        self,
+        *,
+        review_csv: Path | None = None,
+        people_csv: Path | None = None,
+        consolidate_people_csv: Path | None = None,
+        retarget_people_csv: Path | None = None,
+        directory_csv: Path | None = None,
+        dry_run: bool = False,
+    ) -> None:
+        self.review_csv = Path(review_csv or LINKEDIN_OVERRIDES_CSV)
+        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
+        self.consolidate_people_csv = Path(consolidate_people_csv or CONSOLIDATE_PEOPLE_CSV)
+        self.retarget_people_csv = Path(retarget_people_csv or RETARGET_PEOPLE_CSV)
+        self.directory_csv = Path(directory_csv or DEFAULT_DIRECTORY_CSV)
+        self.dry_run = dry_run
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            str(LINKEDIN_OVERRIDES_CSV): str(self.review_csv),
+            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
+            str(CONSOLIDATE_PEOPLE_CSV): str(self.consolidate_people_csv),
+            str(RETARGET_PEOPLE_CSV): str(self.retarget_people_csv),
+            str(DEFAULT_DIRECTORY_CSV): str(self.directory_csv),
+        }
+
+    def execute(self) -> PersistReviewIdentitiesManifest:
+        review_rows, review_stats = rows_from_review(self.review_csv, self.people_csv)
+        consolidated, consolidation_people = rows_from_people_artifact(
+            self.consolidate_people_csv, reason="Approved Deep Context consolidation",
+        )
+        retargeted, retarget_people = rows_from_people_artifact(
+            self.retarget_people_csv, reason="Approved Deep Context retarget",
+        )
+        rows = review_rows + consolidated + retargeted
+        payload = PersistReviewIdentitiesManifest(
+            status="dry_run" if self.dry_run else "completed",
+            **review_stats,
+            consolidated_people=consolidation_people,
+            retarget_people=retarget_people,
+            identity_rows=len(rows),
+            directory_csv=str(self.directory_csv),
+        )
+        if self.dry_run:
+            return payload
+        committed = commit_directory_rows(self.directory_csv, rows)
+        payload.directory_csv = committed["directory_csv"]
+        payload.existing_rows = committed["existing_rows"]
+        payload.imported_rows = committed["imported_rows"]
+        payload.rows = committed["rows"]
         return payload
-    payload.update(commit_directory_rows(Path(args.directory_csv), rows))
-    return payload
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -199,7 +282,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    emit(run(build_parser().parse_args()))
+    args = build_parser().parse_args()
+    payload = PersistReviewIdentities(
+        review_csv=Path(args.review_csv),
+        people_csv=Path(args.people_csv),
+        consolidate_people_csv=Path(args.consolidate_people_csv),
+        retarget_people_csv=Path(args.retarget_people_csv),
+        directory_csv=Path(args.directory_csv),
+        dry_run=args.dry_run,
+    ).run()
+    emit(payload.to_payload())
     return 0
 
 

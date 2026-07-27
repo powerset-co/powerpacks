@@ -41,6 +41,11 @@ Flow (Node.run):
                                (the process still exits nonzero)
 
 Changelog:
+  2026-07-27 (deep-context): `STATUS_NEEDS_APPROVAL` — the deep-context paid
+    stages (synthesize, cluster, reconcile, deep-research, prefetch) gate spend
+    by returning a typed payload instead of exiting mid-template; `run()` already
+    treats any non-completed status as "write the manifest, skip output
+    verification", so the constant is the whole extension.
   2026-07-26 (failed manifest): `run()` catches `Exception` and `SystemExit` from
     `execute()` (and from output validation), writes a typed `Failed` manifest
     (`status: "failed"`, `stage`, `error`), then RE-RAISES. Before this, a raise
@@ -97,6 +102,11 @@ from packs.shared.csv_io import CsvIO  # noqa: E402
 STATUS_COMPLETED = "completed"
 STATUS_NOT_READY = "not_ready"
 STATUS_FAILED = "failed"
+# A spend-bearing stage returns this INSTEAD of doing paid work: the payload
+# carries the estimate and the CLI maps it to exit 20 (`common/gates.py`). The
+# run template treats it like any non-completed status — outputs are not
+# verified, the manifest is written — so the gate stays a payload, not a raise.
+STATUS_NEEDS_APPROVAL = "needs_approval"
 
 
 class ContractError(RuntimeError):

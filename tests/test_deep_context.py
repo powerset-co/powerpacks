@@ -950,7 +950,7 @@ class TestEndToEnd(unittest.TestCase):
             self._write_person(raw, facts, "p2", "Jon Smith", "+14155551234", "jon.smith@gmail.com")
             self._write_person(raw, facts, "p3", "Maria Garcia", "+13105550000", "maria@x.com")
 
-            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+            _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=index_md, person=""))
             self.assertEqual(len(list(dossiers.glob("*.md"))), 3)
 
@@ -1014,7 +1014,7 @@ class TestEndToEnd(unittest.TestCase):
             self._write_person(raw, facts, "p3", "Casey Delta", "+15550111", "casey@example.com")
 
             def run_compose(person=""):
-                return compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                return _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                                        index_json=index_json, index_md=index_md, person=person))
 
             run_compose()
@@ -1053,7 +1053,7 @@ class TestEndToEnd(unittest.TestCase):
             self._write_person(raw, facts, "p2", "Casey Delta", "+15550111", "casey@example.com")
 
             def run_compose(person=""):
-                return compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                return _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                                        index_json=index_json, index_md=index_md, person=person))
 
             run_compose()
@@ -1075,10 +1075,10 @@ class TestEndToEnd(unittest.TestCase):
             raw.mkdir(); facts.mkdir()
             index_json, index_md = base / "index.json", base / "index.md"
             self._write_person(raw, facts, "p1", "Jordan Bravo", "+15550100", "jordan@example.com")
-            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+            _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=index_md, person=""))
             self._write_person(raw, facts, "p1", "Jordan Bravado", "+15550100", "jordan@example.com")
-            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+            _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=index_md, person="p1"))
             after = json.loads(index_json.read_text())
             self.assertEqual([info["person_id"] for info in after["slugs"].values()], ["p1"])
@@ -1092,7 +1092,7 @@ class TestEndToEnd(unittest.TestCase):
         self._write_person(raw, facts, "p1", "Jonathan Smith", "+15550100", "jon@acme.test")
         self._write_person(raw, facts, "p2", "Jon Smith", "+15550100", "jon.smith@example.com")
         self._write_person(raw, facts, "p3", "Maria Garcia", "+15550111", "maria@example.net")
-        compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+        _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                         index_json=index_json, index_md=index_md, person=""))
 
         def cluster_run(**over):
@@ -1218,7 +1218,7 @@ class TestEndToEnd(unittest.TestCase):
             index_json = base / "index.json"
             self._write_person(raw, facts, "p1", "Jordan Bravo", "+15550100", "jordan@example.com")
             self._write_person(raw, facts, "p2", "Jordan Bravo", "+15550100", "jb@example.net")
-            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+            _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=base / "index.md", person=""))
             manifest = cluster.run(_ns(
                 dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
@@ -4047,6 +4047,14 @@ class _ns:
 
     def __init__(self, **kw):
         self.__dict__.update(kw)
+
+
+def _run_compose(ns):
+    """The old `compose.run(args)` surface over the ComposeDossier node."""
+    return compose.ComposeDossier(
+        raw_dir=ns.raw_dir, facts_dir=ns.facts_dir, dossier_dir=ns.dossier_dir,
+        index_json=ns.index_json, index_md=ns.index_md, person=getattr(ns, "person", ""),
+    ).run().to_payload()
 
 
 class TestWhatsAppUSJid(unittest.TestCase):
