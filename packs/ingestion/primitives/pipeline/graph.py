@@ -33,6 +33,15 @@ Flow: import the converted node modules -> walk Node subclasses -> group
 declarations by path -> emit one JSON report.
 
 Changelog:
+  2026-07-27 (deep-context registered): the twelve deep-context nodes joined the
+    graph — the dossier chain (collect -> synthesize -> compose -> cluster ->
+    parents -> reconcile), the enrichment tail (deep-research, assemble,
+    prefetch, apply-retargets), owner, and persist-review (the third declared
+    `directory.csv` row slice, closing the loop back into merge_people).
+    review.csv became the graph's first THREE-owner file (synthesize's
+    llm_worth family, reconcile's identity slice, the human's network_worth —
+    row-bookkeeping columns deliberately unclaimed), and index.json's
+    slugs/parents key split is now declared, not just documented.
   2026-07-26 (cycles canonicalized): `find_cycles` rotates each found cycle to
     start at its lexicographically-smallest node and dedups, so a loop is one
     entry instead of one entry per member and path variant (the historical two
@@ -74,6 +83,18 @@ from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa:
 
 # The converted nodes. Importing them IS the registration (and would already have
 # raised TypeError if any declaration were incomplete).
+import packs.ingestion.primitives.deep_context.apply_retargets  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.assemble_synthetic_profile  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.build_owner  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.build_parents  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.cluster_merge_candidates  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.collect_person_context  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.compose_dossier  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.persist_review_identities  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.prefetch_profiles  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.reconcile_deep_research  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.reconcile_linkedin  # noqa: E402,F401
+import packs.ingestion.primitives.deep_context.synthesize_person_context  # noqa: E402,F401
 import packs.ingestion.primitives.discover.gmail.discover  # noqa: E402,F401
 import packs.ingestion.primitives.discover.messages.discover  # noqa: E402,F401
 import packs.ingestion.primitives.enrich.enrich_people  # noqa: E402,F401
@@ -204,6 +225,25 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
         })
         for node in nodes
     }
+    # Cycle detection excludes `feedback=True` writes (the persist stage's
+    # directory.csv slice feeds the NEXT realization of the importers/merge —
+    # the one deliberate loop). Everything else about the edge stays scored.
+    forward_producers = {
+        path: [name for name, item in declared if not item.feedback]
+        for path, declared in producers.items()
+    }
+    forward_edges = {
+        node.name: sorted({
+            name
+            for item in node.inputs
+            for name in (
+                forward_producers.get(item.path, [])
+                + ([manifest_producers[item.path]] if item.path in manifest_producers else [])
+            )
+            if name != node.name
+        })
+        for node in nodes
+    }
     return {
         "status": "completed",
         "nodes": sorted(node.name for node in nodes),
@@ -212,7 +252,7 @@ def check_graph(nodes: list[type[Node]]) -> dict[str, Any]:
         "phantom_inputs": phantom_inputs,
         "two_writer_conflicts": two_writer_conflicts,
         "schema_mismatches": schema_mismatches,
-        "cycles": find_cycles(edges),
+        "cycles": find_cycles(forward_edges),
     }
 
 

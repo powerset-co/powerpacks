@@ -38,6 +38,15 @@ Two no-spend modes, deliberately different:
 Outputs: merge-candidates.csv / .md + a "Possible same person" section per dossier.
 
 Changelog:
+  2026-07-27 (declared contract): `ClusterMergeCandidates` is a
+    `pipeline/contract.py:Node`. It declares its per-person reads as the shared
+    `{person_id}`/`{slug}` templates and declares `merge-verdicts.csv` as BOTH an
+    input and an output — the honest shape of the incremental cache, which is the
+    prior run's own log. `--dry-run` deliberately does NOT go through the node:
+    `run()` writes the stage manifest for every payload it returns, and an estimate
+    must never overwrite a completed `merge_manifest.json` (which the estimate has
+    never written). `run(args)` became `execute()`; same flags, same free/paid
+    tiers, same status strings, same outputs.
   2026-07-24: merge-verdicts.csv gained a `judge` provenance column; `--no-llm`
     verdicts are no longer reusable as cache hits (they used to permanently
     suppress the paid judge for unchanged pairs); added `--deterministic-only`.
@@ -52,6 +61,7 @@ import hashlib
 import json
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -70,10 +80,16 @@ from packs.indexing.lib.openai_responses import (
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
+    DOSSIER_TEMPLATE,
     FACTS_DIR,
+    FACTS_TEMPLATE,
     INDEX_JSON,
     MERGE_CSV,
+    MERGE_MANIFEST,
     MERGE_MD,
+    MERGE_VERDICTS_CSV,
+    OWNER_JSON,
+    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
     emit,
     read_jsonl,
@@ -81,7 +97,8 @@ from packs.ingestion.primitives.deep_context.common import (
     normalize_name,
     phone_digits,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 DEFAULT_CONFIDENCE = 0.7   # judge must be at least this confident to merge
 IDENTITY_CONTRACT_VERSION = "owned-identifiers-v1"
@@ -676,157 +693,296 @@ def split_cached_pairs(pairs: list[tuple[int, int]], people: list[dict[str, Any]
     return reused, to_judge
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    started = time.monotonic()
-    dossier_dir = Path(args.dossier_dir)
-    index = _read_json(Path(args.index_json))
-    people = load_people(index, dossier_dir, Path(args.raw_dir), Path(args.facts_dir))
-    pairs = sorted(generate_pairs(people))
+@dataclass(frozen=True)
+class PairSurvey:
+    """The FREE half of a cluster run: who is in the index, which pairs block
+    together, which of those code already settled, and how the rest split against
+    the verdict cache. Nothing here calls the judge, so `estimate()` and
+    `execute()` share it and can never disagree about the counts."""
+    people: list[dict[str, Any]]
+    pairs: list[tuple[int, int]]
+    slam: list[tuple[int, int, dict[str, Any]]]
+    reused: list[tuple[int, int, str, dict[str, Any]]]
+    to_judge: list[tuple[int, int, str]]
+    adopted: int
 
-    # Deterministic gate first: identical name + shared identifier merges in code — free, and
-    # immune to cache staleness and judge attention alike.
-    slam: list[tuple[int, int, dict[str, Any]]] = []
-    rest: list[tuple[int, int]] = []
-    for a, b in pairs:
-        verdict = slam_dunk_verdict(people[a], people[b])
-        if verdict:
-            slam.append((a, b, verdict))
-        else:
-            rest.append((a, b))
 
-    # Incremental cache: reuse verdicts from the prior merge-verdicts.csv for unchanged pairs, so a
-    # rerun only spends on NEW or changed pairs. --refresh ignores the cache and re-judges all.
-    cache_path = Path(args.out_csv).with_name("merge-verdicts.csv")
-    refresh = getattr(args, "refresh", False)
-    cache = {} if refresh else load_cached_verdicts(cache_path)
-    legacy = {} if refresh else load_legacy_verdicts(cache_path, people)
-    reused, to_judge = split_cached_pairs(rest, people, cache, legacy)
-    adopted = len({frozenset({people[a]["slug"], people[b]["slug"]}) for a, b, _s, _v in reused} & set(legacy))
+class ClusterMergeManifest(StageManifest):
+    """The stage's typed manifest payload — same keys as the raw dict it replaces
+    (`updated_at` is stamped by the manifest writer). The `--dry-run` estimate is a
+    DIFFERENT payload shape and deliberately never reaches this model or the node."""
+    source: str = "cluster_merge_candidates"
+    judge: str = ""
+    people: int = 0
+    pairs_total: int = 0
+    pairs_deterministic: int = 0   # merged in code (identical name + shared identifier)
+    pairs_judged: int = 0          # actually sent to the judge this run
+    pairs_reused: int = 0
+    # Tier 0 only: pairs no judge has decided yet — what the paid escalation would cost.
+    pairs_unsettled: int = 0
+    pairs_legacy_adopted: int = 0  # reused from a pre-sig file by name match (upgraded in place)
+    candidate_pairs: int = 0
+    clusters: int = 0
+    confidence_threshold: float = 0.0
+    tokens: dict[str, int] = {}
+    estimated_cost_usd: float = 0.0
+    out_csv: str = ""
+    out_md: str = ""
+    elapsed_ms: int = 0
 
-    if getattr(args, "dry_run", False):
+
+class ClusterMergeCandidates(Node):
+    """Detects same-person / merge candidates and writes the pair CSV, the full
+    verdict log, the cluster markdown, and each dossier's "Possible same person"
+    section. The paid LLM judge is the escalation tier; `deterministic_only` and
+    `no_llm` are the two free tiers described at the top of this module."""
+
+    name = "deep_cluster"
+    # `merge-verdicts.csv` is declared on BOTH sides on purpose: this stage's own
+    # prior log IS the incremental verdict cache, so the self-edge is the honest
+    # description of a rerun. Everything else is optional — an absent index or
+    # dossier set simply yields zero people, which is the pre-compose state.
+    inputs = (
+        Artifact(path=str(INDEX_JSON), required=False),
+        Artifact(path=DOSSIER_TEMPLATE, required=False),
+        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(path=str(OWNER_JSON), required=False),
+        Artifact(path=str(MERGE_VERDICTS_CSV), required=False),
+    )
+    # NOT declared: the "## Possible same person" section this stage injects into
+    # each dossier (`inject_section`). compose_dossier declares `{slug}.md` as a
+    # whole-file output, so a second writer would report a two-writer conflict that
+    # only the graph's owner can resolve — the injection is an anchored section
+    # edit, not a rewrite, and is called out here rather than declared silently.
+    # NOT declared either: `EMBED_DIR`. Nothing in this stage (or any other) reads
+    # or writes it today; a path with no reader and no writer is not a contract.
+    # `merge-candidates.md` is written but NOT declared: it is a human review
+    # rendering of MERGE_CSV that no node reads — report surfaces stay out of
+    # the graph (same rule as compose's index.md).
+    outputs = (
+        Artifact(path=str(MERGE_CSV), writes="full_rewrite"),
+        Artifact(path=str(MERGE_VERDICTS_CSV), writes="full_rewrite"),
+    )
+    payload = ClusterMergeManifest
+    # `dossiers/merge_manifest.json`, NOT `dossiers/manifest.json` — that one is
+    # compose_dossier's. Two stages write into the same directory; only the file
+    # names keep them apart.
+    manifest = str(MERGE_MANIFEST)
+
+    def __init__(
+        self,
+        *,
+        dossier_dir: Path | None = None,
+        index_json: Path | None = None,
+        raw_dir: Path | None = None,
+        facts_dir: Path | None = None,
+        out_csv: Path | None = None,
+        out_md: Path | None = None,
+        confidence: float = DEFAULT_CONFIDENCE,
+        model: str = DEFAULT_MODEL,
+        reasoning_effort: str = "high",
+        concurrency: int = 0,
+        timeout: int = 120,
+        max_retries: int = 6,
+        deterministic_only: bool = False,
+        no_llm: bool = False,
+        refresh: bool = False,
+    ) -> None:
+        self.dossier_dir = Path(dossier_dir or DOSSIER_DIR)
+        self.index_json = Path(index_json or INDEX_JSON)
+        self.raw_dir = Path(raw_dir or RAW_DIR)
+        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.out_csv = Path(out_csv or MERGE_CSV)
+        self.out_md = Path(out_md or MERGE_MD)
+        # The verdict log has always been derived from --out-csv's directory rather
+        # than carrying a flag of its own; same derivation, one place.
+        self.verdicts_csv = self.out_csv.with_name("merge-verdicts.csv")
+        # `load_people` reads owner.json next to the dossier dir; named here only so
+        # the declared path can be bound to what this instance actually reads.
+        self.owner_json = self.dossier_dir.parent / "owner.json"
+        self.confidence = confidence
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.concurrency = concurrency
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.deterministic_only = deterministic_only
+        self.no_llm = no_llm
+        self.refresh = refresh
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            str(INDEX_JSON): str(self.index_json),
+            DOSSIER_TEMPLATE: str(self.dossier_dir / "{slug}.md"),
+            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
+            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            str(OWNER_JSON): str(self.owner_json),
+            str(MERGE_VERDICTS_CSV): str(self.verdicts_csv),
+            str(MERGE_CSV): str(self.out_csv),
+            str(MERGE_MD): str(self.out_md),
+            self.manifest: str(self.dossier_dir / "merge_manifest.json"),
+        }
+
+    def survey(self) -> PairSurvey:
+        """Load, block, settle the slam dunks, split the rest against the cache.
+        Free: no judge call, and nothing on disk is written."""
+        index = _read_json(self.index_json)
+        people = load_people(index, self.dossier_dir, self.raw_dir, self.facts_dir)
+        pairs = sorted(generate_pairs(people))
+
+        # Deterministic gate first: identical name + shared identifier merges in code — free, and
+        # immune to cache staleness and judge attention alike.
+        slam: list[tuple[int, int, dict[str, Any]]] = []
+        rest: list[tuple[int, int]] = []
+        for a, b in pairs:
+            verdict = slam_dunk_verdict(people[a], people[b])
+            if verdict:
+                slam.append((a, b, verdict))
+            else:
+                rest.append((a, b))
+
+        # Incremental cache: reuse verdicts from the prior merge-verdicts.csv for unchanged pairs, so a
+        # rerun only spends on NEW or changed pairs. --refresh ignores the cache and re-judges all.
+        cache = {} if self.refresh else load_cached_verdicts(self.verdicts_csv)
+        legacy = {} if self.refresh else load_legacy_verdicts(self.verdicts_csv, people)
+        reused, to_judge = split_cached_pairs(rest, people, cache, legacy)
+        adopted = len({frozenset({people[a]["slug"], people[b]["slug"]}) for a, b, _s, _v in reused} & set(legacy))
+        return PairSurvey(people=people, pairs=pairs, slam=slam, reused=reused,
+                          to_judge=to_judge, adopted=adopted)
+
+    def estimate(self) -> dict[str, Any]:
+        """The `--dry-run` payload: what the paid judge WOULD cost. No spend.
+
+        Deliberately NOT routed through `run()`. The node template writes the stage
+        manifest for every payload it returns, so an estimate going through it would
+        replace a completed `merge_manifest.json` with a `dry_run` one — and this
+        mode has never written a manifest at all. Same keys, same values as before.
+        """
+        started = time.monotonic()
+        survey = self.survey()
         # Blocking + cache lookup are free; only the NEW pairs below would be judged (small spend).
         per_lo, per_hi = 0.004, 0.02
         return {
             "source": "cluster_merge_candidates", "status": "dry_run",
-            "people": len(people), "candidate_pairs": len(pairs),
-            "pairs_deterministic": len(slam),
-            "cached_reused": len(reused), "legacy_adopted": adopted,
-            "candidate_pairs_to_judge": len(to_judge),
-            "estimated_cost_usd_low": round(len(to_judge) * per_lo, 2),
-            "estimated_cost_usd_high": round(len(to_judge) * per_hi, 2),
-            "model": args.model, "reasoning_effort": args.reasoning_effort,
+            "people": len(survey.people), "candidate_pairs": len(survey.pairs),
+            "pairs_deterministic": len(survey.slam),
+            "cached_reused": len(survey.reused), "legacy_adopted": survey.adopted,
+            "candidate_pairs_to_judge": len(survey.to_judge),
+            "estimated_cost_usd_low": round(len(survey.to_judge) * per_lo, 2),
+            "estimated_cost_usd_high": round(len(survey.to_judge) * per_hi, 2),
+            "model": self.model, "reasoning_effort": self.reasoning_effort,
             "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
         }
 
-    verdicts: list[dict[str, Any]] = [
-        {"a": a, "b": b, "sig": pair_sig(people[a], people[b]), **v} for a, b, v in slam
-    ] + [{"a": a, "b": b, "sig": sig, **v} for a, b, sig, v in reused]
-    usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-    deterministic_only = getattr(args, "deterministic_only", False)
-    use_llm = not (deterministic_only or getattr(args, "no_llm", False))
-    unsettled = 0
+    def execute(self) -> ClusterMergeManifest:
+        started = time.monotonic()
+        survey = self.survey()
+        people, pairs, to_judge = survey.people, survey.pairs, survey.to_judge
 
-    if deterministic_only:
-        # TIER 0 only: the slam dunks above are decided; everything else keeps the verdict
-        # the last run recorded — VERBATIM, including its original sig, so a pair whose
-        # identity changed still re-judges on the next paid run — and pairs nobody has
-        # judged stay UNJUDGED. A free pass may add deterministic identity, never invent it
-        # and never drop an edge a paid run already established.
-        carry = load_cached_verdicts(cache_path)
-        for a, b, _sig in to_judge:
-            prior = carry.get(frozenset({people[a]["slug"], people[b]["slug"]}))
-            if prior:
-                verdicts.append({"a": a, "b": b, "sig": prior[0], **prior[1]})
-            else:
-                unsettled += 1
-    elif use_llm and to_judge:
-        load_env()
-        # Wall-time is bound by per-call high-reasoning latency, not local CPU — parallelize hard.
-        concurrency = args.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
-        effort = reasoning_effort(args.reasoning_effort)
+        verdicts: list[dict[str, Any]] = [
+            {"a": a, "b": b, "sig": pair_sig(people[a], people[b]), **v} for a, b, v in survey.slam
+        ] + [{"a": a, "b": b, "sig": sig, **v} for a, b, sig, v in survey.reused]
+        usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+        use_llm = not (self.deterministic_only or self.no_llm)
+        unsettled = 0
 
-        async def driver() -> None:
-            client = make_async_client(timeout=args.timeout)
-            semaphore = asyncio.Semaphore(max(1, concurrency))
-            results: dict[int, dict[str, Any]] = {}
+        if self.deterministic_only:
+            # TIER 0 only: the slam dunks above are decided; everything else keeps the verdict
+            # the last run recorded — VERBATIM, including its original sig, so a pair whose
+            # identity changed still re-judges on the next paid run — and pairs nobody has
+            # judged stay UNJUDGED. A free pass may add deterministic identity, never invent it
+            # and never drop an edge a paid run already established.
+            carry = load_cached_verdicts(self.verdicts_csv)
+            for a, b, _sig in to_judge:
+                prior = carry.get(frozenset({people[a]["slug"], people[b]["slug"]}))
+                if prior:
+                    verdicts.append({"a": a, "b": b, "sig": prior[0], **prior[1]})
+                else:
+                    unsettled += 1
+        elif use_llm and to_judge:
+            load_env()
+            # Wall-time is bound by per-call high-reasoning latency, not local CPU — parallelize hard.
+            concurrency = self.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
+            effort = reasoning_effort(self.reasoning_effort)
 
-            def on_result(item: tuple[int, dict[str, Any]]) -> None:
-                results[item[0]] = item[1]
+            async def driver() -> None:
+                client = make_async_client(timeout=self.timeout)
+                semaphore = asyncio.Semaphore(max(1, concurrency))
+                results: dict[int, dict[str, Any]] = {}
 
-            async def one(i: int, a: int, b: int) -> tuple[int, dict[str, Any]]:
-                return i, await judge_pair(client, people[a], people[b], model=args.model,
-                                           effort=effort, semaphore=semaphore, max_retries=args.max_retries)
-            try:
-                await drain_pool([one(i, a, b) for i, (a, b, _sig) in enumerate(to_judge)], on_result)
-            finally:
-                await client.close()
-            for i, (a, b, sig) in enumerate(to_judge):
-                res = results.get(i, {"verdict": {}, "usage": {}})
-                for k in usage_total:
-                    usage_total[k] += res.get("usage", {}).get(k, 0)
-                verdicts.append({"a": a, "b": b, "sig": sig, "judge": JUDGE_LLM,
-                                 **(res["verdict"] or {})})
+                def on_result(item: tuple[int, dict[str, Any]]) -> None:
+                    results[item[0]] = item[1]
 
-        asyncio.run(driver())
-    else:
-        for a, b, sig in to_judge:
-            verdicts.append({"a": a, "b": b, "sig": sig, **deterministic_verdict(people[a], people[b])})
+                async def one(i: int, a: int, b: int) -> tuple[int, dict[str, Any]]:
+                    return i, await judge_pair(client, people[a], people[b], model=self.model,
+                                               effort=effort, semaphore=semaphore, max_retries=self.max_retries)
+                try:
+                    await drain_pool([one(i, a, b) for i, (a, b, _sig) in enumerate(to_judge)], on_result)
+                finally:
+                    await client.close()
+                for i, (a, b, sig) in enumerate(to_judge):
+                    res = results.get(i, {"verdict": {}, "usage": {}})
+                    for k in usage_total:
+                        usage_total[k] += res.get("usage", {}).get(k, 0)
+                    verdicts.append({"a": a, "b": b, "sig": sig, "judge": JUDGE_LLM,
+                                     **(res["verdict"] or {})})
 
-    edges: list[tuple[int, int]] = []
-    confirmed: list[dict[str, Any]] = []
-    for v in verdicts:
-        if v.get("same_person") and float(v.get("confidence") or 0) >= args.confidence:
-            a, b = v["a"], v["b"]
-            edges.append((a, b))
-            confirmed.append({
-                "slug_a": people[a]["slug"], "name_a": people[a]["name"],
-                "slug_b": people[b]["slug"], "name_b": people[b]["name"],
-                "confidence": round(float(v.get("confidence") or 0), 3),
-                "tone_consistent": v.get("tone_consistent"),
-                "reason": v.get("reason", ""),
-            })
+            asyncio.run(driver())
+        else:
+            for a, b, sig in to_judge:
+                verdicts.append({"a": a, "b": b, "sig": sig, **deterministic_verdict(people[a], people[b])})
 
-    confirmed.sort(key=lambda r: r["confidence"], reverse=True)
-    _write_pairs_csv(Path(args.out_csv), confirmed)
-    # Full audit log: every judged pair incl. rejections (why a duplicate was NOT merged).
-    _write_verdicts_csv(Path(args.out_csv).with_name("merge-verdicts.csv"), people, verdicts)
-    clusters = connected_components(len(people), edges)
-    _write_clusters_md(Path(args.out_md), people, clusters, confirmed)
+        edges: list[tuple[int, int]] = []
+        confirmed: list[dict[str, Any]] = []
+        for v in verdicts:
+            if v.get("same_person") and float(v.get("confidence") or 0) >= self.confidence:
+                a, b = v["a"], v["b"]
+                edges.append((a, b))
+                confirmed.append({
+                    "slug_a": people[a]["slug"], "name_a": people[a]["name"],
+                    "slug_b": people[b]["slug"], "name_b": people[b]["name"],
+                    "confidence": round(float(v.get("confidence") or 0), 3),
+                    "tone_consistent": v.get("tone_consistent"),
+                    "reason": v.get("reason", ""),
+                })
 
-    neighbors: dict[str, list[tuple[str, str, float, str]]] = {}
-    for r in confirmed:
-        neighbors.setdefault(r["slug_a"], []).append((r["slug_b"], r["name_b"], r["confidence"], r["reason"]))
-        neighbors.setdefault(r["slug_b"], []).append((r["slug_a"], r["name_a"], r["confidence"], r["reason"]))
-    for person in people:
-        matches = sorted(neighbors.get(person["slug"], []), key=lambda m: m[2], reverse=True)
-        body = "\n".join(f"- [[{s}]] **{n}** (confidence {c:.2f}) — _{why}_" for s, n, c, why in matches) if matches else "_None detected._"
-        inject_section(dossier_dir / f"{person['slug']}.md", body)
+        confirmed.sort(key=lambda r: r["confidence"], reverse=True)
+        _write_pairs_csv(self.out_csv, confirmed)
+        # Full audit log: every judged pair incl. rejections (why a duplicate was NOT merged).
+        _write_verdicts_csv(self.verdicts_csv, people, verdicts)
+        clusters = connected_components(len(people), edges)
+        _write_clusters_md(self.out_md, people, clusters, confirmed)
 
-    billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
-    manifest = {
-        "source": "cluster_merge_candidates",
-        "status": "completed",
-        "judge": JUDGE_LLM if use_llm else ("tier0" if deterministic_only else "deterministic"),
-        "people": len(people),
-        "pairs_total": len(pairs),
-        "pairs_deterministic": len(slam),  # merged in code (identical name + shared identifier)
-        "pairs_judged": len(to_judge) if use_llm else 0,  # actually sent to the judge this run
-        "pairs_reused": len(reused),
-        # Tier 0 only: pairs no judge has decided yet — what the paid escalation would cost.
-        "pairs_unsettled": unsettled,
-        "pairs_legacy_adopted": adopted,  # reused from a pre-sig file by name match (upgraded in place)
-        "candidate_pairs": len(confirmed),
-        "clusters": len(clusters),
-        "confidence_threshold": args.confidence,
-        "tokens": usage_total,
-        "estimated_cost_usd": estimate_cost_usd(usage_total["input_tokens"], billed_output, args.model),
-        "out_csv": str(args.out_csv),
-        "out_md": str(args.out_md),
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "updated_at": now_iso(),
-    }
-    write_json(dossier_dir / "merge_manifest.json", manifest)
-    return manifest
+        neighbors: dict[str, list[tuple[str, str, float, str]]] = {}
+        for r in confirmed:
+            neighbors.setdefault(r["slug_a"], []).append((r["slug_b"], r["name_b"], r["confidence"], r["reason"]))
+            neighbors.setdefault(r["slug_b"], []).append((r["slug_a"], r["name_a"], r["confidence"], r["reason"]))
+        for person in people:
+            matches = sorted(neighbors.get(person["slug"], []), key=lambda m: m[2], reverse=True)
+            body = "\n".join(f"- [[{s}]] **{n}** (confidence {c:.2f}) — _{why}_" for s, n, c, why in matches) if matches else "_None detected._"
+            inject_section(self.dossier_dir / f"{person['slug']}.md", body)
+
+        billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
+        return ClusterMergeManifest(
+            status="completed",
+            judge=JUDGE_LLM if use_llm else ("tier0" if self.deterministic_only else "deterministic"),
+            people=len(people),
+            pairs_total=len(pairs),
+            pairs_deterministic=len(survey.slam),
+            pairs_judged=len(to_judge) if use_llm else 0,
+            pairs_reused=len(survey.reused),
+            pairs_unsettled=unsettled,
+            pairs_legacy_adopted=survey.adopted,
+            candidate_pairs=len(confirmed),
+            clusters=len(clusters),
+            confidence_threshold=self.confidence,
+            tokens=usage_total,
+            estimated_cost_usd=estimate_cost_usd(usage_total["input_tokens"], billed_output, self.model),
+            out_csv=str(self.out_csv),
+            out_md=str(self.out_md),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
 
 
 def _write_pairs_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -896,7 +1052,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    emit(run(build_parser().parse_args(argv)))
+    args = build_parser().parse_args(argv)
+    node = ClusterMergeCandidates(
+        dossier_dir=Path(args.dossier_dir),
+        index_json=Path(args.index_json),
+        raw_dir=Path(args.raw_dir),
+        facts_dir=Path(args.facts_dir),
+        out_csv=Path(args.out_csv),
+        out_md=Path(args.out_md),
+        confidence=args.confidence,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+        deterministic_only=args.deterministic_only,
+        no_llm=args.no_llm,
+        refresh=args.refresh,
+    )
+    # The estimate never touches the node template: it must not write (and so must
+    # not clobber) the completed merge_manifest.json a real run left behind.
+    emit(node.estimate() if args.dry_run else node.run().to_payload())
     return 0
 
 

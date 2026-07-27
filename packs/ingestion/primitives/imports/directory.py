@@ -122,6 +122,7 @@ DirectoryRow = row_model_for("DirectoryRow", DIRECTORY_COLUMNS)
 # column, of its own source's rows only, so columns are the wrong ownership axis.
 GMAIL_DIRECTORY_ROWS = "source == 'gmail_msgvault'"
 MESSAGES_DIRECTORY_ROWS = "source == 'messages'"
+DEEP_CONTEXT_DIRECTORY_ROWS = "source == 'deep_context_review'"
 
 RESOLUTION_FOUND_STATUSES = {"found", "completed", "success"}
 RESOLUTION_NEGATIVE_STATUSES = {"not_found", "not-found", "missing", "failed", "error"}

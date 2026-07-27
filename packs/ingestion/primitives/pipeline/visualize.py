@@ -14,6 +14,8 @@ Flow: graph.node_subclasses() -> graph.check_graph() -> group by stage package
 -> emit markdown to --out (default stdout).
 
 Changelog:
+  2026-07-27: deep-context joined the stage grouping; subgraph headers emit an
+    id + quoted label so the hyphenated stage name parses.
   2026-07-26: created.
 """
 
@@ -35,7 +37,13 @@ from packs.ingestion.primitives.pipeline.contract import Node  # noqa: E402
 from packs.ingestion.primitives.pipeline.graph import check_graph, node_subclasses  # noqa: E402
 
 # Stage grouping comes from the node's package, never from its name.
-_STAGE_OF_PACKAGE = {"discover": "discover", "imports": "import", "enrich": "enrich"}
+_STAGE_OF_PACKAGE = {
+    "discover": "discover",
+    "imports": "import",
+    "enrich": "enrich",
+    "deep_context": "deep-context",
+}
+_STAGE_ORDER = ("discover", "import", "enrich", "deep-context", "other")
 
 
 def stage_of(node: type[Node]) -> str:
@@ -95,11 +103,13 @@ def mermaid(nodes: list[type[Node]], report: dict) -> str:
                 external_inputs[item.path].append(node.name)
 
     lines = ["flowchart TD"]
-    for stage in ("discover", "import", "enrich", "other"):
+    for stage in _STAGE_ORDER:
         members = [n for n in nodes if stage_of(n) == stage]
         if not members:
             continue
-        lines.append(f"  subgraph {stage}")
+        # id + quoted label: a hyphenated stage name ("deep-context") is not a
+        # valid bare Mermaid subgraph id.
+        lines.append(f'  subgraph {_mermaid_id(stage)}["{stage}"]')
         for node in sorted(members, key=lambda n: n.name):
             lines.append(f'    {_mermaid_id(node.name)}["{node.name}"]')
         lines.append("  end")
@@ -137,7 +147,7 @@ def stage_mermaid(nodes: list[type[Node]], stage: str, report: dict) -> str:
     (rendered outside the box) that feed or consume it."""
     members = {n.name for n in nodes if stage_of(n) == stage}
     full = mermaid(nodes, report).splitlines()
-    lines = ["flowchart TD", f"  subgraph {stage}"]
+    lines = ["flowchart TD", f'  subgraph {_mermaid_id(stage)}["{stage}"]']
     lines += [line for line in full if line.startswith("    ") and _id_of(line) in members]
     lines.append("  end")
     neighbors: set[str] = set()
@@ -193,8 +203,8 @@ def render(nodes: list[type[Node]]) -> str:
         f"cylinders are external inputs no node produces.\n\n"
         + "".join(
             f"## Stage: {stage}\n\n```mermaid\n{stage_mermaid(nodes, stage, report)}\n```\n\n"
-            for stage in ("discover", "import", "enrich")
-            if any(stage_of(n) == stage for n in nodes)
+            for stage in _STAGE_ORDER
+            if stage != "other" and any(stage_of(n) == stage for n in nodes)
         )
         + f"## Nodes\n\n{node_table(nodes)}\n\n"
         f"## Checker findings\n\n{findings}\n"

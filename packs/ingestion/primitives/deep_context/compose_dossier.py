@@ -17,6 +17,12 @@ This stage owns exactly ONE index.json key — `slugs` — and never touches
 re-derived from both record maps on write; see the index contract in `common.py`.
 
 Changelog:
+  2026-07-27 (declared contract): `ComposeDossier` is a `pipeline/contract.py:Node`.
+    The per-person inputs/outputs are declared as `{person_id}`/`{slug}` templates
+    (same mechanism as gmail's `{account_slug}`), `index.json` is declared with
+    `owns_columns=("slugs",)` against build_parents' `("parents",)`, and the
+    manifest goes through the Node template (same keys, plus the declared
+    `fingerprints` block). `run(args)` became `execute()`; same flags, same output.
   2026-07-24: writes index.json through common.write_index, so `parents` survives a
     recompose and the lookup maps are derived rather than appended. Each `slugs`
     entry now carries its own emails/phones/full_name, and `--person` updates that
@@ -35,9 +41,13 @@ from typing import Any
 from packs.ingestion.primitives.deep_context.candidates import NETWORK_WORTH_VALUES
 from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
+    DOSSIER_TEMPLATE,
+    DOSSIERS_MANIFEST,
     FACTS_DIR,
+    FACTS_TEMPLATE,
     INDEX_JSON,
     INDEX_MD,
+    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
     emit,
     load_index,
@@ -46,7 +56,8 @@ from packs.ingestion.primitives.deep_context.common import (
     slugify,
     write_index,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 MAX_TOPICS = 25
 
@@ -273,87 +284,137 @@ def render_dossier(meta: dict[str, Any], merged: dict[str, Any], depth: dict[str
     return "\n".join(lines)
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    started = time.monotonic()
-    raw_dir = Path(args.raw_dir)
-    facts_dir = Path(args.facts_dir)
-    dossier_dir = Path(args.dossier_dir)
-    dossier_dir.mkdir(parents=True, exist_ok=True)
+class ComposeDossierManifest(StageManifest):
+    """The stage's typed manifest payload — same keys as the raw dict it replaces
+    (`updated_at` is stamped by the manifest writer)."""
+    source: str = "compose_dossier"
+    dossiers_written: int = 0
+    orphans_removed: int = 0
+    dossier_dir: str = ""
+    index_json: str = ""
+    index_md: str = ""
+    elapsed_ms: int = 0
 
-    # Load the whole document so `parents` (build_parents' key) survives, then replace
-    # only `slugs`. A full run rebuilds `slugs` from scratch — it is authoritative for
-    # every composed person; `--person` keeps the other entries and refreshes one.
-    index = load_index(Path(args.index_json))
-    slugs: dict[str, Any] = dict(index.get("slugs") or {}) if args.person else {}
-    index["slugs"] = slugs
-    catalog: list[tuple[str, str, str]] = []  # (name, headline, slug)
-    written_slugs: set[str] = set()
-    written = 0
 
-    for facts_path in sorted(facts_dir.glob("*.jsonl")):
-        if facts_path.name == "manifest.json":
-            continue
-        person_id = facts_path.stem
-        if args.person and person_id != args.person:
-            continue
-        raw_path = raw_dir / f"{person_id}.json"
-        if not raw_path.exists():
-            continue
-        meta = json.loads(raw_path.read_text(encoding="utf-8"))
-        chunks = list(read_jsonl(facts_path))
-        merged = merge_facts(chunks)
-        if not merged:
-            continue
-        depth = chunks[-1] if chunks else {}  # incremental synth writes one record with depth meta
-        name = merged.get("canonical_name") or meta.get("full_name") or "person"
-        slug = slugify(name, person_id)
-        (dossier_dir / f"{slug}.md").write_text(render_dossier(meta, merged, depth), encoding="utf-8")
-        written_slugs.add(slug)
-        written += 1
+class ComposeDossier(Node):
+    """Renders facts into markdown dossiers + the lookup index. Deterministic,
+    LLM-free; owns `index.json`'s `slugs` key (build_parents owns `parents`)."""
 
-        # A renamed person gets a NEW slug; drop the stale entry for the same
-        # person_id so `--person` cannot leave two records for one human.
-        for stale in [s for s, info in slugs.items()
-                      if s != slug and (info or {}).get("person_id") == person_id]:
-            slugs.pop(stale)
-        # The record carries its own identity: the lookup maps are derived from it,
-        # so they stay correct even after the raw bundles are purged.
-        slugs[slug] = {"person_id": person_id, "name": name, "path": f"dossiers/{slug}.md",
-                       "headline": headline(merged),
-                       "full_name": str(meta.get("full_name") or ""),
-                       "emails": list(meta.get("emails") or []),
-                       "phones": list(meta.get("phones") or [])}
-        catalog.append((name, headline(merged), slug))
+    name = "deep_compose"
+    inputs = (
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
+    )
+    # index.md is deliberately NOT declared: it is a human catalog no node
+    # reads. Declaring report surfaces would pin permanent dead-output findings,
+    # and dead outputs are deleted-or-consumed in this graph, never annotated.
+    outputs = (
+        Artifact(path=DOSSIER_TEMPLATE, required=False),
+        Artifact(path=str(INDEX_JSON), writes="upsert", owns_columns=("slugs",)),
+    )
+    payload = ComposeDossierManifest
+    manifest = str(DOSSIERS_MANIFEST)
 
-    # Remove orphan dossiers from earlier runs (a changed canonical_name yields a
-    # new slug; the old file would otherwise linger). Skip when scoped to --person.
-    orphans = 0
-    if not args.person:
-        for md in dossier_dir.glob("*.md"):
-            if md.stem not in written_slugs:
-                md.unlink()
-                orphans += 1
+    def __init__(
+        self,
+        *,
+        raw_dir: Path | None = None,
+        facts_dir: Path | None = None,
+        dossier_dir: Path | None = None,
+        index_json: Path | None = None,
+        index_md: Path | None = None,
+        person: str = "",
+    ) -> None:
+        self.raw_dir = Path(raw_dir or RAW_DIR)
+        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.dossier_dir = Path(dossier_dir or DOSSIER_DIR)
+        self.index_json = Path(index_json or INDEX_JSON)
+        self.index_md = Path(index_md or INDEX_MD)
+        self.person = person
 
-    write_index(Path(args.index_json), index)
-    # Scoped runs only refresh the one person; the catalog stays whole-network.
-    if args.person:
-        catalog = [(info.get("name") or slug, info.get("headline") or "", slug)
-                   for slug, info in slugs.items()]
-    _write_catalog(Path(args.index_md), catalog)
+    def bindings(self) -> dict[str, str]:
+        return {
+            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
+            DOSSIER_TEMPLATE: str(self.dossier_dir / "{slug}.md"),
+            str(INDEX_JSON): str(self.index_json),
+            self.manifest: str(self.dossier_dir / "manifest.json"),
+        }
 
-    manifest = {
-        "source": "compose_dossier",
-        "status": "completed",
-        "dossiers_written": written,
-        "orphans_removed": orphans,
-        "dossier_dir": str(dossier_dir),
-        "index_json": str(args.index_json),
-        "index_md": str(args.index_md),
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "updated_at": now_iso(),
-    }
-    write_json(dossier_dir / "manifest.json", manifest)
-    return manifest
+    def execute(self) -> ComposeDossierManifest:
+        started = time.monotonic()
+        self.dossier_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load the whole document so `parents` (build_parents' key) survives, then replace
+        # only `slugs`. A full run rebuilds `slugs` from scratch — it is authoritative for
+        # every composed person; `--person` keeps the other entries and refreshes one.
+        index = load_index(self.index_json)
+        slugs: dict[str, Any] = dict(index.get("slugs") or {}) if self.person else {}
+        index["slugs"] = slugs
+        catalog: list[tuple[str, str, str]] = []  # (name, headline, slug)
+        written_slugs: set[str] = set()
+        written = 0
+
+        for facts_path in sorted(self.facts_dir.glob("*.jsonl")):
+            if facts_path.name == "manifest.json":
+                continue
+            person_id = facts_path.stem
+            if self.person and person_id != self.person:
+                continue
+            raw_path = self.raw_dir / f"{person_id}.json"
+            if not raw_path.exists():
+                continue
+            meta = json.loads(raw_path.read_text(encoding="utf-8"))
+            chunks = list(read_jsonl(facts_path))
+            merged = merge_facts(chunks)
+            if not merged:
+                continue
+            depth = chunks[-1] if chunks else {}  # incremental synth writes one record with depth meta
+            name = merged.get("canonical_name") or meta.get("full_name") or "person"
+            slug = slugify(name, person_id)
+            (self.dossier_dir / f"{slug}.md").write_text(render_dossier(meta, merged, depth), encoding="utf-8")
+            written_slugs.add(slug)
+            written += 1
+
+            # A renamed person gets a NEW slug; drop the stale entry for the same
+            # person_id so `--person` cannot leave two records for one human.
+            for stale in [s for s, info in slugs.items()
+                          if s != slug and (info or {}).get("person_id") == person_id]:
+                slugs.pop(stale)
+            # The record carries its own identity: the lookup maps are derived from it,
+            # so they stay correct even after the raw bundles are purged.
+            slugs[slug] = {"person_id": person_id, "name": name, "path": f"dossiers/{slug}.md",
+                           "headline": headline(merged),
+                           "full_name": str(meta.get("full_name") or ""),
+                           "emails": list(meta.get("emails") or []),
+                           "phones": list(meta.get("phones") or [])}
+            catalog.append((name, headline(merged), slug))
+
+        # Remove orphan dossiers from earlier runs (a changed canonical_name yields a
+        # new slug; the old file would otherwise linger). Skip when scoped to --person.
+        orphans = 0
+        if not self.person:
+            for md in self.dossier_dir.glob("*.md"):
+                if md.stem not in written_slugs:
+                    md.unlink()
+                    orphans += 1
+
+        write_index(self.index_json, index)
+        # Scoped runs only refresh the one person; the catalog stays whole-network.
+        if self.person:
+            catalog = [(info.get("name") or slug, info.get("headline") or "", slug)
+                       for slug, info in slugs.items()]
+        _write_catalog(self.index_md, catalog)
+
+        return ComposeDossierManifest(
+            status="completed",
+            dossiers_written=written,
+            orphans_removed=orphans,
+            dossier_dir=str(self.dossier_dir),
+            index_json=str(self.index_json),
+            index_md=str(self.index_md),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
 
 
 def _write_catalog(path: Path, catalog: list[tuple[str, str, str]]) -> None:
@@ -378,7 +439,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    emit(run(args))
+    payload = ComposeDossier(
+        raw_dir=Path(args.raw_dir),
+        facts_dir=Path(args.facts_dir),
+        dossier_dir=Path(args.dossier_dir),
+        index_json=Path(args.index_json),
+        index_md=Path(args.index_md),
+        person=args.person,
+    ).run()
+    emit(payload.to_payload())
     return 0
 
 

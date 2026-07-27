@@ -3,10 +3,9 @@ import csv
 import json
 import tempfile
 import unittest
-from argparse import Namespace
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.persist_review_identities import run
+from packs.ingestion.primitives.deep_context.persist_review_identities import PersistReviewIdentities
 from packs.ingestion.primitives.deep_context.review_store import OVERRIDE_COLUMNS
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.shared.csv_io import CsvIO
@@ -49,15 +48,18 @@ class PersistReviewIdentitiesTests(unittest.TestCase):
                 {"id": "p-retarget", "full_name": "Casey Delta", "primary_phone": "+15550101",
                  "linkedin_url": "https://www.linkedin.com/in/casey-delta"},
             ])
-            args = Namespace(review_csv=str(review), people_csv=str(people), consolidate_people_csv=str(consolidated),
-                             retarget_people_csv=str(retargeted), directory_csv=str(directory), dry_run=False)
-            dry_run_args = Namespace(**{**vars(args), "dry_run": True})
-            dry_payload = run(dry_run_args)
+            def persist(dry_run: bool) -> dict:
+                return PersistReviewIdentities(
+                    review_csv=review, people_csv=people, consolidate_people_csv=consolidated,
+                    retarget_people_csv=retargeted, directory_csv=directory, dry_run=dry_run,
+                ).run().to_payload()
+
+            dry_payload = persist(dry_run=True)
             self.assertEqual(dry_payload["status"], "dry_run")
             self.assertFalse(directory.exists())
-            payload = run(args)
+            payload = persist(dry_run=False)
             first = directory.read_bytes()
-            run(args)
+            persist(dry_run=False)
             second = directory.read_bytes()
             rows = CsvIO.read_dict_rows(directory)
         self.assertEqual(payload["review_persisted"], 2)

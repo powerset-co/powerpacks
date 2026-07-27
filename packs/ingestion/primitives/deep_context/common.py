@@ -6,6 +6,11 @@ dependency-light (stdlib + repo schema helpers) so every stage imports the same
 identity logic and nothing drifts.
 
 Changelog:
+  2026-07-27: the shared network-import locations (merged people.csv, the profile
+    cache, the overrides dir, directory.csv) are imported from
+    `primitives/common/paths.py` instead of re-spelled here — that module is the
+    one home for them, and three copies of `.powerpacks/network-import` lived in
+    this file. Same strings, so every declared graph edge still matches.
   2026-07-24: added the index.json document contract (load_index / write_index /
     derive_lookup_maps) so compose_dossier and build_parents each own exactly one
     key and the three by_* lookup maps are a pure projection of both. write_json is
@@ -34,6 +39,13 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.schemas.people_schema import parse_jsonish  # noqa: E402
 from packs.ingestion.primitives.common.contact_fields import normalize_email  # noqa: E402
+# The canonical network-import locations. Deep-context owns its own tree
+# (`.powerpacks/deep-context`) but must not re-derive the shared one.
+from packs.ingestion.primitives.common.paths import (  # noqa: E402
+    DEFAULT_BASE_DIR,
+    DEFAULT_DIRECTORY_CSV,
+    DEFAULT_PROFILE_CACHE_DIR,
+)
 # now_iso is re-exported here so review_web/ (off-limits) keeps importing it from
 # deep_context.common; the canonical home is common.jsonio.
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402,F401
@@ -48,7 +60,23 @@ INDEX_JSON = ROOT / "index.json"  # lookup map: phone/email/name -> slug
 INDEX_MD = ROOT / "index.md"      # human catalog
 MERGE_CSV = ROOT / "merge-candidates.csv"
 MERGE_MD = ROOT / "merge-candidates.md"
+MERGE_VERDICTS_CSV = ROOT / "merge-verdicts.csv"  # full judge log incl. rejections
 PARENTS_DIR = ROOT / "parents"    # merged canonical-person dossiers (link to children)
+
+# Declared-contract path templates (`pipeline/contract.py`). Per-person files are
+# unenumerable at declaration time, so the graph names them as `{person_id}` /
+# `{slug}` templates — same mechanism as gmail discovery's `{account_slug}`.
+# Producer and consumer must use the SAME constant: graph edges are string
+# equality on the declared path.
+RAW_BUNDLE_TEMPLATE = str(RAW_DIR / "{person_id}.json")
+RAW_MANIFEST = RAW_DIR / "manifest.json"
+FACTS_TEMPLATE = str(FACTS_DIR / "{person_id}.jsonl")
+FACTS_MANIFEST = FACTS_DIR / "manifest.json"
+DOSSIER_TEMPLATE = str(DOSSIER_DIR / "{slug}.md")
+DOSSIERS_MANIFEST = DOSSIER_DIR / "manifest.json"
+MERGE_MANIFEST = DOSSIER_DIR / "merge_manifest.json"
+PARENT_TEMPLATE = str(PARENTS_DIR / "{slug}.md")
+PARENTS_MANIFEST = PARENTS_DIR / "manifest.json"
 
 # Phase 3 — reconcile parents against their attached LinkedIn profile ("self-heal").
 RECONCILE_DIR = ROOT / "reconcile"
@@ -60,12 +88,17 @@ SUMMARY_MD = RECONCILE_DIR / "summary.md"           # the ONE report to read (wh
 REVIEW_DIR = ROOT / "review"                         # staged human review UI state + cached avatars
 REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # fixed completion signal for the agent
 
-DEFAULT_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
+# Network-import locations come from the ONE home for them
+# (`primitives/common/paths.py`); only the deep-context tree is described here.
+DEFAULT_PEOPLE_CSV = DEFAULT_BASE_DIR / "merged" / "people.csv"
 # RapidAPI LinkedIn lookup cache (one JSON per public_identifier) — the "linkedin lookups".
-PROFILE_CACHE_DIR = Path(".powerpacks/network-import/profile_cache_v2")
+PROFILE_CACHE_DIR = DEFAULT_PROFILE_CACHE_DIR
+# Declared-contract template for the cache (prefetch writes it; reconcile,
+# apply-retargets, and the review UI read it).
+PROFILE_CACHE_TEMPLATE = str(PROFILE_CACHE_DIR / "{public_identifier}.json")
 # Durable Deep Context review decisions. Realized identities are persisted from
 # this file to directory.csv before fan-in, so they survive source re-imports.
-OVERRIDES_DIR = Path(".powerpacks/network-import/overrides")
+OVERRIDES_DIR = DEFAULT_BASE_DIR / "overrides"
 LINKEDIN_OVERRIDES_CSV = OVERRIDES_DIR / "review.csv"
 # Enriched re-attach rows (retargets), persisted to directory.csv at realization.
 RETARGET_PEOPLE_CSV = OVERRIDES_DIR / "retarget-people.csv"

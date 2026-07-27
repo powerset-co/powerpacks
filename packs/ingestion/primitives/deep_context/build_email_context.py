@@ -91,6 +91,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.contact_fields import is_generic_or_non_person  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.paths import discover_source_dir  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.msgvault import store as gni  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.msgvault.util import (  # noqa: E402
     default_excluded_labels,
@@ -100,7 +101,7 @@ from packs.ingestion.primitives.discover.gmail.extract_gmail import (  # noqa: E
     linkedin_resolution_queue_rows,
 )
 
-DEFAULT_OUT_DIR = Path(".powerpacks/network-import/discover/email-context")
+DEFAULT_OUT_DIR = discover_source_dir("email-context")
 # Emails read per contact (most recent, sender = contact or you). More = richer
 # identity signal at a small linear cost; tunable via --per-person (e.g. 50).
 DEFAULT_PER_PERSON = 20

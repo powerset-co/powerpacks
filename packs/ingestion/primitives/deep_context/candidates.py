@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from packs.ingestion.primitives.deep_context.common import (
+    DEFAULT_PEOPLE_CSV,
     FACTS_DIR,
     GMAIL_CHANNEL,
     IMESSAGE_CHANNEL,
@@ -22,8 +23,9 @@ from packs.ingestion.primitives.deep_context.common import (
     _collect_phones,
 )
 
-# Import-owned candidate pools (fixed paths, same relative style as common.py).
-MERGED_PEOPLE_CSV = Path(".powerpacks/network-import/merged/people.csv")
+# The canonical merged network file, from its one home in common.py (which in
+# turn derives the network-import root from primitives/common/paths.py).
+MERGED_PEOPLE_CSV = DEFAULT_PEOPLE_CSV
 
 PERSON_ID_PREFIX = "candidate:"
 

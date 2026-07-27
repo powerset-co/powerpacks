@@ -39,6 +39,17 @@ invisible to the whole review, with no way to keep or reject them. They are revi
 but never research-eligible; the worth-gated candidate path owns paid lookups.
 
 Changelog:
+  2026-07-27 (declared contract): `ReconcileLinkedin` is a `pipeline/contract.py:Node`
+    ("deep_reconcile"). Inputs (index.json, people.csv, the facts/raw/profile-cache
+    templates, owner.json) and outputs (verdicts.jsonl/csv, summary.md, and the
+    review.csv identity column slice — `ReviewRow`, `owns_columns`) are declared;
+    the manifest goes through the Node template (same keys, plus the declared
+    `fingerprints` block and the writer-stamped `updated_at`). `run(args)` +
+    `_finalize` became `ReconcileLinkedin.execute()`; `--dry-run` BYPASSES the
+    node (`dry_run_estimate` + emit) because an estimate writes nothing today —
+    routing it through `Node.run()` would clobber a completed manifest with a
+    `dry_run` one. Every other module-level name/signature is untouched (eight+
+    modules import them). Same flags, same status strings, same exit codes.
   2026-07-24: `no_link` tasks are no longer stripped from verdicts.jsonl (they carry
     their contact keys and stay out of the paid-research subset), so contact-only
     people are reviewable. The flat verdicts.csv stays identity-only.
@@ -79,12 +90,18 @@ from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
     FACTS_DIR,
+    FACTS_TEMPLATE,
     CONSOLIDATE_PEOPLE_CSV,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
+    OWNER_JSON,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
+    PROFILE_CACHE_TEMPLATE,
+    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
+    RECONCILE_DIR,
+    SUMMARY_MD,
     VERDICTS_CSV,
     VERDICTS_JSONL,
     emit,
@@ -95,16 +112,18 @@ from packs.ingestion.primitives.deep_context.common import (
     owner_background_block,
     parse_list,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.review_store import (
     OVERRIDE_COLUMNS,
     USER_APPROVED,
+    ReviewRow,
     is_parent_worth_row,
     load_override_rows,
     row_keys_for_person,
     write_override_rows,
 )
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
     read_usable_cached_profile,
@@ -1369,49 +1388,22 @@ def load_tasks_from_verdicts(path: Path) -> list[dict[str, Any]]:
     return tasks
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    started = time.monotonic()
-    index = _read_json(Path(args.index_json))
-
-    # --reapply: re-decide/apply from the existing verdicts (e.g. after changing the
-    # auto-resolution rule) without re-judging — no OpenAI spend. Still overlays the
-    # deterministic connection ground-truth, so it's free to fold in your LinkedIn connections.
-    if getattr(args, "reapply", False):
-        tasks = load_tasks_from_verdicts(Path(args.verdicts_jsonl))
-        # Drop verdicts for parents that no longer exist (e.g. an owner-alias parent that
-        # build_parents now excludes) so they fall out of the review table/UI for free.
-        valid_parents = set(index.get("parents", {}))
-        if valid_parents:
-            tasks = [t for t in tasks if t.get("parent_slug") in valid_parents]
-        people = load_people_rows(Path(args.people_csv))
-        facts_dir = Path(args.facts_dir)
-        for t in tasks:
-            if t.get("no_link"):
-                continue
-            if _from_connections(t.get("person_ids") or [], people):
-                t["from_connections"], t["verdict"], t["error"] = True, connection_verdict(), ""
-            # Recompute the self-reported LinkedIn from facts so the free recovery also runs here.
-            url, pub = self_linkedin_from_facts(t.get("person_ids") or [], facts_dir)
-            t["dossier"] = {**(t.get("dossier") or {}), "self_linkedin_url": url, "self_linkedin_pub": pub}
-        # Re-run the unconfirmed-name-match revert here too: if the threshold changed (or an old
-        # verdict no longer clears the bar), a speculative match drops back to the no-link path
-        # instead of lingering as a stale LinkedIn review row.
-        overrides = load_override_rows(Path(args.overrides_csv))
-        revert_unconfirmed_name_matches(tasks, args.confirm_threshold, overrides, facts_dir)
-        return _finalize(args, tasks, index, usage_total={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
-                         use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")), started=started)
-
-    people = load_people_rows(Path(args.people_csv))
-    facts_dir = Path(args.facts_dir)
-    tasks = build_tasks(index, people, facts_dir, Path(args.raw_dir), Path(args.profile_cache_dir))
-    overrides = load_override_rows(Path(args.overrides_csv))
+def _prepared_tasks(*, index: dict[str, Any], people: dict[str, dict[str, str]],
+                    facts_dir: Path, raw_dir: Path, cache_dir: Path,
+                    slug: list[str] | None, limit: int,
+                    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build + subset-filter the judge tasks, overlay the connection ground truth,
+    and split out the identity-judgeable subset — returns (tasks, connections,
+    identity_judgeable). Shared by the node's `execute()` and the free `--dry-run`
+    estimate so the two can never disagree about what would be judged."""
+    tasks = build_tasks(index, people, facts_dir, raw_dir, cache_dir)
     # Subset targeting (--slug/--limit): cheap spot identity re-reviews without
-    # re-judging everyone. Results MERGE into verdicts.jsonl (see _finalize).
-    if getattr(args, "slug", None):
-        wanted = {s.strip().lower() for s in args.slug}
+    # re-judging everyone. Results MERGE into verdicts.jsonl (see execute()).
+    if slug:
+        wanted = {s.strip().lower() for s in slug}
         tasks = [t for t in tasks if (t.get("parent_slug") or "").lower() in wanted]
-    if getattr(args, "limit", 0):
-        tasks = tasks[: args.limit]
+    if limit:
+        tasks = tasks[:limit]
     # Ground truth first: contacts who ARE your LinkedIn connections are confirmed without the LLM.
     connections = [t for t in tasks if t.get("from_connections") and not t.get("no_link")]
     for t in connections:
@@ -1421,76 +1413,37 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if not t.get("no_link") and t["linkedin"].get("has_profile")
         and not t.get("from_connections")
     ]
+    return tasks, connections, identity_judgeable
+
+
+def dry_run_estimate(*, index_json: Path, people_csv: Path, profile_cache_dir: Path,
+                     facts_dir: Path, raw_dir: Path, model: str, effort: str,
+                     slug: list[str] | None = None, limit: int = 0) -> dict[str, Any]:
+    """Free cost estimate (--dry-run): judges nothing and writes NOTHING — including
+    the reconcile manifest. That is why this path deliberately BYPASSES the Node
+    template: `Node.run()` writes the manifest for every payload it returns, and an
+    estimate must never clobber a completed run's manifest with a `dry_run` one."""
+    started = time.monotonic()
+    index = _read_json(Path(index_json))
+    people = load_people_rows(Path(people_csv))
+    tasks, connections, identity_judgeable = _prepared_tasks(
+        index=index, people=people, facts_dir=Path(facts_dir), raw_dir=Path(raw_dir),
+        cache_dir=Path(profile_cache_dir), slug=slug, limit=limit)
     judgeable = identity_judgeable
-
-    if args.dry_run:
-        # ~ cost bracket: judgeable tasks * (rich-context floor/ceiling) — no spend.
-        per_lo, per_hi = 0.004, 0.02
-        manifest = {
-            "source": "reconcile_linkedin", "status": "dry_run",
-            "parents": len(index.get("parents", {})), "tasks": len(tasks),
-            "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
-            "identity_judgeable": len(identity_judgeable),
-            "ground_truth_connections": len(connections),
-            "conflicts": sum(1 for t in tasks if t.get("conflict")),
-            "estimated_cost_usd_low": round(len(judgeable) * per_lo, 2),
-            "estimated_cost_usd_high": round(len(judgeable) * per_hi, 2),
-            "model": args.model, "reasoning_effort": reasoning_effort(args.reasoning_effort),
-            "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
-        }
-        return manifest
-
-    usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-    use_llm = not args.no_llm
-    owner_block = owner_background_block(load_owner()) if load_owner() else ""
-
-    if use_llm and judgeable:
-        load_env()
-        # Wall-time is bound by per-call high-reasoning latency, not local CPU — so parallelize hard.
-        concurrency = args.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
-        effort = reasoning_effort(args.reasoning_effort)
-
-        async def driver() -> None:
-            client = make_async_client(timeout=args.timeout)
-            semaphore = asyncio.Semaphore(max(1, concurrency))
-            collected: dict[int, dict[str, Any]] = {}
-
-            async def one(i: int, task: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-                return i, await judge_task(client, task, owner_block, model=args.model,
-                                           effort=effort, semaphore=semaphore, max_retries=args.max_retries)
-            try:
-                await drain_pool([one(i, t) for i, t in enumerate(judgeable)], lambda r: collected.__setitem__(r[0], r[1]))
-            finally:
-                await client.close()
-            for i, task in enumerate(judgeable):
-                res = collected.get(i, {"verdict": {}, "usage": {}, "error": "no result"})
-                for k in usage_total:
-                    usage_total[k] += res.get("usage", {}).get(k, 0)
-                task["verdict"] = res.get("verdict") or {}
-                task["error"] = res.get("error", "")
-        asyncio.run(driver())
-    elif judgeable:
-        for task in judgeable:
-            task["verdict"] = deterministic_verdict(task)
-            task["error"] = ""
-
-    # Tasks without a usable profile still get a (no-spend) verdict so they route to review.
-    for task in tasks:
-        if "verdict" not in task:
-            task["verdict"] = deterministic_verdict(task)
-            task["error"] = ""
-
-    # Optimistic name-matches the judge didn't confirm fall back to the plain
-    # no-link lookup path, so only confirmed matches persist / auto-apply.
-    revert_unconfirmed_name_matches(tasks, args.confirm_threshold, overrides, facts_dir)
-
-    # A subset run must not clobber the full verdicts file: overlay the fresh rows onto the
-    # existing verdicts so the review UI keeps seeing everyone.
-    if getattr(args, "slug", None) or getattr(args, "limit", 0):
-        tasks = merge_subset_tasks(Path(args.verdicts_jsonl), tasks)
-
-    return _finalize(args, tasks, index, usage_total=usage_total, use_llm=use_llm,
-                     judged=len(judgeable), started=started)
+    # ~ cost bracket: judgeable tasks * (rich-context floor/ceiling) — no spend.
+    per_lo, per_hi = 0.004, 0.02
+    return {
+        "source": "reconcile_linkedin", "status": "dry_run",
+        "parents": len(index.get("parents", {})), "tasks": len(tasks),
+        "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
+        "identity_judgeable": len(identity_judgeable),
+        "ground_truth_connections": len(connections),
+        "conflicts": sum(1 for t in tasks if t.get("conflict")),
+        "estimated_cost_usd_low": round(len(judgeable) * per_lo, 2),
+        "estimated_cost_usd_high": round(len(judgeable) * per_hi, 2),
+        "model": model, "reasoning_effort": reasoning_effort(effort),
+        "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
+    }
 
 
 def merge_subset_tasks(verdicts_path: Path, fresh: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1506,82 +1459,320 @@ def merge_subset_tasks(verdicts_path: Path, fresh: list[dict[str, Any]]) -> list
     return existing + fresh
 
 
-def _finalize(args: argparse.Namespace, tasks: list[dict[str, Any]], index: dict[str, Any], *,
-              usage_total: dict[str, int], use_llm: bool, judged: int, started: float) -> dict[str, Any]:
-    """Shared tail: decide -> verdicts/review/applied outputs -> parent injection -> manifest."""
-    out_dir = Path(args.verdicts_jsonl).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # EVERY task is written, including `no_link` (a real person with no LinkedIn attached).
-    # Stripping them made contact-only people unreachable: the review model builds its rows
-    # from this file, so a person with only an email/phone appeared in no queue at all and
-    # no decision could be made about them. They carry a free deterministic verdict
-    # (needs_review + linkedin_plausibly_absent) and are REVIEWABLE but NOT research-eligible
-    # — reconcile_deep_research.eligible_subset skips them; the worth-gated candidate path is
-    # the only door to paid research. The flat CSV stays identity-only (a no-link row has no
-    # LinkedIn columns to fill).
-    write_verdicts(Path(args.verdicts_jsonl), Path(args.verdicts_csv), tasks,
-                   csv_results=[task for task in tasks if not task.get("no_link")])
+class ReconcileLinkedinManifest(StageManifest):
+    """Typed manifest payload — the completed raw dict's keys verbatim
+    (`updated_at` is stamped by the manifest writer; `fingerprints` by the Node)."""
+    source: str = "reconcile_linkedin"
+    judge: str = ""
+    parents: int = 0
+    tasks: int = 0
+    judged: int = 0
+    ground_truth_connections: int = 0
+    self_reported_retargets: int = 0
+    name_match_reviews: int = 0
+    verdicts: dict[str, int] = {}
+    conflicts: int = 0
+    conflicts_auto_resolved: int = 0
+    conflicts_to_review: int = 0
+    no_link: int = 0
+    errors: int = 0
+    overrides: dict[str, Any] = {}
+    consolidation: dict[str, Any] = {}
+    summary_md: str = ""
+    applied_csv: str = ""
+    needs_review: int = 0
+    deep_research_eligible: int = 0
+    deep_research_est_usd: float = 0.0
+    tokens: dict[str, int] = {}
+    estimated_cost_usd: float = 0.0
+    elapsed_ms: int = 0
 
-    decide_actions(tasks, args.confirm_threshold, getattr(args, "detach_threshold", DEFAULT_DETACH))   # one authoritative decision pass
-    parents_dir = Path(args.parents_dir)
-    for task in tasks:
-        if task.get("verdict") and not task.get("no_link"):
-            inject_section(parents_dir / f"{task['parent_slug']}.md", render_section(task["verdict"], task["linkedin"]))
 
-    override_stats = {"path": str(args.overrides_csv), "detached": 0, "verified": 0, "pending": 0, "total_rows": 0}
-    consolidation = {"consolidated_parents": 0}
-    self_retargets = {"proposed": 0}
-    name_match_reviews = {"name_match_reviews": 0}
-    if not args.no_overrides:
-        override_stats = write_overrides(Path(args.overrides_csv), tasks, Path(args.facts_dir))
-        # Free recovery: retarget to a LinkedIn the contact shared themselves (overrides any
-        # detach/verify on the wrong attached link). Sticky — won't clobber a user decision.
-        self_retargets = upsert_retargets(Path(args.overrides_csv), self_reported_retargets(tasks))
-        # Surface (don't vanish) each unique first-degree name match the judge couldn't corroborate:
-        # a visible needs_review row naming the connection so the human confirms or rejects it.
-        name_match_reviews = upsert_name_match_reviews(Path(args.overrides_csv), tasks, Path(args.facts_dir))
-        # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
-        consolidation = write_consolidations(Path(args.consolidate_people_csv), tasks, Path(args.people_csv))
-    write_applied(out_dir / "applied.csv", decided_report(tasks))
-    write_summary(out_dir / "summary.md", tasks, Path(args.overrides_csv), consolidation)
+class ReconcileLinkedin(Node):
+    """Judges every (parent dossier ↔ attached LinkedIn) pair and writes the
+    verdicts plus the review.csv identity slice. Owns exactly the identity /
+    bookkeeping columns of review.csv: synthesis owns the llm_worth family and the
+    human owns network_worth — this node only carries those two forward."""
 
-    counts = {v: 0 for v in VERDICTS}
-    for task in tasks:
-        v = (task.get("verdict") or {}).get("verdict")
-        if v in counts:
-            counts[v] += 1
-    conflict_tasks = [t for t in tasks if t.get("conflict")]
-    dr_subset = [t for t in tasks
-                 if (t.get("verdict") or {}).get("verdict") == "wrong_person"
-                 and float((t.get("verdict") or {}).get("confidence") or 0) >= getattr(args, "detach_threshold", DEFAULT_DETACH)
-                 and (t.get("verdict") or {}).get("recommend_deep_research")
-                 and not (t.get("verdict") or {}).get("linkedin_plausibly_absent")]
+    name = "deep_reconcile"
+    inputs = (
+        Artifact(path=str(INDEX_JSON), required=False),
+        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
+        # The profile cache is EXTERNAL: it materializes RapidAPI responses and
+        # is hydrated opportunistically by several nodes (prefetch on purpose,
+        # owner/retargets on a miss) — no single node owns it, and declaring an
+        # in-graph producer would pin a prefetch<->reconcile cycle over what is
+        # a cross-run cache, not a pipeline edge. linkedin_view falls back to
+        # people.csv columns on a miss, so it is never required.
+        Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),
+        Artifact(path=str(OWNER_JSON), required=False),
+    )
+    # `verdicts.csv` (flat human review table) and `summary.md` (the one report
+    # to read) are written but NOT declared: they are human surfaces no node
+    # reads — report files stay out of the graph (same rule as compose's
+    # index.md and cluster's merge-candidates.md).
+    outputs = (
+        Artifact(path=str(VERDICTS_JSONL), writes="full_rewrite"),
+        # Contact-only fold rows for kept parents; persist_review_identities
+        # reads them into the directory at realization.
+        Artifact(path=str(CONSOLIDATE_PEOPLE_CSV), writes="full_rewrite", required=False),
+        # The identity slice of the shared review table: exactly the columns this
+        # module AUTHORS (write_overrides / upsert_retargets /
+        # upsert_name_match_reviews; upsert_retargets is also the sole
+        # llm_judge_fingerprint writer anywhere). The llm_worth family is
+        # synthesize's, network_worth is the human's, and the row-bookkeeping
+        # columns every writer stamps when minting a row (public_identifier,
+        # person_id, source, updated_at) are deliberately UNCLAIMED by all
+        # writers — shared bookkeeping, not ownership.
+        Artifact(
+            path=str(LINKEDIN_OVERRIDES_CSV),
+            row_model=ReviewRow,
+            writes="upsert",
+            owns_columns=(
+                "action", "approved", "new_linkedin_url",
+                "new_public_identifier", "linkedin_url", "match_emails",
+                "match_phones", "confidence", "reason",
+                "llm_judge_fingerprint",
+            ),
+            required=False,  # --no-overrides completes without writing it
+        ),
+    )
+    payload = ReconcileLinkedinManifest
+    manifest = str(RECONCILE_DIR / "manifest.json")
 
-    billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
-    manifest = {
-        "source": "reconcile_linkedin", "status": "completed",
-        "judge": "llm" if use_llm else "deterministic",
-        "parents": len(index.get("parents", {})), "tasks": len(tasks), "judged": judged,
-        "ground_truth_connections": sum(1 for t in tasks if t.get("from_connections") and not t.get("no_link")),
-        "self_reported_retargets": self_retargets.get("proposed", 0),
-        "name_match_reviews": name_match_reviews.get("name_match_reviews", 0),
-        "verdicts": counts, "conflicts": len(conflict_tasks),
-        "conflicts_auto_resolved": sum(1 for t in conflict_tasks if t.get("via") == "conflict_resolved"),
-        "conflicts_to_review": sum(1 for t in conflict_tasks if t.get("action") == "review"),
-        "no_link": sum(1 for t in tasks if t.get("no_link")),
-        "errors": sum(1 for t in tasks if t.get("error")),
-        "overrides": override_stats, "consolidation": consolidation,
-        "summary_md": str(out_dir / "summary.md"),
-        "applied_csv": str(out_dir / "applied.csv"),
-        "needs_review": override_stats.get("pending", 0) + sum(1 for t in tasks if t.get("no_link")),
-        "deep_research_eligible": len(dr_subset),
-        "deep_research_est_usd": round(len(dr_subset) * DR_COST_PER_PERSON, 2),
-        "tokens": usage_total,
-        "estimated_cost_usd": estimate_cost_usd(usage_total["input_tokens"], billed_output, args.model),
-        "elapsed_ms": int((time.monotonic() - started) * 1000), "updated_at": now_iso(),
-    }
-    write_json(out_dir / "manifest.json", manifest)
-    return manifest
+    def __init__(
+        self,
+        *,
+        index_json: Path | None = None,
+        people_csv: Path | None = None,
+        profile_cache_dir: Path | None = None,
+        facts_dir: Path | None = None,
+        raw_dir: Path | None = None,
+        parents_dir: Path | None = None,
+        verdicts_jsonl: Path | None = None,
+        verdicts_csv: Path | None = None,
+        confirm_threshold: float = DEFAULT_CONFIRM,
+        detach_threshold: float = DEFAULT_DETACH,
+        model: str = DEFAULT_MODEL,
+        reasoning_effort: str = "high",
+        concurrency: int = 0,
+        timeout: int = 120,
+        max_retries: int = 6,
+        overrides_csv: Path | None = None,
+        consolidate_people_csv: Path | None = None,
+        slug: list[str] | None = None,
+        limit: int = 0,
+        no_overrides: bool = False,
+        no_llm: bool = False,
+        reapply: bool = False,
+    ) -> None:
+        self.index_json = Path(index_json or INDEX_JSON)
+        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
+        self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
+        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.raw_dir = Path(raw_dir or RAW_DIR)
+        self.parents_dir = Path(parents_dir or PARENTS_DIR)
+        self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
+        self.verdicts_csv = Path(verdicts_csv or VERDICTS_CSV)
+        self.confirm_threshold = confirm_threshold
+        self.detach_threshold = detach_threshold
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.concurrency = concurrency
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
+        self.consolidate_people_csv = Path(consolidate_people_csv or CONSOLIDATE_PEOPLE_CSV)
+        self.slug = list(slug or [])
+        self.limit = limit
+        self.no_overrides = no_overrides
+        self.no_llm = no_llm
+        self.reapply = reapply
+
+    def bindings(self) -> dict[str, str]:
+        out_dir = self.verdicts_jsonl.parent
+        return {
+            str(INDEX_JSON): str(self.index_json),
+            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
+            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
+            PROFILE_CACHE_TEMPLATE: str(self.profile_cache_dir / "{public_identifier}.json"),
+            str(VERDICTS_JSONL): str(self.verdicts_jsonl),
+            str(VERDICTS_CSV): str(self.verdicts_csv),
+            str(SUMMARY_MD): str(out_dir / "summary.md"),
+            str(LINKEDIN_OVERRIDES_CSV): str(self.overrides_csv),
+            self.manifest: str(out_dir / "manifest.json"),
+        }
+
+    def execute(self) -> ReconcileLinkedinManifest:
+        started = time.monotonic()
+        index = _read_json(self.index_json)
+
+        # --reapply: re-decide/apply from the existing verdicts (e.g. after changing the
+        # auto-resolution rule) without re-judging — no OpenAI spend. Still overlays the
+        # deterministic connection ground-truth, so it's free to fold in your LinkedIn connections.
+        if self.reapply:
+            tasks = load_tasks_from_verdicts(self.verdicts_jsonl)
+            # Drop verdicts for parents that no longer exist (e.g. an owner-alias parent that
+            # build_parents now excludes) so they fall out of the review table/UI for free.
+            valid_parents = set(index.get("parents", {}))
+            if valid_parents:
+                tasks = [t for t in tasks if t.get("parent_slug") in valid_parents]
+            people = load_people_rows(self.people_csv)
+            for t in tasks:
+                if t.get("no_link"):
+                    continue
+                if _from_connections(t.get("person_ids") or [], people):
+                    t["from_connections"], t["verdict"], t["error"] = True, connection_verdict(), ""
+                # Recompute the self-reported LinkedIn from facts so the free recovery also runs here.
+                url, pub = self_linkedin_from_facts(t.get("person_ids") or [], self.facts_dir)
+                t["dossier"] = {**(t.get("dossier") or {}), "self_linkedin_url": url, "self_linkedin_pub": pub}
+            # Re-run the unconfirmed-name-match revert here too: if the threshold changed (or an old
+            # verdict no longer clears the bar), a speculative match drops back to the no-link path
+            # instead of lingering as a stale LinkedIn review row.
+            overrides = load_override_rows(self.overrides_csv)
+            revert_unconfirmed_name_matches(tasks, self.confirm_threshold, overrides, self.facts_dir)
+            return self._finalize(tasks, index,
+                                  usage_total={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
+                                  use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")),
+                                  started=started)
+
+        people = load_people_rows(self.people_csv)
+        overrides = load_override_rows(self.overrides_csv)
+        tasks, _connections, identity_judgeable = _prepared_tasks(
+            index=index, people=people, facts_dir=self.facts_dir, raw_dir=self.raw_dir,
+            cache_dir=self.profile_cache_dir, slug=self.slug, limit=self.limit)
+        judgeable = identity_judgeable
+
+        usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+        use_llm = not self.no_llm
+        owner_block = owner_background_block(load_owner()) if load_owner() else ""
+
+        if use_llm and judgeable:
+            load_env()
+            # Wall-time is bound by per-call high-reasoning latency, not local CPU — so parallelize hard.
+            concurrency = self.concurrency or env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=64)
+            effort = reasoning_effort(self.reasoning_effort)
+
+            async def driver() -> None:
+                client = make_async_client(timeout=self.timeout)
+                semaphore = asyncio.Semaphore(max(1, concurrency))
+                collected: dict[int, dict[str, Any]] = {}
+
+                async def one(i: int, task: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+                    return i, await judge_task(client, task, owner_block, model=self.model,
+                                               effort=effort, semaphore=semaphore, max_retries=self.max_retries)
+                try:
+                    await drain_pool([one(i, t) for i, t in enumerate(judgeable)], lambda r: collected.__setitem__(r[0], r[1]))
+                finally:
+                    await client.close()
+                for i, task in enumerate(judgeable):
+                    res = collected.get(i, {"verdict": {}, "usage": {}, "error": "no result"})
+                    for k in usage_total:
+                        usage_total[k] += res.get("usage", {}).get(k, 0)
+                    task["verdict"] = res.get("verdict") or {}
+                    task["error"] = res.get("error", "")
+            asyncio.run(driver())
+        elif judgeable:
+            for task in judgeable:
+                task["verdict"] = deterministic_verdict(task)
+                task["error"] = ""
+
+        # Tasks without a usable profile still get a (no-spend) verdict so they route to review.
+        for task in tasks:
+            if "verdict" not in task:
+                task["verdict"] = deterministic_verdict(task)
+                task["error"] = ""
+
+        # Optimistic name-matches the judge didn't confirm fall back to the plain
+        # no-link lookup path, so only confirmed matches persist / auto-apply.
+        revert_unconfirmed_name_matches(tasks, self.confirm_threshold, overrides, self.facts_dir)
+
+        # A subset run must not clobber the full verdicts file: overlay the fresh rows onto the
+        # existing verdicts so the review UI keeps seeing everyone.
+        if self.slug or self.limit:
+            tasks = merge_subset_tasks(self.verdicts_jsonl, tasks)
+
+        return self._finalize(tasks, index, usage_total=usage_total, use_llm=use_llm,
+                              judged=len(judgeable), started=started)
+
+    def _finalize(self, tasks: list[dict[str, Any]], index: dict[str, Any], *,
+                  usage_total: dict[str, int], use_llm: bool, judged: int,
+                  started: float) -> ReconcileLinkedinManifest:
+        """Shared tail: decide -> verdicts/review/applied outputs -> parent injection ->
+        typed payload. The manifest write itself is the Node template's, not ours."""
+        out_dir = self.verdicts_jsonl.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # EVERY task is written, including `no_link` (a real person with no LinkedIn attached).
+        # Stripping them made contact-only people unreachable: the review model builds its rows
+        # from this file, so a person with only an email/phone appeared in no queue at all and
+        # no decision could be made about them. They carry a free deterministic verdict
+        # (needs_review + linkedin_plausibly_absent) and are REVIEWABLE but NOT research-eligible
+        # — reconcile_deep_research.eligible_subset skips them; the worth-gated candidate path is
+        # the only door to paid research. The flat CSV stays identity-only (a no-link row has no
+        # LinkedIn columns to fill).
+        write_verdicts(self.verdicts_jsonl, self.verdicts_csv, tasks,
+                       csv_results=[task for task in tasks if not task.get("no_link")])
+
+        decide_actions(tasks, self.confirm_threshold, self.detach_threshold)   # one authoritative decision pass
+        for task in tasks:
+            if task.get("verdict") and not task.get("no_link"):
+                inject_section(self.parents_dir / f"{task['parent_slug']}.md", render_section(task["verdict"], task["linkedin"]))
+
+        override_stats = {"path": str(self.overrides_csv), "detached": 0, "verified": 0, "pending": 0, "total_rows": 0}
+        consolidation = {"consolidated_parents": 0}
+        self_retargets = {"proposed": 0}
+        name_match_reviews = {"name_match_reviews": 0}
+        if not self.no_overrides:
+            override_stats = write_overrides(self.overrides_csv, tasks, self.facts_dir)
+            # Free recovery: retarget to a LinkedIn the contact shared themselves (overrides any
+            # detach/verify on the wrong attached link). Sticky — won't clobber a user decision.
+            self_retargets = upsert_retargets(self.overrides_csv, self_reported_retargets(tasks))
+            # Surface (don't vanish) each unique first-degree name match the judge couldn't corroborate:
+            # a visible needs_review row naming the connection so the human confirms or rejects it.
+            name_match_reviews = upsert_name_match_reviews(self.overrides_csv, tasks, self.facts_dir)
+            # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
+            consolidation = write_consolidations(self.consolidate_people_csv, tasks, self.people_csv)
+        write_applied(out_dir / "applied.csv", decided_report(tasks))
+        write_summary(out_dir / "summary.md", tasks, self.overrides_csv, consolidation)
+
+        counts = {v: 0 for v in VERDICTS}
+        for task in tasks:
+            v = (task.get("verdict") or {}).get("verdict")
+            if v in counts:
+                counts[v] += 1
+        conflict_tasks = [t for t in tasks if t.get("conflict")]
+        dr_subset = [t for t in tasks
+                     if (t.get("verdict") or {}).get("verdict") == "wrong_person"
+                     and float((t.get("verdict") or {}).get("confidence") or 0) >= self.detach_threshold
+                     and (t.get("verdict") or {}).get("recommend_deep_research")
+                     and not (t.get("verdict") or {}).get("linkedin_plausibly_absent")]
+
+        billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
+        return ReconcileLinkedinManifest(
+            status="completed",
+            judge="llm" if use_llm else "deterministic",
+            parents=len(index.get("parents", {})), tasks=len(tasks), judged=judged,
+            ground_truth_connections=sum(1 for t in tasks if t.get("from_connections") and not t.get("no_link")),
+            self_reported_retargets=self_retargets.get("proposed", 0),
+            name_match_reviews=name_match_reviews.get("name_match_reviews", 0),
+            verdicts=counts, conflicts=len(conflict_tasks),
+            conflicts_auto_resolved=sum(1 for t in conflict_tasks if t.get("via") == "conflict_resolved"),
+            conflicts_to_review=sum(1 for t in conflict_tasks if t.get("action") == "review"),
+            no_link=sum(1 for t in tasks if t.get("no_link")),
+            errors=sum(1 for t in tasks if t.get("error")),
+            overrides=override_stats, consolidation=consolidation,
+            summary_md=str(out_dir / "summary.md"),
+            applied_csv=str(out_dir / "applied.csv"),
+            needs_review=override_stats.get("pending", 0) + sum(1 for t in tasks if t.get("no_link")),
+            deep_research_eligible=len(dr_subset),
+            deep_research_est_usd=round(len(dr_subset) * DR_COST_PER_PERSON, 2),
+            tokens=usage_total,
+            estimated_cost_usd=estimate_cost_usd(usage_total["input_tokens"], billed_output, self.model),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1620,7 +1811,43 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    emit(run(build_parser().parse_args(argv)))
+    args = build_parser().parse_args(argv)
+    # --dry-run is the no-write estimate and BYPASSES the node (see dry_run_estimate).
+    # --reapply takes precedence over it, exactly as before: reapply is a real
+    # (free) apply pass that writes everything, so it goes through the node.
+    if args.dry_run and not args.reapply:
+        emit(dry_run_estimate(
+            index_json=Path(args.index_json), people_csv=Path(args.people_csv),
+            profile_cache_dir=Path(args.profile_cache_dir), facts_dir=Path(args.facts_dir),
+            raw_dir=Path(args.raw_dir), model=args.model, effort=args.reasoning_effort,
+            slug=args.slug, limit=args.limit,
+        ))
+        return 0
+    payload = ReconcileLinkedin(
+        index_json=Path(args.index_json),
+        people_csv=Path(args.people_csv),
+        profile_cache_dir=Path(args.profile_cache_dir),
+        facts_dir=Path(args.facts_dir),
+        raw_dir=Path(args.raw_dir),
+        parents_dir=Path(args.parents_dir),
+        verdicts_jsonl=Path(args.verdicts_jsonl),
+        verdicts_csv=Path(args.verdicts_csv),
+        confirm_threshold=args.confirm_threshold,
+        detach_threshold=args.detach_threshold,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+        overrides_csv=Path(args.overrides_csv),
+        consolidate_people_csv=Path(args.consolidate_people_csv),
+        slug=args.slug,
+        limit=args.limit,
+        no_overrides=args.no_overrides,
+        no_llm=args.no_llm,
+        reapply=args.reapply,
+    ).run()
+    emit(payload.to_payload())
     return 0
 
 

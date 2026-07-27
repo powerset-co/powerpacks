@@ -57,11 +57,16 @@ from packs.ingestion.primitives.deep_context.review_store import (
     write_override_rows,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.common import (
+    FACTS_DIR,
+    INDEX_JSON,
+    LINKEDIN_OVERRIDES_CSV,
+)
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
 
-FACTS_DIR = Path(".powerpacks/deep-context/facts")
-REVIEW_CSV = Path(".powerpacks/network-import/overrides/review.csv")
-INDEX_JSON = Path(".powerpacks/deep-context/index.json")
+# Paths come from common.py, the one home for the deep-context layout (and, for
+# the network-import side, from primitives/common/paths.py behind it).
+REVIEW_CSV = LINKEDIN_OVERRIDES_CSV
 
 WORTH_VALUES = ("yes", "maybe", "no")
 

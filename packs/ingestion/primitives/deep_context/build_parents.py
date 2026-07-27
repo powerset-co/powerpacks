@@ -21,6 +21,15 @@ This stage owns exactly ONE index.json key — `parents` — and never touches `
 both record maps on write; see the index contract in `common.py`.
 
 Changelog:
+  2026-07-27 (declared contract): `BuildParents` is a `pipeline/contract.py:Node`.
+    Its per-person reads are declared as the shared `{person_id}`/`{slug}` templates,
+    `index.json` is declared with `owns_columns=("parents",)` against
+    compose_dossier's `("slugs",)`, the owner-alias fold declares its `owner.json`
+    write, and the manifest goes through the Node template (same keys, plus the
+    declared `fingerprints` block; `updated_at` is now stamped by the manifest
+    writer rather than carried in the payload). `run(args)` became `execute()`;
+    same flags, same outputs. The parent-worth review.csv sync is documented on
+    `outputs` rather than declared (see the note there).
   2026-07-27: parent slugs use eight actual parent-id digest characters; unchanged
     parent IDs migrate exact slug-keyed artifacts in place before index replacement.
   2026-07-24: writes index.json through common.write_index and no longer appends to
@@ -44,12 +53,17 @@ from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     DEEP_RESEARCH_DIR,
     DOSSIER_DIR,
+    DOSSIER_TEMPLATE,
     FACTS_DIR,
+    FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     MERGE_CSV,
     OWNER_JSON,
+    PARENT_TEMPLATE,
     PARENTS_DIR,
+    PARENTS_MANIFEST,
+    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
     RECONCILE_DIR,
     VERDICTS_CSV,
@@ -64,6 +78,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.common.contact_fields import normalize_email
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 PARENT_ANCHOR = "<!-- parent-link -->"
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
@@ -402,171 +417,288 @@ def inject_parent_backref(dossier_dir: Path, child_slug: str, parent_slug: str, 
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    started = time.monotonic()
-    index = load_index(Path(args.index_json))
-    old_parents = dict(index.get("parents") or {})
-    slugs_info = index.get("slugs", {})
-    pairs = load_pairs(Path(args.merge_csv))
-    pairs += superseded_pairs(Path(getattr(args, "people_csv", "") or DEFAULT_PEOPLE_CSV), slugs_info)
-    score_by_pair = {tuple(sorted((p["slug_a"], p["slug_b"]))): p for p in pairs}
-    clusters = clusters_from_pairs(pairs)
+class BuildParentsManifest(StageManifest):
+    """The stage's typed manifest payload — same keys as the raw dict it replaces
+    (`updated_at` is stamped by the manifest writer)."""
+    source: str = "build_parents"
+    clusters: int = 0
+    parents_written: int = 0
+    merged_parents: int = 0
+    singleton_parents: int = 0
+    owner_excluded: int = 0
+    owner_aliases_added: list[str] = []
+    orphans_removed: int = 0
+    # Slug-migration counters (`migrate_parent_slug_artifacts`).
+    parent_slug_keys_migrated: int = 0
+    parent_slug_directories_renamed: int = 0
+    parent_slug_directory_conflicts: int = 0
+    parent_slug_csv_rows_rewritten: int = 0
+    parent_slug_jsonl_rows_rewritten: int = 0
+    # Parent-worth sync counters (`worth_view.sync_parent_worth_rows`).
+    worth_parent_rows: int = 0
+    worth_human_migrated: int = 0
+    worth_legacy_marks_cleared: int = 0
+    worth_stale_parent_rows_removed: int = 0
+    parents_dir: str = ""
+    elapsed_ms: int = 0
 
-    parents_dir = Path(args.parents_dir)
-    parents_dir.mkdir(parents=True, exist_ok=True)
-    dossier_dir = Path(args.dossier_dir)
-    facts_dir = Path(args.facts_dir)
-    raw_dir = Path(args.raw_dir)
 
-    index["parents"] = {}  # authoritative for this run (don't accumulate stale clusters)
-    written = 0
-    singletons = 0
-    written_slugs: set[str] = set()
-    clustered_slugs: set[str] = set()
-    # The mailbox owner shows up as a "contact" when they email from another address (synthesis
-    # flags it is_owner). They are YOU, not a contact — never make them a parent.
-    owner_slugs = {slug for slug, info in slugs_info.items()
-                   if _is_owner(info.get("person_id", ""), facts_dir)}
-    owner_aliases_added = fold_owner_aliases(owner_slugs, slugs_info, raw_dir) if owner_slugs else []
-    owner_excluded = 0
+class BuildParents(Node):
+    """Builds the canonical parent layer from merge clusters. Deterministic and
+    free; owns `index.json`'s `parents` key (compose_dossier owns `slugs`)."""
 
-    def _pscore(row: dict[str, Any]) -> float:
-        return float(row.get("confidence") or row.get("score") or 0)
-
-    for cluster in clusters:
-        members = [s for s in cluster if s in slugs_info and s not in owner_slugs]
-        if len(members) < 2:
-            continue
-
-        # Best judge confidence linking each member to the rest of the cluster.
-        def best_conf(slug: str) -> float:
-            return max((_pscore(score_by_pair[tuple(sorted((slug, o)))])
-                        for o in members if o != slug and tuple(sorted((slug, o))) in score_by_pair), default=0.0)
-
-        member_conf = {s: best_conf(s) for s in members}
-        # No needs_review limbo. Every clustered member is folded into the parent as a child
-        # (defaulted in), carrying its merge confidence — a human rejects the rare wrong one in
-        # the review UI. The old split hid low-confidence members entirely: they appeared in no
-        # parent's children, so reconcile never judged them and they vanished from the UI.
-        confirmed_slugs = list(members)
-        review_slugs: list[str] = []
-
-        def child_entry(slug: str, status: str) -> dict[str, Any]:
-            info = slugs_info[slug]
-            bundle = _read_json(raw_dir / f"{info['person_id']}.json")
-            reason = next((score_by_pair[tuple(sorted((slug, o)))]["reason"]
-                           for o in members if o != slug and tuple(sorted((slug, o))) in score_by_pair), "")
-            return {"slug": slug, "name": info.get("name", slug), "score": member_conf[slug],
-                    "reason": reason, "channels": bundle.get("source_channels") or [], "status": status,
-                    "pid": info["person_id"]}
-
-        confirmed = [child_entry(s, "confirmed") for s in confirmed_slugs]
-        review = [child_entry(s, "needs_review") for s in review_slugs]
-
-        # Merge facts from CONFIRMED children only; needs-review are listed, not merged.
-        # Identity comes from the children's index records (one projection, shared with
-        # the derived lookup maps), so the parent dossier and index never disagree.
-        all_records: list[dict[str, Any]] = []
-        child_pids: list[str] = []
-        for c in confirmed:
-            child_pids.append(c["pid"])
-            all_records.extend(read_jsonl(facts_dir / f"{c['pid']}.jsonl"))
-        emails, phones = parent_identifiers(index, [c["slug"] for c in confirmed])
-
-        merged = compose.merge_facts(all_records)
-        name = merged.get("canonical_name") or confirmed[0]["name"]
-        parent_id = parent_id_for(child_pids)
-        slug = slugify(name, parent_id)
-        (parents_dir / f"{slug}.md").write_text(
-            render_parent(name, parent_id, slug, emails, phones, merged, confirmed, review), encoding="utf-8")
-        written += 1
-        written_slugs.add(slug)
-
-        for c in confirmed + review:
-            inject_parent_backref(dossier_dir, c["slug"], slug, name)
-            clustered_slugs.add(c["slug"])
-
-        index["parents"][slug] = {"parent_id": parent_id, "name": name, "path": f"parents/{slug}.md",
-                                  "children": [c["slug"] for c in confirmed],
-                                  "needs_review": [c["slug"] for c in review]}
-
-    # Promote every UNMERGED person to a thin singleton parent (a pointer to its one
-    # child), so `parents/` is ALWAYS the COMPLETE canonical layer: exactly one parent
-    # per real person. Idempotent — singleton parent_id is a stable hash of [person_id].
-    for child_slug, info in slugs_info.items():
-        if child_slug in clustered_slugs:
-            continue
-        if child_slug in owner_slugs:   # you on another email — not a contact
-            owner_excluded += 1
-            continue
-        pid = info["person_id"]
-        name = info.get("name", child_slug)
-        emails, phones = parent_identifiers(index, [child_slug])
-        parent_id = parent_id_for([pid])
-        pslug = slugify(name, parent_id)
-        (parents_dir / f"{pslug}.md").write_text(
-            render_singleton(name, parent_id, pslug, child_slug, emails, phones, info.get("headline", "")),
-            encoding="utf-8")
-        written += 1
-        singletons += 1
-        written_slugs.add(pslug)
-        inject_parent_backref(dossier_dir, child_slug, pslug, name)
-        index["parents"][pslug] = {"parent_id": parent_id, "name": name, "path": f"parents/{pslug}.md",
-                                   "children": [child_slug], "needs_review": [], "singleton": True}
-
-    # Remove orphan parent files from earlier cluster runs (slug set changes when
-    # clusters change); the dossier compose does the same for child dossiers.
-    orphans = 0
-    for md in parents_dir.glob("*.md"):
-        if md.stem not in written_slugs:
-            md.unlink()
-            orphans += 1
-
-    slug_migrations = parent_slug_migrations(old_parents, index["parents"])
-    slug_migration = migrate_parent_slug_artifacts(slug_migrations)
-    index_json = Path(args.index_json)
-    write_index(index_json, index)
-    # Parent construction is the first point where canonical membership exists.
-    # Mirror child synthesis worth and migrate legacy human marks into one
-    # parent-owned review.csv row while those memberships are authoritative.
-    from packs.ingestion.primitives.deep_context.worth_view import sync_parent_worth_rows
-
-    review_csv = str(getattr(args, "review_csv", "") or "").strip()
-    worth_sync = (
-        sync_parent_worth_rows(Path(review_csv), facts_dir, index_json)
-        if review_csv
-        else {
-            "parent_rows": 0,
-            "human_migrated": 0,
-            "legacy_marks_cleared": 0,
-            "stale_parent_rows_removed": 0,
-        }
+    name = "deep_parents"
+    # All optional: an absent merge CSV / people.csv / index simply contributes no
+    # clusters, which is the pre-cluster pipeline state rather than an error.
+    inputs = (
+        Artifact(path=str(MERGE_CSV), required=False),
+        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
+        Artifact(path=str(INDEX_JSON), required=False),
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
+        # Child dossiers are read to inject the parent backref (see the note on
+        # outputs below); owner.json is read by the alias fold.
+        Artifact(path=DOSSIER_TEMPLATE, required=False),
+        Artifact(path=str(OWNER_JSON), required=False),
     )
-    manifest = {
-        "source": "build_parents",
-        "status": "completed",
-        "clusters": len(clusters),
-        "parents_written": written,
-        "merged_parents": written - singletons,
-        "singleton_parents": singletons,
-        "owner_excluded": owner_excluded,
-        "owner_aliases_added": owner_aliases_added,
-        "orphans_removed": orphans,
-        "parent_slug_keys_migrated": slug_migration["keys"],
-        "parent_slug_directories_renamed": slug_migration["directories_renamed"],
-        "parent_slug_directory_conflicts": slug_migration["directory_conflicts"],
-        "parent_slug_csv_rows_rewritten": slug_migration["csv_rows_rewritten"],
-        "parent_slug_jsonl_rows_rewritten": slug_migration["jsonl_rows_rewritten"],
-        "worth_parent_rows": worth_sync["parent_rows"],
-        "worth_human_migrated": worth_sync["human_migrated"],
-        "worth_legacy_marks_cleared": worth_sync["legacy_marks_cleared"],
-        "worth_stale_parent_rows_removed": worth_sync["stale_parent_rows_removed"],
-        "parents_dir": str(parents_dir),
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "updated_at": now_iso(),
-    }
-    write_json(parents_dir / "manifest.json", manifest)
-    return manifest
+    # NOT declared: the parent-backref line this stage injects into each CHILD
+    # dossier (`inject_parent_backref`). compose_dossier declares `{slug}.md` as a
+    # whole-file output, so a second writer would report a two-writer conflict that
+    # only the graph's owner can resolve — the annotation is an anchored line edit,
+    # not a rewrite, and is called out here rather than declared silently.
+    # ALSO not declared: `fold_owner_aliases` appends the owner's alias addresses
+    # to owner.json's `emails` key (module constant, not rebindable, no-op unless
+    # owner slugs exist). build_owner rewrites the whole file, so declaring this
+    # annotate-write would pin a permanent two-writer conflict AND a
+    # cluster->parents->cluster cycle over a known, deliberate product behavior
+    # (`bin/deep-context owner --force` dropping folded aliases). Same treatment
+    # as the child-dossier annotation above: documented here, not declared.
+    # ALSO not declared: the parent-worth rows this stage syncs into review.csv
+    # (`worth_view.sync_parent_worth_rows`, gated by `--review-csv`). It mirrors
+    # synthesize's `llm_worth`/`llm_worth_reason` onto the `parent-worth:<id>` rows
+    # and clears the migrated child rows' `network_worth`/`action`/`approved`, i.e.
+    # columns deep_synthesize and deep_reconcile own — declaring the write would
+    # pin two permanent two-writer conflicts on a deliberate one-way migration.
+    # Declaring the matching READ would be worse: deep_reconcile WRITES review.csv
+    # and reads this stage's parent dossiers, so a declared review.csv input here
+    # closes a parents<->reconcile cycle. Documented here, not declared — same
+    # treatment as the two annotate-writes above.
+    outputs = (
+        Artifact(path=PARENT_TEMPLATE, writes="full_rewrite", required=False),
+        # `feedback=True`: within one pass cluster runs BEFORE parents, so
+        # cluster's read of the index `parents` key is always the PREVIOUS
+        # round's fold state — a cross-iteration edge, like persist's
+        # directory.csv slice. Same-run consumers (reconcile) read the parent
+        # dossiers themselves, which stay a forward edge.
+        Artifact(path=str(INDEX_JSON), writes="upsert", owns_columns=("parents",), feedback=True),
+    )
+    payload = BuildParentsManifest
+    manifest = str(PARENTS_MANIFEST)
+
+    def __init__(
+        self,
+        *,
+        merge_csv: Path | None = None,
+        people_csv: Path | None = None,
+        index_json: Path | None = None,
+        dossier_dir: Path | None = None,
+        facts_dir: Path | None = None,
+        raw_dir: Path | None = None,
+        parents_dir: Path | None = None,
+        review_csv: Path | str | None = LINKEDIN_OVERRIDES_CSV,
+        confirm_threshold: float = 0.85,
+    ) -> None:
+        self.merge_csv = Path(merge_csv or MERGE_CSV)
+        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
+        self.index_json = Path(index_json or INDEX_JSON)
+        self.dossier_dir = Path(dossier_dir or DOSSIER_DIR)
+        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.raw_dir = Path(raw_dir or RAW_DIR)
+        self.parents_dir = Path(parents_dir or PARENTS_DIR)
+        # `--review-csv ""` (or review_csv=None) skips the parent-worth sync
+        # entirely; the CLI default is the shared review table.
+        review_value = str(review_csv or "").strip()
+        self.review_csv = Path(review_value) if review_value else None
+        # Kept because `--confirm-threshold` is a public CLI flag; no longer read —
+        # every clustered member is folded in as a child (see the comment in the
+        # cluster loop), so there is no needs-review split left to threshold.
+        self.confirm_threshold = confirm_threshold
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            str(MERGE_CSV): str(self.merge_csv),
+            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
+            str(INDEX_JSON): str(self.index_json),
+            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
+            DOSSIER_TEMPLATE: str(self.dossier_dir / "{slug}.md"),
+            PARENT_TEMPLATE: str(self.parents_dir / "{slug}.md"),
+            self.manifest: str(self.parents_dir / "manifest.json"),
+        }
+
+    def execute(self) -> BuildParentsManifest:
+        started = time.monotonic()
+        index = load_index(self.index_json)
+        old_parents = dict(index.get("parents") or {})
+        slugs_info = index.get("slugs", {})
+        pairs = load_pairs(self.merge_csv)
+        pairs += superseded_pairs(self.people_csv, slugs_info)
+        score_by_pair = {tuple(sorted((p["slug_a"], p["slug_b"]))): p for p in pairs}
+        clusters = clusters_from_pairs(pairs)
+
+        parents_dir = self.parents_dir
+        parents_dir.mkdir(parents=True, exist_ok=True)
+        dossier_dir = self.dossier_dir
+        facts_dir = self.facts_dir
+        raw_dir = self.raw_dir
+
+        index["parents"] = {}  # authoritative for this run (don't accumulate stale clusters)
+        written = 0
+        singletons = 0
+        written_slugs: set[str] = set()
+        clustered_slugs: set[str] = set()
+        # The mailbox owner shows up as a "contact" when they email from another address (synthesis
+        # flags it is_owner). They are YOU, not a contact — never make them a parent.
+        owner_slugs = {slug for slug, info in slugs_info.items()
+                       if _is_owner(info.get("person_id", ""), facts_dir)}
+        owner_aliases_added = fold_owner_aliases(owner_slugs, slugs_info, raw_dir) if owner_slugs else []
+        owner_excluded = 0
+
+        def _pscore(row: dict[str, Any]) -> float:
+            return float(row.get("confidence") or row.get("score") or 0)
+
+        for cluster in clusters:
+            members = [s for s in cluster if s in slugs_info and s not in owner_slugs]
+            if len(members) < 2:
+                continue
+
+            # Best judge confidence linking each member to the rest of the cluster.
+            def best_conf(slug: str) -> float:
+                return max((_pscore(score_by_pair[tuple(sorted((slug, o)))])
+                            for o in members if o != slug and tuple(sorted((slug, o))) in score_by_pair), default=0.0)
+
+            member_conf = {s: best_conf(s) for s in members}
+            # No needs_review limbo. Every clustered member is folded into the parent as a child
+            # (defaulted in), carrying its merge confidence — a human rejects the rare wrong one in
+            # the review UI. The old split hid low-confidence members entirely: they appeared in no
+            # parent's children, so reconcile never judged them and they vanished from the UI.
+            confirmed_slugs = list(members)
+            review_slugs: list[str] = []
+
+            def child_entry(slug: str, status: str) -> dict[str, Any]:
+                info = slugs_info[slug]
+                bundle = _read_json(raw_dir / f"{info['person_id']}.json")
+                reason = next((score_by_pair[tuple(sorted((slug, o)))]["reason"]
+                               for o in members if o != slug and tuple(sorted((slug, o))) in score_by_pair), "")
+                return {"slug": slug, "name": info.get("name", slug), "score": member_conf[slug],
+                        "reason": reason, "channels": bundle.get("source_channels") or [], "status": status,
+                        "pid": info["person_id"]}
+
+            confirmed = [child_entry(s, "confirmed") for s in confirmed_slugs]
+            review = [child_entry(s, "needs_review") for s in review_slugs]
+
+            # Merge facts from CONFIRMED children only; needs-review are listed, not merged.
+            # Identity comes from the children's index records (one projection, shared with
+            # the derived lookup maps), so the parent dossier and index never disagree.
+            all_records: list[dict[str, Any]] = []
+            child_pids: list[str] = []
+            for c in confirmed:
+                child_pids.append(c["pid"])
+                all_records.extend(read_jsonl(facts_dir / f"{c['pid']}.jsonl"))
+            emails, phones = parent_identifiers(index, [c["slug"] for c in confirmed])
+
+            merged = compose.merge_facts(all_records)
+            name = merged.get("canonical_name") or confirmed[0]["name"]
+            parent_id = parent_id_for(child_pids)
+            slug = slugify(name, parent_id)
+            (parents_dir / f"{slug}.md").write_text(
+                render_parent(name, parent_id, slug, emails, phones, merged, confirmed, review), encoding="utf-8")
+            written += 1
+            written_slugs.add(slug)
+
+            for c in confirmed + review:
+                inject_parent_backref(dossier_dir, c["slug"], slug, name)
+                clustered_slugs.add(c["slug"])
+
+            index["parents"][slug] = {"parent_id": parent_id, "name": name, "path": f"parents/{slug}.md",
+                                      "children": [c["slug"] for c in confirmed],
+                                      "needs_review": [c["slug"] for c in review]}
+
+        # Promote every UNMERGED person to a thin singleton parent (a pointer to its one
+        # child), so `parents/` is ALWAYS the COMPLETE canonical layer: exactly one parent
+        # per real person. Idempotent — singleton parent_id is a stable hash of [person_id].
+        for child_slug, info in slugs_info.items():
+            if child_slug in clustered_slugs:
+                continue
+            if child_slug in owner_slugs:   # you on another email — not a contact
+                owner_excluded += 1
+                continue
+            pid = info["person_id"]
+            name = info.get("name", child_slug)
+            emails, phones = parent_identifiers(index, [child_slug])
+            parent_id = parent_id_for([pid])
+            pslug = slugify(name, parent_id)
+            (parents_dir / f"{pslug}.md").write_text(
+                render_singleton(name, parent_id, pslug, child_slug, emails, phones, info.get("headline", "")),
+                encoding="utf-8")
+            written += 1
+            singletons += 1
+            written_slugs.add(pslug)
+            inject_parent_backref(dossier_dir, child_slug, pslug, name)
+            index["parents"][pslug] = {"parent_id": parent_id, "name": name, "path": f"parents/{pslug}.md",
+                                       "children": [child_slug], "needs_review": [], "singleton": True}
+
+        # Remove orphan parent files from earlier cluster runs (slug set changes when
+        # clusters change); the dossier compose does the same for child dossiers.
+        orphans = 0
+        for md in parents_dir.glob("*.md"):
+            if md.stem not in written_slugs:
+                md.unlink()
+                orphans += 1
+
+        # Migrate exact slug-keyed artifacts BEFORE the index replacement, so an
+        # unchanged parent_id keeps its paid deep-research directory and its rows.
+        slug_migrations = parent_slug_migrations(old_parents, index["parents"])
+        slug_migration = migrate_parent_slug_artifacts(slug_migrations)
+        write_index(self.index_json, index)
+        # Parent construction is the first point where canonical membership exists.
+        # Mirror child synthesis worth and migrate legacy human marks into one
+        # parent-owned review.csv row while those memberships are authoritative.
+        # Imported here rather than at module top because worth_view imports
+        # `parent_id_for` from THIS module — a top-level import is circular.
+        from packs.ingestion.primitives.deep_context.worth_view import sync_parent_worth_rows
+
+        worth_sync = (
+            sync_parent_worth_rows(self.review_csv, facts_dir, self.index_json)
+            if self.review_csv
+            else {
+                "parent_rows": 0,
+                "human_migrated": 0,
+                "legacy_marks_cleared": 0,
+                "stale_parent_rows_removed": 0,
+            }
+        )
+        return BuildParentsManifest(
+            status="completed",
+            clusters=len(clusters),
+            parents_written=written,
+            merged_parents=written - singletons,
+            singleton_parents=singletons,
+            owner_excluded=owner_excluded,
+            owner_aliases_added=owner_aliases_added,
+            orphans_removed=orphans,
+            parent_slug_keys_migrated=slug_migration["keys"],
+            parent_slug_directories_renamed=slug_migration["directories_renamed"],
+            parent_slug_directory_conflicts=slug_migration["directory_conflicts"],
+            parent_slug_csv_rows_rewritten=slug_migration["csv_rows_rewritten"],
+            parent_slug_jsonl_rows_rewritten=slug_migration["jsonl_rows_rewritten"],
+            worth_parent_rows=worth_sync["parent_rows"],
+            worth_human_migrated=worth_sync["human_migrated"],
+            worth_legacy_marks_cleared=worth_sync["legacy_marks_cleared"],
+            worth_stale_parent_rows_removed=worth_sync["stale_parent_rows_removed"],
+            parents_dir=str(parents_dir),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
 
 
 def _is_owner(person_id: str, facts_dir: Path) -> bool:
@@ -603,7 +735,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    emit(run(build_parser().parse_args(argv)))
+    args = build_parser().parse_args(argv)
+    payload = BuildParents(
+        merge_csv=Path(args.merge_csv),
+        people_csv=Path(args.people_csv),
+        index_json=Path(args.index_json),
+        dossier_dir=Path(args.dossier_dir),
+        facts_dir=Path(args.facts_dir),
+        raw_dir=Path(args.raw_dir),
+        parents_dir=Path(args.parents_dir),
+        review_csv=args.review_csv,
+        confirm_threshold=args.confirm_threshold,
+    ).run()
+    emit(payload.to_payload())
     return 0
 
 

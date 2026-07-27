@@ -378,7 +378,7 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
                 "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n",
                 encoding="utf-8",
             )
-            manifest = collect.build(_ns(
+            manifest = _run_collect(_ns(
                 out_dir=base / "raw",
                 chat_db=base / "missing-chat.db",
                 wacli_db=base / "missing-wacli.db",
@@ -422,7 +422,7 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
                 "direction": "from_them", "text": "hello",
             }
             with mock.patch.object(collect, "collect_one", return_value=([message], 1)):
-                manifest = collect.build(_ns(
+                manifest = _run_collect(_ns(
                     out_dir=raw,
                     chat_db=base / "missing-chat.db",
                     wacli_db=base / "missing-wacli.db",
@@ -479,7 +479,7 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
                 "text": "dm",
             }
             with mock.patch.object(collect, "collect_one", return_value=([dm_message], 1)):
-                manifest = collect.build(_ns(
+                manifest = _run_collect(_ns(
                     out_dir=raw,
                     chat_db=base / "missing-chat.db",
                     wacli_db=base / "missing-wacli.db",
@@ -512,7 +512,7 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
                 "collect_one",
                 return_value=([opted_in_message], 1),
             ) as collect_mock:
-                opted_in_manifest = collect.build(_ns(
+                opted_in_manifest = _run_collect(_ns(
                     out_dir=raw,
                     chat_db=base / "missing-chat.db",
                     wacli_db=base / "missing-wacli.db",
@@ -547,7 +547,7 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
             }), encoding="utf-8")
 
             with self.assertRaises(FileNotFoundError):
-                collect.build(_ns(
+                _run_collect(_ns(
                     out_dir=raw,
                     people_csv=base / "missing.csv",
                     msgvault_db=base / "missing-msgvault.db",
@@ -583,7 +583,7 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
             }), encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "full default collection"):
-                collect.build(_ns(
+                _run_collect(_ns(
                     out_dir=raw,
                     people_csv=people,
                     msgvault_db=base / "missing-msgvault.db",
@@ -950,7 +950,7 @@ class TestEndToEnd(unittest.TestCase):
             self._write_person(raw, facts, "p2", "Jon Smith", "+14155551234", "jon.smith@gmail.com")
             self._write_person(raw, facts, "p3", "Maria Garcia", "+13105550000", "maria@x.com")
 
-            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+            _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=index_md, person=""))
             self.assertEqual(len(list(dossiers.glob("*.md"))), 3)
 
@@ -963,7 +963,7 @@ class TestEndToEnd(unittest.TestCase):
 
             # Cluster detects the duplicate pair. --no-llm = deterministic (offline test);
             # the live pipeline uses the mandatory LLM tone-aware judge.
-            manifest = cluster.run(_ns(dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
+            manifest = _run_cluster(_ns(dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
                                        out_csv=merge_csv, out_md=merge_md, confidence=0.7, no_llm=True,
                                        model="m", reasoning_effort="medium", concurrency=1, timeout=10, max_retries=0))
             self.assertEqual(manifest["judge"], "deterministic")
@@ -981,7 +981,7 @@ class TestEndToEnd(unittest.TestCase):
             par_dir = base / "parents"
             # Always a complete canonical layer: 1 merged parent (p1/p2 dup) + 1 pointer
             # parent for the unique p3 (Maria). Every person resolves through parents/.
-            pman = parents.run(_ns(merge_csv=merge_csv, index_json=index_json, dossier_dir=dossiers,
+            pman = _run_parents(_ns(merge_csv=merge_csv, index_json=index_json, dossier_dir=dossiers,
                                    facts_dir=facts, raw_dir=raw, parents_dir=par_dir, confirm_threshold=0.85))
             self.assertEqual(pman["merged_parents"], 1)
             self.assertEqual(pman["singleton_parents"], 1)  # Maria, unmerged -> pointer parent
@@ -1014,15 +1014,15 @@ class TestEndToEnd(unittest.TestCase):
             self._write_person(raw, facts, "p3", "Casey Delta", "+15550111", "casey@example.com")
 
             def run_compose(person=""):
-                return compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                return _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                                        index_json=index_json, index_md=index_md, person=person))
 
             run_compose()
-            cluster.run(_ns(dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
+            _run_cluster(_ns(dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
                             out_csv=base / "merge.csv", out_md=base / "merge.md", confidence=0.7,
                             no_llm=False, deterministic_only=True, model="m",
                             reasoning_effort="medium", concurrency=1, timeout=10, max_retries=0))
-            parents.run(_ns(merge_csv=base / "merge.csv", index_json=index_json, dossier_dir=dossiers,
+            _run_parents(_ns(merge_csv=base / "merge.csv", index_json=index_json, dossier_dir=dossiers,
                             facts_dir=facts, raw_dir=raw, parents_dir=par_dir, confirm_threshold=0.85))
             after_parents = json.loads(index_json.read_text())
             self.assertEqual(len(after_parents["parents"]), 2)  # 1 merged pair + 1 singleton
@@ -1053,7 +1053,7 @@ class TestEndToEnd(unittest.TestCase):
             self._write_person(raw, facts, "p2", "Casey Delta", "+15550111", "casey@example.com")
 
             def run_compose(person=""):
-                return compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+                return _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                                        index_json=index_json, index_md=index_md, person=person))
 
             run_compose()
@@ -1075,10 +1075,10 @@ class TestEndToEnd(unittest.TestCase):
             raw.mkdir(); facts.mkdir()
             index_json, index_md = base / "index.json", base / "index.md"
             self._write_person(raw, facts, "p1", "Jordan Bravo", "+15550100", "jordan@example.com")
-            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+            _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=index_md, person=""))
             self._write_person(raw, facts, "p1", "Jordan Bravado", "+15550100", "jordan@example.com")
-            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+            _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=index_md, person="p1"))
             after = json.loads(index_json.read_text())
             self.assertEqual([info["person_id"] for info in after["slugs"].values()], ["p1"])
@@ -1092,7 +1092,7 @@ class TestEndToEnd(unittest.TestCase):
         self._write_person(raw, facts, "p1", "Jonathan Smith", "+15550100", "jon@acme.test")
         self._write_person(raw, facts, "p2", "Jon Smith", "+15550100", "jon.smith@example.com")
         self._write_person(raw, facts, "p3", "Maria Garcia", "+15550111", "maria@example.net")
-        compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+        _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                         index_json=index_json, index_md=index_md, person=""))
 
         def cluster_run(**over):
@@ -1101,7 +1101,7 @@ class TestEndToEnd(unittest.TestCase):
                       no_llm=True, model="m", reasoning_effort="medium", concurrency=1,
                       timeout=10, max_retries=0)
             kw.update(over)
-            return cluster.run(_ns(**kw))
+            return _run_cluster(_ns(**kw))
 
         return cluster_run
 
@@ -1218,9 +1218,9 @@ class TestEndToEnd(unittest.TestCase):
             index_json = base / "index.json"
             self._write_person(raw, facts, "p1", "Jordan Bravo", "+15550100", "jordan@example.com")
             self._write_person(raw, facts, "p2", "Jordan Bravo", "+15550100", "jb@example.net")
-            compose.run(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
+            _run_compose(_ns(raw_dir=raw, facts_dir=facts, dossier_dir=dossiers,
                             index_json=index_json, index_md=base / "index.md", person=""))
-            manifest = cluster.run(_ns(
+            manifest = _run_cluster(_ns(
                 dossier_dir=dossiers, index_json=index_json, raw_dir=raw, facts_dir=facts,
                 out_csv=base / "merge.csv", out_md=base / "merge.md", confidence=0.7,
                 no_llm=False, deterministic_only=True, model="m", reasoning_effort="medium",
@@ -1587,7 +1587,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
                 {"id": "pa", "public_identifier": "alice", "linkedin_url": "https://www.linkedin.com/in/alice",
                  "headline": "Eng", "work_experiences": json.dumps([{"title": "Eng", "company_name": "Acme"}])},
                 {"id": "pc", "public_identifier": "", "linkedin_url": ""}])  # Carol has no link
-            man = reconcile.run(_ns(
+            man = _run_reconcile(_ns(
                 index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
                 facts_dir=facts, raw_dir=raw, parents_dir=pdir,
                 verdicts_jsonl=rdir / "verdicts.jsonl", verdicts_csv=rdir / "verdicts.csv",
@@ -1639,7 +1639,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
                  "full_name": "Casey Delta", "primary_email": "casey@example.com",
                  "primary_phone": "+15550100"}])
             review_csv = rdir / "review.csv"
-            reconcile.run(_ns(
+            _run_reconcile(_ns(
                 index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
                 facts_dir=facts, raw_dir=raw, parents_dir=pdir,
                 verdicts_jsonl=rdir / "verdicts.jsonl", verdicts_csv=rdir / "verdicts.csv",
@@ -1683,7 +1683,7 @@ class TestReconcileLinkedIn(unittest.TestCase):
             self._people_csv(people_csv, [{"id": "pa", "public_identifier": "alice",
                 "linkedin_url": "https://www.linkedin.com/in/alice", "headline": "Eng",
                 "work_experiences": json.dumps([{"title": "Eng", "company_name": "Acme"}])}])
-            man = reconcile.run(_ns(index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
+            man = _run_reconcile(_ns(index_json=index_json, people_csv=people_csv, profile_cache_dir=cache,
                 facts_dir=facts, raw_dir=base / "raw", parents_dir=base / "parents",
                 verdicts_jsonl=base / "r" / "v.jsonl", verdicts_csv=base / "r" / "v.csv",
                 overrides_csv=base / "r" / "ov.csv",
@@ -1727,7 +1727,7 @@ class TestApplyRetargets(unittest.TestCase):
                  mock.patch.object(retargets, "merge_provider_profile",
                                    return_value={"public_identifier": "bob-real", "full_name": "Bob Right",
                                                  "rapidapi_response": '{"raw":1}'}):
-                man = retargets.run(_ns(overrides_csv=ov, people_csv=people,
+                man = _run_retargets(_ns(overrides_csv=ov, people_csv=people,
                     profile_cache_dir=base / "cache", out_csv=base / "retarget-people.csv"))
             self.assertEqual(man["enriched"], 1)        # only the approved one
             self.assertEqual(man["cache_hits"], 1)
@@ -1768,7 +1768,7 @@ class TestApplyRetargets(unittest.TestCase):
                             "full_name": "Ada"})
             with mock.patch.object(retargets, "rapidapi_profile",
                                    side_effect=AssertionError("realized rows must not re-enrich")):
-                man = retargets.run(_ns(overrides_csv=ov, people_csv=people,
+                man = _run_retargets(_ns(overrides_csv=ov, people_csv=people,
                     profile_cache_dir=base / "cache", out_csv=base / "retarget-people.csv"))
             self.assertEqual(man["finalized_applied"], 1)
             self.assertEqual(man["enriched"], 0)
@@ -1839,7 +1839,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
             dresearch.DR_OUT_DIR = base / "research"
             dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
             try:
-                result = dresearch.run(_ns(
+                result = _run_dresearch(_ns(
                     verdicts_jsonl=verdicts, people_csv=base / "people.csv",
                     overrides_csv=base / "review.csv", facts_dir=base / "facts",
                     raw_dir=base / "raw", processor="core2x", confirm_threshold=0.85,
@@ -1894,7 +1894,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                     },
                 },
             }), encoding="utf-8")
-            result = reconcile.run(_ns(
+            result = _run_reconcile(_ns(
                 index_json=index_json,
                 people_csv=base / "people.csv",
                 profile_cache_dir=cache,
@@ -1935,7 +1935,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                     "llm_worth": "no",
                 },
             })
-            stable = reconcile.run(_ns(
+            stable = _run_reconcile(_ns(
                 index_json=index_json,
                 people_csv=base / "people.csv",
                 profile_cache_dir=cache,
@@ -1966,7 +1966,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                 "person_id": pid,
                 "network_worth": "yes",
             }})
-            mixed = reconcile.run(_ns(
+            mixed = _run_reconcile(_ns(
                 index_json=index_json,
                 people_csv=base / "people.csv",
                 profile_cache_dir=cache,
@@ -2006,7 +2006,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                     "network_worth": "yes",
                 },
             })
-            preserved = reconcile.run(_ns(
+            preserved = _run_reconcile(_ns(
                 index_json=index_json,
                 people_csv=base / "people.csv",
                 profile_cache_dir=cache,
@@ -2116,7 +2116,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
     def legacy_limbo_dry_run_reports_reprofile_count_and_cost(self):
         with tempfile.TemporaryDirectory() as d:
             _, args = self._build_limbo(Path(d))
-            dry = reconcile.run(_ns(**args, dry_run=True, no_llm=False))
+            dry = _run_reconcile(_ns(**args, dry_run=True, no_llm=False))
             # 3 limbo maybes carry a verified profile; the user-marked row is human-decided so it
             # is neither re-judged nor counted (spend is gated to the machine-Maybe limbo class).
             self.assertEqual(dry["limbo_worth_reprofile"], 3)
@@ -2153,7 +2153,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
             with mock.patch.object(reconcile, "judge_task", self._fake_judge_task()), \
                     mock.patch.object(reconcile, "make_async_client", lambda **kw: _Client()), \
                     mock.patch.object(reconcile, "load_env", lambda: None):
-                manifest = reconcile.run(_ns(**args, dry_run=False, no_llm=False))
+                manifest = _run_reconcile(_ns(**args, dry_run=False, no_llm=False))
             self.assertEqual(manifest["judge"], "llm")
             rows = reconcile.load_override_rows(review)
             # Decisive outcomes re-pile: machine yes -> Yes, machine no -> No, with the new reason.
@@ -2176,7 +2176,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             review, args = self._build_limbo(Path(d))
             # Deterministic path never auto-promotes without a judge.
-            reconcile.run(_ns(**args, dry_run=False, no_llm=True))
+            _run_reconcile(_ns(**args, dry_run=False, no_llm=True))
             rows = reconcile.load_override_rows(review)
             for pid, *_ in self._LIMBO:
                 self.assertEqual(rows[pid]["llm_worth"], "maybe", pid)
@@ -2224,7 +2224,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
             dresearch.DR_OUT_DIR = base / "research"
             dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
             try:
-                man = dresearch.run(_ns(
+                man = _run_dresearch(_ns(
                     verdicts_jsonl=vj, people_csv=base / "nope.csv",
                     overrides_csv=base / "nope_ov.csv",
                     facts_dir=base / "f", raw_dir=base / "r", processor="core2x",
@@ -2248,7 +2248,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
             dresearch.DR_OUT_DIR = base / "research"
             dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
             try:
-                manifest = dresearch.run(_ns(
+                manifest = _run_dresearch(_ns(
                     verdicts_jsonl=vj, people_csv=base / "missing.csv",
                     overrides_csv=base / "overrides.csv", facts_dir=base / "facts",
                     raw_dir=base / "raw", processor="core2x", confirm_threshold=0.85,
@@ -2283,7 +2283,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
             completed.parent.mkdir(parents=True)
             completed.write_text("{}\n", encoding="utf-8")
             try:
-                manifest = dresearch.run(_ns(
+                manifest = _run_dresearch(_ns(
                     verdicts_jsonl=vj, people_csv=base / "missing.csv",
                     overrides_csv=base / "overrides.csv", facts_dir=base / "facts",
                     raw_dir=base / "raw", processor="core2x", confirm_threshold=0.85,
@@ -2318,7 +2318,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
                     "run",
                     return_value=mock.Mock(returncode=0),
                 ) as run_mock:
-                    manifest = dresearch.run(_ns(
+                    manifest = _run_dresearch(_ns(
                         verdicts_jsonl=vj, people_csv=base / "missing.csv",
                         overrides_csv=base / "overrides.csv", facts_dir=base / "facts",
                         raw_dir=base / "raw", processor="core2x", confirm_threshold=0.85,
@@ -2331,7 +2331,7 @@ class TestReconcileDeepResearch(unittest.TestCase):
             run_mock.assert_called_once()
 
     def test_invalid_budget_cannot_bypass_gate(self):
-        manifest = dresearch.run(_ns(budget=float("nan")))
+        manifest = _run_dresearch(_ns(budget=float("nan")))
         self.assertEqual(manifest["status"], "invalid_budget")
         with self.assertRaises(SystemExit):
             dresearch.build_parser().parse_args(["--budget", "nan"])
@@ -2730,7 +2730,7 @@ class TestRetargetJudgeFingerprintCache(unittest.TestCase):
                     with mock.patch.object(dresearch, "build_queue", side_effect=(
                             lambda s, people, f, r: [{"handle": row["parent_slug"]}
                                                      for row in s])):
-                        result = dresearch.run(_ns(
+                        result = _run_dresearch(_ns(
                             verdicts_jsonl=verdicts_path, overrides_csv=ov,
                             people_csv=base / "people.csv", facts_dir=facts, raw_dir=raw,
                             manifest=str(manifest), processor="core2x",
@@ -4047,6 +4047,84 @@ class _ns:
 
     def __init__(self, **kw):
         self.__dict__.update(kw)
+
+
+def _run_compose(ns):
+    """The old `compose.run(args)` surface over the ComposeDossier node."""
+    return compose.ComposeDossier(
+        raw_dir=ns.raw_dir, facts_dir=ns.facts_dir, dossier_dir=ns.dossier_dir,
+        index_json=ns.index_json, index_md=ns.index_md, person=getattr(ns, "person", ""),
+    ).run().to_payload()
+
+
+def _run_cluster(ns):
+    """The old `cluster.run(args)` surface over the ClusterMergeCandidates node.
+    `dry_run` routes to the estimate bypass exactly as the CLI does — an estimate
+    must never write the stage manifest."""
+    kw = dict(vars(ns))
+    dry_run = kw.pop("dry_run", False)
+    node = cluster.ClusterMergeCandidates(**kw)
+    if dry_run:
+        return node.estimate()
+    return node.run().to_payload()
+
+
+def _run_parents(ns):
+    """The old `parents.run(args)` surface over the BuildParents node. The old
+    namespaces omit `people_csv` meaning "none" — map that to a nonexistent
+    temp-dir path, NOT the constructor default (the real merged people.csv)."""
+    return parents.BuildParents(
+        merge_csv=ns.merge_csv,
+        people_csv=getattr(ns, "people_csv", "") or Path(ns.parents_dir) / "no-people.csv",
+        index_json=ns.index_json, dossier_dir=ns.dossier_dir, facts_dir=ns.facts_dir,
+        raw_dir=ns.raw_dir, parents_dir=ns.parents_dir,
+        confirm_threshold=getattr(ns, "confirm_threshold", 0.85),
+    ).run().to_payload()
+
+
+def _run_collect(ns):
+    """The old `collect.build(args)` surface over the CollectPersonContext node
+    (`--dry-run` bypasses the template exactly as the CLI does — it must not
+    write the raw manifest)."""
+    node = collect.CollectPersonContext(**vars(ns))
+    payload = node.execute() if getattr(ns, "dry_run", False) else node.run()
+    return payload.to_payload()
+
+
+def _run_reconcile(ns):
+    """The old `reconcile.run(args)` surface over the ReconcileLinkedin node.
+    A dry run (without --reapply, which wins) routes to the free estimate
+    bypass, exactly as the CLI does."""
+    kw = dict(vars(ns))
+    dry_run = kw.pop("dry_run", False)
+    if dry_run and not kw.get("reapply", False):
+        return reconcile.dry_run_estimate(
+            index_json=Path(kw["index_json"]), people_csv=Path(kw["people_csv"]),
+            profile_cache_dir=Path(kw["profile_cache_dir"]), facts_dir=Path(kw["facts_dir"]),
+            raw_dir=Path(kw["raw_dir"]), model=kw["model"], effort=kw["reasoning_effort"],
+            slug=kw.get("slug"), limit=kw.get("limit", 0),
+        )
+    return reconcile.ReconcileLinkedin(**kw).run().to_payload()
+
+
+def _run_retargets(ns):
+    """The old `retargets.run(args)` surface over the ApplyRetargets node."""
+    return retargets.ApplyRetargets(
+        overrides_csv=ns.overrides_csv, people_csv=ns.people_csv,
+        profile_cache_dir=ns.profile_cache_dir, out_csv=ns.out_csv,
+    ).run().to_payload()
+
+
+def _run_dresearch(ns):
+    """The old `dresearch.run(args)` surface over the ReconcileDeepResearch node.
+    The old return value is the emitted RESULT dict (`node.result`), not the
+    manifest receipt; a namespace without `manifest` meant "no receipt writes",
+    which the constructor spells `manifest=""`."""
+    kw = dict(vars(ns))
+    kw.setdefault("manifest", "")
+    node = dresearch.ReconcileDeepResearch(**kw)
+    node.run()
+    return node.result
 
 
 class TestWhatsAppUSJid(unittest.TestCase):
