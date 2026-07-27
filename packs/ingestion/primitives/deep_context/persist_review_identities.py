@@ -196,20 +196,24 @@ class PersistReviewIdentities(Node):
 
     name = "deep_persist_review"
     # All optional: an absent review artifact simply contributes zero rows —
-    # the pre-review pipeline state, not an error. `consolidate-people.csv` is
-    # external: the review app (human decisions, not a batch node) writes it.
+    # the pre-review pipeline state, not an error.
     inputs = (
         Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
         Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
-        Artifact(path=str(CONSOLIDATE_PEOPLE_CSV), external=True, required=False),
+        Artifact(path=str(CONSOLIDATE_PEOPLE_CSV), required=False),
         Artifact(path=str(RETARGET_PEOPLE_CSV), required=False),
     )
     outputs = (
+        # `feedback=True`: this slice is read by the importers and the merge on
+        # the NEXT realization — the pipeline's one deliberate loop (reviewed
+        # identities survive source re-imports). Excluded from cycle detection,
+        # fully scored for conflicts/ownership.
         Artifact(
             path=str(DEFAULT_DIRECTORY_CSV),
             row_model=DirectoryRow,
             writes="upsert",
             owns_rows_where=DEEP_CONTEXT_DIRECTORY_ROWS,
+            feedback=True,
         ),
     )
     payload = PersistReviewIdentitiesManifest

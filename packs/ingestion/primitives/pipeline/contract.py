@@ -45,7 +45,10 @@ Changelog:
     stages (synthesize, cluster, reconcile, deep-research, prefetch) gate spend
     by returning a typed payload instead of exiting mid-template; `run()` already
     treats any non-completed status as "write the manifest, skip output
-    verification", so the constant is the whole extension.
+    verification", so the constant is the whole extension. External artifacts
+    get a stat-only fingerprint (no sha256): deep_collect declares the live
+    chat.db/msgvault.db stores, whose mtime moves constantly, so the hash-reuse
+    path never hit and every manifest write would have re-hashed gigabytes.
   2026-07-26 (failed manifest): `run()` catches `Exception` and `SystemExit` from
     `execute()` (and from output validation), writes a typed `Failed` manifest
     (`status: "failed"`, `stage`, `error`), then RE-RAISES. Before this, a raise
@@ -240,6 +243,14 @@ class Artifact(BaseModel):
                   is real, existing behavior (the merge tolerates an absent
                   per-source people.csv; the gmail extractor legitimately writes
                   no queue for an account with no matching mail).
+    feedback      OUTPUT-side marker for the graph's one deliberate loop shape:
+                  this write feeds a LATER iteration of an upstream stage, not
+                  this run's downstream. `deep_persist_review` writes reviewed
+                  identities into `directory.csv`, which the importers and the
+                  merge read on the NEXT realization — the designed durability
+                  loop, not an accidental cycle. The checker keeps the edge for
+                  conflicts/phantoms/edges but excludes it from cycle detection;
+                  every cycle through an unmarked edge still reports.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -251,6 +262,7 @@ class Artifact(BaseModel):
     owns_columns: tuple[str, ...] = ()
     owns_rows_where: str = ""
     required: bool = True
+    feedback: bool = False
 
 
 class Node(ABC):
@@ -381,6 +393,14 @@ class Node(ABC):
             # would otherwise record a literal "{account_slug}" path.
             if "{" in item.path:
                 continue
+            if item.external:
+                # External stores are stat-only: a live chat.db or msgvault.db is
+                # multi-GB and its mtime moves constantly, so the sha256 reuse
+                # never hits and every manifest write would re-hash gigabytes.
+                # Size+mtime is enough to say "the input moved" for a store we
+                # do not own.
+                stats[item.path] = _external_stat(item.path)
+                continue
             stats[item.path] = _artifact_stat(item.path, existing.get(item.path), item.row_model)
         return stats
 
@@ -392,6 +412,16 @@ class Node(ABC):
         body = payload.to_payload()
         body["fingerprints"] = self.artifact_stats(Path(manifest_path))
         write_stage_manifest(Path(manifest_path), body)
+
+
+def _external_stat(path_text: str) -> dict[str, Any]:
+    """Size+mtime only — no sha256, no row count — for stores the graph does not
+    produce. Cheap enough to run on a live multi-GB sqlite db every time."""
+    path = Path(path_text)
+    if not path.is_file():
+        return {"path": path_text, "exists": False}
+    stat = path.stat()
+    return {"path": path_text, "exists": True, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
 def _artifact_stat(path_text: str, existing: dict[str, Any] | None, row_model: type[RowModel] | None) -> dict[str, Any]:

@@ -9,6 +9,16 @@ This builds it deterministically from the owner's LinkedIn via the RapidAPI cach
 a hit costs nothing) — NEVER from a web fetch of linkedin.com, which hallucinates. Run it FIRST.
 
 Changelog:
+  2026-07-27 (declared contract): `BuildOwner` is a `pipeline/contract.py:Node`
+    ("deep_owner"). The RapidAPI profile cache is a declared EXTERNAL input
+    (`PROFILE_CACHE_TEMPLATE` — materialized API responses several nodes
+    hydrate opportunistically, no single in-graph producer) and
+    `owner.json` the declared output. No manifest file today and none invented
+    (`manifest=""`, declaration-only, like persist_review_identities), so every
+    mode routes through the node template safely. `run(args)` became
+    `execute()` — same flags, same "exists"/"error"/"written" payloads, same
+    cache-first gating (a paid RapidAPI fetch still happens ONLY on a cache miss
+    after an explicit --linkedin-url), same exit code 0.
   2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -22,6 +32,7 @@ from typing import Any
 from packs.ingestion.primitives.deep_context.common import (
     OWNER_JSON,
     PROFILE_CACHE_DIR,
+    PROFILE_CACHE_TEMPLATE,
     emit,
     load_env,
 )
@@ -31,6 +42,7 @@ from packs.ingestion.primitives.enrich.profile_cache import (
     read_usable_cached_profile,
 )
 from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
@@ -66,47 +78,107 @@ def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[s
     }
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    out = Path(args.out)
-    if out.exists() and not args.force:
-        try:
-            existing = json.loads(out.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            existing = {}
-        return {"source": "build_owner", "status": "exists", "path": str(out),
-                "name": existing.get("name", ""),
-                "schools": [e.get("school") for e in existing.get("education", [])],
-                "employers": [w.get("company") for w in existing.get("work", [])],
-                "hint": "pass --force to rebuild, or --linkedin-url to point at a different profile"}
+class BuildOwnerManifest(StageManifest):
+    """Typed payload — the union of the three raw dict shapes ("exists" / "error" /
+    "written"); None-valued optionals drop in `to_payload()` so each mode emits
+    exactly today's keys."""
+    source: str = "build_owner"
+    path: str | None = None
+    name: str | None = None
+    schools: list[Any] | None = None
+    employers: list[Any] | None = None
+    hint: str | None = None
+    error: str | None = None
+    from_cache: bool | None = None
+    locations: list[Any] | None = None
+    updated_at: str | None = None
 
-    url = normalize_linkedin_url(args.linkedin_url or "")
-    pub = extract_public_identifier(url).lower()
-    if not pub:
-        return {"source": "build_owner", "status": "error",
-                "error": "no --linkedin-url given (your own LinkedIn) and owner.json not present"}
 
-    load_env()
-    cache_dir = Path(args.profile_cache_dir)
-    cached = read_usable_cached_profile(profile_cache_path(cache_dir, pub))
-    from_cache = cached is not None
-    if cached:
-        normalized = cached.get("normalized_profile") or {}
-    else:
-        result = rapidapi_profile(pub, url, rapidapi_key(), cache_dir=cache_dir)
-        normalized = result.get("normalized_profile") or {}
-        if normalized.get("success") is not True:
-            return {"source": "build_owner", "status": "error",
-                    "error": result.get("error") or "could not fetch the owner profile (set RAPIDAPI_KEY?)"}
+class BuildOwner(Node):
+    """Builds owner.json (your bio timeline) from your LinkedIn, cache-first.
 
-    owner = owner_from_profile(normalized, email=args.email)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
-    return {
-        "source": "build_owner", "status": "written", "path": str(out), "from_cache": from_cache,
-        "name": owner["name"], "schools": [e["school"] for e in owner["education"]],
-        "employers": [w["company"] for w in owner["work"]], "locations": owner["locations"],
-        "updated_at": now_iso(),
-    }
+    Statuses are the pre-contract strings ("exists"/"error"/"written"), never
+    "completed", so the template's output verification intentionally does not
+    fire — the durable output is owner.json itself."""
+
+    name = "deep_owner"
+    inputs = (
+        Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),
+    )
+    outputs = (
+        Artifact(path=str(OWNER_JSON), writes="full_rewrite"),
+    )
+    payload = BuildOwnerManifest
+    # Declaration-only node: no manifest file today, and none invented — the
+    # payload is emitted by the CLI and the durable output is owner.json.
+    manifest = ""
+
+    def __init__(
+        self,
+        *,
+        linkedin_url: str = "",
+        email: str = "",
+        profile_cache_dir: Path | None = None,
+        out: Path | None = None,
+        force: bool = False,
+    ) -> None:
+        self.linkedin_url = linkedin_url
+        self.email = email
+        self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
+        self.out = Path(out or OWNER_JSON)
+        self.force = force
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            PROFILE_CACHE_TEMPLATE: str(self.profile_cache_dir / "{public_identifier}.json"),
+            str(OWNER_JSON): str(self.out),
+        }
+
+    def execute(self) -> BuildOwnerManifest:
+        if self.out.exists() and not self.force:
+            try:
+                existing = json.loads(self.out.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                existing = {}
+            return BuildOwnerManifest(
+                status="exists", path=str(self.out),
+                name=existing.get("name", ""),
+                schools=[e.get("school") for e in existing.get("education", [])],
+                employers=[w.get("company") for w in existing.get("work", [])],
+                hint="pass --force to rebuild, or --linkedin-url to point at a different profile",
+            )
+
+        url = normalize_linkedin_url(self.linkedin_url or "")
+        pub = extract_public_identifier(url).lower()
+        if not pub:
+            return BuildOwnerManifest(
+                status="error",
+                error="no --linkedin-url given (your own LinkedIn) and owner.json not present",
+            )
+
+        load_env()
+        cached = read_usable_cached_profile(profile_cache_path(self.profile_cache_dir, pub))
+        from_cache = cached is not None
+        if cached:
+            normalized = cached.get("normalized_profile") or {}
+        else:
+            result = rapidapi_profile(pub, url, rapidapi_key(), cache_dir=self.profile_cache_dir)
+            normalized = result.get("normalized_profile") or {}
+            if normalized.get("success") is not True:
+                return BuildOwnerManifest(
+                    status="error",
+                    error=result.get("error") or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
+                )
+
+        owner = owner_from_profile(normalized, email=self.email)
+        self.out.parent.mkdir(parents=True, exist_ok=True)
+        self.out.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
+        return BuildOwnerManifest(
+            status="written", path=str(self.out), from_cache=from_cache,
+            name=owner["name"], schools=[e["school"] for e in owner["education"]],
+            employers=[w["company"] for w in owner["work"]], locations=owner["locations"],
+            updated_at=now_iso(),
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,7 +192,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    emit(run(build_parser().parse_args(argv)))
+    args = build_parser().parse_args(argv)
+    payload = BuildOwner(
+        linkedin_url=args.linkedin_url,
+        email=args.email,
+        profile_cache_dir=Path(args.profile_cache_dir),
+        out=Path(args.out),
+        force=args.force,
+    ).run()
+    emit(payload.to_payload())
     return 0
 
 

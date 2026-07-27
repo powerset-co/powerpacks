@@ -305,10 +305,12 @@ class ComposeDossier(Node):
         Artifact(path=FACTS_TEMPLATE, required=False),
         Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
     )
+    # index.md is deliberately NOT declared: it is a human catalog no node
+    # reads. Declaring report surfaces would pin permanent dead-output findings,
+    # and dead outputs are deleted-or-consumed in this graph, never annotated.
     outputs = (
         Artifact(path=DOSSIER_TEMPLATE, required=False),
         Artifact(path=str(INDEX_JSON), writes="upsert", owns_columns=("slugs",)),
-        Artifact(path=str(INDEX_MD), writes="full_rewrite"),
     )
     payload = ComposeDossierManifest
     manifest = str(DOSSIERS_MANIFEST)
@@ -336,7 +338,6 @@ class ComposeDossier(Node):
             RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
             DOSSIER_TEMPLATE: str(self.dossier_dir / "{slug}.md"),
             str(INDEX_JSON): str(self.index_json),
-            str(INDEX_MD): str(self.index_md),
             self.manifest: str(self.dossier_dir / "manifest.json"),
         }
 

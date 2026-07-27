@@ -27,6 +27,13 @@ stage's fixed manifest — no ledgers, no run ids.
 Run: uv run --project . python -m packs.ingestion.primitives.deep_context.prefetch_profiles
 
 Changelog:
+  2026-07-27 (declared contract): `PrefetchProfiles` is a `pipeline/contract.py:Node`.
+    It DECLARES the review population it scans (verdicts, review.csv, synthetic
+    people, facts/parents/dossier templates, merged people.csv) and the shared
+    profile cache it upserts, instead of only opening them. `run(args)` became
+    `execute()`. EVERY mode still runs through the node because every mode already
+    wrote this stage's manifest — the dry run included — so no path bypasses it and
+    no spend moved: `--fetch` is still the only door to RapidAPI/OpenAI.
   2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -55,10 +62,14 @@ from packs.indexing.lib.openai_responses import (
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
+    DOSSIER_TEMPLATE,
     FACTS_DIR,
+    FACTS_TEMPLATE,
     LINKEDIN_OVERRIDES_CSV,
+    PARENT_TEMPLATE,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
+    PROFILE_CACHE_TEMPLATE,
     ROOT,
     VERDICTS_JSONL,
     emit,
@@ -78,8 +89,9 @@ from packs.ingestion.primitives.enrich.profile_cache import (
     read_usable_cached_profile,
 )
 from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
-from packs.ingestion.primitives.imports.common import write_manifest
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier
+from pydantic import BaseModel
 
 STAGE = "profile-prefetch"
 
@@ -491,126 +503,279 @@ def _summary_concurrency(args: argparse.Namespace) -> int:
                               fallback=DEFAULT_SUMMARY_CONCURRENCY)
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    started = time.monotonic()
-    cache_dir = Path(args.profile_cache_dir)
-    parents = _all_review_parents(
-        Path(args.verdicts), Path(args.review), Path(args.synthetic_people),
-        Path(args.facts_dir), Path(args.people_csv),
-        Path(args.parents_dir), Path(args.dossier_dir), cache_dir)
-    links = review_queue_links(parents)
-    # Self-heal FIRST: strip any garbage simple_summary a prior run wrote for a
-    # failed/empty profile, so it never lingers in the UI. Free, local, idempotent.
-    cleaned_summaries = cleanup_garbage_summaries(links, cache_dir)
-    buckets = classify_queue(links, cache_dir)
-    fetch_misses, summ_misses = buckets["fetch"], buckets["summarize"]
-    not_summarizable, no_pub = buckets["not_summarizable"], buckets["no_public_identifier"]
-    use_llm = not args.no_llm
-    # The queue-wide per-person state BEFORE any work this run (owner: works
-    # whether the cache is empty or partially populated — no all-or-none assumption).
-    already_cached = len(links) - len(fetch_misses) - len(no_pub)
-    # already_summarized = links that are already done: they carry a summary and
-    # are summarizable. ``summarize`` (summary misses), ``not_summarizable``
-    # (cached-failed), and ``no_pub`` are mutually exclusive and together are
-    # exactly the not-yet-done set, so the remainder is the already-summarized set.
-    # (``fetch`` ⊆ ``summarize`` — an uncached person is always a summary miss —
-    # so it is NOT subtracted again here.)
-    already_summarized = (len(links) - len(summ_misses)
-                          - len(not_summarizable) - len(no_pub))
-    # Summarization runs ONLY over REAL cached profiles lacking a summary. Failed/
-    # empty profiles are excluded (not summarizable) — we never feed empties to the
-    # LLM, so it can't hallucinate generic filler for a bad-URL fetch.
-    payload: dict[str, Any] = {
-        "queue_links": len(links),
-        "cache_misses": len(fetch_misses),
-        "summary_misses": len(summ_misses),
-        "not_summarizable": len(not_summarizable),
-        "already_cached": already_cached,
-        "already_summarized": already_summarized,
-        "no_public_identifier": len(no_pub),
-        "cleaned_garbage_summaries": len(cleaned_summaries),
-        "cleaned_public_identifiers": sorted(cleaned_summaries),
-        "estimated_rapidapi_calls": len(fetch_misses),
-        "estimated_summary_calls": len(summ_misses) if use_llm else 0,
-        "missing_public_identifiers": sorted(link["public_identifier"] for link in fetch_misses),
-        "summary_missing_public_identifiers": sorted(
-            link["public_identifier"] for link in summ_misses),
-        "not_summarizable_public_identifiers": sorted(
-            link["public_identifier"] for link in not_summarizable),
-        "model": args.model,
-        "reasoning_effort": reasoning_effort(args.reasoning_effort),
-        "summary_concurrency": _summary_concurrency(args),
-        "fetch_concurrency": max(1, args.fetch_concurrency),
-        "rapidapi_rpm": args.rapidapi_rpm,
-        "profile_cache_dir": str(cache_dir),
-        "privacy": {"message_bodies_read": False,
-                    "network_called": bool(args.fetch),
-                    "paid_provider_called": bool(args.fetch)},
-    }
-    payload.update(_estimated_llm_cost(payload["estimated_summary_calls"], args.model))
+class PrefetchPrivacy(BaseModel):
+    """The `privacy` block — the same three flags the raw dict carried."""
+    message_bodies_read: bool = False
+    network_called: bool = False
+    paid_provider_called: bool = False
 
-    if not args.fetch:
-        payload["status"] = "dry_run"
-        skipped_note = (f"; {len(not_summarizable)} failed/empty profile(s) not summarizable"
-                        if not_summarizable else "")
-        cleaned_note = (f"; cleaned {len(cleaned_summaries)} stale summary(ies)"
-                        if cleaned_summaries else "")
-        payload["note"] = (
-            f"dry run: {len(fetch_misses)} fetch miss(es) would cost ~{len(fetch_misses)} "
-            f"RapidAPI call(s); {payload['estimated_summary_calls']} summary miss(es) would "
-            f"cost ~${payload['estimated_llm_cost_usd_low']}–{payload['estimated_llm_cost_usd_high']} "
-            f"LLM{skipped_note}{cleaned_note}; rerun with --fetch to spend")
-    elif not rapidapi_key():
-        payload["status"] = "blocked_no_key"
-        payload["privacy"]["network_called"] = False
-        payload["privacy"]["paid_provider_called"] = False
-        payload["note"] = "RAPIDAPI_LINKEDIN_KEY / RAPIDAPI_KEY not configured; nothing fetched"
-    else:
-        counts = prefetch(fetch_misses, cache_dir, rapidapi_key(),
-                          limit=args.limit, concurrency=max(1, args.fetch_concurrency),
-                          rpm=args.rapidapi_rpm)
-        counts["already_cached"] = already_cached
-        payload["counts"] = counts
-        # Re-classify AFTER the fetch: a failed fetch (bad URL) now sits in the
-        # not_summarizable bucket, NOT the summarize bucket — so we never hand it
-        # to the LLM. --limit caps the whole run.
-        post = classify_queue(links, cache_dir)
-        payload["remaining_misses"] = len(post["fetch"])
-        status = "completed" if not counts["failed"] else "completed_with_failures"
-        pending_summary = post["summarize"]
-        if args.limit:
-            pending_summary = pending_summary[:max(0, args.limit - counts["attempted"])]
-        # Fetch failures show up as newly non-summarizable cached entries; report
-        # them so the manifest explains why some fetched people got no summary.
-        skipped_no_profile = len(post["not_summarizable"])
-        summary_counts = {"summarized": 0, "failed": 0, "attempted": 0,
-                          "already_summarized": already_summarized,
-                          "skipped_no_profile": skipped_no_profile,
-                          "pending": len(pending_summary)}
-        if not use_llm:
-            payload["summary"] = {"status": "skipped_no_llm", "counts": summary_counts}
-        elif not os.getenv("OPENAI_API_KEY"):
-            payload["summary"] = {"status": "blocked_no_key", "counts": summary_counts}
-            payload["privacy"]["paid_provider_called"] = True  # RapidAPI still ran
-        elif pending_summary:
-            result = summarize(
-                pending_summary, cache_dir, model=args.model,
-                effort=reasoning_effort(args.reasoning_effort),
-                concurrency=_summary_concurrency(args), timeout=args.timeout,
-                max_retries=args.max_retries)
-            payload["summary"] = {"status": "completed",
-                                  "counts": {**summary_counts, **result["counts"]},
-                                  "tokens": result["tokens"],
-                                  "actual_cost_usd": result["actual_cost_usd"]}
-            if result["counts"]["failed"]:
-                status = "completed_with_failures"
+
+class PrefetchSummaryBlock(BaseModel):
+    """The `summary` block. Written only on a `--fetch` run; `tokens` and
+    `actual_cost_usd` only when the LLM actually ran, exactly as before (the
+    None-valued fields are dropped by `to_payload()`)."""
+    status: str = ""
+    counts: dict[str, int] = {}
+    tokens: dict[str, int] | None = None
+    actual_cost_usd: float | None = None
+
+
+class PrefetchProfilesManifest(StageManifest):
+    """The stage's typed manifest payload — the raw dict's keys verbatim,
+    including the `source` key `write_manifest` used to inject. The branch-only
+    keys are `| None` so `to_payload()` drops them on the runs that never set
+    them (a dry run has no `counts`/`summary`), which is what the raw dict did by
+    simply not assigning them."""
+    source: str = STAGE
+    queue_links: int = 0
+    cache_misses: int = 0
+    summary_misses: int = 0
+    not_summarizable: int = 0
+    already_cached: int = 0
+    already_summarized: int = 0
+    no_public_identifier: int = 0
+    cleaned_garbage_summaries: int = 0
+    cleaned_public_identifiers: list[str] = []
+    estimated_rapidapi_calls: int = 0
+    estimated_summary_calls: int = 0
+    missing_public_identifiers: list[str] = []
+    summary_missing_public_identifiers: list[str] = []
+    not_summarizable_public_identifiers: list[str] = []
+    model: str = ""
+    reasoning_effort: str = ""
+    summary_concurrency: int = 0
+    fetch_concurrency: int = 0
+    rapidapi_rpm: int = 0
+    profile_cache_dir: str = ""
+    privacy: PrefetchPrivacy = PrefetchPrivacy()
+    # `int | float`, not `float`: `_estimated_llm_cost` sums an EMPTY generator to
+    # the int 0 for a zero-miss queue and to a float otherwise, and the dry-run
+    # note interpolates these verbatim ("~$0–0" vs "~$0.0–0.0"). A plain `float`
+    # would coerce the zero case and silently change the reported text.
+    estimated_llm_cost_usd_low: int | float = 0
+    estimated_llm_cost_usd_high: int | float = 0
+    note: str | None = None
+    counts: dict[str, int] | None = None
+    remaining_misses: int | None = None
+    summary: PrefetchSummaryBlock | None = None
+    remaining_summary_misses: int | None = None
+    duration_seconds: float = 0.0
+
+
+class PrefetchProfiles(Node):
+    """Fills the shared profile cache (and its summaries) for the Check-Profile
+    review queue. Cache-only by default — `fetch=False` is the spend-free preview
+    that still runs through this node, because the dry run has always written this
+    stage's manifest."""
+
+    name = "deep_prefetch"
+    # Everything this stage scans is optional: before review has produced any of
+    # it, the queue is simply empty and the run reports zero misses. The cache is
+    # BOTH read (the miss diff) and written (the fetch), which is not a cycle —
+    # `graph.check_graph` drops self-edges.
+    inputs = (
+        Artifact(path=str(VERDICTS_JSONL), required=False),
+        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
+        Artifact(path=str(SYNTHETIC_PEOPLE_CSV), required=False),
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
+        Artifact(path=PARENT_TEMPLATE, required=False),
+        Artifact(path=DOSSIER_TEMPLATE, required=False),
+        Artifact(path=PROFILE_CACHE_TEMPLATE, external=True, required=False),
+    )
+    # The profile cache is deliberately NOT a declared output. It is EXTERNAL
+    # data — materialized RapidAPI responses — hydrated opportunistically by
+    # several nodes (this one on purpose via --fetch, owner/retargets on a
+    # miss). Declaring one in-graph producer would pin a prefetch<->reconcile
+    # cycle over what is a cross-run cache, not a pipeline edge; this node's
+    # durable record is its manifest.
+    outputs = ()
+    payload = PrefetchProfilesManifest
+    # Where `write_manifest(STAGE, payload, import_dir=ROOT)` has always put it:
+    # `<import_dir>/<stage>/manifest.json` (`imports/common.py`). Unmoved.
+    manifest = str(ROOT / STAGE / "manifest.json")
+
+    def __init__(
+        self,
+        *,
+        verdicts: Path | None = None,
+        review: Path | None = None,
+        synthetic_people: Path | None = None,
+        facts_dir: Path | None = None,
+        people_csv: Path | None = None,
+        parents_dir: Path | None = None,
+        dossier_dir: Path | None = None,
+        profile_cache_dir: Path | None = None,
+        fetch: bool = False,
+        no_llm: bool = False,
+        model: str = DEFAULT_SUMMARY_MODEL,
+        reasoning_effort: str = DEFAULT_SUMMARY_EFFORT,
+        limit: int = 0,
+        summary_concurrency: int = 0,
+        fetch_concurrency: int = DEFAULT_FETCH_CONCURRENCY,
+        rapidapi_rpm: int = RAPIDAPI_RPM_DEFAULT,
+        timeout: int = 120,
+        max_retries: int = 4,
+    ) -> None:
+        self.verdicts = Path(verdicts or VERDICTS_JSONL)
+        self.review = Path(review or LINKEDIN_OVERRIDES_CSV)
+        self.synthetic_people = Path(synthetic_people or SYNTHETIC_PEOPLE_CSV)
+        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
+        self.parents_dir = Path(parents_dir or PARENTS_DIR)
+        self.dossier_dir = Path(dossier_dir or DOSSIER_DIR)
+        self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
+        # The ONE spend door: everything paid (RapidAPI fetch, then OpenAI
+        # summaries) hangs off this flag, exactly as `--fetch` always has.
+        self.fetch = fetch
+        self.no_llm = no_llm
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.limit = limit
+        # 0 = resolve from env/profile. The CLI passes the already-resolved value
+        # from `_summary_concurrency(args)` (explicit --concurrency wins there).
+        self.summary_concurrency = summary_concurrency
+        self.fetch_concurrency = fetch_concurrency
+        self.rapidapi_rpm = rapidapi_rpm
+        self.timeout = timeout
+        self.max_retries = max_retries
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            str(VERDICTS_JSONL): str(self.verdicts),
+            str(LINKEDIN_OVERRIDES_CSV): str(self.review),
+            str(SYNTHETIC_PEOPLE_CSV): str(self.synthetic_people),
+            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
+            PARENT_TEMPLATE: str(self.parents_dir / "{slug}.md"),
+            DOSSIER_TEMPLATE: str(self.dossier_dir / "{slug}.md"),
+            PROFILE_CACHE_TEMPLATE: str(self.profile_cache_dir / "{public_identifier}.json"),
+        }
+
+    def execute(self) -> PrefetchProfilesManifest:
+        started = time.monotonic()
+        cache_dir = self.profile_cache_dir
+        parents = _all_review_parents(
+            self.verdicts, self.review, self.synthetic_people,
+            self.facts_dir, self.people_csv,
+            self.parents_dir, self.dossier_dir, cache_dir)
+        links = review_queue_links(parents)
+        # Self-heal FIRST: strip any garbage simple_summary a prior run wrote for a
+        # failed/empty profile, so it never lingers in the UI. Free, local, idempotent.
+        cleaned_summaries = cleanup_garbage_summaries(links, cache_dir)
+        buckets = classify_queue(links, cache_dir)
+        fetch_misses, summ_misses = buckets["fetch"], buckets["summarize"]
+        not_summarizable, no_pub = buckets["not_summarizable"], buckets["no_public_identifier"]
+        use_llm = not self.no_llm
+        summary_concurrency = self.summary_concurrency or env_or_profile_int(
+            "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency",
+            fallback=DEFAULT_SUMMARY_CONCURRENCY)
+        # The queue-wide per-person state BEFORE any work this run (owner: works
+        # whether the cache is empty or partially populated — no all-or-none assumption).
+        already_cached = len(links) - len(fetch_misses) - len(no_pub)
+        # already_summarized = links that are already done: they carry a summary and
+        # are summarizable. ``summarize`` (summary misses), ``not_summarizable``
+        # (cached-failed), and ``no_pub`` are mutually exclusive and together are
+        # exactly the not-yet-done set, so the remainder is the already-summarized set.
+        # (``fetch`` ⊆ ``summarize`` — an uncached person is always a summary miss —
+        # so it is NOT subtracted again here.)
+        already_summarized = (len(links) - len(summ_misses)
+                              - len(not_summarizable) - len(no_pub))
+        estimated_summary_calls = len(summ_misses) if use_llm else 0
+        # Summarization runs ONLY over REAL cached profiles lacking a summary. Failed/
+        # empty profiles are excluded (not summarizable) — we never feed empties to the
+        # LLM, so it can't hallucinate generic filler for a bad-URL fetch.
+        payload = PrefetchProfilesManifest(
+            queue_links=len(links),
+            cache_misses=len(fetch_misses),
+            summary_misses=len(summ_misses),
+            not_summarizable=len(not_summarizable),
+            already_cached=already_cached,
+            already_summarized=already_summarized,
+            no_public_identifier=len(no_pub),
+            cleaned_garbage_summaries=len(cleaned_summaries),
+            cleaned_public_identifiers=sorted(cleaned_summaries),
+            estimated_rapidapi_calls=len(fetch_misses),
+            estimated_summary_calls=estimated_summary_calls,
+            missing_public_identifiers=sorted(link["public_identifier"] for link in fetch_misses),
+            summary_missing_public_identifiers=sorted(
+                link["public_identifier"] for link in summ_misses),
+            not_summarizable_public_identifiers=sorted(
+                link["public_identifier"] for link in not_summarizable),
+            model=self.model,
+            reasoning_effort=reasoning_effort(self.reasoning_effort),
+            summary_concurrency=summary_concurrency,
+            fetch_concurrency=max(1, self.fetch_concurrency),
+            rapidapi_rpm=self.rapidapi_rpm,
+            profile_cache_dir=str(cache_dir),
+            privacy=PrefetchPrivacy(message_bodies_read=False,
+                                    network_called=bool(self.fetch),
+                                    paid_provider_called=bool(self.fetch)),
+            **_estimated_llm_cost(estimated_summary_calls, self.model),
+        )
+
+        if not self.fetch:
+            payload.status = "dry_run"
+            skipped_note = (f"; {len(not_summarizable)} failed/empty profile(s) not summarizable"
+                            if not_summarizable else "")
+            cleaned_note = (f"; cleaned {len(cleaned_summaries)} stale summary(ies)"
+                            if cleaned_summaries else "")
+            payload.note = (
+                f"dry run: {len(fetch_misses)} fetch miss(es) would cost ~{len(fetch_misses)} "
+                f"RapidAPI call(s); {payload.estimated_summary_calls} summary miss(es) would "
+                f"cost ~${payload.estimated_llm_cost_usd_low}–{payload.estimated_llm_cost_usd_high} "
+                f"LLM{skipped_note}{cleaned_note}; rerun with --fetch to spend")
+        elif not rapidapi_key():
+            payload.status = "blocked_no_key"
+            payload.privacy.network_called = False
+            payload.privacy.paid_provider_called = False
+            payload.note = "RAPIDAPI_LINKEDIN_KEY / RAPIDAPI_KEY not configured; nothing fetched"
         else:
-            payload["summary"] = {"status": "completed", "counts": summary_counts}
-        payload["remaining_summary_misses"] = len(classify_queue(links, cache_dir)["summarize"])
-        payload["status"] = status
-    payload["duration_seconds"] = round(time.monotonic() - started, 2)
-    manifest = write_manifest(STAGE, payload, import_dir=ROOT)
-    return manifest
+            counts = prefetch(fetch_misses, cache_dir, rapidapi_key(),
+                              limit=self.limit, concurrency=max(1, self.fetch_concurrency),
+                              rpm=self.rapidapi_rpm)
+            counts["already_cached"] = already_cached
+            payload.counts = counts
+            # Re-classify AFTER the fetch: a failed fetch (bad URL) now sits in the
+            # not_summarizable bucket, NOT the summarize bucket — so we never hand it
+            # to the LLM. --limit caps the whole run.
+            post = classify_queue(links, cache_dir)
+            payload.remaining_misses = len(post["fetch"])
+            status = "completed" if not counts["failed"] else "completed_with_failures"
+            pending_summary = post["summarize"]
+            if self.limit:
+                pending_summary = pending_summary[:max(0, self.limit - counts["attempted"])]
+            # Fetch failures show up as newly non-summarizable cached entries; report
+            # them so the manifest explains why some fetched people got no summary.
+            skipped_no_profile = len(post["not_summarizable"])
+            summary_counts = {"summarized": 0, "failed": 0, "attempted": 0,
+                              "already_summarized": already_summarized,
+                              "skipped_no_profile": skipped_no_profile,
+                              "pending": len(pending_summary)}
+            if not use_llm:
+                payload.summary = PrefetchSummaryBlock(status="skipped_no_llm", counts=summary_counts)
+            elif not os.getenv("OPENAI_API_KEY"):
+                payload.summary = PrefetchSummaryBlock(status="blocked_no_key", counts=summary_counts)
+                payload.privacy.paid_provider_called = True  # RapidAPI still ran
+            elif pending_summary:
+                result = summarize(
+                    pending_summary, cache_dir, model=self.model,
+                    effort=reasoning_effort(self.reasoning_effort),
+                    concurrency=summary_concurrency, timeout=self.timeout,
+                    max_retries=self.max_retries)
+                payload.summary = PrefetchSummaryBlock(
+                    status="completed",
+                    counts={**summary_counts, **result["counts"]},
+                    tokens=result["tokens"],
+                    actual_cost_usd=result["actual_cost_usd"])
+                if result["counts"]["failed"]:
+                    status = "completed_with_failures"
+            else:
+                payload.summary = PrefetchSummaryBlock(status="completed", counts=summary_counts)
+            payload.remaining_summary_misses = len(classify_queue(links, cache_dir)["summarize"])
+            payload.status = status
+        payload.duration_seconds = round(time.monotonic() - started, 2)
+        return payload
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -649,7 +814,27 @@ def main(argv: list[str] | None = None) -> None:
                         help="retries per summary call on transient failures")
     args = parser.parse_args(argv)
     load_env()
-    emit(run(args))
+    payload = PrefetchProfiles(
+        verdicts=Path(args.verdicts),
+        review=Path(args.review),
+        synthetic_people=Path(args.synthetic_people),
+        facts_dir=Path(args.facts_dir),
+        people_csv=Path(args.people_csv),
+        parents_dir=Path(args.parents_dir),
+        dossier_dir=Path(args.dossier_dir),
+        profile_cache_dir=Path(args.profile_cache_dir),
+        fetch=args.fetch,
+        no_llm=args.no_llm,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        limit=args.limit,
+        summary_concurrency=_summary_concurrency(args),
+        fetch_concurrency=args.fetch_concurrency,
+        rapidapi_rpm=args.rapidapi_rpm,
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+    ).run()
+    emit(payload.to_payload())
 
 
 if __name__ == "__main__":

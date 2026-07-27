@@ -16,6 +16,17 @@ Reads:  .powerpacks/deep-context/reconcile/deep-research/<handle>/01_research_pa
 Writes: .powerpacks/network-import/overrides/synthetic-people.csv
 
 Changelog:
+  2026-07-27 (declared contract): `AssembleSyntheticProfile` is a
+    `pipeline/contract.py:Node` ("deep_assemble_synthetic"). The flow moved from
+    `main()` into `execute()` unchanged (same flags, same pretty-printed result
+    JSON); the typed payload has the result dict's keys verbatim. Declaration-only
+    node (`manifest=""`): the write_manifest call here updates ANOTHER node's
+    manifest — deep_research's ENRICH_MANIFEST receipt, stamping the chain's
+    terminal "completed" — so it stays inside `execute()` and is deliberately NOT
+    this node's manifest or a declared output. Inputs/outputs are declared via the
+    producer-owned constants (QUEUE_CSV / RESEARCH_PROFILE_TEMPLATE from
+    reconcile_deep_research, SYNTHETIC_PEOPLE_CSV from review_web.model) so graph
+    edges are string-equal.
   2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -41,14 +52,22 @@ from packs.ingestion.primitives.deep_context.candidates import (
 from packs.ingestion.primitives.deep_context.common import (
     ENRICH_MANIFEST,
     FACTS_DIR,
+    FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
     VERDICTS_JSONL,
+    DEFAULT_PEOPLE_CSV as MERGED_PEOPLE_CSV,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.imports.common import write_manifest
-from packs.ingestion.primitives.deep_context.reconcile_deep_research import DR_OUT_DIR, QUEUE_CSV
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest, row_model_for
+from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
+    DR_OUT_DIR,
+    QUEUE_CSV,
+    RESEARCH_PROFILE_TEMPLATE,
+)
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED, load_override_rows
+from packs.ingestion.primitives.deep_context.review_web.model import SYNTHETIC_PEOPLE_CSV
 from packs.ingestion.schemas.candidates_schema import candidate_key_for
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 
@@ -65,6 +84,9 @@ SYNTHETIC_COLUMNS = (
     + SYNTHETIC_PROVENANCE_COLUMNS
     + ["approved", "synthetic_metadata"]
 )
+# The declared row shape of synthetic-people.csv, generated FROM SYNTHETIC_COLUMNS
+# so the column list keeps one home (this module is the file's only writer).
+SyntheticPersonRow = row_model_for("SyntheticPersonRow", SYNTHETIC_COLUMNS)
 
 # Auto-approve bar: research completeness at/above this flows straight into the
 # merge (approved=auto); below it the row waits for the user in the review file.
@@ -348,6 +370,335 @@ def people_lookup(people_csv: Path) -> tuple[dict[str, dict[str, str]], dict[str
     return by_email, by_phone
 
 
+class AssembleSyntheticProfileManifest(StageManifest):
+    """Typed payload — today's result dict key-for-key (`status` is the base
+    field, so it renders first in the emitted JSON; every key and value is
+    unchanged)."""
+    primitive: str = "assemble_synthetic_profile"
+    built: int = 0
+    auto_approved: int = 0
+    pending_review: int = 0
+    preserved_user_rows: int = 0
+    skipped_with_linkedin: int = 0
+    skipped_unusable: int = 0
+    skipped_worth_no: int = 0
+    pruned_stale_machine_rows: int = 0
+    collapsed_merged_parents: int = 0
+    total_rows: int = 0
+    out: str = ""
+    elapsed_ms: int = 0
+
+
+class AssembleSyntheticProfile(Node):
+    """Builds synthetic people-rows from EXISTING research artifacts — free and
+    local. Declaration-only node (`manifest=""`): its one manifest-touching side
+    effect updates deep_research's ENRICH_MANIFEST receipt (the chain's terminal
+    "completed"), which is another node's manifest and stays inside execute()."""
+
+    name = "deep_assemble_synthetic"
+    inputs = (
+        Artifact(path=str(QUEUE_CSV), required=False),
+        Artifact(path=RESEARCH_PROFILE_TEMPLATE, required=False),
+        Artifact(path=str(VERDICTS_JSONL), required=False),
+        # review.csv is INPUT ONLY here (worth gates via load_override_rows);
+        # this node never writes it.
+        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
+        Artifact(path=str(MERGED_PEOPLE_CSV), required=False),
+        Artifact(path=str(INDEX_JSON), required=False),
+        # worth_view.rows_from reads the per-person facts to resolve each
+        # subject's PARENT-level worth decision (parent-owned worth).
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        # Read to merge-not-clobber the receipt's existing keys; deep_research
+        # declares this manifest, so the graph knows its producer.
+        Artifact(path=str(ENRICH_MANIFEST), required=False),
+    )
+    outputs = (
+        Artifact(path=str(SYNTHETIC_PEOPLE_CSV), row_model=SyntheticPersonRow, writes="upsert"),
+    )
+    payload = AssembleSyntheticProfileManifest
+    manifest = ""
+
+    def __init__(
+        self,
+        *,
+        research_dir: Path | None = None,
+        queue_csv: Path | None = None,
+        people_csv: Path | None = None,
+        verdicts_jsonl: Path | None = None,
+        out: Path | None = None,
+        index_json: Path | None = None,
+        facts_dir: Path | None = None,
+        auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
+        manifest: str | Path | None = None,
+    ) -> None:
+        self.research_dir = Path(research_dir or DR_OUT_DIR)
+        self.queue_csv = Path(queue_csv or QUEUE_CSV)
+        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
+        self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
+        self.out = Path(out or DEFAULT_OUT)
+        self.index_json = Path(index_json or INDEX_JSON)
+        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.auto_completeness = auto_completeness
+        # NOT named `manifest`: that is the Node ClassVar ("" = declaration-only),
+        # and an instance attribute would shadow it into a template manifest write.
+        self.manifest_arg = str(manifest or "").strip()
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            str(QUEUE_CSV): str(self.queue_csv),
+            RESEARCH_PROFILE_TEMPLATE: str(self.research_dir / "{handle}" / "01_research_parallel.json"),
+            str(VERDICTS_JSONL): str(self.verdicts_jsonl),
+            str(MERGED_PEOPLE_CSV): str(self.people_csv),
+            str(INDEX_JSON): str(self.index_json),
+            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            str(SYNTHETIC_PEOPLE_CSV): str(self.out),
+        }
+
+    def execute(self) -> AssembleSyntheticProfileManifest:
+        started = time.monotonic()
+        research_dir = self.research_dir
+        queue: dict[str, dict[str, str]] = {}
+        qpath = self.queue_csv
+        queue_is_current = qpath.exists()
+        if qpath.exists():
+            with qpath.open(newline="", encoding="utf-8") as fh:
+                for row in csv.DictReader(fh):
+                    if row.get("handle"):
+                        queue[row["handle"]] = row
+
+        by_email, by_phone = people_lookup(self.people_csv)
+        existing = load_rows(self.out)
+        verdict_provenance = load_verdict_provenance(self.verdicts_jsonl)
+        overrides = load_override_rows(LINKEDIN_OVERRIDES_CSV)
+        parent_worth = worth_view.rows_by_person_id(
+            worth_view.rows_from(self.facts_dir, overrides, self.index_json)
+        )
+
+        # The output is fixed and overwrite-in-place. Rebuild machine-owned rows
+        # only from this queue; otherwise an old model-Yes synthetic could survive
+        # after the current People decision moved to No. Explicit user gates remain
+        # sticky and are never pruned here.
+        pruned_stale = 0
+        if queue_is_current:
+            for pub, row in list(existing.items()):
+                approved = str(row.get("approved") or "").strip().lower()
+                handle = str(row.get("source_parent_slug") or "").strip()
+                if not handle and pub.startswith("synth-x-"):
+                    handle = pub.removeprefix("synth-x-")
+                if handle and approved not in USER_APPROVED:
+                    existing.pop(pub, None)
+                    pruned_stale += 1
+
+        # Child -> current-parent membership. A later cluster_merge can fold two former
+        # parents into one; the per-person research dirs keyed on the OLD parent slugs are
+        # re-keyed here so their outputs GROUP on the current parent instead of minting a
+        # stale row each. No re-fetch — the existing research JSON is reused as-is.
+        parent_map = current_parent_by_person_id(self.index_json)
+
+        # Phase 1: collect every usable no-LinkedIn research output, resolving each to the
+        # current parent that owns its person_ids. Entries sharing a current parent collapse
+        # into one synthetic row in phase 2.
+        built = auto = pending = preserved = with_linkedin = unusable = worth_no = 0
+        collapsed = 0
+        groups: dict[str, dict[str, Any]] = {}
+        for pdir in sorted(research_dir.iterdir()) if research_dir.exists() else []:
+            if queue_is_current and pdir.name not in queue:
+                continue
+            rj = pdir / "01_research_parallel.json"
+            if not rj.is_file():
+                continue
+            try:
+                profile = json.loads(rj.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if ((profile.get("social") or {}).get("linkedin_url") or "").strip():
+                with_linkedin += 1  # the retarget path owns this person
+                continue
+            if not profile_is_usable(profile):
+                unusable += 1
+                continue
+            contact: dict[str, str] = {"handle": pdir.name}
+            for source in (verdict_provenance.get(pdir.name) or {}, queue.get(pdir.name) or {}):
+                for key, value in source.items():
+                    if value:
+                        contact[key] = value
+            stale_slug = contact.get("source_parent_slug") or pdir.name
+            source_person_ids = _json_list(contact.get("source_person_ids") or "")
+            # The CURRENT parent that owns any of these person_ids (via index membership).
+            # Falls back to the stale slug when the parent is still live/unindexed.
+            current_slug = ""
+            for pid in source_person_ids:
+                current_slug = parent_map.get(pid.strip().lower(), "")
+                if current_slug:
+                    break
+            current_slug = current_slug or stale_slug
+            group_key = current_slug or pdir.name
+            entry = groups.setdefault(group_key, {
+                "current_slug": current_slug,
+                "profiles": [],
+                "contacts": [],
+                "person_ids": [],
+                "candidate_pubs": [],
+                "handles": [],
+            })
+            entry["profiles"].append(profile)
+            entry["contacts"].append(contact)
+            entry["handles"].append(pdir.name)
+            for pid in source_person_ids:
+                if pid not in entry["person_ids"]:
+                    entry["person_ids"].append(pid)
+            cand_pub = contact.get("source_candidate_public_identifier") or ""
+            if cand_pub and cand_pub not in entry["candidate_pubs"]:
+                entry["candidate_pubs"].append(cand_pub)
+
+        # Phase 2: one synthetic per current parent (union the research; retain both
+        # candidate identities so the human can still pick), preserving any prior decision.
+        for group_key in sorted(groups):
+            entry = groups[group_key]
+            profiles = entry["profiles"]
+            if len(profiles) > 1:
+                collapsed += 1
+            profile = merge_research_profiles(profiles)
+            # The strongest contact anchor wins the primary identity/pub; the rest ride
+            # along in provenance so both LinkedIn options stay visible in review.
+            primary = entry["contacts"][0]
+            for c in entry["contacts"]:
+                if c.get("primary_email") or c.get("phone_e164"):
+                    primary = c
+                    break
+            contact = dict(primary)
+            contact["handle"] = entry["current_slug"] or entry["handles"][0]
+            source_person_ids = entry["person_ids"]
+            provenance = {
+                "source_parent_slug": entry["current_slug"] or entry["handles"][0],
+                "source_person_ids": json.dumps(source_person_ids, ensure_ascii=False),
+                "source_candidate_public_identifier": (
+                    contact.get("source_candidate_public_identifier")
+                    or (entry["candidate_pubs"][0] if entry["candidate_pubs"] else "")
+                ),
+            }
+            email = (contact.get("primary_email") or "").strip().lower()
+            digits = "".join(c for c in (contact.get("phone_e164") or "") if c.isdigit())[-10:]
+            original = by_email.get(email) or (by_phone.get(digits) if digits else None)
+            person_id = (original or {}).get("id", "") or (source_person_ids[0] if source_person_ids else "")
+            if original is None:
+                # Not in people.csv -> the subject is an import candidate: carry its
+                # contact identity (emails/phones/counts/channels) onto the minted row.
+                crow = candidate_row(candidate_key_for(email, contact.get("phone_e164") or ""))
+                if crow:
+                    original = candidate_carry(crow)
+                    person_id = candidate_person_id(crow.get("candidate_key", ""))
+            worth_row = parent_worth.get(str(person_id).lower())
+            worth_decision = (
+                str(worth_row.get("effective") or "maybe")
+                if worth_row is not None
+                else effective_network_worth(person_id, overrides)["decision"]
+            )
+            if is_candidate_id(person_id) and worth_decision == "no":
+                worth_no += 1  # user/LLM said not worth adding — never mint a synthetic row
+                continue
+            row = build_synthetic_row(
+                profile,
+                contact,
+                original,
+                person_id,
+                self.auto_completeness,
+                provenance=provenance,
+            )
+            # Before provenance was persisted, handle-only subjects minted a
+            # ``synth-x-<parent>`` key. Keep that stable identity when backfilling so
+            # review decisions and any prior fan-in references do not fork.
+            for handle in entry["handles"]:
+                legacy_pub = f"synth-x-{handle}".lower()
+                if legacy_pub in existing:
+                    row["public_identifier"] = legacy_pub
+                    row["id"] = existing[legacy_pub].get("id") or row["id"]
+                    row["entity_urn"] = existing[legacy_pub].get("entity_urn") or f"synthetic:{row['id']}"
+                    break
+            pub = row["public_identifier"].lower()
+            # When two stale rows collapse onto one current parent, the survivor inherits
+            # the strongest human decision across every colliding row (its own pub + the
+            # pubs the merged children would have minted — see _inherit_decision). An
+            # explicit user gate (yes/no) beats a machine gate (auto/blank), and among user
+            # gates `no` (exclude) beats `yes` (keep). A human decision is never silently
+            # dropped on collapse, even when the survivor's own gate was the weaker one.
+            colliding_pubs = {pub}
+            for c in entry["contacts"]:
+                colliding_pubs.add(synth_public_identifier(
+                    c.get("primary_email", ""), c.get("phone_e164", ""), c.get("handle", "")).lower())
+            inherited = _inherit_decision(existing, colliding_pubs)
+            previous = existing.get(pub) or {}
+            if (previous.get("approved") or "").strip().lower() in USER_APPROVED:
+                # The user's gate is sticky, but missing lineage is safe to repair.
+                for field in SYNTHETIC_PROVENANCE_COLUMNS:
+                    if not previous.get(field) and row.get(field):
+                        previous[field] = row[field]
+                # A collapsing sibling may carry a STRONGER decision than the survivor's own
+                # (inherited already folds in previous's gate, so it never weakens it).
+                if inherited:
+                    previous["approved"] = inherited
+                existing[pub] = previous
+                preserved += 1
+            else:
+                if inherited:
+                    row["approved"] = inherited
+                existing[pub] = row
+                built += 1
+                auto += row["approved"] == "auto"
+                pending += row["approved"] == ""
+            # Drop the sibling rows the merged children would have minted so a collapse
+            # leaves exactly one synthetic per current parent.
+            for other in colliding_pubs:
+                if other != pub:
+                    existing.pop(other, None)
+
+        write_rows(self.out, existing)
+        result = AssembleSyntheticProfileManifest(
+            status="completed",
+            built=built, auto_approved=auto, pending_review=pending,
+            preserved_user_rows=preserved, skipped_with_linkedin=with_linkedin,
+            skipped_unusable=unusable, skipped_worth_no=worth_no,
+            pruned_stale_machine_rows=pruned_stale,
+            collapsed_merged_parents=collapsed,
+            total_rows=len(existing),
+            out=str(self.out), elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+        # ANOTHER node's manifest: merge-update deep_research's ENRICH_MANIFEST
+        # receipt to the chain's terminal "completed". Stays here, not in the
+        # Node template — this node is declaration-only (manifest="").
+        manifest_text = self.manifest_arg
+        if not manifest_text:
+            try:
+                if research_dir.resolve() == DR_OUT_DIR.resolve():
+                    manifest_text = str(ENRICH_MANIFEST)
+            except (OSError, RuntimeError):
+                pass
+        if manifest_text:
+            manifest_path = Path(manifest_text)
+            if manifest_path.name != "manifest.json":
+                raise SystemExit("--manifest must end in manifest.json")
+            try:
+                current = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                current = {}
+            receipt = {
+                **current,
+                "stage": "enrich",
+                "status": "completed",
+                "assembly": result.to_payload(),
+                "outputs": {
+                    **(current.get("outputs") or {}),
+                    "synthetic_people_csv": str(self.out),
+                },
+            }
+            receipt.pop("updated_at", None)
+            receipt.pop("created_at", None)
+            write_manifest(
+                manifest_path.parent.name, receipt,
+                import_dir=manifest_path.parent.parent)
+        return result
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Build synthetic people-rows for researched people with no real LinkedIn (free, local — reads existing research artifacts).")
     ap.add_argument("--research-dir", default=str(DR_OUT_DIR))
@@ -362,246 +713,18 @@ def main(argv: list[str] | None = None) -> None:
                     help="Research completeness at/above this auto-approves the row (default %(default)s)")
     ap.add_argument("--manifest", help="Fixed Enrich Contacts manifest (defaults on the canonical research path)")
     args = ap.parse_args(argv)
-
-    started = time.monotonic()
-    research_dir = Path(args.research_dir)
-    queue: dict[str, dict[str, str]] = {}
-    qpath = Path(args.queue_csv)
-    queue_is_current = qpath.exists()
-    if qpath.exists():
-        with qpath.open(newline="", encoding="utf-8") as fh:
-            for row in csv.DictReader(fh):
-                if row.get("handle"):
-                    queue[row["handle"]] = row
-
-    by_email, by_phone = people_lookup(Path(args.people_csv))
-    existing = load_rows(Path(args.out))
-    verdict_provenance = load_verdict_provenance(Path(args.verdicts_jsonl))
-    overrides = load_override_rows(LINKEDIN_OVERRIDES_CSV)
-    parent_worth = worth_view.rows_by_person_id(
-        worth_view.rows_from(Path(args.facts_dir), overrides, Path(args.index_json))
-    )
-
-    # The output is fixed and overwrite-in-place. Rebuild machine-owned rows
-    # only from this queue; otherwise an old model-Yes synthetic could survive
-    # after the current People decision moved to No. Explicit user gates remain
-    # sticky and are never pruned here.
-    pruned_stale = 0
-    if queue_is_current:
-        for pub, row in list(existing.items()):
-            approved = str(row.get("approved") or "").strip().lower()
-            handle = str(row.get("source_parent_slug") or "").strip()
-            if not handle and pub.startswith("synth-x-"):
-                handle = pub.removeprefix("synth-x-")
-            if handle and approved not in USER_APPROVED:
-                existing.pop(pub, None)
-                pruned_stale += 1
-
-    # Child -> current-parent membership. A later cluster_merge can fold two former
-    # parents into one; the per-person research dirs keyed on the OLD parent slugs are
-    # re-keyed here so their outputs GROUP on the current parent instead of minting a
-    # stale row each. No re-fetch — the existing research JSON is reused as-is.
-    parent_map = current_parent_by_person_id(Path(args.index_json))
-
-    # Phase 1: collect every usable no-LinkedIn research output, resolving each to the
-    # current parent that owns its person_ids. Entries sharing a current parent collapse
-    # into one synthetic row in phase 2.
-    built = auto = pending = preserved = with_linkedin = unusable = worth_no = 0
-    collapsed = 0
-    groups: dict[str, dict[str, Any]] = {}
-    for pdir in sorted(research_dir.iterdir()) if research_dir.exists() else []:
-        if queue_is_current and pdir.name not in queue:
-            continue
-        rj = pdir / "01_research_parallel.json"
-        if not rj.is_file():
-            continue
-        try:
-            profile = json.loads(rj.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if ((profile.get("social") or {}).get("linkedin_url") or "").strip():
-            with_linkedin += 1  # the retarget path owns this person
-            continue
-        if not profile_is_usable(profile):
-            unusable += 1
-            continue
-        contact: dict[str, str] = {"handle": pdir.name}
-        for source in (verdict_provenance.get(pdir.name) or {}, queue.get(pdir.name) or {}):
-            for key, value in source.items():
-                if value:
-                    contact[key] = value
-        stale_slug = contact.get("source_parent_slug") or pdir.name
-        source_person_ids = _json_list(contact.get("source_person_ids") or "")
-        # The CURRENT parent that owns any of these person_ids (via index membership).
-        # Falls back to the stale slug when the parent is still live/unindexed.
-        current_slug = ""
-        for pid in source_person_ids:
-            current_slug = parent_map.get(pid.strip().lower(), "")
-            if current_slug:
-                break
-        current_slug = current_slug or stale_slug
-        group_key = current_slug or pdir.name
-        entry = groups.setdefault(group_key, {
-            "current_slug": current_slug,
-            "profiles": [],
-            "contacts": [],
-            "person_ids": [],
-            "candidate_pubs": [],
-            "handles": [],
-        })
-        entry["profiles"].append(profile)
-        entry["contacts"].append(contact)
-        entry["handles"].append(pdir.name)
-        for pid in source_person_ids:
-            if pid not in entry["person_ids"]:
-                entry["person_ids"].append(pid)
-        cand_pub = contact.get("source_candidate_public_identifier") or ""
-        if cand_pub and cand_pub not in entry["candidate_pubs"]:
-            entry["candidate_pubs"].append(cand_pub)
-
-    # Phase 2: one synthetic per current parent (union the research; retain both
-    # candidate identities so the human can still pick), preserving any prior decision.
-    for group_key in sorted(groups):
-        entry = groups[group_key]
-        profiles = entry["profiles"]
-        if len(profiles) > 1:
-            collapsed += 1
-        profile = merge_research_profiles(profiles)
-        # The strongest contact anchor wins the primary identity/pub; the rest ride
-        # along in provenance so both LinkedIn options stay visible in review.
-        primary = entry["contacts"][0]
-        for c in entry["contacts"]:
-            if c.get("primary_email") or c.get("phone_e164"):
-                primary = c
-                break
-        contact = dict(primary)
-        contact["handle"] = entry["current_slug"] or entry["handles"][0]
-        source_person_ids = entry["person_ids"]
-        provenance = {
-            "source_parent_slug": entry["current_slug"] or entry["handles"][0],
-            "source_person_ids": json.dumps(source_person_ids, ensure_ascii=False),
-            "source_candidate_public_identifier": (
-                contact.get("source_candidate_public_identifier")
-                or (entry["candidate_pubs"][0] if entry["candidate_pubs"] else "")
-            ),
-        }
-        email = (contact.get("primary_email") or "").strip().lower()
-        digits = "".join(c for c in (contact.get("phone_e164") or "") if c.isdigit())[-10:]
-        original = by_email.get(email) or (by_phone.get(digits) if digits else None)
-        person_id = (original or {}).get("id", "") or (source_person_ids[0] if source_person_ids else "")
-        if original is None:
-            # Not in people.csv -> the subject is an import candidate: carry its
-            # contact identity (emails/phones/counts/channels) onto the minted row.
-            crow = candidate_row(candidate_key_for(email, contact.get("phone_e164") or ""))
-            if crow:
-                original = candidate_carry(crow)
-                person_id = candidate_person_id(crow.get("candidate_key", ""))
-        worth_row = parent_worth.get(str(person_id).lower())
-        worth_decision = (
-            str(worth_row.get("effective") or "maybe")
-            if worth_row is not None
-            else effective_network_worth(person_id, overrides)["decision"]
-        )
-        if is_candidate_id(person_id) and worth_decision == "no":
-            worth_no += 1  # user/LLM said not worth adding — never mint a synthetic row
-            continue
-        row = build_synthetic_row(
-            profile,
-            contact,
-            original,
-            person_id,
-            args.auto_completeness,
-            provenance=provenance,
-        )
-        # Before provenance was persisted, handle-only subjects minted a
-        # ``synth-x-<parent>`` key. Keep that stable identity when backfilling so
-        # review decisions and any prior fan-in references do not fork.
-        for handle in entry["handles"]:
-            legacy_pub = f"synth-x-{handle}".lower()
-            if legacy_pub in existing:
-                row["public_identifier"] = legacy_pub
-                row["id"] = existing[legacy_pub].get("id") or row["id"]
-                row["entity_urn"] = existing[legacy_pub].get("entity_urn") or f"synthetic:{row['id']}"
-                break
-        pub = row["public_identifier"].lower()
-        # When two stale rows collapse onto one current parent, the survivor inherits
-        # the strongest human decision across every colliding row (its own pub + the
-        # pubs the merged children would have minted — see _inherit_decision). An
-        # explicit user gate (yes/no) beats a machine gate (auto/blank), and among user
-        # gates `no` (exclude) beats `yes` (keep). A human decision is never silently
-        # dropped on collapse, even when the survivor's own gate was the weaker one.
-        colliding_pubs = {pub}
-        for c in entry["contacts"]:
-            colliding_pubs.add(synth_public_identifier(
-                c.get("primary_email", ""), c.get("phone_e164", ""), c.get("handle", "")).lower())
-        inherited = _inherit_decision(existing, colliding_pubs)
-        previous = existing.get(pub) or {}
-        if (previous.get("approved") or "").strip().lower() in USER_APPROVED:
-            # The user's gate is sticky, but missing lineage is safe to repair.
-            for field in SYNTHETIC_PROVENANCE_COLUMNS:
-                if not previous.get(field) and row.get(field):
-                    previous[field] = row[field]
-            # A collapsing sibling may carry a STRONGER decision than the survivor's own
-            # (inherited already folds in previous's gate, so it never weakens it).
-            if inherited:
-                previous["approved"] = inherited
-            existing[pub] = previous
-            preserved += 1
-        else:
-            if inherited:
-                row["approved"] = inherited
-            existing[pub] = row
-            built += 1
-            auto += row["approved"] == "auto"
-            pending += row["approved"] == ""
-        # Drop the sibling rows the merged children would have minted so a collapse
-        # leaves exactly one synthetic per current parent.
-        for other in colliding_pubs:
-            if other != pub:
-                existing.pop(other, None)
-
-    write_rows(Path(args.out), existing)
-    result = {
-        "primitive": "assemble_synthetic_profile", "status": "completed",
-        "built": built, "auto_approved": auto, "pending_review": pending,
-        "preserved_user_rows": preserved, "skipped_with_linkedin": with_linkedin,
-        "skipped_unusable": unusable, "skipped_worth_no": worth_no,
-        "pruned_stale_machine_rows": pruned_stale,
-        "collapsed_merged_parents": collapsed,
-        "total_rows": len(existing),
-        "out": str(args.out), "elapsed_ms": int((time.monotonic() - started) * 1000),
-    }
-    manifest_text = str(args.manifest or "").strip()
-    if not manifest_text:
-        try:
-            if research_dir.resolve() == DR_OUT_DIR.resolve():
-                manifest_text = str(ENRICH_MANIFEST)
-        except (OSError, RuntimeError):
-            pass
-    if manifest_text:
-        manifest_path = Path(manifest_text)
-        if manifest_path.name != "manifest.json":
-            raise SystemExit("--manifest must end in manifest.json")
-        try:
-            current = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            current = {}
-        payload = {
-            **current,
-            "stage": "enrich",
-            "status": "completed",
-            "assembly": result,
-            "outputs": {
-                **(current.get("outputs") or {}),
-                "synthetic_people_csv": str(args.out),
-            },
-        }
-        payload.pop("updated_at", None)
-        payload.pop("created_at", None)
-        write_manifest(
-            manifest_path.parent.name, payload,
-            import_dir=manifest_path.parent.parent)
-    print(json.dumps(result, indent=2))
+    payload = AssembleSyntheticProfile(
+        research_dir=Path(args.research_dir),
+        queue_csv=Path(args.queue_csv),
+        people_csv=Path(args.people_csv),
+        verdicts_jsonl=Path(args.verdicts_jsonl),
+        out=Path(args.out),
+        index_json=Path(args.index_json),
+        facts_dir=Path(args.facts_dir),
+        auto_completeness=args.auto_completeness,
+        manifest=args.manifest,
+    ).run()
+    print(json.dumps(payload.to_payload(), indent=2))
 
 
 if __name__ == "__main__":

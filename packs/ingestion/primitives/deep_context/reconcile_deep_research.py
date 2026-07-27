@@ -22,6 +22,20 @@ Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
   manifest.json          subset size, estimated cost, gate decision, run status
 
 Changelog:
+  2026-07-27 (declared contract): `ReconcileDeepResearch` is a
+    `pipeline/contract.py:Node` ("deep_research"). `run(args)` became
+    `execute()`; the TERMINAL enrichment-manifest write routes through the Node
+    template (same keys — `source`/`stage`/`counts`/... — plus the declared
+    `fingerprints` block), while every MID-RUN `write_enrichment_manifest` call
+    (the running receipt before the Parallel subprocess, the judging heartbeat)
+    stays exactly where it was so the browser's poll contract is untouched. The
+    emitted CLI result and the manifest receipt are DIFFERENT shapes by existing
+    contract, so `main()` emits `node.result` (the same result dict as before)
+    rather than the payload. `RESEARCH_PROFILE_TEMPLATE` names the per-person
+    research output for the graph; assemble_synthetic_profile consumes it.
+    review.csv is declared input-only: its column families are already declared
+    by `deep_reconcile` (identity/fingerprint) and `deep_synthesize`
+    (worth + llm_reject*) — see the comment on the outputs ClassVar.
   2026-07-24: `eligible_subset` skips `no_link` verdict rows. They are now kept in
     verdicts.jsonl so contact-only people are reviewable, and their free verdict always
     carries `linkedin_plausibly_absent` — which the include_plausibly_absent branch
@@ -73,8 +87,11 @@ from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
     ENRICH_MANIFEST,
     FACTS_DIR,
+    FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
+    OWNER_JSON,
+    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
     VERDICTS_JSONL,
     emit,
@@ -86,6 +103,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.imports.common import write_manifest
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest, row_model_for
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
     RESEARCH_CONFIDENCE_FLOOR,
@@ -136,6 +154,15 @@ QUEUE_FIELDS = [
     "source_channel",
     "retarget_hint",
 ]
+# Declared-contract template for the per-person research output the Parallel.ai
+# primitive writes under DR_OUT_DIR (`<handle>/01_research_parallel.json`). This
+# module is the producer, so the constant lives HERE and the consumers
+# (assemble_synthetic_profile, this module's own reuse pass) import it — graph
+# edges are string equality on declared paths (`pipeline/contract.py`).
+RESEARCH_PROFILE_TEMPLATE = str(DR_OUT_DIR / "{handle}" / "01_research_parallel.json")
+# The declared row shape of research_queue.csv, generated FROM QUEUE_FIELDS so
+# the column list keeps one home.
+ResearchQueueRow = row_model_for("ResearchQueueRow", QUEUE_FIELDS)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -645,73 +672,207 @@ def _manifest_counts(*, total: int, completed: int = 0, failed: int = 0) -> dict
     }
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    started = time.monotonic()
-    manifest_text = str(getattr(args, "manifest", "") or "").strip()
-    manifest_path = Path(manifest_text) if manifest_text else None
-    if not math.isfinite(args.budget) or args.budget < 0:
-        result = {
+class ReconcileDeepResearchManifest(StageManifest):
+    """The ENRICH_MANIFEST receipt body — the exact keys `persist()` used to hand
+    `write_enrichment_manifest` (plus `source`, which `write_manifest` injected
+    from the manifest's directory name). Branch-only keys are `| None` so
+    `to_payload()` drops them exactly where the raw dict never set them (the
+    invalid-budget receipt is only stage/status/counts/error). NOTE this is the
+    RECEIPT shape, not the emitted CLI result — the two have always differed
+    (receipt statuses needs_approval/research_complete/failed vs result statuses
+    noop/dry_run/reused/ran/...); the result dict rides on `node.result`."""
+    source: str | None = None
+    stage: str = "enrich"
+    counts: dict[str, int] | None = None
+    selection: dict[str, Any] | None = None
+    eligible: int | None = None
+    eligible_candidates: int | None = None
+    candidates_skipped_not_added: int | None = None
+    would_submit: int | None = None
+    reused_completed: int | None = None
+    duplicate_handles: int | None = None
+    processor: str | None = None
+    cost_per_person_usd: float | None = None
+    estimated_usd: float | None = None
+    budget_usd: float | None = None
+    input: dict[str, str] | None = None
+    outputs: dict[str, str] | None = None
+    privacy: dict[str, bool] | None = None
+    result_status: str | None = None
+    error: str | None = None
+
+
+class ReconcileDeepResearch(Node):
+    """Cost-gated deep research for wrong-LinkedIn detaches (and opted-in
+    candidates): builds the queue, estimates Parallel.ai spend, enforces the
+    --approve --budget gate, shells out to the research primitive, and judges
+    the proposed retargets. The browser polls ENRICH_MANIFEST while this runs —
+    mid-run receipts (running / judging heartbeat) are written in-flow and only
+    the TERMINAL receipt goes through the Node template."""
+
+    name = "deep_research"
+    inputs = (
+        Artifact(path=str(VERDICTS_JSONL), required=False),
+        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
+        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
+        # candidates_resolved_by_existing / candidate_subset read the index;
+        # load_owner anchors queue bios and the retarget judge.
+        Artifact(path=str(INDEX_JSON), required=False),
+        Artifact(path=str(OWNER_JSON), required=False),
+        # The reuse pass ($0 steady state) reads this stage's own prior research
+        # output — a self-edge, which the graph checker drops.
+        Artifact(path=RESEARCH_PROFILE_TEMPLATE, required=False),
+    )
+    # review.csv is declared as an INPUT above, not an output, even though this
+    # node's propose pass physically writes retarget rows through the shared
+    # sticky `upsert_retargets`: every review.csv column family already has its
+    # declaring node — `deep_reconcile` owns the identity/action/fingerprint
+    # columns and `deep_synthesize` owns llm_worth* plus the llm_reject* family
+    # (the graph checker forbids a second claim on either). This follows the
+    # existing convention that a shared upsert helper's column families are
+    # declared once (deep_reconcile already speaks for upsert_retargets'
+    # identity columns regardless of caller).
+    outputs = (
+        Artifact(path=str(QUEUE_CSV), row_model=ResearchQueueRow, writes="full_rewrite", required=False),
+        Artifact(path=RESEARCH_PROFILE_TEMPLATE, writes="upsert", required=False),
+    )
+    payload = ReconcileDeepResearchManifest
+    manifest = str(ENRICH_MANIFEST)
+
+    def __init__(
+        self,
+        *,
+        verdicts_jsonl: Path | None = None,
+        overrides_csv: Path | None = None,
+        people_csv: Path | None = None,
+        facts_dir: Path | None = None,
+        index_json: Path | None = None,
+        raw_dir: Path | None = None,
+        manifest: str | Path | None = None,
+        processor: str = DEFAULT_PROCESSOR,
+        confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
+        budget: float = DEFAULT_BUDGET,
+        approve: bool = False,
+        dry_run: bool = False,
+        include_plausibly_absent: bool = False,
+        include_candidates: bool = False,
+        no_llm: bool = False,
+        model: str = "",
+        reasoning_effort: str = "medium",
+        out_dir: Path | None = None,
+        queue_csv: Path | None = None,
+    ) -> None:
+        self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
+        self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
+        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
+        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.index_json = Path(index_json or INDEX_JSON)
+        self.raw_dir = Path(raw_dir or RAW_DIR)
+        self.out_dir = Path(out_dir or DR_OUT_DIR)
+        self.queue_csv = Path(queue_csv or QUEUE_CSV)
+        # None = the CLI default (the fixed Enrich Contacts receipt); "" disables
+        # every receipt write, exactly like `--manifest ""` always has.
+        manifest_text = str(ENRICH_MANIFEST) if manifest is None else str(manifest).strip()
+        self.manifest_path = Path(manifest_text) if manifest_text else None
+        if self.manifest_path is not None and self.manifest_path.name != "manifest.json":
+            # Same guard write_enrichment_manifest applies on every mid-run write,
+            # moved to construction so no path can dodge it.
+            raise ValueError("enrichment manifest path must end in manifest.json")
+        self.processor = processor
+        self.confirm_threshold = confirm_threshold
+        self.budget = budget
+        self.approve = approve
+        self.dry_run = dry_run
+        self.include_plausibly_absent = include_plausibly_absent
+        self.include_candidates = include_candidates
+        self.no_llm = no_llm
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        # The emitted CLI result (`main()` prints it) — same dict, same keys as
+        # the old `run(args)` return value.
+        self.result: dict[str, Any] = {}
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            str(VERDICTS_JSONL): str(self.verdicts_jsonl),
+            str(LINKEDIN_OVERRIDES_CSV): str(self.overrides_csv),
+            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
+            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
+            str(INDEX_JSON): str(self.index_json),
+            str(QUEUE_CSV): str(self.queue_csv),
+            RESEARCH_PROFILE_TEMPLATE: str(self.out_dir / "{handle}" / "01_research_parallel.json"),
+            self.manifest: str(self.manifest_path) if self.manifest_path else "",
+        }
+
+    def execute(self) -> ReconcileDeepResearchManifest:
+        started = time.monotonic()
+        manifest_path = self.manifest_path
+        if not math.isfinite(self.budget) or self.budget < 0:
+            message = "--budget must be a finite, non-negative USD amount"
+            self.result = {
+                "source": "reconcile_deep_research",
+                "status": STATUS_INVALID_BUDGET,
+                "budget_usd": self.budget,
+                "message": message,
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+                "updated_at": now_iso(),
+            }
+            return ReconcileDeepResearchManifest(
+                source=manifest_path.parent.name if manifest_path else None,
+                status=STATUS_FAILED,
+                counts=_manifest_counts(total=0, failed=0),
+                error=message,
+            )
+        verdicts = list(read_jsonl(self.verdicts_jsonl))
+        overrides = load_override_rows(self.overrides_csv)
+        resolved_candidates = candidates_resolved_by_existing()
+        # Same authoritative digest the review UI stamps — a candidate promoted to a verified
+        # LinkedIn parent leaves the worth pool for BOTH sides here, so they can't disagree by one.
+        selection = current_worth_selection()
+        subset = eligible_subset(verdicts, self.confirm_threshold, overrides,
+                                 include_plausibly_absent=self.include_plausibly_absent)
+        worth_skipped: list[str] = []
+        candidates = (candidate_subset(
+            self.facts_dir, overrides, worth_skipped=worth_skipped,
+            resolved_candidates=resolved_candidates, index_json=self.index_json)
+                      if self.include_candidates else [])
+        subset += candidates
+        people = load_people_rows(self.people_csv)
+        queue = build_queue(subset, people, self.facts_dir, self.raw_dir)
+        pending_queue, reused_completed = filter_already_done(queue, self.out_dir)
+        duplicate_handles = max(0, len(queue) - len(pending_queue) - reused_completed)
+        cost_per = PROCESSOR_PRICING_USD.get(self.processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])
+        est_usd = round(len(pending_queue) * cost_per, 2)
+
+        base = {
             "source": "reconcile_deep_research",
-            "status": STATUS_INVALID_BUDGET,
-            "budget_usd": args.budget,
-            "message": "--budget must be a finite, non-negative USD amount",
-            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "eligible": len(subset),
+            "eligible_candidates": len(candidates),
+            "candidates_skipped_not_added": len(worth_skipped),
+            "would_submit": len(pending_queue),
+            "reused_completed": reused_completed,
+            "duplicate_handles": duplicate_handles,
+            "processor": self.processor,
+            "cost_per_person_usd": cost_per,
+            "estimated_usd": est_usd,
+            "budget_usd": self.budget,
+            "selection": selection,
             "updated_at": now_iso(),
         }
-        if manifest_path:
-            write_enrichment_manifest({
-                "stage": "enrich", "status": STATUS_FAILED,
-                "counts": _manifest_counts(total=0, failed=0),
-                "error": result["message"],
-            }, manifest_path)
-        return result
-    verdicts = list(read_jsonl(Path(args.verdicts_jsonl)))
-    overrides = load_override_rows(Path(args.overrides_csv))
-    resolved_candidates = candidates_resolved_by_existing()
-    # Same authoritative digest the review UI stamps — a candidate promoted to a verified
-    # LinkedIn parent leaves the worth pool for BOTH sides here, so they can't disagree by one.
-    selection = current_worth_selection()
-    subset = eligible_subset(verdicts, args.confirm_threshold, overrides,
-                             include_plausibly_absent=getattr(args, "include_plausibly_absent", False))
-    worth_skipped: list[str] = []
-    candidates = (candidate_subset(
-        Path(args.facts_dir), overrides, worth_skipped=worth_skipped,
-        resolved_candidates=resolved_candidates, index_json=Path(args.index_json))
-                  if getattr(args, "include_candidates", False) else [])
-    subset += candidates
-    people = load_people_rows(Path(args.people_csv))
-    queue = build_queue(subset, people, Path(args.facts_dir), Path(args.raw_dir))
-    pending_queue, reused_completed = filter_already_done(queue, DR_OUT_DIR)
-    duplicate_handles = max(0, len(queue) - len(pending_queue) - reused_completed)
-    cost_per = PROCESSOR_PRICING_USD.get(args.processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])
-    est_usd = round(len(pending_queue) * cost_per, 2)
 
-    base = {
-        "source": "reconcile_deep_research",
-        "eligible": len(subset),
-        "eligible_candidates": len(candidates),
-        "candidates_skipped_not_added": len(worth_skipped),
-        "would_submit": len(pending_queue),
-        "reused_completed": reused_completed,
-        "duplicate_handles": duplicate_handles,
-        "processor": args.processor,
-        "cost_per_person_usd": cost_per,
-        "estimated_usd": est_usd,
-        "budget_usd": args.budget,
-        "selection": selection,
-        "updated_at": now_iso(),
-    }
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        with self.queue_csv.open("w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=QUEUE_FIELDS)
+            w.writeheader()
+            w.writerows(queue)
 
-    DR_OUT_DIR.mkdir(parents=True, exist_ok=True)
-    with QUEUE_CSV.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=QUEUE_FIELDS)
-        w.writeheader()
-        w.writerows(queue)
-
-    def persist(result: dict[str, Any], status: str, *, completed: int = 0,
-                failed: int = 0) -> dict[str, Any]:
-        if manifest_path:
-            write_enrichment_manifest({
+        def receipt_body(status: str, result: dict[str, Any], *, completed: int = 0,
+                         failed: int = 0) -> dict[str, Any]:
+            """The one receipt shape — the dict `persist()` always wrote."""
+            return {
                 "stage": "enrich",
                 "status": status,
                 "counts": _manifest_counts(
@@ -723,123 +884,135 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "would_submit": len(pending_queue),
                 "reused_completed": reused_completed,
                 "duplicate_handles": duplicate_handles,
-                "processor": args.processor,
+                "processor": self.processor,
                 "cost_per_person_usd": cost_per,
                 "estimated_usd": est_usd,
-                "budget_usd": args.budget,
+                "budget_usd": self.budget,
                 "input": {
-                    "review_csv": str(args.overrides_csv),
-                    "facts_dir": str(args.facts_dir),
-                    "queue_csv": str(QUEUE_CSV),
+                    "review_csv": str(self.overrides_csv),
+                    "facts_dir": str(self.facts_dir),
+                    "queue_csv": str(self.queue_csv),
                 },
                 "outputs": {
-                    "research_dir": str(DR_OUT_DIR),
-                    "review_csv": str(args.overrides_csv),
+                    "research_dir": str(self.out_dir),
+                    "review_csv": str(self.overrides_csv),
                 },
                 "privacy": {
                     "message_bodies_read": False,
                     "paid_provider_called": status in {STATUS_RUNNING, STATUS_RESEARCH_COMPLETE, STATUS_FAILED},
                 },
                 "result_status": result.get("status", ""),
-            }, manifest_path)
-        return result
+            }
 
-    # Judge each proposed retarget with the SAME identity judge attached links use, inside this
-    # already-approved enrichment pass. --no-llm uses the deterministic fallback (never
-    # auto-approves; rejects unverified / sub-threshold guesses). Owner background is a network
-    # prior for the judge, same as reconcile_linkedin.
-    use_llm = not getattr(args, "no_llm", False)
-    owner_block = owner_background_block(load_owner()) if load_owner() else ""
+        def finish(result: dict[str, Any], status: str, *, completed: int = 0,
+                   failed: int = 0) -> ReconcileDeepResearchManifest:
+            """Terminal: stash the emitted result; the Node template writes the receipt."""
+            self.result = result
+            return ReconcileDeepResearchManifest(
+                source=manifest_path.parent.name if manifest_path else None,
+                **receipt_body(status, result, completed=completed, failed=failed))
 
-    def heartbeat(done: int, total: int) -> None:
-        # Honest judging progress in the ONE fixed manifest (no new state files):
-        # cheap per-completion writes the UI polls while a pass judges N proposals.
+        # Judge each proposed retarget with the SAME identity judge attached links use, inside this
+        # already-approved enrichment pass. --no-llm uses the deterministic fallback (never
+        # auto-approves; rejects unverified / sub-threshold guesses). Owner background is a network
+        # prior for the judge, same as reconcile_linkedin.
+        use_llm = not self.no_llm
+        owner_block = owner_background_block(load_owner()) if load_owner() else ""
+
+        def heartbeat(done: int, total: int) -> None:
+            # Honest judging progress in the ONE fixed manifest (no new state files):
+            # cheap per-completion writes the UI polls while a pass judges N proposals.
+            if manifest_path:
+                write_enrichment_manifest({
+                    "stage": "enrich", "status": STATUS_RUNNING,
+                    "phase": "judging_retargets", "done": done, "total": total,
+                    "counts": _manifest_counts(total=len(queue), completed=reused_completed),
+                    "selection": selection,
+                }, manifest_path)
+
+        def propose() -> dict[str, Any]:
+            return propose_retargets_from_output(
+                self.out_dir, subset, self.overrides_csv,
+                facts_dir=self.facts_dir, raw_dir=self.raw_dir,
+                use_llm=use_llm, owner_block=owner_block,
+                model=self.model or "",
+                effort=self.reasoning_effort or "medium",
+                confirm_threshold=self.confirm_threshold, heartbeat=heartbeat)
+
+        if not subset:
+            return finish(
+                {**base, "status": STATUS_NOOP, "queue_csv": str(self.queue_csv),
+                 "reason": "no effective-Yes contacts need enrichment"},
+                STATUS_RESEARCH_COMPLETE)
+
+        if self.dry_run:
+            return finish(
+                {**base, "status": STATUS_DRY_RUN, "queue_csv": str(self.queue_csv),
+                 "elapsed_ms": int((time.monotonic() - started) * 1000)},
+                STATUS_NEEDS_APPROVAL, completed=reused_completed)
+
+        if not pending_queue:
+            proposals = propose()
+            return finish(
+                {**base, "status": STATUS_REUSED, "queue_csv": str(self.queue_csv),
+                 "output_dir": str(self.out_dir),
+                 "retargets_proposed": proposals.get("proposed", 0),
+                 "judge_calls": proposals.get("judge_calls", 0),
+                 "cached_verdicts": proposals.get("cached_verdicts", 0),
+                 "grandfathered": proposals.get("grandfathered", 0),
+                 "reason": "all eligible people already have completed Parallel research",
+                 "elapsed_ms": int((time.monotonic() - started) * 1000)},
+                STATUS_RESEARCH_COMPLETE, completed=len(queue))
+
+        # Every paid run needs current-run approval, and the estimate must stay below
+        # the ceiling the user approved. This gate returns BEFORE any Parallel.ai call
+        # — the typed needs_approval payload (and its receipt) is the whole outcome.
+        if not self.approve or est_usd > self.budget:
+            return finish(
+                {**base, "status": STATUS_NEEDS_APPROVAL, "queue_csv": str(self.queue_csv),
+                 "message": f"deep research for {len(pending_queue)} net-new people is ~${est_usd:.2f} "
+                            f"({reused_completed} completed reused, {duplicate_handles} duplicates skipped); "
+                            f"get explicit approval, then re-run with --approve and "
+                            f"an approved --budget at or above the estimate (current ${self.budget:.2f})",
+                 "elapsed_ms": int((time.monotonic() - started) * 1000)},
+                STATUS_NEEDS_APPROVAL, completed=reused_completed)
+
+        # Delegate the spend to the existing Parallel.ai primitive (reuse, don't rebuild).
+        # STREAM its output live to our stderr (the primitive prints `[deep_research_contacts]
+        # poll status ...` every poll) so the run isn't a silent black box — Parallel.ai jobs can
+        # take minutes. Keep our own stdout clean for the final JSON manifest.
+        print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({self.processor}); "
+              "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
+        # Mid-run receipt: the browser must see "running" while the subprocess works.
         if manifest_path:
-            write_enrichment_manifest({
-                "stage": "enrich", "status": STATUS_RUNNING,
-                "phase": "judging_retargets", "done": done, "total": total,
-                "counts": _manifest_counts(total=len(queue), completed=reused_completed),
-                "selection": selection,
-            }, manifest_path)
-
-    def propose() -> dict[str, Any]:
-        return propose_retargets_from_output(
-            DR_OUT_DIR, subset, Path(args.overrides_csv),
-            facts_dir=Path(args.facts_dir), raw_dir=Path(args.raw_dir),
-            use_llm=use_llm, owner_block=owner_block,
-            model=getattr(args, "model", "") or "",
-            effort=getattr(args, "reasoning_effort", "medium") or "medium",
-            confirm_threshold=args.confirm_threshold, heartbeat=heartbeat)
-
-    if not subset:
-        return persist(
-            {**base, "status": STATUS_NOOP, "queue_csv": str(QUEUE_CSV),
-             "reason": "no effective-Yes contacts need enrichment"},
-            STATUS_RESEARCH_COMPLETE)
-
-    if args.dry_run:
-        return persist(
-            {**base, "status": STATUS_DRY_RUN, "queue_csv": str(QUEUE_CSV),
-             "elapsed_ms": int((time.monotonic() - started) * 1000)},
-            STATUS_NEEDS_APPROVAL, completed=reused_completed)
-
-    if not pending_queue:
-        proposals = propose()
-        return persist(
-            {**base, "status": STATUS_REUSED, "queue_csv": str(QUEUE_CSV),
-             "output_dir": str(DR_OUT_DIR),
-             "retargets_proposed": proposals.get("proposed", 0),
-             "judge_calls": proposals.get("judge_calls", 0),
-             "cached_verdicts": proposals.get("cached_verdicts", 0),
-             "grandfathered": proposals.get("grandfathered", 0),
-             "reason": "all eligible people already have completed Parallel research",
-             "elapsed_ms": int((time.monotonic() - started) * 1000)},
-            STATUS_RESEARCH_COMPLETE, completed=len(queue))
-
-    # Every paid run needs current-run approval, and the estimate must stay below
-    # the ceiling the user approved.
-    if not args.approve or est_usd > args.budget:
-        return persist(
-            {**base, "status": STATUS_NEEDS_APPROVAL, "queue_csv": str(QUEUE_CSV),
-             "message": f"deep research for {len(pending_queue)} net-new people is ~${est_usd:.2f} "
-                        f"({reused_completed} completed reused, {duplicate_handles} duplicates skipped); "
-                        f"get explicit approval, then re-run with --approve and "
-                        f"an approved --budget at or above the estimate (current ${args.budget:.2f})",
-             "elapsed_ms": int((time.monotonic() - started) * 1000)},
-            STATUS_NEEDS_APPROVAL, completed=reused_completed)
-
-    # Delegate the spend to the existing Parallel.ai primitive (reuse, don't rebuild).
-    # STREAM its output live to our stderr (the primitive prints `[deep_research_contacts]
-    # poll status ...` every poll) so the run isn't a silent black box — Parallel.ai jobs can
-    # take minutes. Keep our own stdout clean for the final JSON manifest.
-    print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({args.processor}); "
-          "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
-    persist({**base, "status": STATUS_RUNNING}, STATUS_RUNNING, completed=reused_completed)
-    cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_context.deep_research_contacts",
-           "run", "--input", str(QUEUE_CSV), "--output-dir", str(DR_OUT_DIR), "--processor", args.processor]
-    if manifest_path:
-        cmd.extend(["--manifest", str(manifest_path)])
-    proc = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, text=True)
-    print(f"[deep-research] research process exited ({proc.returncode}).", file=sys.stderr, flush=True)
-    # Propose retargets (pending) for any correct LinkedIn the research found.
-    proposals = {"proposed": 0}
-    if proc.returncode == 0:
-        proposals = propose()
-    result = {
-        **base, "status": STATUS_RAN if proc.returncode == 0 else STATUS_FAILED,
-        "queue_csv": str(QUEUE_CSV), "output_dir": str(DR_OUT_DIR),
-        "retargets_proposed": proposals.get("proposed", 0),
-        "judge_calls": proposals.get("judge_calls", 0),
-        "cached_verdicts": proposals.get("cached_verdicts", 0),
-        "grandfathered": proposals.get("grandfathered", 0),
-        "returncode": proc.returncode, "progress": "streamed live to stderr",
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-    }
-    return persist(
-        result,
-        STATUS_RESEARCH_COMPLETE if proc.returncode == 0 else STATUS_FAILED,
-        completed=len(queue) if proc.returncode == 0 else reused_completed,
-        failed=0 if proc.returncode == 0 else len(pending_queue))
+            write_enrichment_manifest(
+                receipt_body(STATUS_RUNNING, {**base, "status": STATUS_RUNNING},
+                             completed=reused_completed), manifest_path)
+        cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_context.deep_research_contacts",
+               "run", "--input", str(self.queue_csv), "--output-dir", str(self.out_dir), "--processor", self.processor]
+        if manifest_path:
+            cmd.extend(["--manifest", str(manifest_path)])
+        proc = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, text=True)
+        print(f"[deep-research] research process exited ({proc.returncode}).", file=sys.stderr, flush=True)
+        # Propose retargets (pending) for any correct LinkedIn the research found.
+        proposals = {"proposed": 0}
+        if proc.returncode == 0:
+            proposals = propose()
+        result = {
+            **base, "status": STATUS_RAN if proc.returncode == 0 else STATUS_FAILED,
+            "queue_csv": str(self.queue_csv), "output_dir": str(self.out_dir),
+            "retargets_proposed": proposals.get("proposed", 0),
+            "judge_calls": proposals.get("judge_calls", 0),
+            "cached_verdicts": proposals.get("cached_verdicts", 0),
+            "grandfathered": proposals.get("grandfathered", 0),
+            "returncode": proc.returncode, "progress": "streamed live to stderr",
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+        return finish(
+            result,
+            STATUS_RESEARCH_COMPLETE if proc.returncode == 0 else STATUS_FAILED,
+            completed=len(queue) if proc.returncode == 0 else reused_completed,
+            failed=0 if proc.returncode == 0 else len(pending_queue))
 
 
 def _finite_non_negative_float(value: str) -> float:
@@ -880,7 +1053,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    emit(run(build_parser().parse_args(argv)))
+    args = build_parser().parse_args(argv)
+    node = ReconcileDeepResearch(
+        verdicts_jsonl=Path(args.verdicts_jsonl),
+        overrides_csv=Path(args.overrides_csv),
+        people_csv=Path(args.people_csv),
+        facts_dir=Path(args.facts_dir),
+        index_json=Path(args.index_json),
+        raw_dir=Path(args.raw_dir),
+        manifest=args.manifest,
+        processor=args.processor,
+        confirm_threshold=args.confirm_threshold,
+        budget=args.budget,
+        approve=args.approve,
+        dry_run=args.dry_run,
+        include_plausibly_absent=args.include_plausibly_absent,
+        include_candidates=args.include_candidates,
+        no_llm=args.no_llm,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+    )
+    node.run()
+    # The emitted result and the manifest receipt are different shapes by
+    # existing contract (see ReconcileDeepResearchManifest); emit the result.
+    emit(node.result)
     return 0
 
 

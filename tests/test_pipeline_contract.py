@@ -482,6 +482,75 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertIn("gmail_stage_merge", report["edges"]["gmail_import"])
         self.assertIn("messages_match_local", report["edges"]["messages_import"])
 
+    def test_the_deep_context_stage_is_registered(self) -> None:
+        # The twelve deep-context nodes; a rename or a lost registration import
+        # must not pass silently.
+        names = set(check_graph(self._declared_nodes())["nodes"])
+        self.assertLessEqual({
+            "deep_owner", "deep_collect", "deep_synthesize", "deep_compose",
+            "deep_cluster", "deep_parents", "deep_reconcile", "deep_research",
+            "deep_assemble_synthetic", "deep_prefetch", "deep_apply_retargets",
+            "deep_persist_review",
+        }, names)
+        self.assertEqual(len(names), 26)
+
+    def test_review_csv_has_two_disjoint_machine_writers(self) -> None:
+        # review.csv is the graph's most-shared mutable file: synthesize owns the
+        # llm_worth family, reconcile the identity/action slice, the human owns
+        # network_worth, and the row-bookkeeping columns are unclaimed by all.
+        claims = {
+            node.name: item
+            for node in self._declared_nodes()
+            for item in node.outputs
+            if item.path.endswith("overrides/review.csv")
+        }
+        self.assertEqual(sorted(claims), ["deep_reconcile", "deep_synthesize"])
+        synth = set(claims["deep_synthesize"].owns_columns)
+        recon = set(claims["deep_reconcile"].owns_columns)
+        self.assertIn("llm_worth", synth)
+        self.assertIn("action", recon)
+        self.assertEqual(synth & recon, set())
+        self.assertIs(claims["deep_synthesize"].row_model, claims["deep_reconcile"].row_model)
+        for shared in ("network_worth", "public_identifier", "person_id", "source", "updated_at"):
+            self.assertNotIn(shared, synth | recon)
+
+    def test_directory_csv_has_three_distinct_row_slices(self) -> None:
+        slices = {
+            node.name: item.owns_rows_where
+            for node in self._declared_nodes()
+            for item in node.outputs
+            if item.path.endswith("network-import/directory.csv")
+        }
+        self.assertEqual(
+            sorted(slices), ["deep_persist_review", "gmail_import", "messages_import"]
+        )
+        self.assertEqual(len(set(slices.values())), 3)
+
+    def test_index_json_key_split_is_declared(self) -> None:
+        owners = {
+            node.name: item.owns_columns
+            for node in self._declared_nodes()
+            for item in node.outputs
+            if item.path.endswith("deep-context/index.json")
+        }
+        self.assertEqual(owners, {"deep_compose": ("slugs",), "deep_parents": ("parents",)})
+
+    def test_the_two_feedback_edges_are_the_only_ones(self) -> None:
+        # feedback=True exists for exactly the two cross-iteration writes (the
+        # persist stage's directory slice; parents' index key read by the NEXT
+        # cluster round). Anything else marked feedback would silently exempt a
+        # real edge from cycle detection.
+        feedback = sorted(
+            (node.name, item.path)
+            for node in self._declared_nodes()
+            for item in node.outputs
+            if item.feedback
+        )
+        self.assertEqual(feedback, [
+            ("deep_parents", ".powerpacks/deep-context/index.json"),
+            ("deep_persist_review", ".powerpacks/network-import/directory.csv"),
+        ])
+
 
 class MessagesSubsetTests(unittest.TestCase):
     """`.powerpacks/messages/contacts.csv` is the first REAL two-writer file, so

@@ -21,6 +21,18 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-07-27 (declared contract): `SynthesizePersonContext` is a
+    `pipeline/contract.py:Node` named `deep_synthesize`. It declares the
+    `{person_id}` raw-bundle template + owner.json as inputs and the `{person_id}`
+    facts template + the machine-worth column slice of overrides/review.csv
+    (row model `ReviewRow`, `owns_columns` = the `llm_worth*` pair plus the
+    `llm_reject*` legacy-spam fields it clears) as outputs; the final manifest
+    write moved into the Node template (same keys, plus the declared
+    `fingerprints` block). `run(args)` became `execute()`. `--dry-run` cost
+    estimation BYPASSES the node (`estimate()`, called plainly from main())
+    because a dry run writes no manifest today — a free estimate must never
+    overwrite a completed facts manifest. The spend path is unchanged: same
+    flags, same payload, same gates, no OpenAI call added or moved.
   2026-07-27: prune orphan facts only after an authoritative full collection.
   2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
@@ -36,6 +48,7 @@ from pathlib import Path
 from typing import Any
 
 import tiktoken
+from pydantic import Field
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_stream import drain_pool
@@ -51,21 +64,27 @@ from packs.indexing.lib.openai_responses import (
 )
 from packs.ingestion.primitives.deep_context.common import (
     FACTS_DIR,
+    FACTS_MANIFEST,
+    FACTS_TEMPLATE,
     LINKEDIN_OVERRIDES_CSV,
+    OWNER_JSON,
+    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
     emit,
     load_env,
     load_owner,
     owner_background_block,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
 from packs.ingestion.primitives.deep_context.review_store import (
+    ReviewRow,
     has_human_worth,
     load_override_rows,
     mirror_facts_worth,
     parent_ids_by_person,
 )
+from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 DEFAULT_CHUNK_CHARS = 9000
 DEFAULT_TARGET_CONFIDENCE = 0.85   # stop deepening once the profile is this confident
@@ -545,37 +564,149 @@ def _chunked(seq: list[Any], size: int) -> Any:
         yield seq[i:i + size]
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    started = time.monotonic()
-    raw_dir = Path(args.raw_dir)
-    facts_dir = Path(args.out_dir)
-    facts_dir.mkdir(parents=True, exist_ok=True)
-    orphan_facts_removed = prune_orphan_facts(
-        raw_dir, facts_dir, scoped=bool(args.person), dry_run=bool(args.dry_run))
-    encoder = tiktoken.get_encoding("o200k_base")
+class SynthesizePersonContextManifest(StageManifest):
+    """The stage's typed manifest payload — same keys as the raw dict it replaces.
+    `updated_at` is stamped in `execute()` so the emitted payload keeps it, exactly
+    as the raw dict did (the manifest writer preserves a payload-set value)."""
+    source: str = "synthesize_person_context"
+    people: int = 0
+    chunk_people: int = 0
+    people_done: int = 0
+    batches_run: int = 0
+    avg_batches_per_person: float = 0.0
+    stop_reasons: dict[str, int] = Field(default_factory=dict)
+    errors: int = 0
+    model: str = ""
+    synthesis_version: str = SYNTHESIS_VERSION
+    reasoning_effort: str = ""
+    owner_context: bool = False
+    orphan_facts_removed: int = 0
+    rejudge: bool = False
+    target_confidence: float = DEFAULT_TARGET_CONFIDENCE
+    max_batches: int = DEFAULT_MAX_BATCHES
+    concurrency: int = 0
+    tokens: dict[str, int] = Field(default_factory=dict)
+    estimated_cost_usd: float = 0.0
+    out_dir: str = ""
+    worth_sync: dict[str, Any] = Field(default_factory=dict)
+    elapsed_ms: int = 0
+    updated_at: str = ""
 
-    owner = load_owner() if not args.no_owner else None
-    system_prompt = SYSTEM_PROMPT + (
-        owner_identity_block(owner) + OWNER_PROMPT_SUFFIX + owner_background_block(owner) if owner else "")
-    review_path = Path(args.review_csv)
-    review_rows = load_override_rows(review_path)
 
-    # Only the path list is held in memory; bundle bodies are loaded one chunk at a
-    # time, so peak RAM is bounded by --chunk-people, not the network size.
-    paths = pending_target_paths(
-        raw_dir,
-        facts_dir,
-        force=args.force,
-        rejudge=args.rejudge,
-        person_id=args.person,
-        review_rows=review_rows,
+class SynthesizePersonContext(Node):
+    """Builds per-person facts from raw bundles through OpenAI Responses calls
+    (SPENDS). Construct with explicit paths/config and call `run()` — except
+    `--dry-run`, where the caller invokes `estimate()` (a free counting pass)
+    directly so the estimate never writes the facts manifest."""
+
+    name = "deep_synthesize"
+    # Both inputs tolerate absence: no bundles is the pre-collect state (the run
+    # completes with people=0) and owner.json (produced in-graph by the owner
+    # node) is an optional reasoning anchor, also skippable via --no-owner.
+    inputs = (
+        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
+        Artifact(path=str(OWNER_JSON), required=False),
     )
+    # review.csv has three writers with disjoint column slices (see
+    # review_store.OVERRIDE_COLUMNS): synthesis owns the mirrored machine worth
+    # plus the legacy llm_reject spam values it retires; reconciliation owns the
+    # action/link columns; the human alone owns network_worth.
+    outputs = (
+        Artifact(path=FACTS_TEMPLATE, required=False),
+        Artifact(
+            path=str(LINKEDIN_OVERRIDES_CSV),
+            row_model=ReviewRow,
+            writes="upsert",
+            owns_columns=(
+                "llm_worth",
+                "llm_worth_reason",
+                "llm_reject",
+                "llm_reject_confidence",
+                "llm_reject_reason",
+            ),
+            required=False,
+        ),
+    )
+    payload = SynthesizePersonContextManifest
+    manifest = str(FACTS_MANIFEST)
 
-    def make_batches(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    def __init__(
+        self,
+        *,
+        raw_dir: Path | None = None,
+        out_dir: Path | None = None,
+        review_csv: Path | None = None,
+        model: str = DEFAULT_MODEL,
+        reasoning_effort: str = "medium",
+        chunk_chars: int = DEFAULT_CHUNK_CHARS,
+        target_confidence: float = DEFAULT_TARGET_CONFIDENCE,
+        saturation_rounds: int = DEFAULT_SATURATION_ROUNDS,
+        max_batches: int = DEFAULT_MAX_BATCHES,
+        concurrency: int = 0,
+        chunk_people: int = DEFAULT_CHUNK_PEOPLE,
+        timeout: int = 120,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        person: str = "",
+        no_owner: bool = False,
+        force: bool = False,
+        rejudge: bool = False,
+    ) -> None:
+        self.raw_dir = Path(raw_dir or RAW_DIR)
+        self.facts_dir = Path(out_dir or FACTS_DIR)
+        self.review_csv = Path(review_csv or LINKEDIN_OVERRIDES_CSV)
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.chunk_chars = chunk_chars
+        self.target_confidence = target_confidence
+        self.saturation_rounds = saturation_rounds
+        self.max_batches = max_batches
+        self.concurrency = concurrency
+        self.chunk_people = chunk_people
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.person = person
+        self.no_owner = no_owner
+        self.force = force
+        self.rejudge = rejudge
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
+            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
+            str(LINKEDIN_OVERRIDES_CSV): str(self.review_csv),
+            self.manifest: str(self.facts_dir / "manifest.json"),
+        }
+
+    def _plan(self) -> tuple[dict[str, Any] | None, str, list[Path]]:
+        """Owner context, the assembled system prompt, and the pending bundles —
+        the shared free preamble of both the paid run and the dry-run estimate."""
+        owner = load_owner() if not self.no_owner else None
+        system_prompt = SYSTEM_PROMPT + (
+            owner_identity_block(owner) + OWNER_PROMPT_SUFFIX + owner_background_block(owner) if owner else "")
+        review_rows = load_override_rows(self.review_csv)
+        # Only the path list is held in memory; bundle bodies are loaded one chunk at a
+        # time, so peak RAM is bounded by --chunk-people, not the network size.
+        paths = pending_target_paths(
+            self.raw_dir,
+            self.facts_dir,
+            force=self.force,
+            rejudge=self.rejudge,
+            person_id=self.person,
+            review_rows=review_rows,
+        )
+        return owner, system_prompt, paths
+
+    def _batches(self, messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         newest = sorted(messages, key=lambda m: m.get("at") or "", reverse=True)
-        return chunk_messages(newest, args.chunk_chars)[: args.max_batches]
+        return chunk_messages(newest, self.chunk_chars)[: self.max_batches]
 
-    if args.dry_run:
+    def estimate(self) -> dict[str, Any]:
+        """The --dry-run cost estimate: count batches/tokens, spend and write
+        NOTHING (beyond today's facts-dir mkdir). Deliberately NOT `execute()` —
+        it bypasses the run template so the estimate never becomes a manifest."""
+        self.facts_dir.mkdir(parents=True, exist_ok=True)
+        encoder = tiktoken.get_encoding("o200k_base")
+        owner, system_prompt, paths = self._plan()
         # Stream bundles one at a time to tally tokens without holding them all.
         profile_carry_tokens = 350
         floor_tokens = ceiling_tokens = ceiling_batches = people = 0
@@ -584,7 +715,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if not bundle.get("messages"):
                 continue
             people += 1
-            batches = make_batches(bundle["messages"])
+            batches = self._batches(bundle["messages"])
             if batches:
                 floor_tokens += len(encoder.encode(system_prompt + render_batch(bundle, batches[0], None)))
             for i, b in enumerate(batches):
@@ -596,149 +727,156 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "status": "dry_run",
             "people": people,
             "batches_ceiling": ceiling_batches,
-            "model": args.model,
+            "model": self.model,
             "synthesis_version": SYNTHESIS_VERSION,
-            "reasoning_effort": reasoning_effort(args.reasoning_effort),
+            "reasoning_effort": reasoning_effort(self.reasoning_effort),
             "owner_context": bool(owner),
-            "orphan_facts_removed": orphan_facts_removed,
-            "rejudge": bool(args.rejudge),
-            "target_confidence": args.target_confidence,
-            "max_batches": args.max_batches,
-            "estimated_cost_floor_usd": estimate_cost_usd(floor_tokens, people * 750, args.model),
-            "estimated_cost_ceiling_usd": estimate_cost_usd(ceiling_tokens, ceiling_batches * 750, args.model),
+            # A dry run is never authority to delete the paid facts cache
+            # (`prune_orphan_facts` returns 0 for it), so the estimate always
+            # reports zero — the key stays for payload parity with a real run.
+            "orphan_facts_removed": 0,
+            "rejudge": bool(self.rejudge),
+            "target_confidence": self.target_confidence,
+            "max_batches": self.max_batches,
+            "estimated_cost_floor_usd": estimate_cost_usd(floor_tokens, people * 750, self.model),
+            "estimated_cost_ceiling_usd": estimate_cost_usd(ceiling_tokens, ceiling_batches * 750, self.model),
             "estimated_wall_seconds_ceiling": round(ceiling_batches / CHUNKS_PER_SEC, 1),
             "note": "approximate (output/reasoning tokens vary with --reasoning-effort); floor=1 batch each, ceiling=all batches. Confidence/saturation usually stops near the floor.",
             "updated_at": now_iso(),
         }
 
-    if not paths:
-        worth_sync = mirror_facts_worth(
-            review_path,
-            facts_dir,
-            include_human_rows=bool(args.rejudge),
+    def execute(self) -> SynthesizePersonContextManifest:
+        started = time.monotonic()
+        self.facts_dir.mkdir(parents=True, exist_ok=True)
+        # Drop facts whose bundle left a completed full collection BEFORE
+        # selection, so an obsolete identity cannot be re-billed. `--dry-run`
+        # never reaches execute() (it bypasses to estimate()), so dry_run=False.
+        orphan_facts_removed = prune_orphan_facts(
+            self.raw_dir, self.facts_dir, scoped=bool(self.person), dry_run=False)
+        owner, system_prompt, paths = self._plan()
+
+        if not paths:
+            worth_sync = mirror_facts_worth(
+                self.review_csv,
+                self.facts_dir,
+                include_human_rows=bool(self.rejudge),
+            )
+            return SynthesizePersonContextManifest(
+                status="completed",
+                people=0,
+                chunk_people=self.chunk_people,
+                people_done=0,
+                batches_run=0,
+                avg_batches_per_person=0.0,
+                stop_reasons={},
+                errors=0,
+                model=self.model,
+                synthesis_version=SYNTHESIS_VERSION,
+                reasoning_effort=reasoning_effort(self.reasoning_effort),
+                owner_context=bool(owner),
+                orphan_facts_removed=orphan_facts_removed,
+                rejudge=bool(self.rejudge),
+                target_confidence=self.target_confidence,
+                max_batches=self.max_batches,
+                concurrency=0,
+                tokens={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
+                estimated_cost_usd=0.0,
+                out_dir=str(self.facts_dir),
+                worth_sync=worth_sync,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+                updated_at=now_iso(),
+            )
+
+        load_env()
+        concurrency = self.concurrency or env_or_profile_int(
+            "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=16
         )
-        manifest = {
-            "source": "synthesize_person_context",
-            "status": "completed",
-            "people": 0,
-            "chunk_people": args.chunk_people,
-            "people_done": 0,
-            "batches_run": 0,
-            "avg_batches_per_person": 0.0,
-            "stop_reasons": {},
-            "errors": 0,
-            "model": args.model,
-            "synthesis_version": SYNTHESIS_VERSION,
-            "reasoning_effort": reasoning_effort(args.reasoning_effort),
-            "owner_context": bool(owner),
-            "orphan_facts_removed": orphan_facts_removed,
-            "rejudge": bool(args.rejudge),
-            "target_confidence": args.target_confidence,
-            "max_batches": args.max_batches,
-            "concurrency": 0,
-            "tokens": {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
-            "estimated_cost_usd": 0.0,
-            "out_dir": str(facts_dir),
-            "worth_sync": worth_sync,
-            "elapsed_ms": int((time.monotonic() - started) * 1000),
-            "updated_at": now_iso(),
-        }
-        write_json(facts_dir / "manifest.json", manifest)
-        return manifest
+        effort = reasoning_effort(self.reasoning_effort)
+        usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+        counter = {"done": 0, "errors": 0, "batches": 0}
+        stop_reasons: dict[str, int] = {}
+        total = len(paths)
 
-    load_env()
-    concurrency = args.concurrency or env_or_profile_int(
-        "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=16
-    )
-    effort = reasoning_effort(args.reasoning_effort)
-    usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-    counter = {"done": 0, "errors": 0, "batches": 0}
-    stop_reasons: dict[str, int] = {}
-    total = len(paths)
+        def on_result(result: dict[str, Any]) -> None:
+            pid = result["person_id"]
+            rec = {
+                "chunk_index": 0,
+                "synthesis_version": SYNTHESIS_VERSION,
+                "facts": result["facts"],
+                "usage": result["usage"],
+                "batches_used": result["batches_used"],
+                "batches_total": result["batches_total"],
+                "messages_used": result["messages_used"],
+                "messages_available": result["messages_available"],
+                "final_confidence": result["final_confidence"],
+                "stop_reason": result["stop_reason"],
+            }
+            (self.facts_dir / f"{pid}.jsonl").write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+            for key in usage_total:
+                usage_total[key] += result["usage"].get(key, 0)
+            counter["done"] += 1
+            counter["errors"] += result["errors"]
+            counter["batches"] += result["batches_used"]
+            stop_reasons[result["stop_reason"]] = stop_reasons.get(result["stop_reason"], 0) + 1
+            if counter["done"] % 25 == 0:
+                print(f"[synthesize] {counter['done']}/{total} people", file=sys.stderr, flush=True)
 
-    def on_result(result: dict[str, Any]) -> None:
-        pid = result["person_id"]
-        rec = {
-            "chunk_index": 0,
-            "synthesis_version": SYNTHESIS_VERSION,
-            "facts": result["facts"],
-            "usage": result["usage"],
-            "batches_used": result["batches_used"],
-            "batches_total": result["batches_total"],
-            "messages_used": result["messages_used"],
-            "messages_available": result["messages_available"],
-            "final_confidence": result["final_confidence"],
-            "stop_reason": result["stop_reason"],
-        }
-        (facts_dir / f"{pid}.jsonl").write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
-        for key in usage_total:
-            usage_total[key] += result["usage"].get(key, 0)
-        counter["done"] += 1
-        counter["errors"] += result["errors"]
-        counter["batches"] += result["batches_used"]
-        stop_reasons[result["stop_reason"]] = stop_reasons.get(result["stop_reason"], 0) + 1
-        if counter["done"] % 25 == 0:
-            print(f"[synthesize] {counter['done']}/{total} people", file=sys.stderr, flush=True)
+        async def driver() -> None:
+            client = make_async_client(timeout=self.timeout)
+            semaphore = asyncio.Semaphore(max(1, concurrency))
+            try:
+                # Process people in bounded chunks: load bodies -> batch -> drain -> free.
+                # Only one chunk's bundles/batches are resident at a time.
+                for chunk_paths in _chunked(paths, self.chunk_people):
+                    bundles = [b for b in (_load_bundle(p) for p in chunk_paths) if b.get("messages")]
+                    local_batches = {b["person_id"]: self._batches(b["messages"]) for b in bundles}
+                    coros = [
+                        synthesize_person(
+                            client, bundle, local_batches[bundle["person_id"]],
+                            model=self.model, effort=effort, semaphore=semaphore,
+                            max_retries=self.max_retries, system_prompt=system_prompt,
+                            target_confidence=self.target_confidence,
+                            saturation_rounds=self.saturation_rounds, max_batches=self.max_batches,
+                        )
+                        for bundle in bundles
+                    ]
+                    await drain_pool(coros, on_result)
+            finally:
+                await client.close()
 
-    async def driver() -> None:
-        client = make_async_client(timeout=args.timeout)
-        semaphore = asyncio.Semaphore(max(1, concurrency))
-        try:
-            # Process people in bounded chunks: load bodies -> batch -> drain -> free.
-            # Only one chunk's bundles/batches are resident at a time.
-            for chunk_paths in _chunked(paths, args.chunk_people):
-                bundles = [b for b in (_load_bundle(p) for p in chunk_paths) if b.get("messages")]
-                local_batches = {b["person_id"]: make_batches(b["messages"]) for b in bundles}
-                coros = [
-                    synthesize_person(
-                        client, bundle, local_batches[bundle["person_id"]],
-                        model=args.model, effort=effort, semaphore=semaphore,
-                        max_retries=args.max_retries, system_prompt=system_prompt,
-                        target_confidence=args.target_confidence,
-                        saturation_rounds=args.saturation_rounds, max_batches=args.max_batches,
-                    )
-                    for bundle in bundles
-                ]
-                await drain_pool(coros, on_result)
-        finally:
-            await client.close()
+        asyncio.run(driver())
 
-    asyncio.run(driver())
-
-    worth_sync = mirror_facts_worth(
-        review_path,
-        facts_dir,
-        include_human_rows=bool(args.rejudge),
-    )
-    billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
-    manifest = {
-        "source": "synthesize_person_context",
-        "status": "completed",
-        "people": total,
-        "chunk_people": args.chunk_people,
-        "people_done": counter["done"],
-        "batches_run": counter["batches"],
-        "avg_batches_per_person": round(counter["batches"] / max(1, counter["done"]), 2),
-        "stop_reasons": stop_reasons,
-        "errors": counter["errors"],
-        "model": args.model,
-        "synthesis_version": SYNTHESIS_VERSION,
-        "reasoning_effort": effort,
-        "owner_context": bool(owner),
-        "orphan_facts_removed": orphan_facts_removed,
-        "rejudge": bool(args.rejudge),
-        "target_confidence": args.target_confidence,
-        "max_batches": args.max_batches,
-        "concurrency": concurrency,
-        "tokens": usage_total,
-        "estimated_cost_usd": estimate_cost_usd(usage_total["input_tokens"], billed_output, args.model),
-        "out_dir": str(facts_dir),
-        "worth_sync": worth_sync,
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "updated_at": now_iso(),
-    }
-    write_json(facts_dir / "manifest.json", manifest)
-    return manifest
+        worth_sync = mirror_facts_worth(
+            self.review_csv,
+            self.facts_dir,
+            include_human_rows=bool(self.rejudge),
+        )
+        billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
+        return SynthesizePersonContextManifest(
+            status="completed",
+            people=total,
+            chunk_people=self.chunk_people,
+            people_done=counter["done"],
+            batches_run=counter["batches"],
+            avg_batches_per_person=round(counter["batches"] / max(1, counter["done"]), 2),
+            stop_reasons=stop_reasons,
+            errors=counter["errors"],
+            model=self.model,
+            synthesis_version=SYNTHESIS_VERSION,
+            reasoning_effort=effort,
+            owner_context=bool(owner),
+            orphan_facts_removed=orphan_facts_removed,
+            rejudge=bool(self.rejudge),
+            target_confidence=self.target_confidence,
+            max_batches=self.max_batches,
+            concurrency=concurrency,
+            tokens=usage_total,
+            estimated_cost_usd=estimate_cost_usd(usage_total["input_tokens"], billed_output, self.model),
+            out_dir=str(self.facts_dir),
+            worth_sync=worth_sync,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            updated_at=now_iso(),
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -770,7 +908,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    emit(run(args))
+    node = SynthesizePersonContext(
+        raw_dir=Path(args.raw_dir),
+        out_dir=Path(args.out_dir),
+        review_csv=Path(args.review_csv),
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        chunk_chars=args.chunk_chars,
+        target_confidence=args.target_confidence,
+        saturation_rounds=args.saturation_rounds,
+        max_batches=args.max_batches,
+        concurrency=args.concurrency,
+        chunk_people=args.chunk_people,
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+        person=args.person,
+        no_owner=args.no_owner,
+        force=args.force,
+        rejudge=args.rejudge,
+    )
+    if args.dry_run:
+        # The free estimate bypasses the run template: it writes no manifest
+        # today, and must never overwrite a completed one with an estimate.
+        emit(node.estimate())
+        return 0
+    payload = node.run()
+    emit(payload.to_payload())
     return 0
 
 
