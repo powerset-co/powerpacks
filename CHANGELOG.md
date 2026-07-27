@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.2.0...powerpacks-v1.2.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* **deep-context:** make canonical review state consistent ([#350](https://github.com/powerset-co/powerpacks/issues/350)) ([57932e3](https://github.com/powerset-co/powerpacks/commit/57932e373a634cd65ae494de7bcc32a4de958d61))
+* **deep-context:** qualify synthesized identifiers ([#345](https://github.com/powerset-co/powerpacks/issues/345)) ([956c688](https://github.com/powerset-co/powerpacks/commit/956c6884d1c28f04a66b532f1869bf9b2106adea))
+
 ## [1.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.1.0...powerpacks-v1.2.0) (2026-07-27)
 
 
