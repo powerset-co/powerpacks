@@ -134,6 +134,11 @@ def slugify(name: str, person_id: str) -> str:
         # alnum suffix below would collapse to "candidat" for all of them and
         # same-named candidates would collide. Hash the whole id instead.
         suffix = hashlib.sha1(pid.encode("utf-8")).hexdigest()[:8]
+    elif pid.startswith("parent-"):
+        # parent_id already carries a SHA-1 digest. Using the generic first
+        # eight alphanumerics produced "parent" + only two digest characters,
+        # leaving just 256 suffixes per same-named parent.
+        suffix = re.sub(r"[^a-z0-9]+", "", pid.removeprefix("parent-"))[:8]
     else:
         suffix = re.sub(r"[^a-z0-9]+", "", pid)[:8] or "unknown"
     return f"{base}-{suffix}"

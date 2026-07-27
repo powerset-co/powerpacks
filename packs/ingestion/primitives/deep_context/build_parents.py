@@ -21,6 +21,8 @@ This stage owns exactly ONE index.json key — `parents` — and never touches `
 both record maps on write; see the index contract in `common.py`.
 
 Changelog:
+  2026-07-27: parent slugs use eight actual parent-id digest characters; unchanged
+    parent IDs migrate exact slug-keyed artifacts in place before index replacement.
   2026-07-24: writes index.json through common.write_index and no longer appends to
     the by_* maps it does not own. A parent's emails/phones come from
     common.parent_identifiers (the union of its children's index records), the same
@@ -40,6 +42,7 @@ from typing import Any
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
+    DEEP_RESEARCH_DIR,
     DOSSIER_DIR,
     FACTS_DIR,
     INDEX_JSON,
@@ -48,6 +51,9 @@ from packs.ingestion.primitives.deep_context.common import (
     OWNER_JSON,
     PARENTS_DIR,
     RAW_DIR,
+    RECONCILE_DIR,
+    VERDICTS_CSV,
+    VERDICTS_JSONL,
     read_jsonl,
     emit,
     load_index,
@@ -60,6 +66,137 @@ from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 
 PARENT_ANCHOR = "<!-- parent-link -->"
+SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
+
+
+def parent_slug_migrations(
+    old_parents: dict[str, dict[str, Any]],
+    new_parents: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    """Exact old-slug -> new-slug mapping for unchanged canonical parent IDs."""
+    old_by_id = {
+        str(parent.get("parent_id") or "").strip().lower(): slug
+        for slug, parent in old_parents.items()
+        if str(parent.get("parent_id") or "").strip()
+    }
+    new_by_id = {
+        str(parent.get("parent_id") or "").strip().lower(): slug
+        for slug, parent in new_parents.items()
+        if str(parent.get("parent_id") or "").strip()
+    }
+    return {
+        old_by_id[parent_id]: new_slug
+        for parent_id, new_slug in new_by_id.items()
+        if parent_id in old_by_id and old_by_id[parent_id] != new_slug
+    }
+
+
+def _rewrite_parent_slug_csv(
+    path: Path,
+    migrations: dict[str, str],
+    fields: tuple[str, ...],
+) -> int:
+    if not path.exists() or not migrations:
+        return 0
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    if not fieldnames or not any(field in fieldnames for field in fields):
+        return 0
+    changed = 0
+    for row in rows:
+        row_changed = False
+        for field in fields:
+            old = str(row.get(field) or "").strip()
+            if old in migrations:
+                row[field] = migrations[old]
+                row_changed = True
+        changed += row_changed
+    if not changed:
+        return 0
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp.replace(path)
+    return changed
+
+
+def _rewrite_parent_slug_jsonl(
+    path: Path,
+    migrations: dict[str, str],
+) -> int:
+    if not path.exists() or not migrations:
+        return 0
+    records: list[dict[str, Any]] = []
+    changed = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        old = str(record.get("parent_slug") or "").strip()
+        if old in migrations:
+            record["parent_slug"] = migrations[old]
+            changed += 1
+        records.append(record)
+    if not changed:
+        return 0
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    tmp.replace(path)
+    return changed
+
+
+def migrate_parent_slug_artifacts(
+    migrations: dict[str, str],
+    *,
+    deep_research_dir: Path = DEEP_RESEARCH_DIR,
+    verdicts_jsonl: Path = VERDICTS_JSONL,
+    verdicts_csv: Path = VERDICTS_CSV,
+    applied_csv: Path = RECONCILE_DIR / "applied.csv",
+    synthetic_people_csv: Path = SYNTHETIC_PEOPLE_CSV,
+) -> dict[str, int]:
+    """Rewrite exact parent-slug references without touching paid result bodies."""
+    directories_renamed = directory_conflicts = 0
+    for old_slug, new_slug in sorted(migrations.items()):
+        old_dir = deep_research_dir / old_slug
+        new_dir = deep_research_dir / new_slug
+        if not old_dir.exists():
+            continue
+        if new_dir.exists():
+            directory_conflicts += 1
+            continue
+        old_dir.rename(new_dir)
+        directories_renamed += 1
+
+    csv_rows_rewritten = 0
+    csv_rows_rewritten += _rewrite_parent_slug_csv(
+        deep_research_dir / "research_queue.csv",
+        migrations,
+        ("handle", "source_parent_slug"),
+    )
+    csv_rows_rewritten += _rewrite_parent_slug_csv(
+        verdicts_csv, migrations, ("parent_slug",)
+    )
+    csv_rows_rewritten += _rewrite_parent_slug_csv(
+        applied_csv, migrations, ("parent_slug",)
+    )
+    csv_rows_rewritten += _rewrite_parent_slug_csv(
+        synthetic_people_csv, migrations, ("source_parent_slug",)
+    )
+    return {
+        "keys": len(migrations),
+        "directories_renamed": directories_renamed,
+        "directory_conflicts": directory_conflicts,
+        "csv_rows_rewritten": csv_rows_rewritten,
+        "jsonl_rows_rewritten": _rewrite_parent_slug_jsonl(
+            verdicts_jsonl, migrations
+        ),
+    }
 
 
 def fold_owner_aliases(owner_slugs: set[str], slugs_info: dict[str, Any], raw_dir: Path) -> list[str]:
@@ -268,6 +405,7 @@ def inject_parent_backref(dossier_dir: Path, child_slug: str, parent_slug: str, 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.monotonic()
     index = load_index(Path(args.index_json))
+    old_parents = dict(index.get("parents") or {})
     slugs_info = index.get("slugs", {})
     pairs = load_pairs(Path(args.merge_csv))
     pairs += superseded_pairs(Path(getattr(args, "people_csv", "") or DEFAULT_PEOPLE_CSV), slugs_info)
@@ -384,6 +522,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             md.unlink()
             orphans += 1
 
+    slug_migrations = parent_slug_migrations(old_parents, index["parents"])
+    slug_migration = migrate_parent_slug_artifacts(slug_migrations)
     index_json = Path(args.index_json)
     write_index(index_json, index)
     # Parent construction is the first point where canonical membership exists.
@@ -412,6 +552,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "owner_excluded": owner_excluded,
         "owner_aliases_added": owner_aliases_added,
         "orphans_removed": orphans,
+        "parent_slug_keys_migrated": slug_migration["keys"],
+        "parent_slug_directories_renamed": slug_migration["directories_renamed"],
+        "parent_slug_directory_conflicts": slug_migration["directory_conflicts"],
+        "parent_slug_csv_rows_rewritten": slug_migration["csv_rows_rewritten"],
+        "parent_slug_jsonl_rows_rewritten": slug_migration["jsonl_rows_rewritten"],
         "worth_parent_rows": worth_sync["parent_rows"],
         "worth_human_migrated": worth_sync["human_migrated"],
         "worth_legacy_marks_cleared": worth_sync["legacy_marks_cleared"],

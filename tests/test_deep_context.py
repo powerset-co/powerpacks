@@ -63,6 +63,10 @@ class TestCommon(unittest.TestCase):
     def test_slugify_stable_and_collision_proof(self):
         self.assertEqual(common.slugify("Jane Doe", "abcd1234-xyz"), "jane-doe-abcd1234")
         self.assertNotEqual(common.slugify("Jane Doe", "id-one"), common.slugify("Jane Doe", "id-two"))
+        self.assertEqual(
+            common.slugify("Jane Doe", "parent-1234567890ab"),
+            "jane-doe-12345678",
+        )
 
     def test_parse_list_handles_json_and_bare(self):
         self.assertEqual(common.parse_list('["a@x.com", "b@x.com"]'), ["a@x.com", "b@x.com"])
@@ -833,6 +837,81 @@ class TestParents(unittest.TestCase):
     def test_parent_id_is_stable_and_order_independent(self):
         self.assertEqual(parents.parent_id_for(["p1", "p2"]), parents.parent_id_for(["p2", "p1"]))
         self.assertNotEqual(parents.parent_id_for(["p1", "p2"]), parents.parent_id_for(["p1", "p3"]))
+
+    def test_parent_slug_migration_rewrites_artifacts_once(self):
+        old_slug = "jordan-bravo-parent12"
+        new_slug = "jordan-bravo-12345678"
+        mapping = parents.parent_slug_migrations(
+            {old_slug: {"parent_id": "parent-1234567890ab"}},
+            {new_slug: {"parent_id": "parent-1234567890ab"}},
+        )
+        self.assertEqual(mapping, {old_slug: new_slug})
+
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            research = base / "deep-research"
+            old_dir = research / old_slug
+            old_dir.mkdir(parents=True)
+            (old_dir / "01_research_parallel.json").write_text(
+                '{"status":"completed"}\n', encoding="utf-8"
+            )
+            queue = research / "research_queue.csv"
+            queue.write_text(
+                "handle,source_parent_slug,display_name\n"
+                f"{old_slug},{old_slug},Jordan Bravo\n",
+                encoding="utf-8",
+            )
+            verdicts_jsonl = base / "verdicts.jsonl"
+            verdicts_jsonl.write_text(
+                json.dumps({"parent_slug": old_slug, "name": "Jordan Bravo"}) + "\n",
+                encoding="utf-8",
+            )
+            verdicts_csv = base / "verdicts.csv"
+            verdicts_csv.write_text(
+                f"parent_slug,name\n{old_slug},Jordan Bravo\n",
+                encoding="utf-8",
+            )
+            applied_csv = base / "applied.csv"
+            applied_csv.write_text(
+                f"parent_slug,name\n{old_slug},Jordan Bravo\n",
+                encoding="utf-8",
+            )
+            synthetic_csv = base / "synthetic.csv"
+            synthetic_csv.write_text(
+                f"source_parent_slug,full_name\n{old_slug},Jordan Bravo\n",
+                encoding="utf-8",
+            )
+
+            stats = parents.migrate_parent_slug_artifacts(
+                mapping,
+                deep_research_dir=research,
+                verdicts_jsonl=verdicts_jsonl,
+                verdicts_csv=verdicts_csv,
+                applied_csv=applied_csv,
+                synthetic_people_csv=synthetic_csv,
+            )
+            self.assertEqual(stats["directories_renamed"], 1)
+            self.assertEqual(stats["csv_rows_rewritten"], 4)
+            self.assertEqual(stats["jsonl_rows_rewritten"], 1)
+            self.assertFalse(old_dir.exists())
+            self.assertTrue((research / new_slug / "01_research_parallel.json").exists())
+            self.assertNotIn(old_slug, queue.read_text(encoding="utf-8"))
+            self.assertNotIn(old_slug, verdicts_jsonl.read_text(encoding="utf-8"))
+            self.assertNotIn(old_slug, verdicts_csv.read_text(encoding="utf-8"))
+            self.assertNotIn(old_slug, applied_csv.read_text(encoding="utf-8"))
+            self.assertNotIn(old_slug, synthetic_csv.read_text(encoding="utf-8"))
+
+            rerun = parents.migrate_parent_slug_artifacts(
+                mapping,
+                deep_research_dir=research,
+                verdicts_jsonl=verdicts_jsonl,
+                verdicts_csv=verdicts_csv,
+                applied_csv=applied_csv,
+                synthetic_people_csv=synthetic_csv,
+            )
+            self.assertEqual(rerun["directories_renamed"], 0)
+            self.assertEqual(rerun["csv_rows_rewritten"], 0)
+            self.assertEqual(rerun["jsonl_rows_rewritten"], 0)
 
 
 def _verdict_rows(path: Path) -> list[dict[str, str]]:
