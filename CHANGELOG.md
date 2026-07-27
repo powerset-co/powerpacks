@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.2.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.1.0...powerpacks-v1.2.0) (2026-07-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ingestion:** `.powerpacks/network-import/discover/{gmail,messages}/contacts.csv` are no longer written, and the gmail discovery manifest no longer carries `contacts_csv`. `match_local_candidates.py --local-people` has no default and `--no-local-people` is removed.
+* **ingestion:** `merged/people.csv` no longer carries the merge bookkeeping or `linkedin_verified*` columns, the merge no longer applies `overrides/*.csv` decisions, `index_contacts_pipeline`'s `--include-existing-artifacts` flag is gone, and the merge's side CSVs plus `merge_manifest.json` are no longer written.
+
+### Features
+
+* **discover/gmail:** rebuild contacts.csv when the output is empty or a full rerun is asked for ([#334](https://github.com/powerset-co/powerpacks/issues/334)) ([078819c](https://github.com/powerset-co/powerpacks/commit/078819c246928646533b4f5e330c4d678ff8f651))
+* **enrich:** annotate enrichment failures instead of deleting rows, and cache only permanent failures ([#331](https://github.com/powerset-co/powerpacks/issues/331)) ([71bb20f](https://github.com/powerset-co/powerpacks/commit/71bb20f0bd13c69fd60b5a5a7d205cf31fb1a165))
+* **ingestion:** a person with a LinkedIn key, an email, or a phone is a person ([#330](https://github.com/powerset-co/powerpacks/issues/330)) ([48852df](https://github.com/powerset-co/powerpacks/commit/48852dff8a2128469427c1e0d0d606def080f294))
+* **ingestion:** declare pipeline inputs, outputs, and row shapes as a contract ([#340](https://github.com/powerset-co/powerpacks/issues/340)) ([b412fb5](https://github.com/powerset-co/powerpacks/commit/b412fb56a43b53e167d9836d56b49705319fd937))
+
+
+### Bug Fixes
+
+* **deep-context:** one owner per index key, a free identity tier, and reachable contact-only people ([#337](https://github.com/powerset-co/powerpacks/issues/337)) ([5dad52d](https://github.com/powerset-co/powerpacks/commit/5dad52d1bdb0b7b275c5d4334f52714f65d262a9))
+* **ingestion:** merge unresolved contacts into people ([3a77d40](https://github.com/powerset-co/powerpacks/commit/3a77d407c7a6521b2f70c4cd242469d51e8f0d42))
+* **ingestion:** merge unresolved contacts into people ([f5aae22](https://github.com/powerset-co/powerpacks/commit/f5aae22cd7e0fb3fb40229d364a93c11d85b9988))
+* **ingestion:** one LinkedIn slug normalizer, and a merge key that re-derives it ([#329](https://github.com/powerset-co/powerpacks/issues/329)) ([7b6a7d2](https://github.com/powerset-co/powerpacks/commit/7b6a7d2be699142ee22950966cf7cbc3e46b8110))
+* **install:** the release's own updater finishes the update ([#327](https://github.com/powerset-co/powerpacks/issues/327)) ([dbdb02f](https://github.com/powerset-co/powerpacks/commit/dbdb02f6c6b2484cc154cfb4d4398561fdef2737))
+* **search:** make local search tests hermetic; records-dir profiles win over implicit CSV fallback ([#348](https://github.com/powerset-co/powerpacks/issues/348)) ([5c14780](https://github.com/powerset-co/powerpacks/commit/5c14780dd73a5fab9d73522f1aebfc0d80ca60f7))
+
+
+### Miscellaneous Chores
+
+* cap the next release at a minor bump ([05393e2](https://github.com/powerset-co/powerpacks/commit/05393e2bfd25367cd1f93fe6953f5ca2f5f0fb4c))
+
+
+### Code Refactoring
+
+* **ingestion:** rewrite the people merge as one primitive with one output ([#338](https://github.com/powerset-co/powerpacks/issues/338)) ([80d48aa](https://github.com/powerset-co/powerpacks/commit/80d48aab367bf5c7179b301f0f7b38fab32929cd))
+
 ## [1.1.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.0.0...powerpacks-v1.1.0) (2026-07-24)
 
 
