@@ -52,6 +52,7 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV, source_import_dir
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
     judge_concurrency,
     proposal_fingerprint,
@@ -69,8 +70,9 @@ from packs.ingestion.primitives.deep_context.review_store import (
 )
 
 LEGACY_PROVIDER = "parallel_linkedin_resolution"
-GMAIL_PEOPLE_CSV = Path(".powerpacks/network-import/import/gmail/people.csv")
-DIRECTORY_CSV = Path(".powerpacks/network-import/directory.csv")
+# Built from the shared path helpers rather than re-spelled (primitives/common/paths.py).
+GMAIL_PEOPLE_CSV = source_import_dir("gmail") / "people.csv"
+DIRECTORY_CSV = DEFAULT_DIRECTORY_CSV
 
 
 def _read_rows(path: Path) -> list[dict[str, str]]:

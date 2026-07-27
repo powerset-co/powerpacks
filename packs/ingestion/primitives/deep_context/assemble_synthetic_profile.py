@@ -72,8 +72,12 @@ from packs.ingestion.schemas.candidates_schema import candidate_key_for
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 
 ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_OUT = ROOT / ".powerpacks/network-import/overrides/synthetic-people.csv"
-DEFAULT_PEOPLE_CSV = ROOT / ".powerpacks/network-import/merged/people.csv"
+# The DECLARED artifact path is the default: these used to be re-spelled as
+# repo-root-ABSOLUTE paths, so the CLI wrote to the checkout's `.powerpacks`
+# while the declaration (and every other stage) named the cwd-relative one.
+# They agreed only when run from the repo root; now they are the same object.
+DEFAULT_OUT = SYNTHETIC_PEOPLE_CSV
+DEFAULT_PEOPLE_CSV = MERGED_PEOPLE_CSV
 SYNTHETIC_PROVENANCE_COLUMNS = [
     "source_parent_slug",
     "source_person_ids",

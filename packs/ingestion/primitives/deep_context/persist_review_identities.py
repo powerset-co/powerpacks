@@ -280,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     parser.add_argument("--consolidate-people-csv", default=str(CONSOLIDATE_PEOPLE_CSV))
     parser.add_argument("--retarget-people-csv", default=str(RETARGET_PEOPLE_CSV))
-    parser.add_argument("--directory-csv", default=".powerpacks/network-import/directory.csv")
+    parser.add_argument("--directory-csv", default=str(DEFAULT_DIRECTORY_CSV))
     parser.add_argument("--dry-run", action="store_true", help="Report mappings without writing directory.csv")
     return parser
 
