@@ -30,6 +30,8 @@ copy_powerpacks_bundle() {
   # Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
+  mkdir -p "$dest/powerpacks/bin"
+  install -m 755 "$REPO_ROOT/bin/reflect" "$dest/powerpacks/bin/reflect"
   # Keep only the top-level skill entrypoint; avoid nested skill duplication
   # from copied packs during discovery.
   find "$dest/powerpacks/packs" -type f -path "*/SKILL.md" -delete
@@ -93,12 +95,13 @@ install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
+install_skill reflect "$REPO_ROOT/packs/observability/skills/reflect/SKILL.md"
 
 # Install stamp: which Powerpacks these skills came from (auto-generated, never
 # hand-bumped). Lets update-powerpacks/doctor detect stale installs.
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" claude-code "$SKILLS_DIR/.powerpacks-install.json"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks sales-nav-search build-outbound"
+echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks sales-nav-search build-outbound reflect"
 echo "  setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
 echo

@@ -122,6 +122,47 @@ class TestDeepContextRunnerSafety(unittest.TestCase):
         self.assertIn("--fetch", result.stdout)
         self.assertIn("RapidAPI", result.stdout)
 
+    def test_profile_prefetch_manifest_has_terminal_timing(self):
+        from packs.ingestion.primitives.deep_context import prefetch_profiles
+
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            manifest = base / "profile-prefetch" / "manifest.json"
+            with mock.patch.object(
+                    prefetch_profiles.PrefetchProfiles, "manifest", str(manifest)), \
+                 mock.patch.object(prefetch_profiles, "_all_review_parents",
+                                   return_value=[]):
+                result = prefetch_profiles.PrefetchProfiles(
+                    verdicts=base / "verdicts.jsonl",
+                    review=base / "review.csv",
+                    synthetic_people=base / "synthetic.csv",
+                    facts_dir=base / "facts",
+                    people_csv=base / "people.csv",
+                    parents_dir=base / "parents",
+                    dossier_dir=base / "dossiers",
+                    profile_cache_dir=base / "profiles",
+                    fetch=False,
+                    no_llm=False,
+                    model="gpt-5-nano",
+                    reasoning_effort="minimal",
+                    summary_concurrency=1,
+                    fetch_concurrency=1,
+                    rapidapi_rpm=0,
+                    timeout=1,
+                    max_retries=0,
+                ).run()
+
+            payload = result.to_payload()
+            self.assertEqual(payload["status"], "dry_run")
+            self.assertEqual(
+                set(payload["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
+            self.assertEqual(
+                json.loads(manifest.read_text(encoding="utf-8"))["timing"],
+                payload["timing"],
+            )
+
     def test_restart_is_wired_and_defaults_to_dry_run(self):
         runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
         result = subprocess.run(
@@ -1780,6 +1821,44 @@ class TestApplyRetargets(unittest.TestCase):
 
 
 class TestReconcileDeepResearch(unittest.TestCase):
+    def test_provider_progress_preserves_steps_and_finishes_research_timing(self):
+        from packs.ingestion.primitives.deep_context import deep_research_contacts
+
+        with tempfile.TemporaryDirectory() as d:
+            manifest = Path(d) / "research" / "manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({
+                "stage": "enrich",
+                "status": "running",
+                "steps": {
+                    "prepare_queue": {
+                        "started_at": "2026-01-01T00:00:00Z",
+                        "finished_at": "2026-01-01T00:00:01Z",
+                        "duration_seconds": 1.0,
+                    },
+                },
+            }), encoding="utf-8")
+            args = _ns(
+                manifest=manifest,
+                _research_started_at="2026-01-01T00:00:01Z",
+                _research_started_monotonic=deep_research_contacts.time.monotonic(),
+            )
+            deep_research_contacts._write_progress_manifest(
+                args, "running",
+                {"total": 1, "completed": 0, "pending": 1, "failed": 0},
+            )
+            running = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertNotIn("timing", running)
+            self.assertIn("prepare_queue", running["steps"])
+            self.assertNotIn("finished_at", running["steps"]["research"])
+
+            deep_research_contacts._write_progress_manifest(
+                args, "research_complete",
+                {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+            )
+            completed = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertIn("finished_at", completed["steps"]["research"])
+
     def test_queue_sends_dossier_identifiers_and_owner_context(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -1855,6 +1934,12 @@ class TestReconcileDeepResearch(unittest.TestCase):
                              ("enrich", "research_complete"))
             self.assertEqual(manifest["counts"],
                              {"total": 0, "completed": 0, "pending": 0, "failed": 0})
+            self.assertEqual(
+                set(manifest["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
+            self.assertIn("prepare_queue", manifest["steps"])
+            self.assertGreaterEqual(manifest["timing"]["duration_seconds"], 0)
             self.assertEqual((base / "research" / "research_queue.csv").read_text().splitlines()[0],
                              ",".join(dresearch.QUEUE_FIELDS))
 
@@ -2749,6 +2834,9 @@ class TestRetargetJudgeFingerprintCache(unittest.TestCase):
             final = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(final["status"], "research_complete")
             self.assertNotIn("phase", final)
+            self.assertIn("prepare_queue", final["steps"])
+            self.assertIn("retarget_judge", final["steps"])
+            self.assertIn("finished_at", final["steps"]["retarget_judge"])
 
     def test_judge_concurrency_defaults_capped_and_env_overridable(self):
         with mock.patch.dict(os.environ, {"POWERPACKS_OPENAI_CONCURRENCY": "",
@@ -3571,6 +3659,67 @@ class TestReviewWeb(unittest.TestCase):
         )
         fake_server.serve_forever.assert_called_once_with()
 
+    def test_approved_enrichment_runs_followups_only_after_current_research_complete(self):
+        with mock.patch.object(web_server.ReconcileDeepResearch, "run"), \
+             mock.patch.object(web_server, "current_worth_selection",
+                               return_value={"sha256": "current"}), \
+             mock.patch.object(web_server, "_post_enrichment_chain") as followups:
+            with mock.patch.object(
+                    web_server, "read_enrichment_manifest",
+                    return_value={"status": "failed", "current": True}):
+                web_server._approved_enrichment_steps(1.25)
+            followups.assert_not_called()
+
+            with mock.patch.object(
+                    web_server, "read_enrichment_manifest",
+                    return_value={"status": "research_complete", "current": True}):
+                web_server._approved_enrichment_steps(1.25)
+            followups.assert_called_once_with()
+
+    def test_background_job_finishes_total_timing_without_losing_step_timings(self):
+        class ImmediateThread:
+            def __init__(self, *, target, **_kwargs):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with tempfile.TemporaryDirectory() as dd:
+            manifest = Path(dd) / "deep-research" / "manifest.json"
+
+            def steps():
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+                manifest.write_text(json.dumps({
+                    "stage": "enrich",
+                    "status": "completed",
+                    "timing": {
+                        "started_at": "2026-01-01T00:00:00Z",
+                        "finished_at": "2026-01-01T00:00:02Z",
+                        "duration_seconds": 2.0,
+                    },
+                    "steps": {
+                        "assembly": {
+                            "started_at": "2026-01-01T00:00:01Z",
+                            "finished_at": "2026-01-01T00:00:02Z",
+                            "duration_seconds": 1.0,
+                        },
+                    },
+                }), encoding="utf-8")
+
+            with mock.patch.object(web_server, "ENRICH_MANIFEST", manifest), \
+                 mock.patch.object(web_server.threading, "Thread", ImmediateThread):
+                web_server._run_pipeline_job("fixture", steps)
+
+            result = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(
+                set(result["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
+            self.assertIn("assembly", result["steps"])
+            self.assertIn("finished_at", result["timing"])
+            self.assertGreaterEqual(result["timing"]["duration_seconds"], 0)
+
     def test_browser_observer_polls_only_while_external_updates_are_possible(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn('fetch("/api/status", { cache: "no-store" })', script)
@@ -4308,6 +4457,48 @@ class TestAssembleSyntheticProfile(unittest.TestCase):
         self.assertFalse(asp.profile_is_usable(no_name))
         bare = self._profile(positions=False); bare["location"] = {}
         self.assertFalse(asp.profile_is_usable(bare))
+
+    def test_main_preserves_prior_steps_and_records_assembly_timing(self) -> None:
+        from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
+
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            manifest = base / "research" / "manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({
+                "stage": "enrich",
+                "status": "research_complete",
+                "timing": {
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:00:01Z",
+                    "duration_seconds": 1.0,
+                },
+                "steps": {
+                    "prepare_queue": {
+                        "started_at": "2026-01-01T00:00:00Z",
+                        "finished_at": "2026-01-01T00:00:01Z",
+                        "duration_seconds": 1.0,
+                    },
+                },
+            }), encoding="utf-8")
+            overrides = base / "review.csv"
+            with mock.patch.object(asp, "LINKEDIN_OVERRIDES_CSV", overrides):
+                asp.main([
+                    "--research-dir", str(manifest.parent),
+                    "--queue-csv", str(base / "missing-queue.csv"),
+                    "--people-csv", str(base / "missing-people.csv"),
+                    "--verdicts-jsonl", str(base / "missing-verdicts.jsonl"),
+                    "--out", str(base / "synthetic.csv"),
+                    "--index-json", str(base / "missing-index.json"),
+                    "--facts-dir", str(base / "facts"),
+                    "--manifest", str(manifest),
+                ])
+
+            result = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "completed")
+            self.assertIn("prepare_queue", result["steps"])
+            self.assertIn("assembly", result["steps"])
+            self.assertIn("finished_at", result["steps"]["assembly"])
 
 
 class TestSyntheticReviewUI(unittest.TestCase):

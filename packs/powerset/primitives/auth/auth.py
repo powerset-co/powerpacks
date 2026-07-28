@@ -64,6 +64,14 @@ DEFAULT_LOGIN_TIMEOUT = 180
 # Helpers
 # ---------------------------------------------------------------------------
 
+class PowersetNotLoggedIn(RuntimeError):
+    """No stored Powerset session exists."""
+
+
+class PowersetAuthUnavailable(RuntimeError):
+    """A stored Powerset session exists but cannot currently yield a token."""
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -275,6 +283,11 @@ def _credentials_with_fresh_token(
     creds = _load_credentials(path)
     if not creds:
         raise SystemExit("not logged in; run login")
+    # Login stores both values with the refresh token. In-process API clients
+    # should not need the same configuration exported again just to refresh an
+    # otherwise valid stored session.
+    domain = domain or str(creds.get("auth0_domain") or "")
+    client_id = client_id or str(creds.get("client_id") or "")
     if time.time() > float(creds.get("expires_at", 0)) - 60:
         if not domain or not client_id:
             missing = []
@@ -286,6 +299,35 @@ def _credentials_with_fresh_token(
         creds = _refresh_credentials(creds, domain, client_id)
         _save_credentials(path, creds)
     return creds
+
+
+def fresh_access_token(
+    *,
+    credentials_path: Path = DEFAULT_CREDENTIALS_PATH,
+    auth0_domain: str | None = DEFAULT_AUTH0_DOMAIN,
+    client_id: str | None = DEFAULT_AUTH0_CLIENT_ID,
+) -> str:
+    """Return a fresh Powerset bearer token for in-process API clients.
+
+    Authentication remains owned by this module: callers do not read the
+    credential file, decode identity claims, or duplicate refresh behavior.
+    """
+    try:
+        creds = _credentials_with_fresh_token(
+            credentials_path,
+            auth0_domain or "",
+            client_id or "",
+        )
+    except SystemExit as exc:
+        if str(exc) == "not logged in; run login" and not credentials_path.exists():
+            raise PowersetNotLoggedIn(str(exc)) from exc
+        raise PowersetAuthUnavailable(str(exc)) from exc
+    except (ConnectionError, OSError) as exc:
+        raise PowersetAuthUnavailable("could not refresh Powerset authentication") from exc
+    token = creds.get("access_token")
+    if not isinstance(token, str) or not token:
+        raise PowersetAuthUnavailable("stored Powerset credentials have no access token")
+    return token
 
 
 # ---------------------------------------------------------------------------

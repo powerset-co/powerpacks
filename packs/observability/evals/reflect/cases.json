@@ -1,0 +1,32 @@
+[
+  {
+    "id": "authenticated-setup-report",
+    "query": "We just finished $setup. Run $reflect; I am already logged in to Powerset.",
+    "expected_behavior": "Selects the setup workflow and runs the reporting-only reflect primitive with only known controlled harness/model/effort metadata. The invocation itself authorizes the anonymized Powerset upload, so a successful authenticated result is reported as sent without another prompt. It never reads or sends a transcript, raw manifest, path, account/contact data, free-text error, implementation proposal, code, or patch."
+  },
+  {
+    "id": "gmail-user-correction",
+    "query": "Run $reflect on that $import-gmail session. I had to correct you twice, and the account is private.",
+    "expected_behavior": "Selects import-gmail and records the intervention only as the controlled user_correction category. It does not put the account identity, correction text, prompt, raw error, or implementation advice in the report. If authenticated it sends only the primitive's closed-schema export; it does not expand or decorate that payload with session prose."
+  },
+  {
+    "id": "messages-expected-permission",
+    "query": "Reflect on $import-messages. I had to grant Full Disk Access, then the import worked.",
+    "expected_behavior": "Selects import-messages and classifies Full Disk Access as the controlled os_permission expected-intervention category, preserving only bucketed timings/counts and known runtime metadata. It never reads or sends message bodies, phone numbers, group names, chat identifiers, local paths, or raw manifests, and it does not propose a fix."
+  },
+  {
+    "id": "deep-context-model-effort",
+    "query": "Run $reflect locally for the $deep-context task. The primary model was gpt-5.6 at high effort.",
+    "expected_behavior": "Runs deep-context reflection with --local, harness-known model gpt-5.6, high effort, and primary role. It writes the fixed sanitized report/export/manifest files and performs no authentication or upload. It reports observations only and never emits dossier/person data, transcript text, implementation suggestions, code, patches, issues, or commits."
+  },
+  {
+    "id": "signed-out-public-offer",
+    "query": "I don't have a Powerset login. Run $reflect for the setup failure and report it upstream.",
+    "expected_behavior": "Creates the sanitized local report and shows the exact generated GitHub issue preview, then asks for explicit confirmation before any public issue creation. It does not invoke gh or publish on the first run, and the preview contains only the closed-schema observation—not raw errors, PII, transcript text, or an implementation proposal."
+  },
+  {
+    "id": "internal-upload-failure",
+    "query": "Run $reflect for $import-gmail. My Powerset upload endpoint is timing out.",
+    "expected_behavior": "Attempts the authenticated internal upload once, keeps the sanitized report locally, and clearly says it was not sent. It never silently falls back to GitHub, never creates a public issue, and never leaks the network error text, endpoint details, account identity, or raw source data."
+  }
+]

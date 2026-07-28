@@ -36,9 +36,13 @@ rm -rf "$TARGET/.claude/skills/add-slice-search"
 rm -rf "$TARGET/.claude/skills/add-candidate-review-planning"
 rm -rf "$TARGET/.claude/skills/search-network" "$TARGET/.claude/skills/search"
 cp -R "$REPO_ROOT/packs/search/skills/search" "$TARGET/.claude/skills/search"
+rm -rf "$TARGET/.claude/skills/reflect"
+cp -R "$REPO_ROOT/packs/observability/skills/reflect" "$TARGET/.claude/skills/reflect"
 
 rm -rf "$TARGET/container/skills/search-network" "$TARGET/container/skills/search"
 cp -R "$REPO_ROOT/packs/search/skills/search" "$TARGET/container/skills/search"
+rm -rf "$TARGET/container/skills/reflect"
+cp -R "$REPO_ROOT/packs/observability/skills/reflect" "$TARGET/container/skills/reflect"
 
 rm -rf "$TARGET/powerpacks/primitives"
 rm -rf "$TARGET/powerpacks/mcp"
@@ -58,6 +62,7 @@ cp -R "$REPO_ROOT/packs" "$TARGET/powerpacks/packs"
 mkdir -p "$TARGET/powerpacks/adapters"
 cp -R "$REPO_ROOT/adapters/nanoclaw" "$TARGET/powerpacks/adapters/nanoclaw"
 cp -R "$SCRIPT_DIR/bin" "$TARGET/powerpacks/bin"
+install -m 755 "$REPO_ROOT/bin/reflect" "$TARGET/powerpacks/bin/reflect"
 chmod +x "$TARGET/powerpacks/bin/powerclaw"
 
 TARGET_FOR_POWERPACKS="$TARGET" python3 <<'PY'

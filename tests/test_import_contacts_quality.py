@@ -203,6 +203,101 @@ class ImportContactsQualityTests(unittest.TestCase):
             self.assertTrue((import_dir / "manifest.json").is_file())
             self.assertFalse((import_dir / "ledger.json").exists())
             self.assertNotIn("ledger", json.dumps(payload).lower())
+            written = json.loads((import_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(written["timing"], payload["timing"])
+            self.assertEqual(
+                set(written["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
+
+    def test_gmail_completed_manifest_has_constructor_timing_and_noop_preserves_it(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            import_root = tmp / "import"
+            import_dir = import_root / "gmail"
+            directory = tmp / "directory.csv"
+            account_people = tmp / "account-people.csv"
+            CsvIO.write_dict_rows(directory, DIRECTORY_COLUMNS, [])
+            CsvIO.write_dict_rows(account_people, PEOPLE_SCHEMA_COLUMNS, [{"id": "gmail-1"}])
+            args = gmail_import.build_parser().parse_args(["run"])
+
+            def materialize(node: gmail_import.GmailImport) -> bool:
+                node.gmail_people_csv = account_people
+                return True
+
+            gmail_clock = mock.Mock()
+            gmail_clock.monotonic.side_effect = [40.0, 41.2346, 50.0]
+            with mock.patch.object(gmail_import, "DEFAULT_IMPORT_DIR", import_root), \
+                    mock.patch.object(gmail_import, "DEFAULT_DIRECTORY_CSV", directory), \
+                    mock.patch.object(gmail_import, "source_import_dir", return_value=import_dir), \
+                    mock.patch.object(gmail_import, "gmail_artifacts_from_discovery", return_value={"accounts": []}), \
+                    mock.patch.object(gmail_import, "gmail_account_queue_records", return_value=[{}]), \
+                    mock.patch.object(gmail_import, "run_gmail_directory", return_value=True), \
+                    mock.patch.object(gmail_import, "run_gmail_apply_and_enrich", side_effect=materialize), \
+                    mock.patch.object(
+                        gmail_import,
+                        "gmail_candidate_people",
+                        return_value={"people": [], "candidates": 0},
+                    ), \
+                    mock.patch.object(
+                        gmail_import,
+                        "normalize_directory_source_accounts",
+                        return_value={"status": "completed", "updated_rows": 0},
+                    ), \
+                    mock.patch.object(
+                        gmail_import,
+                        "directory_source_account_quality",
+                        return_value={"status": "ok"},
+                    ), \
+                    mock.patch.object(
+                        gmail_import,
+                        "now_iso",
+                        side_effect=[
+                            "2026-07-27T10:00:00Z",
+                            "2026-07-27T10:00:01Z",
+                            "2026-07-27T10:00:02Z",
+                        ],
+                    ), \
+                    mock.patch.object(gmail_import, "time", gmail_clock):
+                completed = gmail_import.run(args)
+                manifest_path = import_dir / "manifest.json"
+                written_before_noop = manifest_path.read_text(encoding="utf-8")
+                noop = gmail_import.run(args)
+
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["timing"], {
+                "started_at": "2026-07-27T10:00:00Z",
+                "finished_at": "2026-07-27T10:00:01Z",
+                "duration_seconds": 1.235,
+            })
+            self.assertTrue(noop["noop"])
+            self.assertEqual(noop["timing"], completed["timing"])
+            self.assertEqual(
+                manifest_path.read_text(encoding="utf-8"),
+                written_before_noop,
+            )
+
+    def test_gmail_failed_manifest_has_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            import_root = tmp / "import"
+            import_dir = import_root / "gmail"
+            args = gmail_import.build_parser().parse_args(["run"])
+
+            with mock.patch.object(gmail_import, "DEFAULT_IMPORT_DIR", import_root), \
+                    mock.patch.object(gmail_import, "source_import_dir", return_value=import_dir), \
+                    mock.patch.object(gmail_import, "gmail_artifacts_from_discovery", return_value={"accounts": []}), \
+                    mock.patch.object(gmail_import, "gmail_account_queue_records", return_value=[{}]), \
+                    mock.patch.object(gmail_import, "run_gmail_directory", return_value=False):
+                payload = gmail_import.run(args)
+
+            self.assertEqual(payload["status"], "failed")
+            written = json.loads((import_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(written["timing"], payload["timing"])
+            self.assertEqual(
+                set(written["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
 
     def test_gmail_account_people_merge_preserves_interaction_counts(self) -> None:
         with tempfile.TemporaryDirectory() as td:

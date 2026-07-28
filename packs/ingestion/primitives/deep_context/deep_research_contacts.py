@@ -47,7 +47,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -644,7 +644,38 @@ def _write_progress_manifest(args: argparse.Namespace, status: str,
         existing = read_json(path) if path.exists() else {}
     except (json.JSONDecodeError, OSError):
         existing = {}
-    payload = {**existing, **extra, "stage": "enrich", "status": status, "counts": counts}
+    steps = existing.get("steps") if isinstance(existing.get("steps"), dict) else {}
+    research_started_at = str(getattr(args, "_research_started_at", "") or "")
+    if research_started_at:
+        research_timing: dict[str, Any] = {"started_at": research_started_at}
+        if status != "running":
+            finished_at = now_iso()
+            research_timing["finished_at"] = finished_at
+            research_started = getattr(args, "_research_started_monotonic", None)
+            if isinstance(research_started, (int, float)):
+                duration = time.monotonic() - research_started
+            else:
+                try:
+                    start_dt = datetime.fromisoformat(
+                        research_started_at.replace("Z", "+00:00"))
+                    finish_dt = datetime.fromisoformat(
+                        finished_at.replace("Z", "+00:00"))
+                    duration = (finish_dt - start_dt).total_seconds()
+                except ValueError:
+                    duration = 0.0
+            research_timing["duration_seconds"] = round(max(0.0, duration), 3)
+        steps = {**steps, "research": research_timing}
+    payload = {
+        **existing,
+        **extra,
+        "stage": "enrich",
+        "status": status,
+        "counts": counts,
+        "steps": steps,
+    }
+    # This child owns only steps.research. The outer enrichment wrapper owns
+    # the strict top-level stage total once its whole terminal pass finishes.
+    payload.pop("timing", None)
     payload.pop("updated_at", None)
     payload.pop("created_at", None)
     write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
@@ -720,6 +751,9 @@ def _load_group_id(output_dir: Path) -> str | None:
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
+    if not getattr(args, "_research_started_at", ""):
+        args._research_started_at = now_iso()
+        args._research_started_monotonic = time.monotonic()
     processor = _validate_processor(args.processor)
     api_key = _resolve_api_key(args.api_key)
     rows = load_queue(Path(args.input))
@@ -832,6 +866,8 @@ def cmd_poll(args: argparse.Namespace) -> int:
         return 1
 
     state = read_json(state_path) if state_path.exists() else {}
+    if not getattr(args, "_research_started_at", ""):
+        args._research_started_at = str(state.get("submitted_at") or now_iso())
     group_id = args.taskgroup_id or state.get("taskgroup_id")
     if not group_id:
         emit({"primitive": "deep_research_contacts", "command": "poll",
@@ -943,6 +979,8 @@ def cmd_poll(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    args._research_started_at = now_iso()
+    args._research_started_monotonic = time.monotonic()
     rows = load_queue(Path(args.input))
     todo, skipped_done = filter_already_done(rows, Path(args.output_dir))
     if args.limit is not None:

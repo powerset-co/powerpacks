@@ -595,6 +595,10 @@ class MessagesImportRuntimeTests(unittest.TestCase):
 
             blocked = self.run_import(env, confirm=False)
             self.assertEqual(blocked["status"], "blocked_approval")
+            self.assertEqual(
+                set(blocked["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
             self.assertFalse((env["import_dir"] / "people.csv").exists())
             self.assertEqual(
                 [path.name for path in env["import_dir"].iterdir()],
@@ -603,6 +607,10 @@ class MessagesImportRuntimeTests(unittest.TestCase):
 
             completed = self.run_import(env, confirm=True)
             self.assertEqual(completed["status"], "completed")
+            self.assertEqual(
+                set(completed["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
             people_csv = env["import_dir"] / "people.csv"
             self.assertEqual(self.csv_count(people_csv), 2)
             self.assertFalse((env["import_dir"] / "candidates.csv").exists())
@@ -627,8 +635,15 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             derived_text = people_csv.read_text()
             self.assertNotIn(sentinel, derived_text)
 
+            manifest_path = env["import_dir"] / "manifest.json"
+            written_before_noop = manifest_path.read_text(encoding="utf-8")
             noop = self.run_import(env, confirm=False)
             self.assertTrue(noop["noop"])
+            self.assertEqual(noop["timing"], completed["timing"])
+            self.assertEqual(
+                manifest_path.read_text(encoding="utf-8"),
+                written_before_noop,
+            )
 
             self.write_contacts(env, [
                 self.matched_row(
@@ -651,6 +666,20 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             self.assertEqual(self.csv_count(people_csv), 0)
             directory_rows = self.csv_rows(env["directory"])
             self.assertEqual([row["source"] for row in directory_rows], ["gmail_msgvault"])
+
+    def test_failed_import_writes_timing(self) -> None:
+        with self.sandbox() as env:
+            failed = self.run_import(env, confirm=False)
+
+            self.assertEqual(failed["status"], "failed")
+            written = json.loads(
+                (env["import_dir"] / "manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(written["timing"], failed["timing"])
+            self.assertEqual(
+                set(written["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
 
     def test_floor_reasons_and_suggested_not_attached(self) -> None:
         cases = [

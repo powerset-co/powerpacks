@@ -94,6 +94,20 @@ Product and architecture walkthroughs live in the
 | [`import-messages`](packs/ingestion/skills/import-messages/SKILL.md) | `$import-messages` | Contact sync only: adds iMessage/WhatsApp contact metadata, matches against imported LinkedIn/Gmail people for free, imports matched people + a research-candidates pool, and merges sources. No LLM, no research, no index build in-skill. See the [product guide](packs/ingestion/docs/message-import-pipeline.md). |
 | [`deep-context`](packs/ingestion/skills/deep-context/SKILL.md) | `$deep-context`, "process my contacts" | The single post-import workflow and dossier surface: context over people + unresolved candidates, duplicate merge, a binary exception queue with editable Yes/No piles, one revision-bound lookup for effective-Yes people, LinkedIn verify/replace/Skip review, fan-in + Modal index + validate, plus ad-hoc person lookup/re-review. See the [product guide](packs/ingestion/docs/deep-context-pipeline.md). |
 
+### Observability
+
+| Skill | Trigger | What it does |
+| --- | --- | --- |
+| [`reflect`](packs/observability/skills/reflect/SKILL.md) | `$reflect [setup\|import-gmail\|import-messages\|deep-context]` | Produces a reporting-only review of one supported workflow from its fixed local status artifacts. A strict allowlist keeps only controlled status, bucketed counts, each stage's explicit total timing block—never a nested child timing—and normalized top-level stage model/reasoning-effort metadata, plus optional harness and agent-role metadata. It never includes PII, transcripts, raw manifests, message bodies, paths, hashes, identifiers, or raw errors, and it never proposes implementation, writes code or patches, or mutates the reviewed workflow. |
+
+`$reflect` overwrites the fixed local outputs
+`.powerpacks/reflect/report.json`, `.powerpacks/reflect/export.json`, and
+`.powerpacks/reflect/manifest.json`. For an authenticated Powerset user, invoking
+the skill submits the anonymized export automatically; `$reflect --local`
+keeps it local. When signed out, it prepares a sanitized GitHub issue preview
+and must ask before creating that issue with `gh`. A failed private upload never
+falls back to a public issue.
+
 ### Sales Nav
 
 | Skill | Trigger | What it does |
@@ -148,6 +162,9 @@ powerpacks/
 │   │   ├── primitives/     source discovery/import + message leaf primitives
 │   │   ├── schemas/        people + message-contact contracts
 │   │   └── docs/           maintained ingestion product guides
+│   ├── observability/      anonymous, reporting-only workflow reflection
+│   │   ├── skills/         reflect
+│   │   └── primitives/     strict allowlist projection + optional submission
 │   ├── search/             recruiting people / company search
 │   │   ├── skills/         search, search-company
 │   │   ├── primitives/     search CLIs + deep orchestration + shared lib/
@@ -209,6 +226,7 @@ $import-gmail                     # Gmail contact sync (free after OAuth)
 $import-messages                  # iMessage + WhatsApp contact sync
 $deep-context                     # process contacts end-to-end, or run ad-hoc
                                   #   dossier lookup/re-review subcommands
+$reflect deep-context             # anonymous report; use --local to keep local
 ```
 
 ### Prereqs by skill family
@@ -221,6 +239,7 @@ $deep-context                     # process contacts end-to-end, or run ad-hoc
 | `import-gmail` | msgvault/Gmail OAuth only — the import itself is free and local (identity lookups moved to `deep-context`). |
 | `import-messages` | macOS Full Disk Access for iMessage and WhatsApp/wacli setup — no LLM or research secrets needed in-skill. |
 | `deep-context` | A merged network + linked message sources, Full Disk Access for iMessage, OpenAI for dossiers/triage, Parallel for the approved-person lookup, RapidAPI for retarget hydration, and Modal runtime keys for the index rebuild. |
+| `reflect` | A completed or blocked `$setup`, `$import-gmail`, `$import-messages`, or `$deep-context` artifact set. Powerset login enables automatic anonymous upload; `--local` and signed-out preview need no account. |
 | `sales-nav-search` | `$powerset setup` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
 | `build-outbound` | `APOLLO_API_KEY` in `.env` or shell, connected Apollo email account/schedule, and a Sales Nav run or manifest. Node/npx is only needed for MCP setup/status. |
 
@@ -311,8 +330,9 @@ adapter installs also work:
 ```
 
 The NanoClaw adapter copies the core Powerpacks directory into the target,
-installs `search`, wires the
-threaded CLI channel, and keeps NanoClaw-specific TUI/runtime code under
+installs the portable Powerpacks skills including `search` and reporting-only
+`reflect` in both host and container skill directories, wires the threaded CLI
+channel, and keeps NanoClaw-specific TUI/runtime code under
 `powerpacks/adapters/nanoclaw`.
 
 ### Reinstall after pulling new changes
@@ -380,6 +400,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 | `import-gmail` | `$import-gmail` — should create a nine-step plan, ask for accounts/window, use one bounded multi-account discovery command, and end by suggesting missing sources + offering `$deep-context`. |
 | `import-messages` | `$import-messages` — should show a seven-step checklist, run free through discover/match/import (one import confirmation), and end with the same suggest/process tail. |
 | `deep-context` | `$deep-context check` should report local source readiness without starting a paid build; bare `$deep-context` should begin with sources, people, and waiting candidates. |
+| `reflect` | `$reflect deep-context --local` should write only the fixed local reporting artifacts; authenticated `$reflect deep-context` should submit the allowlisted anonymous export without another confirmation. |
 
 If the agent host doesn't see a skill at all: re-run `./install.sh <host>`
 and restart the host (skills are loaded once at startup).
