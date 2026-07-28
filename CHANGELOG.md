@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.3.0...powerpacks-v1.3.1) (2026-07-28)
+
+
+### Miscellaneous Chores
+
+* cut 1.3.1 with the review-app node conversion ([302b789](https://github.com/powerset-co/powerpacks/commit/302b7891ed954b31623c1011a4064718070f4c30))
+
 ## [1.3.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.2.1...powerpacks-v1.3.0) (2026-07-27)
 
 
