@@ -39,7 +39,9 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     load_override_rows,
 )
 
-from packs.ingestion.primitives.deep_context import assemble_synthetic_profile, prefetch_profiles, reconcile_deep_research
+from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
+from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
+from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_worth_card, worth_review_body
@@ -54,7 +56,12 @@ def _manifest_for_review_path(review_path: Path) -> Path:
     return review_path.parent / "review" / "manifest.json"
 
 
-ENRICH_FLAGS = ["--include-candidates", "--include-plausibly-absent"]
+# The enrichment scope this app always runs with. Constructor kwargs, not CLI
+# flags: the in-app jobs build the same `pipeline/contract.py` nodes every other
+# caller does (construct-and-run) instead of fabricating an argv and re-parsing
+# it. Same defaults — the node constructors and their parsers agree — so the
+# work and the manifests are unchanged; only the invocation shape is.
+ENRICH_SCOPE = {"include_candidates": True, "include_plausibly_absent": True}
 
 
 _job_lock = threading.Lock()
@@ -100,8 +107,10 @@ def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
 
 def _post_enrichment_chain() -> None:
     """Free follow-ups once research is done: no-LinkedIn cards + profile cache."""
-    assemble_synthetic_profile.main([])
-    prefetch_profiles.main(["--fetch"])
+    AssembleSyntheticProfile().run()
+    # `fetch=True` IS the spend: the profile cache misses are hydrated here, on
+    # the same authorization that started this chain (research completed).
+    PrefetchProfiles(fetch=True).run()
 
 
 def _free_enrichment_steps() -> None:
@@ -111,7 +120,7 @@ def _free_enrichment_steps() -> None:
     gate, which stamps a current needs_approval receipt WITHOUT spending a cent
     (the Approve button owns money). No convergence loop: the chain may re-drift
     the selection, and the next enrich-page render re-derives and re-triggers."""
-    reconcile_deep_research.main([*ENRICH_FLAGS, "--approve", "--budget", "0.00"])
+    ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=0.0).run()
     enrichment = read_enrichment_manifest(selection=current_worth_selection())
     if enrichment.get("status") == STATUS_RESEARCH_COMPLETE:
         _post_enrichment_chain()
@@ -127,8 +136,9 @@ def start_free_enrichment_job() -> None:
 def start_approved_enrichment_job(budget: float) -> None:
     """The Approve $X click IS the user's spend approval: run exactly that."""
     def steps() -> None:
-        reconcile_deep_research.main(
-            [*ENRICH_FLAGS, "--approve", "--budget", f"{budget:.2f}"])
+        # The budget is rounded to cents exactly as the argv form did, so the
+        # primitive's gate compares the same ceiling the UI approved.
+        ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=round(budget, 2)).run()
         _post_enrichment_chain()
 
     _run_pipeline_job("approved-enrichment", steps)

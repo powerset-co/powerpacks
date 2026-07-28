@@ -759,7 +759,12 @@ class ReconcileDeepResearch(Node):
         include_plausibly_absent: bool = False,
         include_candidates: bool = False,
         no_llm: bool = False,
-        model: str = "",
+        # Same default as `--model`: the judge call passes `self.model or ""`
+        # straight through, and `judge_research_proposal`'s own DEFAULT_MODEL
+        # cannot fill an explicitly-empty argument — so a caller that
+        # constructs this node directly (the review app does) would have sent
+        # an empty model to a paid judge.
+        model: str = DEFAULT_MODEL,
         reasoning_effort: str = "medium",
         out_dir: Path | None = None,
         queue_csv: Path | None = None,
