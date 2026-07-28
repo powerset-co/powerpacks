@@ -1,50 +1,41 @@
 #!/usr/bin/env python3
 """Gmail import helpers shared across the importer and its step modules.
 
-Discovery-artifact collection (`gmail_artifacts_from_discovery`), unresolved
-contact materialization (`gmail_candidate_people`), and two tiny cross-cutting things the
-`importer.py` orchestrator and both `steps/` modules lean on:
-`GMAIL_IMPORT_PREFIX` (the stderr progress tag they hand to
-`common.proc.emit_progress`) and `artifact_dir_from_state` (the
-intermediate-artifact directory).
+The boundary parser (`discovery_from_manifest` -> `GmailDiscovery`), the
+candidate-people materializer (`candidate_people`), and `GMAIL_IMPORT_PREFIX`
+(the stderr progress tag handed to `common.proc.emit_progress`).
 
-Free and local: apply the shared identity directory to the discovered Gmail
-queues, materialize `import/gmail/people.csv`, and write the still-unresolved
-contacts to `import/gmail/candidates.csv` for the deep-context processing
-layer, which owns ALL resolution and enrichment: stored legacy resolutions
-migrate into overrides/review.csv via `bin/deep-context migrate-legacy` (the
-central source of truth the fan-in and the review flow read); new lookups run
-through deep-context's judged, budget-gated stages.
+Everything crossing into this stage is parsed HERE, once, into frozen
+dataclasses; downstream code takes typed values and never re-defends. Children
+with an invalid/missing people CSV are reported on `GmailDiscovery.invalid`
+instead of being silently dropped.
 
 Changelog:
-  2026-07-26 (declaration owns the path): `gmail_artifacts_from_discovery` no
-    longer asks the discovery manifest WHERE the stage queue is (a
-    `manifest.get(...) or <hardcoded default>` pair) — the path is gmail
-    discovery's declared output, imported as `GMAIL_STAGE_QUEUE_CSV`, and the
-    manifest it reads is `GMAIL_STAGE_MANIFEST_JSON` for the same reason. Both are
-    keyword parameters defaulting to those declarations, so a caller runs it
-    against its own directory instead of patching `DEFAULT_BASE_DIR` (which this
-    module no longer imports). The `gmail_contacts_csv` artifact key went with
-    `contacts.csv` itself; it had zero readers.
-  2026-07-25 (declared contract): added `gmail_account_queue_records` /
-    `gmail_stage_queue_csv`, the two named readers for the artifact keys that
-    differ by one letter (`..._csvs` vs `..._csv`). Every caller now goes through
-    them instead of guarding on a literal.
+  2026-07-28 (parse at the boundary): `gmail_artifacts_from_discovery`'s
+    untyped artifacts dict became `GmailDiscovery` (frozen dataclasses,
+    accounts pre-sorted). The one-letter-apart artifact keys and their
+    accessors (`gmail_account_queue_records` / `gmail_stage_queue_csv`) are
+    gone — a typed field cannot be confused with its sibling.
+    `gmail_candidate_people` became `candidate_people` over explicit path
+    lists; `artifact_dir_from_state` died with the state blob.
+  2026-07-26 (declaration owns the path): the parser does not ask the manifest
+    WHERE the stage queue is — both fixed paths default to gmail discovery's
+    DECLARED constants (`GMAIL_STAGE_QUEUE_CSV`, `GMAIL_STAGE_MANIFEST_JSON`),
+    imported from it. Both are keyword parameters so a caller (a test) runs it
+    against its own directory instead of patching a module global.
   2026-07-24 (dedup): the local `emit_progress` wrapper was deleted — it only
     bound a prefix onto `common.proc.emit_progress`, which already takes one.
     Callers import that function directly and pass `GMAIL_IMPORT_PREFIX`.
   2026-07-23 (steps split): emit_progress + artifact_dir_from_state moved here
     from the old import_steps.py so the importer and both steps/ modules share
     one home instead of the file-loaded module owning them.
-  2026-07-23 (audit):
-    - One upfront repo-root path bootstrap replaced the duplicated try/except
-      import block.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +49,6 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.schemas.candidates_schema import candidate_key_for, normalize_candidate_row  # noqa: E402
 from packs.ingestion.schemas.people_schema import normalize_people_row  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
-from packs.ingestion.primitives.common.paths import DEFAULT_DISCOVER_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     read_csv_rows,
     source_slug,
@@ -73,35 +63,45 @@ from packs.ingestion.primitives.discover.gmail.discover import (  # noqa: E402
 # "write a progress line" behavior — this vertical owns only its prefix.
 GMAIL_IMPORT_PREFIX = "[gmail-import]"
 
-# These two artifact keys differ by ONE LETTER and mean different things. Read
-# them through the accessors below, never by literal, so no caller can guard on
-# one while meaning the other.
-#   ..._csvs (plural)  the list of PER-ACCOUNT queue records the import iterates,
-#                      each {account_email, queue_csv, people_csv, slug}. Only
-#                      accounts whose people.csv passed the schema check appear.
-#   ..._csv (singular) the ONE stage-level merged queue path gmail discovery
-#                      wrote. It exists even when every per-account record was
-#                      rejected — which is exactly the case the skip reason
-#                      `gmail_discovery_missing_per_account_people_csv` names.
-GMAIL_ACCOUNT_QUEUE_RECORDS_KEY = "gmail_linkedin_resolution_queue_csvs"
-GMAIL_STAGE_QUEUE_CSV_KEY = "gmail_linkedin_resolution_queue_csv"
+
+@dataclass(frozen=True)
+class GmailAccount:
+    """One discovery account whose people.csv passed the schema check.
+
+    `queue_csv` is "" for an account that produced a valid people.csv but no
+    LinkedIn queue on disk — such accounts still feed the no-resolutions
+    people merge."""
+
+    email: str
+    slug: str
+    queue_csv: str
+    people_csv: str
 
 
-def gmail_account_queue_records(artifacts: dict[str, Any]) -> list[dict[str, Any]]:
-    """The PER-ACCOUNT queue records (plural key). Empty means no account survived
-    discovery's schema check, not that discovery produced nothing."""
-    records = artifacts.get(GMAIL_ACCOUNT_QUEUE_RECORDS_KEY) or []
-    return [record for record in records if isinstance(record, dict)]
+@dataclass(frozen=True)
+class InvalidAccount:
+    """A discovery child whose people.csv failed the schema check — reported,
+    never silently dropped."""
+
+    email: str
+    people_csv: str
+    queue_csv: str
+    reason: str
 
 
-def gmail_stage_queue_csv(artifacts: dict[str, Any]) -> str:
-    """The STAGE-level merged queue path (singular key), "" when discovery wrote none."""
-    return str(artifacts.get(GMAIL_STAGE_QUEUE_CSV_KEY) or "")
+@dataclass(frozen=True)
+class GmailDiscovery:
+    """Everything the import takes from gmail discovery, parsed once.
 
+    `accounts` (queue + valid people.csv) is what the import iterates;
+    `people_accounts` (valid people.csv, queue optional) is the superset the
+    no-resolutions people merge preserves. Both are pre-sorted by
+    (email, slug) — account order is deterministic from here on."""
 
-def artifact_dir_from_state(state: dict[str, Any]) -> Path:
-    """Directory the import writes intermediate artifacts into."""
-    return Path(str(state.get("artifact_dir") or DEFAULT_DISCOVER_DIR))
+    stage_queue_csv: str
+    accounts: tuple[GmailAccount, ...]
+    people_accounts: tuple[GmailAccount, ...]
+    invalid: tuple[InvalidAccount, ...]
 
 
 def _child_artifacts(child: dict[str, Any]) -> dict[str, Any]:
@@ -135,63 +135,62 @@ def _valid_gmail_people_csv(path_text: Any) -> bool:
     return "primary_email" in fields and "interaction_counts" in fields
 
 
-def gmail_artifacts_from_discovery(
+def _account_sort_key(account: GmailAccount) -> str:
+    return account.email or account.slug or account.people_csv or account.queue_csv
+
+
+def discovery_from_manifest(
     *,
     manifest_json: Path | None = None,
     queue_csv: Path | None = None,
-) -> dict[str, Any]:
-    """Collect the import's inputs from the gmail DISCOVERY manifest.
+) -> GmailDiscovery:
+    """Parse the gmail DISCOVERY manifest into `GmailDiscovery` — the stage's
+    one boundary.
 
     The manifest is read for ONE thing: the per-account children (which accounts
     discovery ran, and where each one's queue/people CSV landed). It is not asked
     where anything IS — both fixed paths default to gmail discovery's DECLARED
     ones, imported from it, so the two stages name one string each and a manifest
-    written by an older version cannot point this import at a different file. The
-    two parameters exist so a caller (a test) can run this against its own
-    directory without patching a module global. Children with an invalid/missing
-    people CSV are reported under `gmail_invalid_discovery_records` instead of
-    being silently dropped."""
+    written by an older version cannot point this import at a different file."""
     manifest_json = manifest_json or Path(GMAIL_STAGE_MANIFEST_JSON)
     queue_csv = queue_csv or Path(GMAIL_STAGE_QUEUE_CSV)
     manifest = read_json(manifest_json, {}) or {}
-    artifacts: dict[str, Any] = {}
-    if queue_csv.exists():
-        artifacts[GMAIL_STAGE_QUEUE_CSV_KEY] = str(queue_csv)
-    queue_records: list[dict[str, Any]] = []
-    people_records: list[dict[str, Any]] = []
-    invalid_records: list[dict[str, Any]] = []
+    stage_queue_csv = str(queue_csv) if queue_csv.exists() else ""
+    accounts: list[GmailAccount] = []
+    people_accounts: list[GmailAccount] = []
+    invalid: list[InvalidAccount] = []
     for child in manifest.get("children") or []:
         if not isinstance(child, dict):
             continue
-        account_email = str(child.get("account_email") or "")
-        child_artifacts = _child_artifacts(child)
-        queue_csv = child_artifacts.get("linkedin_resolution_queue_csv")
-        people_csv = child_artifacts.get("people_csv")
-        slug = source_slug(account_email or "gmail")
-        valid_people = _valid_gmail_people_csv(people_csv)
-        if valid_people:
-            people_records.append({"account_email": account_email, "people_csv": people_csv, "slug": slug})
-        elif people_csv:
-            invalid_records.append({
-                "account_email": account_email,
-                "people_csv": people_csv,
-                "queue_csv": queue_csv or "",
-                "reason": "missing_people_schema_or_interaction_counts",
-            })
-        if queue_csv and Path(str(queue_csv)).exists() and valid_people:
-            queue_records.append({
-                "account_email": account_email,
-                "queue_csv": queue_csv,
-                "people_csv": people_csv,
-                "slug": slug,
-            })
-    if queue_records:
-        artifacts[GMAIL_ACCOUNT_QUEUE_RECORDS_KEY] = queue_records
-    if people_records:
-        artifacts["gmail_people_records"] = people_records
-    if invalid_records:
-        artifacts["gmail_invalid_discovery_records"] = invalid_records
-    return artifacts
+        email = str(child.get("account_email") or "")
+        artifacts = _child_artifacts(child)
+        child_queue = str(artifacts.get("linkedin_resolution_queue_csv") or "")
+        people_csv = str(artifacts.get("people_csv") or "")
+        slug = source_slug(email or "gmail")
+        if not _valid_gmail_people_csv(people_csv):
+            if people_csv:
+                invalid.append(InvalidAccount(
+                    email=email,
+                    people_csv=people_csv,
+                    queue_csv=child_queue,
+                    reason="missing_people_schema_or_interaction_counts",
+                ))
+            continue
+        account = GmailAccount(
+            email=email,
+            slug=slug,
+            queue_csv=child_queue if child_queue and Path(child_queue).exists() else "",
+            people_csv=people_csv,
+        )
+        people_accounts.append(account)
+        if account.queue_csv:
+            accounts.append(account)
+    return GmailDiscovery(
+        stage_queue_csv=stage_queue_csv,
+        accounts=tuple(sorted(accounts, key=_account_sort_key)),
+        people_accounts=tuple(sorted(people_accounts, key=_account_sort_key)),
+        invalid=tuple(invalid),
+    )
 
 
 def queue_row_to_candidate(row: dict[str, str], *, cached_negative: bool) -> dict[str, str] | None:
@@ -229,20 +228,18 @@ def queue_row_to_candidate(row: dict[str, str], *, cached_negative: bool) -> dic
     return normalize_candidate_row(candidate)
 
 
-def gmail_candidate_people(artifacts: dict[str, Any]) -> dict[str, Any]:
-    """Return unresolved Gmail contacts as ordinary no-LinkedIn people rows."""
+def candidate_people(unresolved_csvs: list[str], cached_negative_csvs: list[str]) -> dict[str, Any]:
+    """Return unresolved Gmail contacts as ordinary no-LinkedIn people rows.
+
+    Two passes in order — plain unresolved first, then cached-negative — so a
+    contact present in both keeps the plain-unresolved evidence (first wins)."""
     by_key: dict[str, dict[str, str]] = {}
     skipped = {"no_email": 0, "duplicate_email": 0}
-    groups = (
-        (artifacts.get("gmail_unresolved_linkedin_resolution_queue_csvs") or [], False),
-        (artifacts.get("gmail_cached_negative_linkedin_resolution_queue_csvs") or [], True),
-    )
-    for records, cached_negative in groups:
-        for record in records:
-            if not isinstance(record, dict) or not record.get("queue_csv"):
-                continue
-            queue_path = Path(str(record["queue_csv"]))
-            if not queue_path.exists():
+    groups = ((unresolved_csvs, False), (cached_negative_csvs, True))
+    for paths, cached_negative in groups:
+        for path_text in paths:
+            queue_path = Path(str(path_text or ""))
+            if not path_text or not queue_path.exists():
                 continue
             for row in read_csv_rows(queue_path)[1]:
                 candidate = queue_row_to_candidate(row, cached_negative=cached_negative)

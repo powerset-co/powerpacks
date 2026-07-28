@@ -81,15 +81,7 @@ class GmailCandidatesTests(unittest.TestCase):
                 {"handle": "b@x.com", "primary_email": "b@x.com", "full_name": "Bob Brown", "total_messages": "5"},
                 {"handle": "c@x.com", "primary_email": "c@x.com", "full_name": "Cara Cole", "total_messages": "1"},
             ])
-            artifacts = {
-                "gmail_unresolved_linkedin_resolution_queue_csvs": [
-                    {"queue_csv": str(unresolved), "account_email": "me@gmail.com"},
-                ],
-                "gmail_cached_negative_linkedin_resolution_queue_csvs": [
-                    {"queue_csv": str(negative), "account_email": "me@gmail.com"},
-                ],
-            }
-            result = gmail_import_util.gmail_candidate_people(artifacts)
+            result = gmail_import_util.candidate_people([str(unresolved)], [str(negative)])
             self.assertEqual(result["candidates"], 3)
             self.assertEqual(result["skipped"], {"no_email": 0, "duplicate_email": 1})
             by_key = {row["id"]: row for row in result["people"]}
@@ -135,22 +127,19 @@ class ImportContactsQualityTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            artifacts = gmail_import_util.gmail_artifacts_from_discovery(
+            discovery = gmail_import_util.discovery_from_manifest(
                 manifest_json=discover_gmail / "manifest.json", queue_csv=queue,
             )
 
-            self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csv"], str(queue))
-            self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csvs"], [{
-                "account_email": "operator@example.com",
-                "queue_csv": str(account_queue),
-                "people_csv": str(account_people),
-                "slug": "operator-example.com",
-            }])
-            self.assertEqual(artifacts["gmail_people_records"], [{
-                "account_email": "operator@example.com",
-                "people_csv": str(account_people),
-                "slug": "operator-example.com",
-            }])
+            self.assertEqual(discovery.stage_queue_csv, str(queue))
+            self.assertEqual(discovery.accounts, (gmail_import_util.GmailAccount(
+                email="operator@example.com",
+                slug="operator-example.com",
+                queue_csv=str(account_queue),
+                people_csv=str(account_people),
+            ),))
+            self.assertEqual(discovery.people_accounts, discovery.accounts)
+            self.assertEqual(discovery.invalid, ())
 
     def test_gmail_import_rejects_stale_child_people_without_counts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -174,13 +163,13 @@ class ImportContactsQualityTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            artifacts = gmail_import_util.gmail_artifacts_from_discovery(
+            discovery = gmail_import_util.discovery_from_manifest(
                 manifest_json=discover_gmail / "manifest.json", queue_csv=queue,
             )
 
-            self.assertEqual(artifacts["gmail_linkedin_resolution_queue_csv"], str(queue))
-            self.assertNotIn("gmail_linkedin_resolution_queue_csvs", artifacts)
-            self.assertEqual(artifacts["gmail_invalid_discovery_records"][0]["reason"], "missing_people_schema_or_interaction_counts")
+            self.assertEqual(discovery.stage_queue_csv, str(queue))
+            self.assertEqual(discovery.accounts, ())
+            self.assertEqual(discovery.invalid[0].reason, "missing_people_schema_or_interaction_counts")
 
     def test_gmail_import_removes_legacy_ledger_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -191,9 +180,12 @@ class ImportContactsQualityTests(unittest.TestCase):
             (import_dir / "ledger.json").write_text('{"status": "completed"}', encoding="utf-8")
             args = gmail_import.build_parser().parse_args(["run"])
 
+            empty_discovery = gmail_import_util.GmailDiscovery(
+                stage_queue_csv="", accounts=(), people_accounts=(), invalid=(),
+            )
             with mock.patch.object(gmail_import, "DEFAULT_IMPORT_DIR", import_root):
                 with mock.patch.object(gmail_import, "source_import_dir", return_value=import_dir):
-                    with mock.patch.object(gmail_import, "gmail_artifacts_from_discovery", return_value={}):
+                    with mock.patch.object(gmail_import, "discovery_from_manifest", return_value=empty_discovery):
                         payload = gmail_import.GmailImport(
                             args=args,
                             contract=gmail_import.GMAIL_IMPORT_CONTRACT,
