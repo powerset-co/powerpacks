@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -253,16 +254,56 @@ def worth_selection_from_parents(
     }
 
 
+# Single-slot memo for the selection digest, keyed by the stats of the files the
+# digest is derived from — the same four-file invariant the server's
+# input_signature codifies ("facts/dossiers are fixed before review"), plus the
+# review manifest whose people_revision the digest embeds. Deliberately EXCLUDES
+# ENRICH_MANIFEST: a running enrichment job heartbeats into it, and this
+# function sits on the 1 Hz /api/status poll path — without the memo every poll
+# rebuilt the full parent model (measured 3.3s/poll on an 8,440-person store;
+# six unguarded browser polls in flight slowed the in-process job 4.2x).
+_selection_memo: tuple[tuple[tuple[str, int, int], ...], dict[str, Any]] | None = None
+# Concurrent first-misses must not stampede into parallel full-model rebuilds
+# (six blocked pollers once meant six concurrent rebuilds); one builds, the
+# rest wait and hit.
+_selection_lock = threading.Lock()
+
+
+def _selection_signature(manifest_path: Path) -> tuple[tuple[str, int, int], ...]:
+    """Cheap invalidation key: (path, mtime_ns, size) of the digest's inputs."""
+    values = []
+    for path in (VERDICTS_JSONL, LINKEDIN_OVERRIDES_CSV, SYNTHETIC_PEOPLE_CSV,
+                 DEFAULT_PEOPLE_CSV, manifest_path):
+        try:
+            stat = Path(path).stat()
+            values.append((str(path), stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            values.append((str(path), 0, 0))
+    return tuple(values)
+
+
 def current_worth_selection(*, manifest_path: Path = REVIEW_MANIFEST) -> dict[str, Any]:
     """The one authoritative People-worth selection digest, built from the live review
     parents. Both the review status and the enrichment manifest must stamp THIS value so
     their sha256 can never drift: a candidate promoted to a verified LinkedIn parent (e.g.
     via a retarget/verify) leaves the worth pool here for both sides at once, instead of
-    the enrichment side re-deriving the set from candidate files and disagreeing by one."""
-    parents = _all_review_parents(
-        VERDICTS_JSONL, LINKEDIN_OVERRIDES_CSV, SYNTHETIC_PEOPLE_CSV, FACTS_DIR,
-        DEFAULT_PEOPLE_CSV, PARENTS_DIR, DOSSIER_DIR, PROFILE_CACHE_DIR)
-    return worth_selection_from_parents(parents, manifest_path=manifest_path)
+    the enrichment side re-deriving the set from candidate files and disagreeing by one.
+
+    Memoized on the input files' stats (see _selection_memo): any write to the
+    review inputs rebuilds, everything else answers from memory in microseconds."""
+    global _selection_memo
+    signature = _selection_signature(manifest_path)
+    if _selection_memo and _selection_memo[0] == signature:
+        return dict(_selection_memo[1])
+    with _selection_lock:
+        if _selection_memo and _selection_memo[0] == signature:
+            return dict(_selection_memo[1])
+        parents = _all_review_parents(
+            VERDICTS_JSONL, LINKEDIN_OVERRIDES_CSV, SYNTHETIC_PEOPLE_CSV, FACTS_DIR,
+            DEFAULT_PEOPLE_CSV, PARENTS_DIR, DOSSIER_DIR, PROFILE_CACHE_DIR)
+        selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
+        _selection_memo = (signature, selection)
+    return dict(selection)
 
 
 def approve_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,

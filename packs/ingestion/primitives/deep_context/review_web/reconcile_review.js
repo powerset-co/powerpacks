@@ -1006,11 +1006,19 @@ function hasIdentityDraft() {
   );
 }
 
+let pollInFlight = false;
+
 async function pollFileState() {
+  // One request in flight, ever: setInterval keeps firing while a slow
+  // /api/status response is pending, and unguarded polls pile up to the
+  // browser's connection cap — six concurrent status requests once starved an
+  // in-process enrichment job 4x on a large store.
+  if (pollInFlight) return;
   if (document.visibilityState !== "visible") return;
   if (completingStage) return; // a stage-complete navigation is in flight
   const currentStage = document.body.dataset.stage || "";
   if (!observesExternalUpdates) return;
+  pollInFlight = true;
   try {
     const response = await fetch("/api/status", { cache: "no-store" });
     if (!response.ok) return;
@@ -1040,6 +1048,8 @@ async function pollFileState() {
     }
   } catch {
     // The local observer may be restarting; the next poll will retry.
+  } finally {
+    pollInFlight = false;
   }
 }
 

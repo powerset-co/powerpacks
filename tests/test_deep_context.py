@@ -3462,6 +3462,51 @@ class TestReviewWeb(unittest.TestCase):
                     synthetic_path=Path(dd) / "synthetic.csv",
                 )
 
+    def test_current_worth_selection_memoizes_on_input_stats(self):
+        # The digest sits on the 1 Hz /api/status poll path: it must answer from
+        # the memo unless one of ITS input files changed — an enrichment-manifest
+        # heartbeat (any unrelated write) must never trigger a model rebuild.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            review = base / "review.csv"
+            review.write_text("a\n", encoding="utf-8")
+            verdicts = base / "verdicts.jsonl"
+            verdicts.write_text("", encoding="utf-8")
+            synthetic = base / "synthetic.csv"
+            synthetic.write_text("", encoding="utf-8")
+            people = base / "people.csv"
+            people.write_text("", encoding="utf-8")
+            manifest = base / "review-manifest.json"
+            manifest.write_text("{}", encoding="utf-8")
+            heartbeat = base / "enrich-manifest.json"
+            calls = {"n": 0}
+
+            def fake_parents(*_args, **_kwargs):
+                calls["n"] += 1
+                return []
+
+            with mock.patch.object(web_workflow, "VERDICTS_JSONL", verdicts), \
+                 mock.patch.object(web_workflow, "LINKEDIN_OVERRIDES_CSV", review), \
+                 mock.patch.object(web_workflow, "SYNTHETIC_PEOPLE_CSV", synthetic), \
+                 mock.patch.object(web_workflow, "DEFAULT_PEOPLE_CSV", people), \
+                 mock.patch.object(web_workflow, "_all_review_parents", fake_parents), \
+                 mock.patch.object(web_workflow, "_selection_memo", None):
+                first = web_workflow.current_worth_selection(manifest_path=manifest)
+                second = web_workflow.current_worth_selection(manifest_path=manifest)
+                self.assertEqual(calls["n"], 1)
+                self.assertEqual(first, second)
+                second["total"] = 999  # returned copies must not alias the memo
+                self.assertEqual(
+                    web_workflow.current_worth_selection(manifest_path=manifest)["total"], 0)
+
+                heartbeat.write_text('{"phase": "judging_retargets"}', encoding="utf-8")
+                web_workflow.current_worth_selection(manifest_path=manifest)
+                self.assertEqual(calls["n"], 1)
+
+                review.write_text("a,b\n", encoding="utf-8")
+                web_workflow.current_worth_selection(manifest_path=manifest)
+                self.assertEqual(calls["n"], 2)
+
     def test_unresolved_maybe_stays_out_of_lookup_after_people_completion(self):
         maybe = self._maybe_parent()
         yes = json.loads(json.dumps(maybe))
