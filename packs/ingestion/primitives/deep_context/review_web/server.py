@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import threading
+import time
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -42,6 +43,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
+from packs.ingestion.primitives.imports.common import write_manifest
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_worth_card, worth_review_body
@@ -67,22 +69,47 @@ ENRICH_SCOPE = {"include_candidates": True, "include_plausibly_absent": True}
 _job_lock = threading.Lock()
 
 
-def _mark_enrichment_failed(error: str) -> None:
+def _read_enrichment_payload() -> dict[str, Any]:
+    try:
+        payload = json.loads(ENRICH_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_enrichment_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(payload)
+    payload.pop("updated_at", None)
+    payload.pop("created_at", None)
+    return write_manifest(
+        ENRICH_MANIFEST.parent.name,
+        payload,
+        import_dir=ENRICH_MANIFEST.parent.parent,
+    )
+
+
+def _job_timing(started_at: str, started: float) -> dict[str, Any]:
+    return {
+        "started_at": started_at,
+        "finished_at": now_iso(),
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
+
+
+def _mark_enrichment_failed(error: str, *,
+                            started_at: str | None = None,
+                            started: float | None = None) -> None:
     """Best-effort: surface a job crash in the fixed enrichment manifest so
     workflow_status turns it into retry_enrichment instead of a silent stall."""
-    try:
-        existing = json.loads(ENRICH_MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        existing = {}
-    if not isinstance(existing, dict):
-        existing = {}
+    existing = _read_enrichment_payload()
     if existing.get("status") == "failed" and existing.get("error") == error[:500]:
         return  # already surfaced; a repeat write would churn the UI poll per retry
     existing.update({"stage": "enrich", "status": "failed", "error": error[:500],
                      "updated_at": now_iso()})
+    if started_at is not None and started is not None:
+        existing["timing"] = _job_timing(started_at, started)
     try:
-        ENRICH_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-        ENRICH_MANIFEST.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        _write_enrichment_payload(existing)
     except OSError:
         pass
 
@@ -91,14 +118,24 @@ def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
     if not _job_lock.acquire(blocking=False):
         return  # one job at a time; the durable manifests re-trigger any rerun
 
+    started = time.monotonic()
+    started_at = now_iso()
+
     def runner() -> None:
         try:
             steps()
+            existing = _read_enrichment_payload()
+            existing["timing"] = _job_timing(started_at, started)
+            _write_enrichment_payload(existing)
         # BaseException on purpose: the primitives raise SystemExit on their
         # guard paths, which `except Exception` misses — the thread then died
         # silently and the manifest stranded mid-state with no failure marker.
         except BaseException as exc:  # the manifest is the UI's/agent's error surface
-            _mark_enrichment_failed(f"{name}: {type(exc).__name__}: {exc}")
+            _mark_enrichment_failed(
+                f"{name}: {type(exc).__name__}: {exc}",
+                started_at=started_at,
+                started=started,
+            )
         finally:
             _job_lock.release()
 
@@ -110,7 +147,13 @@ def _post_enrichment_chain() -> None:
     AssembleSyntheticProfile().run()
     # `fetch=True` IS the spend: the profile cache misses are hydrated here, on
     # the same authorization that started this chain (research completed).
-    PrefetchProfiles(fetch=True).run()
+    prefetch = PrefetchProfiles(fetch=True).run()
+    prefetch_timing = prefetch.to_payload().get("timing")
+    if isinstance(prefetch_timing, dict):
+        existing = _read_enrichment_payload()
+        steps = existing.get("steps") if isinstance(existing.get("steps"), dict) else {}
+        existing["steps"] = {**steps, "profile_prefetch": prefetch_timing}
+        _write_enrichment_payload(existing)
 
 
 def _free_enrichment_steps() -> None:
@@ -135,13 +178,21 @@ def start_free_enrichment_job() -> None:
 
 def start_approved_enrichment_job(budget: float) -> None:
     """The Approve $X click IS the user's spend approval: run exactly that."""
-    def steps() -> None:
-        # The budget is rounded to cents exactly as the argv form did, so the
-        # primitive's gate compares the same ceiling the UI approved.
-        ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=round(budget, 2)).run()
-        _post_enrichment_chain()
 
-    _run_pipeline_job("approved-enrichment", steps)
+    _run_pipeline_job(
+        "approved-enrichment",
+        lambda: _approved_enrichment_steps(budget),
+    )
+
+
+def _approved_enrichment_steps(budget: float) -> None:
+    # The budget is rounded to cents exactly as the argv form did, so the
+    # primitive's gate compares the same ceiling the UI approved.
+    ReconcileDeepResearch(
+        **ENRICH_SCOPE, approve=True, budget=round(budget, 2)).run()
+    enrichment = read_enrichment_manifest(selection=current_worth_selection())
+    if enrichment.get("status") == STATUS_RESEARCH_COMPLETE:
+        _post_enrichment_chain()
 
 
 def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, dossier_dir: Path,

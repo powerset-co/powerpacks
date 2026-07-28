@@ -28,9 +28,11 @@ declarations — `input_artifacts` is what the node read, `output_artifacts` wha
 wrote, both keyed by declared path, and each entry of a `row_model` artifact
 carries `rows`. That is what a consumer reads instead of opening an output file to
 count it (`imports/status.py`), so a file that existed only to be counted can be
-deleted. Nothing here caches, ids, or sequences a run: the declaration is
-compile-time and the only durable artifacts stay each stage's outputs plus its one
-manifest.json.
+deleted. The template also owns the typed top-level `timing` block on every
+outcome: wall-clock `started_at` / `finished_at` bounds plus a monotonic
+`duration_seconds`. Nothing here caches, ids, or sequences a run: the declaration
+is compile-time and the only durable artifacts stay each stage's outputs plus its
+one manifest.json.
 
 Flow (Node.run):
   declared inputs readable? -> no  -> typed NotReady payload (never an exception)
@@ -41,6 +43,9 @@ Flow (Node.run):
                                (the process still exits nonzero)
 
 Changelog:
+  2026-07-27 (template timing): every completed, not-ready, and failed Node
+    outcome carries the same typed top-level timing block. Wall-clock bounds use
+    the shared JSON timestamp helper; elapsed time uses the monotonic clock.
   2026-07-27 (deep-context): `STATUS_NEEDS_APPROVAL` — the deep-context paid
     stages (synthesize, cluster, reconcile, deep-research, prefetch) gate spend
     by returning a typed payload instead of exiting mid-template; `run()` already
@@ -82,6 +87,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -93,7 +99,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import read_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import now_iso, read_json  # noqa: E402
 from packs.ingestion.primitives.common.manifests import artifact_fingerprint, write_stage_manifest  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     PEOPLE_SCHEMA_COLUMNS,
@@ -116,6 +122,16 @@ class ContractError(RuntimeError):
     """A declaration was violated at run time (missing output, drifted header)."""
 
 
+class StageTiming(BaseModel):
+    """The template-owned wall-clock bounds and monotonic elapsed time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    started_at: str
+    finished_at: str
+    duration_seconds: float
+
+
 class StageManifest(BaseModel):
     """Base for a stage's TYPED manifest payload — the pydantic successor to
     `StagePayload`. `extra="forbid"` is the point: a stage cannot invent a field
@@ -126,6 +142,7 @@ class StageManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = ""
+    timing: StageTiming | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True)
@@ -330,6 +347,8 @@ class Node(ABC):
         (a corrupt msgvault db raises `SystemExit` from `MsgvaultStore.connect`,
         which nothing below catches), and the caller must still see the traceback
         and a nonzero exit."""
+        started_at = now_iso()
+        started_clock = time.monotonic()
         missing = [item.path for item in self.resolved(self.inputs) if item.required and not _readable(item.path)]
         if missing:
             payload: StageManifest = NotReady(stage=self.name, missing_inputs=tuple(missing))
@@ -339,10 +358,28 @@ class Node(ABC):
                 if payload.status == STATUS_COMPLETED:
                     self.verify_outputs()
             except (Exception, SystemExit) as exc:
-                self._write(Failed(stage=self.name, error=str(exc) or type(exc).__name__))
+                self._write(Failed(
+                    stage=self.name,
+                    error=str(exc) or type(exc).__name__,
+                    timing=self._timing(started_at, started_clock),
+                ))
                 raise
+        # Custom manifest writers may have to persist inside execute() (the import
+        # stage's fingerprint-aware writer does). Preserve the typed timing they
+        # attached there so the returned payload matches the durable manifest.
+        if payload.timing is None:
+            payload.timing = self._timing(started_at, started_clock)
         self._write(payload)
         return payload
+
+    @staticmethod
+    def _timing(started_at: str, started_clock: float) -> StageTiming:
+        """Finish one run with wall-clock timestamps and monotonic duration."""
+        return StageTiming(
+            started_at=started_at,
+            finished_at=now_iso(),
+            duration_seconds=round(time.monotonic() - started_clock, 3),
+        )
 
     def verify_outputs(self) -> None:
         """Every declared output exists and its header still matches its model."""

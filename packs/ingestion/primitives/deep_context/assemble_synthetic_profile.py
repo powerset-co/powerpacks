@@ -460,6 +460,7 @@ class AssembleSyntheticProfile(Node):
 
     def execute(self) -> AssembleSyntheticProfileManifest:
         started = time.monotonic()
+        started_at = now_iso()
         research_dir = self.research_dir
         queue: dict[str, dict[str, str]] = {}
         qpath = self.queue_csv
@@ -657,6 +658,13 @@ class AssembleSyntheticProfile(Node):
                     existing.pop(other, None)
 
         write_rows(self.out, existing)
+        finished_at = now_iso()
+        duration_seconds = round(time.monotonic() - started, 3)
+        assembly_timing = {
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "duration_seconds": duration_seconds,
+        }
         result = AssembleSyntheticProfileManifest(
             status="completed",
             built=built, auto_approved=auto, pending_review=pending,
@@ -665,7 +673,8 @@ class AssembleSyntheticProfile(Node):
             pruned_stale_machine_rows=pruned_stale,
             collapsed_merged_parents=collapsed,
             total_rows=len(existing),
-            out=str(self.out), elapsed_ms=int((time.monotonic() - started) * 1000),
+            out=str(self.out), elapsed_ms=int(duration_seconds * 1000),
+            timing=assembly_timing,
         )
         # ANOTHER node's manifest: merge-update deep_research's ENRICH_MANIFEST
         # receipt to the chain's terminal "completed". Stays here, not in the
@@ -685,11 +694,29 @@ class AssembleSyntheticProfile(Node):
                 current = json.loads(manifest_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 current = {}
+            current_timing = (
+                current.get("timing") if isinstance(current.get("timing"), dict) else {}
+            )
+            current_steps = (
+                current.get("steps") if isinstance(current.get("steps"), dict) else {}
+            )
+            steps = {**current_steps, "assembly": assembly_timing}
+            total_duration = round(sum(
+                float(step.get("duration_seconds") or 0)
+                for step in steps.values()
+                if isinstance(step, dict)
+            ), 3)
             receipt = {
                 **current,
                 "stage": "enrich",
                 "status": "completed",
                 "assembly": result.to_payload(),
+                "timing": {
+                    "started_at": str(current_timing.get("started_at") or started_at),
+                    "finished_at": finished_at,
+                    "duration_seconds": total_duration,
+                },
+                "steps": steps,
                 "outputs": {
                     **(current.get("outputs") or {}),
                     "synthetic_people_csv": str(self.out),

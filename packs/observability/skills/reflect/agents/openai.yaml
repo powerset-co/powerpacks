@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reflect"
+  short_description: "Report anonymized Powerpacks workflow friction"
+  default_prompt: "Use $reflect to send a reporting-only, anonymized review of this Powerpacks workflow."

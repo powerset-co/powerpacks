@@ -47,6 +47,10 @@ class CoreLayoutTests(unittest.TestCase):
             path.name for path in (ROOT / "packs/apollo/skills").iterdir() if path.is_dir()
         )
         self.assertEqual(outbound_pack, ["build-outbound"])
+        observability_pack = sorted(
+            path.name for path in (ROOT / "packs/observability/skills").iterdir() if path.is_dir()
+        )
+        self.assertEqual(observability_pack, ["reflect"])
 
     def test_pack_skills_have_codex_frontmatter(self) -> None:
         for path in sorted((ROOT / "packs").glob("*/skills/*/SKILL.md")):
@@ -90,6 +94,8 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "import-twitter" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "reflect" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "reflect" / "powerpacks" / "bin" / "reflect").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks" / "packs").is_dir())
             self.assertTrue((skills_dir / "search" / "powerpacks" / "pyproject.toml").exists())
             self.assertIn(
@@ -125,6 +131,9 @@ class CoreLayoutTests(unittest.TestCase):
             self.assertTrue((skills_dir / "import-messages" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "setup" / "SKILL.md").exists())
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "reflect" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "reflect" / "agents" / "openai.yaml").exists())
+            self.assertTrue((bundle / "bin" / "reflect").exists())
             self.assertTrue((skills_dir / "powerset" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "import-messages" / "powerpacks").is_symlink())
             self.assertTrue((skills_dir / "setup" / "powerpacks").is_symlink())
@@ -148,12 +157,26 @@ class CoreLayoutTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertTrue((skills_dir / "build-outbound" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "reflect" / "SKILL.md").exists())
+            self.assertTrue((skills_dir / "reflect" / "powerpacks" / "bin" / "reflect").exists())
             self.assertTrue((skills_dir / "build-outbound" / "powerpacks" / "packs" / "apollo").is_dir())
             nested_skill_files = sorted(
                 path.relative_to(skills_dir)
                 for path in skills_dir.glob("*/powerpacks/packs/*/skills/*/SKILL.md")
             )
             self.assertEqual(nested_skill_files, [])
+
+    def test_nanoclaw_adapter_installs_reflect_in_host_and_container(self) -> None:
+        text = (ROOT / "adapters/nanoclaw/install.sh").read_text(encoding="utf-8")
+        source = "$REPO_ROOT/packs/observability/skills/reflect"
+        self.assertIn(
+            f'cp -R "{source}" "$TARGET/.claude/skills/reflect"',
+            text,
+        )
+        self.assertIn(
+            f'cp -R "{source}" "$TARGET/container/skills/reflect"',
+            text,
+        )
 
     def test_powerset_login_skill_uses_api_runtime_key_primitives(self) -> None:
         text = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()

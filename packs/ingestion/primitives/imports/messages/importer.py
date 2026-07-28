@@ -37,6 +37,9 @@ reads OTHER sources' directory rows to decide its own resolutions, so there it
 is a real input.
 
 Changelog:
+  2026-07-27 (manifest timing): constructor-captured wall/monotonic clocks now
+    add the shared typed timing block before the custom import-manifest writer.
+    Manifest-current no-ops still preserve the prior manifest unchanged.
   2026-07-26 (dead minting branch deleted): the `legacy_message_linkedin_id`
     fallback in `contact_row_to_messages_people` was unreachable — the only
     caller (`selected_contacts_people`) guards on a non-empty
@@ -83,6 +86,7 @@ import argparse
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -108,7 +112,7 @@ from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
     normalize_candidate_row,
 )
 from packs.ingestion.primitives.common.contact_fields import phones_from_value  # noqa: E402
-from packs.ingestion.primitives.common.jsonio import emit, unique_strings  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import emit, now_iso, unique_strings  # noqa: E402
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
@@ -131,6 +135,7 @@ from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
     Node,
     PeopleRow,
     StageManifest,
+    StageTiming,
 )
 from packs.ingestion.primitives.imports.common import (  # noqa: E402
     csv_count,
@@ -573,6 +578,8 @@ class MessagesImport(Node):
     manifest = ""
 
     def __init__(self, args: argparse.Namespace) -> None:
+        self._started_at = now_iso()
+        self._started_clock = time.monotonic()
         self.args = args
         self.import_dir = DEFAULT_IMPORT_DIR / self.source
         self.people_csv = self.import_dir / "people.csv"
@@ -616,6 +623,11 @@ class MessagesImport(Node):
     def _manifest(self, payload: MessagesImportManifest) -> MessagesImportManifest:
         """Write this stage's single import manifest, parking the writer's result
         (which may be the unchanged existing manifest) on `self.written`."""
+        payload.timing = StageTiming(
+            started_at=self._started_at,
+            finished_at=now_iso(),
+            duration_seconds=round(time.monotonic() - self._started_clock, 3),
+        )
         self.written = write_manifest(self.source, payload.to_payload(), import_dir=DEFAULT_IMPORT_DIR)
         return payload
 

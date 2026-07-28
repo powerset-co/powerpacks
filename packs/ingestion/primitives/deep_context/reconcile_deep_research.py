@@ -658,6 +658,20 @@ def write_enrichment_manifest(payload: dict[str, Any], path: Path = ENRICH_MANIF
     """
     if path.name != "manifest.json":
         raise ValueError("enrichment manifest path must end in manifest.json")
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    payload = dict(payload)
+    if (
+        "approval" not in payload
+        and payload.get("status") != STATUS_NEEDS_APPROVAL
+        and isinstance(existing.get("approval"), dict)
+        and existing.get("selection") == payload.get("selection")
+    ):
+        payload["approval"] = existing["approval"]
     return write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
 
 
@@ -683,6 +697,8 @@ class ReconcileDeepResearchManifest(StageManifest):
     noop/dry_run/reused/ran/...); the result dict rides on `node.result`."""
     source: str | None = None
     stage: str = "enrich"
+    model: str | None = None
+    reasoning_effort: str | None = None
     counts: dict[str, int] | None = None
     selection: dict[str, Any] | None = None
     eligible: int | None = None
@@ -699,6 +715,8 @@ class ReconcileDeepResearchManifest(StageManifest):
     outputs: dict[str, str] | None = None
     privacy: dict[str, bool] | None = None
     result_status: str | None = None
+    steps: dict[str, dict[str, Any]] | None = None
+    approval: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -814,6 +832,16 @@ class ReconcileDeepResearch(Node):
 
     def execute(self) -> ReconcileDeepResearchManifest:
         started = time.monotonic()
+        started_at = now_iso()
+        steps: dict[str, dict[str, Any]] = {}
+
+        def finish_step(step_started_at: str, step_started: float) -> dict[str, Any]:
+            return {
+                "started_at": step_started_at,
+                "finished_at": now_iso(),
+                "duration_seconds": round(time.monotonic() - step_started, 3),
+            }
+
         manifest_path = self.manifest_path
         if not math.isfinite(self.budget) or self.budget < 0:
             message = "--budget must be a finite, non-negative USD amount"
@@ -829,8 +857,11 @@ class ReconcileDeepResearch(Node):
                 source=manifest_path.parent.name if manifest_path else None,
                 status=STATUS_FAILED,
                 counts=_manifest_counts(total=0, failed=0),
+                steps=steps,
                 error=message,
             )
+        prepare_started = started
+        prepare_started_at = started_at
         verdicts = list(read_jsonl(self.verdicts_jsonl))
         overrides = load_override_rows(self.overrides_csv)
         resolved_candidates = candidates_resolved_by_existing()
@@ -873,13 +904,32 @@ class ReconcileDeepResearch(Node):
             w = csv.DictWriter(fh, fieldnames=QUEUE_FIELDS)
             w.writeheader()
             w.writerows(queue)
+        steps["prepare_queue"] = finish_step(prepare_started_at, prepare_started)
+
+        def current_approval(status: str) -> dict[str, Any] | None:
+            if status == STATUS_NEEDS_APPROVAL or manifest_path is None:
+                return None
+            try:
+                existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+            if (
+                isinstance(existing, dict)
+                and existing.get("selection") == selection
+                and isinstance(existing.get("approval"), dict)
+            ):
+                return existing["approval"]
+            return None
 
         def receipt_body(status: str, result: dict[str, Any], *, completed: int = 0,
                          failed: int = 0) -> dict[str, Any]:
             """The one receipt shape — the dict `persist()` always wrote."""
+            approval = current_approval(status)
             return {
                 "stage": "enrich",
                 "status": status,
+                "model": self.model or None,
+                "reasoning_effort": self.reasoning_effort or None,
                 "counts": _manifest_counts(
                     total=len(queue), completed=completed, failed=failed),
                 "selection": selection,
@@ -907,6 +957,8 @@ class ReconcileDeepResearch(Node):
                     "paid_provider_called": status in {STATUS_RUNNING, STATUS_RESEARCH_COMPLETE, STATUS_FAILED},
                 },
                 "result_status": result.get("status", ""),
+                "steps": dict(steps),
+                **({"approval": approval} if approval else {}),
             }
 
         def finish(result: dict[str, Any], status: str, *, completed: int = 0,
@@ -933,16 +985,24 @@ class ReconcileDeepResearch(Node):
                     "phase": "judging_retargets", "done": done, "total": total,
                     "counts": _manifest_counts(total=len(queue), completed=reused_completed),
                     "selection": selection,
+                    "steps": dict(steps),
                 }, manifest_path)
 
         def propose() -> dict[str, Any]:
-            return propose_retargets_from_output(
-                self.out_dir, subset, self.overrides_csv,
-                facts_dir=self.facts_dir, raw_dir=self.raw_dir,
-                use_llm=use_llm, owner_block=owner_block,
-                model=self.model or "",
-                effort=self.reasoning_effort or "medium",
-                confirm_threshold=self.confirm_threshold, heartbeat=heartbeat)
+            judge_started = time.monotonic()
+            judge_started_at = now_iso()
+            steps["retarget_judge"] = {"started_at": judge_started_at}
+            try:
+                return propose_retargets_from_output(
+                    self.out_dir, subset, self.overrides_csv,
+                    facts_dir=self.facts_dir, raw_dir=self.raw_dir,
+                    use_llm=use_llm, owner_block=owner_block,
+                    model=self.model or "",
+                    effort=self.reasoning_effort or "medium",
+                    confirm_threshold=self.confirm_threshold, heartbeat=heartbeat)
+            finally:
+                steps["retarget_judge"] = finish_step(
+                    judge_started_at, judge_started)
 
         if not subset:
             return finish(
@@ -988,6 +1048,9 @@ class ReconcileDeepResearch(Node):
         # take minutes. Keep our own stdout clean for the final JSON manifest.
         print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({self.processor}); "
               "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
+        research_started = time.monotonic()
+        research_started_at = now_iso()
+        steps["research"] = {"started_at": research_started_at}
         # Mid-run receipt: the browser must see "running" while the subprocess works.
         if manifest_path:
             write_enrichment_manifest(
@@ -998,6 +1061,28 @@ class ReconcileDeepResearch(Node):
         if manifest_path:
             cmd.extend(["--manifest", str(manifest_path)])
         proc = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, text=True)
+        child_timing: dict[str, Any] = {}
+        if manifest_path:
+            try:
+                child_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                child_manifest = {}
+            if isinstance(child_manifest, dict):
+                child_steps = (
+                    child_manifest.get("steps")
+                    if isinstance(child_manifest.get("steps"), dict)
+                    else {}
+                )
+                child_timing = (
+                    child_steps.get("research")
+                    if isinstance(child_steps.get("research"), dict)
+                    else {}
+                )
+        steps["research"] = (
+            child_timing
+            if child_timing.get("finished_at")
+            else finish_step(research_started_at, research_started)
+        )
         print(f"[deep-research] research process exited ({proc.returncode}).", file=sys.stderr, flush=True)
         # Propose retargets (pending) for any correct LinkedIn the research found.
         proposals = {"proposed": 0}

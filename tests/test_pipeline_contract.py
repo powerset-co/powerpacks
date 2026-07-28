@@ -2,7 +2,8 @@
 
 Every test here builds a deliberately-broken node (or graph) and asserts the
 failure, plus the two behaviors the contract is supposed to buy: an older CSV with
-fewer columns still reads, and `PeopleRow` reproduces `normalize_people_row`.
+fewer columns still reads, `PeopleRow` reproduces `normalize_people_row`, and
+every Node outcome receives template-owned timing.
 """
 
 from __future__ import annotations
@@ -12,6 +13,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -23,6 +27,7 @@ from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
     Node,
     PeopleRow,
     StageManifest,
+    StageTiming,
     row_model_for,
 )
 from packs.ingestion.primitives.pipeline.graph import check_graph  # noqa: E402
@@ -103,6 +108,53 @@ class DeclarationTests(unittest.TestCase):
 
 
 class RunTemplateTests(unittest.TestCase):
+    def test_timing_model_rejects_extra_fields(self) -> None:
+        with self.assertRaises(ValidationError):
+            StageTiming(
+                started_at="2026-07-27T10:00:00Z",
+                finished_at="2026-07-27T10:00:01Z",
+                duration_seconds=1.0,
+                clock="monotonic",
+            )
+
+    def test_completed_run_returns_and_writes_typed_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            manifest_json = Path(td) / "manifest.json"
+
+            class Timed(Node):
+                name = "timed"
+                inputs = ()
+                outputs = ()
+                payload = _Payload
+                manifest = str(manifest_json)
+
+                def execute(self) -> _Payload:
+                    return _Payload()
+
+            with (
+                patch(
+                    "packs.ingestion.primitives.pipeline.contract.now_iso",
+                    side_effect=["2026-07-27T10:00:00Z", "2026-07-27T10:00:01Z"],
+                ),
+                patch(
+                    "packs.ingestion.primitives.pipeline.contract.time.monotonic",
+                    side_effect=[20.0, 21.2346],
+                ),
+            ):
+                payload = Timed().run()
+
+            expected = {
+                "started_at": "2026-07-27T10:00:00Z",
+                "finished_at": "2026-07-27T10:00:01Z",
+                "duration_seconds": 1.235,
+            }
+            self.assertIsInstance(payload.timing, StageTiming)
+            self.assertEqual(payload.to_payload()["timing"], expected)
+            self.assertEqual(
+                json.loads(manifest_json.read_text(encoding="utf-8"))["timing"],
+                expected,
+            )
+
     def test_undeclared_write_is_caught_as_a_missing_output(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "people.csv"
@@ -167,17 +219,23 @@ class RunTemplateTests(unittest.TestCase):
             self.assertEqual(written["status"], "failed")
             self.assertEqual(written["stage"], "crasher")
             self.assertIn("msgvault database not found", written["error"])
+            self.assertEqual(
+                set(written["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
+            self.assertGreaterEqual(written["timing"]["duration_seconds"], 0)
 
     def test_missing_required_input_is_not_ready_not_an_exception(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "upstream.csv"
+            manifest_json = Path(td) / "manifest.json"
 
             class Waiting(Node):
                 name = "waiting"
                 inputs = (Artifact(path=str(missing), row_model=PeopleRow, external=True),)
                 outputs = ()
                 payload = _Payload
-                manifest = ""
+                manifest = str(manifest_json)
 
                 def execute(self) -> _Payload:
                     raise AssertionError("execute() must not run without its input")
@@ -186,6 +244,13 @@ class RunTemplateTests(unittest.TestCase):
             self.assertEqual(payload.status, "not_ready")
             self.assertEqual(payload.reason, "missing_inputs")
             self.assertEqual(payload.missing_inputs, (str(missing),))
+            self.assertIsInstance(payload.timing, StageTiming)
+            written = json.loads(manifest_json.read_text(encoding="utf-8"))
+            self.assertEqual(written["timing"], payload.to_payload()["timing"])
+            self.assertEqual(
+                set(written["timing"]),
+                {"started_at", "finished_at", "duration_seconds"},
+            )
 
     def test_run_returns_the_typed_payload_not_the_written_manifest(self) -> None:
         # The store of a stage consumes its steps' payloads by attribute
@@ -206,7 +271,8 @@ class RunTemplateTests(unittest.TestCase):
 
             payload = Quiet().run()
             self.assertIsInstance(payload, _Payload)
-            self.assertEqual(payload.to_payload(), {"status": "completed"})
+            self.assertEqual(payload.status, "completed")
+            self.assertIsInstance(payload.timing, StageTiming)
             # The manifest on disk is the one with the stats block.
             self.assertIn("fingerprints", json.loads(manifest_json.read_text(encoding="utf-8")))
 

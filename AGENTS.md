@@ -486,6 +486,22 @@ Routes:
   synthetic profiles, fan-in + Modal index + validate. This is the single
   post-import processing surface; `$deep-setup` is retired →
   `packs/ingestion/skills/deep-context/SKILL.md`
+- `$reflect`, "report this workflow", "send anonymous feedback", review the
+  observed `$setup`, `$import-gmail`, `$import-messages`, or `$deep-context`
+  outcome → `packs/observability/skills/reflect/SKILL.md`
+  This is reporting-only. It reduces the supported workflow's fixed local
+  artifacts into the fixed `.powerpacks/reflect/report.json`,
+  `.powerpacks/reflect/export.json`, and `.powerpacks/reflect/manifest.json`
+  outputs through a strict allowlist. It may report controlled environment
+  metadata such as harness, agent role, model provider/model, reasoning effort,
+  release version/channel, bucketed timing/counts, and normalized statuses.
+  It never sends transcripts, raw manifests, message bodies, contact PII, raw
+  errors, paths, hashes, or identifiers, and it never proposes implementation,
+  writes code or patches, or mutates the workflow it reviews. An authenticated
+  `$reflect` invocation uploads the anonymized export automatically; `--local`
+  never uploads. When signed out, prepare a sanitized GitHub issue preview and
+  ask before creating the issue with `gh`. An upload failure must stay private
+  and report the failure; never fall back to a public GitHub issue.
 - `$clean-slate`, "clean slate", "pipeclean", "start over from scratch" —
   the BIG reset: full derived-state scrub preserving every paid artifact
   (backed up outside the repo, never deleted); the small human-decisions-only
@@ -516,7 +532,10 @@ the primitive blocks/fails or the user asks for implementation details.
   searches, local file reads, scoped `check`/`status` commands, `whoami`,
   `estimate` subcommands, and doctor `run` when it is actually needed by the
   health-check policy). Ask only for spend (LLM calls, Parallel.ai submits,
-  uploads, Docker pulls, browser-based logins, OS installs).
+  uploads, Docker pulls, browser-based logins, OS installs). `$reflect` is the
+  narrow upload exception: invoking it while authenticated is the user's
+  explicit request to submit its allowlisted anonymous export; `--local`
+  disables that upload.
 - Prefer small, inspectable primitives. Dependencies are allowed when they make
   product paths safer or clearer; add them through project metadata and run via
   `uv run --project . ...` so agents use the locked environment.
@@ -538,6 +557,19 @@ the primitive blocks/fails or the user asks for implementation details.
   whole purpose. Output lives gitignored under `.powerpacks/logbook/`; nothing is
   sent anywhere (no LLM, no network). These two skills are the ONLY exceptions —
   every other primitive stays metadata-only.
+- **Reflect reporting safety:** `$reflect` may inspect only the supported
+  `$setup`, `$import-gmail`, `$import-messages`, and `$deep-context` status
+  artifacts, then project individual fields through a strict allowlist. Never
+  serialize or upload a transcript, raw manifest, message body, dossier,
+  free-form error, path, hash, revision, account/contact identifier, or other
+  PII. The remote payload is limited to controlled enums/booleans/versions and
+  bucketed numbers, including optional harness, agent-role, model-provider,
+  model, and reasoning-effort metadata. Reflection reports observations, not
+  implementation: it must not suggest code, produce a patch, edit prompts or
+  skills, mutate workflow state, or apply a fix. Authenticated invocation
+  submits automatically unless `--local` is present. A signed-out invocation
+  may prepare a sanitized issue preview but must ask before `gh` creates it;
+  failed private upload never authorizes public fallback.
 - **Artifacts under `.powerpacks/`** are derivable. The agent can rebuild
   any of them from the source data; never paste full datasets into chat.
 - **Development privacy — anonymize contact PII in anything committed or shared.**

@@ -13,6 +13,7 @@ SKILLS_DIR="${1:-$PI_HOME/skills}"
 MANAGED_SKILLS=(
   search search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound
+  reflect
   setup msgvault import-gmail import-twitter
   import-messages
 )
@@ -47,6 +48,8 @@ copy_powerpacks_bundle() {
   # Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$dest/powerpacks/packs"
+  mkdir -p "$dest/powerpacks/bin"
+  install -m 755 "$REPO_ROOT/bin/reflect" "$dest/powerpacks/bin/reflect"
   mkdir -p "$dest/powerpacks/scripts"
   for script in build-local-duckdb-shim.py adopt-powerpacks-state.py fix-powerpacks-state.py; do
     cp "$REPO_ROOT/scripts/$script" "$dest/powerpacks/scripts/$script"
@@ -102,10 +105,11 @@ install_skill import-gmail "$REPO_ROOT/packs/ingestion/skills/import-gmail/SKILL
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
+install_skill reflect "$REPO_ROOT/packs/observability/skills/reflect/SKILL.md"
 
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" pi "$SKILLS_DIR/.powerpacks-install.json"
 
 printf 'installed Powerpacks skills into %s:\n' "$SKILLS_DIR"
-printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound\n'
+printf '  search search-company search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound reflect\n'
 printf '  setup import-messages msgvault import-gmail import-twitter\n'
 printf '\nrestart Pi or run /reload to pick up the skill list\n'

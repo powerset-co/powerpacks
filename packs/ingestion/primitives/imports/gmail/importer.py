@@ -36,6 +36,9 @@ combined resolution CSVs, and `.powerpacks/network-import/gmail/people.gmail.csv
 — all written and read inside this one node.
 
 Changelog:
+  2026-07-27 (manifest timing): constructor-captured wall/monotonic clocks now
+    add the shared typed timing block before the custom import-manifest writer.
+    Manifest-current no-ops still preserve the prior manifest unchanged.
   2026-07-26 (declaration owns the path): the discovery paths this import reads are
     gmail discovery's declared constants (`GMAIL_STAGE_QUEUE_CSV`,
     `GMAIL_STAGE_MANIFEST_JSON`) instead of local rebuilds of the same strings, and
@@ -82,6 +85,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +137,7 @@ from packs.ingestion.primitives.pipeline.contract import (  # noqa: E402
     Node,
     PeopleRow,
     StageManifest,
+    StageTiming,
 )
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, normalize_people_row  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
@@ -230,6 +235,8 @@ class GmailImport(Node):
     manifest = ""
 
     def __init__(self, *, args: argparse.Namespace, contract: str) -> None:
+        self._started_at = now_iso()
+        self._started_clock = time.monotonic()
         self.args = args
         self.contract = contract
         self.import_dir = source_import_dir("gmail")
@@ -281,6 +288,11 @@ class GmailImport(Node):
     def _manifest(self, payload: GmailImportManifest) -> GmailImportManifest:
         """Write this stage's single import manifest, parking the writer's result
         (which may be the unchanged existing manifest) on `self.written`."""
+        payload.timing = StageTiming(
+            started_at=self._started_at,
+            finished_at=now_iso(),
+            duration_seconds=round(time.monotonic() - self._started_clock, 3),
+        )
         self.written = write_manifest("gmail", payload.to_payload(), import_dir=DEFAULT_IMPORT_DIR)
         return payload
 

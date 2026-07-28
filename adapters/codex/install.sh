@@ -9,6 +9,7 @@ BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 MANAGED_SKILLS=(
   search search-company search-sql search-contacts build-local-search-index
   powerset powerset-login powerset-set update-powerpacks fix-powerpacks install-powerpacks sales-nav-search build-outbound
+  reflect
   setup msgvault import-gmail import-twitter deep-context logbook
   import-messages clean-slate
 )
@@ -49,6 +50,8 @@ install_powerpacks_bundle() {
   # Domain packs (powerset, search, ingestion, sales-nav, ...) carry their own
   # primitives, schemas, contracts, tasks, evals, and docs.
   cp -R "$REPO_ROOT/packs" "$tmp/packs"
+  mkdir -p "$tmp/bin"
+  install -m 755 "$REPO_ROOT/bin/reflect" "$tmp/bin/reflect"
   # Setup sidecars run from this installed bundle: setup/index expects
   # scripts/build-local-duckdb-shim.py to materialize restored bootstrap records
   # into .powerpacks/search-index/local-search.duckdb.
@@ -103,6 +106,9 @@ install_skill() {
   mkdir -p "$dest"
 
   cp -R "$source_skill" "$dest/SKILL.md"
+  if [[ -d "$(dirname "$source_skill")/agents" ]]; then
+    cp -R "$(dirname "$source_skill")/agents" "$dest/agents"
+  fi
   ln -s "$BUNDLE_DIR" "$dest/powerpacks"
 }
 
@@ -130,6 +136,7 @@ install_skill logbook "$REPO_ROOT/packs/ingestion/skills/logbook/SKILL.md"
 install_skill import-twitter "$REPO_ROOT/packs/ingestion/skills/import-twitter/SKILL.md"
 install_skill sales-nav-search "$REPO_ROOT/packs/sales-nav/skills/sales-nav-search/SKILL.md"
 install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKILL.md"
+install_skill reflect "$REPO_ROOT/packs/observability/skills/reflect/SKILL.md"
 
 # Install stamp: which Powerpacks these skills came from. Auto-generated (never
 # hand-bumped, so it can't drift): release version from the Release Please
@@ -147,4 +154,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound reflect setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
