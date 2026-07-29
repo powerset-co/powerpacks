@@ -992,30 +992,25 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
 def cmd_serve(args: argparse.Namespace) -> None:
     review_path = Path(args.review)
-    # SINGLE-WRITER: hold the advisory session lock for the server lifetime so
-    # mutating CLI primitives refuse to run concurrently (canonical store only —
-    # temp-path test servers do not own the real session).
-    session_lock = None
-    try:
-        canonical = review_path.resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
-    except OSError:
-        canonical = False
-    if canonical:
-        session_lock = acquire_review_session_lock()  # held until process exit  # noqa: F841
     verdicts_path = Path(args.verdicts)
     parents_dir = Path(args.parents_dir)
     synthetic_path = Path(args.synthetic_people)
     manifest_path = Path(args.manifest)
-    parents = _all_review_parents(
-        verdicts_path, review_path, synthetic_path,
-        Path(args.facts_dir), Path(args.people_csv),
-        Path(args.parents_dir), Path(args.dossier_dir), Path(args.profile_cache_dir))
-    progress = review_progress(parents)
     requested_stage = args.stage or "worth"
-    query = f"?stage={urllib.parse.quote(requested_stage)}"
+    # "directory" is the read-only browse PATH, not a review stage: it lands on
+    # /directory and never begins a people-review revision (only worth writes).
+    query = ("directory" if requested_stage == "directory"
+             else f"?stage={urllib.parse.quote(requested_stage)}")
     requested_url = f"http://{args.host}:{args.port}/{query}"
 
-    def begin_people_review() -> None:
+    def build_initial_parents() -> list[dict[str, Any]]:
+        return _all_review_parents(
+            verdicts_path, review_path, synthetic_path,
+            Path(args.facts_dir), Path(args.people_csv),
+            Path(args.parents_dir), Path(args.dossier_dir),
+            Path(args.profile_cache_dir))
+
+    def begin_people_review(progress: dict[str, int]) -> None:
         write_review_manifest("worth", "awaiting_user", progress, path=manifest_path,
                               review_path=review_path, synthetic_path=synthetic_path,
                               launched=True)
@@ -1025,6 +1020,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     # Reopening a live UI is read-only. Starting a new server begins one fresh
     # People-review revision; later stages are merely direct views into files.
+    # The reuse probe runs BEFORE the session flock below — the live server is
+    # the one holding it, so locking first would refuse the very server we are
+    # about to reuse (bin/deep-context's enrichment-running deferral and the
+    # `view` browse landing both reach this path with a server up).
     status_payload: dict[str, Any] = {}
     try:
         with urllib.request.urlopen(
@@ -1047,7 +1046,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
                 f"this review uses {manifest_path}"
             )
         if args.fresh and requested_stage == "worth":
-            begin_people_review()
+            begin_people_review(review_progress(build_initial_parents()))
         print(json.dumps({"primitive": "reconcile_review_web", "status": "reused",
                           "url": requested_url, "manifest": str(manifest_path),
                           "stage": requested_stage}, indent=2))
@@ -1055,8 +1054,21 @@ def cmd_serve(args: argparse.Namespace) -> None:
             webbrowser.open(requested_url)
         return
 
+    # SINGLE-WRITER: hold the advisory session lock for the server lifetime so
+    # mutating CLI primitives refuse to run concurrently (canonical store only —
+    # temp-path test servers do not own the real session). Taken only once we
+    # are actually starting a server, never on the reuse path above.
+    session_lock = None
+    try:
+        canonical = review_path.resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
+    except OSError:
+        canonical = False
+    if canonical:
+        session_lock = acquire_review_session_lock()  # held until process exit  # noqa: F841
+    parents = build_initial_parents()
+    progress = review_progress(parents)
     if requested_stage == "worth":
-        begin_people_review()
+        begin_people_review(progress)
     # No launch self-heal kick: enrichment state is DERIVED at every enrich-page
     # render (derive_enrichment_state), and the render starts-or-joins the one
     # free-work job — so a stranded persisted state cannot survive a reload.

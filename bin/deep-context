@@ -49,6 +49,8 @@ usage: bin/deep-context <command> [args]
                proposals for the normal judge/review loop (default dry run;
                --apply writes; --apply --judge also judges from cache, spends OpenAI)
   review       open the staged people / LinkedIn decision UI (local, free)
+  view         open the read-only people directory: A-Z browse of dossiers +
+               LinkedIn (alias: directory). Reuses a live review server; free.
   review-status  read manifests/CSVs and print the exact next workflow action
                (--wait [--timeout N] blocks until the next action is the agent's)
   assemble-synthetic  build synthetic people-rows from deep-research output for
@@ -225,6 +227,14 @@ case "$cmd" in
       done
     fi
     "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
+    ;;
+  view|directory)
+    # Read-only browse of the review model (/directory landing). Deliberately
+    # REUSES a live review server as-is instead of restarting it — a browse
+    # must never bounce a session out from under open review pages; `review`
+    # stays the code-refresh door. Lands on /directory, writes nothing, and
+    # never begins a people-review revision.
+    "${PY[@]}" "$PKG.reconcile_review_web" serve --open --stage directory "$@"
     ;;
   review-status)
     # Read-only deterministic status target. No browser, provider, or write.
