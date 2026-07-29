@@ -81,21 +81,22 @@ from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     DOSSIER_TEMPLATE,
+    emit,
+    ensure_no_review_session,
     FACTS_DIR,
     FACTS_TEMPLATE,
     INDEX_JSON,
+    load_env,
     MERGE_CSV,
     MERGE_MANIFEST,
     MERGE_MD,
     MERGE_VERDICTS_CSV,
+    normalize_name,
     OWNER_JSON,
+    phone_digits,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
-    emit,
     read_jsonl,
-    load_env,
-    normalize_name,
-    phone_digits,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
@@ -1052,6 +1053,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_no_review_session("cluster_merge_candidates")
     args = build_parser().parse_args(argv)
     node = ClusterMergeCandidates(
         dossier_dir=Path(args.dossier_dir),

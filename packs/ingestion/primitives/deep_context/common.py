@@ -25,6 +25,7 @@ Changelog:
 from __future__ import annotations
 
 import csv
+import fcntl
 import hashlib
 import json
 import re
@@ -87,6 +88,45 @@ VERDICTS_CSV = RECONCILE_DIR / "verdicts.csv"       # flat review table
 SUMMARY_MD = RECONCILE_DIR / "summary.md"           # the ONE report to read (what changed + review)
 REVIEW_DIR = ROOT / "review"                         # staged human review UI state + cached avatars
 REVIEW_MANIFEST = REVIEW_DIR / "manifest.json"      # fixed completion signal for the agent
+REVIEW_SESSION_LOCK = REVIEW_DIR / ".server.lock"    # advisory single-writer session lock
+
+
+def acquire_review_session_lock():
+    """Take the advisory session lock for a review-server lifetime.
+
+    SINGLE-WRITER CONTRACT: while a review server runs it is the only writer of
+    the review-session files; its in-memory model is authoritative and never
+    re-checks disk. This flock is what turns that assumption into an enforced
+    invariant. Returns the open file object (hold it until process exit);
+    raises RuntimeError if another server already holds it."""
+    REVIEW_SESSION_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    handle = REVIEW_SESSION_LOCK.open("w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.close()
+        raise RuntimeError("another review server is already running") from exc
+    return handle
+
+
+def ensure_no_review_session(primitive: str) -> None:
+    """Refuse a mutating CLI run while a review server is up.
+
+    Called at CLI entry (main()) only — the server's own in-process jobs go
+    through the class constructors and never hit this gate. Concurrency that
+    used to cause silent staleness is refused with a clear next step instead."""
+    if not REVIEW_SESSION_LOCK.exists():
+        return
+    handle = REVIEW_SESSION_LOCK.open("w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    except OSError:
+        raise SystemExit(
+            f"{primitive}: the review server is running and owns the review session "
+            "(single-writer contract). Finish or stop the review UI, then re-run.")
+    finally:
+        handle.close()
 
 # Network-import locations come from the ONE home for them
 # (`primitives/common/paths.py`); only the deep-context tree is described here.

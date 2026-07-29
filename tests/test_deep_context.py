@@ -3575,10 +3575,58 @@ class TestReviewWeb(unittest.TestCase):
         )
         fake_server.serve_forever.assert_called_once_with()
 
-    def test_browser_observer_polls_only_while_external_updates_are_possible(self):
+    def test_session_lock_enforces_single_writer(self):
+        # The advisory flock is what turns "the server is the only writer" from
+        # an assumption into an invariant: mutating CLI mains refuse while a
+        # server holds it, and a second server cannot start.
+        from packs.ingestion.primitives.deep_context import common as dc_common
+        with tempfile.TemporaryDirectory() as dd:
+            lock_path = Path(dd) / "review" / ".server.lock"
+            with mock.patch.object(dc_common, "REVIEW_SESSION_LOCK", lock_path):
+                handle = dc_common.acquire_review_session_lock()
+                try:
+                    with self.assertRaisesRegex(SystemExit, "review server is running"):
+                        dc_common.ensure_no_review_session("apply_retargets")
+                    with self.assertRaises(RuntimeError):
+                        dc_common.acquire_review_session_lock()
+                finally:
+                    handle.close()
+                dc_common.ensure_no_review_session("apply_retargets")  # released -> free
+
+    def test_job_terminal_fires_view_hooks_on_success_and_failure(self):
+        # Single-writer refresh points: a job terminal (success OR failure) must
+        # re-derive the model and nudge views — it is the only mid-session
+        # writer besides clicks.
+        import time as _time
+        fired: list[str] = []
+        web_server._job_done_hooks.append(lambda: fired.append("hook"))
+        try:
+            web_server._run_pipeline_job("t-ok", lambda: None)
+            deadline = _time.time() + 5
+            while len(fired) < 1 and _time.time() < deadline:
+                _time.sleep(0.01)
+            self.assertEqual(len(fired), 1)
+
+            def boom() -> None:
+                raise SystemExit("guard path")
+
+            web_server._run_pipeline_job("t-fail", boom)
+            deadline = _time.time() + 5
+            while len(fired) < 2 and _time.time() < deadline:
+                _time.sleep(0.01)
+            self.assertEqual(len(fired), 2)
+        finally:
+            web_server._job_done_hooks.pop()
+
+    def test_browser_observer_subscribes_only_on_wait_screens(self):
+        # Single-writer sessions: the browser never polls. Wait screens open ONE
+        # EventSource; each server nudge (mutation/job completion) triggers one
+        # /api/status re-snapshot. Interactive screens open nothing.
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn('fetch("/api/status", { cache: "no-store" })', script)
-        self.assertIn("const statusPollMs = 1000;", script)
+        self.assertIn('new EventSource("/api/events")', script)
+        self.assertNotIn("setInterval(pollFileState", script)
+        self.assertNotIn("statusPollMs", script)
         self.assertIn(
             'const observesExternalUpdates = document.body.dataset.externalUpdates === "true";',
             script,
@@ -3610,8 +3658,8 @@ class TestReviewWeb(unittest.TestCase):
             "!isStagePreview && state.stage && state.stage !== currentStage",
             script,
         )
-        self.assertIn("void pollFileState();", script)
-        self.assertIn("window.setInterval(pollFileState, statusPollMs);", script)
+        self.assertIn("void syncFileState();", script)
+        self.assertIn("serverEvents.onmessage = () => { void syncFileState(); };", script)
         self.assertIn('document.addEventListener("visibilitychange"', script)
         self.assertIn('leaveAndNavigate("People complete", "/?stage=enrich")', script)
         self.assertNotIn(

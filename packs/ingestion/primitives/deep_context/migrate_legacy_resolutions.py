@@ -45,11 +45,12 @@ from typing import Any
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
+    emit,
+    ensure_no_review_session,
     FACTS_DIR,
     LINKEDIN_OVERRIDES_CSV,
     PROFILE_CACHE_DIR,
     RAW_DIR,
-    emit,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV, source_import_dir
@@ -288,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_no_review_session("migrate_legacy_resolutions")
     emit(run(build_parser().parse_args(argv)))
     return 0
 

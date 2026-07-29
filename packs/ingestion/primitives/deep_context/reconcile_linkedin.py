@@ -87,30 +87,31 @@ from packs.ingestion.primitives.deep_context.candidates import (
     is_candidate_id,
 )
 from packs.ingestion.primitives.deep_context.common import (
+    CONSOLIDATE_PEOPLE_CSV,
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
+    emit,
+    ensure_no_review_session,
     FACTS_DIR,
     FACTS_TEMPLATE,
-    CONSOLIDATE_PEOPLE_CSV,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
-    OWNER_JSON,
-    PARENTS_DIR,
-    PROFILE_CACHE_DIR,
-    PROFILE_CACHE_TEMPLATE,
-    RAW_BUNDLE_TEMPLATE,
-    RAW_DIR,
-    RECONCILE_DIR,
-    SUMMARY_MD,
-    VERDICTS_CSV,
-    VERDICTS_JSONL,
-    emit,
-    read_jsonl,
     load_env,
     load_owner,
     normalize_phone,
     owner_background_block,
+    OWNER_JSON,
+    PARENTS_DIR,
     parse_list,
+    PROFILE_CACHE_DIR,
+    PROFILE_CACHE_TEMPLATE,
+    RAW_BUNDLE_TEMPLATE,
+    RAW_DIR,
+    read_jsonl,
+    RECONCILE_DIR,
+    SUMMARY_MD,
+    VERDICTS_CSV,
+    VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
@@ -1811,6 +1812,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_no_review_session("reconcile_linkedin")
     args = build_parser().parse_args(argv)
     # --dry-run is the no-write estimate and BYPASSES the node (see dry_run_estimate).
     # --reapply takes precedence over it, exactly as before: reapply is a real

@@ -997,7 +997,6 @@ let reviewStateToken = document.body.dataset.stateToken || "";
 // exactly that window, and a reload tears down the JS before it can leave).
 let completingStage = false;
 let lastServerStage = "";
-const statusPollMs = 1000;
 const observesExternalUpdates = document.body.dataset.externalUpdates === "true";
 
 function hasIdentityDraft() {
@@ -1006,7 +1005,9 @@ function hasIdentityDraft() {
   );
 }
 
-async function pollFileState() {
+// Re-snapshot /api/status. Invoked by the server's SSE nudge stream — the
+// browser never polls; the single-writer server pushes when anything changes.
+async function syncFileState() {
   if (document.visibilityState !== "visible") return;
   if (completingStage) return; // a stage-complete navigation is in flight
   const currentStage = document.body.dataset.stage || "";
@@ -1044,9 +1045,12 @@ async function pollFileState() {
 }
 
 if (observesExternalUpdates) {
-  void pollFileState();
-  window.setInterval(pollFileState, statusPollMs);
+  void syncFileState();
+  const serverEvents = new EventSource("/api/events");
+  serverEvents.onmessage = () => { void syncFileState(); };
+  // A reconnect implies missed events — re-snapshot on every open.
+  serverEvents.onopen = () => { void syncFileState(); };
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void pollFileState();
+    if (document.visibilityState === "visible") void syncFileState();
   });
 }

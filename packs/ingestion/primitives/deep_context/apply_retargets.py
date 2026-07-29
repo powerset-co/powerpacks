@@ -41,12 +41,13 @@ from packs.ingestion.primitives.deep_context.candidates import (
 )
 from packs.ingestion.primitives.deep_context.common import (
     DEFAULT_PEOPLE_CSV,
+    emit,
+    ensure_no_review_session,
     LINKEDIN_OVERRIDES_CSV,
+    load_env,
     PROFILE_CACHE_DIR,
     PROFILE_CACHE_TEMPLATE,
     RETARGET_PEOPLE_CSV,
-    emit,
-    load_env,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
@@ -303,6 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_no_review_session("apply_retargets")
     args = build_parser().parse_args(argv)
     payload = ApplyRetargets(
         overrides_csv=Path(args.overrides_csv),

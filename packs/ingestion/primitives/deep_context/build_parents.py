@@ -50,30 +50,31 @@ from typing import Any
 
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
 from packs.ingestion.primitives.deep_context.common import (
-    DEFAULT_PEOPLE_CSV,
     DEEP_RESEARCH_DIR,
+    DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
     DOSSIER_TEMPLATE,
+    emit,
+    ensure_no_review_session,
     FACTS_DIR,
     FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
+    load_index,
+    load_owner,
     MERGE_CSV,
     OWNER_JSON,
+    parent_identifiers,
     PARENT_TEMPLATE,
     PARENTS_DIR,
     PARENTS_MANIFEST,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
+    read_jsonl,
     RECONCILE_DIR,
+    slugify,
     VERDICTS_CSV,
     VERDICTS_JSONL,
-    read_jsonl,
-    emit,
-    load_index,
-    load_owner,
-    parent_identifiers,
-    slugify,
     write_index,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
@@ -735,6 +736,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_no_review_session("build_parents")
     args = build_parser().parse_args(argv)
     payload = BuildParents(
         merge_csv=Path(args.merge_csv),

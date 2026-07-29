@@ -1,4 +1,25 @@
-"""HTTP routing, asset serving, and in-app workflow jobs for review."""
+"""HTTP routing, asset serving, and in-app workflow jobs for review.
+
+SINGLE-WRITER SESSION CONTRACT (2026-07-29): while this server runs it is the
+only writer of the review-session files — enforced by the advisory flock in
+`common.acquire_review_session_lock` (mutating CLI mains refuse while it is
+held). Memory is therefore authoritative for the whole session: the model is
+built at boot and rebuilt only at this server's own refresh points (job
+terminals, stage boundaries). Files are write-through flushes for crash safety
+and the baton pass to the next process. Views subscribe to `/api/events` (SSE)
+and re-snapshot `/api/status` on each nudge — the browser never polls.
+
+Changelog:
+  2026-07-29 (single-writer rewrite): deleted the stat/signature invalidation
+    apparatus (`input_signature`, `accept_local_write`, `accept_rows_write`,
+    per-request stat checks) — sediment from defending an undesigned
+    concurrency mode that once caused the stale-enrich-phase bug and later a
+    9-minute GIL pile-up on an 8 GB machine (1 Hz polls x full-model rebuilds).
+    `parents_now()` returns memory; `refresh_parents_from_disk()` runs at job
+    terminals (via `_job_done_hooks`) and stage boundaries. Added `/api/events`
+    (SSE nudge stream) and the session flock in `cmd_serve` (canonical store
+    only). The review JS replaced `setInterval` polling with one EventSource.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +53,7 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_DIR,
     REVIEW_MANIFEST,
     VERDICTS_JSONL,
+    acquire_review_session_lock,
     now_iso,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
@@ -87,6 +109,13 @@ def _mark_enrichment_failed(error: str) -> None:
         pass
 
 
+# The handler closure registers its refresh+notify here so job terminals
+# (success OR failure) re-derive the in-memory model from the job's own
+# writes and nudge connected views. Single-writer: jobs are the only
+# mid-session writer besides clicks, so these are the only refresh points.
+_job_done_hooks: list[Callable[[], None]] = []
+
+
 def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
     if not _job_lock.acquire(blocking=False):
         return  # one job at a time; the durable manifests re-trigger any rerun
@@ -101,6 +130,11 @@ def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
             _mark_enrichment_failed(f"{name}: {type(exc).__name__}: {exc}")
         finally:
             _job_lock.release()
+            for hook in list(_job_done_hooks):
+                try:
+                    hook()
+                except Exception:
+                    pass  # a view nudge must never mask the job outcome
 
     threading.Thread(target=runner, name=f"pipeline-job-{name}", daemon=True).start()
 
@@ -166,26 +200,6 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
     avatar_dir = avatar_dir or manifest_path.parent / "avatars"
     mutation_lock = threading.Lock()
 
-    def input_signature() -> tuple[tuple[str, int, int], ...]:
-        """Cheap invalidation key for files that can change the review queue.
-
-        Facts/dossiers are fixed before review. Provider work changes the durable
-        review/synthetic CSVs, so those files are sufficient to notice external
-        agent progress without recursively scanning thousands of artifacts.
-        """
-        values = []
-        # ENRICH_MANIFEST included so an enrichment state change (in-app or an
-        # external CLI completion) invalidates the cached model — without it
-        # the enrich page served a stale phase until a manual server restart.
-        for path in (review_path, verdicts_path, synthetic_path, people_csv,
-                     ENRICH_MANIFEST):
-            try:
-                stat = path.stat()
-                values.append((str(path), stat.st_mtime_ns, stat.st_size))
-            except OSError:
-                values.append((str(path), 0, 0))
-        return tuple(values)
-
     def notify_agent() -> None:
         """Best-effort wake after durable UI mutations; file state stays authoritative."""
         if agent_notifier is None:
@@ -197,74 +211,65 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             # hook (tests use it to count mutations) raised.
             pass
 
+    # SINGLE-WRITER SESSION CONTRACT: while this server runs it is the ONLY
+    # writer of the review-session files (the advisory session lock refuses
+    # concurrent mutating CLI runs). Memory is therefore authoritative for the
+    # whole session: no stat checks, no invalidation signatures — the model is
+    # built at boot and rebuilt only after this server's OWN jobs write, at
+    # explicit refresh points. Files are write-through flushes for crash
+    # safety and the baton pass to the next process, never re-read mid-session.
     cached_parents = (
         initial_parents if initial_parents is not None else
         _all_review_parents(
             verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
             parents_dir, dossier_dir, profile_cache_dir)
     )
-    cached_signature = input_signature()
     connection_keys = load_connection_keys(people_csv)
 
+    # View change stream: mutation choke points and job completions bump the
+    # sequence; /api/events holds a connection per tab and nudges it to
+    # re-snapshot /api/status. The browser never polls.
+    events_cond = threading.Condition()
+    events_seq = {"n": 0}
+
+    def notify_views() -> None:
+        with events_cond:
+            events_seq["n"] += 1
+            events_cond.notify_all()
+
+    def _after_job() -> None:
+        refresh_parents_from_disk()
+        notify_views()
+
+    _job_done_hooks.append(_after_job)
+
     def parents_now() -> list[dict[str, Any]]:
-        """Return the in-memory SPA model, reloading only after an external write."""
-        nonlocal cached_parents, cached_signature, connection_keys
-        signature = input_signature()
-        if signature != cached_signature:
-            cached_parents = _all_review_parents(
-                verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
-                parents_dir, dossier_dir, profile_cache_dir)
-            connection_keys = load_connection_keys(people_csv)
-            cached_signature = signature
+        """The in-memory SPA model — authoritative for the session."""
         return cached_parents
 
-    def accept_local_write() -> None:
-        """The caller already updated ``cached_parents`` to mirror its durable write."""
-        nonlocal cached_signature
-        cached_signature = input_signature()
-
     def refresh_parents_from_disk() -> list[dict[str, Any]]:
-        """Rebuild the model FRESH from files, discarding optimistic patches.
-
-        Used at stage-completion boundaries: the agent's `review-status` CLI
-        always rebuilds fresh, so "completed" must only ever be written when a
-        fresh derivation agrees — otherwise the UI shows "waiting on the agent"
-        while the agent's own read says N people are still pending (the
-        off-by-N handoff split)."""
-        nonlocal cached_parents, cached_signature, connection_keys
+        """Rebuild the model from files — the explicit refresh points: after
+        this server's own in-process jobs write (their primitives author
+        complex slices it is safer to re-derive than to patch), and at
+        stage-completion boundaries so "completed" is only written when a
+        fresh derivation agrees with the agent's own read."""
+        nonlocal cached_parents, connection_keys, cached_rows
         cached_parents = _all_review_parents(
             verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
             parents_dir, dossier_dir, profile_cache_dir)
         connection_keys = load_connection_keys(people_csv)
-        cached_signature = input_signature()
+        cached_rows = None
         return cached_parents
 
-    # Parsed review.csv rows, cached so a decision click does not re-read a
-    # potentially large CSV per POST. Invalidation mirrors input_signature:
-    # any external write changes the file stat and forces a reload; our own
-    # writes refresh the stat via accept_rows_write (the dict itself was
-    # mutated in place by apply_worth_decision, so it is already current).
+    # Parsed review.csv rows, loaded once; our own decision writes mutate the
+    # dict in place, and refresh_parents_from_disk drops it after a job write.
     cached_rows: dict[str, dict[str, str]] | None = None
-    cached_rows_sig: tuple[int, int] | None = None
-
-    def _review_rows_sig() -> tuple[int, int]:
-        try:
-            stat = review_path.stat()
-            return (stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            return (0, 0)
 
     def review_rows_now() -> dict[str, dict[str, str]]:
-        nonlocal cached_rows, cached_rows_sig
-        sig = _review_rows_sig()
-        if cached_rows is None or sig != cached_rows_sig:
+        nonlocal cached_rows
+        if cached_rows is None:
             cached_rows = load_override_rows(review_path)
-            cached_rows_sig = sig
         return cached_rows
-
-    def accept_rows_write() -> None:
-        nonlocal cached_rows_sig
-        cached_rows_sig = _review_rows_sig()
 
     def candidate_in_snapshot(pub: str, prefer_slug: str = "",
                               ) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -335,6 +340,31 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             if parsed.path == "/healthz":
                 self.send_bytes(b"ok", "text/plain")
                 return
+            if parsed.path == "/api/events":
+                # SSE nudge stream: each event tells the view "re-snapshot
+                # /api/status". Data is the sequence number only; the snapshot
+                # endpoint stays the one answer shape. Keepalive comment every
+                # 15s; EventSource reconnects (and re-snapshots) on its own.
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                last_seen = -1
+                try:
+                    self.wfile.write(b"retry: 2000\n\n")
+                    while True:
+                        with events_cond:
+                            if events_seq["n"] == last_seen:
+                                events_cond.wait(timeout=15.0)
+                            current = events_seq["n"]
+                        if current != last_seen:
+                            last_seen = current
+                            self.wfile.write(f"data: {current}\n\n".encode("utf-8"))
+                        else:
+                            self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    return
             if parsed.path == "/api/status":
                 with mutation_lock:
                     status = workflow_status_from_parents(
@@ -642,7 +672,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             llm_worth=str(machine.get("decision") or ""),
                             llm_worth_reason=str(machine.get("reason") or ""),
                         )
-                        accept_rows_write()
+                        notify_views()
                         gate_key = str(
                             (target_parent.get("person_ids") or [""])[0]
                         ).strip().lower()
@@ -735,7 +765,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 ).strip().lower()
                                 if sibling_key in attach_keys:
                                     patch_worth_state(sibling)
-                        accept_local_write()
+                        notify_views()
                         current_parents = cached_parents
                         progress = review_progress(current_parents)
                         if progress["worth_pending"] == 0:
@@ -866,7 +896,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             target_parent, target_candidate,
                             synthetic_path=synthetic_path, people_csv=people_csv)
 
-                    accept_local_write()
+                    notify_views()
                     current_parents = cached_parents
                     progress = review_progress(current_parents)
                     invalidate_manifest("linkedin", progress)
@@ -901,6 +931,16 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
 def cmd_serve(args: argparse.Namespace) -> None:
     review_path = Path(args.review)
+    # SINGLE-WRITER: hold the advisory session lock for the server lifetime so
+    # mutating CLI primitives refuse to run concurrently (canonical store only —
+    # temp-path test servers do not own the real session).
+    session_lock = None
+    try:
+        canonical = review_path.resolve() == LINKEDIN_OVERRIDES_CSV.resolve()
+    except OSError:
+        canonical = False
+    if canonical:
+        session_lock = acquire_review_session_lock()  # held until process exit  # noqa: F841
     verdicts_path = Path(args.verdicts)
     parents_dir = Path(args.parents_dir)
     synthetic_path = Path(args.synthetic_people)
