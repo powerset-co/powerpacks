@@ -507,7 +507,9 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     body = worth_review_body(parents, progress, parents_dir, dossier_dir,
                                              debug=debug, index=index,
                                              profile_cache_dir=profile_cache_dir,
-                                             exclude=exclude or None)
+                                             exclude=exclude or None,
+                                             auto_continue=not phase_is_completed(
+                                                 "worth", progress, manifest_path))
                 elif debug:
                     selection = worth_selection_from_parents(
                         parents, manifest_path=manifest_path)

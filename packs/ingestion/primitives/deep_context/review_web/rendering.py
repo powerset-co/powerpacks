@@ -980,7 +980,8 @@ def worth_review_body(parents: list[dict[str, Any]], progress: dict[str, int],
                       parents_dir: Path, dossier_dir: Path, *,
                       debug: bool = False, index: int = 0,
                       profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                      exclude: frozenset[str] | None = None) -> str:
+                      exclude: frozenset[str] | None = None,
+                      auto_continue: bool = False) -> str:
     """The Review tab's current item: the next queue card, or the stage-complete
     state. Shared by page_html and /api/worth-card so a decision click can swap
     in the next card client-side without a full page reload. ``debug`` adds the
@@ -999,10 +1000,15 @@ def worth_review_body(parents: list[dict[str, Any]], progress: dict[str, int],
             return (f"<div class='carousel-shell' data-queue-index='{index}' "
                     f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>")
         return card
+    # auto_continue: the FIRST arrival at the ready state (worth not yet
+    # completed) self-advances — the JS fires the same Continue flow, so the
+    # user never clicks through a done screen. Revisits after completion keep
+    # the button and never yank.
+    auto_attr = " data-auto-complete" if auto_continue else ""
     return ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
             "<h2>Decisions ready</h2>"
             f"<p>{progress['lookup_ready']} people will be enriched</p>"
-            "<button class='button button-primary' data-complete='worth'>Continue</button></div>")
+            f"<button class='button button-primary' data-complete='worth'{auto_attr}>Continue</button></div>")
 
 
 def _enrichment_note(enrichment: dict[str, Any] | None) -> str:
@@ -1144,8 +1150,11 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         tabs = render_decision_tabs(progress, decision_view, preview=preview)
         search = ""
         if decision_view == "review":
-            body = worth_review_body(parents, progress, parents_dir, dossier_dir,
-                                     debug=debug, profile_cache_dir=profile_cache_dir)
+            body = worth_review_body(
+                parents, progress, parents_dir, dossier_dir,
+                debug=debug, profile_cache_dir=profile_cache_dir,
+                auto_continue=(not preview and not phase_is_completed(
+                    "worth", progress, manifest_path)))
             # The typeahead lives OUTSIDE the swap panel so card swaps never
             # touch it; its pending queue is embedded once at page render.
             pending = worth_pending_entries(parents)

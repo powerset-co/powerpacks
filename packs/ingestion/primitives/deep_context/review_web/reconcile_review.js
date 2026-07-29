@@ -173,6 +173,7 @@ async function decideWorthCard(button, card) {
     }
     panel.innerHTML = nextHtml; // next queue card, or the Decisions-ready state
     wireDynamicContent(panel);  // also prefetches the card after this one
+    maybeAutoComplete(panel);
     postPromise.then((response) => {
       adoptMutationState(response);
       applyProgress(response.progress);
@@ -255,6 +256,7 @@ async function jumpToWorthCard(key) {
   panel.querySelector("[data-card]")?.classList.add("leaving");
   await delay(170);
   panel.innerHTML = nextHtml; // the picked card, via the existing swap path
+  maybeAutoComplete(panel);
   wireDynamicContent(panel);  // re-prefetches with the picked card excluded
 }
 
@@ -999,6 +1001,20 @@ let completingStage = false;
 let lastServerStage = "";
 const observesExternalUpdates = document.body.dataset.externalUpdates === "true";
 
+let autoCompleted = false;
+
+// First arrival at "Decisions ready": fire the same flow the Continue button
+// runs (POST /complete + navigate) so the user never clicks through a done
+// screen. Server marks the block data-auto-complete only when the stage is
+// not yet completed, so deliberate revisits keep the button and never yank.
+function maybeAutoComplete(root) {
+  if (autoCompleted || completingStage) return;
+  const button = (root || document).querySelector("[data-auto-complete]");
+  if (!button) return;
+  autoCompleted = true;
+  button.click();
+}
+
 function hasIdentityDraft() {
   return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(
     (input) => !input.closest("[hidden]") && Boolean(input.value.trim()),
@@ -1069,6 +1085,8 @@ async function syncFileState() {
     // The local observer may be restarting; the next poll will retry.
   }
 }
+
+maybeAutoComplete(document);
 
 if (observesExternalUpdates) {
   void syncFileState();
