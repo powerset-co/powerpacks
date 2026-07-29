@@ -1377,29 +1377,25 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
                   f"<h2>{len(entries)} people</h2>"
                   "<p>Pick a person to read their dossier.</p></div>")
     payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
-    # Worth tabs over the sidebar (the review's decision-tabs component, as
-    # buttons: pure client-side filter, no navigation). Yes is the default;
-    # Undecided appears only while maybes exist, so a finished review shows
-    # the clean Yes/No pair. Tab counts are the same effective-worth numbers
-    # the review tabs report.
+    # Worth tabs under the search bar (the review's decision-tabs component, as
+    # buttons: pure client-side filter, no navigation). Yes is the default, and
+    # only the two decided piles are shown — an undecided person is not listed
+    # until the review decides them. Counts are the same effective-worth
+    # numbers the review tabs report.
     counts = {"yes": 0, "no": 0, "maybe": 0}
     for entry in entries:
         counts[entry["worth"]] += 1
-    tab_defs = [(key, label) for key, label in
-                (("yes", "Yes"), ("no", "No"), ("maybe", "Undecided")) if counts[key]]
-    default_tab = "yes" if counts["yes"] or not tab_defs else tab_defs[0][0]
     tabs = "".join(
-        f"<button type='button' class='decision-tab{' active' if key == default_tab else ''}' "
+        f"<button type='button' class='decision-tab{' active' if key == 'yes' else ''}' "
         f"data-directory-tab='{key}'>{label}<span>{counts[key]}</span></button>"
-        for key, label in tab_defs)
-    tab_nav = (f"<nav class='decision-tabs directory-tabs' aria-label='Worth decision'>{tabs}</nav>"
-               if tabs else "")
+        for key, label in (("yes", "Yes"), ("no", "No")))
+    tab_nav = f"<nav class='decision-tabs directory-tabs' aria-label='Worth decision'>{tabs}</nav>"
     search = ("<div class='worth-search' data-directory-search>"
               "<input class='worth-search-input' type='search' placeholder='Search people…' "
               "aria-label='Search people by name' autocomplete='off' spellcheck='false'>"
               "<span class='worth-search-count' data-search-count hidden></span></div>")
     content = ("<div class='directory-layout'>"
-               f"<aside class='directory-sidebar'>{tab_nav}{search}"
+               f"<aside class='directory-sidebar'>{search}{tab_nav}"
                "<nav class='directory-list' data-directory-list aria-label='People A to Z'></nav>"
                "</aside>"
                f"<section class='directory-detail' data-directory-detail>{detail}</section>"
