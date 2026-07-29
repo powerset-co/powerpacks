@@ -353,11 +353,15 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 try:
                     self.wfile.write(b"retry: 2000\n\n")
                     while True:
+                        # While a job runs its primitives heartbeat progress
+                        # into the manifest; tick the stream every 2s so the
+                        # view re-snapshots live counts. Idle: 15s keepalives.
+                        job_running = _job_lock.locked()
                         with events_cond:
                             if events_seq["n"] == last_seen:
-                                events_cond.wait(timeout=15.0)
+                                events_cond.wait(timeout=2.0 if job_running else 15.0)
                             current = events_seq["n"]
-                        if current != last_seen:
+                        if current != last_seen or _job_lock.locked():
                             last_seen = current
                             self.wfile.write(f"data: {current}\n\n".encode("utf-8"))
                         else:
