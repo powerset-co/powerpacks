@@ -4946,17 +4946,25 @@ class TestDirectoryView(unittest.TestCase):
         self.assertNotIn("parent-link", html)       # HTML comments are stripped
         self.assertNotIn("[[", html)                # wiki links become display text
 
-    def test_directory_entries_sorted_and_deduped(self):
+    def test_directory_entries_sorted_deduped_and_worth_labeled(self):
+        yes = self._parent("zed-zulu", "Zed Zulu")
+        yes["worth_row"] = {"effective": "yes"}
+        no = self._parent("amy-alpha", "Amy Alpha")
+        no["worth"] = {"decision": "no"}  # no worth_row -> parent effective
         parents = [
-            self._parent("zed-zulu", "Zed Zulu"),
-            self._parent("amy-alpha", "Amy Alpha"),
+            yes,
+            no,
             {"slug": "split-twin", "dossier_slug": "amy-alpha", "name": "Amy Alpha",
              "candidates": []},  # split parent sharing a dossier appears once
             {"slug": "", "name": "No Slug", "candidates": []},
+            self._parent("mel-maybe", "Mel Maybe"),  # undecided -> maybe
         ]
         entries = web_rendering.directory_entries(parents)
-        self.assertEqual(entries, [{"slug": "amy-alpha", "name": "Amy Alpha"},
-                                   {"slug": "zed-zulu", "name": "Zed Zulu"}])
+        self.assertEqual(entries, [
+            {"slug": "amy-alpha", "name": "Amy Alpha", "worth": "no"},
+            {"slug": "mel-maybe", "name": "Mel Maybe", "worth": "maybe"},
+            {"slug": "zed-zulu", "name": "Zed Zulu", "worth": "yes"},
+        ])
 
     def test_person_detail_reuses_profile_renderers_over_full_dossier(self):
         with tempfile.TemporaryDirectory() as dd:
@@ -4997,8 +5005,11 @@ class TestDirectoryView(unittest.TestCase):
             dossiers.mkdir()
             (dossiers / "amy-alpha.md").write_text(
                 "# Amy Alpha\n\n## Summary\n\nAlpha tester.\n", encoding="utf-8")
-            parents = [self._parent("amy-alpha", "Amy Alpha"),
-                       self._parent("zed-zulu", "Zed Zulu")]
+            amy = self._parent("amy-alpha", "Amy Alpha")
+            amy["worth_row"] = {"effective": "yes"}
+            zed = self._parent("zed-zulu", "Zed Zulu")
+            zed["worth_row"] = {"effective": "no"}
+            parents = [amy, zed]
             kwargs = {"parents_dir": base / "parents", "dossier_dir": dossiers,
                       "profile_cache_dir": base / "profiles"}
             html = web_rendering.directory_page_html(parents, {}, **kwargs).decode("utf-8")
@@ -5011,14 +5022,30 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("data-stage='directory'", html)
         self.assertIn("data-external-updates='false'", html)  # no SSE on this page
         self.assertIn("Pick a person", html)                  # no selection -> empty state
+        # Worth tabs: Yes is the default-active tab; no maybes -> no Undecided tab.
+        self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>1</span>", html)
+        self.assertIn("data-directory-tab='no'>No<span>1</span>", html)
+        self.assertNotIn("data-directory-tab='maybe'", html)
         self.assertIn("Alpha tester.", picked)                # ?person= pre-renders the pane
         self.assertNotIn("Pick a person", picked)
+
+    def test_directory_tabs_surface_undecided_and_fall_back_when_no_yes(self):
+        parents = [self._parent("mel-maybe", "Mel Maybe")]  # only undecided people
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            html = web_rendering.directory_page_html(
+                parents, {}, parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                profile_cache_dir=base / "profiles").decode("utf-8")
+        self.assertNotIn("data-directory-tab='yes'", html)
+        self.assertIn("decision-tab active' data-directory-tab='maybe'>Undecided<span>1</span>",
+                      html)
 
     def test_review_js_wires_the_directory_view(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn("setupDirectory", script)
         self.assertIn("/api/person", script)
         self.assertIn("data-directory-list", script)
+        self.assertIn("data-directory-tab", script)
 
 
 if __name__ == "__main__":

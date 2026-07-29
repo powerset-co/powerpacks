@@ -1161,6 +1161,16 @@ body[data-stage="directory"] main {
   overflow: hidden;
 }
 
+/* The review's decision-tabs component reused as sidebar filter buttons. */
+.directory-tabs { margin: 12px 12px 0; }
+.directory-tabs .decision-tab {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.directory-tabs .decision-tab.active { background: var(--secondary); }
+
 .directory-sidebar .worth-search { padding: 12px 12px 10px; }
 .directory-sidebar .worth-search-input { background: var(--secondary); }
 

@@ -1087,10 +1087,11 @@ async function syncFileState() {
 }
 
 // --- directory browse view (/directory) --------------------------------------
-// Read-only reference surface: the sidebar renders in chunks from the embedded
-// A-Z island (scrolling appends more), the search input filters it live with an
-// "N of M" count (Enter opens the first match), and clicking a name fetches
-// that person's pane from /api/person. Nothing here ever writes.
+// Read-only reference surface: the sidebar's Yes/No worth tabs (default Yes)
+// and search input filter an A-Z list rendered in chunks from the embedded
+// island (scrolling appends more; the count shows "N of M" within the active
+// tab; Enter opens the first match), and clicking a name fetches that person's
+// pane from /api/person. Nothing here ever writes.
 function setupDirectory() {
   const list = document.querySelector("[data-directory-list]");
   const detail = document.querySelector("[data-directory-detail]");
@@ -1099,9 +1100,24 @@ function setupDirectory() {
   let people = [];
   try { people = JSON.parse(island.textContent || "[]"); } catch { people = []; }
   const CHUNK = 150;
-  let filtered = people;
-  let rendered = 0;
+  const tabs = Array.from(document.querySelectorAll("[data-directory-tab]"));
+  const box = document.querySelector("[data-directory-search]");
+  const input = box?.querySelector("input");
+  const count = box?.querySelector("[data-search-count]");
+  let activeTab = tabs.find((tab) => tab.classList.contains("active"))?.dataset.directoryTab || "";
   let activeSlug = new URLSearchParams(window.location.search).get("person") || "";
+  // A ?person= deep link lands on that person's own tab, so the server-rendered
+  // pane always has its sidebar entry visible.
+  const selected = people.find((entry) => entry.slug === activeSlug);
+  if (selected && tabs.length) {
+    const worth = selected.worth || "maybe";
+    if (worth !== activeTab && tabs.some((tab) => tab.dataset.directoryTab === worth)) {
+      activeTab = worth;
+      tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.directoryTab === worth));
+    }
+  }
+  let filtered = [];
+  let rendered = 0;
 
   function entryButton(entry) {
     const item = document.createElement("button");
@@ -1120,6 +1136,25 @@ function setupDirectory() {
 
   function fillViewport() {
     while (rendered < filtered.length && list.scrollHeight <= list.clientHeight + 200) renderMore();
+  }
+
+  function refreshList() {
+    const scope = tabs.length && activeTab
+      ? people.filter((entry) => (entry.worth || "maybe") === activeTab)
+      : people;
+    const query = (input?.value || "").trim().toLowerCase();
+    filtered = query
+      ? scope.filter((entry) => (entry.name || "").toLowerCase().includes(query))
+      : scope;
+    if (count) {
+      count.hidden = !query;
+      if (query) count.textContent = `${filtered.length} of ${scope.length}`;
+    }
+    list.textContent = "";
+    rendered = 0;
+    renderMore();
+    fillViewport();
+    list.scrollTop = 0;
   }
 
   async function selectPerson(slug) {
@@ -1153,37 +1188,27 @@ function setupDirectory() {
     if (list.scrollTop + list.clientHeight >= list.scrollHeight - 400) renderMore();
   }, { passive: true });
 
-  const box = document.querySelector("[data-directory-search]");
-  const input = box?.querySelector("input");
-  const count = box?.querySelector("[data-search-count]");
+  tabs.forEach((tab) => tab.addEventListener("click", () => {
+    if (tab.dataset.directoryTab === activeTab) return;
+    activeTab = tab.dataset.directoryTab || "";
+    tabs.forEach((item) => item.classList.toggle("active", item === tab));
+    refreshList();
+  }));
+
   if (input) {
-    input.addEventListener("input", () => {
-      const query = input.value.trim().toLowerCase();
-      filtered = query
-        ? people.filter((entry) => (entry.name || "").toLowerCase().includes(query))
-        : people;
-      if (count) {
-        count.hidden = !query;
-        if (query) count.textContent = `${filtered.length} of ${people.length}`;
-      }
-      list.textContent = "";
-      rendered = 0;
-      renderMore();
-      fillViewport();
-    });
+    input.addEventListener("input", refreshList);
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
         if (filtered.length) void selectPerson(filtered[0].slug || "");
       } else if (event.key === "Escape") {
         input.value = "";
-        input.dispatchEvent(new Event("input"));
+        refreshList();
       }
     });
   }
 
-  renderMore();
-  fillViewport();
+  refreshList();
   if (activeSlug) {
     // The server already rendered this person's pane; make sure their sidebar
     // entry exists (render up to it) and is visible.

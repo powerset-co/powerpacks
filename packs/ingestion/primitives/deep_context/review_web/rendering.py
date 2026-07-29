@@ -1291,9 +1291,11 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
 
 
 def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """One sidebar entry per person, A-Z by display name: the name plus the
-    dossier slug /api/person keys on. Deduped by slug so split parents sharing
-    one dossier appear once."""
+    """One sidebar entry per person, A-Z by display name: the name, the dossier
+    slug /api/person keys on, and the EFFECTIVE worth decision (yes/no/maybe —
+    the same worth_view effective the review tabs group by) so the sidebar's
+    Yes/No tabs match the review's numbers. Deduped by slug so split parents
+    sharing one dossier appear once."""
     seen: set[str] = set()
     entries: list[dict[str, str]] = []
     for parent in parents:
@@ -1301,7 +1303,10 @@ def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
         if not slug or slug in seen:
             continue
         seen.add(slug)
-        entries.append({"slug": slug, "name": str(parent.get("name") or slug)})
+        worth = str(((parent.get("worth_row") or {}).get("effective"))
+                    or (parent.get("worth") or {}).get("decision") or "").strip().lower()
+        entries.append({"slug": slug, "name": str(parent.get("name") or slug),
+                        "worth": worth if worth in {"yes", "no"} else "maybe"})
     entries.sort(key=lambda entry: entry["name"].lower())
     return entries
 
@@ -1372,12 +1377,29 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
                   f"<h2>{len(entries)} people</h2>"
                   "<p>Pick a person to read their dossier.</p></div>")
     payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
+    # Worth tabs over the sidebar (the review's decision-tabs component, as
+    # buttons: pure client-side filter, no navigation). Yes is the default;
+    # Undecided appears only while maybes exist, so a finished review shows
+    # the clean Yes/No pair. Tab counts are the same effective-worth numbers
+    # the review tabs report.
+    counts = {"yes": 0, "no": 0, "maybe": 0}
+    for entry in entries:
+        counts[entry["worth"]] += 1
+    tab_defs = [(key, label) for key, label in
+                (("yes", "Yes"), ("no", "No"), ("maybe", "Undecided")) if counts[key]]
+    default_tab = "yes" if counts["yes"] or not tab_defs else tab_defs[0][0]
+    tabs = "".join(
+        f"<button type='button' class='decision-tab{' active' if key == default_tab else ''}' "
+        f"data-directory-tab='{key}'>{label}<span>{counts[key]}</span></button>"
+        for key, label in tab_defs)
+    tab_nav = (f"<nav class='decision-tabs directory-tabs' aria-label='Worth decision'>{tabs}</nav>"
+               if tabs else "")
     search = ("<div class='worth-search' data-directory-search>"
               "<input class='worth-search-input' type='search' placeholder='Search people…' "
               "aria-label='Search people by name' autocomplete='off' spellcheck='false'>"
               "<span class='worth-search-count' data-search-count hidden></span></div>")
     content = ("<div class='directory-layout'>"
-               f"<aside class='directory-sidebar'>{search}"
+               f"<aside class='directory-sidebar'>{tab_nav}{search}"
                "<nav class='directory-list' data-directory-list aria-label='People A to Z'></nav>"
                "</aside>"
                f"<section class='directory-detail' data-directory-detail>{detail}</section>"
