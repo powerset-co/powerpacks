@@ -16,7 +16,7 @@ Changelog:
     concurrency mode that once caused the stale-enrich-phase bug and later a
     9-minute GIL pile-up on an 8 GB machine (1 Hz polls x full-model rebuilds).
     `parents_now()` returns memory; `refresh_parents_from_disk()` runs at job
-    terminals (via `_job_done_hooks`) and stage boundaries. Added `/api/events`
+    terminals (via the `_job_events` channel) and stage boundaries. Added `/api/events`
     (SSE nudge stream) and the session flock in `cmd_serve` (canonical store
     only). The review JS replaced `setInterval` polling with one EventSource.
 """
@@ -109,27 +109,43 @@ def _mark_enrichment_failed(error: str) -> None:
         pass
 
 
-# Live job progress, in memory: the in-process primitives call on_progress
-# beside every manifest heartbeat; the server never reads its own flush back.
-_job_progress: dict[str, Any] = {}
-_progress_listeners: list[Callable[[], None]] = []
+class _JobEvents:
+    """The one in-process channel between jobs and views (single-writer:
+    jobs are the only mid-session writer besides clicks). Primitives report
+    progress here beside their manifest flushes — the server never reads its
+    own flush back; job terminals (success OR failure) fire the terminal
+    subscribers so the handler closure re-derives the model and nudges views."""
+
+    def __init__(self) -> None:
+        self.latest: dict[str, Any] = {}
+        self._progress_subs: list[Callable[[], None]] = []
+        self._terminal_subs: list[Callable[[], None]] = []
+
+    def subscribe(self, *, progress: Callable[[], None] | None = None,
+                  terminal: Callable[[], None] | None = None) -> None:
+        if progress:
+            self._progress_subs.append(progress)
+        if terminal:
+            self._terminal_subs.append(terminal)
+
+    def report(self, event: dict[str, Any]) -> None:
+        self.latest = dict(event)
+        self._fire(self._progress_subs)
+
+    def terminal(self) -> None:
+        self.latest = {}
+        self._fire(self._terminal_subs)
+
+    @staticmethod
+    def _fire(subs: list[Callable[[], None]]) -> None:
+        for sub in list(subs):
+            try:
+                sub()
+            except Exception:
+                pass  # a view nudge must never break the job
 
 
-def _report_job_progress(event: dict[str, Any]) -> None:
-    _job_progress.clear()
-    _job_progress.update(event)
-    for listener in list(_progress_listeners):
-        try:
-            listener()
-        except Exception:
-            pass  # a view nudge must never break the job
-
-
-# The handler closure registers its refresh+notify here so job terminals
-# (success OR failure) re-derive the in-memory model from the job's own
-# writes and nudge connected views. Single-writer: jobs are the only
-# mid-session writer besides clicks, so these are the only refresh points.
-_job_done_hooks: list[Callable[[], None]] = []
+_job_events = _JobEvents()
 
 
 def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
@@ -137,7 +153,6 @@ def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
         return  # one job at a time; the durable manifests re-trigger any rerun
 
     def runner() -> None:
-        _job_progress.clear()
         try:
             steps()
         # BaseException on purpose: the primitives raise SystemExit on their
@@ -147,11 +162,7 @@ def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
             _mark_enrichment_failed(f"{name}: {type(exc).__name__}: {exc}")
         finally:
             _job_lock.release()
-            for hook in list(_job_done_hooks):
-                try:
-                    hook()
-                except Exception:
-                    pass  # a view nudge must never mask the job outcome
+            _job_events.terminal()
 
     threading.Thread(target=runner, name=f"pipeline-job-{name}", daemon=True).start()
 
@@ -172,7 +183,7 @@ def _free_enrichment_steps() -> None:
     (the Approve button owns money). No convergence loop: the chain may re-drift
     the selection, and the next enrich-page render re-derives and re-triggers."""
     ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=0.0,
-                          on_progress=_report_job_progress).run()
+                          on_progress=_job_events.report).run()
     enrichment = read_enrichment_manifest(selection=current_worth_selection())
     if enrichment.get("status") == STATUS_RESEARCH_COMPLETE:
         _post_enrichment_chain()
@@ -191,7 +202,7 @@ def start_approved_enrichment_job(budget: float) -> None:
         # The budget is rounded to cents exactly as the argv form did, so the
         # primitive's gate compares the same ceiling the UI approved.
         ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=round(budget, 2),
-                              on_progress=_report_job_progress).run()
+                              on_progress=_job_events.report).run()
         _post_enrichment_chain()
 
     _run_pipeline_job("approved-enrichment", steps)
@@ -260,8 +271,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         refresh_parents_from_disk()
         notify_views()
 
-    _job_done_hooks.append(_after_job)
-    _progress_listeners.append(notify_views)
+    _job_events.subscribe(progress=notify_views, terminal=_after_job)
 
     def parents_now() -> list[dict[str, Any]]:
         """The in-memory SPA model — authoritative for the session."""
@@ -382,7 +392,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         if current != last_seen:
                             last_seen = current
                             payload = json.dumps({"seq": current,
-                                                  "job": dict(_job_progress) or None})
+                                                  "job": _job_events.latest or None})
                             self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
                         else:
                             self.wfile.write(b": ping\n\n")

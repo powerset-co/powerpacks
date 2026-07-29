@@ -3599,7 +3599,7 @@ class TestReviewWeb(unittest.TestCase):
         # writer besides clicks.
         import time as _time
         fired: list[str] = []
-        web_server._job_done_hooks.append(lambda: fired.append("hook"))
+        web_server._job_events.subscribe(terminal=lambda: fired.append("hook"))
         try:
             web_server._run_pipeline_job("t-ok", lambda: None)
             deadline = _time.time() + 5
@@ -3616,7 +3616,7 @@ class TestReviewWeb(unittest.TestCase):
                 _time.sleep(0.01)
             self.assertEqual(len(fired), 2)
         finally:
-            web_server._job_done_hooks.pop()
+            web_server._job_events._terminal_subs.pop()
 
     def test_browser_observer_subscribes_only_on_wait_screens(self):
         # Single-writer sessions: the browser never polls. Wait screens open ONE

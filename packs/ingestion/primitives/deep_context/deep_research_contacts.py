@@ -58,7 +58,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from parallel import NotFoundError, Parallel
 
@@ -659,6 +659,14 @@ def _write_progress_manifest(manifest: str, status: str,
     write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
 
 
+def _report_progress(params: "ResearchRunParams", status: str,
+                     counts: dict[str, int], **extra: Any) -> None:
+    """The one progress door: durable manifest flush + in-process channel."""
+    _write_progress_manifest(params.manifest, status, counts, **extra)
+    if params.on_progress:
+        params.on_progress({"status": status, "counts": counts})
+
+
 def _normalized_progress_counts(total: int, reused: int,
                                 provider_counts: dict[str, Any]) -> dict[str, int]:
     normalized = {str(key).lower(): int(value or 0)
@@ -748,11 +756,11 @@ class ResearchRunParams:
     max_wait: int = DEFAULT_MAX_WAIT
     workers: int = DEFAULT_RESULT_WORKERS
     api_timeout: int = 60
-    # In-process progress channel: called with {"status", "counts"} beside every
-    # manifest heartbeat, so an in-process caller (the review server) can hold
-    # live progress in memory instead of reading its own flush back. The
-    # manifest write remains the durability record. None = no listener (CLI).
-    on_progress: Any = None
+    # In-process progress channel: fired with {"status", "counts"} by
+    # _report_progress beside every manifest heartbeat, so an in-process caller
+    # (the review server) holds live progress in memory instead of reading its
+    # own flush back. The manifest write remains the durability record.
+    on_progress: Callable[[dict[str, Any]], None] | None = None
 
 
 def _params_from_args(args: argparse.Namespace) -> ResearchRunParams:
@@ -796,14 +804,10 @@ def submit_research(params: ResearchRunParams) -> dict[str, Any]:
         todo = todo[: params.limit]
 
     if not todo:
-        _write_progress_manifest(
-            params.manifest, "research_complete",
+        _report_progress(
+            params, "research_complete",
             {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
             provider_status={})
-        if params.on_progress:
-            params.on_progress({"status": "research_complete",
-                                "counts": {"total": len(rows), "completed": skipped_done,
-                                           "pending": 0, "failed": 0}})
         return {
             "primitive": "deep_research_contacts",
             "command": "submit",
@@ -849,15 +853,11 @@ def submit_research(params: ResearchRunParams) -> dict[str, Any]:
         "rows": todo,  # keep for poll-time CSV row lookup
     }
     write_json(_persisted_state_path(output_dir), state)
-    _write_progress_manifest(
-        params.manifest, "running",
+    _report_progress(
+        params, "running",
         {"total": len(rows), "completed": skipped_done,
          "pending": len(todo), "failed": 0},
         provider_status={"submitted": len(todo)})
-    if params.on_progress:
-        params.on_progress({"status": "running",
-                            "counts": {"total": len(rows), "completed": skipped_done,
-                                       "pending": len(todo), "failed": 0}})
 
     cost_per = PROCESSOR_PRICING_USD[processor]
     return {
@@ -930,15 +930,10 @@ def poll_research(params: ResearchRunParams) -> dict[str, Any]:
         client, group_id,
         poll_interval=params.poll_interval,
         max_wait=params.max_wait,
-        on_progress=lambda counts: (
-            _write_progress_manifest(
-                params.manifest, "running",
-                _normalized_progress_counts(total, skipped_done, counts),
-                provider_status=counts),
-            params.on_progress and params.on_progress({
-                "status": "running",
-                "counts": _normalized_progress_counts(total, skipped_done, counts)}),
-        ),
+        on_progress=lambda counts: _report_progress(
+            params, "running",
+            _normalized_progress_counts(total, skipped_done, counts),
+            provider_status=counts),
     )
     print(f"[deep_research_contacts] group complete, fetching {len(run_ids)} run results", file=sys.stderr)
 
@@ -1015,17 +1010,12 @@ def poll_research(params: ResearchRunParams) -> dict[str, Any]:
         "errors": errors,
     }
     write_json(output_dir / "_manifest.json", summary)
-    _write_progress_manifest(
-        params.manifest,
+    _report_progress(
+        params,
         "research_complete" if not errors else "completed_with_errors",
         {"total": total, "completed": skipped_done + len(results_by_handle),
          "pending": 0, "failed": len(errors)},
         provider_status=(final_group or {}).get("status") or {})
-    if params.on_progress:
-        params.on_progress({
-            "status": "research_complete" if not errors else "completed_with_errors",
-            "counts": {"total": total, "completed": skipped_done + len(results_by_handle),
-                       "pending": 0, "failed": len(errors)}})
     return summary
 
 
@@ -1045,14 +1035,10 @@ def run_research(params: ResearchRunParams) -> dict[str, Any]:
     if params.limit is not None:
         todo = todo[: params.limit]
     if not todo:
-        _write_progress_manifest(
-            params.manifest, "research_complete",
+        _report_progress(
+            params, "research_complete",
             {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
             provider_status={})
-        if params.on_progress:
-            params.on_progress({"status": "research_complete",
-                                "counts": {"total": len(rows), "completed": skipped_done,
-                                           "pending": 0, "failed": 0}})
         return {"primitive": "deep_research_contacts", "command": "run",
                 "status": "no_work", "queue_rows": len(rows),
                 "skipped_already_done": skipped_done}

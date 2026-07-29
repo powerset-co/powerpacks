@@ -140,6 +140,10 @@ from packs.ingestion.primitives.deep_context.deep_research_contacts import (
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
+# The research payload statuses a pass treats as success — the same set the
+# exit-code era called "exit 0" ({no_work, completed}); completed_with_errors
+# (old exit 2) stays a failed pass.
+RESEARCH_OK_STATUSES = frozenset({"no_work", "completed"})
 DR_OUT_DIR = DEEP_RESEARCH_DIR
 QUEUE_CSV = DR_OUT_DIR / "research_queue.csv"
 QUEUE_FIELDS = [
@@ -1019,9 +1023,7 @@ class ReconcileDeepResearch(Node):
         except Exception as exc:
             research = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
         research_status = str(research.get("status") or "failed")
-        # Same success set the exit-code era used: exit 0 == {no_work, completed};
-        # completed_with_errors (old exit 2) stays a failed pass.
-        research_ok = research_status in {"no_work", "completed"}
+        research_ok = research_status in RESEARCH_OK_STATUSES
         print(f"[deep-research] research finished ({research_status}).", file=sys.stderr, flush=True)
         # Propose retargets (pending) for any correct LinkedIn the research found.
         proposals = {"proposed": 0}
