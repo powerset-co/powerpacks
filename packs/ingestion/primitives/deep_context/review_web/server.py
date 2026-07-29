@@ -109,6 +109,22 @@ def _mark_enrichment_failed(error: str) -> None:
         pass
 
 
+# Live job progress, in memory: the in-process primitives call on_progress
+# beside every manifest heartbeat; the server never reads its own flush back.
+_job_progress: dict[str, Any] = {}
+_progress_listeners: list[Callable[[], None]] = []
+
+
+def _report_job_progress(event: dict[str, Any]) -> None:
+    _job_progress.clear()
+    _job_progress.update(event)
+    for listener in list(_progress_listeners):
+        try:
+            listener()
+        except Exception:
+            pass  # a view nudge must never break the job
+
+
 # The handler closure registers its refresh+notify here so job terminals
 # (success OR failure) re-derive the in-memory model from the job's own
 # writes and nudge connected views. Single-writer: jobs are the only
@@ -121,6 +137,7 @@ def _run_pipeline_job(name: str, steps: Callable[[], None]) -> None:
         return  # one job at a time; the durable manifests re-trigger any rerun
 
     def runner() -> None:
+        _job_progress.clear()
         try:
             steps()
         # BaseException on purpose: the primitives raise SystemExit on their
@@ -154,7 +171,8 @@ def _free_enrichment_steps() -> None:
     gate, which stamps a current needs_approval receipt WITHOUT spending a cent
     (the Approve button owns money). No convergence loop: the chain may re-drift
     the selection, and the next enrich-page render re-derives and re-triggers."""
-    ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=0.0).run()
+    ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=0.0,
+                          on_progress=_report_job_progress).run()
     enrichment = read_enrichment_manifest(selection=current_worth_selection())
     if enrichment.get("status") == STATUS_RESEARCH_COMPLETE:
         _post_enrichment_chain()
@@ -172,7 +190,8 @@ def start_approved_enrichment_job(budget: float) -> None:
     def steps() -> None:
         # The budget is rounded to cents exactly as the argv form did, so the
         # primitive's gate compares the same ceiling the UI approved.
-        ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=round(budget, 2)).run()
+        ReconcileDeepResearch(**ENRICH_SCOPE, approve=True, budget=round(budget, 2),
+                              on_progress=_report_job_progress).run()
         _post_enrichment_chain()
 
     _run_pipeline_job("approved-enrichment", steps)
@@ -242,6 +261,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         notify_views()
 
     _job_done_hooks.append(_after_job)
+    _progress_listeners.append(notify_views)
 
     def parents_now() -> list[dict[str, Any]]:
         """The in-memory SPA model — authoritative for the session."""
@@ -353,17 +373,17 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 try:
                     self.wfile.write(b"retry: 2000\n\n")
                     while True:
-                        # While a job runs its primitives heartbeat progress
-                        # into the manifest; tick the stream every 2s so the
-                        # view re-snapshots live counts. Idle: 15s keepalives.
-                        job_running = _job_lock.locked()
+                        # Progress events are pushed by the primitives' own
+                        # on_progress callbacks — no timers, no file reads.
                         with events_cond:
                             if events_seq["n"] == last_seen:
-                                events_cond.wait(timeout=2.0 if job_running else 15.0)
+                                events_cond.wait(timeout=15.0)
                             current = events_seq["n"]
-                        if current != last_seen or _job_lock.locked():
+                        if current != last_seen:
                             last_seen = current
-                            self.wfile.write(f"data: {current}\n\n".encode("utf-8"))
+                            payload = json.dumps({"seq": current,
+                                                  "job": dict(_job_progress) or None})
+                            self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
                         else:
                             self.wfile.write(b": ping\n\n")
                         self.wfile.flush()

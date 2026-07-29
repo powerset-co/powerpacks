@@ -770,6 +770,7 @@ class ReconcileDeepResearch(Node):
         reasoning_effort: str = "medium",
         out_dir: Path | None = None,
         queue_csv: Path | None = None,
+        on_progress: Any = None,
     ) -> None:
         self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
         self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
@@ -779,6 +780,9 @@ class ReconcileDeepResearch(Node):
         self.raw_dir = Path(raw_dir or RAW_DIR)
         self.out_dir = Path(out_dir or DR_OUT_DIR)
         self.queue_csv = Path(queue_csv or QUEUE_CSV)
+        # In-process progress channel (the review server holds live counts in
+        # memory; manifest writes stay the durable record). None = CLI, no listener.
+        self.on_progress = on_progress
         # None = the CLI default (the fixed Enrich Contacts receipt); "" disables
         # every receipt write, exactly like `--manifest ""` always has.
         manifest_text = str(ENRICH_MANIFEST) if manifest is None else str(manifest).strip()
@@ -927,6 +931,9 @@ class ReconcileDeepResearch(Node):
         owner_block = owner_background_block(load_owner()) if load_owner() else ""
 
         def heartbeat(done: int, total: int) -> None:
+            if self.on_progress:
+                self.on_progress({"status": "running", "phase": "judging_retargets",
+                                  "counts": {"done": done, "total": total}})
             # Honest judging progress in the ONE fixed manifest (no new state files):
             # cheap per-completion writes the UI polls while a pass judges N proposals.
             if manifest_path:
@@ -1005,6 +1012,7 @@ class ReconcileDeepResearch(Node):
                 output_dir=self.out_dir,
                 processor=self.processor,
                 manifest=str(manifest_path) if manifest_path else "",
+                on_progress=self.on_progress,
             ))
         except SystemExit as exc:
             research = {"status": "failed", "error": f"SystemExit: {exc}"}
