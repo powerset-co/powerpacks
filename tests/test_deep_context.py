@@ -4908,5 +4908,118 @@ class TestMergeCache(unittest.TestCase):
         self.assertEqual(to_judge, [])
 
 
+class TestDirectoryView(unittest.TestCase):
+    """The /directory browse surface: A-Z sidebar island + read-only person pane."""
+
+    @staticmethod
+    def _parent(slug: str, name: str, **candidate: object) -> dict:
+        base = {
+            "pub": f"{slug}-pub", "full_name": name,
+            "match_emails": [], "match_phones": [],
+        }
+        base.update(candidate)
+        return {"slug": slug, "dossier_slug": slug, "name": name,
+                "person_ids": [f"candidate:email:{slug}@example.com"],
+                "candidates": [base]}
+
+    def test_markdown_to_html_renders_dossier_shapes(self):
+        markdown = (
+            "# Jordan Bravo\n\n"
+            "<!-- parent-link --> _Part of [[jordan-parent]] **Jordan Bravo**_\n\n"
+            "## Summary\n\n"
+            "Knows **everyone** at [[acme-corp|Acme]] — _allegedly_.\n"
+            "Second line of the same paragraph.\n\n"
+            "## Timeline\n\n"
+            "- **2026-01-02** — Said hello\n"
+            "- Replied <script>alert(1)</script>\n\n"
+            + "─" * 56 + "\n\n"
+            "Tail after the merge rule.\n")
+        html = web_rendering.markdown_to_html(markdown)
+        self.assertIn("<h3>Jordan Bravo</h3>", html)
+        self.assertIn("<h4>Summary</h4>", html)
+        self.assertIn("Knows <strong>everyone</strong> at Acme — <em>allegedly</em>. "
+                      "Second line of the same paragraph.", html)
+        self.assertIn("<ul><li><strong>2026-01-02</strong> — Said hello</li>", html)
+        self.assertIn("&lt;script&gt;", html)      # dossier text can never inject markup
+        self.assertNotIn("<script>", html)
+        self.assertIn("<hr>", html)
+        self.assertNotIn("parent-link", html)       # HTML comments are stripped
+        self.assertNotIn("[[", html)                # wiki links become display text
+
+    def test_directory_entries_sorted_and_deduped(self):
+        parents = [
+            self._parent("zed-zulu", "Zed Zulu"),
+            self._parent("amy-alpha", "Amy Alpha"),
+            {"slug": "split-twin", "dossier_slug": "amy-alpha", "name": "Amy Alpha",
+             "candidates": []},  # split parent sharing a dossier appears once
+            {"slug": "", "name": "No Slug", "candidates": []},
+        ]
+        entries = web_rendering.directory_entries(parents)
+        self.assertEqual(entries, [{"slug": "amy-alpha", "name": "Amy Alpha"},
+                                   {"slug": "zed-zulu", "name": "Zed Zulu"}])
+
+    def test_person_detail_reuses_profile_renderers_over_full_dossier(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "jordan-parent.md").write_text(
+                "---\nslug: jordan-parent\n---\n\n# Jordan Bravo\n\n"
+                "## Relationship & cadence\n\nWarm intro via Casey.\n\n"
+                "## Identifiers\n\n- casey@example.com\n",
+                encoding="utf-8")
+            parent = self._parent(
+                "jordan-parent", "Jordan Bravo",
+                url="https://www.linkedin.com/in/jordan-bravo-test",
+                headline="Builds things", location="Springfield",
+                experiences=["Engineer @ Acme (2020 - Present)"],
+                education=["BS — State"],
+                match_emails=["jordan@example.com"])
+            html = web_rendering.render_person_detail(
+                parent, base / "parents", dossiers, base / "profiles")
+        self.assertIn("Jordan Bravo", html)
+        self.assertIn("View LinkedIn", html)
+        self.assertIn("Builds things", html)
+        self.assertIn("<div><dt>Work</dt>", html)
+        self.assertIn("<div><dt>Education</dt>", html)
+        # Contact merges match values with the dossier's Identifiers section.
+        self.assertIn("jordan@example.com · casey@example.com", html)
+        self.assertIn("<h4>Relationship &amp; cadence</h4>", html)
+        self.assertIn("Warm intro via Casey.", html)
+        # Browse-only: no decision affordances anywhere in the pane.
+        for marker in ("data-worth", "data-decide", "data-complete", "data-open-fix"):
+            self.assertNotIn(marker, html)
+
+    def test_directory_page_embeds_island_and_selected_person(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "amy-alpha.md").write_text(
+                "# Amy Alpha\n\n## Summary\n\nAlpha tester.\n", encoding="utf-8")
+            parents = [self._parent("amy-alpha", "Amy Alpha"),
+                       self._parent("zed-zulu", "Zed Zulu")]
+            kwargs = {"parents_dir": base / "parents", "dossier_dir": dossiers,
+                      "profile_cache_dir": base / "profiles"}
+            html = web_rendering.directory_page_html(parents, {}, **kwargs).decode("utf-8")
+            picked = web_rendering.directory_page_html(
+                parents, {"person": ["amy-alpha"]}, **kwargs).decode("utf-8")
+        self.assertIn("data-directory-people", html)
+        self.assertIn("data-directory-list", html)
+        self.assertIn("data-directory-search", html)
+        self.assertIn('"slug": "zed-zulu"', html)
+        self.assertIn("data-stage='directory'", html)
+        self.assertIn("data-external-updates='false'", html)  # no SSE on this page
+        self.assertIn("Pick a person", html)                  # no selection -> empty state
+        self.assertIn("Alpha tester.", picked)                # ?person= pre-renders the pane
+        self.assertNotIn("Pick a person", picked)
+
+    def test_review_js_wires_the_directory_view(self):
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn("setupDirectory", script)
+        self.assertIn("/api/person", script)
+        self.assertIn("data-directory-list", script)
+
+
 if __name__ == "__main__":
     unittest.main()

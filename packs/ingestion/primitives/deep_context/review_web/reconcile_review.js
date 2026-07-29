@@ -1086,6 +1086,115 @@ async function syncFileState() {
   }
 }
 
+// --- directory browse view (/directory) --------------------------------------
+// Read-only reference surface: the sidebar renders in chunks from the embedded
+// A-Z island (scrolling appends more), the search input filters it live with an
+// "N of M" count (Enter opens the first match), and clicking a name fetches
+// that person's pane from /api/person. Nothing here ever writes.
+function setupDirectory() {
+  const list = document.querySelector("[data-directory-list]");
+  const detail = document.querySelector("[data-directory-detail]");
+  const island = document.querySelector("script[data-directory-people]");
+  if (!list || !detail || !island) return;
+  let people = [];
+  try { people = JSON.parse(island.textContent || "[]"); } catch { people = []; }
+  const CHUNK = 150;
+  let filtered = people;
+  let rendered = 0;
+  let activeSlug = new URLSearchParams(window.location.search).get("person") || "";
+
+  function entryButton(entry) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "directory-item";
+    item.dataset.slug = entry.slug || "";
+    item.textContent = entry.name || entry.slug || "";
+    if (entry.slug === activeSlug) item.classList.add("active");
+    return item;
+  }
+
+  function renderMore() {
+    filtered.slice(rendered, rendered + CHUNK).forEach((entry) => list.append(entryButton(entry)));
+    rendered = Math.min(filtered.length, rendered + CHUNK);
+  }
+
+  function fillViewport() {
+    while (rendered < filtered.length && list.scrollHeight <= list.clientHeight + 200) renderMore();
+  }
+
+  async function selectPerson(slug) {
+    if (!slug || slug === activeSlug) return;
+    let response;
+    try {
+      response = await fetch(`/api/person?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
+    } catch {
+      announce("Could not load person", true);
+      return;
+    }
+    if (!response.ok) {
+      announce("Could not load person", true);
+      return;
+    }
+    detail.innerHTML = await response.text();
+    wireDynamicContent(detail);
+    detail.scrollTop = 0;
+    activeSlug = slug;
+    list.querySelectorAll(".directory-item").forEach((item) => {
+      item.classList.toggle("active", item.dataset.slug === slug);
+    });
+    window.history.replaceState(null, "", `/directory?person=${encodeURIComponent(slug)}`);
+  }
+
+  list.addEventListener("click", (event) => {
+    const item = event.target.closest(".directory-item");
+    if (item) void selectPerson(item.dataset.slug || "");
+  });
+  list.addEventListener("scroll", () => {
+    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 400) renderMore();
+  }, { passive: true });
+
+  const box = document.querySelector("[data-directory-search]");
+  const input = box?.querySelector("input");
+  const count = box?.querySelector("[data-search-count]");
+  if (input) {
+    input.addEventListener("input", () => {
+      const query = input.value.trim().toLowerCase();
+      filtered = query
+        ? people.filter((entry) => (entry.name || "").toLowerCase().includes(query))
+        : people;
+      if (count) {
+        count.hidden = !query;
+        if (query) count.textContent = `${filtered.length} of ${people.length}`;
+      }
+      list.textContent = "";
+      rendered = 0;
+      renderMore();
+      fillViewport();
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (filtered.length) void selectPerson(filtered[0].slug || "");
+      } else if (event.key === "Escape") {
+        input.value = "";
+        input.dispatchEvent(new Event("input"));
+      }
+    });
+  }
+
+  renderMore();
+  fillViewport();
+  if (activeSlug) {
+    // The server already rendered this person's pane; make sure their sidebar
+    // entry exists (render up to it) and is visible.
+    const at = filtered.findIndex((entry) => entry.slug === activeSlug);
+    while (at >= rendered && rendered < filtered.length) renderMore();
+    list.querySelector(".directory-item.active")?.scrollIntoView({ block: "center" });
+  }
+}
+
+if (document.body.dataset.stage === "directory") setupDirectory();
+
 maybeAutoComplete(document);
 
 if (observesExternalUpdates) {
