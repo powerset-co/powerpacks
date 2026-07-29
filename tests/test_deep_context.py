@@ -3659,8 +3659,9 @@ class TestReviewWeb(unittest.TestCase):
             script,
         )
         self.assertIn("void syncFileState();", script)
-        self.assertIn("serverEvents.onmessage = () => { void syncFileState(); };", script)
-        self.assertIn('document.addEventListener("visibilitychange"', script)
+        self.assertIn("renderJobProgress(payload.job)", script)
+        self.assertNotIn("visibilitychange", script)
+        self.assertNotIn('document.visibilityState !== "visible"', script)
         self.assertIn('leaveAndNavigate("People complete", "/?stage=enrich")', script)
         self.assertNotIn(
             'document.visibilityState !== "visible" || hasIdentityDraft()',

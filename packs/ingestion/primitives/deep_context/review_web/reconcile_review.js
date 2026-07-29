@@ -1005,10 +1005,36 @@ function hasIdentityDraft() {
   );
 }
 
+// Update the enrich screen's counts in place from an SSE job-progress payload
+// (no reload, no fetch — the numbers rode in on the event). Returns false when
+// the current screen has no enrich state to update.
+function renderJobProgress(job) {
+  const state = document.querySelector(".enrich-state");
+  if (!state || !job || !job.counts) return false;
+  const text = state.querySelector("p");
+  const bar = state.querySelector(".enrich-progress");
+  const fill = state.querySelector(".enrich-progress-fill");
+  const counts = job.counts;
+  if (job.phase === "judging_retargets") {
+    if (text) text.textContent = `${counts.done || 0} of ${counts.total || 0} checked`;
+    return true;
+  }
+  const total = counts.total || 0;
+  const done = Math.min(total, counts.completed || 0);
+  if (text) text.textContent = `${done} of ${total} complete`;
+  if (bar && fill && total) {
+    bar.setAttribute("aria-valuemax", String(total));
+    bar.setAttribute("aria-valuenow", String(done));
+    fill.style.width = `${Math.round((done / total) * 100)}%`;
+  }
+  return true;
+}
+
 // Re-snapshot /api/status. Invoked by the server's SSE nudge stream — the
 // browser never polls; the single-writer server pushes when anything changes.
+// No visibility gating: events are rare and a snapshot costs ~20ms, so hidden
+// tabs stay current too and are already correct when refocused.
 async function syncFileState() {
-  if (document.visibilityState !== "visible") return;
   if (completingStage) return; // a stage-complete navigation is in flight
   const currentStage = document.body.dataset.stage || "";
   if (!observesExternalUpdates) return;
@@ -1047,10 +1073,14 @@ async function syncFileState() {
 if (observesExternalUpdates) {
   void syncFileState();
   const serverEvents = new EventSource("/api/events");
-  serverEvents.onmessage = () => { void syncFileState(); };
+  serverEvents.onmessage = (message) => {
+    let payload = null;
+    try { payload = JSON.parse(message.data); } catch { payload = null; }
+    // Pure job-progress events update the counts in place; everything else
+    // (mutations, job terminals) re-snapshots and reloads on a token change.
+    if (payload && payload.job && renderJobProgress(payload.job)) return;
+    void syncFileState();
+  };
   // A reconnect implies missed events — re-snapshot on every open.
   serverEvents.onopen = () => { void syncFileState(); };
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void syncFileState();
-  });
 }
