@@ -425,10 +425,17 @@ read-only waiting view.
 
 ### 8. Apply and realize
 
+Stop the review UI first: the server holds the single-writer review-session
+lock for its whole lifetime (completing LinkedIn does NOT release it), and
+`apply-retargets` / `realize` refuse to write while it runs. `stop` is the
+cleanup — the lock dies with the process; the on-disk `.server.lock` anchor
+file intentionally remains.
+
 Before applying replacement URLs, disclose that cache misses call RapidAPI and
 get explicit approval. Then:
 
 ```bash
+bin/deep-context stop
 bin/deep-context apply-retargets
 bin/deep-context realize
 ```

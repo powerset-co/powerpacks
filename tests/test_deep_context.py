@@ -112,6 +112,18 @@ class TestDeepContextRunnerSafety(unittest.TestCase):
         self.assertEqual(help_result.returncode, 0)
         self.assertIn("paid stages require", help_result.stderr)
 
+    def test_stop_is_an_idempotent_noop_without_a_review_server(self):
+        # `stop` is the post-review cleanup step (skill step 8): it must exit 0
+        # and say so when no server holds the session, so agents can run it
+        # unconditionally before apply-retargets/realize.
+        runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
+        result = subprocess.run(
+            [str(runner), "stop", "--port", "45997"],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"status": "stopped"', result.stdout)
+        self.assertIn("no review server was running", result.stdout)
+
     def test_profile_prefetch_is_an_explicit_runner_task(self):
         runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
         result = subprocess.run(

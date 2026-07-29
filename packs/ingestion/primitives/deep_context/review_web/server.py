@@ -1168,7 +1168,7 @@ def workflow_status_from_parents(
         "continue_enrichment": "wait for the user to click Continue in Enrich Contacts",
         "review_linkedin": "wait for LinkedIn Yes/No decisions in the review UI",
         "finish_linkedin": "wait for the user to click Finish in Check LinkedIn",
-        "realize": "bin/deep-context realize",
+        "realize": "bin/deep-context stop && bin/deep-context realize",
     }
     return {
         "primitive": "deep_context_review_status",
