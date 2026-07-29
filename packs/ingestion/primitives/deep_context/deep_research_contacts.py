@@ -8,6 +8,14 @@ operations this primitive uses and returns plain dicts in the shapes the rest of
 the module consumes.
 
 Changelog:
+- 2026-07-29 (in-process invocation): the run/submit/poll bodies became the
+  payload-returning `run_research`/`submit_research`/`poll_research` over a
+  frozen `ResearchRunParams`; the `cmd_*` subcommands are thin wrappers that
+  call, `emit()`, and map status -> exit code. In-repo callers
+  (reconcile_deep_research) now import and call `run_research` and branch on
+  the returned payload — the subprocess + stdout redirect are gone. CLI
+  surface, per-handle artifacts, `_taskgroup.json`/`_manifest.json`, manifest
+  heartbeats, stderr progress lines, and exit codes are unchanged.
 - 2026-07-23: Replaced the hand-rolled stdlib (urllib) Parallel HTTP client with the
   official `parallel-web` SDK. Public helpers (PROCESSOR_PRICING_USD,
   filter_already_done, build_input, parallel_to_research_json, …), the CLI surface
@@ -47,6 +55,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -632,9 +641,9 @@ def _persisted_state_path(output_dir: Path) -> Path:
     return output_dir / "_taskgroup.json"
 
 
-def _write_progress_manifest(args: argparse.Namespace, status: str,
+def _write_progress_manifest(manifest: str, status: str,
                              counts: dict[str, int], **extra: Any) -> None:
-    text = str(getattr(args, "manifest", "") or "").strip()
+    text = str(manifest or "").strip()
     if not text:
         return
     path = Path(text)
@@ -719,38 +728,87 @@ def _load_group_id(output_dir: Path) -> str | None:
         return None
 
 
-def cmd_submit(args: argparse.Namespace) -> int:
-    processor = _validate_processor(args.processor)
-    api_key = _resolve_api_key(args.api_key)
-    rows = load_queue(Path(args.input))
-    output_dir = Path(args.output_dir)
+@dataclass(frozen=True)
+class ResearchRunParams:
+    """The one config door for the submit/poll/run flow — explicit caller
+    arguments, resolved once (in-process callers construct it directly; the CLI
+    builds it from argparse via `_params_from_args`)."""
+
+    input_csv: Path
+    output_dir: Path
+    processor: str = DEFAULT_PROCESSOR
+    manifest: str = ""  # optional fixed stage manifest for UI progress
+    api_key: str | None = None
+    base_url: str = DEFAULT_BASE_URL
+    beta_header: str = DEFAULT_BETA_HEADER
+    batch_size: int = DEFAULT_BATCH_SIZE
+    limit: int | None = None
+    taskgroup_id: str = ""
+    poll_interval: int = DEFAULT_POLL_INTERVAL
+    max_wait: int = DEFAULT_MAX_WAIT
+    workers: int = DEFAULT_RESULT_WORKERS
+    api_timeout: int = 60
+
+
+def _params_from_args(args: argparse.Namespace) -> ResearchRunParams:
+    """CLI Namespace -> params. getattr defaults cover subcommands whose parser
+    lacks the other phase's flags (submit has no poll args and vice versa)."""
+    return ResearchRunParams(
+        input_csv=Path(getattr(args, "input", "") or ""),
+        output_dir=Path(args.output_dir),
+        processor=getattr(args, "processor", DEFAULT_PROCESSOR),
+        manifest=str(getattr(args, "manifest", "") or ""),
+        api_key=getattr(args, "api_key", None),
+        base_url=getattr(args, "base_url", DEFAULT_BASE_URL),
+        beta_header=getattr(args, "beta_header", DEFAULT_BETA_HEADER),
+        batch_size=getattr(args, "batch_size", DEFAULT_BATCH_SIZE),
+        limit=getattr(args, "limit", None),
+        taskgroup_id=str(getattr(args, "taskgroup_id", "") or ""),
+        poll_interval=getattr(args, "poll_interval", DEFAULT_POLL_INTERVAL),
+        max_wait=getattr(args, "max_wait", DEFAULT_MAX_WAIT),
+        workers=getattr(args, "workers", DEFAULT_RESULT_WORKERS),
+        api_timeout=getattr(args, "api_timeout", 60),
+    )
+
+
+# status -> CLI exit code, the same codes the subprocess era used.
+_EXIT_CODES = {"no_work": 0, "submitted": 0, "completed": 0, "completed_with_errors": 2}
+
+
+def submit_research(params: ResearchRunParams) -> dict[str, Any]:
+    """Create a task group + submit all eligible rows; save state for poll.
+
+    Returns the payload the CLI used to emit — statuses: no_work | submitted |
+    failed. This is the paid call: every submitted row bills."""
+    processor = _validate_processor(params.processor)
+    api_key = _resolve_api_key(params.api_key)
+    rows = load_queue(params.input_csv)
+    output_dir = params.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     todo, skipped_done = filter_already_done(rows, output_dir)
-    if args.limit is not None:
-        todo = todo[: args.limit]
+    if params.limit is not None:
+        todo = todo[: params.limit]
 
     if not todo:
         _write_progress_manifest(
-            args, "research_complete",
+            params.manifest, "research_complete",
             {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
             provider_status={})
-        emit({
+        return {
             "primitive": "deep_research_contacts",
             "command": "submit",
             "status": "no_work",
             "queue_rows": len(rows),
             "skipped_already_done": skipped_done,
-        })
-        return 0
+        }
 
-    client = ParallelClient(api_key, args.base_url, args.beta_header)
+    client = ParallelClient(api_key, params.base_url, params.beta_header)
     group = client.create_group(metadata={"source": "powerpacks", "submitted_at": now_iso()})
     group_id = group.get("taskgroup_id") or group.get("id")
     if not group_id:
-        emit({"primitive": "deep_research_contacts", "command": "submit",
-              "status": "failed", "error": "no taskgroup_id in response", "raw": group})
-        return 1
+        return {"primitive": "deep_research_contacts", "command": "submit",
+                "status": "failed", "error": "no taskgroup_id in response", "raw": group}
 
     spec = task_spec()
     inputs = [
@@ -764,8 +822,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
     ]
 
     all_run_ids: list[str] = []
-    for i in range(0, len(inputs), args.batch_size):
-        batch = inputs[i:i + args.batch_size]
+    for i in range(0, len(inputs), params.batch_size):
+        batch = inputs[i:i + params.batch_size]
         run_resp = client.add_runs(group_id, batch)
         run_ids = run_resp.get("run_ids") or []
         all_run_ids.extend(run_ids)
@@ -774,7 +832,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         "taskgroup_id": group_id,
         "processor": processor,
         "submitted_at": now_iso(),
-        "input_csv": str(args.input),
+        "input_csv": str(params.input_csv),
         "rows_submitted": len(todo),
         "skipped_already_done": skipped_done,
         "run_ids": all_run_ids,
@@ -783,13 +841,13 @@ def cmd_submit(args: argparse.Namespace) -> int:
     }
     write_json(_persisted_state_path(output_dir), state)
     _write_progress_manifest(
-        args, "running",
+        params.manifest, "running",
         {"total": len(rows), "completed": skipped_done,
          "pending": len(todo), "failed": 0},
         provider_status={"submitted": len(todo)})
 
     cost_per = PROCESSOR_PRICING_USD[processor]
-    emit({
+    return {
         "primitive": "deep_research_contacts",
         "command": "submit",
         "status": "submitted",
@@ -799,8 +857,13 @@ def cmd_submit(args: argparse.Namespace) -> int:
         "skipped_already_done": skipped_done,
         "estimated_usd": round(len(all_run_ids) * cost_per, 4),
         "state_path": str(_persisted_state_path(output_dir)),
-    })
-    return 0
+    }
+
+
+def cmd_submit(args: argparse.Namespace) -> int:
+    payload = submit_research(_params_from_args(args))
+    emit(payload)
+    return _EXIT_CODES.get(str(payload.get("status")), 1)
 
 
 def _wait_for_group(client: ParallelClient, group_id: str, *, poll_interval: int,
@@ -822,21 +885,23 @@ def _wait_for_group(client: ParallelClient, group_id: str, *, poll_interval: int
     return last
 
 
-def cmd_poll(args: argparse.Namespace) -> int:
-    api_key = _resolve_api_key(args.api_key)
-    output_dir = Path(args.output_dir)
+def poll_research(params: ResearchRunParams) -> dict[str, Any]:
+    """Poll the persisted task group + fetch results into per-handle JSON.
+
+    Returns the summary payload the CLI used to emit — statuses: completed |
+    completed_with_errors | failed. Free: reads results already paid for."""
+    api_key = _resolve_api_key(params.api_key)
+    output_dir = params.output_dir
     state_path = _persisted_state_path(output_dir)
-    if not state_path.exists() and not args.taskgroup_id:
-        emit({"primitive": "deep_research_contacts", "command": "poll",
-              "status": "failed", "error": f"no state file at {state_path} and no --taskgroup-id"})
-        return 1
+    if not state_path.exists() and not params.taskgroup_id:
+        return {"primitive": "deep_research_contacts", "command": "poll",
+                "status": "failed", "error": f"no state file at {state_path} and no --taskgroup-id"}
 
     state = read_json(state_path) if state_path.exists() else {}
-    group_id = args.taskgroup_id or state.get("taskgroup_id")
+    group_id = params.taskgroup_id or state.get("taskgroup_id")
     if not group_id:
-        emit({"primitive": "deep_research_contacts", "command": "poll",
-              "status": "failed", "error": "no taskgroup_id"})
-        return 1
+        return {"primitive": "deep_research_contacts", "command": "poll",
+                "status": "failed", "error": "no taskgroup_id"}
     run_ids: list[str] = state.get("run_ids") or []
     rows: list[dict[str, str]] = state.get("rows") or []
     rows_by_handle = {row.get("handle"): row for row in rows if row.get("handle")}
@@ -845,15 +910,15 @@ def cmd_poll(args: argparse.Namespace) -> int:
     skipped_done = int(state.get("skipped_already_done") or 0)
     total = skipped_done + len(run_ids)
 
-    client = ParallelClient(api_key, args.base_url, args.beta_header)
+    client = ParallelClient(api_key, params.base_url, params.beta_header)
 
     print(f"[deep_research_contacts] polling group {group_id}", file=sys.stderr)
     final_group = _wait_for_group(
         client, group_id,
-        poll_interval=args.poll_interval,
-        max_wait=args.max_wait,
+        poll_interval=params.poll_interval,
+        max_wait=params.max_wait,
         on_progress=lambda counts: _write_progress_manifest(
-            args, "running",
+            params.manifest, "running",
             _normalized_progress_counts(total, skipped_done, counts),
             provider_status=counts),
     )
@@ -866,12 +931,12 @@ def cmd_poll(args: argparse.Namespace) -> int:
 
     def fetch_one(run_id: str) -> tuple[str, dict[str, Any] | None, str | None]:
         try:
-            payload = client.get_run_result(run_id, api_timeout=args.api_timeout)
+            payload = client.get_run_result(run_id, api_timeout=params.api_timeout)
         except Exception as exc:
             return run_id, None, f"{type(exc).__name__}: {exc}"
         return run_id, payload, None
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+    with ThreadPoolExecutor(max_workers=params.workers) as pool:
         futures = {pool.submit(fetch_one, rid): rid for rid in run_ids}
         for fut in as_completed(futures):
             run_id, payload, err = fut.result()
@@ -933,34 +998,49 @@ def cmd_poll(args: argparse.Namespace) -> int:
     }
     write_json(output_dir / "_manifest.json", summary)
     _write_progress_manifest(
-        args,
+        params.manifest,
         "research_complete" if not errors else "completed_with_errors",
         {"total": total, "completed": skipped_done + len(results_by_handle),
          "pending": 0, "failed": len(errors)},
         provider_status=(final_group or {}).get("status") or {})
-    emit(summary)
-    return 0 if not errors else 2
+    return summary
+
+
+def cmd_poll(args: argparse.Namespace) -> int:
+    payload = poll_research(_params_from_args(args))
+    emit(payload)
+    return _EXIT_CODES.get(str(payload.get("status")), 1)
+
+
+def run_research(params: ResearchRunParams) -> dict[str, Any]:
+    """submit + poll in one go — the payload in-repo callers branch on.
+
+    Statuses: no_work | completed | completed_with_errors | failed. The paid
+    submission happens inside; a failed submit returns without polling."""
+    rows = load_queue(params.input_csv)
+    todo, skipped_done = filter_already_done(rows, params.output_dir)
+    if params.limit is not None:
+        todo = todo[: params.limit]
+    if not todo:
+        _write_progress_manifest(
+            params.manifest, "research_complete",
+            {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
+            provider_status={})
+        return {"primitive": "deep_research_contacts", "command": "run",
+                "status": "no_work", "queue_rows": len(rows),
+                "skipped_already_done": skipped_done}
+    submitted = submit_research(params)
+    if submitted.get("status") != "submitted":
+        # no_work was handled above, so anything non-submitted is a failure.
+        return submitted
+    # submit_research already wrote the state; poll_research picks it up.
+    return poll_research(params)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    rows = load_queue(Path(args.input))
-    todo, skipped_done = filter_already_done(rows, Path(args.output_dir))
-    if args.limit is not None:
-        todo = todo[: args.limit]
-    if not todo:
-        _write_progress_manifest(
-            args, "research_complete",
-            {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
-            provider_status={})
-        emit({"primitive": "deep_research_contacts", "command": "run",
-              "status": "no_work", "queue_rows": len(rows),
-              "skipped_already_done": skipped_done})
-        return 0
-    rc = cmd_submit(args)
-    if rc != 0:
-        return rc
-    # cmd_submit already wrote the state; cmd_poll picks it up.
-    return cmd_poll(args)
+    payload = run_research(_params_from_args(args))
+    emit(payload)
+    return _EXIT_CODES.get(str(payload.get("status")), 1)
 
 
 # ---------------------------------------------------------------------------

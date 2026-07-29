@@ -2313,10 +2313,14 @@ class TestReconcileDeepResearch(unittest.TestCase):
             dresearch.DR_OUT_DIR = base / "research"
             dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
             try:
+                # The in-process research call (no subprocess): the gate having
+                # passed means run_research is invoked exactly once and its
+                # returned payload drives the receipt.
                 with mock.patch.object(
-                    dresearch.subprocess,
-                    "run",
-                    return_value=mock.Mock(returncode=0),
+                    dresearch,
+                    "run_research",
+                    return_value={"status": "completed",
+                                  "counts": {"results_fetched": 1, "errors": 0}},
                 ) as run_mock:
                     manifest = _run_dresearch(_ns(
                         verdicts_jsonl=vj, people_csv=base / "missing.csv",
