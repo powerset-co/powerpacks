@@ -201,6 +201,72 @@ def esc(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
+_MD_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+_MD_HEADING_RE = re.compile(r"^(#{1,4})\s+(.*)$")
+
+
+def _md_inline(text: str) -> str:
+    """Inline dossier markdown -> HTML on an ALREADY-ESCAPED line: wiki links
+    become their display text, **bold** and _italic_ become tags."""
+    text = _WIKILINK_RE.sub(lambda m: m.group(1) or m.group(2) or "", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"<em>\1</em>", text)
+    return text
+
+
+def markdown_to_html(markdown: str) -> str:
+    """Small dependency-free renderer for dossier markdown: headings, bullet
+    lists, paragraphs, bold/italic/wiki-link inlines, and the ``─`` rules
+    render_dossier inserts between merged children. Every line is HTML-escaped
+    BEFORE inline tags are applied, so dossier text can never inject markup."""
+    out: list[str] = []
+    bullets: list[str] = []
+    paragraph: list[str] = []
+
+    def flush_bullets() -> None:
+        if bullets:
+            out.append("<ul>" + "".join(f"<li>{item}</li>" for item in bullets) + "</ul>")
+            bullets.clear()
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            out.append(f"<p>{' '.join(paragraph)}</p>")
+            paragraph.clear()
+
+    for raw_line in _MD_COMMENT_RE.sub("", markdown).splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            flush_bullets()
+            flush_paragraph()
+            continue
+        if len(stripped) >= 8 and set(stripped) <= {"─", "-"}:
+            flush_bullets()
+            flush_paragraph()
+            out.append("<hr>")
+            continue
+        heading = _MD_HEADING_RE.match(stripped)
+        if heading:
+            flush_bullets()
+            flush_paragraph()
+            # h1/h2 are taken by the page and person name; dossier headings
+            # start at h3 (# child name) / h4 (## section).
+            level = min(6, len(heading.group(1)) + 2)
+            out.append(f"<h{level}>{_md_inline(esc(heading.group(2)))}</h{level}>")
+            continue
+        bullet = _BULLET_RE.match(stripped)
+        if bullet:
+            flush_paragraph()
+            bullets.append(_md_inline(esc(bullet.group(1))))
+            continue
+        flush_bullets()
+        paragraph.append(_md_inline(esc(stripped)))
+    flush_bullets()
+    flush_paragraph()
+    return "".join(out)
+
+
 def _initials(name: str) -> str:
     words = re.findall(r"[A-Za-z0-9]+", name or "")
     if not words:
@@ -980,7 +1046,8 @@ def worth_review_body(parents: list[dict[str, Any]], progress: dict[str, int],
                       parents_dir: Path, dossier_dir: Path, *,
                       debug: bool = False, index: int = 0,
                       profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                      exclude: frozenset[str] | None = None) -> str:
+                      exclude: frozenset[str] | None = None,
+                      auto_continue: bool = False) -> str:
     """The Review tab's current item: the next queue card, or the stage-complete
     state. Shared by page_html and /api/worth-card so a decision click can swap
     in the next card client-side without a full page reload. ``debug`` adds the
@@ -999,10 +1066,15 @@ def worth_review_body(parents: list[dict[str, Any]], progress: dict[str, int],
             return (f"<div class='carousel-shell' data-queue-index='{index}' "
                     f"data-queue-total='{len(queue)}'>{_carousel_nav()}{card}</div>")
         return card
+    # auto_continue: the FIRST arrival at the ready state (worth not yet
+    # completed) self-advances — the JS fires the same Continue flow, so the
+    # user never clicks through a done screen. Revisits after completion keep
+    # the button and never yank.
+    auto_attr = " data-auto-complete" if auto_continue else ""
     return ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
             "<h2>Decisions ready</h2>"
             f"<p>{progress['lookup_ready']} people will be enriched</p>"
-            "<button class='button button-primary' data-complete='worth'>Continue</button></div>")
+            f"<button class='button button-primary' data-complete='worth'{auto_attr}>Continue</button></div>")
 
 
 def _enrichment_note(enrichment: dict[str, Any] | None) -> str:
@@ -1144,8 +1216,11 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
         tabs = render_decision_tabs(progress, decision_view, preview=preview)
         search = ""
         if decision_view == "review":
-            body = worth_review_body(parents, progress, parents_dir, dossier_dir,
-                                     debug=debug, profile_cache_dir=profile_cache_dir)
+            body = worth_review_body(
+                parents, progress, parents_dir, dossier_dir,
+                debug=debug, profile_cache_dir=profile_cache_dir,
+                auto_continue=(not preview and not phase_is_completed(
+                    "worth", progress, manifest_path)))
             # The typeahead lives OUTSIDE the swap panel so card swaps never
             # touch it; its pending queue is embedded once at page render.
             pending = worth_pending_entries(parents)
@@ -1200,6 +1275,140 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
             "approved" if enrichment.get("approval_current") else enrichment.get("status")
         ),
         "{{STEPPER}}": stepper,
+        "{{CONTENT}}": content,
+    }
+    document = REVIEW_HTML.read_text(encoding="utf-8")
+    for placeholder, value in replacements.items():
+        document = document.replace(placeholder, value)
+    return document.encode("utf-8")
+
+
+# --- directory browse view (/directory) --------------------------------------
+# A read-only reference surface over the same review model: an A-Z name sidebar
+# (the worth stage's live-search component + infinite scroll) beside a person
+# pane showing the FULL dossier as rendered markdown under the LinkedIn profile
+# header/facts the review cards already know how to build. Nothing here writes.
+
+
+def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """One sidebar entry per person, A-Z by display name: the name, the dossier
+    slug /api/person keys on, and the EFFECTIVE worth decision (yes/no/maybe —
+    the same worth_view effective the review tabs group by) so the sidebar's
+    Yes/No tabs match the review's numbers. Deduped by slug so split parents
+    sharing one dossier appear once."""
+    seen: set[str] = set()
+    entries: list[dict[str, str]] = []
+    for parent in parents:
+        slug = str(parent.get("dossier_slug") or parent.get("slug") or "").strip()
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        worth = str(((parent.get("worth_row") or {}).get("effective"))
+                    or (parent.get("worth") or {}).get("decision") or "").strip().lower()
+        entries.append({"slug": slug, "name": str(parent.get("name") or slug),
+                        "worth": worth if worth in {"yes", "no"} else "maybe"})
+    entries.sort(key=lambda entry: entry["name"].lower())
+    return entries
+
+
+def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
+                         profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+    """The directory's person pane: the review cards' profile header (avatar,
+    name, View-LinkedIn link, headline, location) and fact rows (Contact /
+    Summary / Work / Education, cache-hydrated exactly like a card) above the
+    full dossier rendered as HTML. The candidate is copied before hydration so
+    this browse path never mutates the server's cached model."""
+    candidate = dict(_primary_candidate(parent))
+    _hydrate_card_profile(candidate, profile_cache_dir)
+    name = str(parent.get("name") or candidate.get("full_name") or "This person")
+    slug = str(parent.get("dossier_slug") or parent.get("slug") or "")
+    synthetic = bool(candidate.get("synthetic"))
+    url = "" if synthetic else str(candidate.get("url") or "")
+    link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>"
+            "View LinkedIn<span aria-hidden='true'>↗</span></a>") if url else ""
+    headline = "" if synthetic else str(candidate.get("headline") or "")
+    contacts = _merge_contacts(
+        [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
+        dossier_identifiers(parents_dir, dossier_dir, slug))
+    rows: list[str] = []
+    if contacts:
+        rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
+    simple_summary = str(candidate.get("simple_summary") or "").strip()
+    if simple_summary:
+        rows.append(f"<div><dt>Summary</dt><dd>{esc(simple_summary)}</dd></div>")
+    rows.extend(profile_fact_rows(candidate))
+    facts = (f"<section class='details'><div class='details-body'>"
+             f"<dl>{''.join(rows)}</dl></div></section>" if rows else "")
+    dossier = markdown_to_html(render_dossier(parents_dir, dossier_dir, slug))
+    return f"""
+    <article class='person-detail' data-person-slug='{esc(slug)}'>
+      <div class='profile-card'>
+        {_avatar(parent, candidate)}
+        <div class='profile-copy'>
+          <h2>{esc(name)}</h2>
+          {link}
+          {f"<p>{esc(headline)}</p>" if headline else ""}
+          {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
+        </div>
+      </div>
+      {facts}
+      <section class='directory-dossier'>{dossier}</section>
+    </article>"""
+
+
+def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[str]], *,
+                        parents_dir: Path = PARENTS_DIR,
+                        dossier_dir: Path = DOSSIER_DIR,
+                        profile_cache_dir: Path = PROFILE_CACHE_DIR) -> bytes:
+    """The /directory page: the full A-Z entry list rides along as a JSON
+    island (the worth typeahead pattern) and the client renders/filters the
+    sidebar from it; ``?person=<slug>`` server-renders that person's pane so
+    the URL is shareable. Same shell as the review pages, no stepper, no SSE."""
+    entries = directory_entries(parents)
+    selected = str((params.get("person") or [""])[0]).strip().lower()
+    parent = next(
+        (item for item in parents
+         if str(item.get("dossier_slug") or item.get("slug") or "").strip().lower() == selected),
+        None) if selected else None
+    if parent is not None:
+        detail = render_person_detail(parent, parents_dir, dossier_dir, profile_cache_dir)
+    else:
+        detail = ("<div class='empty-state directory-empty'>"
+                  f"<h2>{len(entries)} people</h2>"
+                  "<p>Pick a person to read their dossier.</p></div>")
+    payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
+    # Worth tabs under the search bar (the review's decision-tabs component, as
+    # buttons: pure client-side filter, no navigation). Yes is the default, and
+    # only the two decided piles are shown — an undecided person is not listed
+    # until the review decides them. Counts are the same effective-worth
+    # numbers the review tabs report.
+    counts = {"yes": 0, "no": 0, "maybe": 0}
+    for entry in entries:
+        counts[entry["worth"]] += 1
+    tabs = "".join(
+        f"<button type='button' class='decision-tab{' active' if key == 'yes' else ''}' "
+        f"data-directory-tab='{key}'>{label}<span>{counts[key]}</span></button>"
+        for key, label in (("yes", "Yes"), ("no", "No")))
+    tab_nav = f"<nav class='decision-tabs directory-tabs' aria-label='Worth decision'>{tabs}</nav>"
+    search = ("<div class='worth-search' data-directory-search>"
+              "<input class='worth-search-input' type='search' placeholder='Search people…' "
+              "aria-label='Search people by name' autocomplete='off' spellcheck='false'>"
+              "<span class='worth-search-count' data-search-count hidden></span></div>")
+    content = ("<div class='directory-layout'>"
+               f"<aside class='directory-sidebar'>{search}{tab_nav}"
+               "<nav class='directory-list' data-directory-list aria-label='People A to Z'></nav>"
+               "</aside>"
+               f"<section class='directory-detail' data-directory-detail>{detail}</section>"
+               "</div>"
+               f"<script type='application/json' data-directory-people>{payload}</script>")
+    replacements = {
+        "{{TITLE}}": "Directory",
+        "{{STAGE}}": "directory",
+        "{{PREVIEW}}": "false",
+        "{{EXTERNAL_UPDATES}}": "false",
+        "{{STATE_TOKEN}}": "",
+        "{{ENRICHMENT_STATUS}}": "",
+        "{{STEPPER}}": "",
         "{{CONTENT}}": content,
     }
     document = REVIEW_HTML.read_text(encoding="utf-8")

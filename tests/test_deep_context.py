@@ -2313,10 +2313,14 @@ class TestReconcileDeepResearch(unittest.TestCase):
             dresearch.DR_OUT_DIR = base / "research"
             dresearch.QUEUE_CSV = dresearch.DR_OUT_DIR / "research_queue.csv"
             try:
+                # The in-process research call (no subprocess): the gate having
+                # passed means run_research is invoked exactly once and its
+                # returned payload drives the receipt.
                 with mock.patch.object(
-                    dresearch.subprocess,
-                    "run",
-                    return_value=mock.Mock(returncode=0),
+                    dresearch,
+                    "run_research",
+                    return_value={"status": "completed",
+                                  "counts": {"results_fetched": 1, "errors": 0}},
                 ) as run_mock:
                     manifest = _run_dresearch(_ns(
                         verdicts_jsonl=vj, people_csv=base / "missing.csv",
@@ -3571,10 +3575,58 @@ class TestReviewWeb(unittest.TestCase):
         )
         fake_server.serve_forever.assert_called_once_with()
 
-    def test_browser_observer_polls_only_while_external_updates_are_possible(self):
+    def test_session_lock_enforces_single_writer(self):
+        # The advisory flock is what turns "the server is the only writer" from
+        # an assumption into an invariant: mutating CLI mains refuse while a
+        # server holds it, and a second server cannot start.
+        from packs.ingestion.primitives.deep_context import common as dc_common
+        with tempfile.TemporaryDirectory() as dd:
+            lock_path = Path(dd) / "review" / ".server.lock"
+            with mock.patch.object(dc_common, "REVIEW_SESSION_LOCK", lock_path):
+                handle = dc_common.acquire_review_session_lock()
+                try:
+                    with self.assertRaisesRegex(SystemExit, "review server is running"):
+                        dc_common.ensure_no_review_session("apply_retargets")
+                    with self.assertRaises(RuntimeError):
+                        dc_common.acquire_review_session_lock()
+                finally:
+                    handle.close()
+                dc_common.ensure_no_review_session("apply_retargets")  # released -> free
+
+    def test_job_terminal_fires_view_hooks_on_success_and_failure(self):
+        # Single-writer refresh points: a job terminal (success OR failure) must
+        # re-derive the model and nudge views — it is the only mid-session
+        # writer besides clicks.
+        import time as _time
+        fired: list[str] = []
+        web_server._job_events.subscribe(terminal=lambda: fired.append("hook"))
+        try:
+            web_server._run_pipeline_job("t-ok", lambda: None)
+            deadline = _time.time() + 5
+            while len(fired) < 1 and _time.time() < deadline:
+                _time.sleep(0.01)
+            self.assertEqual(len(fired), 1)
+
+            def boom() -> None:
+                raise SystemExit("guard path")
+
+            web_server._run_pipeline_job("t-fail", boom)
+            deadline = _time.time() + 5
+            while len(fired) < 2 and _time.time() < deadline:
+                _time.sleep(0.01)
+            self.assertEqual(len(fired), 2)
+        finally:
+            web_server._job_events._terminal_subs.pop()
+
+    def test_browser_observer_subscribes_only_on_wait_screens(self):
+        # Single-writer sessions: the browser never polls. Wait screens open ONE
+        # EventSource; each server nudge (mutation/job completion) triggers one
+        # /api/status re-snapshot. Interactive screens open nothing.
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn('fetch("/api/status", { cache: "no-store" })', script)
-        self.assertIn("const statusPollMs = 1000;", script)
+        self.assertIn('new EventSource("/api/events")', script)
+        self.assertNotIn("setInterval(pollFileState", script)
+        self.assertNotIn("statusPollMs", script)
         self.assertIn(
             'const observesExternalUpdates = document.body.dataset.externalUpdates === "true";',
             script,
@@ -3606,9 +3658,10 @@ class TestReviewWeb(unittest.TestCase):
             "!isStagePreview && state.stage && state.stage !== currentStage",
             script,
         )
-        self.assertIn("void pollFileState();", script)
-        self.assertIn("window.setInterval(pollFileState, statusPollMs);", script)
-        self.assertIn('document.addEventListener("visibilitychange"', script)
+        self.assertIn("void syncFileState();", script)
+        self.assertIn("renderJobProgress(payload.job)", script)
+        self.assertNotIn("visibilitychange", script)
+        self.assertNotIn('document.visibilityState !== "visible"', script)
         self.assertIn('leaveAndNavigate("People complete", "/?stage=enrich")', script)
         self.assertNotIn(
             'document.visibilityState !== "visible" || hasIdentityDraft()',
@@ -4853,6 +4906,149 @@ class TestMergeCache(unittest.TestCase):
         reused, to_judge = cluster.split_cached_pairs([(0, 1)], people, cache, legacy)
         self.assertEqual(reused[0][3]["reason"], "precise")
         self.assertEqual(to_judge, [])
+
+
+class TestDirectoryView(unittest.TestCase):
+    """The /directory browse surface: A-Z sidebar island + read-only person pane."""
+
+    @staticmethod
+    def _parent(slug: str, name: str, **candidate: object) -> dict:
+        base = {
+            "pub": f"{slug}-pub", "full_name": name,
+            "match_emails": [], "match_phones": [],
+        }
+        base.update(candidate)
+        return {"slug": slug, "dossier_slug": slug, "name": name,
+                "person_ids": [f"candidate:email:{slug}@example.com"],
+                "candidates": [base]}
+
+    def test_markdown_to_html_renders_dossier_shapes(self):
+        markdown = (
+            "# Jordan Bravo\n\n"
+            "<!-- parent-link --> _Part of [[jordan-parent]] **Jordan Bravo**_\n\n"
+            "## Summary\n\n"
+            "Knows **everyone** at [[acme-corp|Acme]] — _allegedly_.\n"
+            "Second line of the same paragraph.\n\n"
+            "## Timeline\n\n"
+            "- **2026-01-02** — Said hello\n"
+            "- Replied <script>alert(1)</script>\n\n"
+            + "─" * 56 + "\n\n"
+            "Tail after the merge rule.\n")
+        html = web_rendering.markdown_to_html(markdown)
+        self.assertIn("<h3>Jordan Bravo</h3>", html)
+        self.assertIn("<h4>Summary</h4>", html)
+        self.assertIn("Knows <strong>everyone</strong> at Acme — <em>allegedly</em>. "
+                      "Second line of the same paragraph.", html)
+        self.assertIn("<ul><li><strong>2026-01-02</strong> — Said hello</li>", html)
+        self.assertIn("&lt;script&gt;", html)      # dossier text can never inject markup
+        self.assertNotIn("<script>", html)
+        self.assertIn("<hr>", html)
+        self.assertNotIn("parent-link", html)       # HTML comments are stripped
+        self.assertNotIn("[[", html)                # wiki links become display text
+
+    def test_directory_entries_sorted_deduped_and_worth_labeled(self):
+        yes = self._parent("zed-zulu", "Zed Zulu")
+        yes["worth_row"] = {"effective": "yes"}
+        no = self._parent("amy-alpha", "Amy Alpha")
+        no["worth"] = {"decision": "no"}  # no worth_row -> parent effective
+        parents = [
+            yes,
+            no,
+            {"slug": "split-twin", "dossier_slug": "amy-alpha", "name": "Amy Alpha",
+             "candidates": []},  # split parent sharing a dossier appears once
+            {"slug": "", "name": "No Slug", "candidates": []},
+            self._parent("mel-maybe", "Mel Maybe"),  # undecided -> maybe
+        ]
+        entries = web_rendering.directory_entries(parents)
+        self.assertEqual(entries, [
+            {"slug": "amy-alpha", "name": "Amy Alpha", "worth": "no"},
+            {"slug": "mel-maybe", "name": "Mel Maybe", "worth": "maybe"},
+            {"slug": "zed-zulu", "name": "Zed Zulu", "worth": "yes"},
+        ])
+
+    def test_person_detail_reuses_profile_renderers_over_full_dossier(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "jordan-parent.md").write_text(
+                "---\nslug: jordan-parent\n---\n\n# Jordan Bravo\n\n"
+                "## Relationship & cadence\n\nWarm intro via Casey.\n\n"
+                "## Identifiers\n\n- casey@example.com\n",
+                encoding="utf-8")
+            parent = self._parent(
+                "jordan-parent", "Jordan Bravo",
+                url="https://www.linkedin.com/in/jordan-bravo-test",
+                headline="Builds things", location="Springfield",
+                experiences=["Engineer @ Acme (2020 - Present)"],
+                education=["BS — State"],
+                match_emails=["jordan@example.com"])
+            html = web_rendering.render_person_detail(
+                parent, base / "parents", dossiers, base / "profiles")
+        self.assertIn("Jordan Bravo", html)
+        self.assertIn("View LinkedIn", html)
+        self.assertIn("Builds things", html)
+        self.assertIn("<div><dt>Work</dt>", html)
+        self.assertIn("<div><dt>Education</dt>", html)
+        # Contact merges match values with the dossier's Identifiers section.
+        self.assertIn("jordan@example.com · casey@example.com", html)
+        self.assertIn("<h4>Relationship &amp; cadence</h4>", html)
+        self.assertIn("Warm intro via Casey.", html)
+        # Browse-only: no decision affordances anywhere in the pane.
+        for marker in ("data-worth", "data-decide", "data-complete", "data-open-fix"):
+            self.assertNotIn(marker, html)
+
+    def test_directory_page_embeds_island_and_selected_person(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            dossiers = base / "dossiers"
+            dossiers.mkdir()
+            (dossiers / "amy-alpha.md").write_text(
+                "# Amy Alpha\n\n## Summary\n\nAlpha tester.\n", encoding="utf-8")
+            amy = self._parent("amy-alpha", "Amy Alpha")
+            amy["worth_row"] = {"effective": "yes"}
+            zed = self._parent("zed-zulu", "Zed Zulu")
+            zed["worth_row"] = {"effective": "no"}
+            parents = [amy, zed]
+            kwargs = {"parents_dir": base / "parents", "dossier_dir": dossiers,
+                      "profile_cache_dir": base / "profiles"}
+            html = web_rendering.directory_page_html(parents, {}, **kwargs).decode("utf-8")
+            picked = web_rendering.directory_page_html(
+                parents, {"person": ["amy-alpha"]}, **kwargs).decode("utf-8")
+        self.assertIn("data-directory-people", html)
+        self.assertIn("data-directory-list", html)
+        self.assertIn("data-directory-search", html)
+        self.assertIn('"slug": "zed-zulu"', html)
+        self.assertIn("data-stage='directory'", html)
+        self.assertIn("data-external-updates='false'", html)  # no SSE on this page
+        self.assertIn("Pick a person", html)                  # no selection -> empty state
+        # Worth tabs sit UNDER the search bar: Yes/No only, Yes default-active.
+        self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>1</span>", html)
+        self.assertIn("data-directory-tab='no'>No<span>1</span>", html)
+        self.assertLess(html.index("data-directory-search"),
+                        html.index("data-directory-tab='yes'"))
+        self.assertIn("Alpha tester.", picked)                # ?person= pre-renders the pane
+        self.assertNotIn("Pick a person", picked)
+
+    def test_directory_tabs_are_yes_no_only(self):
+        parents = [self._parent("mel-maybe", "Mel Maybe")]  # only undecided people
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            html = web_rendering.directory_page_html(
+                parents, {}, parents_dir=base / "parents", dossier_dir=base / "dossiers",
+                profile_cache_dir=base / "profiles").decode("utf-8")
+        # Undecided people never get a tab; the Yes/No pair always renders and
+        # Yes stays the default even at zero.
+        self.assertNotIn("data-directory-tab='maybe'", html)
+        self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>0</span>", html)
+        self.assertIn("data-directory-tab='no'>No<span>0</span>", html)
+
+    def test_review_js_wires_the_directory_view(self):
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn("setupDirectory", script)
+        self.assertIn("/api/person", script)
+        self.assertIn("data-directory-list", script)
+        self.assertIn("data-directory-tab", script)
 
 
 if __name__ == "__main__":

@@ -34,9 +34,10 @@ from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV
 from packs.ingestion.primitives.deep_context.common import (
     CONSOLIDATE_PEOPLE_CSV,
     DEFAULT_PEOPLE_CSV,
+    emit,
+    ensure_no_review_session,
     LINKEDIN_OVERRIDES_CSV,
     RETARGET_PEOPLE_CSV,
-    emit,
 )
 from packs.ingestion.primitives.imports.directory import (
     DEEP_CONTEXT_DIRECTORY_ROWS,
@@ -286,6 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    ensure_no_review_session("persist_review_identities")
     args = build_parser().parse_args()
     payload = PersistReviewIdentities(
         review_csv=Path(args.review_csv),

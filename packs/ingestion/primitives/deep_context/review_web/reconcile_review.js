@@ -173,6 +173,7 @@ async function decideWorthCard(button, card) {
     }
     panel.innerHTML = nextHtml; // next queue card, or the Decisions-ready state
     wireDynamicContent(panel);  // also prefetches the card after this one
+    maybeAutoComplete(panel);
     postPromise.then((response) => {
       adoptMutationState(response);
       applyProgress(response.progress);
@@ -255,6 +256,7 @@ async function jumpToWorthCard(key) {
   panel.querySelector("[data-card]")?.classList.add("leaving");
   await delay(170);
   panel.innerHTML = nextHtml; // the picked card, via the existing swap path
+  maybeAutoComplete(panel);
   wireDynamicContent(panel);  // re-prefetches with the picked card excluded
 }
 
@@ -997,8 +999,21 @@ let reviewStateToken = document.body.dataset.stateToken || "";
 // exactly that window, and a reload tears down the JS before it can leave).
 let completingStage = false;
 let lastServerStage = "";
-const statusPollMs = 1000;
 const observesExternalUpdates = document.body.dataset.externalUpdates === "true";
+
+let autoCompleted = false;
+
+// First arrival at "Decisions ready": fire the same flow the Continue button
+// runs (POST /complete + navigate) so the user never clicks through a done
+// screen. Server marks the block data-auto-complete only when the stage is
+// not yet completed, so deliberate revisits keep the button and never yank.
+function maybeAutoComplete(root) {
+  if (autoCompleted || completingStage) return;
+  const button = (root || document).querySelector("[data-auto-complete]");
+  if (!button) return;
+  autoCompleted = true;
+  button.click();
+}
 
 function hasIdentityDraft() {
   return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(
@@ -1006,8 +1021,36 @@ function hasIdentityDraft() {
   );
 }
 
-async function pollFileState() {
-  if (document.visibilityState !== "visible") return;
+// Update the enrich screen's counts in place from an SSE job-progress payload
+// (no reload, no fetch — the numbers rode in on the event). Returns false when
+// the current screen has no enrich state to update.
+function renderJobProgress(job) {
+  const state = document.querySelector(".enrich-state");
+  if (!state || !job || !job.counts) return false;
+  const text = state.querySelector("p");
+  const bar = state.querySelector(".enrich-progress");
+  const fill = state.querySelector(".enrich-progress-fill");
+  const counts = job.counts;
+  if (job.phase === "judging_retargets") {
+    if (text) text.textContent = `${counts.done || 0} of ${counts.total || 0} checked`;
+    return true;
+  }
+  const total = counts.total || 0;
+  const done = Math.min(total, counts.completed || 0);
+  if (text) text.textContent = `${done} of ${total} complete`;
+  if (bar && fill && total) {
+    bar.setAttribute("aria-valuemax", String(total));
+    bar.setAttribute("aria-valuenow", String(done));
+    fill.style.width = `${Math.round((done / total) * 100)}%`;
+  }
+  return true;
+}
+
+// Re-snapshot /api/status. Invoked by the server's SSE nudge stream — the
+// browser never polls; the single-writer server pushes when anything changes.
+// No visibility gating: events are rare and a snapshot costs ~20ms, so hidden
+// tabs stay current too and are already correct when refocused.
+async function syncFileState() {
   if (completingStage) return; // a stage-complete navigation is in flight
   const currentStage = document.body.dataset.stage || "";
   if (!observesExternalUpdates) return;
@@ -1043,10 +1086,153 @@ async function pollFileState() {
   }
 }
 
-if (observesExternalUpdates) {
-  void pollFileState();
-  window.setInterval(pollFileState, statusPollMs);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void pollFileState();
+// --- directory browse view (/directory) --------------------------------------
+// Read-only reference surface: the sidebar's Yes/No worth tabs (default Yes)
+// and search input filter an A-Z list rendered in chunks from the embedded
+// island (scrolling appends more; the count shows "N of M" within the active
+// tab; Enter opens the first match), and clicking a name fetches that person's
+// pane from /api/person. Nothing here ever writes.
+function setupDirectory() {
+  const list = document.querySelector("[data-directory-list]");
+  const detail = document.querySelector("[data-directory-detail]");
+  const island = document.querySelector("script[data-directory-people]");
+  if (!list || !detail || !island) return;
+  let people = [];
+  try { people = JSON.parse(island.textContent || "[]"); } catch { people = []; }
+  const CHUNK = 150;
+  const tabs = Array.from(document.querySelectorAll("[data-directory-tab]"));
+  const box = document.querySelector("[data-directory-search]");
+  const input = box?.querySelector("input");
+  const count = box?.querySelector("[data-search-count]");
+  let activeTab = tabs.find((tab) => tab.classList.contains("active"))?.dataset.directoryTab || "";
+  let activeSlug = new URLSearchParams(window.location.search).get("person") || "";
+  // A ?person= deep link lands on that person's own tab, so the server-rendered
+  // pane always has its sidebar entry visible.
+  const selected = people.find((entry) => entry.slug === activeSlug);
+  if (selected && tabs.length) {
+    const worth = selected.worth || "maybe";
+    if (worth !== activeTab && tabs.some((tab) => tab.dataset.directoryTab === worth)) {
+      activeTab = worth;
+      tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.directoryTab === worth));
+    }
+  }
+  let filtered = [];
+  let rendered = 0;
+
+  function entryButton(entry) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "directory-item";
+    item.dataset.slug = entry.slug || "";
+    item.textContent = entry.name || entry.slug || "";
+    if (entry.slug === activeSlug) item.classList.add("active");
+    return item;
+  }
+
+  function renderMore() {
+    filtered.slice(rendered, rendered + CHUNK).forEach((entry) => list.append(entryButton(entry)));
+    rendered = Math.min(filtered.length, rendered + CHUNK);
+  }
+
+  function fillViewport() {
+    while (rendered < filtered.length && list.scrollHeight <= list.clientHeight + 200) renderMore();
+  }
+
+  function refreshList() {
+    const scope = tabs.length && activeTab
+      ? people.filter((entry) => (entry.worth || "maybe") === activeTab)
+      : people;
+    const query = (input?.value || "").trim().toLowerCase();
+    filtered = query
+      ? scope.filter((entry) => (entry.name || "").toLowerCase().includes(query))
+      : scope;
+    if (count) {
+      count.hidden = !query;
+      if (query) count.textContent = `${filtered.length} of ${scope.length}`;
+    }
+    list.textContent = "";
+    rendered = 0;
+    renderMore();
+    fillViewport();
+    list.scrollTop = 0;
+  }
+
+  async function selectPerson(slug) {
+    if (!slug || slug === activeSlug) return;
+    let response;
+    try {
+      response = await fetch(`/api/person?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
+    } catch {
+      announce("Could not load person", true);
+      return;
+    }
+    if (!response.ok) {
+      announce("Could not load person", true);
+      return;
+    }
+    detail.innerHTML = await response.text();
+    wireDynamicContent(detail);
+    detail.scrollTop = 0;
+    activeSlug = slug;
+    list.querySelectorAll(".directory-item").forEach((item) => {
+      item.classList.toggle("active", item.dataset.slug === slug);
+    });
+    window.history.replaceState(null, "", `/directory?person=${encodeURIComponent(slug)}`);
+  }
+
+  list.addEventListener("click", (event) => {
+    const item = event.target.closest(".directory-item");
+    if (item) void selectPerson(item.dataset.slug || "");
   });
+  list.addEventListener("scroll", () => {
+    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 400) renderMore();
+  }, { passive: true });
+
+  tabs.forEach((tab) => tab.addEventListener("click", () => {
+    if (tab.dataset.directoryTab === activeTab) return;
+    activeTab = tab.dataset.directoryTab || "";
+    tabs.forEach((item) => item.classList.toggle("active", item === tab));
+    refreshList();
+  }));
+
+  if (input) {
+    input.addEventListener("input", refreshList);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (filtered.length) void selectPerson(filtered[0].slug || "");
+      } else if (event.key === "Escape") {
+        input.value = "";
+        refreshList();
+      }
+    });
+  }
+
+  refreshList();
+  if (activeSlug) {
+    // The server already rendered this person's pane; make sure their sidebar
+    // entry exists (render up to it) and is visible.
+    const at = filtered.findIndex((entry) => entry.slug === activeSlug);
+    while (at >= rendered && rendered < filtered.length) renderMore();
+    list.querySelector(".directory-item.active")?.scrollIntoView({ block: "center" });
+  }
+}
+
+if (document.body.dataset.stage === "directory") setupDirectory();
+
+maybeAutoComplete(document);
+
+if (observesExternalUpdates) {
+  void syncFileState();
+  const serverEvents = new EventSource("/api/events");
+  serverEvents.onmessage = (message) => {
+    let payload = null;
+    try { payload = JSON.parse(message.data); } catch { payload = null; }
+    // Pure job-progress events update the counts in place; everything else
+    // (mutations, job terminals) re-snapshots and reloads on a token change.
+    if (payload && payload.job && renderJobProgress(payload.job)) return;
+    void syncFileState();
+  };
+  // A reconnect implies missed events — re-snapshot on every open.
+  serverEvents.onopen = () => { void syncFileState(); };
 }

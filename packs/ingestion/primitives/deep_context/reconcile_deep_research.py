@@ -27,7 +27,7 @@ Changelog:
     `execute()`; the TERMINAL enrichment-manifest write routes through the Node
     template (same keys — `source`/`stage`/`counts`/... — plus the declared
     `fingerprints` block), while every MID-RUN `write_enrichment_manifest` call
-    (the running receipt before the Parallel subprocess, the judging heartbeat)
+    (the running receipt before the Parallel research runs, the judging heartbeat)
     stays exactly where it was so the browser's poll contract is untouched. The
     emitted CLI result and the manifest receipt are DIFFERENT shapes by existing
     contract, so `main()` emits `node.result` (the same result dict as before)
@@ -51,7 +51,6 @@ import hashlib
 import json
 import math
 import os
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -85,21 +84,22 @@ from packs.ingestion.primitives.deep_context.candidates import (
 from packs.ingestion.primitives.deep_context.common import (
     DEEP_RESEARCH_DIR,
     DEFAULT_PEOPLE_CSV,
+    emit,
     ENRICH_MANIFEST,
+    ensure_no_review_session,
     FACTS_DIR,
     FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
-    OWNER_JSON,
-    RAW_BUNDLE_TEMPLATE,
-    RAW_DIR,
-    VERDICTS_JSONL,
-    emit,
-    read_jsonl,
     load_owner,
     owner_background_block,
+    OWNER_JSON,
     parse_list,
+    RAW_BUNDLE_TEMPLATE,
+    RAW_DIR,
+    read_jsonl,
     slugify,
+    VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.imports.common import write_manifest
@@ -133,11 +133,17 @@ from packs.ingestion.schemas.people_schema import (
 # Reuse the canonical pricing from the deep-research primitive (don't mirror/drift).
 from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     PROCESSOR_PRICING_USD,
+    ResearchRunParams,
     filter_already_done,
+    run_research,
 )
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
+# The research payload statuses a pass treats as success — the same set the
+# exit-code era called "exit 0" ({no_work, completed}); completed_with_errors
+# (old exit 2) stays a failed pass.
+RESEARCH_OK_STATUSES = frozenset({"no_work", "completed"})
 DR_OUT_DIR = DEEP_RESEARCH_DIR
 QUEUE_CSV = DR_OUT_DIR / "research_queue.csv"
 QUEUE_FIELDS = [
@@ -768,6 +774,7 @@ class ReconcileDeepResearch(Node):
         reasoning_effort: str = "medium",
         out_dir: Path | None = None,
         queue_csv: Path | None = None,
+        on_progress: Any = None,
     ) -> None:
         self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
         self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
@@ -777,6 +784,9 @@ class ReconcileDeepResearch(Node):
         self.raw_dir = Path(raw_dir or RAW_DIR)
         self.out_dir = Path(out_dir or DR_OUT_DIR)
         self.queue_csv = Path(queue_csv or QUEUE_CSV)
+        # In-process progress channel (the review server holds live counts in
+        # memory; manifest writes stay the durable record). None = CLI, no listener.
+        self.on_progress = on_progress
         # None = the CLI default (the fixed Enrich Contacts receipt); "" disables
         # every receipt write, exactly like `--manifest ""` always has.
         manifest_text = str(ENRICH_MANIFEST) if manifest is None else str(manifest).strip()
@@ -925,6 +935,9 @@ class ReconcileDeepResearch(Node):
         owner_block = owner_background_block(load_owner()) if load_owner() else ""
 
         def heartbeat(done: int, total: int) -> None:
+            if self.on_progress:
+                self.on_progress({"status": "running", "phase": "judging_retargets",
+                                  "counts": {"done": done, "total": total}})
             # Honest judging progress in the ONE fixed manifest (no new state files):
             # cheap per-completion writes the UI polls while a pass judges N proposals.
             if manifest_path:
@@ -982,42 +995,57 @@ class ReconcileDeepResearch(Node):
                  "elapsed_ms": int((time.monotonic() - started) * 1000)},
                 STATUS_NEEDS_APPROVAL, completed=reused_completed)
 
-        # Delegate the spend to the existing Parallel.ai primitive (reuse, don't rebuild).
-        # STREAM its output live to our stderr (the primitive prints `[deep_research_contacts]
-        # poll status ...` every poll) so the run isn't a silent black box — Parallel.ai jobs can
-        # take minutes. Keep our own stdout clean for the final JSON manifest.
+        # Delegate the spend to the existing Parallel.ai primitive, IN PROCESS
+        # (import and call, branch on the returned payload — never a subprocess
+        # of our own .py). Its progress prints go to stderr already, so the run
+        # stays a live narrated stream and our stdout stays clean for the final
+        # JSON manifest.
         print(f"[deep-research] researching {len(pending_queue)} net-new people via Parallel.ai ({self.processor}); "
               "this can take several minutes — live progress below:", file=sys.stderr, flush=True)
-        # Mid-run receipt: the browser must see "running" while the subprocess works.
+        # Mid-run receipt: the browser must see "running" while the research runs.
         if manifest_path:
             write_enrichment_manifest(
                 receipt_body(STATUS_RUNNING, {**base, "status": STATUS_RUNNING},
                              completed=reused_completed), manifest_path)
-        cmd = [sys.executable, "-m", "packs.ingestion.primitives.deep_context.deep_research_contacts",
-               "run", "--input", str(self.queue_csv), "--output-dir", str(self.out_dir), "--processor", self.processor]
-        if manifest_path:
-            cmd.extend(["--manifest", str(manifest_path)])
-        proc = subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, text=True)
-        print(f"[deep-research] research process exited ({proc.returncode}).", file=sys.stderr, flush=True)
+        # The old subprocess boundary turned ANY crash into a failed receipt;
+        # mirror that so an SDK/auth exception still lands as STATUS_FAILED
+        # instead of killing the pass mid-manifest.
+        try:
+            research = run_research(ResearchRunParams(
+                input_csv=self.queue_csv,
+                output_dir=self.out_dir,
+                processor=self.processor,
+                manifest=str(manifest_path) if manifest_path else "",
+                on_progress=self.on_progress,
+            ))
+        except SystemExit as exc:
+            research = {"status": "failed", "error": f"SystemExit: {exc}"}
+        except Exception as exc:
+            research = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        research_status = str(research.get("status") or "failed")
+        research_ok = research_status in RESEARCH_OK_STATUSES
+        print(f"[deep-research] research finished ({research_status}).", file=sys.stderr, flush=True)
         # Propose retargets (pending) for any correct LinkedIn the research found.
         proposals = {"proposed": 0}
-        if proc.returncode == 0:
+        if research_ok:
             proposals = propose()
         result = {
-            **base, "status": STATUS_RAN if proc.returncode == 0 else STATUS_FAILED,
+            **base, "status": STATUS_RAN if research_ok else STATUS_FAILED,
             "queue_csv": str(self.queue_csv), "output_dir": str(self.out_dir),
             "retargets_proposed": proposals.get("proposed", 0),
             "judge_calls": proposals.get("judge_calls", 0),
             "cached_verdicts": proposals.get("cached_verdicts", 0),
             "grandfathered": proposals.get("grandfathered", 0),
-            "returncode": proc.returncode, "progress": "streamed live to stderr",
+            "research_status": research_status,
+            "research_error": research.get("error", ""),
+            "progress": "streamed live to stderr",
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
         return finish(
             result,
-            STATUS_RESEARCH_COMPLETE if proc.returncode == 0 else STATUS_FAILED,
-            completed=len(queue) if proc.returncode == 0 else reused_completed,
-            failed=0 if proc.returncode == 0 else len(pending_queue))
+            STATUS_RESEARCH_COMPLETE if research_ok else STATUS_FAILED,
+            completed=len(queue) if research_ok else reused_completed,
+            failed=0 if research_ok else len(pending_queue))
 
 
 def _finite_non_negative_float(value: str) -> float:
@@ -1058,6 +1086,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_no_review_session("reconcile_deep_research")
     args = build_parser().parse_args(argv)
     node = ReconcileDeepResearch(
         verdicts_jsonl=Path(args.verdicts_jsonl),

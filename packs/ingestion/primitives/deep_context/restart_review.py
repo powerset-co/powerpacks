@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.common import (
+    ensure_no_review_session,
     LINKEDIN_OVERRIDES_CSV,
     REVIEW_MANIFEST,
 )
@@ -142,6 +143,7 @@ def clear_synthetic_approvals(path: Path, *, apply: bool) -> dict[str, int | str
 
 
 def main() -> int:
+    ensure_no_review_session("restart_review")
     parser = argparse.ArgumentParser(
         description="Clear HUMAN review decisions; keep all machine (LLM) work")
     parser.add_argument("--review", type=Path, default=LINKEDIN_OVERRIDES_CSV)

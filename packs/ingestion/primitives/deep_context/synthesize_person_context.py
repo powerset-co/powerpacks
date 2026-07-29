@@ -63,17 +63,18 @@ from packs.indexing.lib.openai_responses import (
     usage_tokens,
 )
 from packs.ingestion.primitives.deep_context.common import (
+    emit,
+    ensure_no_review_session,
     FACTS_DIR,
     FACTS_MANIFEST,
     FACTS_TEMPLATE,
     LINKEDIN_OVERRIDES_CSV,
-    OWNER_JSON,
-    RAW_BUNDLE_TEMPLATE,
-    RAW_DIR,
-    emit,
     load_env,
     load_owner,
     owner_background_block,
+    OWNER_JSON,
+    RAW_BUNDLE_TEMPLATE,
+    RAW_DIR,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
@@ -907,6 +908,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    ensure_no_review_session("synthesize_person_context")
     args = build_parser().parse_args(argv)
     node = SynthesizePersonContext(
         raw_dir=Path(args.raw_dir),
