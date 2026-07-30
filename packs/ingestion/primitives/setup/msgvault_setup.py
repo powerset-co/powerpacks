@@ -224,8 +224,10 @@ def main(argv: list[str] | None = None) -> int:
             payload = AccountAuthorization.from_args(args).run()
         elif args.command == "add-test-users":
             payload = TestUsers.from_args(args).run()
-        else:
+        elif args.command == "mcp-install":
             payload = mcp.install_mcp()
+        else:  # unreachable: argparse subcommands are required
+            raise ValueError(f"unknown command: {args.command}")
     except ValueError as exc:
         emit({"status": "error", "message": str(exc)})
         return 1

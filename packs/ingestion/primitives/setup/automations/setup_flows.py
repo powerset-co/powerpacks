@@ -44,7 +44,11 @@ from packs.ingestion.primitives.setup.automations import (  # noqa: E402
 )
 from packs.ingestion.primitives.setup.automations.shell import expand  # noqa: E402
 
-SKIPPED_NOT_REQUESTED: dict[str, Any] = {"status": "skipped", "reason": "not requested"}
+def skipped_not_requested() -> dict[str, Any]:
+    """A FRESH skipped marker per payload — a shared module-level dict embedded
+    in emitted payloads is an aliasing footgun (one caller's mutation would
+    silently edit every payload holding it)."""
+    return {"status": "skipped", "reason": "not requested"}
 
 
 def open_console_urls(action: dict[str, Any], open_console: bool) -> list[str]:
@@ -82,7 +86,7 @@ class OAuthAppInstructions:
     def run(self) -> dict[str, Any]:
         gcloud = gcloud_project.gcloud_context(self.project)
         project = gcloud["project"] or self.project
-        api = gcloud_project.enable_gmail_api(project) if self.enable_gmail_api else SKIPPED_NOT_REQUESTED
+        api = gcloud_project.enable_gmail_api(project) if self.enable_gmail_api else skipped_not_requested()
         action = oauth_browser.build_user_action(project, self.email, self.app_name, self.home)
         return {
             "status": "needs_user_action",
@@ -196,7 +200,7 @@ class MsgvaultSetup:
         api = (
             gcloud_project.enable_gmail_api(gcloud["project"] or self.project)
             if self.enable_gmail_api
-            else SKIPPED_NOT_REQUESTED
+            else skipped_not_requested()
         )
 
         configured: dict[str, Any] | None = None
