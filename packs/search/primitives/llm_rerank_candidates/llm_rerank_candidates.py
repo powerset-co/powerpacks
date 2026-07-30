@@ -71,6 +71,7 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
 
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
+from openai_client import make_async_openai_client  # noqa: E402
 
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
@@ -607,12 +608,7 @@ async def rerank_all(
     include_prompt: bool,
 ) -> list[RerankResult]:
     semaphore = asyncio.Semaphore(concurrency)
-    client = AsyncOpenAI(
-        api_key=api_key,
-        base_url=openai_base_url(api_base),
-        timeout=timeout,
-        max_retries=0,
-    )
+    client = make_async_openai_client(api_key, api_base, timeout=timeout, max_retries=0)
     try:
         tasks = [
             rerank_one(

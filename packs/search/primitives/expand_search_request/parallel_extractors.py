@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,10 @@ import openai
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[4]
+SHARED_DIR = ROOT / "packs/search/primitives/shared"
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
+from openai_client import make_async_openai_client  # noqa: E402
 ROLE_TAXONOMY_PATH = ROOT / "packs/search/data/roles/canonical_role_taxonomy.json"
 
 CITY_ALIASES = {
@@ -627,11 +632,7 @@ async def expand_query_parallel(
     }
     """
     key = api_key or os.environ.get("OPENAI_API_KEY", "")
-    base = api_base or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
-    if not base.endswith("/v1"):
-        base = base.rstrip("/") + "/v1"
-
-    client = openai.AsyncOpenAI(api_key=key, base_url=base)
+    client = make_async_openai_client(key, api_base)
 
     # Load prompts
     prompts = {

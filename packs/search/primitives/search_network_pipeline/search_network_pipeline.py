@@ -727,6 +727,7 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
 
 def run_pipeline(args) -> dict[str, Any]:
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
+    os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
     l=load_ledger(lp); l["current_block"]=None; save(lp,l)
     state=init_state(args,lp,l)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["powerset"]
@@ -800,6 +801,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
         raise Failed("--current-role only applies when the run starts from --payload-json; an existing --state already recorded its expand_search_request filters")
 
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
+    os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
     l=load_ledger(lp)
     l["mode"]="local_duckdb"; l["duckdb"]=str(db_path); l["current_block"]=None
     save(lp,l)
@@ -905,12 +907,13 @@ def cmd_prepare(args):
         if getattr(args,"backend","powerset")=="local":
             return cmd_prepare_local(args)
         out_dir=prepare_output_dir(args.query,args.output_dir)
+        os.environ.setdefault("POWERPACKS_USAGE_LOG", str(out_dir/"usage.jsonl"))
         payload_json=out_dir/"expand_search_request.json"
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),"--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout)]
         if args.model: cmd += ["--model",args.model]
-        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30),"expand_search_request")
+        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
         payload=payload_from_expand_output(expand)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
@@ -961,12 +964,13 @@ def cmd_prepare_local(args):
             raise Failed(f"local DuckDB does not exist: {db_path}")
         configure_local_backend_mode(db_path)
         out_dir=prepare_output_dir(args.query,args.output_dir)
+        os.environ.setdefault("POWERPACKS_USAGE_LOG", str(out_dir/"usage.jsonl"))
         payload_json=out_dir/"expand_search_request.json"
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
         cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),"--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout)]
         if args.model: cmd += ["--model",args.model]
-        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30),"expand_search_request")
+        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
         payload=normalize_query_expansion_payload(payload_from_expand_output(expand, backend="local"), query=args.query)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)

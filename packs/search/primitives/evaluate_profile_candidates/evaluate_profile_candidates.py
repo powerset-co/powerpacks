@@ -47,6 +47,7 @@ SHARED_DIR = ROOT / "packs/search/primitives/shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from probe_artifacts import load_probe_summaries  # noqa: E402
+from openai_client import make_async_openai_client  # noqa: E402
 DEEP_SEARCH_DIR = ROOT / "packs/search/primitives/deep_search"
 if str(DEEP_SEARCH_DIR) not in sys.path:
     sys.path.insert(0, str(DEEP_SEARCH_DIR))
@@ -801,7 +802,7 @@ async def evaluate_all(args: argparse.Namespace) -> dict[str, Any]:
         file=sys.stderr,
     )
 
-    client = AsyncOpenAI(api_key=args.api_key, base_url=args.api_base)
+    client = make_async_openai_client(args.api_key, args.api_base)
     semaphore = asyncio.Semaphore(args.concurrency)
     started = time.monotonic()
     tasks = [
