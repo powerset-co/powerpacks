@@ -28,7 +28,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_sf_in_phrase_adds_person_city(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {"semantic_query": "software engineering work", "bm25_queries": ["software engineer"]},
             {},
             {},
@@ -44,7 +44,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_sf_company_phrase_adds_company_city(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {"semantic_query": "software engineering work", "bm25_queries": ["software engineer"]},
             {},
             {},
@@ -60,7 +60,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_founder_role_expansion_matches_prod_shortcut_shape(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {"semantic_query": "founders", "bm25_queries": ["founder"]},
             {},
             {},
@@ -83,7 +83,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_founder_csuite_query_keeps_founder_role_id_filter_precise(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {
                 "semantic_query": "founder executives",
                 "bm25_queries": ["founder CEO"],
@@ -105,7 +105,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_csuite_role_expansion_adds_canonical_ids_and_aliases(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {"semantic_query": "technology executives", "bm25_queries": ["technology executive"]},
             {},
             {},
@@ -127,7 +127,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         mod = load_module()
 
         for query in ("CISO at security companies", "CISOs at security companies"):
-            filters = mod._merge(
+            filters, _ = mod._merge(
                 {"semantic_query": "security executives", "bm25_queries": ["security executive"]},
                 {},
                 {},
@@ -143,7 +143,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_role_agent_seniority_and_departments_are_consumed(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {
                 "semantic_query": "engineering leadership across software teams",
                 "bm25_queries": ["engineering leader"],
@@ -165,7 +165,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_seniority_extractor_overrides_role_agent_seniority_when_present(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {
                 "semantic_query": "software engineering work",
                 "bm25_queries": ["software engineer"],
@@ -185,7 +185,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_role_id_title_injections_add_generic_bm25_aliases(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {
                 "semantic_query": "software engineers building production systems",
                 "bm25_queries": ["software engineer"],
@@ -204,7 +204,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_temporal_current_flag_maps_to_local_current_filters(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {"semantic_query": "technology executives", "bm25_queries": ["technology executive"]},
             {},
             {},
@@ -220,7 +220,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_temporal_past_flag_maps_to_local_current_filters(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {"semantic_query": "software engineering work", "bm25_queries": ["software engineer"]},
             {"company_names": ["Stripe"]},
             {},
@@ -236,7 +236,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
 
     def test_city_filters_expand_to_prod_alias_lists(self):
         mod = load_module()
-        filters = mod._merge(
+        filters, _ = mod._merge(
             {"semantic_query": "blockchain engineering work", "bm25_queries": ["blockchain engineer"]},
             {},
             {"cities": ["New York City"]},

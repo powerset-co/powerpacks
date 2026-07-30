@@ -20,6 +20,10 @@ uv run --project . python \
   --state .powerpacks/runs/search-network-<uuid>.json
 ```
 
+`export --limit N` keeps only the top N rows of the ranked frontier in the
+exported artifacts (0 = keep all); the pipeline threads its `--limit` here so
+the final cut happens after `llm_rerank`.
+
 ```bash
 uv run --project . python \
   packs/search/primitives/persist_search_results/results_io.py view \

@@ -7,6 +7,15 @@ Each extractor is a system prompt + structured JSON response, run in parallel.
 Usage:
     from parallel_extractors import expand_query_parallel
     result = await expand_query_parallel("founders backed by sequoia", api_key="...")
+
+Changelog:
+    2026-07-30: `_merge` now returns (filters, notes) and applies deterministic
+        post-extraction guards (`_apply_query_intent_guards`): an explicit
+        any-seniority phrase drops extracted seniority_bands; investing-context
+        queries widen a partner/c-suite/owner band into the full band family
+        (the index bands VC General Partners as c-suite and fund founders as
+        owner); investing-context queries drop company funding_stage/amount
+        filters derived from investor check-size/round-leading language.
 """
 from __future__ import annotations
 
@@ -277,6 +286,95 @@ async def _extract(
 # Merge extractor results → role_search_filters
 # ---------------------------------------------------------------------------
 
+# Explicit all-levels phrases: when the user says "any seniority", NO seniority
+# hard filter is correct — enumerating bands is not equivalent, because the
+# index bands people the extractor may forget (VC General Partners are banded
+# c-suite, fund founders owner). Belt for seniority-prompt misses.
+_ANY_SENIORITY_RE = re.compile(
+    r"\b(?:any|all)\s+seniority\b|\ball\s+levels\b|\bany\s+level\b"
+    r"|\bregardless\s+of\s+seniority\b|\bno\s+seniority\b",
+    re.IGNORECASE,
+)
+
+# Investing-context predicate inputs for the seniority band-family and company
+# funding guards below.
+_INVESTING_ROLE_IDS = {
+    "general_partner",
+    "managing_partner",
+    "venture_partner",
+    "venture_capitalist",
+    "vc_associate",
+}
+_INVESTING_ENTITY_TYPES = {"vc_firm", "pe_firm"}
+# The indexer bands VC General/Managing Partners as c-suite and fund founders
+# as owner (see the SENIORITY_BAND enum in packs/indexing/lib/role_prompts.py,
+# ~line 2365), while the seniority prompt's ladder treats partner as a separate
+# band — a partner-only filter excludes exactly the GPs an investing query wants.
+_INVESTING_BAND_FAMILY = ("partner", "c-suite", "owner")
+_COMPANY_FUNDING_KEYS = (
+    "funding_stage_min",
+    "funding_stage_max",
+    "funding_amount_min",
+    "funding_amount_max",
+)
+
+
+def _is_investing_context(filters: dict[str, Any]) -> bool:
+    departments = {str(item).strip().lower() for item in filters.get("role_departments") or []}
+    if "investing" in departments:
+        return True
+    entity_types = {str(item).strip().lower() for item in filters.get("entity_types") or []}
+    if entity_types & _INVESTING_ENTITY_TYPES:
+        return True
+    role_ids = {str(item).strip().lower() for item in filters.get("role_ids") or []}
+    return bool(role_ids & _INVESTING_ROLE_IDS)
+
+
+def _apply_query_intent_guards(filters: dict[str, Any], query: str) -> list[str]:
+    """Deterministic post-extraction guards; mutates filters, returns notes.
+
+    Runs after every band/funding adoption site (including the C-suite parity
+    default) so a guard decision cannot be re-introduced downstream.
+    """
+    notes: list[str] = []
+
+    if _ANY_SENIORITY_RE.search(query) and filters.get("seniority_bands"):
+        dropped_bands = filters.pop("seniority_bands")
+        notes.append(
+            f"any-seniority phrase in query: dropped seniority_bands {dropped_bands} — "
+            "explicit all-levels intent means no seniority hard filter (an enumerated "
+            "list risks excluding index bandings like GP=c-suite)"
+        )
+
+    investing = _is_investing_context(filters)
+
+    bands = list(filters.get("seniority_bands") or [])
+    if investing and any(band in _INVESTING_BAND_FAMILY for band in bands):
+        missing = [band for band in _INVESTING_BAND_FAMILY if band not in bands]
+        if missing:
+            filters["seniority_bands"] = [*bands, *missing]
+            notes.append(
+                "investing context: widened seniority_bands to the full "
+                "partner/c-suite/owner band family — the index bands VC "
+                "General/Managing Partners as c-suite and fund founders as owner, "
+                "so a partner-only filter excludes the GPs the query wants"
+            )
+
+    if investing:
+        dropped_keys = [key for key in _COMPANY_FUNDING_KEYS if filters.get(key) is not None]
+        if dropped_keys:
+            for key in dropped_keys:
+                filters.pop(key)
+            notes.append(
+                "investing context: dropped " + ", ".join(dropped_keys) + " — "
+                "funding fields describe the target company's own fundraising; "
+                "check-size/round-leading language is investor capacity and belongs "
+                "in the semantic query/traits only"
+            )
+
+    return notes
+
+
 def _merge(
     role: dict[str, Any],
     company: dict[str, Any],
@@ -286,8 +384,12 @@ def _merge(
     seniority: dict[str, Any],
     social: dict[str, Any],
     query: str,
-) -> dict[str, Any]:
-    """Merge parallel extractor outputs into a single role_search_filters dict."""
+) -> tuple[dict[str, Any], list[str]]:
+    """Merge parallel extractor outputs into a single role_search_filters dict.
+
+    Returns (filters, notes): notes carry the post-extraction guard decisions
+    for the expansion output's top-level "notes" list.
+    """
     filters: dict[str, Any] = {}
 
     # Role
@@ -430,11 +532,12 @@ def _merge(
 
     _apply_role_expansion_parity(filters, query)
     _apply_location_alias_fallback(filters, query)
+    notes = _apply_query_intent_guards(filters, query)
 
     # Strip empty/null values
     filters = {k: v for k, v in filters.items() if v is not None and v != [] and v != ""}
 
-    return filters
+    return filters, notes
 
 
 def _dedupe_strings(items: list[Any]) -> list[str]:
@@ -672,7 +775,7 @@ async def expand_query_parallel(
     total_ms = int((time.monotonic() - started) * 1000)
 
     # Merge
-    filters = _merge(role, company, location, education, temporal, seniority, social, query)
+    filters, merge_notes = _merge(role, company, location, education, temporal, seniority, social, query)
 
     # Extract traits and has_domain_intent from trait generator
     generated_traits = traits.get("traits") or []
@@ -687,7 +790,7 @@ async def expand_query_parallel(
         "vertical": "people_by_role",
         "role_search_filters": filters,
         "traits": generated_traits,
-        "notes": [],
+        "notes": merge_notes,
         "extractor_timings": timings,
         "total_ms": total_ms,
     }

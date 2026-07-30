@@ -290,6 +290,22 @@ Extract funding amount ranges:
   - "$100M+ funding" → funding_amount_min: 100000000
   - "$50M-$200M funding" → funding_amount_min: 50000000, funding_amount_max: 200000000
 
+**⚠️ INVESTOR CAPACITY IS NOT COMPANY FUNDING (CRITICAL):**
+funding_stage_min/max and funding_amount_min/max describe the TARGET COMPANY'S
+OWN fundraising. Check-size or round-leading language about INVESTORS ("$20M
+check", "can lead a Series B", "writes seed checks") must NOT produce these
+fields — the person's firm is a VC/PE fund, not a Series B company, and a
+funding filter would exclude every investor the query wants. Investor capacity
+belongs in the semantic query/traits only.
+- Worked example: "partners at firms that could lead our Series B with a $20M+ check"
+  → funding_stage_min: null, funding_stage_max: null, funding_amount_min: null,
+    funding_amount_max: null, entity_types: ["vc_firm"]
+  (the $20M and Series B describe the CHECK the investor writes, not the firm's own raise)
+- "investors who can lead a Series B" → funding_stage_min: null, funding_stage_max: null
+- "VCs writing seed checks" → funding_stage_min: null, funding_stage_max: null
+- Contrast (genuine operating-company stage): "engineers at Series B companies"
+  → funding_stage_min: "series_b", funding_stage_max: "series_b" ✅ (the employer's own stage)
+
 **ENTITY TYPES:**
 Extract what KIND of organization is being searched for. Use canonical tag IDs.
 **CRITICAL: Only extract entity_types when the query EXPLICITLY describes the type of COMPANY/ORGANIZATION.**

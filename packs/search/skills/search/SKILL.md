@@ -419,9 +419,11 @@ files on the happy path. Start a fresh run for every search request.
    It already includes `--execute-approved`; do not ask for another approval.
    - If a **limit** was provided (e.g. by the deep-search engine for a
      capped profile search), append `--limit <N>` to the execute_command (or
-     pass `--limit` to `prepare`, which threads it through). This caps
-     retrieval and the whole downstream pipeline. For standalone user
-     searches, do not add a limit unless the user asks for one.
+     pass `--limit` to `prepare`, which threads it through). This caps the
+     FINAL persisted results; retrieval/hydration/LLM stages keep at least
+     100 candidates (judge-pool floor) so the cut takes the top N of a
+     ranked pool, not the first N retrieved. For standalone user searches,
+     do not add a limit unless the user asks for one.
    - If **filter-only mode** was requested (profile searches do this), append
      `--filter-only`. The run keeps the cheap conservative LLM filter but
      skips the expensive per-search LLM rerank; final ranking is owned by the
