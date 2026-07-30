@@ -7,22 +7,20 @@ openai_base_url; without it, a custom OPENAI_API_BASE like
 "https://proxy.example.com" works in the older primitives but 404s in any
 primitive that passes the raw value through.
 
-Usage capture is ON BY DEFAULT (it is all local): both factories return clients
+Usage capture is ALWAYS ON — it all sits local. Both factories return clients
 whose chat/embeddings/responses create() calls append one JSONL row per response
 carrying a usage block: {ts, model, stage, prompt_tokens, completion_tokens,
-reasoning_tokens, latency_ms}. The stage tag comes from POWERPACKS_USAGE_STAGE.
-completion_tokens EXCLUDES reasoning tokens (they are broken out into their own
-field) so downstream pricing never double-counts.
-
-Routing: POWERPACKS_USAGE_LOG set to a path -> that path (the deep loop and the
-fast pipeline route it into their run dirs); unset -> the fixed global sink
-.powerpacks/usage/usage.jsonl; set to off|0|none|disabled -> capture disabled
-(hermetic tests). Capture is fail-open: a logging error never breaks or delays
-the underlying call.
+reasoning_tokens, latency_ms}. Rows land in .powerpacks/usage/usage.jsonl unless
+POWERPACKS_USAGE_LOG points somewhere else (the deep loop and the fast pipeline
+point it into their run dirs for per-run cost attribution). The stage tag comes
+from POWERPACKS_USAGE_STAGE. completion_tokens EXCLUDES reasoning tokens (they
+are broken out into their own field) so downstream pricing never double-counts.
+Capture is fail-open: a logging error never breaks or delays the underlying
+call. Nothing here uploads anything — sharing usage is the $reflect skill's
+explicit opt-in, elsewhere.
 
 Changelog:
-  2026-07-30  usage-capture hooks + make_async_openai_client; capture default-on
-              with a global sink (env routes or disables, never enables).
+  2026-07-30  usage-capture hooks + make_async_openai_client; capture always on.
 """
 from __future__ import annotations
 
@@ -39,17 +37,6 @@ import openai
 DEFAULT_API_BASE = "https://api.openai.com"
 HOOKED_METHODS = ("chat.completions.create", "embeddings.create", "responses.create")
 DEFAULT_USAGE_LOG = Path(__file__).resolve().parents[4] / ".powerpacks" / "usage" / "usage.jsonl"
-USAGE_OFF_VALUES = {"off", "0", "none", "disabled", "false"}
-
-
-def resolve_usage_log() -> str | None:
-    """Env routes or disables capture — it never enables it; default is on."""
-    value = os.environ.get("POWERPACKS_USAGE_LOG")
-    if value is None:
-        return str(DEFAULT_USAGE_LOG)
-    if value.strip().lower() in USAGE_OFF_VALUES:
-        return None
-    return value
 
 
 def openai_base_url(api_base: str | None = None) -> str:
@@ -99,9 +86,7 @@ def _resolve_method(client: Any, dotted: str) -> tuple[Any, str] | None:
 
 
 def _instrument(client: Any, *, is_async: bool) -> Any:
-    log_path = resolve_usage_log()
-    if not log_path:
-        return client
+    log_path = os.environ.get("POWERPACKS_USAGE_LOG") or str(DEFAULT_USAGE_LOG)
     for dotted in HOOKED_METHODS:
         resolved = _resolve_method(client, dotted)
         if resolved is None:

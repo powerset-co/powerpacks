@@ -2,8 +2,7 @@
 
 One flow, not isolated units: mocked-transport calls go through BOTH factories with the
 env set, rows land in a real tmp file, and cost_report prices that same file against a
-hand-computed golden. Capture is DEFAULT-ON: unset env falls back to the global sink;
-only an explicit off value disables it.
+hand-computed golden. Capture is always on: unset env means the global sink.
 """
 from __future__ import annotations
 
@@ -107,7 +106,7 @@ class TestUsageCaptureSetPath(unittest.TestCase):
         self.assertEqual(report["by_model"]["test-model"]["prompt_tokens"], 500)
 
 
-class TestUsageCaptureDefaultOn(unittest.TestCase):
+class TestUsageCaptureAlwaysOn(unittest.TestCase):
     def test_unset_env_captures_to_the_global_sink(self) -> None:
         default_sink = Path(tempfile.mkdtemp()) / "usage" / "usage.jsonl"  # dir must be auto-created
         env = {k: v for k, v in os.environ.items() if k != "POWERPACKS_USAGE_LOG"}
@@ -121,17 +120,6 @@ class TestUsageCaptureDefaultOn(unittest.TestCase):
         rows = [json.loads(line) for line in default_sink.read_text().splitlines()]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["model"], "test-model")
-
-    def test_off_value_disables_capture(self) -> None:
-        default_sink = Path(tempfile.mkdtemp()) / "usage.jsonl"
-        with mock.patch("openai.resources.chat.completions.Completions.create",
-                        return_value=_fake_response()):
-            with mock.patch.dict(os.environ, {"POWERPACKS_USAGE_LOG": "off"}):
-                with mock.patch.object(oc, "DEFAULT_USAGE_LOG", default_sink):
-                    client = oc.make_openai_client(api_key="test-key")
-                    resp = client.chat.completions.create(model="test-model", messages=[])
-        self.assertEqual(resp.model, "test-model")
-        self.assertFalse(default_sink.exists())  # explicit off is the only true no-op
 
     def test_logging_failure_never_breaks_the_call(self) -> None:
         bad_log = "/nonexistent-dir-for-usage-capture/usage.jsonl"
