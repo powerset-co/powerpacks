@@ -48,7 +48,6 @@ from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.extract_gmail import GmailExtractor  # noqa: E402
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
-    build_directory_checkpoint,
     materialize_gmail_merged_people_csv,
 )
 from packs.ingestion.primitives.imports.gmail.steps.directory import (  # noqa: E402
@@ -76,8 +75,6 @@ class ApplyOutcome:
     ok: bool
     results: list[dict[str, Any]] = field(default_factory=list)
     merge: dict[str, Any] = field(default_factory=dict)
-    resolution_checkpoint: dict[str, Any] = field(default_factory=dict)
-    directory_checkpoint: dict[str, Any] = field(default_factory=dict)
     combined: list[ResolutionRecord] = field(default_factory=list)
     error: dict[str, Any] | None = None
 
@@ -109,9 +106,8 @@ def run_gmail_apply_and_enrich(
         for split in splits
         if split.resolved > 0
     ]
-    resolution_checkpoint: dict[str, Any] = {}
     if records:
-        resolution_checkpoint = commit_gmail_resolutions_to_directory(imp.directory_csv, records)
+        commit_gmail_resolutions_to_directory(imp.directory_csv, records)
     combined = combine_gmail_resolution_records(records, imp.import_dir)
     if not combined:
         people_csvs = [
@@ -122,11 +118,8 @@ def run_gmail_apply_and_enrich(
         if merge.get("status") == "completed" and merge.get("people_csv"):
             imp.gmail_people_csv = Path(str(merge["people_csv"]))
         imp._mark_step("gmail_apply_enrich", "skipped", reason="no gmail resolutions")
-        return ApplyOutcome(ok=True, merge=merge, resolution_checkpoint=resolution_checkpoint)
+        return ApplyOutcome(ok=True, merge=merge)
     combined = sorted(combined, key=_record_sort_key)
-    directory_checkpoint = build_directory_checkpoint(
-        {"linkedin_directory_csv": str(imp.directory_csv)}, {},
-    )
     imp._begin_step("gmail_apply_enrich", f"Applying Gmail LinkedIn matches for {len(combined)} account file(s).")
     results: list[dict[str, Any]] = []
     final_people_csvs: list[str] = []
@@ -147,7 +140,7 @@ def run_gmail_apply_and_enrich(
         if payload.get("status") != "completed":
             imp._mark_step("gmail_apply_enrich", "failed", error=payload)
             emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": payload})
-            return ApplyOutcome(ok=False, results=results, resolution_checkpoint=resolution_checkpoint, directory_checkpoint=directory_checkpoint, combined=combined, error=payload)
+            return ApplyOutcome(ok=False, results=results, combined=combined, error=payload)
         resolved_people = str(payload.get("people_csv") or record.people_csv)
         final_people_csvs.append(resolved_people)
         # Fallback source for the import's people.csv when the merge below writes
@@ -170,7 +163,5 @@ def run_gmail_apply_and_enrich(
         ok=True,
         results=results,
         merge=merge,
-        resolution_checkpoint=resolution_checkpoint,
-        directory_checkpoint=directory_checkpoint,
         combined=combined,
     )

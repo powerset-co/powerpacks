@@ -282,6 +282,14 @@ class GmailImport(Node):
         if splits:
             rendered["gmail_directory_by_slug"] = {s.account.slug: s.to_result() for s in splits}
         if outcome:
+            if outcome.results:
+                # Fingerprint parity with the pre-refactor artifacts blob: the
+                # per-slug apply payloads carry WRITTEN file paths (applied_csv,
+                # resolved people.csv) that the no-op gate must keep watching —
+                # dropping them made a deleted applied CSV look "up to date".
+                rendered["gmail_apply_enrich_by_slug"] = {
+                    result["slug"]: result for result in outcome.results
+                }
             if outcome.combined:
                 rendered["gmail_combined_resolutions_csvs"] = [
                     {"account_email": r.account_email, "slug": r.slug, "people_csv": r.people_csv,
