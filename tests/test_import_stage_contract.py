@@ -39,10 +39,12 @@ from packs.ingestion.primitives.imports.messages.importer import MessagesImport 
 from packs.ingestion.primitives.imports.messages.match_local_candidates import (  # noqa: E402
     ContactsMatch,
 )
+from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
+    MessageContactRow,
+)
 from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
     MATCH_ANNOTATION_COLUMNS,
     USER_OWNED_COLUMNS,
-    MessageContactRow,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest  # noqa: E402
 from packs.ingestion.primitives.pipeline.graph import check_graph  # noqa: E402

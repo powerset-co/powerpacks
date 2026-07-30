@@ -8,9 +8,12 @@ Own reusable messaging sync powerpacks for iMessage and WhatsApp.
 ```txt
 packs/ingestion/skills/import-messages/
 packs/ingestion/primitives/{discover/messages/,imports/messages/}
-packs/ingestion/primitives/discover/messages/{extract_imessage,whatsapp_wacli,merge_contacts}.py
+packs/ingestion/primitives/discover/messages/{extract_imessage,extract_whatsapp,merge_contacts}.py
+packs/ingestion/primitives/discover/messages/wacli/  # the wacli binary client package
+packs/ingestion/primitives/discover/messages/whatsapp_wacli.py  # its CLI
 tests/test_messages_pack.py
 tests/test_whatsapp_wacli.py
+tests/test_wacli_payloads.py
 tests/test_ingestion_messages_contract.py
 ```
 
@@ -35,6 +38,7 @@ tests/test_ingestion_messages_contract.py
 uv run --project . python -m unittest \
   tests.test_messages_pack \
   tests.test_whatsapp_wacli \
+  tests.test_wacli_payloads \
   tests.test_ingestion_messages_contract
 ```
 
