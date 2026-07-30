@@ -93,7 +93,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--detach-threshold", type=float, default=DEFAULT_DETACH)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--stage", choices=("worth", "enrich", "linkedin", "done"))
+    serve.add_argument("--stage",
+                       choices=("worth", "enrich", "linkedin", "done", "directory"))
     serve.add_argument("--fresh", action="store_true",
                        help="Begin a new People-review revision even when reusing a live server")
     serve.add_argument("--open", action="store_true")

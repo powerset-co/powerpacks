@@ -28,6 +28,12 @@ Use the narrow path when the user names one:
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page" -> run only
   `bin/deep-context review`; it auto-opens the current stage.
+- `$deep-context view` (alias `directory`), "browse my people", "open the
+  directory", "show me the dossiers" -> run only `bin/deep-context view`;
+  a read-only A-Z directory of everyone in the review model (Yes/No tabs,
+  search, full dossier + LinkedIn pane). Reuses a live review server, writes
+  nothing, and never starts a review revision — `review` stays the decision
+  workflow door.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
   This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed
@@ -419,10 +425,17 @@ read-only waiting view.
 
 ### 8. Apply and realize
 
+Stop the review UI first: the server holds the single-writer review-session
+lock for its whole lifetime (completing LinkedIn does NOT release it), and
+`apply-retargets` / `realize` refuse to write while it runs. `stop` is the
+cleanup — the lock dies with the process; the on-disk `.server.lock` anchor
+file intentionally remains.
+
 Before applying replacement URLs, disclose that cache misses call RapidAPI and
 get explicit approval. Then:
 
 ```bash
+bin/deep-context stop
 bin/deep-context apply-retargets
 bin/deep-context realize
 ```

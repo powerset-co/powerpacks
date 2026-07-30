@@ -6,7 +6,9 @@ compose -> cluster -> lookup flow over synthetic fixtures (no network, no DB).
 """
 from __future__ import annotations
 
+import contextlib
 import csv
+import io
 import json
 import os
 import subprocess
@@ -109,6 +111,18 @@ class TestDeepContextRunnerSafety(unittest.TestCase):
         )
         self.assertEqual(help_result.returncode, 0)
         self.assertIn("paid stages require", help_result.stderr)
+
+    def test_stop_is_an_idempotent_noop_without_a_review_server(self):
+        # `stop` is the post-review cleanup step (skill step 8): it must exit 0
+        # and say so when no server holds the session, so agents can run it
+        # unconditionally before apply-retargets/realize.
+        runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
+        result = subprocess.run(
+            [str(runner), "stop", "--port", "45997"],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"status": "stopped"', result.stdout)
+        self.assertIn("no review server was running", result.stdout)
 
     def test_profile_prefetch_is_an_explicit_runner_task(self):
         runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
@@ -5042,6 +5056,81 @@ class TestDirectoryView(unittest.TestCase):
         self.assertNotIn("data-directory-tab='maybe'", html)
         self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>0</span>", html)
         self.assertIn("data-directory-tab='no'>No<span>0</span>", html)
+
+    def test_view_serve_stage_directory_lands_on_directory_and_writes_nothing(self):
+        # `bin/deep-context view` = serve --stage directory: the read-only
+        # browse landing. It must open /directory and never begin a
+        # people-review revision (no review manifest write).
+        from packs.ingestion.primitives.deep_context.review_web import cli as web_cli
+        parsed = web_cli.build_parser().parse_args(["serve", "--stage", "directory"])
+        self.assertEqual(parsed.stage, "directory")
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            manifest = base / "review" / "manifest.json"
+            args = mock.Mock(
+                review=str(base / "review.csv"), verdicts=str(base / "verdicts.jsonl"),
+                synthetic_people=str(base / "synthetic.csv"), facts_dir=str(base / "facts"),
+                people_csv=str(base / "people.csv"), parents_dir=str(base / "parents"),
+                dossier_dir=str(base / "dossiers"),
+                profile_cache_dir=str(base / "profiles"),
+                manifest=str(manifest),
+                enrichment_manifest=str(base / "research" / "manifest.json"),
+                avatar_dir=str(base / "avatars"),
+                host="127.0.0.1", port=43211, stage="directory", fresh=False,
+                open=False, confirm_threshold=0.7, detach_threshold=0.85,
+            )
+            fake_server = mock.Mock(server_address=("127.0.0.1", 43211))
+            out = io.StringIO()
+            with mock.patch.object(
+                    web_server.urllib.request, "urlopen",
+                    side_effect=web_server.urllib.error.URLError("not running")), \
+                 mock.patch.object(web_server, "_all_review_parents", return_value=[]), \
+                 mock.patch.object(web_server, "ThreadingHTTPServer",
+                                   return_value=fake_server), \
+                 contextlib.redirect_stdout(out):
+                web_server.cmd_serve(args)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["url"], "http://127.0.0.1:43211/directory")
+            self.assertFalse(manifest.exists())
+
+    def test_serve_reuses_live_server_without_touching_the_session_lock(self):
+        # The live server HOLDS the session flock; the reuse path must never
+        # try to take it (locking first refused the very server being reused —
+        # `view` and the enrichment-running review deferral both hit this).
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            manifest = base / "review" / "manifest.json"
+            args = mock.Mock(
+                review=str(base / "review.csv"), verdicts=str(base / "verdicts.jsonl"),
+                synthetic_people=str(base / "synthetic.csv"), facts_dir=str(base / "facts"),
+                people_csv=str(base / "people.csv"), parents_dir=str(base / "parents"),
+                dossier_dir=str(base / "dossiers"),
+                profile_cache_dir=str(base / "profiles"),
+                manifest=str(manifest),
+                enrichment_manifest=str(base / "research" / "manifest.json"),
+                avatar_dir=str(base / "avatars"),
+                host="127.0.0.1", port=43212, stage="directory", fresh=False,
+                open=False, confirm_threshold=0.7, detach_threshold=0.85,
+            )
+            live = mock.Mock()
+            live.read.return_value = json.dumps({
+                "primitive": "reconcile_review_web", "manifest": str(manifest),
+            }).encode("utf-8")
+            live.__enter__ = mock.Mock(return_value=live)
+            live.__exit__ = mock.Mock(return_value=False)
+            out = io.StringIO()
+            with mock.patch.object(web_server, "LINKEDIN_OVERRIDES_CSV",
+                                   base / "review.csv"), \
+                 mock.patch.object(
+                     web_server, "acquire_review_session_lock",
+                     side_effect=AssertionError("reuse must not take the lock")), \
+                 mock.patch.object(web_server.urllib.request, "urlopen",
+                                   return_value=live), \
+                 contextlib.redirect_stdout(out):
+                web_server.cmd_serve(args)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["status"], "reused")
+            self.assertEqual(payload["url"], "http://127.0.0.1:43212/directory")
 
     def test_review_js_wires_the_directory_view(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")

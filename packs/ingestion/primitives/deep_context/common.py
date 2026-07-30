@@ -124,7 +124,8 @@ def ensure_no_review_session(primitive: str) -> None:
     except OSError:
         raise SystemExit(
             f"{primitive}: the review server is running and owns the review session "
-            "(single-writer contract). Finish or stop the review UI, then re-run.")
+            "(single-writer contract). Finish the review, release the session "
+            "with `bin/deep-context stop`, then re-run.")
     finally:
         handle.close()
 

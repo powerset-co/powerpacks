@@ -25,6 +25,41 @@ cd "$ROOT"
 PY=(uv run --project . python -m)
 PKG="packs.ingestion.primitives.deep_context"
 
+review_port_from_args() {
+  # The --port flag exactly as the review server parses it (default 8765).
+  local port=8765 prev="" a
+  for a in "$@"; do
+    case "$a" in
+      --port=*) port="${a#--port=}" ;;
+    esac
+    [[ "$prev" == "--port" ]] && port="$a"
+    prev="$a"
+  done
+  echo "$port"
+}
+
+review_server_pids() {
+  # Only reconcile_review_web listeners on the port — never someone else's process.
+  local pid
+  for pid in $(lsof -ti :"$1" 2>/dev/null); do
+    if ps -p "$pid" -o command= 2>/dev/null | grep -q "reconcile_review_web"; then
+      echo "$pid"
+    fi
+  done
+  return 0
+}
+
+stop_review_server() {
+  local pid _
+  for pid in $(review_server_pids "$1"); do
+    kill "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.2
+    done
+  done
+}
+
 usage() {
   cat >&2 <<'USAGE'
 usage: bin/deep-context <command> [args]
@@ -49,6 +84,10 @@ usage: bin/deep-context <command> [args]
                proposals for the normal judge/review loop (default dry run;
                --apply writes; --apply --judge also judges from cache, spends OpenAI)
   review       open the staged people / LinkedIn decision UI (local, free)
+  view         open the read-only people directory: A-Z browse of dossiers +
+               LinkedIn (alias: directory). Reuses a live review server; free.
+  stop         stop the review UI server, releasing the single-writer review
+               session so apply-retargets/realize/restart can write (free)
   review-status  read manifests/CSVs and print the exact next workflow action
                (--wait [--timeout N] blocks until the next action is the agent's)
   assemble-synthetic  build synthetic people-rows from deep-research output for
@@ -205,26 +244,37 @@ case "$cmd" in
         "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null; then
       echo "note: enrichment is running inside the live review server; reusing it (code refresh deferred)" >&2
     elif (( ! wants_help )); then
-      review_port=8765
-      _prev=""
-      for _a in "$@"; do
-        case "$_a" in
-          --port=*) review_port="${_a#--port=}" ;;
-        esac
-        [[ "$_prev" == "--port" ]] && review_port="$_a"
-        _prev="$_a"
-      done
-      for _pid in $(lsof -ti :"$review_port" 2>/dev/null); do
-        if ps -p "$_pid" -o command= 2>/dev/null | grep -q "reconcile_review_web"; then
-          kill "$_pid" 2>/dev/null || true
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
-            kill -0 "$_pid" 2>/dev/null || break
-            sleep 0.2
-          done
-        fi
-      done
+      stop_review_server "$(review_port_from_args "$@")"
     fi
     "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
+    ;;
+  view|directory)
+    # Read-only browse of the review model (/directory landing). Deliberately
+    # REUSES a live review server as-is instead of restarting it — a browse
+    # must never bounce a session out from under open review pages; `review`
+    # stays the code-refresh door. Lands on /directory, writes nothing, and
+    # never begins a people-review revision.
+    "${PY[@]}" "$PKG.reconcile_review_web" serve --open --stage directory "$@"
+    ;;
+  stop|stop-review)
+    # Release the single-writer review session: kill the review server on the
+    # port. The kernel drops the session flock with the process (even after a
+    # crash), so the guarded primitives (apply-retargets, realize, restart,
+    # ...) can write again. The on-disk .server.lock anchor file intentionally
+    # stays — unlinking a flock anchor is a two-holders race. Refuses while
+    # the in-app enrichment run is active: killing the server would kill the
+    # paid run with it.
+    stop_port="$(review_port_from_args "$@")"
+    if [[ -z "$(review_server_pids "$stop_port")" ]]; then
+      echo '{"primitive": "reconcile_review_web", "status": "stopped", "note": "no review server was running"}'
+    elif grep -qE '"status": *"(running|submitted)"' \
+        "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null; then
+      echo "refusing: enrichment is running inside the live review server; wait for it (bin/deep-context review-status --wait), then re-run stop" >&2
+      exit 1
+    else
+      stop_review_server "$stop_port"
+      echo '{"primitive": "reconcile_review_web", "status": "stopped"}'
+    fi
     ;;
   review-status)
     # Read-only deterministic status target. No browser, provider, or write.
