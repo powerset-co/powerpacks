@@ -606,7 +606,7 @@ document.addEventListener("click", async (event) => {
       const next = {
         worth: ["People complete", "/?stage=enrich"],
         enrich: ["Enrichment complete", "/?stage=linkedin"],
-        linkedin: ["All set", "/?stage=done"],
+        linkedin: ["All set", "/directory"],
       }[button.dataset.complete] || ["Saved", window.location.href];
       leaveAndNavigate(next[0], next[1]);
     } catch (error) {
@@ -1074,7 +1074,8 @@ async function syncFileState() {
     if (!isStagePreview && state.stage && state.stage !== currentStage
         && movesForward && observedTransition) {
       if (preserveDraft) return;
-      window.location.replace(`/?stage=${encodeURIComponent(state.stage)}`);
+      window.location.replace(state.stage === "done"
+        ? "/directory" : `/?stage=${encodeURIComponent(state.stage)}`);
       return;
     }
     if (state.state_token && state.state_token !== reviewStateToken) {

@@ -26,14 +26,12 @@ Use the narrow path when the user names one:
   `bin/deep-context lookup ...` (free, read-only).
 - `$deep-context check` -> run only `bin/deep-context check` (free, read-only).
 - `$deep-context validate` -> run only `bin/deep-context validate`.
-- `$deep-context review`, "open the people/LinkedIn page" -> run only
-  `bin/deep-context review`; it auto-opens the current stage.
-- `$deep-context view` (alias `directory`), "browse my people", "open the
-  directory", "show me the dossiers" -> run only `bin/deep-context view`;
-  a read-only A-Z directory of everyone in the review model (Yes/No tabs,
-  search, full dossier + LinkedIn pane). Reuses a live review server, writes
-  nothing, and never starts a review revision — `review` stays the decision
-  workflow door.
+- `$deep-context review`, "open the people/LinkedIn page", "browse my
+  people", "open the directory", "show me the dossiers" -> run only
+  `bin/deep-context review`; the ONE UI door. Mid-flow it opens the current
+  stage; once the flow is complete it opens the read-only A-Z directory
+  (Yes/No tabs, search, full dossier + LinkedIn pane) — nobody re-reviews
+  without a fresh end-to-end run, so done means browse.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
   This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed

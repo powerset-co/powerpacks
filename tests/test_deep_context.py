@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import http.client
 import io
 import json
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -5131,6 +5133,69 @@ class TestDirectoryView(unittest.TestCase):
             payload = json.loads(out.getvalue())
             self.assertEqual(payload["status"], "reused")
             self.assertEqual(payload["url"], "http://127.0.0.1:43212/directory")
+
+    @staticmethod
+    def _serve_args(base, manifest, port, stage):
+        return mock.Mock(
+            review=str(base / "review.csv"), verdicts=str(base / "verdicts.jsonl"),
+            synthetic_people=str(base / "synthetic.csv"), facts_dir=str(base / "facts"),
+            people_csv=str(base / "people.csv"), parents_dir=str(base / "parents"),
+            dossier_dir=str(base / "dossiers"),
+            profile_cache_dir=str(base / "profiles"),
+            manifest=str(manifest),
+            enrichment_manifest=str(base / "research" / "manifest.json"),
+            avatar_dir=str(base / "avatars"),
+            host="127.0.0.1", port=port, stage=stage, fresh=False,
+            open=False, confirm_threshold=0.7, detach_threshold=0.85,
+        )
+
+    def test_review_lands_on_directory_once_the_flow_is_complete(self):
+        # One door: with no explicit --stage, `review` derives the landing from
+        # the workflow status — mid-flow the current stage, done -> /directory.
+        for next_action, expected in (
+                ("realize", "http://127.0.0.1:43213/directory"),
+                ("review_people", "http://127.0.0.1:43213/?stage=worth")):
+            with tempfile.TemporaryDirectory() as dd:
+                base = Path(dd)
+                args = self._serve_args(base, base / "review" / "manifest.json",
+                                        43213, None)
+                fake_server = mock.Mock(server_address=("127.0.0.1", 43213))
+                out = io.StringIO()
+                with mock.patch.object(
+                        web_server.urllib.request, "urlopen",
+                        side_effect=web_server.urllib.error.URLError("down")), \
+                     mock.patch.object(web_server, "_all_review_parents",
+                                       return_value=[]), \
+                     mock.patch.object(web_server, "workflow_status_from_parents",
+                                       return_value={"next_action": next_action}), \
+                     mock.patch.object(web_server, "ThreadingHTTPServer",
+                                       return_value=fake_server), \
+                     contextlib.redirect_stdout(out):
+                    web_server.cmd_serve(args)
+                payload = json.loads(out.getvalue())
+                self.assertEqual(payload["url"], expected, next_action)
+
+    def test_reused_server_landing_follows_live_stage(self):
+        # Reuse with no explicit --stage: the live server's reported stage
+        # decides the landing, and its done state means the directory.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            manifest = base / "review" / "manifest.json"
+            args = self._serve_args(base, manifest, 43214, None)
+            live = mock.Mock()
+            live.read.return_value = json.dumps({
+                "primitive": "reconcile_review_web", "manifest": str(manifest),
+                "stage": "done",
+            }).encode("utf-8")
+            live.__enter__ = mock.Mock(return_value=live)
+            live.__exit__ = mock.Mock(return_value=False)
+            out = io.StringIO()
+            with mock.patch.object(web_server.urllib.request, "urlopen",
+                                   return_value=live), \
+                 contextlib.redirect_stdout(out):
+                web_server.cmd_serve(args)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["url"], "http://127.0.0.1:43214/directory")
 
     def test_review_js_wires_the_directory_view(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
