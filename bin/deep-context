@@ -83,9 +83,9 @@ usage: bin/deep-context <command> [args]
   migrate-legacy  turn stored legacy Parallel resolutions into pending retarget
                proposals for the normal judge/review loop (default dry run;
                --apply writes; --apply --judge also judges from cache, spends OpenAI)
-  review       open the staged people / LinkedIn decision UI (local, free)
-  view         open the read-only people directory: A-Z browse of dossiers +
-               LinkedIn (alias: directory). Reuses a live review server; free.
+  review       open the review UI at the current stage — or the read-only
+               people directory (A-Z dossiers + LinkedIn) once the flow is
+               complete (local, free)
   stop         stop the review UI server, releasing the single-writer review
                session so apply-retargets/realize/restart can write (free)
   review-status  read manifests/CSVs and print the exact next workflow action
@@ -247,14 +247,6 @@ case "$cmd" in
       stop_review_server "$(review_port_from_args "$@")"
     fi
     "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
-    ;;
-  view|directory)
-    # Read-only browse of the review model (/directory landing). Deliberately
-    # REUSES a live review server as-is instead of restarting it — a browse
-    # must never bounce a session out from under open review pages; `review`
-    # stays the code-refresh door. Lands on /directory, writes nothing, and
-    # never begins a people-review revision.
-    "${PY[@]}" "$PKG.reconcile_review_web" serve --open --stage directory "$@"
     ;;
   stop|stop-review)
     # Release the single-writer review session: kill the review server on the

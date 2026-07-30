@@ -606,7 +606,7 @@ document.addEventListener("click", async (event) => {
       const next = {
         worth: ["People complete", "/?stage=enrich"],
         enrich: ["Enrichment complete", "/?stage=linkedin"],
-        linkedin: ["All set", "/?stage=done"],
+        linkedin: ["All set", "/directory"],
       }[button.dataset.complete] || ["Saved", window.location.href];
       leaveAndNavigate(next[0], next[1]);
     } catch (error) {
