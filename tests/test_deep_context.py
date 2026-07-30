@@ -5197,34 +5197,6 @@ class TestDirectoryView(unittest.TestCase):
             payload = json.loads(out.getvalue())
             self.assertEqual(payload["url"], "http://127.0.0.1:43214/directory")
 
-    def test_stage_done_redirects_to_the_directory(self):
-        # The dead-end "All set" screen is gone: ?stage=done IS the browse
-        # panel now (302), so old links and the JS forward-navigation land there.
-        with tempfile.TemporaryDirectory() as dd:
-            base = Path(dd)
-            handler = web_server.make_handler(
-                base / "review.csv", base / "verdicts.jsonl",
-                base / "parents", base / "dossiers", 0.7, 0.85,
-                synthetic_path=base / "synthetic.csv", facts_dir=base / "facts",
-                people_csv=base / "people.csv",
-                manifest_path=base / "review" / "manifest.json",
-                enrichment_manifest_path=base / "research" / "manifest.json",
-                profile_cache_dir=base / "profiles", avatar_dir=base / "avatars",
-                initial_parents=[])
-            server = web_server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            try:
-                conn = http.client.HTTPConnection(*server.server_address, timeout=5)
-                conn.request("GET", "/?stage=done")
-                response = conn.getresponse()
-                self.assertEqual(response.status, 302)
-                self.assertEqual(response.getheader("Location"), "/directory")
-                conn.close()
-            finally:
-                server.shutdown()
-                server.server_close()
-
     def test_review_js_wires_the_directory_view(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn("setupDirectory", script)

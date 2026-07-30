@@ -1143,6 +1143,26 @@ body[data-stage="directory"] main {
   padding-bottom: 32px;
 }
 
+/* Flow-complete banner over the panel: the done screen's copy affordance. */
+.directory-handoff {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-bottom: 16px;
+  padding: 10px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+}
+.directory-handoff .handoff-note { margin: 0 !important; }
+.directory-handoff .handoff-copy { margin-top: 0; }
+
+body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
+  height: calc(100dvh - var(--topbar-height) - 148px);
+}
+
 .directory-layout {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);

@@ -1359,11 +1359,14 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
 def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[str]], *,
                         parents_dir: Path = PARENTS_DIR,
                         dossier_dir: Path = DOSSIER_DIR,
-                        profile_cache_dir: Path = PROFILE_CACHE_DIR) -> bytes:
+                        profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                        handoff: bool = False) -> bytes:
     """The /directory page: the full A-Z entry list rides along as a JSON
     island (the worth typeahead pattern) and the client renders/filters the
     sidebar from it; ``?person=<slug>`` server-renders that person's pane so
-    the URL is shareable. Same shell as the review pages, no stepper, no SSE."""
+    the URL is shareable. Same shell as the review pages, no stepper, no SSE.
+    ``handoff`` (the flow is complete and the agent's move is next) keeps the
+    old done screen's copy-the-phrase affordance as a banner over the panel."""
     entries = directory_entries(parents)
     selected = str((params.get("person") or [""])[0]).strip().lower()
     parent = next(
@@ -1394,7 +1397,9 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
               "<input class='worth-search-input' type='search' placeholder='Search people…' "
               "aria-label='Search people by name' autocomplete='off' spellcheck='false'>"
               "<span class='worth-search-count' data-search-count hidden></span></div>")
-    content = ("<div class='directory-layout'>"
+    banner = (f"<div class='directory-handoff'>{GO_BACK_HTML}</div>"
+              if handoff else "")
+    content = (f"{banner}<div class='directory-layout'>"
                f"<aside class='directory-sidebar'>{search}{tab_nav}"
                "<nav class='directory-list' data-directory-list aria-label='People A to Z'></nav>"
                "</aside>"

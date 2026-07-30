@@ -550,12 +550,18 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             if parsed.path == "/directory":
                 # Browse-only view over the same in-memory model; never writes
-                # and never starts jobs.
+                # and never starts jobs. Once the human flow is complete
+                # (next_action realize — the agent's move), the old done
+                # screen's go-back-to-Codex copy banner rides on top.
                 with mutation_lock:
                     parents = parents_now()
+                    status = workflow_status_from_parents(
+                        parents, manifest_path=manifest_path,
+                        enrichment_manifest_path=enrichment_manifest_path)
                 self.send_bytes(directory_page_html(
                     parents, params, parents_dir=parents_dir,
-                    dossier_dir=dossier_dir, profile_cache_dir=profile_cache_dir))
+                    dossier_dir=dossier_dir, profile_cache_dir=profile_cache_dir,
+                    handoff=status["next_action"] == "realize"))
                 return
             if parsed.path == "/api/avatar":
                 pub = (params.get("pub") or [""])[0]
@@ -569,14 +575,6 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             if parsed.path != "/":
                 self.send_bytes(b"not found", "text/plain", status=404)
-                return
-            if _phase_view(params, {}, manifest_path) == "done":
-                # The flow's end state IS the browse panel — one door, no
-                # dead-end "All set" screen. Old ?stage=done links follow.
-                self.send_response(302)
-                self.send_header("Location", "/directory")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
                 return
 
             # Serialize the snapshot with decision writes. GET stays read-only for
