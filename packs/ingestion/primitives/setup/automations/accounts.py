@@ -6,7 +6,19 @@ strings, the overall `status` payload (install/config/accounts/MCP/gcloud),
 and the `auth-check` payload that verifies token health per account without
 downloading mail.
 
+The auth-check decision is `check_account` — one first-rule-wins verdict per
+account — and `CHECK_BUCKETS` says which payload lists each verdict lands in.
+`VaultHealth` parses the `status` payload once so the check never re-probes a
+nested dict.
+
 Changelog:
+  2026-07-29 (setup style pass): extracted the auth-check decision. The loop
+    used to inline the four verdicts and then re-derive five parallel lists and
+    the overall status with five more comprehensions over the same payload
+    dicts; verdicts are now the frozen `AccountCheck` and the buckets are a
+    literal table. `VaultHealth.from_status` replaced the four
+    `current.get("x", {}).get("y")` probes and the stored-account
+    `email or identifier` chain. Same payload, same key set per verdict.
   2026-07-23 (audit):
     - Split out of the former 1,770-line setup/msgvault_setup.py.
 """
@@ -18,6 +30,7 @@ import re
 import shlex
 import shutil
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,11 +53,12 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     run_msgvault,
 )
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    command_error,
+    command_output,
     parse_json_fragment,
     progress,
     run_command,
     run_visible_command,
-    tail,
 )
 
 
@@ -56,6 +70,21 @@ MSGVAULT_REAUTH_ERROR_MARKERS = (
     "missing token",
     "no valid token",
     "token is missing",
+)
+# Which auth-check payload lists each verdict lands in, in verdict order. A
+# verdict that needs the user's browser also lands in accounts_to_authorize.
+CHECK_BUCKETS: dict[str, tuple[str, ...]] = {
+    "healthy": ("healthy_accounts",),
+    "missing_token": ("missing_accounts", "accounts_to_authorize"),
+    "reauthorization_required": ("expired_accounts", "accounts_to_authorize"),
+    "transient_error": ("error_accounts",),
+}
+CHECK_LISTS = (
+    "healthy_accounts",
+    "missing_accounts",
+    "expired_accounts",
+    "accounts_to_authorize",
+    "error_accounts",
 )
 
 
@@ -82,6 +111,115 @@ def msgvault_reauthorization_required(text: str) -> bool:
     """Return True when msgvault output means the account token needs re-auth."""
     haystack = (text or "").lower()
     return any(marker in haystack for marker in MSGVAULT_REAUTH_ERROR_MARKERS)
+
+
+@dataclass(frozen=True)
+class AccountCheck:
+    """One account's auth-check verdict, and the record the CLI emits for it.
+
+    Optional fields are omitted from the record when empty, so a healthy
+    account carries no error keys and a transient failure carries no
+    authorize command (there is nothing for the user to re-authorize yet)."""
+
+    email: str
+    status: str
+    error_code: str = ""
+    error: str = ""
+    authorize_command: str = ""
+    network_called: bool = False
+
+    def record(self) -> dict[str, Any]:
+        """Return this verdict as its `accounts[]` entry."""
+        entry: dict[str, Any] = {"email": self.email, "status": self.status}
+        if self.error_code:
+            entry["error_code"] = self.error_code
+        if self.error:
+            entry["error"] = self.error
+        if self.authorize_command:
+            entry["authorize_command"] = self.authorize_command
+        return entry
+
+
+@dataclass(frozen=True)
+class VaultHealth:
+    """The `status` payload parsed once at the auth-check boundary.
+
+    Everything auth-check needs to know about the local vault: whether it can
+    be probed at all, and which account identities msgvault already stores.
+    msgvault has reported the identity as `email` and as `identifier` across
+    versions, so both are read here and nowhere else."""
+
+    installed: bool = False
+    oauth_configured: bool = False
+    database_exists: bool = False
+    accounts_error: str = ""
+    stored_emails: frozenset[str] = field(default_factory=frozenset)
+
+    @classmethod
+    def from_status(cls, payload: dict[str, Any]) -> VaultHealth:
+        """Parse a `status_payload` result."""
+        accounts = payload.get("accounts") or []
+        return cls(
+            installed=bool(payload.get("msgvault", {}).get("installed")),
+            oauth_configured=bool(payload.get("config", {}).get("oauth_configured")),
+            database_exists=bool(payload.get("database", {}).get("exists")),
+            accounts_error=str(payload.get("accounts_error") or ""),
+            stored_emails=frozenset(
+                str(account.get("email") or account.get("identifier") or "").strip().lower()
+                for account in accounts
+                if isinstance(account, dict)
+            ),
+        )
+
+    @property
+    def blockers(self) -> list[str]:
+        """Reasons no account can be checked at all, in report order."""
+        reasons = []
+        if not self.installed:
+            reasons.append("msgvault is not installed")
+        if not self.oauth_configured:
+            reasons.append("msgvault OAuth is not configured")
+        if not self.database_exists:
+            reasons.append("msgvault database is missing")
+        if self.accounts_error:
+            reasons.append(self.accounts_error)
+        return reasons
+
+
+def check_account(home: Path, email: str, *, stored: bool) -> AccountCheck:
+    """Return one account's verdict; first rule wins.
+
+    Not stored by msgvault at all -> the token is missing. Otherwise `msgvault
+    verify` decides: success is healthy, a revoked/expired token needs the user
+    to re-authorize, and anything else is transient and not the user's problem
+    to fix. Only the stored branch touches the network."""
+    if not stored:
+        return AccountCheck(
+            email=email,
+            status="missing_token",
+            error_code="gmail_authorization_missing",
+            authorize_command=msgvault_account_authorize_command(home, email, force=False),
+        )
+    result = run_msgvault(["verify", email, "--skip-db-check", "--sample", "0", "--local"], home, timeout=60)
+    if result["ok"]:
+        return AccountCheck(email=email, status="healthy", network_called=True)
+    error = command_error(result)
+    if msgvault_reauthorization_required(error):
+        return AccountCheck(
+            email=email,
+            status="reauthorization_required",
+            error_code="gmail_reauthorization_required",
+            error=error,
+            authorize_command=msgvault_account_authorize_command(home, email, force=True),
+            network_called=True,
+        )
+    return AccountCheck(
+        email=email,
+        status="transient_error",
+        error_code="gmail_auth_check_failed",
+        error=error or f"msgvault verify exited with {result.get('returncode')}",
+        network_called=True,
+    )
 
 
 def msgvault_account_authorize_command(home: Path, email: str, *, force: bool) -> str:
@@ -145,7 +283,7 @@ def status_payload(home: Path) -> dict[str, Any]:
                 else:
                     accounts_error = "list-accounts did not return JSON"
         else:
-            accounts_error = tail(result.get("stderr") or result.get("stdout") or "")
+            accounts_error = command_error(result)
     mcp = mcp_status()
     secret_records = {
         name: {"path": value, "exists": bool(value and Path(value).expanduser().exists())}
@@ -156,20 +294,19 @@ def status_payload(home: Path) -> dict[str, Any]:
     # stats view and the authorize step becomes unreachable.
     ready = bool(msgvault_path and cfg_path.exists() and secrets and db_path(home).exists() and accounts)
     setup_state = load_setup_state(home)
-    owner_email = str(setup_state.get("email") or "")
     # The emails the user asked to authorize live in setup state as test_users
     # (saved by add-test-users). They're the source of truth for "accounts
     # available to authorize" — msgvault only knows who's already authorized.
-    desired_emails = normalize_email_list([owner_email, *(setup_state.get("test_users") or [])])
+    desired_emails = normalize_email_list([setup_state.email, *setup_state.test_users])
     return {
         "status": "ok" if ready else "needs_setup",
         "home": str(home),
-        "owner_email": owner_email,
+        "owner_email": setup_state.email,
         "desired_emails": desired_emails,
         "msgvault": {
             "installed": bool(msgvault_path),
             "path": msgvault_path,
-            "version": (version.get("stdout") or version.get("stderr") or "").strip(),
+            "version": command_output(version),
         },
         "database": {"path": str(db_path(home)), "exists": db_path(home).exists()},
         "config": {
@@ -188,98 +325,36 @@ def status_payload(home: Path) -> dict[str, Any]:
 def check_accounts_payload(home: Path, requested_emails: list[str]) -> dict[str, Any]:
     """Build the `auth-check` payload: per-account token health without mail sync.
 
-    Accounts absent from msgvault are missing_token; `msgvault verify` failures
-    split into reauthorization_required (token revoked/expired) versus
-    transient_error, each carrying the exact authorize command to run."""
+    When the vault itself cannot be probed, every requested account is one
+    transient failure carrying that reason; otherwise each account gets its
+    own `check_account` verdict. Both paths render through the same buckets."""
     requested = normalize_email_list(requested_emails)
-    current = status_payload(home)
-    setup_errors: list[str] = []
-    if not current.get("msgvault", {}).get("installed"):
-        setup_errors.append("msgvault is not installed")
-    if not current.get("config", {}).get("oauth_configured"):
-        setup_errors.append("msgvault OAuth is not configured")
-    if not current.get("database", {}).get("exists"):
-        setup_errors.append("msgvault database is missing")
-    if current.get("accounts_error"):
-        setup_errors.append(str(current["accounts_error"]))
-    if setup_errors:
-        error = "; ".join(setup_errors)
-        return {
-            "status": "error",
-            "home": str(home),
-            "requested_accounts": requested,
-            "healthy_accounts": [],
-            "missing_accounts": [],
-            "expired_accounts": [],
-            "accounts_to_authorize": [],
-            "error_accounts": requested,
-            "accounts": [
-                {
-                    "email": email,
-                    "status": "transient_error",
-                    "error_code": "gmail_auth_check_unavailable",
-                    "error": error,
-                }
-                for email in requested
-            ],
-            "browser_opened": False,
-            "mail_downloaded": False,
-            "network_called": False,
-        }
-    stored_accounts = {
-        str(account.get("email") or account.get("identifier") or "").strip().lower(): account
-        for account in (current.get("accounts") or [])
-        if isinstance(account, dict)
-    }
-    checks: list[dict[str, Any]] = []
-    network_called = False
-    for email in requested:
-        normalized = email.lower()
-        if normalized not in stored_accounts:
-            checks.append({
-                "email": email,
-                "status": "missing_token",
-                "error_code": "gmail_authorization_missing",
-                "authorize_command": msgvault_account_authorize_command(home, email, force=False),
-            })
-            continue
-        network_called = True
-        result = run_msgvault(
-            ["verify", email, "--skip-db-check", "--sample", "0", "--local"],
-            home,
-            timeout=60,
-        )
-        if result["ok"]:
-            checks.append({"email": email, "status": "healthy"})
-            continue
-        error = tail(result.get("stderr") or result.get("stdout") or "")
-        if msgvault_reauthorization_required(error):
-            checks.append({
-                "email": email,
-                "status": "reauthorization_required",
-                "error_code": "gmail_reauthorization_required",
-                "error": error,
-                "authorize_command": msgvault_account_authorize_command(home, email, force=True),
-            })
-            continue
-        checks.append({
-            "email": email,
-            "status": "transient_error",
-            "error_code": "gmail_auth_check_failed",
-            "error": error or f"msgvault verify exited with {result.get('returncode')}",
-        })
-    healthy_accounts = [item["email"] for item in checks if item["status"] == "healthy"]
-    missing_accounts = [item["email"] for item in checks if item["status"] == "missing_token"]
-    expired_accounts = [item["email"] for item in checks if item["status"] == "reauthorization_required"]
-    errors = [item["email"] for item in checks if item["status"] == "transient_error"]
-    accounts_to_authorize = [
-        item["email"]
-        for item in checks
-        if item["status"] in {"missing_token", "reauthorization_required"}
-    ]
-    if errors:
+    health = VaultHealth.from_status(status_payload(home))
+    blockers = health.blockers
+    if blockers:
+        unavailable = "; ".join(blockers)
+        checks = [
+            AccountCheck(
+                email=email,
+                status="transient_error",
+                error_code="gmail_auth_check_unavailable",
+                error=unavailable,
+            )
+            for email in requested
+        ]
+    else:
+        checks = [
+            check_account(home, email, stored=email.lower() in health.stored_emails)
+            for email in requested
+        ]
+
+    buckets: dict[str, list[str]] = {name: [] for name in CHECK_LISTS}
+    for check in checks:
+        for bucket in CHECK_BUCKETS.get(check.status, ()):
+            buckets[bucket].append(check.email)
+    if buckets["error_accounts"]:
         status = "error"
-    elif accounts_to_authorize:
+    elif buckets["accounts_to_authorize"]:
         status = "needs_user_action"
     else:
         status = "ok"
@@ -287,13 +362,9 @@ def check_accounts_payload(home: Path, requested_emails: list[str]) -> dict[str,
         "status": status,
         "home": str(home),
         "requested_accounts": requested,
-        "healthy_accounts": healthy_accounts,
-        "missing_accounts": missing_accounts,
-        "expired_accounts": expired_accounts,
-        "accounts_to_authorize": accounts_to_authorize,
-        "error_accounts": errors,
-        "accounts": checks,
+        **buckets,
+        "accounts": [check.record() for check in checks],
         "browser_opened": False,
         "mail_downloaded": False,
-        "network_called": network_called,
+        "network_called": any(check.network_called for check in checks),
     }

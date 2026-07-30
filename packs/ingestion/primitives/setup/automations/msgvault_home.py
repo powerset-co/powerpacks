@@ -6,7 +6,16 @@ JSON validation/copying, the msgvault binary (install check, invocation,
 init-db), OAuth-app name validation, and the deterministic
 `local-msg-vault-*` project id helpers.
 
+`load_setup_state` is the boundary for the state JSON: it returns a frozen
+`SetupState` for one OAuth app, so no caller navigates `oauth_apps.<name>` or
+re-guards the file's shape.
+
 Changelog:
+  2026-07-29 (setup style pass): `load_setup_state(home, app_name)` parses the
+    state document into the frozen `SetupState` instead of handing back the raw
+    dict. The three callers (status payload, project choice, test-user save)
+    each carried their own `isinstance(..., dict)` walk down to
+    `oauth_apps.<name>`; the walk now happens once, here, at the read.
   2026-07-23 (audit):
     - Split out of the former 1,770-line setup/msgvault_setup.py.
     - Account authorization/health payloads live in accounts.py; project
@@ -22,6 +31,7 @@ import re
 import secrets
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +41,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    command_error,
+    command_output,
     progress,
     run_command,
     tail,
@@ -58,7 +70,7 @@ def ensure_msgvault(install: bool) -> dict[str, Any]:
         return {
             "installed": True,
             "path": path,
-            "version": (version.get("stdout") or version.get("stderr") or "").strip(),
+            "version": command_output(version),
             "install_attempted": False,
         }
     if not install:
@@ -75,7 +87,7 @@ def ensure_msgvault(install: bool) -> dict[str, Any]:
     return {
         "installed": bool(path),
         "path": path or "",
-        "version": (version.get("stdout") or version.get("stderr") or "").strip(),
+        "version": command_output(version),
         "install_attempted": True,
         "install_ok": result["ok"],
         "install_error": tail(result.get("stderr", "")) if not result["ok"] else "",
@@ -91,13 +103,45 @@ def default_project_id(seed: str = "") -> str:
     return f"{DEFAULT_PROJECT_NAME}-{secrets.token_hex(3)}"
 
 
+@dataclass(frozen=True)
+class SetupState:
+    """One OAuth app's slice of the setup-state JSON, parsed at the read.
+
+    The state document is a foreign blob written across many runs: the unnamed
+    ("default") app is the top-level record and named apps live under
+    `oauth_apps.<name>`. Everything a later step actually decides on is these
+    three values, so they are parsed once and the shape guards stop here. The
+    document also carries write-only diagnostic keys (`oauth_client_name`,
+    `client_secret_path`, `client_id`) that no step reads; they are preserved
+    by the read-modify-write writers and deliberately not modelled."""
+
+    project_id: str = ""
+    email: str = ""
+    test_users: tuple[str, ...] = ()
+
+    @classmethod
+    def from_record(cls, record: Any) -> SetupState:
+        """Parse one app record; anything that is not a JSON object is empty state."""
+        if not isinstance(record, dict):
+            return cls()
+        raw_users = record.get("test_users")
+        return cls(
+            project_id=str(record.get("project_id") or ""),
+            email=str(record.get("email") or ""),
+            test_users=tuple(str(user) for user in raw_users) if isinstance(raw_users, list) else (),
+        )
+
+
 def setup_state_path(home: Path) -> Path:
     """Return the setup-state JSON path inside the msgvault home."""
     return home / DEFAULT_STATE_FILE
 
 
-def load_setup_state(home: Path) -> dict[str, Any]:
-    """Load the setup-state dict, returning {} for missing/corrupt files."""
+def read_state_document(home: Path) -> dict[str, Any]:
+    """Read the whole setup-state JSON object, `{}` for a missing/corrupt file.
+
+    The raw document, for the writers that must merge into it without dropping
+    keys they do not model. Readers want `load_setup_state`."""
     path = setup_state_path(home)
     if not path.exists():
         return {}
@@ -108,11 +152,22 @@ def load_setup_state(home: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def load_setup_state(home: Path, app_name: str = "") -> SetupState:
+    """Return the frozen state for one OAuth app ("" = the unnamed default app).
+
+    A named app with no record yet is empty state, not the default app's."""
+    document = read_state_document(home)
+    if not app_name:
+        return SetupState.from_record(document)
+    apps = document.get("oauth_apps")
+    return SetupState.from_record(apps.get(app_name) if isinstance(apps, dict) else None)
+
+
 def save_setup_state(home: Path, state: dict[str, Any]) -> None:
     """Merge truthy state values into the setup-state JSON on disk."""
     path = setup_state_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    current = load_setup_state(home)
+    current = read_state_document(home)
     current.update({key: value for key, value in state.items() if value})
     path.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -124,7 +179,7 @@ def save_oauth_app_state(home: Path, app_name: str, state: dict[str, Any]) -> No
         return
     path = setup_state_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    current = load_setup_state(home)
+    current = read_state_document(home)
     apps = current.get("oauth_apps") if isinstance(current.get("oauth_apps"), dict) else {}
     existing = apps.get(app_name) if isinstance(apps.get(app_name), dict) else {}
     existing.update({key: value for key, value in state.items() if value})
@@ -337,4 +392,4 @@ def init_db(home: Path) -> dict[str, Any]:
     if result["ok"]:
         progress("msgvault database ready.")
         return {"status": "ok", "path": str(db_path(home))}
-    return {"status": "error", "path": str(db_path(home)), "message": tail(result.get("stderr") or result.get("stdout") or "")}
+    return {"status": "error", "path": str(db_path(home)), "message": command_error(result)}

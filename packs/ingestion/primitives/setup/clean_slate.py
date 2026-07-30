@@ -28,8 +28,17 @@ SCRUBBED (derived; regenerates free on the next full run):
 
 Dry run by default. --apply moves and writes a manifest into the backup dir.
 
+SCRUB and PRESERVE below are the whole policy: one row per path, first column
+the path (globs allowed in SCRUB), second why it is in that column. The run
+resolves each row against the state root into a frozen `ScrubTarget` /
+`PreservedPath` and the payload renders from those.
+
 Created: 2026-07-18
 Changelog:
+  2026-07-29 (setup style pass): the plan and preserve rows became the frozen
+    `ScrubTarget` / `PreservedPath` instead of bare dicts built inline and
+    re-indexed by string key three times; payload key order is unchanged (the
+    result is printed with insertion order, not sorted).
   2026-07-23 (nuke accounts.json): dropped the ("ingestion", ...) PRESERVE entry.
     Nothing writes .powerpacks/ingestion/ anymore (the accounts.json linked-source
     registry was deleted), so there is no wiring left to preserve.
@@ -40,8 +49,10 @@ import argparse
 import json
 import shutil
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 # Directories/files to scrub, relative to .powerpacks. Globs allowed.
 SCRUB = [
@@ -85,6 +96,32 @@ PRESERVE = [
     ("logbook", "verbatim conversation archive"),
     ("memory", "project-local agent memory"),
 ]
+
+
+@dataclass(frozen=True)
+class ScrubTarget:
+    """One resolved path that will move to the backup dir, and why."""
+
+    path: str
+    why: str
+    size_bytes: int
+
+    def as_row(self) -> dict[str, Any]:
+        return {"path": self.path, "why": self.why, "size_bytes": self.size_bytes}
+
+
+@dataclass(frozen=True)
+class PreservedPath:
+    """One path the scrub must not touch, and whether it is actually there."""
+
+    path: str
+    why: str
+    exists: bool
+    size_bytes: int
+
+    def as_row(self) -> dict[str, Any]:
+        return {"path": self.path, "why": self.why, "exists": self.exists,
+                "size_bytes": self.size_bytes}
 
 
 def path_size(path: Path) -> int:
@@ -145,32 +182,31 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError):
         pass
 
-    plan = []
-    for pattern, why in SCRUB:
-        for path in expand(root, pattern):
-            plan.append({"path": str(path.relative_to(root)), "why": why,
-                         "size_bytes": path_size(path)})
-    kept = []
-    for rel, why in PRESERVE:
-        path = root / rel
-        kept.append({"path": rel, "why": why, "exists": path.exists(),
-                     "size_bytes": path_size(path) if path.exists() else 0})
+    plan = [
+        ScrubTarget(path=str(path.relative_to(root)), why=why, size_bytes=path_size(path))
+        for pattern, why in SCRUB
+        for path in expand(root, pattern)
+    ]
+    kept = [
+        PreservedPath(path=rel, why=why, exists=(root / rel).exists(),
+                      size_bytes=path_size(root / rel) if (root / rel).exists() else 0)
+        for rel, why in PRESERVE
+    ]
 
     moved = []
     if args.apply:
-        for entry in plan:
-            src = root / entry["path"]
-            dest = backup / entry["path"]
+        for target in plan:
+            dest = backup / target.path
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dest))
-            moved.append(entry["path"])
+            shutil.move(str(root / target.path), str(dest))
+            moved.append(target.path)
         if moved:
             manifest = {
                 "primitive": "clean_slate",
                 "scrubbed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "state_root": str(root.resolve()),
                 "moved": moved,
-                "preserved": [k["path"] for k in kept if k["exists"]],
+                "preserved": [k.path for k in kept if k.exists],
                 "restore": "move each path back from this directory into the state root",
             }
             backup.mkdir(parents=True, exist_ok=True)
@@ -181,10 +217,10 @@ def main(argv: list[str] | None = None) -> int:
         "primitive": "clean_slate",
         "status": "applied" if args.apply else "dry_run",
         "backup_dir": str(backup),
-        "scrub": plan,
-        "scrub_total_bytes": sum(e["size_bytes"] for e in plan),
-        "preserve": kept,
-        "preserve_total_bytes": sum(k["size_bytes"] for k in kept),
+        "scrub": [target.as_row() for target in plan],
+        "scrub_total_bytes": sum(target.size_bytes for target in plan),
+        "preserve": [item.as_row() for item in kept],
+        "preserve_total_bytes": sum(item.size_bytes for item in kept),
         "next": ["$setup (LinkedIn import + fan-in)", "$import-gmail",
                  "$import-messages", "$deep-context"],
     }
