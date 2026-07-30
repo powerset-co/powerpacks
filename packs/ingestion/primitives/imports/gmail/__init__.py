@@ -12,7 +12,9 @@ from packs.ingestion.primitives.imports.gmail.importer import (  # noqa: F401
     run,
 )
 from packs.ingestion.primitives.imports.gmail.util import (  # noqa: F401
-    gmail_artifacts_from_discovery,
-    gmail_candidate_people,
+    GmailAccount,
+    GmailDiscovery,
+    candidate_people,
+    discovery_from_manifest,
     queue_row_to_candidate,
 )
