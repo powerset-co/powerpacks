@@ -14,6 +14,8 @@ every time.
 Changelog:
   2026-07-28 (created): collected the gmail import's inline legacy unlinks
     (`ledger.json`, `candidates.csv`) into the one quarantine module.
+  2026-07-30: deep-context section — pre-2026-07-27 parent-slug artifact
+    migration and the retired `message-linkedin:` identity aliases.
   2026-07-30: messages section — pre-interaction-counts people.csv probe and
     the retired `import/messages/` artifacts scrub.
 """
@@ -22,8 +24,14 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-
 from packs.shared.csv_io import CsvIO
+import csv
+import json
+from typing import Any
+from packs.ingestion.schemas.people_schema import (
+    generate_person_id,
+    legacy_message_linkedin_id,
+)
 
 
 def scrub_gmail_import(import_dir: Path) -> None:
@@ -97,3 +105,175 @@ def messages_people_csv_predates_interaction_counts(path: Path) -> bool:
     with path.open(newline="", encoding="utf-8") as handle:
         header = next(CsvIO.reader(handle), [])
     return bool(header) and "interaction_counts" not in header
+
+
+def parent_slug_migrations(
+    old_parents: dict[str, dict[str, Any]],
+    new_parents: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    """Exact old-slug -> new-slug mapping for unchanged canonical parent IDs."""
+    old_by_id = {
+        str(parent.get("parent_id") or "").strip().lower(): slug
+        for slug, parent in old_parents.items()
+        if str(parent.get("parent_id") or "").strip()
+    }
+    new_by_id = {
+        str(parent.get("parent_id") or "").strip().lower(): slug
+        for slug, parent in new_parents.items()
+        if str(parent.get("parent_id") or "").strip()
+    }
+    return {
+        old_by_id[parent_id]: new_slug
+        for parent_id, new_slug in new_by_id.items()
+        if parent_id in old_by_id and old_by_id[parent_id] != new_slug
+    }
+
+
+def _rewrite_parent_slug_csv(
+    path: Path,
+    migrations: dict[str, str],
+    fields: tuple[str, ...],
+) -> int:
+    if not path.exists() or not migrations:
+        return 0
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    if not fieldnames or not any(field in fieldnames for field in fields):
+        return 0
+    changed = 0
+    for row in rows:
+        row_changed = False
+        for field in fields:
+            old = str(row.get(field) or "").strip()
+            if old in migrations:
+                row[field] = migrations[old]
+                row_changed = True
+        changed += row_changed
+    if not changed:
+        return 0
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp.replace(path)
+    return changed
+
+
+def _rewrite_parent_slug_jsonl(
+    path: Path,
+    migrations: dict[str, str],
+) -> int:
+    if not path.exists() or not migrations:
+        return 0
+    records: list[dict[str, Any]] = []
+    changed = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        old = str(record.get("parent_slug") or "").strip()
+        if old in migrations:
+            record["parent_slug"] = migrations[old]
+            changed += 1
+        records.append(record)
+    if not changed:
+        return 0
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    tmp.replace(path)
+    return changed
+
+
+def migrate_parent_slug_artifacts(
+    migrations: dict[str, str],
+    *,
+    deep_research_dir: Path,
+    verdicts_jsonl: Path,
+    verdicts_csv: Path,
+    applied_csv: Path,
+    synthetic_people_csv: Path,
+) -> dict[str, int]:
+    """Rewrite exact parent-slug references without touching paid result bodies.
+
+    Every path is explicit: this module sits under the stages and never reads
+    their constants. `build_parents` passes its own resolved locations.
+    """
+    directories_renamed = directory_conflicts = 0
+    for old_slug, new_slug in sorted(migrations.items()):
+        old_dir = deep_research_dir / old_slug
+        new_dir = deep_research_dir / new_slug
+        if not old_dir.exists():
+            continue
+        if new_dir.exists():
+            directory_conflicts += 1
+            continue
+        old_dir.rename(new_dir)
+        directories_renamed += 1
+
+    csv_rows_rewritten = 0
+    csv_rows_rewritten += _rewrite_parent_slug_csv(
+        deep_research_dir / "research_queue.csv",
+        migrations,
+        ("handle", "source_parent_slug"),
+    )
+    csv_rows_rewritten += _rewrite_parent_slug_csv(
+        verdicts_csv, migrations, ("parent_slug",)
+    )
+    csv_rows_rewritten += _rewrite_parent_slug_csv(
+        applied_csv, migrations, ("parent_slug",)
+    )
+    csv_rows_rewritten += _rewrite_parent_slug_csv(
+        synthetic_people_csv, migrations, ("source_parent_slug",)
+    )
+    return {
+        "keys": len(migrations),
+        "directories_renamed": directories_renamed,
+        "directory_conflicts": directory_conflicts,
+        "csv_rows_rewritten": csv_rows_rewritten,
+        "jsonl_rows_rewritten": _rewrite_parent_slug_jsonl(
+            verdicts_jsonl, migrations
+        ),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Retired message-linkedin identity aliases
+#
+# Retired before 2026-07-19. The messages import used to mint
+# `message-linkedin:<sha16(pub)>` for a LinkedIn-matched contact before its
+# durable directory id existed, then a later run silently re-keyed the contact —
+# stranding facts under the retired key as a floating twin of the real person.
+# BOTH keys are pure functions of the pub (retired: sha16; durable: the
+# directory UUIDv5), so any review row naming the pub yields the EXACT
+# equivalence. This is a key migration, not a guess.
+#
+# `worth_view` calls this at load, so its grouping only ever sees one identity
+# per human.
+#
+# REMOVAL CONDITION: delete once no `facts/*.jsonl` file remains under a
+# `MESSAGE_LINKEDIN_PREFIX` person id — the live import can no longer mint the
+# prefix, so the population only shrinks.
+# -----------------------------------------------------------------------------
+
+MESSAGE_LINKEDIN_PREFIX = "message-linkedin:"
+
+
+def message_linkedin_aliases(rows: list[dict[str, str]]) -> dict[str, str]:
+    """Retired message-linkedin pid (lower) -> the same human's durable person_id.
+
+    Entries for pubs with no stranded facts are inert.
+    """
+    aliases: dict[str, str] = {}
+    for row in rows:
+        pub = str(row.get("public_identifier") or "").strip().lower()
+        # real LinkedIn pubs only — review keys can also be person-id-shaped
+        # (candidate:phone:..., synth-...) and those never minted a legacy id
+        if not pub or ":" in pub or pub.startswith("synth-"):
+            continue
+        aliases[legacy_message_linkedin_id(pub)] = generate_person_id(pub)
+    return aliases

@@ -12,6 +12,13 @@ Keeping the tiny CSV contract here prevents either LLM stage from becoming the
 other stage's fallback writer.
 
 Changelog:
+  2026-07-30 (style): `llm_network_worth` is imported at module top instead of inside
+    `mirror_facts_worth`. The old note claimed the deferral kept "the basic CSV
+    contract" independent of dossier parsing, but `candidates` imports only
+    `deep_context.common` — there was never a cycle to break. Also documented the
+    two row shapes `_undecided_candidate_retarget` accepts (review row vs review-UI
+    candidate) at the definition, since that fallback reads as a typo otherwise.
+    No behavior change.
   2026-07-27 (declared contract): `ReviewRow` — the pydantic row model generated
     from OVERRIDE_COLUMNS. The synthesize and reconcile nodes both declare
     `review.csv` with disjoint `owns_columns` slices, and the graph checker
@@ -26,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
 from packs.ingestion.primitives.pipeline.contract import row_model_for
 
 
@@ -116,7 +124,15 @@ def _undecided_candidate_retarget(row: dict[str, Any]) -> bool:
     """Shared gate of both stand-predicates below: a found-LinkedIn retarget on
     a candidate-origin identity (candidate:*) with no terminal human decision.
     Real-network people (directory uuids etc.) never pass — re-attaching a
-    wrong identity on an existing person stays human-gated."""
+    wrong identity on an existing person stays human-gated.
+
+    TWO SHAPES, ONE PREDICATE (deliberate, and the reason for the `person_id` /
+    `pub` fallback): `apply_retargets` passes a raw review.csv row, whose person
+    key is `person_id`, while the review server's `pending_linkedin_candidates`
+    passes a UI candidate dict, whose person key is `pub`. Both name the same
+    thing. This is the "parse at the boundary" debt of the review UI's untyped
+    candidate dict, not a divergence — when the review-UI model is typed, the
+    caller should hand this predicate ONE parsed shape and the fallback goes."""
     if (str(row.get("action") or "").strip().lower() != "retarget"
             or str(row.get("approved") or "").strip().lower() in USER_APPROVED):
         return False
@@ -239,9 +255,6 @@ def mirror_facts_worth(
     machine opinion is visible beside the sticky human decision; the human
     ``network_worth`` cell itself is always preserved.
     """
-    # Local import avoids making the basic CSV contract depend on dossier parsing.
-    from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
-
     rows = load_override_rows(review_path)
     parent_ids = parent_ids_by_person(facts_dir.parent / "index.json")
     synced_people = synced_rows = skipped_human = without_worth = cleared_legacy_spam = 0
