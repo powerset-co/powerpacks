@@ -6,10 +6,12 @@ A channel is one message source (iMessage or WhatsApp). The concrete subclasses
 ``MessageChannel`` AND ``pipeline/contract.py:Node``: they DECLARE their inputs
 and outputs, set their fixed output paths in their own ``__init__``, and own
 their in-process call into the leaf extractor class. ``execute()`` — the Node
-template's one hook — runs ``extract()`` and returns the typed payload;
-``extract()`` returns ``None`` on success or a blocked/failed payload.
-``blocked_child`` and ``failed_child`` are the shared return shapes both channels
-(and the store's merge) emit; they live here as the base's return-shape helpers.
+template's one hook — is the whole step: it returns
+``MessageChannelExtracted`` carrying what this channel produced, or the
+``MessageChannelBlocked`` / ``MessageChannelFailed`` shape that short-circuits
+the store's run loop. ``blocked_child`` and ``failed_child`` are the shared
+return shapes both channels (and the store's merge) emit; they live here as the
+base's return-shape helpers.
 
 ``MessageChannel`` itself is deliberately NOT a ``Node``: it is an abstract base
 with no contract of its own, and a Node subclass would have to declare
@@ -17,6 +19,14 @@ name/inputs/outputs and would then show up in the declared graph as a phantom
 node. The concrete channels inherit ``(MessageChannel, Node)``.
 
 Changelog:
+  2026-07-30 (steps return results): ``extract()`` and the per-channel
+    ``self.artifacts`` dict are GONE; ``execute()`` is the single step method and
+    a success is a VALUE (``MessageChannelExtracted``), not ``None``. A channel
+    used to signal success by returning ``None`` and record what it produced by
+    mutating an untyped ``artifacts`` dict that the store unioned back out of the
+    channel objects after the loop — a step writing into a shared blob the
+    orchestrator reads afterwards. The store now composes the manifest from the
+    returned payloads; the rendered ``artifacts`` keys and values are unchanged.
   2026-07-25 (normalize deleted): ``normalize()`` and the whole
     ``normalize_contacts.py`` primitive are GONE. Its output
     (``*.contacts.normalized.jsonl``) was byte-for-byte identical to the
@@ -116,14 +126,19 @@ def failed_child(step_id: str, payload: dict[str, Any], stderr: str) -> MessageC
 
 class MessageChannel:
     """One message source (iMessage or WhatsApp). Owns its output paths and its
-    in-process call into the leaf extractor, and records what it contributed in
-    ``artifacts``. ``extract()`` returns None on success or a blocked/failed
-    payload; ``execute()`` (the Node template's hook) wraps it.
+    in-process call into the leaf extractor, and RETURNS what it contributed.
+
+    ``execute()`` (the Node template's hook) is the whole step: a typed
+    ``MessageChannelExtracted`` on success, otherwise the blocked/failed payload
+    that stops the store's run loop. Nothing is written into shared state on the
+    way — the store composes the stage manifest from these returns.
 
     Not a ``Node`` itself — see the module docstring."""
 
-    # The message SOURCE name, used to build step ids. The declared NODE name is
-    # the `name` ClassVar each concrete channel sets alongside its contract.
+    # The message SOURCE name, used to build step ids and to key this channel's
+    # contribution in the stage manifest (`<channel>_contacts_csv`, ...). The
+    # declared NODE name is the `name` ClassVar each concrete channel sets
+    # alongside its contract.
     channel = ""
 
     # A subclass sets this fixed output path in its __init__.
@@ -133,14 +148,6 @@ class MessageChannel:
         # Whether the OTHER channel is enabled — only used to rebuild an accurate
         # `--include-*` continue command when this channel blocks.
         self.other_enabled = other_enabled
-        self.artifacts: dict[str, Any] = {}
-
-    def extract(self) -> MessageChannelBlocked | MessageChannelFailed | None:
-        raise NotImplementedError
 
     def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
-        """The Node template's hook: extract, and report what this channel is."""
-        blocked = self.extract()
-        if blocked is not None:
-            return blocked
-        return MessageChannelExtracted(channel=self.channel, contacts_csv=str(self.contacts_csv))
+        raise NotImplementedError

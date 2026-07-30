@@ -33,6 +33,16 @@ Known behaviors (declared, not fixed here):
   declared pipeline graph ignores it.
 
 Changelog:
+- 2026-07-30 (parse at the boundary): two untyped hand-offs became frozen
+  dataclasses. `read_group_participants_cache` now returns a
+  `GroupParticipantCache` of `CachedGroup`/`CachedParticipant` instead of the raw
+  JSON dict — the four `isinstance(..., dict)` guards that used to sit inside
+  `export_contacts_from_store`'s build loop moved into the read, where the
+  untrusted file is actually opened. And `WhatsAppExtractResult` gives
+  `WhatsAppExtractor.run`'s payload a parsed shape for its one caller (the
+  WhatsApp channel), which was unwrapping it by hand. Counts, diagnostics, and
+  exported rows are unchanged; `row_count` preserves the cache-size diagnostic's
+  distinction between raw and usable participant entries.
 - 2026-07-26 (--no-install means it): the flag is no longer a documented no-op —
   `whatsapp_wacli.ensure_wacli_installed(install=False)` uses the installed
   binary as-is and blocks (never downloads) when none is present; the help text
@@ -273,17 +283,91 @@ def load_name_fallbacks(path: Path | None) -> dict[str, str]:
     return out
 
 
-def read_group_participants_cache(store: Path) -> dict[str, Any]:
+@dataclass(frozen=True)
+class CachedParticipant:
+    """One usable member of a cached group: a canonical phone plus wacli's saved
+    name for them (which may be empty — the export falls back to the contact
+    store)."""
+
+    phone: str
+    name: str
+
+
+@dataclass(frozen=True)
+class CachedGroup:
+    """One well-formed group in the participants cache.
+
+    `row_count` is the RAW number of entries the cache holds for this group,
+    including the malformed and phone-less ones `participants` drops — the
+    `group_participant_cache_rows` diagnostic measures cache size, not usable
+    rows, and the two are not the same number."""
+
+    jid: str
+    name: str
+    participant_count: int
+    row_count: int
+    participants: tuple[CachedParticipant, ...]
+
+
+@dataclass(frozen=True)
+class GroupParticipantCache:
+    """`wacli.group-participants.json`, parsed once at the read.
+
+    This file is written by a previous run and is arbitrary JSON on disk, so
+    every level of it is untrusted: the payload, the `groups` map, each group,
+    each participant. Validating it here means the export loop below reads typed
+    fields instead of re-guarding `isinstance(..., dict)` at four nesting levels
+    while it is also doing the actual work.
+
+    `jids` holds EVERY key, including the ones too malformed to become a
+    `CachedGroup`. That is deliberate and load-bearing: a cached jid suppresses
+    the live `group_participants` rows for that group, and a malformed cache
+    entry has always suppressed them too."""
+
+    jids: tuple[str, ...] = ()
+    groups: tuple[CachedGroup, ...] = ()
+
+    @property
+    def rows(self) -> int:
+        """Total cached participant entries across the well-formed groups."""
+        return sum(group.row_count for group in self.groups)
+
+
+def read_group_participants_cache(store: Path) -> GroupParticipantCache:
+    """Parse the group-participants sidecar; an absent, unreadable, or
+    wrong-shaped file is an empty cache, never an error."""
     path = group_participants_cache_path(store)
     if not path.exists():
-        return {"groups": {}}
+        return GroupParticipantCache()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"groups": {}}
+        return GroupParticipantCache()
     if not isinstance(payload, dict) or not isinstance(payload.get("groups"), dict):
-        return {"groups": {}}
-    return payload
+        return GroupParticipantCache()
+    raw_groups: dict[str, Any] = payload["groups"]
+    groups: list[CachedGroup] = []
+    for jid, group in raw_groups.items():
+        if not isinstance(group, dict):
+            continue
+        raw_participants = group.get("participants") or []
+        participants: list[CachedParticipant] = []
+        for participant in raw_participants:
+            if not isinstance(participant, dict):
+                continue
+            phone = canonicalize_phone(participant.get("phone"))
+            if not phone:
+                continue
+            participants.append(CachedParticipant(
+                phone=phone, name=clean_name(participant.get("name"))))
+        groups.append(CachedGroup(
+            jid=str(jid),
+            name=clean_name(group.get("name")),
+            participant_count=int(group.get("participant_count") or len(raw_participants)),
+            row_count=len(raw_participants),
+            participants=tuple(participants),
+        ))
+    return GroupParticipantCache(jids=tuple(str(jid) for jid in raw_groups), groups=tuple(groups))
 
 
 def load_contacts_by_jid(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
@@ -350,8 +434,7 @@ def export_contacts_from_store(
         message_stats = load_message_stats(conn)
         participant_counts = group_participant_counts(conn)
         participant_cache = read_group_participants_cache(store)
-        cached_groups = participant_cache.get("groups") if isinstance(participant_cache.get("groups"), dict) else {}
-        cached_group_jids = set(cached_groups)
+        cached_group_jids = set(participant_cache.jids)
         contacts: dict[str, Contact] = {}
         group_names: dict[str, str] = {}
         active_group_jids: set[str] = set()
@@ -365,38 +448,26 @@ def export_contacts_from_store(
             "group_participants_skipped_large": 0,
             "group_participants_skipped_large_members": 0,
             "group_participant_cache_groups": len(cached_group_jids),
-            "group_participant_cache_rows": sum(
-                len(group.get("participants") or [])
-                for group in cached_groups.values()
-                if isinstance(group, dict)
-            ),
+            "group_participant_cache_rows": participant_cache.rows,
             "message_stats_chats": len(message_stats),
             "lid_map_rows": len(lid_map),
             "name_fallback_rows": len(name_fallbacks_by_phone),
             "queries_read_message_body_columns": False,
         }
 
-        for group_jid, group in cached_groups.items():
-            if not isinstance(group, dict):
-                continue
-            participant_count = int(group.get("participant_count") or len(group.get("participants") or []))
-            if max_group_participants > 0 and participant_count > max_group_participants:
+        for group in participant_cache.groups:
+            if max_group_participants > 0 and group.participant_count > max_group_participants:
                 diagnostics["group_participants_skipped_large"] += 1
-                diagnostics["group_participants_skipped_large_members"] += participant_count
+                diagnostics["group_participants_skipped_large_members"] += group.participant_count
                 continue
-            group_name = clean_name(group.get("name")) or str(group_jid)
-            group_names[str(group_jid)] = group_name
-            active_group_jids.add(str(group_jid))
-            for participant in group.get("participants") or []:
-                if not isinstance(participant, dict):
-                    continue
-                phone = canonicalize_phone(participant.get("phone"))
-                if not phone:
-                    continue
+            group_name = group.name or group.jid
+            group_names[group.jid] = group_name
+            active_group_jids.add(group.jid)
+            for participant in group.participants:
                 diagnostics["group_participants"] += 1
                 add_contact(contacts, Contact(
-                    phone=phone,
-                    name=clean_name(participant.get("name")) or contact_names_by_phone.get(phone, ""),
+                    phone=participant.phone,
+                    name=participant.name or contact_names_by_phone.get(participant.phone, ""),
                     is_in_group_chats=True,
                     group_names={group_name},
                 ))
@@ -608,6 +679,41 @@ def completed_payload(
             "export_reads_columns": "contacts, chats, groups, group_participants, and aggregate message metadata only",
         },
     }
+
+
+@dataclass(frozen=True)
+class WhatsAppExtractResult:
+    """`WhatsAppExtractor.run`'s payload, parsed once at the caller's boundary.
+
+    `run` returns a manifest-shaped dict (it is also written to disk verbatim),
+    so its caller — the WhatsApp channel — would otherwise re-derive the same
+    four values out of nested `.get()` chains and an `isinstance` guard on
+    `pairing` every time it branched. Parsing here means the channel reads typed
+    fields and spends its own code on the DECISION (which state deserves the
+    re-link nudge), not on unwrapping.
+
+    `raw` is the verbatim payload: the blocked/failed channel payloads embed the
+    whole extractor dict as their `detail`, so the original has to survive."""
+
+    status: str
+    message: str
+    qr_page: str
+    pairing_state: str
+    pairing_hint: str
+    raw: dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> WhatsAppExtractResult:
+        pairing = payload.get("pairing")
+        pairing = pairing if isinstance(pairing, dict) else {}
+        return cls(
+            status=str(payload.get("status") or ""),
+            message=str(payload.get("message") or ""),
+            qr_page=str(payload.get("qr_page") or ""),
+            pairing_state=str(pairing.get("state") or ""),
+            pairing_hint=str(pairing.get("hint") or ""),
+            raw=payload,
+        )
 
 
 class WhatsAppExtractor:

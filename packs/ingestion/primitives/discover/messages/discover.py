@@ -7,12 +7,13 @@ materialization, and enrichment live in imports/messages/importer.py.
 Shape:
   MessagesDiscovery(include_imessage=..., include_whatsapp=...) is the whole
   thing: channel selection is EXPLICIT — the --include-* flags ARE the selection,
-  with no accounts.json fallback. Neither enabled -> the skipped/messages_not_linked
-  manifest path (mirrors gmail's empty-selection -> skipped). The constructor
-  creates the fixed output dir and builds the enabled channels; .run() (the Node
-  template: validate declared inputs -> execute() -> validate declared outputs ->
-  manifest) extracts each channel, merges, and writes the stage manifest. main()
-  constructs it and calls run() — no wrapper function.
+  parsed once into a frozen ``ChannelSelection``, with no accounts.json fallback.
+  Neither enabled -> the skipped/messages_not_linked manifest path (mirrors
+  gmail's empty-selection -> skipped). The constructor creates the fixed output
+  dir and builds the enabled channels; .run() (the Node template: validate
+  declared inputs -> execute() -> validate declared outputs -> manifest) extracts
+  each channel, merges, and writes the stage manifest. main() constructs it and
+  calls run() — no wrapper function.
 
   Each source is a MessageChannel node (channels/) that owns its own output paths
   and its in-process call into the leaf extractor class:
@@ -22,13 +23,15 @@ Shape:
     - WhatsAppChannel (channels/whats_app_channel.py): WhatsAppExtractor.run
       (extract_whatsapp.py, composing the whatsapp_wacli client: fetch pinned
       wacli, auth, sync, deepen, export local metadata) ->
-      whatsapp.contacts.csv. Missing QR -> blocked_user_action; surfaces the
+      whatsapp.contacts.csv. Missing QR -> blocked_user_action; returns the
       pre-full-sync re-link nudge.
-  A channel's run() returns its typed payload; anything but ``completed``
-  short-circuits the discovery run. MessagesDiscovery then merges the enabled
-  per-channel CSVs by canonical phone -> .powerpacks/messages/contacts.csv, and
-  writes a typed manifest (contact count, channels, privacy=bodies-never-read,
-  WhatsApp pre-full-sync nudge). Metadata only: no bodies, no research, no upload.
+  A channel's run() RETURNS its typed payload — including what it contributed to
+  the manifest; anything but ``completed`` short-circuits the discovery run.
+  MessagesDiscovery then merges the enabled per-channel CSVs by canonical phone
+  -> .powerpacks/messages/contacts.csv, and renders one typed manifest from the
+  channel returns (contact count, channels, artifacts map,
+  privacy=bodies-never-read, WhatsApp pre-full-sync nudge). Metadata only: no
+  bodies, no research, no upload.
 
 Flow:
   --include-* selection -> per-channel extract (stop at the first blocked/failed)
@@ -50,6 +53,18 @@ Known behaviors this stage DECLARES rather than fixes:
     channels selected on THIS run, not of everything ever discovered.
 
 Changelog:
+  2026-07-30 (steps return results / parse at the boundary): three untyped
+    hand-offs went. (1) The ``self.selection`` dict of three bools is a frozen
+    ``ChannelSelection`` — the CLI flags are parsed once, and ``linked`` is a
+    property instead of a stored third key that had to be kept consistent with
+    the other two. (2) ``_artifacts`` no longer reaches back into each channel
+    object for a mutated ``channel.artifacts`` dict: ``execute`` collects the
+    channels' RETURNED payloads and renders the manifest's artifacts map from
+    them at the end. (3) ``_not_completed`` takes the TYPED child payload and
+    asks it for ``stage_error()``, instead of taking ``child.to_payload()`` and
+    re-reading ``.get("status")`` / ``.get("error") or .get("message")`` out of
+    the dict form of a payload it had just been handed typed; the dict is now
+    built once, where the manifest embeds it. Manifest bytes are unchanged.
   2026-07-26 (staged copy deleted): the stage writes ONE output.
     ``discover/messages/contacts.csv`` was a ``shutil.copyfile`` of the merged
     ``.powerpacks/messages/contacts.csv`` and its only reader was
@@ -107,6 +122,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -118,6 +134,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
     DISCOVERY_OWNED_COLUMNS,
+    MessageChannelBlocked,
+    MessageChannelExtracted,
     MessageChannelFailed,
     MessageContactRow,
     MessagesDiscoveryCompleted,
@@ -160,6 +178,24 @@ DEFAULT_MESSAGES_OUTPUT_DIR = discover_source_dir("messages")
 MESSAGES_DIR = MESSAGES_OUT_DIR
 MERGED_CONTACTS = MESSAGES_DIR / "contacts.csv"
 MERGED_CONTACTS_MANIFEST = MESSAGES_DIR / "contacts.csv.manifest.json"
+
+
+@dataclass(frozen=True)
+class ChannelSelection:
+    """Which message channels this run covers, parsed once from the CLI flags.
+
+    The ``--include-*`` flags ARE the selection — there is no accounts.json
+    fallback and no other source. ``linked`` is derived, not stored: it used to
+    be a third key in a mutable dict alongside the two bools it is a function of,
+    which is one more thing that can disagree with itself."""
+
+    include_imessage: bool = False
+    include_whatsapp: bool = False
+
+    @property
+    def linked(self) -> bool:
+        """Whether any channel was selected. Neither -> the skipped path."""
+        return self.include_imessage or self.include_whatsapp
 
 
 # --- the store: owns the output dir, the run loop, the merge, the manifest ----
@@ -213,11 +249,10 @@ class MessagesDiscovery(Node):
         # Channel selection is EXPLICIT: the --include-* flags ARE the selection
         # (no accounts.json fallback). Neither enabled -> the skipped manifest path.
         # Named `selection`, not `inputs`: `inputs` is now the declared Artifact tuple.
-        self.selection = {
-            "linked": bool(include_imessage or include_whatsapp),
-            "include_imessage": bool(include_imessage),
-            "include_whatsapp": bool(include_whatsapp),
-        }
+        self.selection = ChannelSelection(
+            include_imessage=bool(include_imessage),
+            include_whatsapp=bool(include_whatsapp),
+        )
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
         # This stage's ONE output (the merged, shared message-contacts CSV) as a
@@ -226,12 +261,12 @@ class MessagesDiscovery(Node):
         self.contacts_csv = MERGED_CONTACTS
         self.manifest_json = self.out_dir / "manifest.json"
         self.channels: list[MessageChannel] = []
-        if self.selection["include_imessage"]:
+        if self.selection.include_imessage:
             self.channels.append(IMessageChannel(
-                other_enabled=self.selection["include_whatsapp"]))
-        if self.selection["include_whatsapp"]:
+                other_enabled=self.selection.include_whatsapp))
+        if self.selection.include_whatsapp:
             self.channels.append(WhatsAppChannel(
-                other_enabled=self.selection["include_imessage"],
+                other_enabled=self.selection.include_imessage,
                 max_messages=wacli_max_messages))
 
     def bindings(self) -> dict[str, str]:
@@ -253,29 +288,41 @@ class MessagesDiscovery(Node):
 
     def execute(self) -> MessagesDiscoveryCompleted | MessagesDiscoveryNotCompleted | MessagesDiscoverySkipped:
         """Run the enabled channels (stop at the first blocked/failed child),
-        merge, and return the typed payload (the Node template writes it)."""
-        if not self.selection["linked"]:
+        merge, and return the typed payload (the Node template writes it).
+
+        Each channel RETURNS what it produced; nothing is read back off the
+        channel objects afterwards."""
+        if not self.selection.linked:
             return MessagesDiscoverySkipped(
                 reason="messages_not_linked",
                 contacts_csv=str(self.contacts_csv),
                 updated_at=now_iso(),
             )
+        extracted: list[MessageChannelExtracted] = []
         for channel in self.channels:
             child = channel.run()
             if child.status != "completed":
-                # The child's DICT form: the stage manifest embeds it verbatim.
-                return self._not_completed(child.to_payload())
+                return self._not_completed(child)
+            extracted.append(child)
         failed = self._merge()
         if failed is not None:
-            return self._not_completed(failed.to_payload())
-        return self._completed()
+            return self._not_completed(failed)
+        return self._completed(extracted)
 
-    def _artifacts(self) -> dict[str, Any]:
-        """Union the per-channel artifact dicts into one map for the manifest."""
-        merged: dict[str, Any] = {}
-        for channel in self.channels:
-            merged.update(channel.artifacts)
-        return merged
+    def _artifacts(self, extracted: list[MessageChannelExtracted]) -> dict[str, Any]:
+        """Render the manifest's artifacts map from the channels' returns. Each
+        channel names its own keys off its `channel` — `imessage_contacts_csv`,
+        `whatsapp_contacts_csv`, `whatsapp_provider`, `whatsapp_pairing_*` — and
+        contributes only the ones it actually has."""
+        artifacts: dict[str, Any] = {}
+        for item in extracted:
+            artifacts[f"{item.channel}_contacts_csv"] = item.contacts_csv
+            if item.provider:
+                artifacts[f"{item.channel}_provider"] = item.provider
+            if item.pairing_state:
+                artifacts[f"{item.channel}_pairing_state"] = item.pairing_state
+                artifacts[f"{item.channel}_pairing_notice"] = item.pairing_notice or ""
+        return artifacts
 
     def _merge(self) -> MessageChannelFailed | None:
         """Union the enabled channels' contacts CSVs by canonical phone into
@@ -300,29 +347,35 @@ class MessagesDiscovery(Node):
             return failed_child("ensure_contacts", payload, "")
         return None
 
-    def _not_completed(self, child: dict[str, Any]) -> MessagesDiscoveryNotCompleted:
-        """The not-completed stage payload for a blocked/failed child."""
-        status = str(child.get("status") or "failed")
+    def _not_completed(
+        self,
+        child: MessageChannelBlocked | MessageChannelFailed,
+    ) -> MessagesDiscoveryNotCompleted:
+        """The not-completed stage payload for a blocked/failed child. Reads the
+        child TYPED; its dict form is built once, where the manifest embeds it
+        verbatim."""
         return MessagesDiscoveryNotCompleted(
-            status=status if status in {"blocked_user_action", "blocked_approval"} else "failed",
-            error=child.get("error") or child.get("message") or child,
-            child=child,
+            status=(child.status
+                    if child.status in {"blocked_user_action", "blocked_approval"}
+                    else "failed"),
+            error=child.stage_error(),
+            child=child.to_payload(),
             contacts_csv=str(self.contacts_csv),
             updated_at=now_iso(),
         )
 
-    def _completed(self) -> MessagesDiscoveryCompleted:
-        """Build the completed stage payload from the merged CSV (contact count,
-        channels, privacy, pre-full-sync nudge)."""
-        artifacts = self._artifacts()
+    def _completed(self, extracted: list[MessageChannelExtracted]) -> MessagesDiscoveryCompleted:
+        """Build the completed stage payload from the channels' returns plus the
+        merged CSV (contact count, channels, privacy, pre-full-sync nudge)."""
+        artifacts = self._artifacts(extracted)
         artifacts["contacts_csv"] = str(self.contacts_csv)
         child = {
             "primitive": "messages_discovery",
             "status": "selected_steps_completed",
             "message": "Selected message channels were extracted and merged.",
             "channels": {
-                "imessage": self.selection["include_imessage"],
-                "whatsapp": self.selection["include_whatsapp"],
+                "imessage": self.selection.include_imessage,
+                "whatsapp": self.selection.include_whatsapp,
             },
             "artifacts": artifacts,
             "privacy": {
@@ -334,17 +387,17 @@ class MessagesDiscovery(Node):
         _, rows = read_csv_rows(self.contacts_csv)
         # The pairing fields hoist the non-blocking pre-full-sync nudge to the top
         # level so a fast-path run surfaces it without digging into child.artifacts.
+        nudge = next((item for item in extracted if item.pairing_state), None)
         return MessagesDiscoveryCompleted(
             contacts_csv=str(self.contacts_csv),
             contacts=len(rows),
-            include_imessage=self.selection["include_imessage"],
-            include_whatsapp=self.selection["include_whatsapp"],
+            include_imessage=self.selection.include_imessage,
+            include_whatsapp=self.selection.include_whatsapp,
             privacy=MessagesPrivacy(),
             child=child,
             updated_at=now_iso(),
-            whatsapp_pairing_state=artifacts.get("whatsapp_pairing_state") or None,
-            whatsapp_pairing_notice=(artifacts.get("whatsapp_pairing_notice", "")
-                                     if artifacts.get("whatsapp_pairing_state") else None),
+            whatsapp_pairing_state=nudge.pairing_state if nudge else None,
+            whatsapp_pairing_notice=(nudge.pairing_notice or "") if nudge else None,
         )
 
 

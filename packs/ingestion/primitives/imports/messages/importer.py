@@ -5,16 +5,19 @@ Consumes the match-annotated `.powerpacks/messages/contacts.csv` — the upstrea
 `match_local_candidates.py match` step tiers each contact against the local
 people catalog (unique phone/email, or unique exact name, or same-last-name
 unique first-name-prefix / high-fuzzy -> `matched`; ambiguous or
-first-name-only -> `suggested`; else `unmatched`) — and materializes two
-outputs, with no LLM, no research queue, and no enrichment call:
+first-name-only -> `suggested`; else `unmatched`) — and materializes it, with no
+LLM, no research queue, and no enrichment call, into ONE output:
+`import/messages/people.csv`, which carries both halves (#339 folded the separate
+`candidates.csv` into it; `common/legacy.py` deletes the leftover file):
 
-- `import/messages/people.csv` — `matched` contacts, keyed to the existing
-  network person (message activity attaches to that person at fan-in).
-- `import/messages/candidates.csv` — `unmatched` + `suggested` contacts passing
-  the deterministic "worth researching" floor (real phone, plausibly-real saved
-  name, message-count minimum). A `suggested` match is PARKED here in candidate
-  evidence, never auto-attached — the deep-context cluster judge decides.
-  Identity resolution happens later in deep-context with cross-channel context.
+- `matched` contacts, keyed to the existing network person (message activity
+  attaches to that person at fan-in).
+- `unmatched` + `suggested` contacts passing the deterministic "worth
+  researching" floor (real phone, plausibly-real saved name, message-count
+  minimum), carried as `candidate:` rows. A `suggested` match is PARKED in
+  candidate evidence, never auto-attached — the deep-context cluster judge
+  decides. Identity resolution happens later in deep-context with cross-channel
+  context.
 
 Known gap: the tier-0 approval gate reads a retired review CSV that has had no
 producer since #315 retired the research-review flow, so on a fresh install
@@ -36,7 +39,28 @@ same rule #340 applied to a node's own manifest. Gmail's import, by contrast,
 reads OTHER sources' directory rows to decide its own resolutions, so there it
 is a real input.
 
+Per-row policy lives in `util.py`, not here: `classify_contact` decides what one
+contacts.csv row becomes (matched person / research candidate / dropped, plus the
+skip counters it contributes) and `selected_contacts_people` materializes those
+verdicts, owning only the run-scoped dedup counters that are not a property of
+any single row.
+
 Changelog:
+  2026-07-30 (visible decision / one legal home for old-install cope):
+    - The per-row selection rules moved to `util.classify_contact`. They used to
+      be spelled inline in `selected_contacts_people`'s loop, interleaved with
+      three accumulators, so reading "what happens to a suggested row that fails
+      the floor" meant simulating the loop. The loop now reads a verdict and
+      materializes it; counts, ordering, and manifest bytes are unchanged.
+    - `candidate_to_messages_person` and `contact_row_to_candidate` take the
+      channel list from their caller. The former used to JSON-decode `evidence`
+      to recover a list the latter had encoded moments earlier, then
+      `isinstance`-guard the result.
+    - The two old-install scrubs left this file for `common/legacy.py`, dated
+      with removal conditions: `people_csv_schema_stale` (now
+      `messages_people_csv_predates_interaction_counts`) and the three unlinks
+      of retired `import/messages/` artifacts, which became one
+      `scrub_messages_import_dir` call at the same point in the materialize path.
   2026-07-26 (dead minting branch deleted): the `legacy_message_linkedin_id`
     fallback in `contact_row_to_messages_people` was unreachable — the only
     caller (`selected_contacts_people`) guards on a non-empty
@@ -81,7 +105,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -109,6 +132,10 @@ from packs.ingestion.schemas.candidates_schema import (  # noqa: E402
 )
 from packs.ingestion.primitives.common.contact_fields import phones_from_value  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit, unique_strings  # noqa: E402
+from packs.ingestion.primitives.common.legacy import (  # noqa: E402
+    messages_people_csv_predates_interaction_counts,
+    scrub_messages_import_dir,
+)
 from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_BASE_DIR,
     DEFAULT_DIRECTORY_CSV,
@@ -117,6 +144,13 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
 from packs.ingestion.primitives.discover.common import (  # noqa: E402
     read_csv_rows,
     write_csv_rows,
+)
+# The declared row shape of `.powerpacks/messages/contacts.csv`, imported from the
+# DISCOVERY module that owns the file. `graph.check_graph` compares row models by
+# IDENTITY, so every writer of that file must name THIS object — not an equal
+# copy, and not a second module that re-exports it.
+from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
+    MessageContactRow,
 )
 from packs.ingestion.primitives.imports.directory import (  # noqa: E402
     DIRECTORY_COLUMNS,
@@ -142,8 +176,9 @@ from packs.ingestion.primitives.imports.common import (  # noqa: E402
 )
 from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
     DEFAULT_MIN_MESSAGE_COUNT,
-    MessageContactRow,
-    contact_floor_reason,
+    DROPPED,
+    MATCHED,
+    classify_contact,
     contact_interaction_counts,
     contact_last_interaction,
     messages_source_channels,
@@ -151,7 +186,6 @@ from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
     parse_int_field,
     split_full_name,
 )
-from packs.shared.csv_io import CsvIO  # noqa: E402
 
 MESSAGES_IMPORT_CONTRACT = "messages-contacts-direct-v6"
 WORKING_CONTACTS_CSV = Path(".powerpacks/messages/contacts.csv")
@@ -221,10 +255,15 @@ def contact_row_to_messages_people(
 def contact_row_to_candidate(
     row: dict[str, str],
     contacts_csv: Path,
+    *,
+    channels: list[str],
 ) -> dict[str, str]:
-    """Map a floor-passing UNMATCHED contacts.csv row onto the candidates schema."""
+    """Map a floor-passing UNMATCHED contacts.csv row onto the candidates schema.
+
+    `channels` is passed in rather than re-derived so the candidate row and the
+    people row this contact becomes are built from ONE reading of its source
+    columns."""
     phone = (row.get("phone") or "").strip()
-    channels = messages_source_channels(row)
     counts = contact_interaction_counts(row)
     # Single primary channel by DM volume (ties -> first listed channel).
     source = max(counts, key=lambda ch: counts[ch]) if counts else channels[0]
@@ -255,16 +294,25 @@ def contact_row_to_candidate(
     return normalize_candidate_row(candidate)
 
 
-def candidate_to_messages_person(candidate: dict[str, str], contacts_csv: Path) -> dict[str, str]:
+def candidate_to_messages_person(
+    candidate: dict[str, str],
+    contacts_csv: Path,
+    *,
+    channels: list[str],
+) -> dict[str, str]:
     """Represent an unresolved, floor-passing contact in the sole people schema.
 
     An absent LinkedIn identifier is data, not a separate admission lane.  The
     fan-in preserves this stable candidate id until directory evidence later
     promotes the row to a LinkedIn key.
+
+    `channels` comes from the caller for the same reason `contact_row_to_candidate`
+    takes it: this used to re-read the channel list back out of the candidate
+    row's `evidence` — JSON-encoding a list this function's own caller had just
+    computed, then decoding it and `isinstance`-guarding the result to prove it
+    was still a dict.
     """
     key = candidate.get("candidate_key", "")
-    evidence = parse_jsonish(candidate.get("evidence"), {})
-    channels = evidence.get("channels", []) if isinstance(evidence, dict) else []
     return normalize_people_row({
         "id": f"candidate:{key}",
         "full_name": candidate.get("full_name", ""),
@@ -369,9 +417,16 @@ def selected_contacts_people(
         skipped[reason] = skipped.get(reason, 0) + 1
 
     for row in rows:
-        match_status = (row.get("match_status") or "").strip().lower()
-        matched_person_id = (row.get("matched_person_id") or "").strip()
-        if match_status == "matched" and matched_person_id:
+        # The per-row policy is one function (util.classify_contact); this loop
+        # only materializes its verdict and owns the run-scoped dedup counters.
+        selection = classify_contact(
+            row,
+            min_message_count=min_message_count,
+            include_group_only=include_group_only,
+        )
+        for reason in selection.skips:
+            skip(reason)
+        if selection.outcome == MATCHED:
             person = contact_row_to_messages_people(row, contacts_csv)
             key = person.get("public_identifier") or person.get("id", "")
             if key in people_by_key:
@@ -383,19 +438,10 @@ def selected_contacts_people(
                 people_by_key[key] = person
                 selection_counts["matched"] = selection_counts.get("matched", 0) + 1
             continue
-        if match_status == "suggested":
-            # Never auto-attach a suggestion; the deep-context cluster judge
-            # decides. Recorded in evidence.
-            skip("suggested_not_attached")
-        reason = contact_floor_reason(
-            row,
-            min_message_count=min_message_count,
-            include_group_only=include_group_only,
-        )
-        if reason:
-            skip(reason)
+        if selection.outcome == DROPPED:
             continue
-        candidate_row = contact_row_to_candidate(row, contacts_csv)
+        channels = messages_source_channels(row)
+        candidate_row = contact_row_to_candidate(row, contacts_csv, channels=channels)
         key = candidate_row.get("candidate_key", "")
         if not key:
             skip("short_code_or_invalid_phone")
@@ -403,7 +449,8 @@ def selected_contacts_people(
         if key in candidates_by_key:
             skip("duplicate_phone")
             continue
-        candidates_by_key[key] = candidate_to_messages_person(candidate_row, contacts_csv)
+        candidates_by_key[key] = candidate_to_messages_person(
+            candidate_row, contacts_csv, channels=channels)
         selection_counts["phone_only"] = selection_counts.get("phone_only", 0) + 1
 
     people_rows = [people_by_key[key] for key in sorted(people_by_key)]
@@ -457,17 +504,6 @@ def messages_import_diff(
         "new_candidates": new_candidates,
         "new_rows": new_people + new_candidates,
     }
-
-
-def people_csv_schema_stale(path: Path) -> bool:
-    """True when an existing people.csv predates the interaction-count
-    columns. Input fingerprints can't catch this (the code changed, not the
-    data), so the import self-invalidates instead of trusting its manifest."""
-    if not path.exists():
-        return False
-    with path.open(newline="", encoding="utf-8") as handle:
-        header = next(CsvIO.reader(handle), [])
-    return bool(header) and "interaction_counts" not in header
 
 
 def replace_messages_directory_rows(
@@ -623,8 +659,9 @@ class MessagesImport(Node):
         """Gate sequence -> materialization. Returns the typed manifest payload."""
         # An existing people.csv predating the interaction-count columns is a code
         # change, not a data change, so the fingerprint no-op cannot catch it — a
-        # stale schema forces a re-run.
-        schema_stale = people_csv_schema_stale(self.people_csv)
+        # stale schema forces a re-run. Old-install cope, so it lives in
+        # common/legacy.py and runs first, before any gate reads the manifest.
+        schema_stale = messages_people_csv_predates_interaction_counts(self.people_csv)
         current = None if schema_stale else import_manifest_current(
             self.source,
             self.expected_input,
@@ -704,17 +741,10 @@ class MessagesImport(Node):
             include_group_only=self.include_group_only,
         )
         self.import_dir.mkdir(parents=True, exist_ok=True)
-        # Review-era artifacts are not part of this stage's contract; delete leftovers.
-        legacy_input = self.import_dir / "people.input.csv"
-        if legacy_input.exists():
-            legacy_input.unlink()
-        legacy_enrichment = self.import_dir / "enrichment"
-        if legacy_enrichment.exists():
-            shutil.rmtree(legacy_enrichment)
+        # Artifacts older Powerpacks versions left in this directory. What they
+        # are and when they can stop being handled lives in common/legacy.py.
+        scrub_messages_import_dir(self.import_dir)
         write_csv_rows(self.people_csv, PEOPLE_SCHEMA_COLUMNS, people_rows + candidate_rows)
-        # Pre-#339 leftover: the candidate pool is folded into people.csv now, so
-        # this file has no writer. The unlink clears it from existing installs.
-        (self.import_dir / "candidates.csv").unlink(missing_ok=True)
         directory_replacement = replace_messages_directory_rows(self.people_csv)
         directory_normalization = normalize_directory_source_accounts("messages")
         directory_quality = directory_source_account_quality("messages")

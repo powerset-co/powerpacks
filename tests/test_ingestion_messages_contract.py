@@ -12,7 +12,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.ingestion.primitives.discover.common import write_csv_rows
-from packs.ingestion.primitives.discover.messages.models import MessagesDiscoveryCompleted
+from packs.ingestion.primitives.discover.messages.models import (
+    MessageChannelExtracted,
+    MessagesDiscoveryCompleted,
+)
 from packs.ingestion.primitives.imports.directory import DIRECTORY_COLUMNS
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 from packs.shared.csv_io import CsvIO
@@ -49,6 +52,11 @@ merge_contacts = importlib.import_module(
 )
 import_messages = importlib.import_module(
     "packs.ingestion.primitives.imports.messages.importer"
+)
+# The floor/selection POLICY lives in the vertical util module that defines it;
+# the import consumes it. Reach for it there, not through the importer.
+messages_util = importlib.import_module(
+    "packs.ingestion.primitives.imports.messages.util"
 )
 
 
@@ -247,9 +255,9 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 other_enabled=False,
                 max_messages=0,
             )
-            result = channel.extract()
+            result = channel.execute()
 
-        self.assertIsNone(result)
+        self.assertEqual(result.status, "completed")
         kwargs = run.call_args.kwargs
         self.assertNotIn("sync_mode", kwargs)
         self.assertEqual(kwargs["sync_timeout"], whats_app_channel.DEFAULT_WACLI_SYNC_TIMEOUT)
@@ -294,14 +302,14 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 result = whats_app_channel.WhatsAppChannel(
                     other_enabled=False,
                     max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
-                ).extract()
-        self.assertIsNone(result)
+                ).execute()
+        self.assertEqual(result.status, "completed")
         kwargs = run.call_args.kwargs
         self.assertEqual(kwargs["max_messages"], 0)
         # The pinned wacli fork auto-builds; discovery no longer suppresses install.
         self.assertNotIn("no_install", kwargs)
 
-    def test_extract_whatsapp_records_pre_full_sync_nudge_in_artifacts(self) -> None:
+    def test_extract_whatsapp_returns_pre_full_sync_nudge(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "whatsapp.csv"
             payload = {
@@ -315,17 +323,35 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     other_enabled=False,
                     max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
                 )
-                result = channel.extract()
-        self.assertIsNone(result)
-        self.assertEqual(channel.artifacts["whatsapp_pairing_state"], "pre_full_sync")
-        self.assertIn("Re-link", channel.artifacts["whatsapp_pairing_notice"])
+                result = channel.execute()
+        # The channel RETURNS its contribution; the store renders the manifest's
+        # `whatsapp_pairing_*` artifacts from it.
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.pairing_state, "pre_full_sync")
+        self.assertIn("Re-link", result.pairing_notice)
+
+    def test_whatsapp_channel_reports_no_nudge_for_other_pairing_states(self) -> None:
+        # Only `pre_full_sync` earns the nudge — any other pairing state
+        # contributes nothing to the manifest.
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "whatsapp.csv"
+            payload = {"status": "completed", "pairing": {"state": "full_sync", "hint": "n/a"}}
+            with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", missing), \
+                    mock.patch.object(extract_whatsapp.WhatsAppExtractor, "run", return_value=payload):
+                result = whats_app_channel.WhatsAppChannel(
+                    other_enabled=False,
+                    max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
+                ).execute()
+        self.assertEqual(result.status, "completed")
+        self.assertIsNone(result.pairing_state)
+        self.assertIsNone(result.pairing_notice)
 
     def test_discover_hoists_pre_full_sync_nudge_to_top_level(self) -> None:
         # A fast-path completed run must surface the nudge at the top level, not
         # bury it under child.artifacts where a happy-path agent won't look.
         # The channel and store are declared nodes now, so their run templates
         # verify the DECLARED outputs on a completed run — hence the stubbed
-        # extract/merge still have to leave those two CSVs on disk.
+        # execute/merge still have to leave those two CSVs on disk.
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "discover"
             whatsapp = Path(td) / "whatsapp.contacts.csv"
@@ -333,21 +359,31 @@ class IngestionMessagesContractTests(unittest.TestCase):
             write_csv_rows(whatsapp, CSV_HEADERS, [])
             write_csv_rows(merged, CSV_HEADERS, [])
 
-            def fake_extract(self):
-                self.artifacts["whatsapp_pairing_state"] = "pre_full_sync"
-                self.artifacts["whatsapp_pairing_notice"] = "Re-link to pull years more history."
-                return None
+            def fake_execute(self):
+                return MessageChannelExtracted(
+                    channel=self.channel,
+                    contacts_csv=str(self.contacts_csv),
+                    provider="wacli",
+                    pairing_state="pre_full_sync",
+                    pairing_notice="Re-link to pull years more history.",
+                )
 
             with mock.patch.object(whats_app_channel, "WHATSAPP_CONTACTS", whatsapp), \
                     mock.patch.object(discover_messages, "MERGED_CONTACTS", merged), \
-                    mock.patch.object(discover_messages.WhatsAppChannel, "extract", fake_extract), \
+                    mock.patch.object(discover_messages.WhatsAppChannel, "execute", fake_execute), \
                     mock.patch.object(discover_messages.MessagesDiscovery, "_merge", lambda self: None):
                 result = discover_messages.MessagesDiscovery(
                     include_imessage=False, include_whatsapp=True, out_dir=out).run().to_payload()
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["whatsapp_pairing_state"], "pre_full_sync")
         self.assertIn("Re-link", result["whatsapp_pairing_notice"])
-        self.assertEqual(result["child"]["artifacts"]["contacts_csv"], str(merged))
+        artifacts = result["child"]["artifacts"]
+        self.assertEqual(artifacts["contacts_csv"], str(merged))
+        # The artifacts map is rendered from the channel's return, key for key.
+        self.assertEqual(artifacts["whatsapp_contacts_csv"], str(whatsapp))
+        self.assertEqual(artifacts["whatsapp_provider"], "wacli")
+        self.assertEqual(artifacts["whatsapp_pairing_state"], "pre_full_sync")
+        self.assertIn("Re-link", artifacts["whatsapp_pairing_notice"])
 
     def test_existing_channel_exports_are_refreshed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -363,8 +399,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
                     mock.patch.object(extract_imessage.IMessageExtractor, "extract",
                                       return_value={"status": "completed"}) as imessage_extract:
                 result = i_message_channel.IMessageChannel(
-                    other_enabled=False).extract()
-            self.assertIsNone(result)
+                    other_enabled=False).execute()
+            self.assertEqual(result.contacts_csv, str(imessage))
             # The channel gates on check (Full Disk Access) then runs extract.
             self.assertEqual(imessage_check.call_count, 1)
             self.assertEqual(imessage_extract.call_count, 1)
@@ -376,8 +412,8 @@ class IngestionMessagesContractTests(unittest.TestCase):
                 result = whats_app_channel.WhatsAppChannel(
                     other_enabled=False,
                     max_messages=whats_app_channel.DEFAULT_WACLI_DISCOVERY_MAX_MESSAGES,
-                ).extract()
-            self.assertIsNone(result)
+                ).execute()
+            self.assertEqual(result.contacts_csv, str(whatsapp))
             self.assertEqual(whatsapp_run.call_count, 1)
 
     def test_messages_discovery_merges_only_selected_channels(self) -> None:
@@ -675,7 +711,7 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 row = self.contact_row(**overrides)
                 self.assertEqual(
-                    import_messages.contact_floor_reason(
+                    messages_util.contact_floor_reason(
                         row, min_message_count=1, include_group_only=False
                     ),
                     expected,
@@ -683,7 +719,7 @@ class MessagesImportRuntimeTests(unittest.TestCase):
         # Group-only contacts pass with the opt-in flag.
         row = self.contact_row(is_in_group_chats="true", message_count="3", imessage_message_count="3")
         self.assertEqual(
-            import_messages.contact_floor_reason(row, min_message_count=1, include_group_only=True),
+            messages_util.contact_floor_reason(row, min_message_count=1, include_group_only=True),
             "",
         )
 
@@ -696,7 +732,7 @@ class MessagesImportRuntimeTests(unittest.TestCase):
             whatsapp_message_count="9",
         )
         self.assertEqual(
-            import_messages.contact_floor_reason(
+            messages_util.contact_floor_reason(
                 row, min_message_count=1, include_group_only=False
             ),
             "",

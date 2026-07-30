@@ -4,10 +4,12 @@
 deepens recent history, then exports local metadata. This channel owns its fixed
 output paths — the ``WHATSAPP_*`` module constants, assigned to instance
 attributes in ``__init__`` — plus the wacli max-messages and sync timeout
-defaults, which are channel-scoped. A missing QR pairing returns
-``blocked_user_action`` (with the QR page path); a completed run surfaces the
-non-blocking pre-full-sync re-link nudge on ``self.artifacts``. Metadata only —
-no message bodies.
+defaults, which are channel-scoped. The extractor's payload is parsed ONCE into
+``WhatsAppExtractResult`` (defined beside the extractor that produces it), so
+this channel only branches on typed fields: a missing QR pairing returns
+``blocked_user_action`` (with the QR page path); a completed run returns the
+non-blocking pre-full-sync re-link nudge on its payload. Metadata only — no
+message bodies.
 
 Declared contract:
   reads   ``.powerpacks/messages/wacli/wacli.db`` — the wacli GO BINARY's own
@@ -29,6 +31,15 @@ hand-run of that CLI therefore leaves an orphan copy in
 ``.powerpacks/messages/`` that nothing reads.
 
 Changelog:
+  2026-07-30 (steps return results / parse at the boundary): ``extract()`` became
+    ``execute()`` and returns ``MessageChannelExtracted`` carrying
+    ``provider="wacli"`` and the pairing nudge, instead of returning ``None``
+    after writing four ``whatsapp_*`` keys into a ``self.artifacts`` dict the
+    store read back. The extractor payload is unwrapped once through
+    ``WhatsAppExtractResult.from_payload`` — the ``isinstance(payload.get(
+    "pairing"), dict)`` guard and the ``str(payload.get(...) or ...)`` chains are
+    gone from this step, and the ``pre_full_sync`` test now reads as the one
+    policy decision it is. Same manifest keys and values.
   2026-07-26 (feedback edge removed): DROPPED the ``name_fallback_csv`` input. It
     was the merged ``.powerpacks/messages/contacts.csv`` this channel FEEDS — the
     graph's WhatsApp cycle — and it was redundant: it only fills names wacli did
@@ -80,6 +91,7 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.messages.extract_whatsapp import (  # noqa: E402
     WhatsAppExtractor,
+    WhatsAppExtractResult,
 )
 from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
     MessageChannelBlocked,
@@ -124,7 +136,7 @@ class WhatsAppChannel(MessageChannel, Node):
     )
     payload = MessageChannelExtracted
     # "" — this node has no manifest.json of its own; it reports into the
-    # MessagesDiscovery stage manifest through `self.artifacts`.
+    # MessagesDiscovery stage manifest through the payload it RETURNS.
     manifest = ""
 
     def __init__(
@@ -146,8 +158,8 @@ class WhatsAppChannel(MessageChannel, Node):
         patches ``WHATSAPP_CONTACTS`` still produces a key the template matches."""
         return {self.outputs[0].path: str(self.contacts_csv)}
 
-    def extract(self) -> MessageChannelBlocked | MessageChannelFailed | None:
-        payload = WhatsAppExtractor().run(
+    def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
+        result = WhatsAppExtractResult.from_payload(WhatsAppExtractor().run(
             output_csv=self.contacts_csv,
             output_jsonl=self.raw_jsonl,
             manifest=self.extract_manifest,
@@ -155,24 +167,26 @@ class WhatsAppChannel(MessageChannel, Node):
             max_messages=self.max_messages,
             max_group_participants=30,
             sync_timeout=DEFAULT_WACLI_SYNC_TIMEOUT,
-        )
-        if payload.get("status") == "blocked_user_action":
+        ))
+        if result.status == "blocked_user_action":
             return blocked_child(
-                message=str(payload.get("message") or "WhatsApp needs a QR scan."),
-                detail=payload,
+                message=result.message or "WhatsApp needs a QR scan.",
+                detail=result.raw,
                 whatsapp_provider="wacli",
-                qr_page=str(payload.get("qr_page") or MESSAGES_OUT_DIR / "wacli-login-qr.html"),
+                qr_page=result.qr_page or str(MESSAGES_OUT_DIR / "wacli-login-qr.html"),
                 include_imessage=self.other_enabled,
                 include_whatsapp=True,
             )
-        if payload.get("status") != "completed":
-            return failed_child("extract_whatsapp", payload, "")
-        self.artifacts["whatsapp_contacts_csv"] = str(self.contacts_csv)
-        self.artifacts["whatsapp_provider"] = "wacli"
-        # Surface the non-blocking "re-link for deeper history" nudge to the skill
-        # when the WhatsApp session predates full history sync.
-        pairing = payload.get("pairing") if isinstance(payload.get("pairing"), dict) else {}
-        if pairing.get("state") == "pre_full_sync":
-            self.artifacts["whatsapp_pairing_state"] = "pre_full_sync"
-            self.artifacts["whatsapp_pairing_notice"] = str(pairing.get("hint") or "")
-        return None
+        if result.status != "completed":
+            return failed_child("extract_whatsapp", result.raw, "")
+        # The one pairing DECISION this channel makes: only a session that
+        # predates full history sync earns the non-blocking "re-link for deeper
+        # history" nudge. Every other pairing state contributes nothing.
+        nudge = result.pairing_state == "pre_full_sync"
+        return MessageChannelExtracted(
+            channel=self.channel,
+            contacts_csv=str(self.contacts_csv),
+            provider="wacli",
+            pairing_state=result.pairing_state if nudge else None,
+            pairing_notice=result.pairing_hint if nudge else None,
+        )

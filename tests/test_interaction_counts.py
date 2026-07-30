@@ -20,6 +20,9 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
 )
 from packs.indexing.lib.people import build_unified_profiles, flatten_people  # noqa: E402
 from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
+from packs.ingestion.primitives.common.legacy import (  # noqa: E402
+    messages_people_csv_predates_interaction_counts,
+)
 from packs.ingestion.primitives.imports import merge_people as merge_mod  # noqa: E402
 
 
@@ -127,9 +130,12 @@ class ImportSchemaStalenessTests(unittest.TestCase):
             old.write_text("id,full_name\nx,y\n")
             new = Path(tmp) / "new.csv"
             new.write_text("id,interaction_counts,last_interaction\nx,,\n")
-            self.assertTrue(messages_import_mod.people_csv_schema_stale(old))
-            self.assertFalse(messages_import_mod.people_csv_schema_stale(new))
-            self.assertFalse(messages_import_mod.people_csv_schema_stale(Path(tmp) / "absent.csv"))
+            # Old-install cope lives in common/legacy.py, which is where this
+            # probe is defined and where its removal condition is recorded.
+            self.assertTrue(messages_people_csv_predates_interaction_counts(old))
+            self.assertFalse(messages_people_csv_predates_interaction_counts(new))
+            self.assertFalse(
+                messages_people_csv_predates_interaction_counts(Path(tmp) / "absent.csv"))
 
 class GmailWriterTests(unittest.TestCase):
     def test_msgvault_rows_carry_gmail_counts(self):
