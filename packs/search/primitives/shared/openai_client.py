@@ -7,17 +7,22 @@ openai_base_url; without it, a custom OPENAI_API_BASE like
 "https://proxy.example.com" works in the older primitives but 404s in any
 primitive that passes the raw value through.
 
-Usage capture: when POWERPACKS_USAGE_LOG is set, both factories return clients
+Usage capture is ON BY DEFAULT (it is all local): both factories return clients
 whose chat/embeddings/responses create() calls append one JSONL row per response
 carrying a usage block: {ts, model, stage, prompt_tokens, completion_tokens,
 reasoning_tokens, latency_ms}. The stage tag comes from POWERPACKS_USAGE_STAGE.
 completion_tokens EXCLUDES reasoning tokens (they are broken out into their own
-field) so downstream pricing never double-counts. Unset env is a true no-op —
-the factories return plain SDK clients. Capture is fail-open: a logging error
-never breaks or delays the underlying call.
+field) so downstream pricing never double-counts.
+
+Routing: POWERPACKS_USAGE_LOG set to a path -> that path (the deep loop and the
+fast pipeline route it into their run dirs); unset -> the fixed global sink
+.powerpacks/usage/usage.jsonl; set to off|0|none|disabled -> capture disabled
+(hermetic tests). Capture is fail-open: a logging error never breaks or delays
+the underlying call.
 
 Changelog:
-  2026-07-30  usage-capture hooks + make_async_openai_client.
+  2026-07-30  usage-capture hooks + make_async_openai_client; capture default-on
+              with a global sink (env routes or disables, never enables).
 """
 from __future__ import annotations
 
@@ -26,12 +31,25 @@ import os
 import time
 from datetime import datetime, timezone
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 import openai
 
 DEFAULT_API_BASE = "https://api.openai.com"
 HOOKED_METHODS = ("chat.completions.create", "embeddings.create", "responses.create")
+DEFAULT_USAGE_LOG = Path(__file__).resolve().parents[4] / ".powerpacks" / "usage" / "usage.jsonl"
+USAGE_OFF_VALUES = {"off", "0", "none", "disabled", "false"}
+
+
+def resolve_usage_log() -> str | None:
+    """Env routes or disables capture — it never enables it; default is on."""
+    value = os.environ.get("POWERPACKS_USAGE_LOG")
+    if value is None:
+        return str(DEFAULT_USAGE_LOG)
+    if value.strip().lower() in USAGE_OFF_VALUES:
+        return None
+    return value
 
 
 def openai_base_url(api_base: str | None = None) -> str:
@@ -61,6 +79,7 @@ def _usage_row(requested_model: Any, resp: Any, latency_ms: int) -> dict[str, An
 
 def _append_row(log_path: str, row: dict[str, Any]) -> None:
     try:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row) + "\n")
     except OSError:
@@ -80,7 +99,7 @@ def _resolve_method(client: Any, dotted: str) -> tuple[Any, str] | None:
 
 
 def _instrument(client: Any, *, is_async: bool) -> Any:
-    log_path = os.environ.get("POWERPACKS_USAGE_LOG")
+    log_path = resolve_usage_log()
     if not log_path:
         return client
     for dotted in HOOKED_METHODS:

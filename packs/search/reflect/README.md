@@ -58,7 +58,7 @@ variance and ratified here; only then does the gate start failing builds.
 |---|---|---|
 | 1 | Behavior-neutral — engine outputs unchanged | scorers only read artifacts; engine edits are additive fields; affected suites pass |
 | 2 | Funnel trustworthy | reproduces the hand-written AgentMail REPORT.md funnel (31 GT → 30 sourced → 29 triaged → 29 judged; 5/13/5/6/2 dispositions) or every delta explained |
-| 3 | Cost capture real and safe | set-path E2E test: capture → `usage.jsonl` → `cost_report.py` vs hand-computed golden; unset env is a true no-op |
+| 3 | Cost capture real and safe | E2E test: capture → `usage.jsonl` → `cost_report.py` vs hand-computed golden; capture is default-on (unset env → global sink `.powerpacks/usage/usage.jsonl`; run dirs override; `POWERPACKS_USAGE_LOG=off` disables) |
 | 4 | Gate honest | passes against its own report, fails against a doctored regression |
 | 5 | No PII escapes | committed fixtures synthetic; committed baselines carry numbers only — GT names/ids stay local under `.powerpacks/reflect/` |
 
