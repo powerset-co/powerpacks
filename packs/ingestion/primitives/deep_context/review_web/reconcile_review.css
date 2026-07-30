@@ -1284,6 +1284,22 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 .directory-dossier em { color: var(--muted); }
 .directory-dossier hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
 
+/* Collapsed judge/provenance dropdown at the pane's very bottom. */
+.directory-debug {
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.directory-debug summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.directory-debug[open] summary { margin-bottom: 8px; }
+
 @media (max-width: 860px) {
   .directory-layout {
     grid-template-columns: 1fr;

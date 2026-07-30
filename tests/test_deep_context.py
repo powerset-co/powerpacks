@@ -5264,6 +5264,29 @@ class TestDirectoryView(unittest.TestCase):
             markdown = web_rendering.directory_dossier(parents, dossiers, "solo-parent")
             self.assertIn("The child body.", markdown)
 
+    def test_children_section_folds_into_debug_dropdown(self):
+        # The confirmed-children list is provenance, not person context: the
+        # pane body stays clean and the list collapses at the very bottom.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            parents = base / "parents"
+            parents.mkdir()
+            (parents / "jordan-parent.md").write_text(
+                "---\nslug: jordan-parent\n---\n\n# Jordan Bravo (canonical)\n\n"
+                "## Summary\n\nOne person.\n\n"
+                "## Confirmed children (merged)\n\n- [[jordan-a]] judge 0.90\n\n"
+                "## Topics\n\n- travel\n", encoding="utf-8")
+            parent = self._parent("jordan-parent", "Jordan Bravo")
+            html = web_rendering.render_person_detail(
+                parent, parents, base / "dossiers", base / "profiles")
+        body, _, debug = html.partition("directory-debug")
+        self.assertIn("One person.", body)
+        self.assertIn("travel", body)             # later sections survive the cut
+        self.assertNotIn("judge 0.90", body)      # children not in the main flow
+        self.assertIn("Merged children (debug)", debug)
+        self.assertIn("judge 0.90", debug)
+        self.assertIn("<details", html)
+
     def test_review_js_wires_the_directory_view(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn("setupDirectory", script)

@@ -1314,6 +1314,23 @@ def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
 _PARENT_POINTER_SECTIONS = {"confirmed children (merged)"}
 
 
+_CHILDREN_SECTION_RE = re.compile(
+    r"(?ms)^##\s+Confirmed children \(merged\)\s*\n(.*?)(?=^##\s|\Z)")
+
+
+def split_children_section(markdown: str) -> tuple[str, str]:
+    """(dossier without the merge bookkeeping, the children section body).
+
+    The confirmed-children list is judge/debug provenance, not person context —
+    the pane shows the dossier clean and folds the children into a collapsed
+    debug dropdown at the bottom."""
+    match = _CHILDREN_SECTION_RE.search(markdown)
+    if not match:
+        return markdown, ""
+    remainder = (markdown[:match.start()] + markdown[match.end():]).strip()
+    return remainder, match.group(1).strip()
+
+
 def directory_dossier(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
     """The directory pane's dossier markdown: the PARENT canonical dossier.
 
@@ -1389,7 +1406,16 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     rows.extend(profile_fact_rows(candidate))
     facts = (f"<section class='details'><div class='details-body'>"
              f"<dl>{''.join(rows)}</dl></div></section>" if rows else "")
-    dossier = markdown_to_html(directory_dossier(parents_dir, dossier_dir, slug))
+    dossier_md, children_md = split_children_section(
+        directory_dossier(parents_dir, dossier_dir, slug))
+    dossier = markdown_to_html(dossier_md)
+    children_debug = ""
+    if children_md:
+        children_debug = (
+            "<details class='directory-debug'>"
+            "<summary>Merged children (debug)</summary>"
+            f"<div class='directory-dossier'>{markdown_to_html(children_md)}</div>"
+            "</details>")
     return f"""
     <article class='person-detail' data-person-slug='{esc(slug)}'>
       {_worth_action_buttons(parent, slug)}
@@ -1404,6 +1430,7 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
       </div>
       {facts}
       <section class='directory-dossier'>{dossier}</section>
+      {children_debug}
     </article>"""
 
 
