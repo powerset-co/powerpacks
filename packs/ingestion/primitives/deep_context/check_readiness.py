@@ -22,7 +22,9 @@ Changelog:
     if-ladder became the `ADVICE_RULES` table and the chat.db ternary the
     first-rule-wins `chat_db_status`. Same `ready` logic, same checks key order,
     same status spellings, same advice sentences in the same order; no behavior
-    change.
+    change. The default chat.db is the `default_chat_db()` callable resolved per
+    call (the constructor / the parser default), not a `Path.home()` frozen at
+    import — matching the pre-class behavior.
   2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
 """
 from __future__ import annotations
@@ -50,7 +52,15 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 
-DEFAULT_CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
+
+def default_chat_db() -> Path:
+    """The macOS iMessage store under the CURRENT home.
+
+    A callable, not a module constant: `Path.home()` reads `$HOME`, and resolving
+    it at import time froze whatever the interpreter started with — so a caller
+    (or a test) that sets HOME afterwards was silently ignored.
+    """
+    return Path.home() / "Library" / "Messages" / "chat.db"
 
 # The whole advice policy, in output order: a rule fires when the named check's
 # status starts with its prefix ("absent" covers "absent_optional"), and every
@@ -117,12 +127,12 @@ class CheckReadiness:
         *,
         people_csv: Path = DEFAULT_PEOPLE_CSV,
         msgvault_db: Path = sources.gni.DEFAULT_MSGVAULT_DB,
-        chat_db: Path = DEFAULT_CHAT_DB,
+        chat_db: Path | None = None,
         wacli_db: Path = sources.DEFAULT_WACLI_DB,
     ) -> None:
         self.people_csv = Path(people_csv)
         self.msgvault_db = Path(msgvault_db).expanduser()
-        self.chat_db = Path(chat_db).expanduser()
+        self.chat_db = Path(chat_db or default_chat_db()).expanduser()
         self.wacli_db = Path(wacli_db)
 
     def run(self) -> dict[str, Any]:
@@ -162,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Readiness check for the deep-context pipeline.")
     p.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     p.add_argument("--msgvault-db", default=str(sources.gni.DEFAULT_MSGVAULT_DB))
-    p.add_argument("--chat-db", default=str(DEFAULT_CHAT_DB))
+    p.add_argument("--chat-db", default=str(default_chat_db()))
     p.add_argument("--wacli-db", default=str(sources.DEFAULT_WACLI_DB))
     return p
 

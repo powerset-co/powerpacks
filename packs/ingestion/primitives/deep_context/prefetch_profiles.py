@@ -38,7 +38,8 @@ Changelog:
     boundary into the frozen `CachedProfileState` (`read_profile_state`), and the
     per-link decision is the single first-rule-wins `classify_link` returning a
     `QueueVerdict`. `classify_queue` became a trivial loop over that verdict and
-    returns the frozen `QueueBuckets` instead of a string-keyed dict of lists.
+    returns the frozen `QueueBuckets` — built once from four local lists, never
+    appended to afterwards — instead of a string-keyed dict of lists.
     Replaces the four module-level predicates (`has_cached_profile`,
     `_cached_summary`, `profile_is_summarizable`, `cached_but_failed`) that each
     re-opened the same cache file for the same pub. `_summary_concurrency(args)`
@@ -64,7 +65,7 @@ import os
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -312,12 +313,15 @@ class QueueBuckets:
       we must NOT feed to the LLM.
     - ``no_public_identifier``: queue rows we can neither fetch nor summarize
       (defensive; normally empty).
+
+    Frozen and fully populated at construction: `classify_queue` fills four local
+    lists and builds this once, so the value is never appended to after the fact.
     """
 
-    fetch: list[dict[str, str]] = field(default_factory=list)
-    summarize: list[dict[str, str]] = field(default_factory=list)
-    not_summarizable: list[dict[str, str]] = field(default_factory=list)
-    no_public_identifier: list[dict[str, str]] = field(default_factory=list)
+    fetch: list[dict[str, str]]
+    summarize: list[dict[str, str]]
+    not_summarizable: list[dict[str, str]]
+    no_public_identifier: list[dict[str, str]]
 
 
 def classify_queue(links: list[dict[str, str]], cache_dir: Path) -> QueueBuckets:
@@ -327,21 +331,29 @@ def classify_queue(links: list[dict[str, str]], cache_dir: Path) -> QueueBuckets
     times (before the fetch, after it, and once more at the end) and the post-fetch
     passes MUST see what the fetch just wrote, so nothing is carried across calls.
     """
-    buckets = QueueBuckets()
+    fetch: list[dict[str, str]] = []
+    summarize: list[dict[str, str]] = []
+    not_summarizable: list[dict[str, str]] = []
+    no_public_identifier: list[dict[str, str]] = []
     for link in links:
         pub = _link_pub(link)
         verdict = classify_link(pub, read_profile_state(cache_dir, pub))
         if verdict is QueueVerdict.NO_PUBLIC_IDENTIFIER:
-            buckets.no_public_identifier.append(link)
+            no_public_identifier.append(link)
         elif verdict is QueueVerdict.FETCH_NOT_SUMMARIZABLE:
-            buckets.fetch.append(link)
-            buckets.not_summarizable.append(link)
+            fetch.append(link)
+            not_summarizable.append(link)
         elif verdict is QueueVerdict.FETCH_THEN_SUMMARIZE:
-            buckets.fetch.append(link)
-            buckets.summarize.append(link)
+            fetch.append(link)
+            summarize.append(link)
         elif verdict is QueueVerdict.SUMMARIZE_ONLY:
-            buckets.summarize.append(link)
-    return buckets
+            summarize.append(link)
+    return QueueBuckets(
+        fetch=fetch,
+        summarize=summarize,
+        not_summarizable=not_summarizable,
+        no_public_identifier=no_public_identifier,
+    )
 
 
 def cleanup_garbage_summaries(links: list[dict[str, str]], cache_dir: Path) -> list[str]:

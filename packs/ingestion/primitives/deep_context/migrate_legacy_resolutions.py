@@ -311,8 +311,11 @@ class MigrateLegacyResolutions:
             if self.limit and len(candidates) >= self.limit:
                 break
 
+        # `build_candidate` only mints a judge task on --apply, so `self.apply` is a
+        # deliberate SECOND gate on the paid judge: defense-in-depth, so a future
+        # change that starts building tasks in a dry run cannot start spending.
         pending = [c for c in candidates if c.judge_task is not None]
-        if pending:
+        if pending and self.apply:
             counts["judged"] = self.judge_all(pending)
 
         proposals = [c.proposal for c in candidates]
@@ -335,6 +338,8 @@ class MigrateLegacyResolutions:
                 manifest["estimated_judge_cost_usd_high"] = round(would * per_hi, 2)
             return manifest
         manifest.update(upsert_retargets(self.overrides_csv, proposals))
+        # Re-stamp: the writer's counts merge in, but the run's status is ours.
+        manifest["status"] = "completed"
         return manifest
 
     def build_candidate(self, row: LegacyRow, provenance: dict[str, str]) -> Candidate:

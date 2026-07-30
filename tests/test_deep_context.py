@@ -30,6 +30,7 @@ from packs.ingestion.primitives.common.legacy import (
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context import (
     build_parents as parents,
+    check_readiness,
     cluster_merge_candidates as cluster,
     collect_person_context as collect,
     common,
@@ -784,6 +785,144 @@ class TestIncrementalSynthesis(unittest.TestCase):
         batch = [{"text": "hello", "at": "2020", "channel": "imessage", "direction": "from_them"}]
         self.assertNotIn("PROFILE SO FAR", synth.render_batch(person, batch, None))
         self.assertIn("PROFILE SO FAR", synth.render_batch(person, batch, {"title": "CTO"}))
+
+
+class _StubAsyncClient:
+    """Stands in for AsyncOpenAI. `execute()` only ever closes it — every request
+    goes through the patched `_call_one` — so `close()` is the whole surface."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class TestSynthesizeExecute(unittest.TestCase):
+    """`execute()` end to end with a stubbed OpenAI client: both paths through its
+    single exit. Nothing reaches the network — `_call_one` and the client factory
+    are replaced, so no key is read and no request is made."""
+
+    def _node(self, root: Path, **kw) -> synth.SynthesizePersonContext:
+        return synth.SynthesizePersonContext(
+            raw_dir=root / "raw",
+            out_dir=root / "facts",
+            review_csv=root / "review.csv",
+            concurrency=1,
+            no_owner=True,
+            **kw,
+        )
+
+    def _bundle(self, root: Path, pid: str = "p1") -> None:
+        (root / "raw").mkdir(exist_ok=True)
+        (root / "raw" / f"{pid}.json").write_text(json.dumps({
+            "person_id": pid,
+            "full_name": "Jordan Bravo",
+            "messages": [{"text": "lunch friday?", "at": "2026-01-02",
+                          "channel": "gmail", "direction": "from_them"}],
+        }), encoding="utf-8")
+
+    def _execute(self, root: Path, fake_call_one, **kw):
+        client = _StubAsyncClient()
+        with mock.patch.object(synth, "_call_one", fake_call_one), \
+                mock.patch.object(synth, "make_async_client", lambda **_: client):
+            return self._node(root, **kw).execute(), client
+
+    def test_nothing_pending_reports_a_zero_run_without_building_a_client(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "raw").mkdir()
+
+            def no_client(**_):
+                raise AssertionError("a run with nothing pending must not build a client")
+
+            with mock.patch.object(synth, "make_async_client", no_client):
+                payload = self._node(root).execute()
+            self.assertEqual(payload.status, "completed")
+            self.assertEqual(payload.people, 0)
+            self.assertEqual(payload.people_done, 0)
+            self.assertEqual(payload.batches_run, 0)
+            self.assertEqual(payload.avg_batches_per_person, 0.0)
+            self.assertEqual(payload.stop_reasons, {})
+            self.assertEqual(payload.errors, 0)
+            self.assertEqual(payload.concurrency, 0)  # no pool was ever sized
+            self.assertEqual(payload.tokens,
+                             {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0})
+            self.assertEqual(payload.estimated_cost_usd, 0.0)
+            self.assertEqual(payload.out_dir, str(root / "facts"))
+            self.assertIsInstance(payload.worth_sync, dict)  # the mirror still runs
+
+    def test_pending_bundle_is_synthesized_checkpointed_and_tallied(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._bundle(root)
+
+            async def fake_call_one(client, prompt, **kw):
+                return (_facts(confidence=0.95, topics=["lunch"],
+                               network_worth={"decision": "yes", "reason": "real person"}),
+                        {"input_tokens": 120, "output_tokens": 40, "reasoning_tokens": 8}, "")
+
+            payload, client = self._execute(root, fake_call_one)
+            self.assertEqual(payload.people, 1)
+            self.assertEqual(payload.people_done, 1)
+            self.assertEqual(payload.batches_run, 1)
+            self.assertEqual(payload.avg_batches_per_person, 1.0)
+            self.assertEqual(payload.stop_reasons, {"confident": 1})
+            self.assertEqual(payload.errors, 0)
+            self.assertEqual(payload.concurrency, 1)
+            self.assertEqual(payload.tokens,
+                             {"input_tokens": 120, "output_tokens": 40, "reasoning_tokens": 8})
+            self.assertTrue(client.closed)
+            record = json.loads((root / "facts" / "p1.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(record["synthesis_version"], synth.SYNTHESIS_VERSION)
+            self.assertEqual(record["stop_reason"], "confident")
+            self.assertEqual(record["facts"]["confidence"], 0.95)
+
+    def test_provider_error_is_counted_not_raised(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._bundle(root)
+
+            async def failing_call_one(client, prompt, **kw):
+                return ({}, {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
+                        "APIError: upstream refused")
+
+            payload, _ = self._execute(root, failing_call_one)
+            self.assertEqual(payload.status, "completed")
+            self.assertEqual(payload.people_done, 1)
+            self.assertEqual(payload.errors, 1)
+            self.assertEqual(payload.stop_reasons, {"exhausted": 1})
+
+    def test_plan_is_one_typed_value(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._bundle(root)
+            plan = self._node(root)._plan()
+            self.assertEqual(plan.paths, [root / "raw" / "p1.json"])
+            self.assertIsNone(plan.owner)  # --no-owner
+            self.assertEqual(plan.system_prompt, synth.SYSTEM_PROMPT)
+
+    def test_tally_accumulates_tokens_stop_reasons_and_errors(self):
+        tally = synth.SynthesisTally()
+        tally.record({"usage": {"input_tokens": 3, "output_tokens": 2, "reasoning_tokens": 1},
+                      "errors": 0, "batches_used": 2, "stop_reason": "confident"})
+        tally.record({"usage": {"input_tokens": 5, "reasoning_tokens": 4},
+                      "errors": 1, "batches_used": 3, "stop_reason": "confident"})
+        self.assertEqual(tally.people_done, 2)
+        self.assertEqual(tally.errors, 1)
+        self.assertEqual(tally.batches, 5)
+        self.assertEqual(tally.stop_reasons, {"confident": 2})
+        self.assertEqual(tally.tokens,
+                         {"input_tokens": 8, "output_tokens": 2, "reasoning_tokens": 5})
+
+
+class TestCheckReadinessDefaults(unittest.TestCase):
+    def test_default_chat_db_follows_the_current_home(self):
+        with tempfile.TemporaryDirectory() as d:
+            expected = Path(d) / "Library" / "Messages" / "chat.db"
+            with mock.patch.dict(os.environ, {"HOME": d}):
+                self.assertEqual(check_readiness.default_chat_db(), expected)
+                self.assertEqual(check_readiness.CheckReadiness().chat_db, expected)
 
 
 class TestBuildOwner(unittest.TestCase):
@@ -4359,7 +4498,8 @@ class TestAssembleSyntheticProfile(unittest.TestCase):
 
     def test_build_row_maps_research_to_people_schema(self) -> None:
         from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
-        contact = {"handle": "rpoo", "primary_email": "ross@x.com", "source_channel": "twitter"}
+        contact = asp.ResearchContact(handle="rpoo", primary_email="ross@x.com",
+                                      source_channel="twitter")
         original = {"id": "pid-7", "all_emails": "ross@x.com|r@y.com", "interaction_counts": "{'email': 12}"}
         row = asp.build_synthetic_row(self._profile(), contact, original, "pid-7")
         self.assertTrue(row["public_identifier"].startswith("synth-email-"))
@@ -4375,8 +4515,24 @@ class TestAssembleSyntheticProfile(unittest.TestCase):
 
     def test_low_completeness_waits_for_review(self) -> None:
         from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
-        row = asp.build_synthetic_row(self._profile(completeness=0.3), {"handle": "rpoo"}, None, "")
+        row = asp.build_synthetic_row(self._profile(completeness=0.3),
+                                      asp.ResearchContact(handle="rpoo"), None, "")
         self.assertEqual(row["approved"], "")
+
+    def test_research_contact_merges_sources_later_non_empty_wins(self) -> None:
+        from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
+        verdicts = {"display_name": "Jordan Bravo", "primary_email": "jordan@example.com",
+                    "source_parent_slug": "jordan-bravo-1111"}
+        queue = {"primary_email": "", "phone_e164": "+15550100", "source_channel": "email",
+                 "bio": "not part of the identity"}
+        contact = asp.ResearchContact.merged("jordan-bravo-1111", verdicts, queue)
+        self.assertEqual(contact.handle, "jordan-bravo-1111")
+        self.assertEqual(contact.display_name, "Jordan Bravo")
+        self.assertEqual(contact.primary_email, "jordan@example.com")  # blank never overrides
+        self.assertEqual(contact.phone_e164, "+15550100")
+        self.assertEqual(contact.source_channel, "email")
+        self.assertEqual(contact.source_candidate_public_identifier, "")  # absent -> default
+        self.assertFalse(hasattr(contact, "bio"))  # unknown columns are dropped, not carried
 
     def test_usability_floor(self) -> None:
         from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp

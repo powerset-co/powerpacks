@@ -42,7 +42,9 @@ Changelog:
   2026-07-30 (style): the verdict->action policy is now three named values plus two
     first-rule-wins functions (`decide_plain_task`, `decide_conflict_group`) that
     `decide_actions` merely applies — the decision is readable without simulating the
-    loop. Three parameters that no body ever read are gone (`revert_unconfirmed_name_matches`'s
+    loop. Both take the public `ConfidenceBars`, and the conflict resolution is keyed
+    by POSITION in the judged list rather than `id(task)`. Three parameters that no
+    body ever read are gone (`revert_unconfirmed_name_matches`'s
     `overrides`/`facts_dir`, `upsert_name_match_reviews`'s and `write_overrides`'
     `facts_dir`), and with them the two `load_override_rows` calls in `execute()` that
     existed only to feed them. Same verdicts, same rows, same manifest.
@@ -862,7 +864,7 @@ CONFLICT_KEEP = ("confirm", "conflict_resolved")
 CONFLICT_DROP = ("detach", "conflict_resolved")
 
 
-class _Bar:
+class ConfidenceBars:
     """The ASYMMETRIC, keep-biased confidence bars, resolved once per pass.
 
     A `confirmed` link auto-VERIFIES at the (low) confirm bar — keeping a
@@ -880,7 +882,7 @@ class _Bar:
         return v.get("verdict") == verdict and float(v.get("confidence") or 0) >= bar
 
 
-def decide_plain_task(task: dict[str, Any], bar: _Bar) -> tuple[str, str]:
+def decide_plain_task(task: dict[str, Any], bar: ConfidenceBars) -> tuple[str, str]:
     """(action, via) for ONE link on a non-conflict parent. FIRST RULE WINS."""
     if bar.clears(task, "confirmed"):
         return CONFIRM
@@ -893,19 +895,21 @@ def decide_plain_task(task: dict[str, Any], bar: _Bar) -> tuple[str, str]:
     return REVIEW
 
 
-def decide_conflict_group(judged: list[dict[str, Any]], bar: _Bar) -> dict[int, tuple[str, str]]:
-    """`id(task) -> (action, via)` for ONE conflict parent — one canonical person
-    carrying MULTIPLE different attached LinkedIns.
+def decide_conflict_group(judged: list[dict[str, Any]],
+                          bar: ConfidenceBars) -> dict[int, tuple[str, str]]:
+    """`index into judged -> (action, via)` for ONE conflict parent — one canonical
+    person carrying MULTIPLE different attached LinkedIns.
 
     Auto-RESOLVE only the unambiguous shape: exactly ONE confirmed above the
     confirm bar and EVERY other candidate a wrong_person above the detach bar.
     Keep the confirmed, detach the wrong. Any other conflict shape stays review,
-    which is what an empty mapping means."""
-    confirmed_hi = [t for t in judged if bar.clears(t, "confirmed")]
-    wrong_hi = [t for t in judged if bar.clears(t, "wrong_person")]
+    which is what an empty mapping means. Positions, not `id(task)`: the caller
+    walks the same list, and object identity is a fragile key for plain dicts."""
+    confirmed_hi = [i for i, t in enumerate(judged) if bar.clears(t, "confirmed")]
+    wrong_hi = [i for i, t in enumerate(judged) if bar.clears(t, "wrong_person")]
     if not (len(confirmed_hi) == 1 and len(wrong_hi) == len(judged) - 1 and len(judged) >= 2):
         return {}
-    return {id(confirmed_hi[0]): CONFLICT_KEEP, **{id(t): CONFLICT_DROP for t in wrong_hi}}
+    return {confirmed_hi[0]: CONFLICT_KEEP, **{i: CONFLICT_DROP for i in wrong_hi}}
 
 
 def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
@@ -915,7 +919,7 @@ def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
     The POLICY is the three functions above — this is only the loop that applies
     it. Every task starts at REVIEW and a parent's group decides together, so a
     conflict parent can never be scored one link at a time."""
-    bar = _Bar(confirm_threshold, detach_threshold)
+    bar = ConfidenceBars(confirm_threshold, detach_threshold)
     by_parent: dict[str, list[dict[str, Any]]] = {}
     for t in tasks:
         t["action"], t["via"] = REVIEW
@@ -925,9 +929,9 @@ def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
         judged = [t for t in group if not t.get("no_link")]
         if any(t.get("conflict") for t in group):
             resolved = decide_conflict_group(judged, bar)
-            for t in judged:
-                if id(t) in resolved:
-                    t["action"], t["via"] = resolved[id(t)]
+            for index, t in enumerate(judged):
+                if index in resolved:
+                    t["action"], t["via"] = resolved[index]
             continue
         for t in judged:
             t["action"], t["via"] = decide_plain_task(t, bar)
