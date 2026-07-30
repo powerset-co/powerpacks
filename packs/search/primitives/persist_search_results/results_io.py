@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Export and inspect Powerpacks search result artifacts."""
+"""Export and inspect Powerpacks search result artifacts.
+
+Changelog:
+    2026-07-30: export accepts --limit N to cap the persisted artifacts to the
+        top N rows of the ranked frontier (0 = keep all). The pipeline's
+        --limit now lands here, after llm_rerank, instead of capping retrieval.
+"""
 
 from __future__ import annotations
 
@@ -288,6 +294,10 @@ def cmd_export(args: argparse.Namespace) -> None:
     state_path = Path(args.state)
     state = read_json(state_path)
     rows = result_rows(state)
+    if args.limit:
+        # Final results cap: rows follow frontier order (reranked when the
+        # rerank step ran), so this keeps the top N ranked people.
+        rows = rows[: args.limit]
     out_dir = Path(args.out_dir) if args.out_dir else default_artifact_dir(state_path, state)
     stem = args.name or state.get("task_id") or state_path.stem
 
@@ -347,6 +357,7 @@ def main() -> None:
     export.add_argument("--state", required=True)
     export.add_argument("--out-dir")
     export.add_argument("--name")
+    export.add_argument("--limit", type=int, default=0, help="Keep only the top N ranked rows in the exported artifacts; 0 keeps all")
     export.set_defaults(func=cmd_export)
 
     view = sub.add_parser("view")

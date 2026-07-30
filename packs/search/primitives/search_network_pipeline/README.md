@@ -44,7 +44,10 @@ The runner then executes without another gate:
 3. relevant ID resolvers (`resolve_companies`, `resolve_education`, `resolve_investors`)
 4. `apply_prefilters`
 5. `execute_role_search` (defaults: `--limit 0 --top-k 10000`; `limit=0`
-   means keep the full retrieved frontier locally)
+   means keep the full retrieved frontier locally; a non-zero `--limit N` is
+   floored to `max(N, 100)` here — the judge pool — and the final cut back to
+   N happens at `persist_search_results`, so the LLM stages rank a real pool
+   instead of the first N retrieved)
 6. `hydrate_people`
 7. `llm_filter_candidates`
 8. `llm_rerank_candidates`

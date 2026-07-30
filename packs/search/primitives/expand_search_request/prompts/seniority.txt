@@ -93,6 +93,28 @@ These indicate the user wants ALL people, no seniority filter:
 
 ---
 
+## ⚠️ "ANY SENIORITY" — EXPLICIT ALL-LEVELS PHRASES (CRITICAL)
+
+Explicit phrases like "any seniority", "all seniority levels", "all levels",
+"regardless of seniority", "no seniority requirement", "junior to partner,
+everyone" MUST return seniority_bands: [] — EVEN when the query has a strong
+role component that would normally get default bands.
+
+Do NOT "helpfully" enumerate every band instead. Enumerating bands is NOT
+equivalent to an empty filter: the index bands people in ways you may forget
+(e.g. VC General Partners and Managing Partners are banded c-suite, fund
+founders are banded owner), so any enumerated list risks silently excluding
+people the user explicitly asked to include. Empty means no filter at all.
+
+Worked examples:
+- "people in investing roles — GPs, principals, associates — at any seniority" → seniority_bands: []
+  (strong role component, but "at any seniority" wins; enumerating
+  ["partner", "principal", "junior", ...] would drop the GPs banded c-suite)
+- "software engineers, all seniority levels" → seniority_bands: []
+- "recruiters at Stripe, junior to partner, everyone" → seniority_bands: []
+
+---
+
 ## MIXED QUERIES
 
 When the query has both role AND seniority:

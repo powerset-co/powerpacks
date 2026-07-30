@@ -12,6 +12,19 @@ This runner can prepare the parallel `expand_search_request` payload, then run
 the mechanical retrieval, hydration, LLM filter/rerank, and persistence steps.
 For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
+
+Changelog:
+    2026-07-30: `--limit` now caps only the FINAL persisted results. Retrieval
+        keeps a judge pool of at least JUDGE_POOL_FLOOR (100) candidates when a
+        smaller --limit is set (both backends), so the LLM filter/rerank picks
+        the top N from a real pool instead of the first N retrieved; the cut to
+        --limit happens at persist_search_results. Cost implication: a --limit N
+        search now hydrates/judges up to max(N, 100) candidates.
+        Local title clustering now builds its inventory WITHOUT the seniority
+        hard filter and selects clusters by role-term relevance
+        (`_select_title_clusters` over bm25/role_core_pattern tokens, falling
+        back to query tokens only when the expander produced no role terms)
+        instead of any-overlap against whole-query tokens.
 """
 from __future__ import annotations
 
@@ -41,6 +54,7 @@ PAYLOAD_KEYS = {"intent_type", "source_type", "normalized_query", "vertical", "r
 LOCAL_PAYLOAD_KEYS = PAYLOAD_KEYS | {"traits"}
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_TOP_K = {"powerset": 10000, "local": 1000}
+JUDGE_POOL_FLOOR = 100
 REMOTE_SCOPE_KEYS = {"set_id", "operator_ids", "allowed_operator_ids", "searcher_operator_id"}
 UNSUPPORTED_LOCAL_FILTERS = {
     "investor_names",
@@ -484,11 +498,55 @@ def prepare_local_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list
     sanitized["notes"] = notes
     return sanitized, ignored_scope_keys
 
-def _query_tokens_for_title_cluster(payload: dict[str, Any]) -> set[str]:
+def _cluster_tokens(text: str) -> set[str]:
+    """Tokens for cluster matching: lowercase words longer than 2 chars, with a
+    light plural strip so "software engineers" covers the "Software Engineer"
+    title. Both sides of the match use this normalization."""
+    tokens: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+", text.lower()):
+        if len(token) <= 2:
+            continue
+        if token.endswith("s") and len(token) > 3:
+            token = token[:-1]
+        tokens.add(token)
+    return tokens
+
+def _role_tokens_for_title_cluster(payload: dict[str, Any]) -> set[str]:
+    """Tokens from the expander's role terms only (bm25 phrases plus
+    role_core_pattern examples, as they stand BEFORE cluster injection) — NOT
+    the whole normalized query. Cluster selection must track role relevance:
+    company/location/funding words from the raw query must not qualify
+    corpus-frequent clusters that merely share one incidental token."""
     filters = payload_filters(payload)
-    text_parts = [str(payload.get("normalized_query") or "")]
-    text_parts.extend(str(value) for value in filters.get("bm25_queries") or [] if value)
-    return {token for token in re.findall(r"[a-z0-9]+", " ".join(text_parts).lower()) if len(token) > 2}
+    text_parts = [str(value) for value in filters.get("bm25_queries") or [] if value]
+    text_parts.extend(_pattern_examples(filters.get("role_core_patterns")))
+    return _cluster_tokens(" ".join(text_parts))
+
+def _select_title_clusters(clusters: list[dict[str, Any]], role_tokens: set[str], max_clusters: int) -> list[dict[str, Any]]:
+    """Pick clusters by role relevance, not corpus frequency.
+
+    A cluster qualifies only if all of its tokens are covered by the role
+    tokens (1-2 token clusters) or at least 2 tokens overlap (longer clusters).
+    For an investing query this keeps "Venture Partner"/"Investment Partner"
+    while rejecting corpus-frequent "Software Engineer" and "General Manager",
+    which share at most one incidental token with the role terms. Empty
+    role_tokens select nothing: with no role intent there is nothing to expand.
+    """
+    selected: list[dict[str, Any]] = []
+    for cluster in clusters:
+        title = str(cluster.get("display_title") or "").strip()
+        title_tokens = _cluster_tokens(title)
+        if not title or not title_tokens:
+            continue
+        if len(title_tokens) <= 2:
+            if not title_tokens <= role_tokens:
+                continue
+        elif len(title_tokens & role_tokens) < 2:
+            continue
+        selected.append(cluster)
+        if len(selected) >= max_clusters:
+            break
+    return selected
 
 def _with_local_title_clustering_status(payload: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
     out = json.loads(json.dumps(payload))
@@ -509,9 +567,10 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
     Prod runs TitleClusterer during query expansion before search execution.
     Local mirrors that layer boundary by reading title inventory from the DuckDB
     people table while preparing the payload.  This is intentionally
-    conservative: clusters must overlap the original/BM25 query tokens before
-    they become executable BM25/regex hints, so local clustering does not broaden
-    hard role filters with unrelated in-scope titles.
+    conservative: a cluster's tokens must be covered by the expander's role
+    terms (bm25 phrases + role_core_pattern examples) before it becomes an
+    executable BM25/regex hint, so local clustering does not broaden hard role
+    filters with unrelated in-scope titles.
     """
     filters = payload_filters(payload)
     if not filters or not db_path.exists():
@@ -528,7 +587,12 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
         from search_common import filters_from_role_payload  # type: ignore
 
         store = LocalDuckDBSearchStore(str(db_path))
-        title_filters = filters_from_role_payload(filters)
+        # Build the cluster inventory WITHOUT the seniority hard filter: a band
+        # guess (e.g. partner-only) would hide exactly the title variants the
+        # role intent wants ("General Partner" positions are banded c-suite),
+        # so inventory breadth must reflect role scope, not seniority.
+        inventory_filters = {key: value for key, value in filters.items() if key != "seniority_bands"}
+        title_filters = filters_from_role_payload(inventory_filters)
         clusters = store.title_clusters_for_filters(title_filters, max_titles=10000)
     except Exception as exc:
         return _with_local_title_clustering_status(payload, {"status": "error", "error": str(exc)[:300]})
@@ -540,18 +604,14 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
 
     if not clusters:
         return _with_local_title_clustering_status(payload, {"status": "completed", "cluster_count": 0, "selected_count": 0})
-    query_tokens = _query_tokens_for_title_cluster(payload)
-    selected: list[dict[str, Any]] = []
-    keywords: list[str] = []
-    for cluster in clusters:
-        title = str(cluster.get("display_title") or "").strip()
-        title_tokens = {token for token in re.findall(r"[a-z0-9]+", title.lower()) if len(token) > 2}
-        if not title or (query_tokens and not (query_tokens & title_tokens)):
-            continue
-        selected.append(cluster)
-        keywords.append(title)
-        if len(selected) >= max_clusters:
-            break
+    role_tokens = _role_tokens_for_title_cluster(payload)
+    if not role_tokens:
+        # A payload can be role-scoped without expander role terms (e.g.
+        # role_tracks only). The raw query is then the only role signal left,
+        # so fall back to its tokens; the strict coverage gate still applies.
+        role_tokens = _cluster_tokens(str(payload.get("normalized_query") or ""))
+    selected = _select_title_clusters(clusters, role_tokens, max_clusters)
+    keywords = [str(cluster.get("display_title")).strip() for cluster in selected]
     if not selected:
         return _with_local_title_clustering_status(payload, {"status": "completed", "cluster_count": len(clusters), "selected_count": 0})
 
@@ -725,6 +785,13 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
             return ((step.get("output") or {}).get("role_search_filters") or {})
     return {}
 
+def retrieval_limit(limit: int) -> int:
+    """--limit caps the final persisted results, not the judge pool: retrieval
+    keeps at least JUDGE_POOL_FLOOR candidates through hydration and the LLM
+    filter/rerank so the final cut takes the top N of a ranked pool, not the
+    first N retrieved. 0 stays 0 (full frontier)."""
+    return max(int(limit), JUDGE_POOL_FLOOR) if limit else 0
+
 def run_pipeline(args) -> dict[str, Any]:
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
     l=load_ledger(lp); l["current_block"]=None; save(lp,l)
@@ -740,7 +807,7 @@ def run_pipeline(args) -> dict[str, Any]:
         steps.append(("resolve_education",[sys.executable,str(ROOT/"packs/search/primitives/turbopuffer/turbopuffer_resolve_education.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
     steps += [
         ("apply_prefilters",[sys.executable,str(ROOT/"packs/search/primitives/apply_prefilters/apply_prefilters.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
-        ("execute_role_search",[sys.executable,str(ROOT/"packs/search/primitives/execute_role_search/execute_role_search.py"),"--state",str(state),"--env-file",args.env_file,"--write-state","--limit",str(args.limit),"--top-k",str(top_k)]),
+        ("execute_role_search",[sys.executable,str(ROOT/"packs/search/primitives/execute_role_search/execute_role_search.py"),"--state",str(state),"--env-file",args.env_file,"--write-state","--limit",str(retrieval_limit(args.limit)),"--top-k",str(top_k)]),
         ("hydrate_people",[sys.executable,str(ROOT/"packs/search/primitives/hydrate_people/hydrate_people.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
     ]
     for step,cmd in steps:
@@ -781,7 +848,7 @@ def run_pipeline(args) -> dict[str, Any]:
             l.setdefault("artifacts",{}).update(collect_artifacts(out))
             mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not done(l,"persist_search_results") or args.force:
-        cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state)]
+        cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state),*(["--limit",str(args.limit)] if args.limit else [])]
         mark(lp,l,"persist_search_results","running",command=" ".join(cmd)); out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),"persist_search_results"); l.setdefault("artifacts",{}).update(collect_artifacts(out)); mark(lp,l,"persist_search_results","completed",summary=compact_summary(out),command=" ".join(cmd))
     l["current_block"]=None; save(lp,l)
     return {"primitive":"search_network_pipeline","status":"completed","ledger":str(lp),"state":str(state),"summary":pipeline_summary(l),"artifacts":l.get("artifacts",{})}
@@ -840,7 +907,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
         ("execute_role_search",[
             sys.executable,str(ROOT/"packs/search/primitives/execute_role_search/execute_role_search.py"),
             "--state",str(state),"--env-file","/dev/null","--write-state",
-            "--limit",str(args.limit),"--top-k",str(top_k),
+            "--limit",str(retrieval_limit(args.limit)),"--top-k",str(top_k),
             *(["--extra-candidates-json",str(Path(args.extra_candidates_json).expanduser().resolve())] if getattr(args,"extra_candidates_json",None) else []),
         ]),
         ("hydrate_people",[sys.executable,str(ROOT/"packs/search/primitives/hydrate_people/hydrate_people.py"),"--state",str(state),"--env-file","/dev/null","--write-state","--local-db",str(db_path)]),
@@ -874,7 +941,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
                     break
 
     if not done(l,"persist_search_results") or args.force:
-        cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state)]
+        cmd=[sys.executable,str(ROOT/"packs/search/primitives/persist_search_results/results_io.py"),"export","--state",str(state),*(["--limit",str(args.limit)] if args.limit else [])]
         mark(lp,l,"persist_search_results","running",command=" ".join(cmd))
         out=require_ok(run(cmd, timeout=args.timeout, **run_kwargs),"persist_search_results")
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
@@ -1018,7 +1085,7 @@ def add_backend(p):
     p.add_argument("--db",default=DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local)")
 
 def add_run(p):
-    add_backend(p); p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands"); p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)"); p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 1000 (local)"); p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)"); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--filter-only",action="store_true",help="Run the cheap conservative LLM filter but skip LLM rerank; final ranking is owned by a downstream evaluator"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is low"); p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2"); p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT"); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
+    add_backend(p); p.add_argument("--ledger"); p.add_argument("--state"); p.add_argument("--query"); p.add_argument("--payload-json"); p.add_argument("--env-file",default=".env"); p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands"); p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)"); p.add_argument("--limit",type=int,default=0,help="Max unique people in the FINAL persisted results; retrieval/hydration/LLM stages keep at least 100 candidates (judge-pool floor) so the cut takes the top N of a ranked pool; 0 means keep full retrieved frontier"); p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 1000 (local)"); p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)"); p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration"); p.add_argument("--filter-only",action="store_true",help="Run the cheap conservative LLM filter but skip LLM rerank; final ranking is owned by a downstream evaluator"); p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate"); p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage"); p.add_argument("--model",default=DEFAULT_MODEL); p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is low"); p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2"); p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT"); p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT"); p.add_argument("--timeout",type=int,default=600); p.add_argument("--llm-timeout",type=int,default=3600); p.add_argument("--force",action="store_true")
 
 def build_parser() -> argparse.ArgumentParser:
     ap=argparse.ArgumentParser(); sub=ap.add_subparsers(dest="cmd",required=True)
