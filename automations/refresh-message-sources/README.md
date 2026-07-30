@@ -22,23 +22,23 @@ reports the blocker instead of opening an unattended consent flow.
 From the Powerpacks repository:
 
 ```bash
-npx -y codex-automations add ./automations/refresh-message-sources \
-  --cwd "$PWD" \
+bin/install-codex-automation refresh-message-sources \
+  --workspace "$PWD" \
   --dry-run
 ```
 
 ## Install paused
 
 ```bash
-npx -y codex-automations add ./automations/refresh-message-sources \
-  --cwd "$PWD"
+bin/install-codex-automation refresh-message-sources \
+  --workspace "$PWD"
 ```
 
 ## Install and activate
 
 ```bash
-npx -y codex-automations add ./automations/refresh-message-sources \
-  --cwd "$PWD" \
+bin/install-codex-automation refresh-message-sources \
+  --workspace "$PWD" \
   --activate
 ```
 
