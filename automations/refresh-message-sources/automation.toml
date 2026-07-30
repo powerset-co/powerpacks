@@ -1,0 +1,30 @@
+version = 1
+id = "refresh-message-sources"
+kind = "cron"
+name = "Refresh message sources"
+prompt = """
+Refresh every already-configured local message source in this Powerpacks repository.
+
+This is an unattended metadata-only import run. Use these standing choices without asking:
+- Gmail: run $import-gmail for every account already listed by msgvault status, using the default bounded three-year window.
+- Messages: run $import-messages for both iMessage and WhatsApp.
+- Import confirmation: deterministic metadata-only contact additions and updates are approved; if the Messages importer returns its import_confirmation gate, rerun it with --confirm-import.
+- Processing: do not enrich or process the imported contacts after either skill finishes.
+
+Run Gmail first so its fresh directory improves Messages matching. For each source, always complete discovery before import, and finish with the normal all-source fan-in merge.
+
+Respect human-action boundaries. Do not create an OAuth app, open a browser for Gmail authorization, change Full Disk Access, log out of WhatsApp, or initiate an optional WhatsApp re-link. If an existing credential, permission, or link is unhealthy, stop source work and report the exact blocker. Never call paid providers, LLM enrichment, Deep Context, an index build, or a Powerset upload.
+
+Before ending for any reason, write a fixed, machine-readable snapshot of the current source state:
+
+uv run --project . python packs/ingestion/primitives/imports/status.py status \
+  --output .powerpacks/automations/refresh-message-sources/latest.json
+
+Return a concise report with the Gmail accounts attempted, Messages channels attempted, discovered/imported/candidate counts, merged people count, the status-file path, and any blocker. Do not include message bodies or contact PII.
+"""
+status = "ACTIVE"
+rrule = "RRULE:FREQ=DAILY;BYHOUR=6;BYMINUTE=0"
+model = "gpt-5.6-sol"
+reasoning_effort = "high"
+execution_environment = "local"
+cwds = ["${workspace}"]

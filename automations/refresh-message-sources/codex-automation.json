@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "name": "powerset-co/powerpacks/refresh-message-sources",
+  "version": "0.1.0",
+  "title": "Refresh message sources",
+  "description": "Refresh configured Gmail, iMessage, and WhatsApp sources, import deterministic contact updates, and record a local status snapshot without running Deep Context.",
+  "codex": {
+    "automationKinds": [
+      "cron"
+    ]
+  },
+  "inputs": [
+    {
+      "name": "workspace",
+      "type": "path",
+      "mapsTo": "cwds[0]",
+      "required": true,
+      "defaultHint": "Powerpacks repository"
+    }
+  ],
+  "install": {
+    "suggestedId": "refresh-message-sources",
+    "includeMemory": false,
+    "defaultStatus": "PAUSED"
+  }
+}

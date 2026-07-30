@@ -127,9 +127,28 @@ class ImportStatusTests(unittest.TestCase):
             self.assertFalse(messages["imported"])
             self.assertEqual(messages["status"], "blocked_approval")
 
+    def test_folded_candidate_count_comes_from_manifest_stats(self) -> None:
+        with self.sandbox() as state:
+            self.seed_import(state, "gmail", people_rows=5)
+            manifest_path = state / "import" / "gmail" / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["stats"] = {"candidates": 3}
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            gmail = import_status.status_payload(["gmail"])["sources"]["gmail"]["import"]
+
+            self.assertEqual(gmail["people"], 5)
+            self.assertEqual(gmail["candidates"], 3)
+            self.assertEqual(gmail["candidates_csv"], "")
+
     def test_cli_always_exits_zero(self) -> None:
-        with self.sandbox():
-            with mock.patch.object(sys, "argv", ["status.py", "status"]), \
+        with self.sandbox() as state:
+            output = state / "automation-status" / "latest.json"
+            with mock.patch.object(
+                sys,
+                "argv",
+                ["status.py", "status", "--output", str(output)],
+            ), \
                     redirect_stdout(io.StringIO()) as captured:
                 self.assertEqual(import_status.main(), 0)
             payload = json.loads(captured.getvalue())
@@ -137,6 +156,7 @@ class ImportStatusTests(unittest.TestCase):
             self.assertEqual(
                 sorted(payload["sources"]), ["gmail", "linkedin", "messages"]
             )
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), payload)
 
 
 if __name__ == "__main__":
