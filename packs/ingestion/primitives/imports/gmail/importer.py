@@ -95,9 +95,9 @@ from packs.ingestion.primitives.imports.gmail.steps.directory import (  # noqa: 
     QueueSplit,
     run_gmail_directory,
 )
-from packs.ingestion.primitives.imports.gmail.steps.enrich import (  # noqa: E402
+from packs.ingestion.primitives.imports.gmail.steps.apply import (  # noqa: E402
     ApplyOutcome,
-    run_gmail_apply_and_enrich,
+    run_gmail_apply,
 )
 from packs.ingestion.primitives.common.proc import emit_progress  # noqa: E402
 from packs.ingestion.primitives.imports.gmail.util import (  # noqa: E402
@@ -334,7 +334,7 @@ class GmailImport(Node):
                 artifacts=self._rendered_artifacts(discovery),
             ))
         splits = run_gmail_directory(self, list(discovery.accounts))
-        outcome = run_gmail_apply_and_enrich(self, splits, discovery.people_accounts)
+        outcome = run_gmail_apply(self, splits, discovery.people_accounts)
         if not outcome.ok:
             return self._manifest(GmailImportManifest(
                 status="failed",

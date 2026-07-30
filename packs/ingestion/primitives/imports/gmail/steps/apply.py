@@ -1,7 +1,7 @@
 """Gmail import — apply STORED resolutions to each account people.csv, then
 materialize the merged Gmail people artifact.
 
-`run_gmail_apply_and_enrich(imp, splits, people_accounts)` is the second import
+`run_gmail_apply(imp, splits, people_accounts)` is the second import
 step. It commits the directory-derived resolutions into `directory.csv`,
 combines them per account, applies them to each account's people.csv via an
 in-process `GmailExtractor().apply_resolutions(...)` call, and materializes one
@@ -83,7 +83,7 @@ def _record_sort_key(record: ResolutionRecord) -> str:
     return record.account_email or record.slug or record.people_csv
 
 
-def run_gmail_apply_and_enrich(
+def run_gmail_apply(
     imp: "GmailImport",
     splits: list[QueueSplit],
     people_accounts: tuple[GmailAccount, ...],
@@ -120,6 +120,8 @@ def run_gmail_apply_and_enrich(
         imp._mark_step("gmail_apply_enrich", "skipped", reason="no gmail resolutions")
         return ApplyOutcome(ok=True, merge=merge)
     combined = sorted(combined, key=_record_sort_key)
+    # Step id keeps the historical "gmail_apply_enrich" spelling: it is emitted
+    # into manifests, and renaming it would churn every install's no-op gate.
     imp._begin_step("gmail_apply_enrich", f"Applying Gmail LinkedIn matches for {len(combined)} account file(s).")
     results: list[dict[str, Any]] = []
     final_people_csvs: list[str] = []
