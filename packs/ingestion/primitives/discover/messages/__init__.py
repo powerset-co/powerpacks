@@ -2,9 +2,10 @@
 per-source leaf extractors.
 
 Modules, not a re-export surface — import `discover`, `channels.*`,
-`extract_imessage`, `extract_whatsapp`, `whatsapp_wacli`, `merge_contacts`, or
-`models` directly. The channels own their `IMESSAGE_*` / `WHATSAPP_*` path
-constants; test patches already target those concrete modules.
+`extract_imessage`, `extract_whatsapp`, `wacli.*` (the wacli binary client
+package, with `whatsapp_wacli.py` as its CLI), `merge_contacts`, or `models`
+directly. The channels own their `IMESSAGE_*` / `WHATSAPP_*` path constants;
+test patches already target those concrete modules.
 
 Changelog:
   2026-07-30 (shim deleted): the 16-name re-export block is gone. Nothing

@@ -37,7 +37,10 @@ Changelog:
     (`schemas/message_contacts.CSV_HEADERS`), `message_source` is a LEGACY INPUT
     header the schema-mismatch error tells a user to rename, and both readers of
     this file normalize rows to the canonical headers before any import code sees
-    them, so the second key could never be the one that was set.
+    them, so the second key could never be the one that was set. The legacy
+    `message_source` header is therefore no longer honored anywhere: only a
+    hand-edited `contacts.csv` can still carry it, and such a file fails the
+    schema check that tells the user to rename the column to `source`.
   2026-07-25 (declared contract): added `MessageContactRow`,
     `MATCH_ANNOTATION_COLUMNS`, and `USER_OWNED_COLUMNS` so the two writers of
     contacts.csv declare disjoint `owns_columns`. Moved the mid-file `import re`

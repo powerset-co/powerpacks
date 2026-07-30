@@ -104,7 +104,7 @@ from packs.ingestion.primitives.discover.messages.channels.message_channel_base 
     blocked_child,
     failed_child,
 )
-from packs.ingestion.primitives.discover.messages.whatsapp_wacli import DEFAULT_STORE  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE  # noqa: E402
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node  # noqa: E402
 
 
@@ -122,7 +122,7 @@ WHATSAPP_MANIFEST = MESSAGES_OUT_DIR / "whatsapp.contacts.csv.manifest.json"
 WHATSAPP_PROGRESS_JSONL = MESSAGES_OUT_DIR / "whatsapp.contacts.csv.manifest.json.progress.jsonl"
 
 # The wacli GO BINARY's own SQLite store — the external input this node reads
-# through the client in whatsapp_wacli.py (see open_wacli_db).
+# through the client package (see wacli/store_db.py:open_wacli_db).
 WACLI_DB = DEFAULT_STORE / "wacli.db"
 
 

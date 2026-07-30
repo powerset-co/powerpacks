@@ -21,7 +21,7 @@ Shape:
       (Full Disk Access gate) -> extract chat.db + AddressBook metadata ->
       imessage.contacts.csv.
     - WhatsAppChannel (channels/whats_app_channel.py): WhatsAppExtractor.run
-      (extract_whatsapp.py, composing the whatsapp_wacli client: fetch pinned
+      (extract_whatsapp.py, composing the wacli/ client package: fetch pinned
       wacli, auth, sync, deepen, export local metadata) ->
       whatsapp.contacts.csv. Missing QR -> blocked_user_action; returns the
       pre-full-sync re-link nudge.
