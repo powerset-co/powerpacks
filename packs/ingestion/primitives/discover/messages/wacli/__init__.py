@@ -10,6 +10,10 @@ the full-sync pairing marker) · `auth` (link the account) · `sync` (one metada
 sync pass) · `backfill` (the `history backfill-batch` boundary) · `depth` (the
 history-depth stage) with `depth_results` (its artifacts).
 
+Changelog:
+- 2026-07-30 (created): the `whatsapp_wacli.py` monolith split into this
+  package; the old path stays as the thin CLI entry.
+
 The CLI over all of it is `../whatsapp_wacli.py`. No re-exports: consumers
 import the module that defines what they need.
 """

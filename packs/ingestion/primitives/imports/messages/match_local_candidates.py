@@ -70,6 +70,8 @@ messages_match_local -> messages_import -> merge_people), and it contradicted th
 only real caller, which passes `import/{gmail,linkedin}/people.csv` concatenated.
 
 Changelog:
+  2026-07-30 (style pass): `MessageContactRow` is imported from its definition
+    home (`discover/messages/models.py`) instead of through `util`'s re-export.
   2026-07-26 (cyclic default removed): `--local-people` has NO default. It was
     `.powerpacks/network-import/merged/people.csv` — the fan-in merge's own output,
     fed by this node's own downstream import — which made the declared graph cyclic

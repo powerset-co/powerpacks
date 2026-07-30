@@ -35,9 +35,10 @@ Changelog:
     the loop. Also DELETED the dead `message_source` fallback from
     `messages_source_channels`: `contacts.csv` has one `source` column
     (`schemas/message_contacts.CSV_HEADERS`), `message_source` is a LEGACY INPUT
-    header the schema-mismatch error tells a user to rename, and both readers of
-    this file normalize rows to the canonical headers before any import code sees
-    them, so the second key could never be the one that was set. The legacy
+    header the schema-mismatch error tells a user to rename, and both WRITERS of
+    this file emit `DictWriter(fieldnames=CSV_HEADERS)` — a legacy column cannot
+    survive a merge or match rewrite, so the second key could never be the one
+    that was set. The legacy
     `message_source` header is therefore no longer honored anywhere: only a
     hand-edited `contacts.csv` can still carry it, and such a file fails the
     schema check that tells the user to rename the column to `source`.

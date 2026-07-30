@@ -22,8 +22,8 @@ Usage (the standalone lifecycle subcommands skills/tests invoke by path):
     whatsapp_wacli.py logout       # invalidate the session (re-link flow)
 
 Flow: parse -> build the subcommand's payload from the package -> emit one
-envelope -> map status to the exit code (20 blocked, 1 failed or
-not-linked-on-status, else 0).
+envelope -> map status to the exit code (20 blocked, 1 failed, else 0 —
+an unlinked `status` reports and exits 0; `auth` ending unlinked exits 20).
 
 The discovery `run`/`export` entry points (install → auth → sync → deepen →
 export contacts) live in `extract_whatsapp.py`, which imports the same package.
@@ -31,7 +31,8 @@ export contacts) live in `extract_whatsapp.py`, which imports the same package.
 Changelog:
 - 2026-07-30 (wacli split): the 2,156-line client became the `wacli/` package
   (`paths`, `runtime`, `util`, `payloads`, `binary`, `store_db`, `qr`,
-  `pairing`, `auth`, `sync`, `backfill`, `depth`) and this file kept only the
+  `pairing`, `auth`, `sync`, `backfill`, `depth`, `depth_results`) and this
+  file kept only the
   CLI: argparse, the `status` snapshot, dispatch, and the exit-code mapping.
   wacli's JSON is now parsed once into frozen dataclasses at the boundary
   (`wacli/payloads.py`). No re-export shim: consumers import the module that

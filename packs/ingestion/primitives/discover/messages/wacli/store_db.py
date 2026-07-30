@@ -1,10 +1,11 @@
 """Read-only SQLite access to the local wacli store (`<store>/wacli.db`).
 
 wacli owns this database; Powerpacks only reads it, and only ever reads
-METADATA. `assert_metadata_query` enforces that at the query level: every read
-goes through `select_rows`, which refuses any SQL naming a body column
-(`text`, `display_text`, `media_caption`, attachment paths/keys, …). The
-privacy contract is a code path here, not a convention.
+METADATA. `assert_metadata_query` enforces that at the query level: the
+extractor's ROW reads all go through `select_rows`, which refuses any SQL
+naming a body column (`text`, `display_text`, `media_caption`, attachment
+paths/keys, …); the depth aggregates below select only counts and identifiers.
+The privacy contract is a code path here, not a convention.
 
 Two groups of readers live here:
 

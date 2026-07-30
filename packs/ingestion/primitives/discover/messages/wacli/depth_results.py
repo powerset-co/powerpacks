@@ -74,6 +74,8 @@ HISTORY_DEPTH_TERMINAL_OUTCOMES = {
     "gone",
     "out_of_scope",
 }
+
+
 def read_history_depth_results(path: Path) -> dict[str, dict[str, str]]:
     if not path.exists():
         return {}

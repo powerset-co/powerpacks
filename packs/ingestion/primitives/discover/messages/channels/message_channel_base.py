@@ -79,7 +79,7 @@ from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
 )
 
 
-# --- child payloads (a channel step returns None on success, else one of these) ---
+# --- child payloads (a channel step returns MessageChannelExtracted, or one of these) ---
 
 def blocked_child(
     *,
