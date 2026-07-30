@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.3.1...powerpacks-v1.4.0) (2026-07-30)
+
+
+### Features
+
+* **deep-context:** `view` and `stop` commands — directory browse + review-session release ([#362](https://github.com/powerset-co/powerpacks/issues/362)) ([e6bd113](https://github.com/powerset-co/powerpacks/commit/e6bd1133580039baed9a741d54405d073e13a8c7))
+* **deep-context:** in-process Parallel client + single-writer review sessions (SSE, session lock, in-memory progress) ([#360](https://github.com/powerset-co/powerpacks/issues/360)) ([f023724](https://github.com/powerset-co/powerpacks/commit/f023724fd5c68abc9b7d6bd81060f3c4412bd522))
+* **deep-context:** one review door — `review` lands on the directory once the flow completes ([#363](https://github.com/powerset-co/powerpacks/issues/363)) ([cf9a84d](https://github.com/powerset-co/powerpacks/commit/cf9a84df5b1d2cf5912200243cb99ebf8f5b7241))
+
 ## [1.3.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.3.0...powerpacks-v1.3.1) (2026-07-28)
 
 
