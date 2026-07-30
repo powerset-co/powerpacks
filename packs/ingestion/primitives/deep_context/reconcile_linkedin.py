@@ -39,6 +39,13 @@ invisible to the whole review, with no way to keep or reject them. They are revi
 but never research-eligible; the worth-gated candidate path owns paid lookups.
 
 Changelog:
+  2026-07-30 (style): the verdict->action policy is now three named values plus two
+    first-rule-wins functions (`decide_plain_task`, `decide_conflict_group`) that
+    `decide_actions` merely applies — the decision is readable without simulating the
+    loop. Three parameters that no body ever read are gone (`revert_unconfirmed_name_matches`'s
+    `overrides`/`facts_dir`, `upsert_name_match_reviews`'s and `write_overrides`'
+    `facts_dir`), and with them the two `load_override_rows` calls in `execute()` that
+    existed only to feed them. Same verdicts, same rows, same manifest.
   2026-07-27 (declared contract): `ReconcileLinkedin` is a `pipeline/contract.py:Node`
     ("deep_reconcile"). Inputs (index.json, people.csv, the facts/raw/profile-cache
     templates, owner.json) and outputs (verdicts.jsonl/csv, summary.md, and the
@@ -846,57 +853,87 @@ def inject_section(path: Path, body: str) -> None:
 
 # --- decide what auto-applies (incl. conflict auto-resolution) --------------
 
+# The one decision this stage makes about an attached link, as a value.
+# `""` on REVIEW is the historical `via` for "nobody auto-applied it".
+REVIEW = ("review", "")
+CONFIRM = ("confirm", "normal")
+DETACH = ("detach", "normal")
+CONFLICT_KEEP = ("confirm", "conflict_resolved")
+CONFLICT_DROP = ("detach", "conflict_resolved")
+
+
+class _Bar:
+    """The ASYMMETRIC, keep-biased confidence bars, resolved once per pass.
+
+    A `confirmed` link auto-VERIFIES at the (low) confirm bar — keeping a
+    slightly-wrong link is cheap because the user fixes it in review — while a
+    `wrong_person` link auto-DETACHES only at the (higher) detach bar, since
+    wrongly dropping a real person removes them from people.csv."""
+
+    def __init__(self, confirm: float, detach: float | None) -> None:
+        self.confirm = confirm
+        self.detach = confirm if detach is None else detach
+
+    def clears(self, task: dict[str, Any], verdict: str) -> bool:
+        v = task.get("verdict") or {}
+        bar = self.detach if verdict == "wrong_person" else self.confirm
+        return v.get("verdict") == verdict and float(v.get("confidence") or 0) >= bar
+
+
+def decide_plain_task(task: dict[str, Any], bar: _Bar) -> tuple[str, str]:
+    """(action, via) for ONE link on a non-conflict parent. FIRST RULE WINS."""
+    if bar.clears(task, "confirmed"):
+        return CONFIRM
+    # NEVER detach on a failed name-match: the LinkedIn belongs to a REAL connection
+    # (a separate row), so a wrong guess must drop the optimistic attach, not strip
+    # the connection's link. Unconfirmed name-matches are reverted to no-link upstream;
+    # this guard is defense-in-depth for the --reapply path.
+    if bar.clears(task, "wrong_person") and not task.get("name_matched"):
+        return DETACH
+    return REVIEW
+
+
+def decide_conflict_group(judged: list[dict[str, Any]], bar: _Bar) -> dict[int, tuple[str, str]]:
+    """`id(task) -> (action, via)` for ONE conflict parent — one canonical person
+    carrying MULTIPLE different attached LinkedIns.
+
+    Auto-RESOLVE only the unambiguous shape: exactly ONE confirmed above the
+    confirm bar and EVERY other candidate a wrong_person above the detach bar.
+    Keep the confirmed, detach the wrong. Any other conflict shape stays review,
+    which is what an empty mapping means."""
+    confirmed_hi = [t for t in judged if bar.clears(t, "confirmed")]
+    wrong_hi = [t for t in judged if bar.clears(t, "wrong_person")]
+    if not (len(confirmed_hi) == 1 and len(wrong_hi) == len(judged) - 1 and len(judged) >= 2):
+        return {}
+    return {id(confirmed_hi[0]): CONFLICT_KEEP, **{id(t): CONFLICT_DROP for t in wrong_hi}}
+
+
 def decide_actions(tasks: list[dict[str, Any]], confirm_threshold: float,
                    detach_threshold: float | None = None) -> None:
     """Annotate each task with `action` ∈ {confirm, detach, review} and `via`.
 
-    ASYMMETRIC, keep-biased thresholds: a `confirmed` link auto-VERIFIES at the (low)
-    confirm_threshold — keeping a slightly-wrong link is cheap because the user fixes it
-    in review — while a `wrong_person` link auto-DETACHES only at the (higher)
-    detach_threshold, since wrongly dropping a real person removes them from people.csv.
-
-    Non-conflict parent: confirmed≥confirm_threshold → confirm, wrong_person≥detach_threshold
-    → detach; anything else → review.
-
-    Conflict parent (one canonical person, MULTIPLE different attached LinkedIns):
-    auto-RESOLVE only the unambiguous shape — exactly ONE confirmed (≥confirm_threshold)
-    and EVERY other candidate a wrong_person (≥detach_threshold). Keep the confirmed,
-    detach the wrong (via=conflict_resolved). Any other conflict shape stays → review."""
-    detach_threshold = confirm_threshold if detach_threshold is None else detach_threshold
-
-    def hi(task: dict[str, Any], verdict: str) -> bool:
-        v = task.get("verdict") or {}
-        bar = detach_threshold if verdict == "wrong_person" else confirm_threshold
-        return v.get("verdict") == verdict and float(v.get("confidence") or 0) >= bar
-
+    The POLICY is the three functions above — this is only the loop that applies
+    it. Every task starts at REVIEW and a parent's group decides together, so a
+    conflict parent can never be scored one link at a time."""
+    bar = _Bar(confirm_threshold, detach_threshold)
     by_parent: dict[str, list[dict[str, Any]]] = {}
     for t in tasks:
-        t["action"], t["via"] = "review", ""
+        t["action"], t["via"] = REVIEW
         by_parent.setdefault(t["parent_slug"], []).append(t)
 
     for group in by_parent.values():
         judged = [t for t in group if not t.get("no_link")]
         if any(t.get("conflict") for t in group):
-            confirmed_hi = [t for t in judged if hi(t, "confirmed")]
-            wrong_hi = [t for t in judged if hi(t, "wrong_person")]
-            if len(confirmed_hi) == 1 and len(wrong_hi) == len(judged) - 1 and len(judged) >= 2:
-                confirmed_hi[0]["action"], confirmed_hi[0]["via"] = "confirm", "conflict_resolved"
-                for t in wrong_hi:
-                    t["action"], t["via"] = "detach", "conflict_resolved"
-            continue  # ambiguous conflicts stay as review
+            resolved = decide_conflict_group(judged, bar)
+            for t in judged:
+                if id(t) in resolved:
+                    t["action"], t["via"] = resolved[id(t)]
+            continue
         for t in judged:
-            if hi(t, "confirmed"):
-                t["action"], t["via"] = "confirm", "normal"
-            elif hi(t, "wrong_person") and not t.get("name_matched"):
-                # NEVER detach on a failed name-match: the LinkedIn belongs to a REAL connection
-                # (a separate row), so a wrong guess must drop the optimistic attach, not strip
-                # the connection's link. Unconfirmed name-matches are reverted to no-link upstream;
-                # this guard is defense-in-depth for the --reapply path.
-                t["action"], t["via"] = "detach", "normal"
+            t["action"], t["via"] = decide_plain_task(t, bar)
 
 
-def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_threshold: float,
-                                    overrides: dict[str, dict[str, str]], facts_dir: Path) -> int:
+def revert_unconfirmed_name_matches(tasks: list[dict[str, Any]], confirm_threshold: float) -> int:
     """An optimistic name-match the judge did NOT confirm reverts to a plain no-link parent so the
     deep-research lookup proceeds exactly as if we never guessed a LinkedIn, and a real connection
     is never touched by a wrong guess. Confirmed matches stay put and fold onto the
@@ -942,8 +979,7 @@ def _name_match_review_reason(review: dict[str, Any], competing_url: str = "") -
     return reason
 
 
-def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]],
-                              facts_dir: Path = FACTS_DIR) -> dict[str, Any]:
+def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Persist a VISIBLE needs_review row for each unconfirmed unique name match (see
     revert_unconfirmed_name_matches). Keyed on the connection's public_identifier like every other
     review row, action=review, approved= pending, with a reason naming the connection so the human
@@ -1021,7 +1057,7 @@ def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]],
 _VERDICT_TO_ACTION = {"wrong_person": "detach", "confirmed": "verify", "needs_review": "verify"}
 
 
-def write_overrides(path: Path, tasks: list[dict[str, Any]], facts_dir: Path = FACTS_DIR) -> dict[str, Any]:
+def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Upsert LinkedIn identity decisions without judging or rewriting worth.
 
     High-confidence (action confirm/detach) -> `approved=auto` (applied at merge).
@@ -1427,17 +1463,18 @@ def dry_run_estimate(*, index_json: Path, people_csv: Path, profile_cache_dir: P
     started = time.monotonic()
     index = _read_json(Path(index_json))
     people = load_people_rows(Path(people_csv))
-    tasks, connections, identity_judgeable = _prepared_tasks(
+    tasks, connections, judgeable = _prepared_tasks(
         index=index, people=people, facts_dir=Path(facts_dir), raw_dir=Path(raw_dir),
         cache_dir=Path(profile_cache_dir), slug=slug, limit=limit)
-    judgeable = identity_judgeable
     # ~ cost bracket: judgeable tasks * (rich-context floor/ceiling) — no spend.
     per_lo, per_hi = 0.004, 0.02
+    # `judgeable` and `identity_judgeable` are the SAME count under two names —
+    # both keys have always been emitted, so both stay, sourced from one value.
     return {
         "source": "reconcile_linkedin", "status": "dry_run",
         "parents": len(index.get("parents", {})), "tasks": len(tasks),
         "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
-        "identity_judgeable": len(identity_judgeable),
+        "identity_judgeable": len(judgeable),
         "ground_truth_connections": len(connections),
         "conflicts": sum(1 for t in tasks if t.get("conflict")),
         "estimated_cost_usd_low": round(len(judgeable) * per_lo, 2),
@@ -1633,19 +1670,16 @@ class ReconcileLinkedin(Node):
             # Re-run the unconfirmed-name-match revert here too: if the threshold changed (or an old
             # verdict no longer clears the bar), a speculative match drops back to the no-link path
             # instead of lingering as a stale LinkedIn review row.
-            overrides = load_override_rows(self.overrides_csv)
-            revert_unconfirmed_name_matches(tasks, self.confirm_threshold, overrides, self.facts_dir)
+            revert_unconfirmed_name_matches(tasks, self.confirm_threshold)
             return self._finalize(tasks, index,
                                   usage_total={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
                                   use_llm=False, judged=sum(1 for t in tasks if not t.get("no_link")),
                                   started=started)
 
         people = load_people_rows(self.people_csv)
-        overrides = load_override_rows(self.overrides_csv)
-        tasks, _connections, identity_judgeable = _prepared_tasks(
+        tasks, _connections, judgeable = _prepared_tasks(
             index=index, people=people, facts_dir=self.facts_dir, raw_dir=self.raw_dir,
             cache_dir=self.profile_cache_dir, slug=self.slug, limit=self.limit)
-        judgeable = identity_judgeable
 
         usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         use_llm = not self.no_llm
@@ -1689,7 +1723,7 @@ class ReconcileLinkedin(Node):
 
         # Optimistic name-matches the judge didn't confirm fall back to the plain
         # no-link lookup path, so only confirmed matches persist / auto-apply.
-        revert_unconfirmed_name_matches(tasks, self.confirm_threshold, overrides, self.facts_dir)
+        revert_unconfirmed_name_matches(tasks, self.confirm_threshold)
 
         # A subset run must not clobber the full verdicts file: overlay the fresh rows onto the
         # existing verdicts so the review UI keeps seeing everyone.
@@ -1727,13 +1761,13 @@ class ReconcileLinkedin(Node):
         self_retargets = {"proposed": 0}
         name_match_reviews = {"name_match_reviews": 0}
         if not self.no_overrides:
-            override_stats = write_overrides(self.overrides_csv, tasks, self.facts_dir)
+            override_stats = write_overrides(self.overrides_csv, tasks)
             # Free recovery: retarget to a LinkedIn the contact shared themselves (overrides any
             # detach/verify on the wrong attached link). Sticky — won't clobber a user decision.
             self_retargets = upsert_retargets(self.overrides_csv, self_reported_retargets(tasks))
             # Surface (don't vanish) each unique first-degree name match the judge couldn't corroborate:
             # a visible needs_review row naming the connection so the human confirms or rejects it.
-            name_match_reviews = upsert_name_match_reviews(self.overrides_csv, tasks, self.facts_dir)
+            name_match_reviews = upsert_name_match_reviews(self.overrides_csv, tasks)
             # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
             consolidation = write_consolidations(self.consolidate_people_csv, tasks, self.people_csv)
         write_applied(out_dir / "applied.csv", decided_report(tasks))

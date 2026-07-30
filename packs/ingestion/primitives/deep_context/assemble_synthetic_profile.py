@@ -16,6 +16,9 @@ Reads:  .powerpacks/deep-context/reconcile/deep-research/<handle>/01_research_pa
 Writes: .powerpacks/network-import/overrides/synthetic-people.csv
 
 Changelog:
+  2026-07-30 (style): `USER_APPROVED` / `load_override_rows` are imported from their
+    definition home (`review_store`) instead of through `reconcile_linkedin`, which
+    only re-exported them. Same objects — no behavior change.
   2026-07-27 (declared contract): `AssembleSyntheticProfile` is a
     `pipeline/contract.py:Node` ("deep_assemble_synthetic"). The flow moved from
     `main()` into `execute()` unchanged (same flags, same pretty-printed result
@@ -67,7 +70,7 @@ from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
     QUEUE_CSV,
     RESEARCH_PROFILE_TEMPLATE,
 )
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import USER_APPROVED, load_override_rows
+from packs.ingestion.primitives.deep_context.review_store import USER_APPROVED, load_override_rows
 from packs.ingestion.primitives.deep_context.review_web.model import SYNTHETIC_PEOPLE_CSV
 from packs.ingestion.schemas.candidates_schema import candidate_key_for
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS

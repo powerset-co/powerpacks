@@ -15,6 +15,13 @@ ambiguous rest, and an approved row flows through apply_retargets (cache-first
 enrichment) into the fan-in. Nothing new to operate; the legacy links simply
 enter the loop instead of bypassing it.
 
+Flow: read the gmail people rows -> parse each into a `LegacyRow` -> `eligibility()`
+decides its fate first-rule-wins -> an eligible row becomes a `Candidate` (proposal
++ optional judge task, built from its CACHED profile view) -> on --apply --judge the
+tasks fan out and each returns the llm_reject* fields applied to its proposal ->
+upsert_retargets writes the pending rows. No manifest file: the returned dict is
+emitted to stdout, and overrides/review.csv is the only durable write.
+
 Scope per person (all conditions):
   - gmail people row with enrichment_provider=parallel_linkedin_resolution
   - NOT already in merged/people.csv (those were admitted via enrichment and are
@@ -32,13 +39,22 @@ Run: uv run --project . python -m packs.ingestion.primitives.deep_context.migrat
 
 Changelog:
   2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
+  2026-07-30 (style pass): `run(args)` became the construct-and-run
+    `MigrateLegacyResolutions` class over a thin argparse `main()`; the six
+    scattered eligibility branches collapsed into the first-rule-wins
+    `eligibility()`; rows parse into the frozen `LegacyRow` at the boundary and
+    carry through as `Candidate`; the judge fan-out returns reject fields the
+    caller applies instead of stashing `_judge_task` on the proposal dict;
+    `import json` moved to the top. No behavior change.
 """
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +83,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 )
 from packs.ingestion.primitives.deep_context.review_store import (
     RESEARCH_CONFIRM_THRESHOLD,
+    USER_APPROVED,
     load_override_rows,
 )
 
@@ -84,8 +101,8 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    import json
-
+    # Local to this module (not common.jsonio.read_json) because the callers below
+    # index the result: a non-dict JSON payload must degrade to {}, not to a crash.
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -152,117 +169,223 @@ def legacy_provenance(directory_csv: Path) -> dict[str, dict[str, str]]:
     return best
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
-    started = time.monotonic()
-    facts_dir = Path(args.facts_dir)
-    raw_dir = Path(args.raw_dir)
-    cache_dir = Path(args.cache_dir)
-    overrides_csv = Path(args.overrides)
+@dataclass(frozen=True)
+class LegacyRow:
+    """One gmail people.csv row, normalized once at the boundary.
 
-    merged_ids = {(r.get("id") or "").strip().lower()
-                  for r in _read_rows(Path(args.merged_people))} - {""}
-    overrides = load_override_rows(overrides_csv)
-    provenance = legacy_provenance(Path(args.directory_csv))
+    `public_identifier` and `provider` are lowercased here (the identity/lookup
+    keys); `person_id` keeps its stored case because it names the facts file and
+    is written back onto the proposal."""
 
-    counts = {
-        "legacy_rows": 0, "eligible": 0,
-        "skipped_in_merged": 0, "skipped_no_facts": 0,
-        "skipped_user_decided": 0, "skipped_already_judged": 0,
-        "no_cached_profile": 0, "judged": 0,
-    }
-    proposals: list[dict[str, Any]] = []
-    seen_pubs: set[str] = set()
-    for row in _read_rows(Path(args.gmail_people)):
-        if (row.get("enrichment_provider") or "").strip().lower() != LEGACY_PROVIDER:
-            continue
-        pub = (row.get("public_identifier") or "").strip().lower()
-        url = (row.get("linkedin_url") or "").strip()
-        pid = (row.get("id") or "").strip()
-        if not pub or not url or not pid or pub in seen_pubs:
-            continue
-        seen_pubs.add(pub)
-        counts["legacy_rows"] += 1
-        if pid.lower() in merged_ids:
-            counts["skipped_in_merged"] += 1
-            continue
-        prior = overrides.get(pub) or {}
-        if (prior.get("approved") or "").strip().lower() in {"yes", "no"}:
-            counts["skipped_user_decided"] += 1
-            continue
-        if ((prior.get("action") or "").strip().lower() == "retarget"
-                and (prior.get("llm_judge_fingerprint") or "").strip()):
-            counts["skipped_already_judged"] += 1
-            continue
-        if not (facts_dir / f"{pid}.jsonl").exists():
-            counts["skipped_no_facts"] += 1
-            continue
-        counts["eligible"] += 1
-        prov = provenance.get(pub) or {}
-        confidence = float(prov.get("confidence") or 0)
-        reasoning = prov.get("reasoning") or ""
-        email = prov.get("email") or ""
+    person_id: str
+    public_identifier: str
+    linkedin_url: str
+    full_name: str
+    provider: str
+
+    @classmethod
+    def from_row(cls, row: dict[str, str]) -> LegacyRow:
+        return cls(
+            person_id=(row.get("id") or "").strip(),
+            public_identifier=(row.get("public_identifier") or "").strip().lower(),
+            linkedin_url=(row.get("linkedin_url") or "").strip(),
+            full_name=(row.get("full_name") or "").strip(),
+            provider=(row.get("enrichment_provider") or "").strip().lower(),
+        )
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """An eligible person's retarget proposal plus, when judging, its judge task.
+
+    `cached_profile` is independent of `judge_task`: the cached profile view is
+    read for every eligible person (so a dry run can report `no_cached_profile`),
+    while a task is only built when the run will actually judge."""
+
+    proposal: dict[str, Any]
+    judge_task: dict[str, Any] | None
+    cached_profile: bool
+
+
+def eligibility(row: LegacyRow, *, seen_pubs: set[str], merged_ids: set[str],
+                overrides: dict[str, dict[str, str]], facts_dir: Path) -> str:
+    """First rule that fires wins — the one place a legacy row's fate is decided.
+
+    Returns "" for a row that is not a legacy candidate at all (uncounted: it is
+    not a legacy row, is unusable, or repeats a pub already handled), otherwise a
+    `counts` skip key, or "eligible"."""
+    if row.provider != LEGACY_PROVIDER:
+        return ""
+    if not row.public_identifier or not row.linkedin_url or not row.person_id:
+        return ""
+    if row.public_identifier in seen_pubs:
+        return ""
+    if row.person_id.lower() in merged_ids:
+        return "skipped_in_merged"
+    prior = overrides.get(row.public_identifier) or {}
+    if (prior.get("approved") or "").strip().lower() in USER_APPROVED:
+        return "skipped_user_decided"
+    if ((prior.get("action") or "").strip().lower() == "retarget"
+            and (prior.get("llm_judge_fingerprint") or "").strip()):
+        return "skipped_already_judged"
+    if not (facts_dir / f"{row.person_id}.jsonl").exists():
+        return "skipped_no_facts"
+    return "eligible"
+
+
+class MigrateLegacyResolutions:
+    """Legacy Parallel links -> pending `retarget` rows in overrides/review.csv.
+
+    Deliberately NOT a pipeline Node: it declares no artifacts and writes no
+    manifest file. `run()` returns the payload dict the CLI emits, and the sticky
+    upsert into the overrides CSV is its only durable write."""
+
+    def __init__(
+        self,
+        *,
+        gmail_people: Path | None = None,
+        merged_people: Path | None = None,
+        directory_csv: Path | None = None,
+        overrides: Path | None = None,
+        facts_dir: Path | None = None,
+        raw_dir: Path | None = None,
+        cache_dir: Path | None = None,
+        confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
+        limit: int = 0,
+        apply: bool = False,
+        judge: bool = False,
+        no_llm: bool = False,
+        model: str = DEFAULT_MODEL,
+        reasoning_effort: str = "medium",
+        timeout: int = 120,
+        max_retries: int = 6,
+    ) -> None:
+        self.gmail_people = Path(gmail_people or GMAIL_PEOPLE_CSV)
+        self.merged_people = Path(merged_people or DEFAULT_PEOPLE_CSV)
+        self.directory_csv = Path(directory_csv or DIRECTORY_CSV)
+        self.overrides_csv = Path(overrides or LINKEDIN_OVERRIDES_CSV)
+        self.facts_dir = Path(facts_dir or FACTS_DIR)
+        self.raw_dir = Path(raw_dir or RAW_DIR)
+        self.cache_dir = Path(cache_dir or PROFILE_CACHE_DIR)
+        self.confirm_threshold = confirm_threshold
+        self.limit = limit
+        self.apply = apply
+        self.judge = judge
+        self.no_llm = no_llm
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.timeout = timeout
+        self.max_retries = max_retries
+
+    def run(self) -> dict[str, Any]:
+        started = time.monotonic()
+        merged_ids = {(r.get("id") or "").strip().lower()
+                      for r in _read_rows(self.merged_people)} - {""}
+        overrides = load_override_rows(self.overrides_csv)
+        provenance = legacy_provenance(self.directory_csv)
+
+        counts = {
+            "legacy_rows": 0, "eligible": 0,
+            "skipped_in_merged": 0, "skipped_no_facts": 0,
+            "skipped_user_decided": 0, "skipped_already_judged": 0,
+            "no_cached_profile": 0, "judged": 0,
+        }
+        candidates: list[Candidate] = []
+        seen_pubs: set[str] = set()
+        for raw in _read_rows(self.gmail_people):
+            row = LegacyRow.from_row(raw)
+            verdict = eligibility(row, seen_pubs=seen_pubs, merged_ids=merged_ids,
+                                  overrides=overrides, facts_dir=self.facts_dir)
+            if not verdict:
+                continue
+            seen_pubs.add(row.public_identifier)
+            counts["legacy_rows"] += 1
+            if verdict != "eligible":
+                counts[verdict] += 1
+                continue
+            counts["eligible"] += 1
+            candidate = self.build_candidate(row, provenance.get(row.public_identifier) or {})
+            if not candidate.cached_profile:
+                counts["no_cached_profile"] += 1
+            candidates.append(candidate)
+            if self.limit and len(candidates) >= self.limit:
+                break
+
+        pending = [c for c in candidates if c.judge_task is not None]
+        if pending:
+            counts["judged"] = self.judge_all(pending)
+
+        proposals = [c.proposal for c in candidates]
+        manifest: dict[str, Any] = {
+            "source": "migrate_legacy_resolutions",
+            "status": "dry_run" if not self.apply else "completed",
+            **counts,
+            "proposals": len(proposals),
+            "overrides_csv": str(self.overrides_csv),
+            "judge": bool(self.judge),
+            "confirm_threshold": self.confirm_threshold,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+            "updated_at": now_iso(),
+        }
+        if not self.apply:
+            if self.judge:
+                per_lo, per_hi = 0.004, 0.02
+                would = counts["eligible"] - counts["no_cached_profile"]
+                manifest["estimated_judge_cost_usd_low"] = round(would * per_lo, 2)
+                manifest["estimated_judge_cost_usd_high"] = round(would * per_hi, 2)
+            return manifest
+        manifest.update(upsert_retargets(self.overrides_csv, proposals))
+        return manifest
+
+    def build_candidate(self, row: LegacyRow, provenance: dict[str, str]) -> Candidate:
+        """Shape one eligible person's pending proposal from its legacy provenance."""
+        confidence = float(provenance.get("confidence") or 0)
+        reasoning = provenance.get("reasoning") or ""
+        email = provenance.get("email") or ""
         proposal: dict[str, Any] = {
-            "old_public_identifier": pub,
-            "new_linkedin_url": url,
-            "linkedin_url": url,
+            "old_public_identifier": row.public_identifier,
+            "new_linkedin_url": row.linkedin_url,
+            "linkedin_url": row.linkedin_url,
             "match_emails": [email] if email else [],
             "match_phones": [],
-            "person_id": pid,
+            "person_id": row.person_id,
             "confidence": confidence,
             "reason": (f"migrated legacy parallel resolution "
                        f"(legacy conf {confidence:.2f}): {reasoning[:200]}").strip().rstrip(":"),
             "source": "legacy-migration",
         }
-        view = cache_profile_view(_read_json(cache_dir / f"{pub}.json"))
-        if not view:
-            counts["no_cached_profile"] += 1
+        view = cache_profile_view(_read_json(self.cache_dir / f"{row.public_identifier}.json"))
+        task: dict[str, Any] | None = None
         # Judging is APPLY-only: a dry run must stay $0 (it reports the would-judge
         # count + cost estimate instead of calling the provider).
-        if args.judge and view and args.apply:
-            dossier = dossier_view([pid], facts_dir, raw_dir)
-            proposal["_judge_task"] = research_proposal_task(
-                dossier, view, name=(row.get("full_name") or "").strip(),
+        if self.judge and view and self.apply:
+            dossier = dossier_view([row.person_id], self.facts_dir, self.raw_dir)
+            task = research_proposal_task(
+                dossier, view, name=row.full_name,
                 match_emails=proposal["match_emails"], confidence=confidence,
                 unverified=True)  # legacy links skipped verification by construction
-            proposal["judge_fingerprint"] = proposal_fingerprint(pub, url, dossier, view)
-        proposals.append(proposal)
-        if args.limit and len(proposals) >= args.limit:
-            break
+            proposal["judge_fingerprint"] = proposal_fingerprint(
+                row.public_identifier, row.linkedin_url, dossier, view)
+        return Candidate(proposal=proposal, judge_task=task, cached_profile=bool(view))
 
-    pending = [p for p in proposals if "_judge_task" in p]
-    if pending and args.apply:
-        # Bounded fan-out, mirroring propose_retargets_from_output: each judge call is a
-        # self-contained sync wrapper, so a thread pool keeps its retry/timeout semantics.
+    def judge_one(self, task: dict[str, Any]) -> dict[str, str]:
+        """Judge one proposal and RETURN the llm_reject* fields its verdict implies;
+        the caller stamps them onto the matching proposal."""
+        verdict = judge_research_proposal(
+            task, use_llm=not self.no_llm, model=self.model, effort=self.reasoning_effort,
+            timeout=self.timeout, max_retries=self.max_retries)
+        return research_reject_fields(verdict, self.confirm_threshold)
+
+    def judge_all(self, pending: list[Candidate]) -> int:
+        """Bounded fan-out, mirroring propose_retargets_from_output: each judge call is a
+        self-contained sync wrapper, so a thread pool keeps its retry/timeout semantics."""
+        judged = 0
         with ThreadPoolExecutor(max_workers=min(judge_concurrency(), len(pending))) as pool:
-            futures = {pool.submit(
-                judge_research_proposal, p.pop("_judge_task"), use_llm=not args.no_llm,
-                model=args.model, effort=args.reasoning_effort, timeout=args.timeout,
-                max_retries=args.max_retries): p for p in pending}
+            futures = {pool.submit(self.judge_one, c.judge_task): c.proposal for c in pending}
             for future in as_completed(futures):
-                futures[future].update(research_reject_fields(future.result(), args.confirm_threshold))
-                counts["judged"] += 1
-
-    manifest: dict[str, Any] = {
-        "source": "migrate_legacy_resolutions",
-        "status": "dry_run" if not args.apply else "completed",
-        **counts,
-        "proposals": len(proposals),
-        "overrides_csv": str(overrides_csv),
-        "judge": bool(args.judge),
-        "confirm_threshold": args.confirm_threshold,
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "updated_at": now_iso(),
-    }
-    if not args.apply:
-        if args.judge:
-            per_lo, per_hi = 0.004, 0.02
-            would = counts["eligible"] - counts["no_cached_profile"]
-            manifest["estimated_judge_cost_usd_low"] = round(would * per_lo, 2)
-            manifest["estimated_judge_cost_usd_high"] = round(would * per_hi, 2)
-        return manifest
-    manifest.update(upsert_retargets(overrides_csv, proposals))
-    manifest["status"] = "completed"
-    return manifest
+                futures[future].update(future.result())
+                judged += 1
+        return judged
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -290,7 +413,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     ensure_no_review_session("migrate_legacy_resolutions")
-    emit(run(build_parser().parse_args(argv)))
+    args = build_parser().parse_args(argv)
+    emit(MigrateLegacyResolutions(
+        gmail_people=Path(args.gmail_people),
+        merged_people=Path(args.merged_people),
+        directory_csv=Path(args.directory_csv),
+        overrides=Path(args.overrides),
+        facts_dir=Path(args.facts_dir),
+        raw_dir=Path(args.raw_dir),
+        cache_dir=Path(args.cache_dir),
+        confirm_threshold=args.confirm_threshold,
+        limit=args.limit,
+        apply=args.apply,
+        judge=args.judge,
+        no_llm=args.no_llm,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+    ).run())
     return 0
 
 

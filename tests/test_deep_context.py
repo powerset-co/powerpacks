@@ -19,6 +19,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.schemas.people_schema import (
+    generate_person_id,
+    legacy_message_linkedin_id,
+)
+from packs.ingestion.primitives.common.legacy import (
+    migrate_parent_slug_artifacts,
+    parent_slug_migrations,
+)
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context import (
     build_parents as parents,
@@ -857,7 +865,7 @@ class TestParents(unittest.TestCase):
     def test_parent_slug_migration_rewrites_artifacts_once(self):
         old_slug = "jordan-bravo-parent12"
         new_slug = "jordan-bravo-12345678"
-        mapping = parents.parent_slug_migrations(
+        mapping = parent_slug_migrations(
             {old_slug: {"parent_id": "parent-1234567890ab"}},
             {new_slug: {"parent_id": "parent-1234567890ab"}},
         )
@@ -898,7 +906,7 @@ class TestParents(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            stats = parents.migrate_parent_slug_artifacts(
+            stats = migrate_parent_slug_artifacts(
                 mapping,
                 deep_research_dir=research,
                 verdicts_jsonl=verdicts_jsonl,
@@ -917,7 +925,7 @@ class TestParents(unittest.TestCase):
             self.assertNotIn(old_slug, applied_csv.read_text(encoding="utf-8"))
             self.assertNotIn(old_slug, synthetic_csv.read_text(encoding="utf-8"))
 
-            rerun = parents.migrate_parent_slug_artifacts(
+            rerun = migrate_parent_slug_artifacts(
                 mapping,
                 deep_research_dir=research,
                 verdicts_jsonl=verdicts_jsonl,
@@ -2804,7 +2812,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                         "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
                         "match_emails": ["eugene6605@example.com"], "match_phones": [],
                         "verdict": _verdict("needs_review", 0.4)}
-        reconcile.revert_unconfirmed_name_matches([needs_review], 0.7, {}, Path("/nonexistent"))
+        reconcile.revert_unconfirmed_name_matches([needs_review], 0.7)
         self.assertTrue(needs_review["no_link"])                      # still reverts (invariant kept)
         self.assertEqual(needs_review["candidate_key"], "")
         rv = needs_review["name_match_review"]
@@ -2818,7 +2826,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                     "person_ids": ["msg-eugene"], "no_link": False, "name_matched": True,
                     "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
                     "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
-            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            reconcile.revert_unconfirmed_name_matches([task], 0.7)
             stats = reconcile.upsert_name_match_reviews(ov, [task])
             self.assertEqual(stats["name_match_reviews"], 1)
             rows = _rows_by_pub(ov)
@@ -2841,7 +2849,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                     "person_ids": ["msg-eugene"], "no_link": False, "name_matched": True,
                     "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
                     "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
-            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            reconcile.revert_unconfirmed_name_matches([task], 0.7)
             stats = reconcile.upsert_name_match_reviews(ov, [task])
             self.assertEqual(stats["preserved_user_rows"], 1)
             with ov.open(newline="", encoding="utf-8") as _fh:
@@ -2854,7 +2862,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                      "person_ids": ["msg-c"], "no_link": False, "name_matched": True,
                      "linkedin": {"linkedin_url": "https://www.linkedin.com/in/confirmedp"},
                      "match_emails": [], "match_phones": [], "verdict": _verdict("confirmed", 0.9)}
-        reconcile.revert_unconfirmed_name_matches([confirmed], 0.7, {}, Path("/nonexistent"))
+        reconcile.revert_unconfirmed_name_matches([confirmed], 0.7)
         self.assertNotIn("name_match_review", confirmed)              # confirmed stays an identity row
         with tempfile.TemporaryDirectory() as d:
             ov = Path(d) / "review.csv"
@@ -2876,7 +2884,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                     "person_ids": [pid], "no_link": False, "name_matched": True,
                     "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
                     "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
-            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            reconcile.revert_unconfirmed_name_matches([task], 0.7)
             reconcile.upsert_name_match_reviews(ov, [task])
             rows = _rows_by_pub(ov)
             name_row = rows["eugenewang"]
@@ -2914,7 +2922,7 @@ class TestReviewWeb(unittest.TestCase):
             facts = base / "facts"
             facts.mkdir()
             pub = "jordan-bravo"
-            retired = worth_view.legacy_message_linkedin_id(pub)
+            retired = legacy_message_linkedin_id(pub)
             phone_id = "candidate:phone:+15550100"
             for pid, decision in ((retired, "yes"), (phone_id, "maybe")):
                 (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
@@ -2953,8 +2961,8 @@ class TestReviewWeb(unittest.TestCase):
             facts = base / "facts"
             facts.mkdir()
             pub = "casey-delta"
-            retired = worth_view.legacy_message_linkedin_id(pub)
-            durable = worth_view.generate_person_id(pub)
+            retired = legacy_message_linkedin_id(pub)
+            durable = generate_person_id(pub)
             for pid in (retired, durable):
                 (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
                     "canonical_name": "Casey Delta",
@@ -4564,8 +4572,7 @@ class TestNameMatchAttach(unittest.TestCase):
                         "person_ids": ["candidate:email:b@x.com"], "no_link": False,
                         "name_matched": True, "linkedin": {"linkedin_url": "y"},
                         "verdict": _verdict("needs_review", 0.4)}
-        reverted = reconcile.revert_unconfirmed_name_matches(
-            [confirmed, needs_review], 0.7, {}, Path("/nonexistent"))
+        reverted = reconcile.revert_unconfirmed_name_matches([confirmed, needs_review], 0.7)
         self.assertEqual(reverted, 1)
         self.assertFalse(confirmed["no_link"])          # confirmed match stays an identity row
         self.assertTrue(confirmed["name_matched"])
@@ -4639,7 +4646,7 @@ class TestNameMatchAttach(unittest.TestCase):
         stale = {"parent_slug": "a", "name": "A", "candidate_key": "aconn",
                  "person_ids": ["candidate:email:a@x.com"], "no_link": False, "name_matched": True,
                  "linkedin": {"linkedin_url": "x"}, "verdict": _verdict("confirmed", 0.75)}
-        reverted = reconcile.revert_unconfirmed_name_matches([stale], 0.85, {}, Path("/nonexistent"))
+        reverted = reconcile.revert_unconfirmed_name_matches([stale], 0.85)
         self.assertEqual(reverted, 1)
         self.assertTrue(stale["no_link"])
         self.assertEqual(stale["candidate_key"], "")
