@@ -5189,12 +5189,88 @@ class TestDirectoryView(unittest.TestCase):
             payload = json.loads(out.getvalue())
             self.assertEqual(payload["url"], "http://127.0.0.1:43214/directory")
 
+    def test_person_detail_worth_buttons_follow_current_tag(self):
+        # Top-right decision affordance: the button moves the person to the
+        # OTHER pile; undecided people get both directions; no worth key -> none.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            kwargs = {"profile_cache_dir": base / "profiles"}
+            yes = self._parent("amy-alpha", "Amy Alpha")
+            yes["worth_row"] = {"effective": "yes", "key": "parent-worth:amy"}
+            yes["candidates"][0]["worth_key"] = "parent-worth:amy"
+            html = web_rendering.render_person_detail(yes, base / "p", base / "d", **kwargs)
+            self.assertIn("Move to No", html)
+            self.assertNotIn("Move to Yes", html)
+            no = self._parent("zed-zulu", "Zed Zulu")
+            no["worth_row"] = {"effective": "no", "key": "parent-worth:zed"}
+            no["candidates"][0]["worth_key"] = "parent-worth:zed"
+            html = web_rendering.render_person_detail(no, base / "p", base / "d", **kwargs)
+            self.assertIn("Move to Yes", html)
+            self.assertNotIn("Move to No", html)
+            maybe = self._parent("mel-maybe", "Mel Maybe")
+            maybe["worth_row"] = {"effective": "maybe", "key": "parent-worth:mel"}
+            maybe["candidates"][0]["worth_key"] = "parent-worth:mel"
+            html = web_rendering.render_person_detail(maybe, base / "p", base / "d", **kwargs)
+            self.assertIn("Move to Yes", html)
+            self.assertIn("Move to No", html)
+            # _worth_key falls back to person_ids, so a normal parent always
+            # has a decision key; only a truly keyless shell hides the buttons.
+            keyless = {"slug": "kai-keyless", "dossier_slug": "kai-keyless",
+                       "name": "Kai Keyless", "candidates": []}
+            html = web_rendering.render_person_detail(keyless, base / "p", base / "d", **kwargs)
+            self.assertNotIn("data-dir-worth", html)
+
+    def test_person_detail_linkedin_confidence_badge(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            kwargs = {"profile_cache_dir": base / "profiles"}
+            parent = self._parent(
+                "amy-alpha", "Amy Alpha",
+                url="https://www.linkedin.com/in/amy-alpha-test", confidence=0.87)
+            html = web_rendering.render_person_detail(parent, base / "p", base / "d", **kwargs)
+            self.assertIn("LinkedIn Confidence: 87%", html)
+            bare = self._parent("zed-zulu", "Zed Zulu",
+                                url="https://www.linkedin.com/in/zed-zulu-test")
+            html = web_rendering.render_person_detail(bare, base / "p", base / "d", **kwargs)
+            self.assertNotIn("LinkedIn Confidence", html)
+
+    def test_directory_dossier_prefers_the_canonical_parent(self):
+        # A merged person's parent .md IS the consolidated dossier — show it
+        # once instead of concatenating N repeating child dossiers. Pointer-only
+        # parents (and candidates with no parent file) keep the child fallback.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            parents = base / "parents"
+            dossiers = base / "dossiers"
+            parents.mkdir(); dossiers.mkdir()
+            (parents / "jordan-parent.md").write_text(
+                "---\nslug: jordan-parent\n---\n\n# Jordan Bravo (canonical)\n\n"
+                "## Summary\n\nOne consolidated person.\n\n"
+                "## Confirmed children (merged)\n\n- [[jordan-a]] **Jordan Bravo**\n",
+                encoding="utf-8")
+            (dossiers / "jordan-a.md").write_text(
+                "# Jordan Bravo\n\n## Summary\n\nChild copy.\n", encoding="utf-8")
+            markdown = web_rendering.directory_dossier(parents, dossiers, "jordan-parent")
+            self.assertIn("One consolidated person.", markdown)
+            self.assertNotIn("Child copy.", markdown)
+            self.assertNotIn("merged from", markdown)
+            # Pointer-only parent -> child composition fallback.
+            (parents / "solo-parent.md").write_text(
+                "---\nslug: solo-parent\n---\n\n# Solo (canonical)\n\n"
+                "## Confirmed children (merged)\n\n- [[solo-a]]\n"
+                "children: [\"solo-a\"]\n", encoding="utf-8")
+            (dossiers / "solo-a.md").write_text(
+                "# Solo\n\n## Summary\n\nThe child body.\n", encoding="utf-8")
+            markdown = web_rendering.directory_dossier(parents, dossiers, "solo-parent")
+            self.assertIn("The child body.", markdown)
+
     def test_review_js_wires_the_directory_view(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn("setupDirectory", script)
         self.assertIn("/api/person", script)
         self.assertIn("data-directory-list", script)
         self.assertIn("data-directory-tab", script)
+        self.assertIn("data-dir-worth", script)
 
 
 if __name__ == "__main__":

@@ -1311,6 +1311,52 @@ def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
     return entries
 
 
+_PARENT_POINTER_SECTIONS = {"confirmed children (merged)"}
+
+
+def directory_dossier(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
+    """The directory pane's dossier markdown: the PARENT canonical dossier.
+
+    A merged person's parent .md IS the consolidated dossier (summary,
+    relationship, who-they-are, topics, plus the confirmed-children list with
+    judge scores) — showing it once beats concatenating N child dossiers that
+    repeat the same person. A parent whose body carries no real section beyond
+    the children pointer list (singletons) falls back to render_dossier's
+    child composition, as do candidate rows with no parent file at all."""
+    pmd = parents_dir / f"{Path(slug).name}.md"
+    if pmd.exists():
+        body = _strip_frontmatter(pmd.read_text(encoding="utf-8")).strip()
+        sections = re.findall(r"(?m)^##\s+(.+?)\s*$", body)
+        if any(title.strip().lower() not in _PARENT_POINTER_SECTIONS
+               for title in sections):
+            return body
+    return render_dossier(parents_dir, dossier_dir, slug)
+
+
+def _worth_action_buttons(parent: dict[str, Any], slug: str) -> str:
+    """Top-right decision affordance on the person pane: move the person to
+    the OTHER worth pile (both directions for an undecided person). Wired by
+    the directory JS to the same /worth endpoint the review stages use."""
+    key = str(_worth_key(parent) or "").strip()
+    if not key:
+        return ""
+    worth = str(((parent.get("worth_row") or {}).get("effective"))
+                or (parent.get("worth") or {}).get("decision") or "").strip().lower()
+
+    def button(target: str, label: str) -> str:
+        return (f"<button type='button' class='button button-outline' "
+                f"data-dir-worth='{target}' data-pub='{esc(key)}' "
+                f"data-parent='{esc(slug)}'>{label}</button>")
+
+    if worth == "yes":
+        buttons = button("no", "Move to No")
+    elif worth == "no":
+        buttons = button("yes", "Move to Yes")
+    else:
+        buttons = button("yes", "Move to Yes") + button("no", "Move to No")
+    return f"<div class='person-detail-actions'>{buttons}</div>"
+
+
 def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
                          profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
     """The directory's person pane: the review cards' profile header (avatar,
@@ -1326,6 +1372,10 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     url = "" if synthetic else str(candidate.get("url") or "")
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>"
             "View LinkedIn<span aria-hidden='true'>↗</span></a>") if url else ""
+    confidence = float(candidate.get("confidence") or 0.0)
+    if url and confidence > 0:
+        link += (f"<span class='linkedin-confidence'>LinkedIn Confidence: "
+                 f"{round(confidence * 100)}%</span>")
     headline = "" if synthetic else str(candidate.get("headline") or "")
     contacts = _merge_contacts(
         [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
@@ -1339,9 +1389,10 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     rows.extend(profile_fact_rows(candidate))
     facts = (f"<section class='details'><div class='details-body'>"
              f"<dl>{''.join(rows)}</dl></div></section>" if rows else "")
-    dossier = markdown_to_html(render_dossier(parents_dir, dossier_dir, slug))
+    dossier = markdown_to_html(directory_dossier(parents_dir, dossier_dir, slug))
     return f"""
     <article class='person-detail' data-person-slug='{esc(slug)}'>
+      {_worth_action_buttons(parent, slug)}
       <div class='profile-card'>
         {_avatar(parent, candidate)}
         <div class='profile-copy'>

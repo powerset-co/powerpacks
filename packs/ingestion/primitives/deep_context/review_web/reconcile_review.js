@@ -1158,28 +1158,70 @@ function setupDirectory() {
     list.scrollTop = 0;
   }
 
-  async function selectPerson(slug) {
-    if (!slug || slug === activeSlug) return;
+  async function loadPerson(slug, { keepScroll = false } = {}) {
     let response;
     try {
       response = await fetch(`/api/person?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
     } catch {
       announce("Could not load person", true);
-      return;
+      return false;
     }
     if (!response.ok) {
       announce("Could not load person", true);
-      return;
+      return false;
     }
+    const scrollTop = detail.scrollTop;
     detail.innerHTML = await response.text();
     wireDynamicContent(detail);
-    detail.scrollTop = 0;
+    detail.scrollTop = keepScroll ? scrollTop : 0;
+    return true;
+  }
+
+  async function selectPerson(slug) {
+    if (!slug || slug === activeSlug) return;
+    if (!(await loadPerson(slug))) return;
     activeSlug = slug;
     list.querySelectorAll(".directory-item").forEach((item) => {
       item.classList.toggle("active", item.dataset.slug === slug);
     });
     window.history.replaceState(null, "", `/directory?person=${encodeURIComponent(slug)}`);
   }
+
+  function bumpDirectoryTab(worth, delta) {
+    const span = document.querySelector(`[data-directory-tab='${worth}'] span`);
+    if (!span) return;
+    const current = parseInt(span.textContent || "0", 10);
+    if (!Number.isNaN(current)) span.textContent = String(Math.max(0, current + delta));
+  }
+
+  // Move-to-Yes/No on the person pane: the same /worth endpoint the review
+  // stages use; on success the island entry, tab counts, sidebar list, and
+  // the pane's own buttons all update in place.
+  detail.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-dir-worth]");
+    if (!button || button.disabled) return;
+    event.preventDefault();
+    const worth = button.dataset.dirWorth || "";
+    const slug = button.dataset.parent || activeSlug;
+    detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = true; });
+    try {
+      await post("/worth", { pub: button.dataset.pub || "", worth,
+                             parent_slug: slug });
+    } catch (error) {
+      detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = false; });
+      announce(error.message, true);
+      return;
+    }
+    const entry = people.find((item) => item.slug === slug);
+    if (entry) {
+      bumpDirectoryTab(entry.worth || "maybe", -1);
+      entry.worth = worth;
+      bumpDirectoryTab(worth, 1);
+    }
+    refreshList();
+    announce(worth === "yes" ? "Moved to Yes" : "Moved to No");
+    void loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
+  });
 
   list.addEventListener("click", (event) => {
     const item = event.target.closest(".directory-item");

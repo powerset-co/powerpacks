@@ -1234,6 +1234,31 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 
 .directory-empty { padding-top: 80px; }
 
+/* Person-pane decision affordance (top right) + LinkedIn confidence pill. */
+.person-detail { position: relative; }
+
+.person-detail-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: 8px;
+}
+
+.person-detail-actions .button { min-height: 36px; padding: 0 14px; font-size: 13px; }
+
+.linkedin-confidence {
+  display: inline-block;
+  margin: 12px 0 0 10px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: bottom;
+}
+
 .directory-dossier {
   margin-top: 10px;
   color: var(--foreground);
