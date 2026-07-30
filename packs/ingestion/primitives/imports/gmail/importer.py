@@ -287,7 +287,7 @@ class GmailImport(Node):
                 # per-slug apply payloads carry WRITTEN file paths (applied_csv,
                 # resolved people.csv) that the no-op gate must keep watching —
                 # dropping them made a deleted applied CSV look "up to date".
-                rendered["gmail_apply_enrich_by_slug"] = {
+                rendered["gmail_apply_by_slug"] = {
                     result["slug"]: result for result in outcome.results
                 }
             if outcome.combined:

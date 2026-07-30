@@ -117,12 +117,10 @@ def run_gmail_apply(
         merge = materialize_gmail_merged_people_csv(people_csvs, GMAIL_MERGED_PEOPLE_CSV)
         if merge.get("status") == "completed" and merge.get("people_csv"):
             imp.gmail_people_csv = Path(str(merge["people_csv"]))
-        imp._mark_step("gmail_apply_enrich", "skipped", reason="no gmail resolutions")
+        imp._mark_step("gmail_apply", "skipped", reason="no gmail resolutions")
         return ApplyOutcome(ok=True, merge=merge)
     combined = sorted(combined, key=_record_sort_key)
-    # Step id keeps the historical "gmail_apply_enrich" spelling: it is emitted
-    # into manifests, and renaming it would churn every install's no-op gate.
-    imp._begin_step("gmail_apply_enrich", f"Applying Gmail LinkedIn matches for {len(combined)} account file(s).")
+    imp._begin_step("gmail_apply", f"Applying Gmail LinkedIn matches for {len(combined)} account file(s).")
     results: list[dict[str, Any]] = []
     final_people_csvs: list[str] = []
     for record in combined:
@@ -140,8 +138,8 @@ def run_gmail_apply(
         except ValueError as exc:
             payload = {"status": "error", "error": str(exc)}
         if payload.get("status") != "completed":
-            imp._mark_step("gmail_apply_enrich", "failed", error=payload)
-            emit({"status": "failed", "step_id": "gmail_apply_enrich", "error": payload})
+            imp._mark_step("gmail_apply", "failed", error=payload)
+            emit({"status": "failed", "step_id": "gmail_apply", "error": payload})
             return ApplyOutcome(ok=False, results=results, combined=combined, error=payload)
         resolved_people = str(payload.get("people_csv") or record.people_csv)
         final_people_csvs.append(resolved_people)
@@ -159,7 +157,7 @@ def run_gmail_apply(
     merge = materialize_gmail_merged_people_csv(final_people_csvs, GMAIL_MERGED_PEOPLE_CSV)
     if merge.get("status") == "completed" and merge.get("people_csv"):
         imp.gmail_people_csv = Path(str(merge["people_csv"]))
-    imp._mark_step("gmail_apply_enrich", "completed", payload={"results": results, "gmail_merged_people": merge})
+    imp._mark_step("gmail_apply", "completed", payload={"results": results, "gmail_merged_people": merge})
     emit_progress("Gmail LinkedIn matches applied and enrichment completed.", GMAIL_IMPORT_PREFIX)
     return ApplyOutcome(
         ok=True,
