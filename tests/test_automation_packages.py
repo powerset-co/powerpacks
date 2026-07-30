@@ -113,18 +113,49 @@ class AutomationPackageTests(unittest.TestCase):
         prompt = automation["prompt"]
 
         self.assertEqual(automation["status"], "ACTIVE")
-        self.assertIn("$import-gmail", prompt)
-        self.assertIn("$import-messages", prompt)
-        self.assertIn("both iMessage and WhatsApp", prompt)
-        self.assertIn("three-year window", prompt)
-        self.assertIn("do not enrich or process", prompt)
-        self.assertIn("Never call paid providers", prompt)
+        self.assertIn("$import-gmail sync", prompt)
+        self.assertIn("$import-messages sync", prompt)
+        self.assertIn("skips anything needing human setup", prompt)
+        self.assertIn("Do not run\nDeep Context", prompt)
         self.assertIn("status.py status", prompt)
         self.assertIn("--output", prompt)
         self.assertIn(
             ".powerpacks/automations/refresh-message-sources/latest.json",
             prompt,
         )
+
+    def test_import_skills_define_unattended_sync_contracts(self) -> None:
+        gmail_skill = (
+            REPO_ROOT
+            / "packs"
+            / "ingestion"
+            / "skills"
+            / "import-gmail"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        messages_skill = (
+            REPO_ROOT
+            / "packs"
+            / "ingestion"
+            / "skills"
+            / "import-messages"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "Unattended sync mode — `$import-gmail sync`",
+            gmail_skill,
+        )
+        self.assertIn("every stored account automatically", gmail_skill)
+        self.assertIn("gmail: skipped_unconfigured", gmail_skill)
+        self.assertIn("gmail: skipped_needs_user_action", gmail_skill)
+        self.assertIn(
+            "Unattended sync mode — `$import-messages sync`",
+            messages_skill,
+        )
+        self.assertIn("messages: skipped_unconfigured", messages_skill)
+        self.assertIn("messages: skipped_needs_user_action", messages_skill)
+        self.assertIn("rerun it with `--confirm-import`", messages_skill)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,14 @@
 ---
 name: import-messages
-description: Add iMessage/WhatsApp contacts to your local network. Use for $import-messages. Sets up access (Full Disk Access + WhatsApp QR), syncs message contacts down, matches them against already-imported LinkedIn/Gmail people (free), and imports matched people plus a research-candidates pool. No LLM calls, no paid research, no index build — identity resolution and indexing happen later in $deep-context. Never uploads to a Powerset set.
+description: Add iMessage/WhatsApp contacts to your local network. Use for $import-messages or the unattended $import-messages sync mode. Standard mode sets up Full Disk Access/WhatsApp; sync mode refreshes only already-configured channels with no setup prompts. Matching and import stay free and local, with no LLM, paid research, index build, or upload.
 ---
 
 <!--
 Created: 2026-06-20
 Changelog:
+- 2026-07-30: Added `$import-messages sync`, an unattended mode that refreshes
+  only already-configured iMessage/WhatsApp channels. It never opens settings,
+  authenticates, or re-links; unavailable channels are skipped and reported.
 - 2026-07-23: Removed user-facing WhatsApp sync modes. `$import-messages` now
   chooses account sync from the local store, then automatically deepens recent
   shallow DMs: bootstrap all eligible chats once, then target only chats changed
@@ -48,10 +51,70 @@ Messages merges on top of whatever is already imported.
 For the pipeline walkthrough and privacy map, see
 [`message-import-pipeline.md`](../../docs/message-import-pipeline.md).
 
-It runs a **fixed checklist and always reruns it end to end**, idempotent against
-fixed paths.
+Standard `$import-messages` runs a **fixed checklist and always reruns it end to
+end**. `$import-messages sync` uses the shorter unattended contract below. Both
+are idempotent against fixed paths.
+
+## Unattended sync mode — `$import-messages sync`
+
+Use this mode only when the invocation explicitly includes **`sync`**. It is the
+scheduled refresh path for channels that have already been onboarded. Do not run
+the standard seven-step setup checklist and do not ask the user any questions.
+
+Create and execute this five-step checklist:
+
+```
+0. Inspect existing Messages configuration
+1. Discover configured message contacts
+2. Match contacts locally
+3. Import contacts
+4. Merge sources and report status
+```
+
+The sync contract is:
+
+1. Run the Repo root resolution and Step 0 prerequisite commands below.
+2. Check iMessage with:
+
+   ```bash
+   cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover/messages/extract_imessage.py check
+   ```
+
+   Include iMessage only when the check already succeeds. Never open System
+   Settings or change Full Disk Access.
+3. Check WhatsApp with:
+
+   ```bash
+   cd "$REPO" && uv run --project . python packs/ingestion/primitives/discover/messages/whatsapp_wacli.py status
+   ```
+
+   Include WhatsApp only when the pinned helper is already installed, the
+   session is authenticated, and its local store is ready. Never install the
+   helper, show a QR, authenticate, log out, or re-link in sync mode.
+4. If neither channel is ready, report `messages: skipped_unconfigured` and end
+   this skill successfully so a scheduled caller can continue.
+5. Run Step 2's discovery once with flags for every ready channel, then Steps 3,
+   4, and 5. The explicit `sync` invocation is standing approval for Step 4's
+   deterministic metadata-only import: if it returns the import-confirmation
+   gate, rerun it with `--confirm-import` without asking.
+6. If discovery unexpectedly returns a Full Disk Access, QR/authentication, or
+   unsupported-platform user-action block, report
+   `messages: skipped_needs_user_action`, preserve the last completed Messages
+   import, and do not proceed to matching/import for that run.
+7. A `pre_full_sync` WhatsApp pairing remains usable. Continue with its current
+   incremental data, report `optional_relink_skipped`, and never offer or
+   initiate the optional deeper-history re-link.
+8. Finish with Step 6's `status.py status` command for counts, but do not suggest
+   another source or ask whether to process contacts.
+
+This mode never enters onboarding and never runs Deep Context, an LLM, a paid
+provider, an index build, or an upload. A skipped channel/source is not a failed
+scheduled run: preserve its last completed import and return the reason for the
+run report.
 
 ## How to run this skill
+
+The remainder of this skill defines standard interactive `$import-messages`.
 
 **FIRST, create a literal, visible checklist with all seven steps below and step
 through it, marking each complete as you go.** Mandatory (TaskCreate / update_plan
