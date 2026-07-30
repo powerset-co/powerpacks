@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.4.0...powerpacks-v1.5.0) (2026-07-30)
+
+
+### Features
+
+* **deep-context:** always open review directory ([c06c9a5](https://github.com/powerset-co/powerpacks/commit/c06c9a54cdcfc686f67c84281799b9dc6223c73c))
+
 ## [1.4.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.3.1...powerpacks-v1.4.0) (2026-07-30)
 
 
