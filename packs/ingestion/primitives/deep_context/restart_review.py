@@ -172,8 +172,10 @@ def main() -> int:
             args.synthetic_people, apply=True)
         payload["manifest"] = reset_review_manifest(args.manifest, apply=True)
         payload["status"] = "applied"
-        payload["next"] = ("rerun `bin/deep-context review --fresh` — the queue "
-                           "re-opens with the machine verdicts intact")
+        payload["next"] = (
+            "rerun `bin/deep-context review --stage worth --fresh` — the queue "
+            "re-opens with the machine verdicts intact"
+        )
     else:
         payload["synthetic"] = clear_synthetic_approvals(
             args.synthetic_people, apply=False)

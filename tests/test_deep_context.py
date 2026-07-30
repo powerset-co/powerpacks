@@ -5059,10 +5059,9 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>0</span>", html)
         self.assertIn("data-directory-tab='no'>No<span>0</span>", html)
 
-    def test_view_serve_stage_directory_lands_on_directory_and_writes_nothing(self):
-        # `bin/deep-context view` = serve --stage directory: the read-only
-        # browse landing. It must open /directory and never begin a
-        # people-review revision (no review manifest write).
+    def test_serve_stage_directory_lands_on_directory_and_writes_nothing(self):
+        # The explicit read-only browse landing opens /directory and never
+        # begins a people-review revision (no review manifest write).
         from packs.ingestion.primitives.deep_context.review_web import cli as web_cli
         parsed = web_cli.build_parser().parse_args(["serve", "--stage", "directory"])
         self.assertEqual(parsed.stage, "directory")
@@ -5098,7 +5097,7 @@ class TestDirectoryView(unittest.TestCase):
     def test_serve_reuses_live_server_without_touching_the_session_lock(self):
         # The live server HOLDS the session flock; the reuse path must never
         # try to take it (locking first refused the very server being reused —
-        # `view` and the enrichment-running review deferral both hit this).
+        # directory browsing and the enrichment-running review deferral hit this).
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
             manifest = base / "review" / "manifest.json"
@@ -5149,35 +5148,28 @@ class TestDirectoryView(unittest.TestCase):
             open=False, confirm_threshold=0.7, detach_threshold=0.85,
         )
 
-    def test_review_lands_on_directory_once_the_flow_is_complete(self):
-        # One door: with no explicit --stage, `review` derives the landing from
-        # the workflow status — mid-flow the current stage, done -> /directory.
-        for next_action, expected in (
-                ("realize", "http://127.0.0.1:43213/directory"),
-                ("review_people", "http://127.0.0.1:43213/?stage=worth")):
-            with tempfile.TemporaryDirectory() as dd:
-                base = Path(dd)
-                args = self._serve_args(base, base / "review" / "manifest.json",
-                                        43213, None)
-                fake_server = mock.Mock(server_address=("127.0.0.1", 43213))
-                out = io.StringIO()
-                with mock.patch.object(
-                        web_server.urllib.request, "urlopen",
-                        side_effect=web_server.urllib.error.URLError("down")), \
-                     mock.patch.object(web_server, "_all_review_parents",
-                                       return_value=[]), \
-                     mock.patch.object(web_server, "workflow_status_from_parents",
-                                       return_value={"next_action": next_action}), \
-                     mock.patch.object(web_server, "ThreadingHTTPServer",
-                                       return_value=fake_server), \
-                     contextlib.redirect_stdout(out):
-                    web_server.cmd_serve(args)
-                payload = json.loads(out.getvalue())
-                self.assertEqual(payload["url"], expected, next_action)
+    def test_review_always_lands_on_directory(self):
+        # Bare `review` is browse-only regardless of the workflow's current stage.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            args = self._serve_args(base, base / "review" / "manifest.json",
+                                    43213, None)
+            fake_server = mock.Mock(server_address=("127.0.0.1", 43213))
+            out = io.StringIO()
+            with mock.patch.object(
+                    web_server.urllib.request, "urlopen",
+                    side_effect=web_server.urllib.error.URLError("down")), \
+                 mock.patch.object(web_server, "_all_review_parents",
+                                   return_value=[]), \
+                 mock.patch.object(web_server, "ThreadingHTTPServer",
+                                   return_value=fake_server), \
+                 contextlib.redirect_stdout(out):
+                web_server.cmd_serve(args)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["url"], "http://127.0.0.1:43213/directory")
 
-    def test_reused_server_landing_follows_live_stage(self):
-        # Reuse with no explicit --stage: the live server's reported stage
-        # decides the landing, and its done state means the directory.
+    def test_reused_server_bare_review_lands_on_directory(self):
+        # A live staged server does not change bare `review` browse behavior.
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
             manifest = base / "review" / "manifest.json"
@@ -5185,7 +5177,7 @@ class TestDirectoryView(unittest.TestCase):
             live = mock.Mock()
             live.read.return_value = json.dumps({
                 "primitive": "reconcile_review_web", "manifest": str(manifest),
-                "stage": "done",
+                "stage": "linkedin",
             }).encode("utf-8")
             live.__enter__ = mock.Mock(return_value=live)
             live.__exit__ = mock.Mock(return_value=False)
