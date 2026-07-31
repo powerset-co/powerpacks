@@ -7,7 +7,9 @@ function announce(message, isError = false) {
   toast.classList.toggle("error", isError);
   toast.classList.add("show");
   window.clearTimeout(announce.timer);
-  announce.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+  // Errors stay long enough to actually read (auth hints, network failures).
+  announce.timer = window.setTimeout(
+    () => toast.classList.remove("show"), isError ? 6000 : 1800);
 }
 
 function lock(button) {
@@ -26,7 +28,18 @@ async function post(path, values) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
   });
-  if (!response.ok) throw new Error((await response.text()) || "Could not save");
+  if (!response.ok) {
+    // Error bodies may be JSON payloads ({status, error}) — surface the human
+    // message ("not signed in to Powerset; run $powerset login first"), never
+    // the raw JSON blob.
+    const text = (await response.text()) || "Could not save";
+    let message = text;
+    try {
+      const payload = JSON.parse(text);
+      message = payload.error || payload.status || text;
+    } catch { /* plain-text error body */ }
+    throw new Error(message);
+  }
   return response.json();
 }
 
