@@ -21,6 +21,13 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-07-31 (professional worth v3): `network_worth` is an evidence bar, not a
+    warmth bar — yes requires ANY work-related signal in the messages (job,
+    employer, studies, projects, hiring, investing, collaboration); a real but
+    purely personal relationship with zero work-related prose is no, and a
+    transact-only service provider stays no even with a visible occupation.
+    Intentional semantic change: SYNTHESIS_CONTRACT_VERSION bumps and every
+    dossier resynthesizes on the next run. Human network_worth stays sticky.
   2026-07-30 (contact-info identifiers v2): `identifiers` is redefined as contact
     info to reach the person — their own emails and phone numbers only; URLs,
     handles, third-party and mailbox-owner endpoints are explicitly excluded
@@ -109,7 +116,7 @@ DEFAULT_SATURATION_ROUNDS = 2      # ...or after this many batches add nothing n
 DEFAULT_MAX_BATCHES = 20           # ...or this many batches (~1600 msgs) — hard ceiling
 DEFAULT_MAX_RETRIES = 6
 DEFAULT_CHUNK_PEOPLE = 200         # people loaded into memory at once (streaming bound)
-SYNTHESIS_CONTRACT_VERSION = "contact-info-identifiers-v2"
+SYNTHESIS_CONTRACT_VERSION = "professional-worth-v3"
 # Calibrated from real runs: ~10 chunks/s wall at high concurrency (ranged 6.7
 # on flex tier to 11.7 on default tier). Used only for the --dry-run ETA; actual
 # rate scales with --concurrency and your OpenAI usage tier.
@@ -139,27 +146,32 @@ SYSTEM_PROMPT = (
     "third-party, or merely-mentioned items are NEVER owned by the CONTACT. Do not treat "
     "the supplied Known phones as message evidence; those are already source-record "
     "identifiers.\n\n"
-    "Also decide `network_worth`: is this contact worth adding to (or keeping in) my "
+    "Also decide `network_worth`: is this contact worth keeping in my PROFESSIONAL "
     "network? Use only the message dossier and the contact identifiers supplied with it. "
-    "Never use or infer a LinkedIn profile. This is primarily a human-vs-noise filter, "
-    "not a prestige contest.\n"
-    "- yes: a real person I genuinely know or correspond with — family/relatives, friends, classmates, "
-    "professors/teachers/mentors, alumni or school contacts, colleagues, collaborators, "
-    "warm introductions, founders, investors, operators, researchers, or any meaningful "
-    "two-way personal/professional relationship. Old, personal, one-off school, or sparse "
-    "professional context is still yes when the human relationship itself is real.\n"
+    "Never use or infer a LinkedIn profile. The bar is EVIDENCE OF PROFESSIONAL CAPACITY "
+    "in the messages, not relationship warmth.\n"
+    "- yes: a real two-way relationship AND the messages carry ANY work-related signal "
+    "about them — their job, employer, title, industry, projects, startup, "
+    "studies/field, hiring, investing, professional asks or introductions, or "
+    "working/collaborating together. One credible signal is enough; colleagues, "
+    "collaborators, founders, investors, operators, researchers, professors, and "
+    "classmates with visible school/career context all belong here. A personal contact "
+    "(partner, family member, friend) is yes ONLY on the same evidence.\n"
     "- no: clearly automated/broadcast mail, newsletters, receipts/notifications, mass "
     "marketing, cold sales/recruiting/SEO/agency outreach I did not meaningfully engage "
-    "with, spam, or a purely transactional support/vendor/service exchange with no durable "
-    "human relationship.\n"
-    "- maybe: use only when the evidence is genuinely balanced or incomplete about whether "
-    "there is a real relationship versus noise. Maybe is exceptional, not a catch-all. "
-    "Never use maybe merely because their job, seniority, or professional value is unknown, "
-    "or because the relationship is personal, old, academic, or social. Choose yes or no "
-    "whenever the messages support either conclusion. A recognizable or notable name, or "
-    "a plausible phone area code, may be a weak positive prior when the message evidence "
-    "is sparse, but never invent an identity or biographical fact from either.\n"
-    "Give a terse concrete reason."
+    "with, spam, or a purely transactional support/vendor/service exchange (a service "
+    "provider I only book and pay stays no even though their occupation is visible). "
+    "ALSO no: any real personal relationship whose messages contain ZERO work-related "
+    "prose — pure social, family, dating, or logistics threads. Warmth without "
+    "professional evidence is no.\n"
+    "- maybe: use only when the evidence is genuinely balanced or incomplete — a thin "
+    "work-related hint you cannot confirm, or messages too sparse to tell noise from a "
+    "real professional tie. Maybe is exceptional, not a catch-all. Never use maybe "
+    "merely because their seniority or professional value is unknown. A recognizable or "
+    "notable name, or a plausible phone area code, may be a weak positive prior when "
+    "the message evidence is sparse, but never invent an identity or biographical fact "
+    "from either.\n"
+    "Give a terse concrete reason citing the work-related evidence or its absence."
 )
 
 # Appended when an owner.json bio is present: lets the model infer era/school/
