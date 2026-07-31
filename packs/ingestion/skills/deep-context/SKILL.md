@@ -149,6 +149,11 @@ bin/deep-context collect --deep-cap 1600 --include-groups [--force]
 ```
 
 Collection is local/free. Preserve the exact approved flags through synthesis.
+Normal collection rechecks each bounded local bundle and compares a stable
+evidence fingerprint. Unchanged people are reused; newly synced, backfilled,
+edited, or removed messages refresh only the affected bundles. If a source used
+by an existing bundle is temporarily unavailable, retain that bundle instead of
+silently replacing it with partial evidence.
 
 ### 3. Dossiers
 
@@ -170,8 +175,13 @@ initial `network_worth` recommendation and reason in each
 `review.csv.llm_worth` / `llm_worth_reason`. After canonicalization, `parents`
 aggregates child verdicts in priority order (`Yes > Maybe > No`) into one
 parent-keyed worth row in the same `review.csv`. Human review writes only that
-row's authoritative `network_worth`. Normal repeated synthesis rejudges only
-missing/Maybe machine verdicts; machine Yes/No and human Yes/No are stable.
+row's authoritative `network_worth`. Normal repeated synthesis processes
+missing/Maybe machine verdicts plus every bundle whose evidence fingerprint
+changed. A changed bundle is fully re-synthesized and its dossier is overwritten
+as one clean current snapshot; this avoids duplicated or unretractable facts from
+literal message-delta appends. Machine Yes/No remains cached only while evidence
+is unchanged. Human Yes/No always remains sticky, although the adjacent machine
+opinion refreshes when that person's evidence changes.
 
 Worth uses message context and contact identifiers only — never LinkedIn:
 

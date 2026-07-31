@@ -21,6 +21,12 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-07-30 (evidence refresh): each facts record stores the
+    `input_evidence_fingerprint` it was built from, and selection re-synthesizes a
+    person whose raw bundle no longer hashes to it — a changed bundle is rebuilt
+    whole, so corrected or deleted evidence cannot leave stale facts behind. The
+    machine worth of those refreshed people is mirrored beside a sticky human
+    decision (`include_human_person_ids`); everyone else keeps today's caching.
   2026-07-30 (house style): `_plan()` returns the frozen `SynthesisPlan` instead of
     a 3-tuple, and the run's numbers accumulate in `SynthesisTally` instead of a
     `counter`/`stop_reasons`/`usage_total` trio of string-keyed dicts. `execute()`
@@ -72,6 +78,7 @@ from packs.indexing.lib.openai_responses import (
     usage_tokens,
 )
 from packs.ingestion.primitives.deep_context.common import (
+    bundle_evidence_fingerprint,
     emit,
     ensure_no_review_session,
     FACTS_DIR,
@@ -442,6 +449,7 @@ async def synthesize_person(
     return {
         "person_id": person.get("person_id"),
         "facts": profile,
+        "input_evidence_fingerprint": bundle_evidence_fingerprint(person),
         "usage": usage_total,
         "batches_used": batches_used,
         "batches_total": len(batches),
@@ -494,16 +502,20 @@ def pending_target_paths(
     rejudge: bool = False,
     review_rows: dict[str, dict[str, str]] | None = None,
 ) -> list[Path]:
-    """Bundle paths needing synthesis — WITHOUT loading message bodies into memory.
+    """Bundle paths needing synthesis — holding at most ONE bundle at a time.
 
-    Streaming relies on this: we hold only the path list (cheap), then load bundle
-    bodies one chunk at a time. The 'has messages' check is deferred to load time.
+    Streaming relies on this: the result is only the path list (cheap), and the
+    paid pass then loads bundle bodies one chunk at a time. Selection reads each
+    bundle once to hash its evidence and releases it immediately, so peak RSS is
+    one person, not the network. The 'has messages' check stays deferred to load
+    time.
 
-    Normal runs are monotonic: keep terminal machine Yes/No and human Yes/No,
-    while retrying missing/Maybe verdicts. A facts record from an earlier
-    synthesis contract is stale even with a terminal worth decision, so a
-    contract bump automatically rebuilds it. ``rejudge`` deliberately ignores
-    both caches; the review writer still preserves the human-owned column."""
+    Normal runs are monotonic only while their evidence is unchanged: keep
+    terminal machine Yes/No and human Yes/No, while retrying missing/Maybe
+    verdicts. A raw bundle that no longer hashes to the fingerprint its facts
+    were built from always re-synthesizes, as does a facts record from an earlier
+    synthesis contract. ``rejudge`` deliberately ignores every cache; the review
+    writer still preserves the human-owned column."""
     paths: list[Path] = []
     rows = review_rows or {}
     parent_ids = parent_ids_by_person(facts_dir.parent / "index.json")
@@ -514,8 +526,12 @@ def pending_target_paths(
         if person_id and pid != person_id:
             continue
         if not force and not rejudge:
-            facts_path = facts_dir / f"{pid}.jsonl"
-            if _facts_version(facts_path) != SYNTHESIS_VERSION:
+            cached = _facts_tail(facts_dir / f"{pid}.jsonl")
+            if str(cached.get("synthesis_version") or "") != SYNTHESIS_VERSION:
+                paths.append(path)
+                continue
+            synthesized_from = str(cached.get("input_evidence_fingerprint") or "")
+            if synthesized_from != bundle_evidence_fingerprint(_load_bundle(path)):
                 paths.append(path)
                 continue
             if has_human_worth(rows, pid, parent_ids):
@@ -527,13 +543,16 @@ def pending_target_paths(
     return paths
 
 
-def _facts_version(path: Path) -> str:
-    """Version stamped on the latest fixed-path facts artifact, if readable."""
+def _facts_tail(path: Path) -> dict[str, Any]:
+    """The latest record of a fixed-path facts artifact ({} when unreadable).
+
+    One parse serves both cache checks (the synthesis contract version and the
+    evidence fingerprint the record was built from)."""
     try:
         records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     except (OSError, json.JSONDecodeError):
-        return ""
-    return str(records[-1].get("synthesis_version") or "") if records else ""
+        return {}
+    return records[-1] if records and isinstance(records[-1], dict) else {}
 
 
 def _load_bundle(path: Path) -> dict[str, Any]:
@@ -830,6 +849,7 @@ class SynthesizePersonContext(Node):
                     "chunk_index": 0,
                     "synthesis_version": SYNTHESIS_VERSION,
                     "facts": result["facts"],
+                    "input_evidence_fingerprint": result["input_evidence_fingerprint"],
                     "usage": result["usage"],
                     "batches_used": result["batches_used"],
                     "batches_total": result["batches_total"],
@@ -870,11 +890,14 @@ class SynthesizePersonContext(Node):
 
         # ---- MIRROR the machine worth onto review.csv, then report. ----------
         # Runs on every path, including the no-work one: facts written by an
-        # earlier interrupted run still need their worth column mirrored.
+        # earlier interrupted run still need their worth column mirrored. People
+        # re-synthesized in THIS run (changed evidence) also get their refreshed
+        # machine opinion mirrored beside a sticky human decision.
         worth_sync = mirror_facts_worth(
             self.review_csv,
             self.facts_dir,
             include_human_rows=bool(self.rejudge),
+            include_human_person_ids={path.stem for path in plan.paths},
         )
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
