@@ -32,6 +32,7 @@ from packs.ingestion.primitives.deep_context.common import (
     VERDICTS_JSONL,
     contact_identifiers,
     load_owner,
+    phone_digits,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     linkedin_view,
@@ -332,13 +333,23 @@ def _machine_copy(parent: dict[str, Any]) -> tuple[str, str]:
 
 def _merge_contacts(contacts: list[str], identifiers: list[str]) -> list[str]:
     """Contact values plus the dossier's Identifiers, deduped case-insensitively
-    against what is already shown (bubbling the dossier's aliases up into Contact)."""
-    merged = list(contacts)
-    seen = {value.lower() for value in merged}
-    for value in identifiers:
-        if value and value.lower() not in seen:
-            merged.append(value)
-            seen.add(value.lower())
+    against what is already shown (bubbling the dossier's aliases up into
+    Contact). The mailbox owner's own endpoints never render as a CONTACT's
+    reachability, whichever source carried them in — group-chat channel
+    metadata can attribute the owner's own iMessage number to a contact."""
+    owner_emails, owner_phones = _owner_contact()
+    owner_keys = {str(e or "").strip().lower() for e in owner_emails} - {""}
+    owner_digits = {phone_digits(str(p)) for p in owner_phones} - {""}
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in [*contacts, *identifiers]:
+        low = str(value or "").strip().lower()
+        if not low or low in seen:
+            continue
+        if low in owner_keys or (phone_digits(low) and phone_digits(low) in owner_digits):
+            continue
+        merged.append(value)
+        seen.add(low)
     return merged
 
 

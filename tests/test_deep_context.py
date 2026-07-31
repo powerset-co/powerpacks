@@ -5544,6 +5544,36 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("data-dir-worth", script)
 
 
+class TestOwnerPhoneLeak(unittest.TestCase):
+    """The owner's own iMessage number must never render as a CONTACT's
+    reachability: harvested from the message stores' self-rows into owner.json,
+    then dropped by the shared Contact merge whatever source carried it in."""
+
+    def test_harvest_finds_the_self_row_by_email_local_part(self):
+        from packs.ingestion.primitives.deep_context import build_owner
+        with tempfile.TemporaryDirectory() as d:
+            messages = Path(d) / "messages"
+            messages.mkdir()
+            (messages / "contacts.csv").write_text(
+                "phone,name,source\n"
+                "+15550100,jordanbravo88,imessage\n"      # self-row: email local part
+                "+15550199,Casey Delta,imessage\n",       # a real contact
+                encoding="utf-8")
+            phones = build_owner.harvest_owner_phones(
+                {"name": "Jordan Bravo", "emails": ["jordanbravo88@example.com"]},
+                messages_dir=messages)
+        self.assertEqual(phones, ["+15550100"])
+
+    def test_contact_merge_drops_owner_endpoints_from_any_source(self):
+        with mock.patch.object(web_rendering, "load_owner",
+                               return_value={"emails": ["jordan@example.com"],
+                                             "phones": ["+1 (555) 010-0000"]}):
+            merged = web_rendering._merge_contacts(
+                ["casey@example.com", "555-010-0000", "jordan@example.com"],
+                ["+15550199"])
+        self.assertEqual(merged, ["casey@example.com", "+15550199"])
+
+
 class TestGuidedRetargets(unittest.TestCase):
     """The /directory wrong-person queue: guidance rides into the research row,
     the judge decides, and only a confident confirm auto-approves. All offline —

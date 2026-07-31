@@ -66,6 +66,8 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
+from packs.ingestion.schemas.people_schema import extract_public_identifier
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
 from .feedback import FEEDBACK_ACTIONS, build_feedback_request, post_feedback_quietly, submit_directory_feedback
@@ -307,13 +309,20 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 request, review_path=review_path, people_csv=people_csv,
                 facts_dir=facts_dir, raw_dir=RAW_DIR, use_llm=True,
                 on_progress=report)
-        if result.get("state") == "applied":
+        if result.get("state") == "applied" and result.get("new_url"):
+            # An APPLIED retarget is no longer a pending candidate, so the
+            # prefetch stage would skip it — fetch the new profile directly
+            # (cache-first; same call apply_retargets makes at realize).
             report("hydrating", "fetching the confirmed profile")
             try:
-                PrefetchProfiles(fetch=True).run()
+                new_url = str(result["new_url"])
+                new_pub = extract_public_identifier(new_url).lower()
+                if new_pub:
+                    rapidapi_profile(new_pub, new_url, rapidapi_key(),
+                                     cache_dir=profile_cache_dir)
             except BaseException as exc:
                 result = {**result,
-                          "detail": f"applied; profile prefetch failed: {exc}"}
+                          "detail": f"applied; profile fetch failed: {exc}"}
         refresh_parents_from_disk()
         notify_agent()
         return result

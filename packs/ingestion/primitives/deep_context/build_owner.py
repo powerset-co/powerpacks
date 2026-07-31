@@ -24,6 +24,7 @@ Changelog:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -35,6 +36,8 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_TEMPLATE,
     emit,
     load_env,
+    normalize_name,
+    normalize_phone,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.enrich.profile_cache import (
@@ -71,11 +74,43 @@ def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[s
     return {
         "name": normalized.get("full_name") or "",
         "emails": [email] if email else [],
+        "phones": [],
         "education": [e for e in education if e["school"]],
         "work": [w for w in work if w["company"]],
         "locations": [location] if location else [],
         "notes": normalized.get("headline") or "",
     }
+
+
+def harvest_owner_phones(owner: dict[str, Any],
+                         messages_dir: Path | None = None) -> list[str]:
+    """The owner's OWN phone numbers, from the message stores' self-rows.
+
+    A message-contact row whose name matches the owner's identity (their name,
+    or an email local part like 'thearthurchen') is the owner on their own
+    device — its phone is the owner's, and downstream identifier policy must
+    never render it as a CONTACT's reachability."""
+    messages_dir = messages_dir or Path(".powerpacks/network-import/discover/messages")
+    tokens = {normalize_name(owner.get("name") or "")} - {""}
+    for value in owner.get("emails") or []:
+        local = str(value or "").split("@", 1)[0].strip().lower()
+        if len(local) >= 5:
+            tokens.add(local)
+    if not tokens or not messages_dir.exists():
+        return []
+    phones: list[str] = []
+    for path in sorted(messages_dir.rglob("contacts.csv")):
+        try:
+            with path.open(newline="", encoding="utf-8") as fh:
+                for row in csv.DictReader(fh):
+                    name = normalize_name(row.get("name") or "")
+                    if name and name in tokens:
+                        phone = normalize_phone(row.get("phone") or "")
+                        if phone and phone not in phones:
+                            phones.append(phone)
+        except OSError:
+            continue
+    return phones
 
 
 class BuildOwnerManifest(StageManifest):
@@ -171,6 +206,21 @@ class BuildOwner(Node):
                 )
 
         owner = owner_from_profile(normalized, email=self.email)
+        # Preserve augmentations a rebuild must not lose (msgvault adds emails;
+        # phones may be hand-set), then harvest own phones from the message
+        # stores' self-rows so the identifier policy can drop them everywhere.
+        if self.out.exists():
+            try:
+                previous = json.loads(self.out.read_text(encoding="utf-8")) or {}
+            except (json.JSONDecodeError, OSError):
+                previous = {}
+            for field in ("emails", "phones"):
+                for value in previous.get(field) or []:
+                    if value and value not in owner.setdefault(field, []):
+                        owner[field].append(value)
+        for phone in harvest_owner_phones(owner):
+            if phone not in owner["phones"]:
+                owner["phones"].append(phone)
         self.out.parent.mkdir(parents=True, exist_ok=True)
         self.out.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
         return BuildOwnerManifest(
