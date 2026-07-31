@@ -6,6 +6,13 @@ ephemeral JSON bundle per person. Only people with >= 1 message produce a bundle
 zero-interaction contacts are skipped. A full run removes bundles whose people
 left the current merged input; scoped runs never prune unrelated bundles.
 
+Every run recollects and re-fingerprints each person's bounded evidence: an
+unchanged fingerprint keeps the stored bundle byte-for-byte (a cache hit, so
+synthesis is not re-billed) and a changed one rewrites exactly that bundle. When
+a source an existing bundle was built from is unavailable (chat.db unreadable,
+wacli/msgvault store gone), that bundle is RETAINED rather than replaced with
+partial evidence — including under ``--force``.
+
 Reads message bodies - that deep inspection is the whole point. iMessage and
 WhatsApp read DMs by default. The explicit ``--include-groups`` option also reads
 small iMessage group-chat bodies; WhatsApp groups remain excluded. Bundles live under
@@ -20,6 +27,13 @@ Outputs (fixed dir, overwrite in place):
   <out-dir>/manifest.json      counts/status/privacy
 
 Changelog:
+  2026-07-30 (evidence refresh): every bundle carries an `evidence_fingerprint`
+    and reuse is decided by comparing it, not by the bundle merely existing — so a
+    newly synced, backfilled, edited, or deleted message refreshes exactly that
+    person. WhatsApp totals come from the uncapped `count_whatsapp_dms` so a
+    backfill older than the sampled window still counts. A bundle whose source is
+    unavailable is retained (`people_retained_source_unavailable`), `--force`
+    included, and `wacli_available` reports readability, not mere existence.
   2026-07-27 (declared contract): `CollectPersonContext` is a
     `pipeline/contract.py:Node` named `deep_collect`. It declares merged/people.csv
     plus the three external message stores (msgvault.db, chat.db, wacli.db) as
@@ -51,6 +65,7 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     RAW_MANIFEST,
     Person,
+    bundle_evidence_fingerprint,
     emit,
     load_people,
 )
@@ -94,6 +109,47 @@ def _bundle_matches_policy(
             or policy.get("max_group_size") == max_group_size
         )
     )
+
+
+def _bundle_sources(bundle: dict[str, Any]) -> set[str]:
+    """Which of the three stores an existing bundle's evidence came from."""
+    channels = {
+        str(message.get("channel") or "").strip().lower()
+        for message in bundle.get("messages") or []
+        if isinstance(message, dict)
+    }
+    used: set[str] = set()
+    if "gmail" in channels or bundle.get("thread_participants"):
+        used.add("gmail")
+    if channels & {"imessage", "imessage_group"} or bundle.get("groups"):
+        used.add("imessage")
+    if "whatsapp" in channels:
+        used.add("whatsapp")
+    return used
+
+
+def _unavailable_existing_sources(
+    bundle: dict[str, Any],
+    *,
+    msgvault_available: bool,
+    imessage_available: bool,
+    wacli_available: bool,
+) -> list[str]:
+    """Sources this bundle was built from that this run cannot read.
+
+    Non-empty means recollecting would silently DROP evidence (Full Disk Access
+    revoked, a store not yet synced on this machine), so the stored bundle is
+    kept instead — the one case `--force` does not override."""
+    available = {
+        source
+        for source, ready in (
+            ("gmail", msgvault_available),
+            ("imessage", imessage_available),
+            ("whatsapp", wacli_available),
+        )
+        if ready
+    }
+    return sorted(_bundle_sources(bundle) - available)
 
 
 def _validate_people_csv(path: Path) -> None:
@@ -180,12 +236,15 @@ def collect_one(
     group_chat: list[dict[str, Any]] = []
     true_chat_total = 0
     if person.phones:
-        whatsapp = sources.read_whatsapp(person, wacli_db, cap=deep_cap)
         dm_chat.extend(sources.read_imessage(person, chat_db, cap=deep_cap))
-        dm_chat.extend(whatsapp)
-        # Reuse the WhatsApp pull for the honest total instead of re-querying it.
-        # (len(whatsapp) is post-cap; a count_whatsapp_dms() is a clean follow-up.)
-        true_chat_total = sources.count_imessage_dms(person, chat_db) + len(whatsapp)
+        dm_chat.extend(sources.read_whatsapp(person, wacli_db, cap=deep_cap))
+        # Counts stay uncapped even when the body sample is full. In particular an
+        # older WhatsApp backfill beyond ``deep_cap`` must still move the person's
+        # evidence fingerprint and surface the deeper available total.
+        true_chat_total = (
+            sources.count_imessage_dms(person, chat_db)
+            + sources.count_whatsapp_dms(person, wacli_db)
+        )
         if include_groups:
             group_chat = sources.read_imessage_group_messages(
                 person, chat_db, max_group_size=max_group_size, cap=deep_cap)
@@ -236,6 +295,8 @@ class CollectPersonContextManifest(StageManifest):
     people_total: int = 0
     people_with_context: int = 0
     people_skipped_existing: int = 0
+    people_refreshed_existing: int = 0
+    people_retained_source_unavailable: int = 0
     total_messages_sampled: int = 0
     people_capped: int = 0
     channel_message_counts: dict[str, int] = Field(default_factory=dict)
@@ -352,6 +413,8 @@ class CollectPersonContext(Node):
                 file=sys.stderr, flush=True,
             )
 
+        wacli_available = sources.wacli_readable(self.wacli_db)
+
         if not self.dry_run:
             self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -366,6 +429,8 @@ class CollectPersonContext(Node):
         with_context = 0
         capped = 0
         skipped_existing = 0
+        refreshed_existing = 0
+        retained_source_unavailable = 0
         selected_person_ids: set[str] = set()
         channel_counts = {"gmail": 0, "imessage": 0, "whatsapp": 0}
         total_messages = 0
@@ -375,16 +440,22 @@ class CollectPersonContext(Node):
                 people_total += 1
                 selected_person_ids.add(person.person_id)
                 bundle_path = self.out_dir / f"{person.person_id}.json"
-                if bundle_path.exists() and not self.force and not self.dry_run:
-                    existing = _load_bundle(bundle_path)
-                    if _bundle_matches_policy(
+                existing = _load_bundle(bundle_path) if bundle_path.exists() else {}
+                if existing:
+                    unavailable = _unavailable_existing_sources(
                         existing,
-                        deep_cap=self.deep_cap,
-                        include_groups=self.include_groups,
-                        max_group_size=self.max_group_size,
-                    ):
-                        skipped_existing += 1
+                        msgvault_available=store is not None,
+                        imessage_available=bool(chat_probe["exists"] and chat_probe["readable"]),
+                        wacli_available=wacli_available,
+                    )
+                    if unavailable:
+                        retained_source_unavailable += 1
                         with_context += 1
+                        print(
+                            f"[collect] WARNING: retaining {person.person_id} because prior "
+                            f"source(s) are unavailable: {', '.join(unavailable)}",
+                            file=sys.stderr, flush=True,
+                        )
                         continue
                 messages, available = collect_one(
                     person,
@@ -404,14 +475,7 @@ class CollectPersonContext(Node):
                         bundle_path.unlink(missing_ok=True)
                     continue
                 with_context += 1
-                total_messages += len(messages)
-                if available > len(messages):
-                    capped += 1
-                for msg in messages:
-                    channel_counts[msg["channel"]] = channel_counts.get(msg["channel"], 0) + 1
-                if self.dry_run:
-                    continue
-                write_json(bundle_path, {
+                candidate = {
                     "person_id": person.person_id,
                     "full_name": person.full_name,
                     "emails": person.emails,
@@ -428,7 +492,36 @@ class CollectPersonContext(Node):
                         "max_group_size": self.max_group_size if self.include_groups else 0,
                     },
                     "collected_at": now_iso(),
-                })
+                }
+                candidate["evidence_fingerprint"] = bundle_evidence_fingerprint(candidate)
+                # An existing bundle is reused only when it was collected under the
+                # same policy AND its evidence hashes identically — the stored digest
+                # is recomputed, so bundles written before fingerprints existed
+                # compare correctly instead of forcing one blanket refresh.
+                unchanged = (
+                    bool(existing)
+                    and not self.force
+                    and _bundle_matches_policy(
+                        existing,
+                        deep_cap=self.deep_cap,
+                        include_groups=self.include_groups,
+                        max_group_size=self.max_group_size,
+                    )
+                    and bundle_evidence_fingerprint(existing) == candidate["evidence_fingerprint"]
+                )
+                if unchanged and not self.dry_run:
+                    skipped_existing += 1
+                    continue
+                total_messages += len(messages)
+                if available > len(messages):
+                    capped += 1
+                for msg in messages:
+                    channel_counts[msg["channel"]] = channel_counts.get(msg["channel"], 0) + 1
+                if self.dry_run:
+                    continue
+                if existing:
+                    refreshed_existing += 1
+                write_json(bundle_path, candidate)
                 if with_context % 25 == 0:
                     print(f"[collect] {with_context} bundles written", file=sys.stderr, flush=True)
         finally:
@@ -456,6 +549,8 @@ class CollectPersonContext(Node):
             people_total=people_total,
             people_with_context=with_context,
             people_skipped_existing=skipped_existing,
+            people_refreshed_existing=refreshed_existing,
+            people_retained_source_unavailable=retained_source_unavailable,
             total_messages_sampled=total_messages,
             people_capped=capped,
             channel_message_counts=channel_counts,
@@ -470,7 +565,7 @@ class CollectPersonContext(Node):
             msgvault_available=store is not None or self.msgvault_db.exists(),
             chat_db_available=self.chat_db.exists(),
             chat_db_probe=chat_probe,
-            wacli_available=self.wacli_db.exists(),
+            wacli_available=wacli_available,
             out_dir=str(self.out_dir),
             elapsed_ms=int((time.monotonic() - started) * 1000),
             updated_at=now_iso(),

@@ -12,6 +12,7 @@ import http.client
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -40,8 +41,10 @@ from packs.ingestion.primitives.deep_context import (
     reconcile_deep_research as dresearch,
     reconcile_linkedin as reconcile,
     restart_review,
+    review_store,
     sources,
     synthesize_person_context as synth,
+    validate_dossiers as validate,
     worth_view,
 )
 from packs.ingestion.primitives.deep_context.review_web import (
@@ -72,6 +75,39 @@ class TestCommon(unittest.TestCase):
     def test_normalize_email_name(self):
         self.assertEqual(common.normalize_email("  Jane@ACME.com "), "jane@acme.com")
         self.assertEqual(common.normalize_name("  Jane   Doe "), "jane doe")
+
+    def test_bundle_evidence_fingerprint_ignores_collection_metadata(self):
+        bundle = {
+            "person_id": "p1",
+            "messages": [{"channel": "whatsapp", "at": "2026-01-01", "text": "hello"}],
+            "messages_available": 1,
+            "collection_policy": {"deep_cap": 10, "include_groups": True, "max_group_size": 12},
+            "collected_at": "2026-01-01T00:00:00Z",
+        }
+        first = common.bundle_evidence_fingerprint(bundle)
+        bundle["collected_at"] = "2026-07-22T00:00:00Z"
+        bundle["evidence_fingerprint"] = "stale-cache-value"
+        self.assertEqual(common.bundle_evidence_fingerprint(bundle), first)
+        bundle["messages"].append(
+            {"channel": "whatsapp", "at": "2026-01-02", "text": "new evidence"}
+        )
+        self.assertNotEqual(common.bundle_evidence_fingerprint(bundle), first)
+
+    def test_bundle_evidence_fingerprint_serialization_is_pinned(self):
+        """Golden digests: this hash is a paid-cache key, so changing the field
+        list, the dump flags, or the digest silently re-bills every dossier."""
+        self.assertEqual(
+            common.bundle_evidence_fingerprint({"person_id": "p1", "messages": []}),
+            "c212b948cc08cd92ea2eede28713ccd530abcbd35645579a51640304d77db2dc",
+        )
+        self.assertEqual(
+            common.bundle_evidence_fingerprint({
+                "person_id": "p1",
+                "messages": [{"channel": "whatsapp", "at": "2026-01-01", "text": "hello"}],
+                "messages_available": 1,
+            }),
+            "091f9e4a5f668de9e016fbb6c85735b6d469966b9048f2304c4c4a469c3f6d37",
+        )
 
     def test_slugify_stable_and_collision_proof(self):
         self.assertEqual(common.slugify("Jane Doe", "abcd1234-xyz"), "jane-doe-abcd1234")
@@ -303,8 +339,6 @@ class TestRestartReview(unittest.TestCase):
             self.assertTrue(list(base.glob("synthetic-people.csv.bkup-*")))
 
 
-import sqlite3  # noqa: E402  (local to the msgvault-con helper below)
-
 _MSGVAULT_SCHEMA = """
 CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT, display_name TEXT);
 CREATE TABLE participants (id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT, domain TEXT);
@@ -465,9 +499,136 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
             self.assertTrue((raw / "current-person.json").exists())
             self.assertEqual(manifest["orphan_bundles_removed"], 1)
 
-    def test_default_collection_rebuilds_retained_group_bundles(self):
-        from unittest import mock
+    def test_default_collection_refreshes_only_changed_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw = base / "raw"
+            people = base / "people.csv"
+            people.write_text(
+                "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n"
+                "p1,Jordan Bravo,,,+15550100,,imessage\n",
+                encoding="utf-8",
+            )
+            chat_db = base / "chat.db"
+            con = sqlite3.connect(chat_db)
+            con.executescript("CREATE TABLE message (ROWID INTEGER); CREATE TABLE handle (ROWID INTEGER);")
+            con.close()
+            args = _ns(
+                out_dir=raw,
+                chat_db=chat_db,
+                wacli_db=base / "missing-wacli.db",
+                people_csv=people,
+                msgvault_db=base / "missing-msgvault.db",
+                dry_run=False,
+                limit=0,
+                person="",
+                force=False,
+                deep_cap=10,
+                include_groups=True,
+                max_group_size=12,
+            )
+            first_message = {
+                "channel": "imessage",
+                "at": "2026-01-01T00:00:00Z",
+                "direction": "from_them",
+                "subject": "",
+                "text": "hello",
+            }
+            with (
+                mock.patch.object(collect, "collect_one", return_value=([first_message], 1)),
+                mock.patch.object(sources, "read_imessage_groups", return_value=[]),
+            ):
+                first = _run_collect(args)
+                unchanged = _run_collect(args)
 
+            bundle_path = raw / "p1.json"
+            original = json.loads(bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual(first["people_refreshed_existing"], 0)
+            self.assertEqual(unchanged["people_skipped_existing"], 1)
+
+            second_message = {**first_message, "at": "2026-01-02T00:00:00Z", "text": "new evidence"}
+            with (
+                mock.patch.object(
+                    collect, "collect_one", return_value=([first_message, second_message], 2)),
+                mock.patch.object(sources, "read_imessage_groups", return_value=[]),
+            ):
+                refreshed = _run_collect(args)
+
+            updated = json.loads(bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual(refreshed["people_refreshed_existing"], 1)
+            self.assertEqual(len(updated["messages"]), 2)
+            self.assertNotEqual(updated["evidence_fingerprint"], original["evidence_fingerprint"])
+
+            # The source this bundle came from is gone: keep the evidence rather
+            # than overwrite it with a partial recollection — even under --force.
+            chat_db.unlink()
+            args.force = True
+            with mock.patch.object(collect, "collect_one") as collect_mock:
+                retained = _run_collect(args)
+            collect_mock.assert_not_called()
+            self.assertEqual(retained["people_retained_source_unavailable"], 1)
+            self.assertEqual(
+                json.loads(bundle_path.read_text(encoding="utf-8"))["evidence_fingerprint"],
+                updated["evidence_fingerprint"],
+            )
+
+    def test_older_whatsapp_backfill_beyond_sample_refreshes_bundle(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw = base / "raw"
+            people = base / "people.csv"
+            people.write_text(
+                "id,full_name,primary_email,all_emails,primary_phone,all_phones,source_channels\n"
+                "p1,Jordan Bravo,,,+15550100,,whatsapp\n",
+                encoding="utf-8",
+            )
+            wacli_db = base / "wacli.db"
+            con = sqlite3.connect(wacli_db)
+            con.execute("CREATE TABLE messages (chat_jid TEXT, text TEXT, ts INTEGER, from_me INTEGER)")
+            con.executemany(
+                "INSERT INTO messages VALUES (?,?,?,?)",
+                [
+                    ("15550100@s.whatsapp.net", "newest", 200, 0),
+                    ("15550100@s.whatsapp.net", "older", 100, 1),
+                ],
+            )
+            con.commit()
+            args = _ns(
+                out_dir=raw,
+                chat_db=base / "missing-chat.db",
+                wacli_db=wacli_db,
+                people_csv=people,
+                msgvault_db=base / "missing-msgvault.db",
+                dry_run=False,
+                limit=0,
+                person="",
+                force=False,
+                deep_cap=1,
+                include_groups=True,
+                max_group_size=12,
+            )
+            _run_collect(args)
+            bundle_path = raw / "p1.json"
+            before = json.loads(bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual([message["text"] for message in before["messages"]], ["newest"])
+            self.assertEqual(before["messages_available"], 2)
+
+            # A backfill OLDER than the one-message sample: the bodies collected
+            # are identical, so only the uncapped count can notice it changed.
+            con.execute(
+                "INSERT INTO messages VALUES (?,?,?,?)",
+                ("15550100@s.whatsapp.net", "backfilled oldest", 50, 0),
+            )
+            con.commit()
+            con.close()
+            refreshed = _run_collect(args)
+            after = json.loads(bundle_path.read_text(encoding="utf-8"))
+            self.assertEqual([message["text"] for message in after["messages"]], ["newest"])
+            self.assertEqual(after["messages_available"], 3)
+            self.assertNotEqual(after["evidence_fingerprint"], before["evidence_fingerprint"])
+            self.assertEqual(refreshed["people_refreshed_existing"], 1)
+
+    def test_default_collection_rebuilds_retained_group_bundles(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             raw = base / "raw"
@@ -532,11 +693,18 @@ class TestAdaptiveGmailCollection(unittest.TestCase):
                 "direction": "from_them",
                 "text": "approved group body",
             }
+            # chat.db is absent in this fixture, so the retention guard would keep
+            # the iMessage-backed bundle written above; this case is about the
+            # group-scope transition, so declare every prior source available.
             with mock.patch.object(
                 collect,
                 "collect_one",
                 return_value=([opted_in_message], 1),
-            ) as collect_mock:
+            ) as collect_mock, mock.patch.object(
+                collect,
+                "_unavailable_existing_sources",
+                return_value=[],
+            ):
                 opted_in_manifest = _run_collect(_ns(
                     out_dir=raw,
                     chat_db=base / "missing-chat.db",
@@ -670,17 +838,123 @@ class TestSynthesize(unittest.TestCase):
             raw, facts = Path(d) / "raw", Path(d) / "facts"
             raw.mkdir(); facts.mkdir()
             bundle = raw / "p1.json"
-            bundle.write_text('{"messages": [{"text": "hello"}]}', encoding="utf-8")
+            evidence = {"messages": [{"text": "hello"}]}
+            write_json(bundle, evidence)
+            fingerprint = common.bundle_evidence_fingerprint(evidence)
             (facts / "p1.jsonl").write_text(json.dumps({
                 "synthesis_version": "old-contract",
+                "input_evidence_fingerprint": fingerprint,
                 "facts": _facts(network_worth={"decision": "yes", "reason": "real person"}),
             }) + "\n", encoding="utf-8")
             self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id="", review_rows={}), [bundle])
             (facts / "p1.jsonl").write_text(json.dumps({
                 "synthesis_version": synth.SYNTHESIS_VERSION,
+                "input_evidence_fingerprint": fingerprint,
                 "facts": _facts(network_worth={"decision": "yes", "reason": "real person"}),
             }) + "\n", encoding="utf-8")
             self.assertEqual(synth.pending_target_paths(raw, facts, force=False, person_id="", review_rows={}), [])
+
+    def test_changed_evidence_requeues_cached_and_human_decided_people(self):
+        """Selection keeps terminal verdicts only while the evidence behind them
+        is unchanged; a person whose bundle re-hashes differently is re-synthesized
+        even with a human Yes/No (the human column itself stays theirs)."""
+        with tempfile.TemporaryDirectory() as d:
+            raw, facts = Path(d) / "raw", Path(d) / "facts"
+            raw.mkdir()
+            facts.mkdir()
+            fingerprints = {}
+            for pid in ("yes-person", "maybe-person", "blank-person",
+                        "human-person", "changed-human"):
+                evidence = {"person_id": pid, "messages": [{"text": pid}]}
+                write_json(raw / f"{pid}.json", evidence)
+                fingerprints[pid] = common.bundle_evidence_fingerprint(evidence)
+
+            def record(pid: str, decision: str, reason: str, fingerprint: str) -> None:
+                (facts / f"{pid}.jsonl").write_text(json.dumps({
+                    "synthesis_version": synth.SYNTHESIS_VERSION,
+                    "input_evidence_fingerprint": fingerprint,
+                    "facts": _facts(network_worth={"decision": decision, "reason": reason}),
+                }) + "\n", encoding="utf-8")
+
+            record("yes-person", "yes", "stable", fingerprints["yes-person"])
+            record("maybe-person", "maybe", "uncertain", fingerprints["maybe-person"])
+            record("human-person", "yes", "old machine read", fingerprints["human-person"])
+            record("changed-human", "yes", "stale machine read", "old-fingerprint")
+            review_rows = {
+                pid: {"public_identifier": pid, "person_id": pid, "network_worth": "no"}
+                for pid in ("human-person", "changed-human")
+            }
+
+            normal = synth.pending_target_paths(
+                raw, facts, force=False, person_id="", review_rows=review_rows)
+            self.assertEqual(
+                [path.stem for path in normal],
+                ["blank-person", "changed-human", "maybe-person"],
+            )
+            rejudge = synth.pending_target_paths(
+                raw, facts, force=False, rejudge=True, person_id="", review_rows=review_rows)
+            self.assertEqual(
+                [path.stem for path in rejudge],
+                ["blank-person", "changed-human", "human-person", "maybe-person", "yes-person"],
+            )
+
+    def test_refreshed_person_updates_machine_worth_beside_human_decision(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            facts = base / "facts"
+            facts.mkdir()
+            review = base / "review.csv"
+            pid = "p1"
+            write_rows(review, {pid: {
+                "public_identifier": pid,
+                "person_id": pid,
+                "network_worth": "yes",       # the human's, never machine-writable
+                "llm_worth": "maybe",
+                "llm_worth_reason": "old machine read",
+            }})
+            (facts / f"{pid}.jsonl").write_text(json.dumps({
+                "facts": _facts(network_worth={"decision": "no", "reason": "new machine read"}),
+            }) + "\n", encoding="utf-8")
+
+            normal = review_store.mirror_facts_worth(review, facts)
+            row = load_rows(review)[pid]
+            self.assertEqual(normal["skipped_human"], 1)
+            self.assertEqual((row["network_worth"], row["llm_worth"]), ("yes", "maybe"))
+
+            review_store.mirror_facts_worth(review, facts, include_human_person_ids={pid})
+            row = load_rows(review)[pid]
+            self.assertEqual(row["network_worth"], "yes")
+            self.assertEqual((row["llm_worth"], row["llm_worth_reason"]),
+                             ("no", "new machine read"))
+
+    def test_validator_flags_raw_facts_fingerprint_mismatch(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            raw, facts = base / "raw", base / "facts"
+            raw.mkdir()
+            facts.mkdir()
+            bundle = {
+                "person_id": "p1",
+                "full_name": "Jordan Bravo",
+                "messages": [{"channel": "whatsapp", "at": "2026-01-01", "text": "hello"}],
+            }
+            write_json(raw / "p1.json", bundle)
+            record = {
+                "facts": {"canonical_name": "Jordan Bravo"},
+                "input_evidence_fingerprint": "old-fingerprint",
+            }
+            (facts / "p1.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+            self.assertTrue(validate.collect_rows(raw, facts)[0].stale_evidence)
+
+            record["input_evidence_fingerprint"] = common.bundle_evidence_fingerprint(bundle)
+            (facts / "p1.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+            self.assertFalse(validate.collect_rows(raw, facts)[0].stale_evidence)
+
+            # A purged bundle has no current evidence to disagree with.
+            (raw / "p1.json").unlink()
+            record["input_evidence_fingerprint"] = "old-fingerprint"
+            (facts / "p1.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+            self.assertFalse(validate.collect_rows(raw, facts)[0].stale_evidence)
 
     def test_completed_collection_prunes_orphan_facts_but_scoped_run_does_not(self):
         with tempfile.TemporaryDirectory() as d:
@@ -759,6 +1033,8 @@ class TestIncrementalSynthesis(unittest.TestCase):
         res = self._run([0.5, 0.9], static_facts=False, nbatches=5)
         self.assertEqual(res["stop_reason"], "confident")
         self.assertEqual(res["batches_used"], 2)
+        # The evidence this profile was built from, carried into the facts record.
+        self.assertEqual(len(res["input_evidence_fingerprint"]), 64)
 
     def test_stops_when_saturated(self):
         res = self._run([0.5, 0.5, 0.5, 0.5], static_facts=True, nbatches=5)
@@ -4348,7 +4624,6 @@ class TestWhatsAppUSJid(unittest.TestCase):
     code, even though phone_digits() strips it for comparison."""
 
     def _wacli(self, dirpath: Path) -> Path:
-        import sqlite3
         db = dirpath / "wacli.db"
         con = sqlite3.connect(db)
         con.execute("CREATE TABLE messages (chat_jid TEXT, text TEXT, ts INTEGER, from_me INTEGER)")

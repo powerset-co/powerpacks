@@ -6,6 +6,10 @@ dependency-light (stdlib + repo schema helpers) so every stage imports the same
 identity logic and nothing drifts.
 
 Changelog:
+  2026-07-30 (evidence refresh): `bundle_evidence_fingerprint` — the sha256 of the
+    bounded evidence a dossier synthesis consumes. Collection stamps it on each raw
+    bundle, synthesis stores the value it was built from, and both stages reuse
+    cached work only while the two match.
   2026-07-27: the shared network-import locations (merged people.csv, the profile
     cache, the overrides dir, directory.csv) are imported from
     `primitives/common/paths.py` instead of re-spelled here — that module is the
@@ -151,6 +155,49 @@ OWNER_JSON = ROOT / "owner.json"  # your bio timeline, injected as a reasoning a
 GMAIL_CHANNEL = "gmail_msgvault"
 IMESSAGE_CHANNEL = "imessage"
 WHATSAPP_CHANNEL = "whatsapp"
+
+# Stable inputs consumed by synthesis. Collection timestamps and the stored
+# fingerprint itself are deliberately excluded so an unchanged local source is
+# a cache hit across repeated runs.
+_BUNDLE_EVIDENCE_FIELDS = (
+    "person_id",
+    "full_name",
+    "emails",
+    "phones",
+    "source_channels",
+    "groups",
+    "thread_participants",
+    "messages",
+    "messages_available",
+    "capped",
+    "collection_policy",
+)
+
+
+def bundle_evidence_fingerprint(bundle: dict[str, Any]) -> str:
+    """Hash exactly the bounded evidence a dossier synthesis consumes.
+
+    The hash stays inside the existing raw/facts outputs; it is cache metadata,
+    not a new ledger. Including normalized message content means newly synced,
+    edited, deleted, or newly backfilled older messages all invalidate the
+    affected person, while ``collected_at`` never causes false refreshes.
+
+    PINNED SERIALIZATION: the field tuple above and this exact json.dumps call
+    (``ensure_ascii=False``, ``sort_keys=True``, compact separators, sha256 of
+    the UTF-8 bytes) ARE a paid-cache key. Every stored digest was computed by
+    this code, so any change to the field list, the dump flags, or the digest
+    silently re-bills synthesis for the whole network. Change it only with an
+    intentional cache invalidation.
+    """
+    # `key`, not `field`: `dataclasses.field` is imported into this module.
+    evidence = {key: bundle.get(key) for key in _BUNDLE_EVIDENCE_FIELDS}
+    payload = json.dumps(
+        evidence,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def load_env() -> None:

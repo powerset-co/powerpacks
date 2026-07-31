@@ -8,12 +8,17 @@ confidence + depth distributions, and actionable flag lists:
   - capped_underconfident capped AND under target -> raise --deep-cap to deepen
   - empty_relationship   no relationship_to_owner captured
   - errors               synthesis errors
+  - stale_evidence       facts built from evidence the raw bundle no longer has
 
 Flow: facts/<person_id>.jsonl (last record) + raw/<person_id>.json -> ONE frozen
 `DossierRow` per person -> statistics over typed attributes -> JSON on stdout
 plus validation.json / validation.md written into the dossier dir.
 
 Changelog:
+  2026-07-30 (evidence refresh): a `stale_evidence` flag reports dossiers whose
+    facts were synthesized from a different evidence fingerprint than their raw
+    bundle now hashes to. A person with no raw bundle at all (after `purge-raw`)
+    is never flagged — there is no current evidence to disagree with.
   2026-07-30 (house style): `run(args)` became the construct-and-run
     `ValidateDossiers` class and `main()` a thin argparse entry; each person is
     parsed ONCE at the boundary into a frozen `DossierRow` instead of an
@@ -35,6 +40,7 @@ from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     FACTS_DIR,
     RAW_DIR,
+    bundle_evidence_fingerprint,
     emit,
     read_jsonl,
 )
@@ -75,6 +81,7 @@ class DossierRow:
     capped: bool
     stop_reason: str
     error: bool
+    stale_evidence: bool
 
     @classmethod
     def from_record(cls, person_id: str, rec: dict[str, Any], bundle: dict[str, Any]) -> DossierRow:
@@ -101,6 +108,12 @@ class DossierRow:
             capped=rec.get("messages_available", 0) > rec.get("messages_used", 0),
             stop_reason=rec.get("stop_reason", ""),
             error=bool(rec.get("error")),
+            # A person whose bundle was purged has no current evidence to
+            # disagree with, so only a PRESENT bundle can be stale.
+            stale_evidence=bool(bundle) and (
+                bundle_evidence_fingerprint(bundle)
+                != str(rec.get("input_evidence_fingerprint") or "")
+            ),
         )
 
 
@@ -177,6 +190,7 @@ class ValidateDossiers:
         )
         empty_rel = [r for r in rows if not r.has_rel]
         errored = [r for r in rows if r.error]
+        stale_evidence = [r for r in rows if r.stale_evidence]
 
         # Composite completeness: relationship + employer + topic-bearing + confident.
         score = round(100 * statistics.mean(
@@ -206,6 +220,11 @@ class ValidateDossiers:
                                           "hint": "raise --deep-cap to grok more of these"},
                 "empty_relationship": {"count": len(empty_rel), "examples": _brief(empty_rel)},
                 "errors": {"count": len(errored), "examples": _brief(errored)},
+                "stale_evidence": {
+                    "count": len(stale_evidence),
+                    "examples": _brief(stale_evidence),
+                    "hint": "run the normal dry/synthesize/compose stages to refresh changed evidence",
+                },
             },
             "updated_at": now_iso(),
         }

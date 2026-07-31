@@ -12,6 +12,11 @@ Keeping the tiny CSV contract here prevents either LLM stage from becoming the
 other stage's fallback writer.
 
 Changelog:
+  2026-07-30 (evidence refresh): `mirror_facts_worth` takes
+    `include_human_person_ids` — the people a run actually re-synthesized — so their
+    refreshed machine opinion lands beside a sticky human decision without the
+    blanket `include_human_rows` that only `rejudge` wants. The human
+    `network_worth` cell is still never written by either path.
   2026-07-30 (style): `llm_network_worth` is imported at module top instead of inside
     `mirror_facts_worth`. The old note claimed the deferral kept "the basic CSV
     contract" independent of dossier parsing, but `candidates` imports only
@@ -247,16 +252,24 @@ def mirror_facts_worth(
     facts_dir: Path,
     *,
     include_human_rows: bool = False,
+    include_human_person_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Mirror every facts worth verdict into review.csv.
 
     Normal synthesis leaves rows with a human Yes/No completely untouched.
-    ``$deep-context rejudge`` sets ``include_human_rows`` so the refreshed
-    machine opinion is visible beside the sticky human decision; the human
-    ``network_worth`` cell itself is always preserved.
+    ``$deep-context rejudge`` sets ``include_human_rows`` for every person.
+    Normal source-change refreshes pass only the people synthesized in that run
+    through ``include_human_person_ids`` so their refreshed machine opinion is
+    visible beside the sticky human decision. The human ``network_worth`` cell
+    itself is always preserved.
     """
     rows = load_override_rows(review_path)
     parent_ids = parent_ids_by_person(facts_dir.parent / "index.json")
+    included_human_ids = {
+        str(person_id or "").strip().lower()
+        for person_id in (include_human_person_ids or set())
+        if str(person_id or "").strip()
+    }
     synced_people = synced_rows = skipped_human = without_worth = cleared_legacy_spam = 0
 
     for facts_path in sorted(facts_dir.glob("*.jsonl")):
@@ -268,7 +281,11 @@ def mirror_facts_worth(
             continue
 
         keys = row_keys_for_person(rows, person_id)
-        if not include_human_rows and has_human_worth(rows, person_id, parent_ids):
+        if (
+            not include_human_rows
+            and person_id.lower() not in included_human_ids
+            and has_human_worth(rows, person_id, parent_ids)
+        ):
             skipped_human += 1
             continue
 
