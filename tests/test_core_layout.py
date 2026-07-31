@@ -185,10 +185,12 @@ class CoreLayoutTests(unittest.TestCase):
 
         hosted_env = (ROOT / "packs/powerset/templates/env.powerset.example").read_text()
         self.assertIn(
-            "POWERPACKS_SEARCH_API_URL=https://search-api-7wk4uhe77q-uw.a.run.app",
+            "POWERSET_API_URL=https://search-api-7wk4uhe77q-uw.a.run.app",
             hosted_env,
         )
-        self.assertNotIn("POWERPACKS_API_URL=https://api.powerset.dev", hosted_env)
+        # One API-base var only — the retired aliases must not creep back.
+        self.assertNotIn("POWERPACKS_SEARCH_API_URL", hosted_env)
+        self.assertNotIn("POWERPACKS_API_BASE_URL", hosted_env)
         self.assertNotIn("POWERSET_API_URL=https://api.powerset.dev", hosted_env)
 
     def test_setup_skill_asks_about_powerset_account(self) -> None:
