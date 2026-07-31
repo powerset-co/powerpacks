@@ -1,0 +1,33 @@
+"""Single home for the committed model price table and usage-row cost math.
+
+A usage row is one LLM call as captured by the shared client's POWERPACKS_USAGE_LOG
+hook: {model, stage, prompt_tokens, completion_tokens, reasoning_tokens, latency_ms}.
+Prices live in packs/search/data/model-prices.json as USD per 1M tokens; a null table
+for a model means "unpriced" and cost math reports tokens-only for it.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+PRICES_PATH = Path(__file__).resolve().parents[2] / "data" / "model-prices.json"
+
+
+def load_prices(path: Path | None = None) -> dict[str, Any]:
+    target = path or PRICES_PATH
+    if not target.exists():
+        return {}
+    return json.loads(target.read_text(encoding="utf-8"))
+
+
+def row_cost_usd(row: dict[str, Any], prices: dict[str, Any]) -> float | None:
+    """USD for one usage row, or None when the model has no usable price table."""
+    table = prices.get(row.get("model") or "")
+    if not isinstance(table, dict):
+        return None
+    output_price = float(table.get("output_per_1m") or 0.0)
+    cost = (int(row.get("prompt_tokens") or 0) / 1e6) * float(table.get("input_per_1m") or 0.0)
+    cost += (int(row.get("completion_tokens") or 0) / 1e6) * output_price
+    cost += (int(row.get("reasoning_tokens") or 0) / 1e6) * float(table.get("reasoning_per_1m") or output_price)
+    return cost
