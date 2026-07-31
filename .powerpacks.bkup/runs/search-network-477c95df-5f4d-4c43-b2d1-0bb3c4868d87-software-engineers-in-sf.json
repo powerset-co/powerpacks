@@ -1,0 +1,282 @@
+{
+  "artifacts": {
+    "artifact_dir": ".powerpacks/runs/artifacts/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87",
+    "created_at": "2026-07-30T23:21:12Z",
+    "csv": ".powerpacks/runs/artifacts/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87.csv",
+    "frontier_count": 2,
+    "hydrated_count": 2,
+    "jsonl": ".powerpacks/runs/artifacts/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87.jsonl",
+    "manifest": ".powerpacks/runs/artifacts/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87.manifest.json",
+    "query": "software engineers in sf",
+    "row_count": 2,
+    "state": ".powerpacks/runs/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87-software-engineers-in-sf.json",
+    "task_id": "search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87"
+  },
+  "candidate_feedback": [],
+  "constraints": {
+    "no_company_signal_search": true,
+    "no_expensive_scoring": true,
+    "no_llm_enrichment": true,
+    "no_summary_search": true
+  },
+  "created_at": "2026-07-30T23:21:12Z",
+  "criteria_mutations": [],
+  "exemplar_sets": [],
+  "fanout_threads": [],
+  "plan": {},
+  "query": "software engineers in sf",
+  "run_lineage": [],
+  "search_plan_revisions": [],
+  "status": "running",
+  "steps": [
+    {
+      "id": "expand_search_request",
+      "output": {
+        "intent_type": "role_search",
+        "normalized_query": "software engineers in sf",
+        "notes": [
+          "Local search scope is the DuckDB file; no set_id/operator resolution is used."
+        ],
+        "role_search_filters": {
+          "bm25_queries": [
+            "software engineer",
+            "backend engineer",
+            "Backend Engineer",
+            "Senior Software Engineer"
+          ],
+          "cities": [
+            "San Francisco"
+          ],
+          "has_domain_intent": false,
+          "local_title_cluster_keywords": [
+            "Backend Engineer",
+            "Senior Software Engineer"
+          ],
+          "local_title_clustering_status": {
+            "cluster_count": 2,
+            "selected_count": 2,
+            "status": "completed"
+          },
+          "local_title_clusters": [
+            {
+              "count": 1,
+              "display_title": "Backend Engineer",
+              "raw_titles": [
+                "Backend Engineer"
+              ],
+              "stemmed": "backend engin"
+            },
+            {
+              "count": 1,
+              "display_title": "Senior Software Engineer",
+              "raw_titles": [
+                "Senior Software Engineer"
+              ],
+              "stemmed": "softwar engin"
+            }
+          ],
+          "role_core_patterns": [
+            {
+              "examples": [
+                "software engineer",
+                "backend engineer"
+              ],
+              "regex": "\\b(software\\ engineer|backend\\ engineer)\\b"
+            },
+            {
+              "examples": [
+                "Backend Engineer"
+              ],
+              "regex": "\\bBackend\\s+Engineer\\b",
+              "source": "local_title_cluster"
+            },
+            {
+              "examples": [
+                "Senior Software Engineer"
+              ],
+              "regex": "\\bSenior\\s+Software\\s+Engineer\\b",
+              "source": "local_title_cluster"
+            }
+          ],
+          "semantic_query": "Experienced software engineers who build production systems, own backend or full-stack implementation, and show evidence of technical execution in product or infrastructure teams.",
+          "seniority_bands": [
+            "mid",
+            "senior"
+          ]
+        },
+        "source_type": "query",
+        "vertical": "people_by_role"
+      },
+      "recorded_at": "2026-07-30T23:21:12Z",
+      "status": "completed"
+    },
+    {
+      "elapsed_ms": 0,
+      "id": "apply_prefilters",
+      "output": {
+        "base_candidate_count": 0,
+        "base_candidate_ids": [],
+        "company_union_candidate_count": 0,
+        "company_union_candidate_ids": [],
+        "company_union_candidates": [],
+        "namespaces": {
+          "education": "local_people_education",
+          "people": "local_people_positions",
+          "summaries": "local_summaries"
+        },
+        "ran_prefilters": false,
+        "role_prefilter_ran": false,
+        "search_mode": "SEARCH_ONLY",
+        "stages": [],
+        "truncated": false
+      },
+      "recorded_at": "2026-07-30T23:21:12Z",
+      "status": "completed"
+    },
+    {
+      "elapsed_ms": 260,
+      "id": "execute_role_search",
+      "output": {
+        "agentic_sql_candidate_count": 0,
+        "agentic_sql_tagged": 0,
+        "applied_filter": [
+          "And",
+          [
+            [
+              "city",
+              "In",
+              [
+                "San Francisco"
+              ]
+            ],
+            [
+              "seniority_band",
+              "In",
+              [
+                "mid",
+                "senior"
+              ]
+            ]
+          ]
+        ],
+        "base_id_batch_count": null,
+        "base_id_batch_size": null,
+        "batched_base_ids": false,
+        "candidate_ids": [
+          "00000000-0000-0000-0000-000000000001",
+          "00000000-0000-0000-0000-000000000002"
+        ],
+        "candidates": [
+          {
+            "bucket": "good",
+            "city": "San Francisco",
+            "company_id": "company_1",
+            "company_name": null,
+            "country": "United States",
+            "has_adjacent_regex": false,
+            "has_core_regex": true,
+            "is_current": true,
+            "macro_region": null,
+            "matched_position_ids": [
+              "00000000-0000-0000-0000-000000000001-1"
+            ],
+            "metro_areas": null,
+            "person_id": "00000000-0000-0000-0000-000000000001",
+            "position_id": "00000000-0000-0000-0000-000000000001-1",
+            "position_title": "Senior Software Engineer",
+            "role_track": "engineer",
+            "score": 0.05901639344262296,
+            "seniority_band": "senior",
+            "state": "CA",
+            "vertical_sources": [
+              "hybrid"
+            ]
+          },
+          {
+            "bucket": "good",
+            "city": "San Francisco",
+            "company_id": "company_2",
+            "company_name": null,
+            "country": "United States",
+            "has_adjacent_regex": false,
+            "has_core_regex": true,
+            "is_current": true,
+            "macro_region": null,
+            "matched_position_ids": [
+              "00000000-0000-0000-0000-000000000002-1"
+            ],
+            "metro_areas": null,
+            "person_id": "00000000-0000-0000-0000-000000000002",
+            "position_id": "00000000-0000-0000-0000-000000000002-1",
+            "position_title": "Backend Engineer",
+            "role_track": "engineer",
+            "score": 0.05806451612903226,
+            "seniority_band": "mid",
+            "state": "CA",
+            "vertical_sources": [
+              "hybrid"
+            ]
+          }
+        ],
+        "company_union_added": 0,
+        "company_union_candidate_count": 0,
+        "limit": 10,
+        "namespace": "local_people_positions",
+        "prefilter_short_circuit": false,
+        "retrieval_artifact": ".powerpacks/runs/artifacts/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87/retrieval.json",
+        "retrieval_mode": "hybrid",
+        "returned_people": 2,
+        "search_mode": "SEARCH_ONLY",
+        "top_k": 10,
+        "vertical_source_counts": {
+          "hybrid": 2
+        },
+        "verticals": {
+          "company_signal": {
+            "namespace_row_count": 0,
+            "row_count": 0,
+            "status": "blocked_missing_local_company_signals"
+          },
+          "role": {
+            "row_count": 2,
+            "status": "completed"
+          },
+          "summary": {
+            "row_count": 0,
+            "status": "skipped_missing_namespace"
+          }
+        }
+      },
+      "recorded_at": "2026-07-30T23:21:12Z",
+      "status": "completed"
+    },
+    {
+      "elapsed_ms": 28,
+      "id": "hydrate_people",
+      "output": {
+        "artifacts": {},
+        "hydrated": 2,
+        "llm_profiles_path": ".powerpacks/runs/artifacts/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87/hydrate_people/llm_profiles.jsonl",
+        "profile_ids": [
+          "00000000-0000-0000-0000-000000000001",
+          "00000000-0000-0000-0000-000000000002"
+        ],
+        "profiles_compressed": true,
+        "profiles_path": ".powerpacks/runs/artifacts/search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87/hydrate_people/profiles.jsonl.gz",
+        "requested": 2,
+        "source": {
+          "backend": "duckdb",
+          "batch_size": 1000,
+          "duckdb": "/private/var/folders/vv/13z9d0dj3hzg0m4dl6nq_7jm0000gn/T/tmp6v6i299w/local-search.duckdb",
+          "type": "local_duckdb",
+          "workers": 8
+        }
+      },
+      "recorded_at": "2026-07-30T23:21:12Z",
+      "status": "completed"
+    }
+  ],
+  "task": "search_network",
+  "task_id": "search-network-477c95df-5f4d-4c43-b2d1-0bb3c4868d87",
+  "updated_at": "2026-07-30T23:21:12Z"
+}

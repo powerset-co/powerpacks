@@ -1,0 +1,12 @@
+{
+  "artifact_dir": ".powerpacks/runs/artifacts/search-network-f6d4bebb-fefd-490b-aba2-a8152eda0b3b",
+  "created_at": "2026-07-31T02:12:39Z",
+  "csv": ".powerpacks/runs/artifacts/search-network-f6d4bebb-fefd-490b-aba2-a8152eda0b3b/search-network-f6d4bebb-fefd-490b-aba2-a8152eda0b3b.csv",
+  "frontier_count": 4,
+  "hydrated_count": 4,
+  "jsonl": ".powerpacks/runs/artifacts/search-network-f6d4bebb-fefd-490b-aba2-a8152eda0b3b/search-network-f6d4bebb-fefd-490b-aba2-a8152eda0b3b.jsonl",
+  "query": "software engineers at AI companies",
+  "row_count": 4,
+  "state": ".powerpacks/runs/search-network-f6d4bebb-fefd-490b-aba2-a8152eda0b3b-software-engineers-at-ai-companies.json",
+  "task_id": "search-network-f6d4bebb-fefd-490b-aba2-a8152eda0b3b"
+}

@@ -1158,28 +1158,264 @@ function setupDirectory() {
     list.scrollTop = 0;
   }
 
-  async function selectPerson(slug) {
-    if (!slug || slug === activeSlug) return;
+  async function loadPerson(slug, { keepScroll = false } = {}) {
     let response;
     try {
       response = await fetch(`/api/person?slug=${encodeURIComponent(slug)}`, { cache: "no-store" });
     } catch {
       announce("Could not load person", true);
-      return;
+      return false;
     }
     if (!response.ok) {
       announce("Could not load person", true);
-      return;
+      return false;
     }
+    const scrollTop = detail.scrollTop;
     detail.innerHTML = await response.text();
     wireDynamicContent(detail);
-    detail.scrollTop = 0;
+    detail.scrollTop = keepScroll ? scrollTop : 0;
+    return true;
+  }
+
+  async function selectPerson(slug) {
+    if (!slug || slug === activeSlug) return;
+    if (!(await loadPerson(slug))) return;
     activeSlug = slug;
     list.querySelectorAll(".directory-item").forEach((item) => {
       item.classList.toggle("active", item.dataset.slug === slug);
     });
     window.history.replaceState(null, "", `/directory?person=${encodeURIComponent(slug)}`);
   }
+
+  function bumpDirectoryTab(worth, delta) {
+    const span = document.querySelector(`[data-directory-tab='${worth}'] span`);
+    if (!span) return;
+    const current = parseInt(span.textContent || "0", 10);
+    if (!Number.isNaN(current)) span.textContent = String(Math.max(0, current + delta));
+  }
+
+  // Move-to-Yes/No on the person pane: the same /worth endpoint the review
+  // stages use; on success the island entry, tab counts, sidebar list, and
+  // the pane's own buttons all update in place.
+  detail.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-dir-worth]");
+    if (!button || button.disabled) return;
+    event.preventDefault();
+    const worth = button.dataset.dirWorth || "";
+    const slug = button.dataset.parent || activeSlug;
+    const prevIndex = filtered.findIndex((item) => item.slug === slug);
+    detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = true; });
+    try {
+      await post("/worth", { pub: button.dataset.pub || "", worth,
+                             parent_slug: slug });
+    } catch (error) {
+      detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = false; });
+      announce(error.message, true);
+      return;
+    }
+    const entry = people.find((item) => item.slug === slug);
+    if (entry) {
+      bumpDirectoryTab(entry.worth || "maybe", -1);
+      entry.worth = worth;
+      bumpDirectoryTab(worth, 1);
+    }
+    // Keep the sidebar where it was: the decided person leaves this tab, so
+    // the same index now holds the next person — advance straight to them.
+    const listScroll = list.scrollTop;
+    refreshList();
+    list.scrollTop = listScroll;
+    announce(`Moved ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"}`);
+    const next = (prevIndex >= 0 && filtered.length)
+      ? filtered[Math.min(prevIndex, filtered.length - 1)] : null;
+    if (next && next.slug !== slug) {
+      await selectPerson(next.slug);
+    } else {
+      await loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
+    }
+    // The decision already stands; the popover only collects the optional why
+    // (keyed to the person just decided, not the newly shown pane).
+    const anchor = detail.querySelector(".person-detail-actions")
+      || detail.querySelector(".person-detail");
+    if (anchor) {
+      feedbackPopover({
+        anchor,
+        contextLabel: `Moved ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"} — optional: why?`,
+        pub: button.dataset.pub || "",
+        slug,
+        action: worth === "yes" ? "worth_yes" : "worth_no",
+      });
+    }
+  });
+
+  // Optional-feedback popover, mirrored off the network-search-app
+  // FeedbackForm: context label, auto-grow textarea, ⌘+Enter, send icon,
+  // then a "Got it, thanks!" beat before it closes. Posts to /feedback where
+  // the server folds in everything it knows (incl. retarget guidance).
+  const SEND_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
+    + " stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+    + "<path d='m22 2-7 20-4-9-9-4Z'/><path d='M22 2 11 13'/></svg>";
+  const CHECK_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
+    + " stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>"
+    + "<path d='M20 6 9 17l-5-5'/></svg>";
+
+  function closeFeedbackPopover() {
+    document.querySelector(".feedback-popover")?.remove();
+  }
+
+  function feedbackPopover({ anchor, contextLabel, pub, slug, action }) {
+    closeFeedbackPopover();
+    const host = anchor.closest(".person-detail") || detail;
+    const pop = document.createElement("div");
+    pop.className = "feedback-popover";
+    if (contextLabel) {
+      const label = document.createElement("p");
+      label.className = "feedback-context";
+      label.textContent = contextLabel;
+      pop.append(label);
+    }
+    const textarea = document.createElement("textarea");
+    textarea.rows = 2;
+    textarea.maxLength = 4000;
+    textarea.placeholder = 'e.g. "Wrong person — this is actually Jane Smith"';
+    const footer = document.createElement("div");
+    footer.className = "feedback-footer";
+    footer.innerHTML = `<span class='feedback-hint'>&#8629; &#8984;+Enter</span>`
+      + `<button type='button' class='feedback-send' aria-label='Send feedback' disabled>${SEND_ICON}</button>`;
+    pop.append(textarea, footer);
+    const send = footer.querySelector(".feedback-send");
+
+    async function submit() {
+      const comment = textarea.value.trim();
+      if (!comment) return;
+      send.disabled = true;
+      try {
+        await post("/feedback", { pub, parent_slug: slug, comment, action });
+      } catch (error) {
+        announce(error.message, true);
+        send.disabled = false;
+        return;
+      }
+      pop.replaceChildren();
+      pop.className = "feedback-popover feedback-done";
+      pop.innerHTML = `<span class='feedback-done-badge'>${CHECK_ICON}</span>`
+        + "<p>Got it, thanks! \u{1F64F}</p>";
+      setTimeout(() => pop.remove(), 900);
+    }
+
+    textarea.addEventListener("input", () => {
+      send.disabled = !textarea.value.trim();
+      textarea.style.height = "auto";
+      textarea.style.height = Math.min(textarea.scrollHeight, 140) + "px";
+    });
+    textarea.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        void submit();
+      }
+      if (event.key === "Escape") pop.remove();
+    });
+    send.addEventListener("click", () => void submit());
+    pop.addEventListener("click", (event) => event.stopPropagation());
+
+    host.append(pop);
+    const hostRect = host.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    pop.style.top = `${anchorRect.bottom - hostRect.top + host.scrollTop + 8}px`;
+    pop.style.right = `${Math.max(8, hostRect.right - anchorRect.right)}px`;
+    setTimeout(() => textarea.focus(), 80);
+    function away(event) {
+      if (!document.body.contains(pop)) {
+        document.removeEventListener("click", away);
+        return;
+      }
+      if (!pop.contains(event.target) && event.target !== anchor) {
+        pop.remove();
+        document.removeEventListener("click", away);
+      }
+    }
+    setTimeout(() => document.addEventListener("click", away), 0);
+  }
+
+  // Guided retargets: submit guidance from the person pane, watch the queue in
+  // the sidebar panel. This page has no SSE by design, so the panel polls only
+  // while an item is active and goes quiet when the queue drains.
+  const retargetPanel = document.querySelector("[data-retarget-panel]");
+  const retargetItems = document.querySelector("[data-retarget-items]");
+  const RETARGET_ACTIVE = ["queued", "researching", "judging", "hydrating"];
+  let retargetTimer = null;
+  const retargetSeen = {};
+
+  function retargetRow(item) {
+    const row = document.createElement("li");
+    row.className = `retarget-item retarget-${item.state}`;
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "retarget-name";
+    name.textContent = item.name || item.slug;
+    name.addEventListener("click", () => void selectPerson(item.slug));
+    const chip = document.createElement("span");
+    chip.className = "retarget-chip";
+    chip.textContent = (item.state || "").replace("_", " ");
+    row.append(name, chip);
+    if (item.detail) {
+      const line = document.createElement("small");
+      line.textContent = item.detail;
+      row.append(line);
+    }
+    return row;
+  }
+
+  async function refreshRetargets() {
+    if (!retargetPanel || !retargetItems) return;
+    let data;
+    try {
+      const response = await fetch("/api/retargets", { cache: "no-store" });
+      if (!response.ok) return;
+      data = await response.json();
+    } catch { return; }
+    const items = data.items || [];
+    retargetPanel.hidden = !items.length;
+    retargetItems.textContent = "";
+    items.forEach((item) => retargetItems.append(retargetRow(item)));
+    // A just-finished item announces itself and refreshes the open pane.
+    items.forEach((item) => {
+      const prev = retargetSeen[item.pub];
+      if (prev && RETARGET_ACTIVE.includes(prev) && !RETARGET_ACTIVE.includes(item.state)) {
+        if (item.state === "applied") announce(`Retargeted ${item.name}`);
+        else announce(`${item.name}: ${item.detail || item.state}`, item.state === "failed");
+        if (item.slug === activeSlug) void loadPerson(item.slug, { keepScroll: true });
+      }
+      retargetSeen[item.pub] = item.state;
+    });
+    const active = items.some((item) => RETARGET_ACTIVE.includes(item.state));
+    if (active && !retargetTimer) retargetTimer = setInterval(refreshRetargets, 3000);
+    if (!active && retargetTimer) { clearInterval(retargetTimer); retargetTimer = null; }
+  }
+
+  detail.addEventListener("submit", async (event) => {
+    const form = event.target.closest("[data-retarget-form]");
+    if (!form) return;
+    event.preventDefault();
+    const textarea = form.querySelector("textarea[name='guidance']");
+    const guidance = (textarea?.value || "").trim();
+    if (!guidance) return;
+    const button = form.querySelector("button[type='submit']");
+    if (button) button.disabled = true;
+    try {
+      await post("/retarget", { pub: form.dataset.pub || "",
+                                parent_slug: form.dataset.parent || "", guidance });
+      if (textarea) textarea.value = "";
+      announce("Queued for re-research");
+      void refreshRetargets();
+    } catch (error) {
+      announce(error.message, true);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
+
+  void refreshRetargets();
 
   list.addEventListener("click", (event) => {
     const item = event.target.closest(".directory-item");

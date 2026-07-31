@@ -1,0 +1,12 @@
+{
+  "artifact_dir": ".powerpacks/runs/artifacts/search-network-d5c2ed65-0acd-4783-a2b0-8136fc498c05",
+  "created_at": "2026-07-31T06:46:58Z",
+  "csv": ".powerpacks/runs/artifacts/search-network-d5c2ed65-0acd-4783-a2b0-8136fc498c05/search-network-d5c2ed65-0acd-4783-a2b0-8136fc498c05.csv",
+  "frontier_count": 4,
+  "hydrated_count": 4,
+  "jsonl": ".powerpacks/runs/artifacts/search-network-d5c2ed65-0acd-4783-a2b0-8136fc498c05/search-network-d5c2ed65-0acd-4783-a2b0-8136fc498c05.jsonl",
+  "query": "software engineers",
+  "row_count": 4,
+  "state": ".powerpacks/runs/search-network-d5c2ed65-0acd-4783-a2b0-8136fc498c05-software-engineers.json",
+  "task_id": "search-network-d5c2ed65-0acd-4783-a2b0-8136fc498c05"
+}

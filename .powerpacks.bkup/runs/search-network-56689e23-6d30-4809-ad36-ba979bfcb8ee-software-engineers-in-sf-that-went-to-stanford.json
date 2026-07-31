@@ -1,0 +1,298 @@
+{
+  "artifacts": {
+    "artifact_dir": ".powerpacks/runs/artifacts/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee",
+    "created_at": "2026-07-31T17:55:17Z",
+    "csv": ".powerpacks/runs/artifacts/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee.csv",
+    "frontier_count": 1,
+    "hydrated_count": 1,
+    "jsonl": ".powerpacks/runs/artifacts/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee.jsonl",
+    "manifest": ".powerpacks/runs/artifacts/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee.manifest.json",
+    "query": "software engineers in sf that went to stanford",
+    "row_count": 1,
+    "state": ".powerpacks/runs/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee-software-engineers-in-sf-that-went-to-stanford.json",
+    "task_id": "search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee"
+  },
+  "candidate_feedback": [],
+  "constraints": {
+    "no_company_signal_search": true,
+    "no_expensive_scoring": true,
+    "no_llm_enrichment": true,
+    "no_summary_search": true
+  },
+  "created_at": "2026-07-31T17:55:17Z",
+  "criteria_mutations": [],
+  "exemplar_sets": [],
+  "fanout_threads": [],
+  "plan": {},
+  "query": "software engineers in sf that went to stanford",
+  "run_lineage": [],
+  "search_plan_revisions": [],
+  "status": "running",
+  "steps": [
+    {
+      "id": "expand_search_request",
+      "output": {
+        "intent_type": "role_search",
+        "normalized_query": "software engineers in sf that went to stanford",
+        "notes": [
+          "local backend ignores remote scope keys: allowed_operator_ids, operator_ids, set_id",
+          "Local search scope is the DuckDB file; no set_id/operator resolution is used."
+        ],
+        "role_search_filters": {
+          "bm25_queries": [
+            "Senior Software Engineer"
+          ],
+          "education_names": [
+            "Stanford University"
+          ],
+          "is_current_role": true,
+          "li_followers_min": 1000,
+          "local_title_cluster_keywords": [
+            "Senior Software Engineer"
+          ],
+          "local_title_clustering_status": {
+            "cluster_count": 1,
+            "selected_count": 1,
+            "status": "completed"
+          },
+          "local_title_clusters": [
+            {
+              "count": 1,
+              "display_title": "Senior Software Engineer",
+              "raw_titles": [
+                "Senior Software Engineer"
+              ],
+              "stemmed": "softwar engin"
+            }
+          ],
+          "metro_areas": [
+            "San Francisco Bay Area"
+          ],
+          "role_core_patterns": [
+            {
+              "examples": [
+                "Senior Software Engineer"
+              ],
+              "regex": "\\bSenior\\s+Software\\s+Engineer\\b",
+              "source": "local_title_cluster"
+            }
+          ],
+          "role_tracks": [
+            "engineering"
+          ]
+        },
+        "source_type": "unit_test",
+        "vertical": "people"
+      },
+      "recorded_at": "2026-07-31T17:55:17Z",
+      "status": "completed"
+    },
+    {
+      "elapsed_ms": 23,
+      "id": "resolve_education",
+      "output": {
+        "education_ids": [
+          "linkedin:school:stanford-university"
+        ],
+        "education_names": [
+          "Stanford University"
+        ],
+        "namespace": "local_education",
+        "resolutions": [
+          {
+            "affiliated_queries": [
+              "stanford"
+            ],
+            "candidates": [
+              {
+                "id": "linkedin:school:stanford-university",
+                "included": true,
+                "match_family": true,
+                "matched_rows": 1,
+                "name": "Stanford University"
+              }
+            ],
+            "query": "Stanford University",
+            "resolved_ids": [
+              "linkedin:school:stanford-university"
+            ]
+          }
+        ],
+        "unresolved_names": []
+      },
+      "recorded_at": "2026-07-31T17:55:17Z",
+      "status": "completed"
+    },
+    {
+      "elapsed_ms": 22,
+      "id": "apply_prefilters",
+      "output": {
+        "base_candidate_count": 1,
+        "base_candidate_ids": [
+          "00000000-0000-0000-0000-000000000001"
+        ],
+        "company_union_candidate_count": 0,
+        "company_union_candidate_ids": [],
+        "company_union_candidates": [],
+        "namespaces": {
+          "education": "local_people_education",
+          "people": "local_people_positions",
+          "summaries": "local_summaries"
+        },
+        "ran_prefilters": true,
+        "role_prefilter_ran": true,
+        "search_mode": "SEARCH_ONLY",
+        "stages": [
+          {
+            "frontier_after_stage": 1,
+            "input_count": 1,
+            "matched": 1,
+            "mode": "or",
+            "stage": "education"
+          }
+        ],
+        "truncated": false
+      },
+      "recorded_at": "2026-07-31T17:55:17Z",
+      "status": "completed"
+    },
+    {
+      "elapsed_ms": 38,
+      "id": "execute_role_search",
+      "output": {
+        "agentic_sql_candidate_count": 0,
+        "agentic_sql_tagged": 0,
+        "applied_filter": [
+          "And",
+          [
+            [
+              "metro_areas",
+              "ContainsAny",
+              [
+                "San Francisco Bay Area"
+              ]
+            ],
+            [
+              "is_current",
+              "Eq",
+              true
+            ],
+            [
+              "role_track",
+              "In",
+              [
+                "engineering"
+              ]
+            ],
+            [
+              "base_id",
+              "In",
+              [
+                "00000000-0000-0000-0000-000000000001"
+              ]
+            ],
+            [
+              "linkedin_followers",
+              "Gte",
+              1000
+            ]
+          ]
+        ],
+        "base_id_batch_count": null,
+        "base_id_batch_size": null,
+        "batched_base_ids": false,
+        "candidate_ids": [
+          "00000000-0000-0000-0000-000000000001"
+        ],
+        "candidates": [
+          {
+            "bucket": "good",
+            "city": "San Francisco",
+            "company_id": "linkedin:company:one",
+            "company_name": null,
+            "country": "United States",
+            "has_adjacent_regex": false,
+            "has_core_regex": true,
+            "is_current": true,
+            "macro_region": null,
+            "matched_position_ids": [
+              "00000000-0000-0000-0000-000000000001-1"
+            ],
+            "metro_areas": [
+              "San Francisco Bay Area"
+            ],
+            "person_id": "00000000-0000-0000-0000-000000000001",
+            "position_id": "00000000-0000-0000-0000-000000000001-1",
+            "position_title": "Senior Software Engineer",
+            "role_track": "engineering",
+            "score": 0.02459016393442623,
+            "seniority_band": "senior",
+            "state": "California",
+            "vertical_sources": [
+              "hybrid",
+              "summary"
+            ]
+          }
+        ],
+        "company_union_added": 0,
+        "company_union_candidate_count": 0,
+        "limit": 0,
+        "namespace": "local_people_positions",
+        "prefilter_short_circuit": false,
+        "retrieval_artifact": ".powerpacks/runs/artifacts/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee/retrieval.json",
+        "retrieval_mode": "hybrid",
+        "returned_people": 1,
+        "search_mode": "SEARCH_ONLY",
+        "top_k": 50,
+        "vertical_source_counts": {
+          "hybrid": 1,
+          "summary": 1
+        },
+        "verticals": {
+          "company_signal": {
+            "namespace_row_count": 1,
+            "row_count": 0,
+            "status": "completed"
+          },
+          "role": {
+            "row_count": 1,
+            "status": "completed"
+          },
+          "summary": {
+            "row_count": 1,
+            "status": "completed"
+          }
+        }
+      },
+      "recorded_at": "2026-07-31T17:55:17Z",
+      "status": "completed"
+    },
+    {
+      "elapsed_ms": 30,
+      "id": "hydrate_people",
+      "output": {
+        "artifacts": {},
+        "hydrated": 1,
+        "llm_profiles_path": ".powerpacks/runs/artifacts/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee/hydrate_people/llm_profiles.jsonl",
+        "profile_ids": [
+          "00000000-0000-0000-0000-000000000001"
+        ],
+        "profiles_compressed": true,
+        "profiles_path": ".powerpacks/runs/artifacts/search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee/hydrate_people/profiles.jsonl.gz",
+        "requested": 1,
+        "source": {
+          "backend": "duckdb",
+          "batch_size": 1000,
+          "duckdb": "/private/var/folders/vv/13z9d0dj3hzg0m4dl6nq_7jm0000gn/T/tmpav00f2rs/local-search.duckdb",
+          "type": "local_duckdb",
+          "workers": 8
+        }
+      },
+      "recorded_at": "2026-07-31T17:55:17Z",
+      "status": "completed"
+    }
+  ],
+  "task": "search_network",
+  "task_id": "search-network-56689e23-6d30-4809-ad36-ba979bfcb8ee",
+  "updated_at": "2026-07-31T17:55:17Z"
+}

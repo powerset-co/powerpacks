@@ -1,0 +1,2 @@
+rank,person_id,result_index,final_score,trait_scores,overall_reasoning,matched_position_indexes,pre_rerank_score,tags,vertical_sources,name,headline,location,inferred_birth_year,inferred_age,current_titles,current_companies,source_operator,source_channel,linkedin_url,hydrated,source_run,source_query
+1,00000000-0000-0000-0000-000000000008,,,,,,,,hybrid; summary,,Founder at Founder Co,"Palo Alto, California, United States",,,Founder,Founder Co,,,,True,search-network-5ebd5dba-03ee-4c4c-ab0c-e3b92ed3d5ec,founders

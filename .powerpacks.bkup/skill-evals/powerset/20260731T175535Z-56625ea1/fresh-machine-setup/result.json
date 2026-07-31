@@ -1,0 +1,12 @@
+{
+  "id": "fresh-machine-setup",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/powerset/20260731T175535Z-56625ea1/fresh-machine-setup/prompt.txt",
+  "query": "I just installed Powerpacks on a fresh MacBook. I have a @powerset.co Google account. Run $powerset setup for me.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

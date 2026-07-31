@@ -1,0 +1,12 @@
+{
+  "id": "twitter-is-field-not-filter",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/search-contacts/20260730T230007Z-9293bfec/twitter-is-field-not-filter/prompt.txt",
+  "query": "Show my contacts' Twitter handles.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

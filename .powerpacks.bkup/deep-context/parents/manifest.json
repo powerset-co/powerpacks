@@ -1,0 +1,55 @@
+{
+  "clusters": 0,
+  "elapsed_ms": 2,
+  "fingerprints": {
+    "input_artifacts": {
+      ".powerpacks/deep-context/index.json": {
+        "exists": true,
+        "mtime_ns": 1785522308984095584,
+        "path": ".powerpacks/deep-context/index.json",
+        "sha256": "b2b923acb2428ea9fdc14d08cafff22d5e2122f68f0e9c6595b4e96d733302eb",
+        "size": 88
+      },
+      ".powerpacks/deep-context/merge-candidates.csv": {
+        "exists": false,
+        "path": ".powerpacks/deep-context/merge-candidates.csv"
+      },
+      ".powerpacks/deep-context/owner.json": {
+        "exists": false,
+        "path": ".powerpacks/deep-context/owner.json"
+      },
+      ".powerpacks/network-import/merged/people.csv": {
+        "exists": false,
+        "path": ".powerpacks/network-import/merged/people.csv"
+      }
+    },
+    "output_artifacts": {
+      ".powerpacks/deep-context/index.json": {
+        "exists": true,
+        "mtime_ns": 1785522308984095584,
+        "path": ".powerpacks/deep-context/index.json",
+        "sha256": "b2b923acb2428ea9fdc14d08cafff22d5e2122f68f0e9c6595b4e96d733302eb",
+        "size": 88
+      }
+    }
+  },
+  "merged_parents": 0,
+  "orphans_removed": 0,
+  "owner_aliases_added": [],
+  "owner_excluded": 0,
+  "parent_slug_csv_rows_rewritten": 0,
+  "parent_slug_directories_renamed": 0,
+  "parent_slug_directory_conflicts": 0,
+  "parent_slug_jsonl_rows_rewritten": 0,
+  "parent_slug_keys_migrated": 0,
+  "parents_dir": ".powerpacks/deep-context/parents",
+  "parents_written": 0,
+  "singleton_parents": 0,
+  "source": "build_parents",
+  "status": "completed",
+  "updated_at": "2026-07-31T18:25:08Z",
+  "worth_human_migrated": 0,
+  "worth_legacy_marks_cleared": 0,
+  "worth_parent_rows": 0,
+  "worth_stale_parent_rows_removed": 0
+}

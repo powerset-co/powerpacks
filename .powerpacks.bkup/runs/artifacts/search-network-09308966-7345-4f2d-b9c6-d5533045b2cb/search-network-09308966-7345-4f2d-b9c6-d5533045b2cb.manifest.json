@@ -1,0 +1,12 @@
+{
+  "artifact_dir": ".powerpacks/runs/artifacts/search-network-09308966-7345-4f2d-b9c6-d5533045b2cb",
+  "created_at": "2026-07-30T23:20:57Z",
+  "csv": ".powerpacks/runs/artifacts/search-network-09308966-7345-4f2d-b9c6-d5533045b2cb/search-network-09308966-7345-4f2d-b9c6-d5533045b2cb.csv",
+  "frontier_count": 1,
+  "hydrated_count": 1,
+  "jsonl": ".powerpacks/runs/artifacts/search-network-09308966-7345-4f2d-b9c6-d5533045b2cb/search-network-09308966-7345-4f2d-b9c6-d5533045b2cb.jsonl",
+  "query": "software engineers in sf that went to stanford",
+  "row_count": 1,
+  "state": ".powerpacks/runs/search-network-09308966-7345-4f2d-b9c6-d5533045b2cb-software-engineers-in-sf-that-went-to-stanford.json",
+  "task_id": "search-network-09308966-7345-4f2d-b9c6-d5533045b2cb"
+}

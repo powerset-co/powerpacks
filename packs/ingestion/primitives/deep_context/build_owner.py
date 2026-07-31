@@ -25,9 +25,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 from typing import Any
+
+from packs.ingestion.primitives.discover.messages.extract_imessage import open_sqlite_readonly
 
 from packs.ingestion.primitives.deep_context.common import (
     OWNER_JSON,
@@ -35,6 +39,7 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_TEMPLATE,
     emit,
     load_env,
+    normalize_phone,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.enrich.profile_cache import (
@@ -71,11 +76,48 @@ def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[s
     return {
         "name": normalized.get("full_name") or "",
         "emails": [email] if email else [],
+        "phones": [],
         "education": [e for e in education if e["school"]],
         "work": [w for w in work if w["company"]],
         "locations": [location] if location else [],
         "notes": normalized.get("headline") or "",
     }
+
+
+def harvest_owner_phones(chat_db: Path | None = None) -> list[str]:
+    """The owner's OWN phone numbers, straight from the SOURCE: iMessage
+    chat.db account metadata — `chat.account_login` P:-prefixed logins plus
+    `destination_caller_id` on received messages. Metadata columns only, never
+    message bodies. Downstream identifier policy drops these from every
+    CONTACT's reachability.
+
+    Deliberately no other source: derived contact CSVs are a name heuristic,
+    and the wacli stores offer nothing reliable (the session store's
+    paired-device JID is empty except while paired, and the message store's
+    `from_me` sender rows carry dozens of other people's JIDs through group
+    attribution)."""
+    chat_db = chat_db if chat_db is not None else Path.home() / "Library/Messages/chat.db"
+    if not chat_db.exists():
+        return []
+    phones: list[str] = []
+    try:
+        with closing(open_sqlite_readonly(chat_db)) as conn:
+            for (login,) in conn.execute("SELECT DISTINCT account_login FROM chat"):
+                value = str(login or "")
+                if value.startswith("P:"):
+                    phone = normalize_phone(value[2:])
+                    if phone and phone not in phones:
+                        phones.append(phone)
+            rows = conn.execute(
+                "SELECT DISTINCT destination_caller_id FROM message "
+                "WHERE is_from_me = 0 AND destination_caller_id LIKE '+%'")
+            for (caller_id,) in rows:
+                phone = normalize_phone(str(caller_id or ""))
+                if phone and phone not in phones:
+                    phones.append(phone)
+    except (sqlite3.Error, OSError):
+        return phones
+    return phones
 
 
 class BuildOwnerManifest(StageManifest):
@@ -171,6 +213,21 @@ class BuildOwner(Node):
                 )
 
         owner = owner_from_profile(normalized, email=self.email)
+        # Preserve augmentations a rebuild must not lose (msgvault adds emails;
+        # phones may be hand-set), then harvest own phones from the message
+        # stores' self-rows so the identifier policy can drop them everywhere.
+        if self.out.exists():
+            try:
+                previous = json.loads(self.out.read_text(encoding="utf-8")) or {}
+            except (json.JSONDecodeError, OSError):
+                previous = {}
+            for field in ("emails", "phones"):
+                for value in previous.get(field) or []:
+                    if value and value not in owner.setdefault(field, []):
+                        owner[field].append(value)
+        for phone in harvest_owner_phones():
+            if phone not in owner["phones"]:
+                owner["phones"].append(phone)
         self.out.parent.mkdir(parents=True, exist_ok=True)
         self.out.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
         return BuildOwnerManifest(

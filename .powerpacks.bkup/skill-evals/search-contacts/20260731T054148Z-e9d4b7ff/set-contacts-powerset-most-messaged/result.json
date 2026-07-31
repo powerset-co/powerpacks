@@ -1,0 +1,12 @@
+{
+  "id": "set-contacts-powerset-most-messaged",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/search-contacts/20260731T054148Z-e9d4b7ff/set-contacts-powerset-most-messaged/prompt.txt",
+  "query": "Show me the most messaged contacts in my Powerset set.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

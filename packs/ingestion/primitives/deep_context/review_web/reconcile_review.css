@@ -1234,6 +1234,31 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 
 .directory-empty { padding-top: 80px; }
 
+/* Person-pane decision affordance (top right) + LinkedIn confidence pill. */
+.person-detail { position: relative; }
+
+.person-detail-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: 8px;
+}
+
+.person-detail-actions .button { min-height: 36px; padding: 0 14px; font-size: 13px; }
+
+.linkedin-confidence {
+  display: inline-block;
+  margin: 12px 0 0 10px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: bottom;
+}
+
 .directory-dossier {
   margin-top: 10px;
   color: var(--foreground);
@@ -1258,6 +1283,235 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 .directory-dossier li + li { margin-top: 4px; }
 .directory-dossier em { color: var(--muted); }
 .directory-dossier hr { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
+
+/* Collapsed judge/provenance dropdown at the pane's very bottom. */
+.directory-debug {
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.directory-debug summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.directory-debug[open] summary { margin-bottom: 8px; }
+
+/* Optional-feedback popover — mirrored off the network-search-app
+   FeedbackForm: 288px card, 12px radius, soft drop shadow, context label,
+   auto-grow textarea, ⌘+Enter hint + send icon, green "Got it" done beat. */
+.feedback-popover {
+  position: absolute;
+  z-index: 40;
+  width: 288px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, .12);
+  animation: feedback-pop-in .15s ease-out;
+}
+
+@keyframes feedback-pop-in {
+  from { opacity: 0; transform: scale(.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.feedback-context {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.feedback-popover textarea {
+  width: 100%;
+  min-height: 48px;
+  max-height: 140px;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+}
+
+.feedback-popover textarea::placeholder { color: var(--muted); opacity: .55; }
+
+.feedback-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+}
+
+.feedback-hint { font-size: 10px; opacity: .6; }
+
+.feedback-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--secondary);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+
+.feedback-send:hover { color: var(--foreground); }
+
+.feedback-send:disabled { opacity: .3; pointer-events: none; }
+
+.feedback-done {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.feedback-done p { margin: 0; font-size: 13px; font-weight: 500; color: var(--foreground); }
+
+.feedback-done-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  flex-shrink: 0;
+}
+
+.person-detail-actions .feedback-trigger { min-height: 36px; font-size: 13px; }
+
+/* Wrong-person guidance form on the pane + the sidebar retarget queue. */
+.retarget-guidance {
+  margin: 12px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--secondary);
+}
+
+.retarget-guidance summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.retarget-guidance[open] summary { margin-bottom: 8px; }
+
+.retarget-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.retarget-form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.retarget-form-row .button { min-height: 34px; padding: 0 14px; font-size: 13px; }
+
+.retarget-panel {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
+.retarget-panel h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.retarget-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 30dvh;
+  overflow-y: auto;
+}
+
+.retarget-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.retarget-name {
+  border: 0;
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.retarget-name:hover { text-decoration: underline; }
+
+.retarget-item small {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.retarget-chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--secondary);
+  color: var(--muted);
+}
+
+.retarget-researching .retarget-chip,
+.retarget-judging .retarget-chip,
+.retarget-hydrating .retarget-chip { background: var(--accent-soft, #dbeafe); color: var(--accent, #1d4ed8); }
+
+.retarget-applied .retarget-chip { background: var(--ok-soft, #dcfce7); color: var(--ok, #15803d); }
+
+.retarget-synthetic .retarget-chip { background: var(--accent, #3a2420); color: var(--foreground, #f0eae2); }
+
+.retarget-no_match .retarget-chip { background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); }
+
+.retarget-failed .retarget-chip { background: var(--danger-soft, #fee2e2); color: var(--danger, #b91c1c); }
 
 @media (max-width: 860px) {
   .directory-layout {

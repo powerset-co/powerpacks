@@ -1,0 +1,12 @@
+{
+  "id": "page-back-through-existing",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/sales-nav-search/20260731T003250Z-8c2bbda9/page-back-through-existing/prompt.txt",
+  "query": "Show me the next 25 leads from artifact_id art_abc123.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

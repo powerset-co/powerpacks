@@ -30,6 +30,9 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     REVIEW_MANIFEST,
     VERDICTS_JSONL,
+    contact_identifiers,
+    load_owner,
+    phone_digits,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     linkedin_view,
@@ -38,7 +41,8 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
 )
 
-from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, parent_status
+from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, candidate_state, parent_status
+from .retarget_queue import ESTIMATED_COST_USD
 from .workflow import _effective_no_row, _effective_yes, enrichment_handoff_completed, in_worth_view, needs_worth_review, pending_linkedin_candidates, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents
 
 DECISION_CHUNK_SIZE = 40
@@ -147,30 +151,64 @@ def timeline_entries(parents_dir: Path, dossier_dir: Path, slug: str) -> list[st
     return entries
 
 
-_MEETING_URL_RE = re.compile(
-    r"(?i)\b(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com|teams\.live\.com|"
-    r"webex\.com|calendly\.com|cal\.com|whereby\.com|gotomeeting\.com)\b")
+def _owner_contact() -> tuple[list[str], list[str]]:
+    owner = load_owner() or {}
+    return (owner.get("emails") or [], owner.get("phones") or [])
 
 
-def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str) -> list[str]:
-    """Bare identifier values (emails/phones/etc.) from the dossier's "Identifiers"
-    section, so the card can bubble them up into its Contact line. Display-side
-    only (dossier files are never rewritten); meeting/scheduling URLs are
-    dropped because they are not contact info."""
+def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str, *,
+                        name: str = "", known: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """Contact-info values from the dossier's "Identifiers" section, so the card
+    can bubble them up into its Contact line. Display-side only (dossier files
+    are never rewritten). Every value passes the shared contact-identifier
+    policy: emails/phones only, owner's own endpoints dropped, and an email
+    survives only when `name`/`known` context can show it is this person's."""
     markdown = render_dossier(parents_dir, dossier_dir, slug)
     body = _dossier_section(markdown, "Identifiers")
-    values: list[str] = []
-    seen: set[str] = set()
-    for line in body.splitlines():
+    values = [_clean_text(bullet.group(1))
+              for bullet in map(_BULLET_RE.match, body.splitlines()) if bullet]
+    owner_emails, owner_phones = _owner_contact()
+    return contact_identifiers(values, name=name, known=known,
+                               owner_emails=owner_emails, owner_phones=owner_phones)
+
+
+def scrub_identifier_sections(markdown: str, *, name: str = "",
+                              known: list[str] | tuple[str, ...] = ()) -> str:
+    """Display-side rewrite of every "## Identifiers" section: bullets that fail
+    the contact-identifier policy disappear; a section left with no bullets
+    disappears entirely. The dossier file itself is never touched."""
+    owner_emails, owner_phones = _owner_contact()
+    out: list[str] = []
+    section: list[str] | None = None
+    keep_section = False
+
+    def flush() -> None:
+        nonlocal section, keep_section
+        if section is not None and keep_section:
+            out.extend(section)
+        section, keep_section = None, False
+
+    for line in markdown.splitlines():
+        if section is not None and line.startswith("## "):
+            flush()
+        if section is None:
+            if line.strip().lower() == "## identifiers":
+                section = [line]
+            else:
+                out.append(line)
+            continue
         bullet = _BULLET_RE.match(line)
-        if not bullet:
-            continue
-        value = _clean_text(bullet.group(1))
-        if not value or value.lower() in seen or _MEETING_URL_RE.search(value):
-            continue
-        values.append(value)
-        seen.add(value.lower())
-    return values
+        if bullet:
+            if not contact_identifiers(
+                    [_clean_text(bullet.group(1))], name=name, known=known,
+                    owner_emails=owner_emails, owner_phones=owner_phones):
+                continue
+            keep_section = True
+        elif line.strip():
+            keep_section = True
+        section.append(line)
+    flush()
+    return "\n".join(out)
 
 
 def render_dossier_markdown(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
@@ -295,13 +333,23 @@ def _machine_copy(parent: dict[str, Any]) -> tuple[str, str]:
 
 def _merge_contacts(contacts: list[str], identifiers: list[str]) -> list[str]:
     """Contact values plus the dossier's Identifiers, deduped case-insensitively
-    against what is already shown (bubbling the dossier's aliases up into Contact)."""
-    merged = list(contacts)
-    seen = {value.lower() for value in merged}
-    for value in identifiers:
-        if value and value.lower() not in seen:
-            merged.append(value)
-            seen.add(value.lower())
+    against what is already shown (bubbling the dossier's aliases up into
+    Contact). The mailbox owner's own endpoints never render as a CONTACT's
+    reachability, whichever source carried them in — group-chat channel
+    metadata can attribute the owner's own iMessage number to a contact."""
+    owner_emails, owner_phones = _owner_contact()
+    owner_keys = {str(e or "").strip().lower() for e in owner_emails} - {""}
+    owner_digits = {phone_digits(str(p)) for p in owner_phones} - {""}
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in [*contacts, *identifiers]:
+        low = str(value or "").strip().lower()
+        if not low or low in seen:
+            continue
+        if low in owner_keys or (phone_digits(low) and phone_digits(low) in owner_digits):
+            continue
+        merged.append(value)
+        seen.add(low)
     return merged
 
 
@@ -473,7 +521,9 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
     key = _worth_key(parent)
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
     slug = parent.get("dossier_slug") or parent.get("slug")
-    identifiers = dossier_identifiers(parents_dir, dossier_dir, slug)
+    identifiers = dossier_identifiers(
+        parents_dir, dossier_dir, slug, name=name,
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
     sparse_context = (
         not candidate.get("simple_summary")
         and not relationship_summary(parents_dir, dossier_dir, slug)
@@ -643,7 +693,9 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     placeholder = ("<p class='profile-note'>Not enough profile information "
                    "available.</p>" if cache_miss else "")
     identifiers = dossier_identifiers(
-        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
+        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
+        name=str(parent.get("name") or candidate.get("full_name") or ""),
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
     scroll_content = f"""
         {f"<div class='identity-eyebrow'>{esc(eyebrow)}</div>" if eyebrow else ""}
         <div class='profile-card'>
@@ -720,7 +772,9 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
     name = str(parent.get("name") or "this person")
     primary = candidates[0]
     identifiers = dossier_identifiers(
-        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
+        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
+        name=name,
+        known=[*(primary.get("match_emails") or []), *(primary.get("match_phones") or [])])
     options = "".join(
         _linkedin_option(parent, cand, profile_cache_dir) for cand in candidates)
     # The person header + merged context appears once; the per-option profiles follow.
@@ -806,7 +860,10 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
     reason = (_rejection_reason(parent) if decision == "no" else
               str((parent.get("machine_worth") or {}).get("reason") or "Worth adding"))
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
-    identifiers = (dossier_identifiers(parents_dir, dossier_dir, dossier_slug)
+    identifiers = (dossier_identifiers(
+        parents_dir, dossier_dir, dossier_slug,
+        name=str(parent.get("name") or candidate.get("full_name") or ""),
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
                    if parents_dir is not None and dossier_dir is not None else [])
     sparse_context = (
         parents_dir is not None
@@ -1311,6 +1368,69 @@ def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
     return entries
 
 
+_PARENT_POINTER_SECTIONS = {"confirmed children (merged)"}
+
+
+_CHILDREN_SECTION_RE = re.compile(
+    r"(?ms)^##\s+Confirmed children \(merged\)\s*\n(.*?)(?=^##\s|\Z)")
+
+
+def split_children_section(markdown: str) -> tuple[str, str]:
+    """(dossier without the merge bookkeeping, the children section body).
+
+    The confirmed-children list is judge/debug provenance, not person context —
+    the pane shows the dossier clean and folds the children into a collapsed
+    debug dropdown at the bottom."""
+    match = _CHILDREN_SECTION_RE.search(markdown)
+    if not match:
+        return markdown, ""
+    remainder = (markdown[:match.start()] + markdown[match.end():]).strip()
+    return remainder, match.group(1).strip()
+
+
+def directory_dossier(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
+    """The directory pane's dossier markdown: the PARENT canonical dossier.
+
+    A merged person's parent .md IS the consolidated dossier (summary,
+    relationship, who-they-are, topics, plus the confirmed-children list with
+    judge scores) — showing it once beats concatenating N child dossiers that
+    repeat the same person. A parent whose body carries no real section beyond
+    the children pointer list (singletons) falls back to render_dossier's
+    child composition, as do candidate rows with no parent file at all."""
+    pmd = parents_dir / f"{Path(slug).name}.md"
+    if pmd.exists():
+        body = _strip_frontmatter(pmd.read_text(encoding="utf-8")).strip()
+        sections = re.findall(r"(?m)^##\s+(.+?)\s*$", body)
+        if any(title.strip().lower() not in _PARENT_POINTER_SECTIONS
+               for title in sections):
+            return body
+    return render_dossier(parents_dir, dossier_dir, slug)
+
+
+def _worth_action_buttons(parent: dict[str, Any], slug: str) -> str:
+    """Top-right decision affordance on the person pane: move the person to
+    the OTHER worth pile (both directions for an undecided person). Wired by
+    the directory JS to the same /worth endpoint the review stages use."""
+    key = str(_worth_key(parent) or "").strip()
+    if not key:
+        return ""
+    worth = str(((parent.get("worth_row") or {}).get("effective"))
+                or (parent.get("worth") or {}).get("decision") or "").strip().lower()
+
+    def button(target: str, label: str) -> str:
+        return (f"<button type='button' class='button button-outline' "
+                f"data-dir-worth='{target}' data-pub='{esc(key)}' "
+                f"data-parent='{esc(slug)}'>{label}</button>")
+
+    if worth == "yes":
+        buttons = button("no", "Move to No")
+    elif worth == "no":
+        buttons = button("yes", "Move to Yes")
+    else:
+        buttons = button("yes", "Move to Yes") + button("no", "Move to No")
+    return f"<div class='person-detail-actions'>{buttons}</div>"
+
+
 def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
                          profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
     """The directory's person pane: the review cards' profile header (avatar,
@@ -1318,7 +1438,16 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     Summary / Work / Education, cache-hydrated exactly like a card) above the
     full dossier rendered as HTML. The candidate is copied before hydration so
     this browse path never mutates the server's cached model."""
-    candidate = dict(_primary_candidate(parent))
+    primary = dict(_primary_candidate(parent))
+    # A detached/excluded/rejected identity is a judged-wrong (or user-refused)
+    # person: never render its link, confidence, headline, photo, or cached
+    # profile facts — only the contact's own emails/phones survive. The pub is
+    # kept separately so the wrong-person guidance form still keys correctly.
+    wrong_identity = candidate_state(primary) in {"detached", "excluded", "rejected"} \
+        if primary else False
+    candidate = ({"match_emails": primary.get("match_emails") or [],
+                  "match_phones": primary.get("match_phones") or []}
+                 if wrong_identity else primary)
     _hydrate_card_profile(candidate, profile_cache_dir)
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
     slug = str(parent.get("dossier_slug") or parent.get("slug") or "")
@@ -1326,10 +1455,17 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     url = "" if synthetic else str(candidate.get("url") or "")
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>"
             "View LinkedIn<span aria-hidden='true'>↗</span></a>") if url else ""
+    confidence = float(candidate.get("confidence") or 0.0)
+    if url and confidence > 0:
+        link += (f"<span class='linkedin-confidence'>LinkedIn Confidence: "
+                 f"{round(confidence * 100)}%</span>")
     headline = "" if synthetic else str(candidate.get("headline") or "")
+    ground_truth = [*(candidate.get("match_emails") or []),
+                    *(candidate.get("match_phones") or [])]
     contacts = _merge_contacts(
-        [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
-        dossier_identifiers(parents_dir, dossier_dir, slug))
+        ground_truth,
+        dossier_identifiers(parents_dir, dossier_dir, slug,
+                            name=name, known=ground_truth))
     rows: list[str] = []
     if contacts:
         rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
@@ -1339,9 +1475,41 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     rows.extend(profile_fact_rows(candidate))
     facts = (f"<section class='details'><div class='details-body'>"
              f"<dl>{''.join(rows)}</dl></div></section>" if rows else "")
-    dossier = markdown_to_html(render_dossier(parents_dir, dossier_dir, slug))
+    retarget_pub = str(primary.get("pub")
+                       or (parent.get("person_ids") or [""])[0] or "").strip()
+    guidance_form = ""
+    if retarget_pub:
+        guidance_form = f"""
+      <details class='retarget-guidance'>
+        <summary>Wrong person?</summary>
+        <form class='retarget-form' data-retarget-form
+              data-pub='{esc(retarget_pub)}' data-parent='{esc(slug)}'>
+          <textarea name='guidance' rows='3' maxlength='2000' required
+            placeholder="Who is this actually? e.g. 'the Jordan Bravo who ran DevRel at Acme' — or paste the right LinkedIn URL"></textarea>
+          <div class='retarget-form-row'>
+            <button type='submit' class='button button-primary'>
+              Queue re-research (≈${ESTIMATED_COST_USD:.2f})</button>
+            <span class='retarget-form-note' data-retarget-note hidden></span>
+          </div>
+        </form>
+      </details>"""
+    dossier_md, children_md = split_children_section(
+        scrub_identifier_sections(directory_dossier(parents_dir, dossier_dir, slug),
+                                  name=name, known=ground_truth))
+    # Older parent dossiers title themselves "Name (canonical)" — an internal
+    # label, redundant on the pane (display-side; files are never rewritten).
+    dossier_md = re.sub(r"(?m)^(#{1,3} .*?) \(canonical\)\s*$", r"\1", dossier_md)
+    dossier = markdown_to_html(dossier_md)
+    children_debug = ""
+    if children_md:
+        children_debug = (
+            "<details class='directory-debug'>"
+            "<summary>Merged children (debug)</summary>"
+            f"<div class='directory-dossier'>{markdown_to_html(children_md)}</div>"
+            "</details>")
     return f"""
     <article class='person-detail' data-person-slug='{esc(slug)}'>
+      {_worth_action_buttons(parent, slug)}
       <div class='profile-card'>
         {_avatar(parent, candidate)}
         <div class='profile-copy'>
@@ -1351,8 +1519,10 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
           {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
         </div>
       </div>
+      {guidance_form}
       {facts}
       <section class='directory-dossier'>{dossier}</section>
+      {children_debug}
     </article>"""
 
 
@@ -1399,8 +1569,12 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
               "<span class='worth-search-count' data-search-count hidden></span></div>")
     banner = (f"<div class='directory-handoff'>{GO_BACK_HTML}</div>"
               if handoff else "")
+    retarget_panel = ("<section class='retarget-panel' data-retarget-panel hidden>"
+                      "<h3>Retargeting</h3>"
+                      "<ul class='retarget-items' data-retarget-items></ul>"
+                      "</section>")
     content = (f"{banner}<div class='directory-layout'>"
-               f"<aside class='directory-sidebar'>{search}{tab_nav}"
+               f"<aside class='directory-sidebar'>{search}{tab_nav}{retarget_panel}"
                "<nav class='directory-list' data-directory-list aria-label='People A to Z'></nav>"
                "</aside>"
                f"<section class='directory-detail' data-directory-detail>{detail}</section>"

@@ -1,0 +1,12 @@
+{
+  "artifact_dir": ".powerpacks/runs/artifacts/search-network-53141ced-9967-45f4-b0c3-731117e78245",
+  "created_at": "2026-07-31T16:15:08Z",
+  "csv": ".powerpacks/runs/artifacts/search-network-53141ced-9967-45f4-b0c3-731117e78245/search-network-53141ced-9967-45f4-b0c3-731117e78245.csv",
+  "frontier_count": 6,
+  "hydrated_count": 6,
+  "jsonl": ".powerpacks/runs/artifacts/search-network-53141ced-9967-45f4-b0c3-731117e78245/search-network-53141ced-9967-45f4-b0c3-731117e78245.jsonl",
+  "query": "software engineer database architects",
+  "row_count": 6,
+  "state": ".powerpacks/runs/search-network-53141ced-9967-45f4-b0c3-731117e78245-software-engineer-database-architects.json",
+  "task_id": "search-network-53141ced-9967-45f4-b0c3-731117e78245"
+}

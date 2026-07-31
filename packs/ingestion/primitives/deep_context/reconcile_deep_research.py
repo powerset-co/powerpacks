@@ -91,6 +91,7 @@ from packs.ingestion.primitives.deep_context.common import (
     FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
+    contact_identifiers,
     load_owner,
     owner_background_block,
     OWNER_JSON,
@@ -353,8 +354,12 @@ def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
         parts.append(f"Location: {merged['location']}")
     if merged.get("topics"):
         parts.append(f"We discuss: {', '.join(merged['topics'][:8])}")
-    identifiers = [str(value).strip() for value in (merged.get("identifiers") or [])
-                   if str(value).strip()]
+    owner = load_owner() or {}
+    identifiers = contact_identifiers(
+        merged.get("identifiers"),
+        name=str(merged.get("canonical_name") or ""),
+        owner_emails=owner.get("emails") or [],
+        owner_phones=owner.get("phones") or [])
     if identifiers:
         parts.append(f"Identifiers from our messages: {', '.join(identifiers[:12])}")
     shared = [

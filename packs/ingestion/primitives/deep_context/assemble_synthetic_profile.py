@@ -526,7 +526,13 @@ class AssembleSyntheticProfile(Node):
         facts_dir: Path | None = None,
         auto_completeness: float = DEFAULT_AUTO_COMPLETENESS,
         manifest: str | Path | None = None,
+        prune: bool = True,
     ) -> None:
+        # prune=False is for SCOPED assembly (the directory's guided-retarget
+        # flow passes its one-person queue): the machine-row prune assumes the
+        # queue covers the whole enrichment selection, so a partial queue must
+        # never trigger it or every other machine-owned synthetic would vanish.
+        self.prune = prune
         self.research_dir = Path(research_dir or DR_OUT_DIR)
         self.queue_csv = Path(queue_csv or QUEUE_CSV)
         self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
@@ -577,7 +583,7 @@ class AssembleSyntheticProfile(Node):
         # only from this queue; otherwise an old model-Yes synthetic could survive
         # after the current People decision moved to No. Explicit user gates remain
         # sticky and are never pruned here.
-        if queue_is_current:
+        if queue_is_current and self.prune:
             for pub, row in list(existing.items()):
                 approved = str(row.get("approved") or "").strip().lower()
                 handle = str(row.get("source_parent_slug") or "").strip()

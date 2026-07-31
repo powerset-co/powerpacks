@@ -1,0 +1,12 @@
+{
+  "id": "expired-token-refresh",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/powerset-login/20260731T003407Z-2b18a2fd/expired-token-refresh/prompt.txt",
+  "query": "My MCP suddenly stopped working. claude mcp list says powerset-search failed to connect.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

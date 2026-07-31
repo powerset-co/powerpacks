@@ -1,0 +1,112 @@
+{
+  "agentic_sql_candidate_count": 0,
+  "agentic_sql_tagged": 0,
+  "applied_filter": [
+    "And",
+    [
+      [
+        "city",
+        "In",
+        [
+          "San Francisco"
+        ]
+      ],
+      [
+        "seniority_band",
+        "In",
+        [
+          "mid",
+          "senior"
+        ]
+      ]
+    ]
+  ],
+  "base_id_batch_count": null,
+  "base_id_batch_size": null,
+  "batched_base_ids": false,
+  "bm25_queries": [
+    "software engineer",
+    "backend engineer",
+    "Backend Engineer",
+    "Senior Software Engineer"
+  ],
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "bucket": "good",
+      "city": "San Francisco",
+      "company_id": "company_1",
+      "company_name": null,
+      "country": "United States",
+      "has_adjacent_regex": false,
+      "has_core_regex": true,
+      "is_current": true,
+      "macro_region": null,
+      "matched_position_ids": [
+        "00000000-0000-0000-0000-000000000001-1"
+      ],
+      "metro_areas": null,
+      "person_id": "00000000-0000-0000-0000-000000000001",
+      "position_id": "00000000-0000-0000-0000-000000000001-1",
+      "position_title": "Senior Software Engineer",
+      "role_track": "engineer",
+      "score": 0.05901639344262296,
+      "seniority_band": "senior",
+      "state": "CA",
+      "vertical_sources": [
+        "hybrid"
+      ]
+    },
+    {
+      "bucket": "good",
+      "city": "San Francisco",
+      "company_id": "company_2",
+      "company_name": null,
+      "country": "United States",
+      "has_adjacent_regex": false,
+      "has_core_regex": true,
+      "is_current": true,
+      "macro_region": null,
+      "matched_position_ids": [
+        "00000000-0000-0000-0000-000000000002-1"
+      ],
+      "metro_areas": null,
+      "person_id": "00000000-0000-0000-0000-000000000002",
+      "position_id": "00000000-0000-0000-0000-000000000002-1",
+      "position_title": "Backend Engineer",
+      "role_track": "engineer",
+      "score": 0.05806451612903226,
+      "seniority_band": "mid",
+      "state": "CA",
+      "vertical_sources": [
+        "hybrid"
+      ]
+    }
+  ],
+  "company_union_added": 0,
+  "company_union_candidate_count": 0,
+  "namespace": "local_people_positions",
+  "prefilter_short_circuit": false,
+  "query": "software engineers in sf",
+  "retrieval_mode": "hybrid",
+  "search_mode": "SEARCH_ONLY",
+  "semantic_query": "Experienced software engineers who build production systems, own backend or full-stack implementation, and show evidence of technical execution in product or infrastructure teams.",
+  "vertical_source_counts": {
+    "hybrid": 2
+  },
+  "verticals": {
+    "company_signal": {
+      "namespace_row_count": 0,
+      "row_count": 0,
+      "status": "blocked_missing_local_company_signals"
+    },
+    "role": {
+      "row_count": 2,
+      "status": "completed"
+    },
+    "summary": {
+      "row_count": 0,
+      "status": "skipped_missing_namespace"
+    }
+  }
+}
