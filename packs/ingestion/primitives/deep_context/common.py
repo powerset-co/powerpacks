@@ -199,6 +199,66 @@ def normalize_name(raw: str) -> str:
     return re.sub(r"\s+", " ", (raw or "").strip()).lower()
 
 
+_IDENT_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
+
+
+def _name_tokens(name: str) -> set[str]:
+    return {t for t in re.split(r"[^a-z0-9]+", (name or "").lower()) if len(t) >= 3}
+
+
+def contact_identifiers(values: list[str] | None, *, name: str = "",
+                        known: list[str] | tuple[str, ...] = (),
+                        owner_emails: list[str] | tuple[str, ...] = (),
+                        owner_phones: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """The one identifier policy: "contact info to reach THIS person" — emails
+    and phone numbers ONLY, and an email must show it is theirs. First rule
+    wins per value:
+
+      1. not an email and not phone-like (>=7 digits)      -> drop (URLs, maps,
+         campaign links, handles, free text — never contact info)
+      2. the mailbox owner's own email/phone                -> drop
+      3. phone                                              -> keep
+      4. email in `known` (ground-truth channel endpoints)  -> keep
+      5. email whose local part or domain carries a token
+         (>=3 chars) of the person's name                   -> keep
+      6. any other email (someone else on the thread)       -> drop
+
+    With no `name`/`known` context only ground-truth-free rules apply, which
+    means extracted emails drop — strict by design."""
+    owner_e = {str(e or "").strip().lower() for e in owner_emails} - {""}
+    owner_p = {phone_digits(str(p)) for p in owner_phones} - {""}
+    known_l = {str(v or "").strip().lower() for v in known} - {""}
+    tokens = _name_tokens(name)
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        value = str(raw or "").strip().strip(".,;:")
+        low = value.lower()
+        if not value or low in seen:
+            continue
+        # A slash disqualifies both shapes up front: URLs with an embedded
+        # address (sprh.mn/?vip=x@y.com) are not emails, and dates (11/1/2023)
+        # are not phone numbers.
+        if "/" in value:
+            continue
+        if _IDENT_EMAIL_RE.match(value):
+            if low in owner_e:
+                continue
+            local, _, domain = low.partition("@")
+            hay = local + " " + domain.rsplit(".", 1)[0]
+            if low in known_l or any(t in hay for t in tokens):
+                seen.add(low)
+                out.append(value)
+            continue
+        digits = phone_digits(value)
+        if re.fullmatch(r"[+()\d\s.\-]{7,}", value) and len(digits) >= 7:
+            if digits in owner_p:
+                continue
+            seen.add(low)
+            out.append(value)
+    return out
+
+
 def slugify(name: str, person_id: str) -> str:
     """Stable dossier filename stem: name-slug + short id suffix (collision-proof)."""
     base = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "person"

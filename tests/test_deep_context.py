@@ -103,6 +103,56 @@ class TestCommon(unittest.TestCase):
             self.assertIn("+14155551234", people[0].phones)
 
 
+class TestContactIdentifierPolicy(unittest.TestCase):
+    """'Contact info to reach this person': emails/phones only, owner dropped,
+    and an email must be provably theirs (ground truth, or a name token in its
+    local part / domain). Everything else — URLs, maps/campaign/meeting links,
+    handles, dates — never survives."""
+
+    def test_policy_first_rule_wins(self):
+        kept = common.contact_identifiers(
+            ["jordan.bravo@acme.com",              # name token in local part
+             "casey@jordanbravo.com",              # name token in domain
+             "owner@example.com",                  # mailbox owner's own
+             "randomperson@acme.com",              # someone else on the thread
+             "known@example.net",                  # ground-truth channel email
+             "+1 (555) 010-0000",                  # phone
+             "11/1/2023",                          # date is not a phone
+             "https://maps.app.goo.gl/Zus2dp",     # maps link
+             "https://sprh.mn/?vip=jordan@a.com",  # URL with embedded address
+             "https://www.amazon.com/dp/1328663795",
+             "meet.google.com/abc-defg-hij",
+             "@jordanbravo"],                      # bare handle
+            name="Jordan Bravo",
+            known=["known@example.net"],
+            owner_emails=["owner@example.com"],
+            owner_phones=["+15550199"])
+        self.assertEqual(kept, ["jordan.bravo@acme.com", "casey@jordanbravo.com",
+                                "known@example.net", "+1 (555) 010-0000"])
+
+    def test_without_context_extracted_emails_drop(self):
+        kept = common.contact_identifiers(["someone@example.com", "+15550100000"])
+        self.assertEqual(kept, ["+15550100000"])
+
+    def test_owner_phone_drops(self):
+        self.assertEqual(
+            common.contact_identifiers(["+1 555 019 9000"],
+                                       owner_phones=["5550199000"]), [])
+
+    def test_scrub_rewrites_identifier_sections_display_side(self):
+        md = ("# Jordan Bravo\n\n## Identifiers\n\n- jordan@acme.com\n"
+              "- https://maps.app.goo.gl/Zus2dp\n\n## Timeline\n\n- **2026** — met up")
+        out = web_rendering.scrub_identifier_sections(md, name="Jordan Bravo")
+        self.assertIn("jordan@acme.com", out)
+        self.assertNotIn("maps.app.goo.gl", out)
+        self.assertIn("## Timeline", out)
+        only_junk = ("## Identifiers\n\n- https://maps.app.goo.gl/Zus2dp\n\n"
+                     "## Timeline\n\n- **2026** — met up")
+        out2 = web_rendering.scrub_identifier_sections(only_junk, name="Jordan Bravo")
+        self.assertNotIn("## Identifiers", out2)   # emptied section disappears
+        self.assertIn("## Timeline", out2)
+
+
 class TestDeepContextRunnerSafety(unittest.TestCase):
     def test_chained_paid_run_is_disabled(self):
         runner = Path(__file__).resolve().parents[1] / "bin" / "deep-context"
@@ -5154,7 +5204,7 @@ class TestDirectoryView(unittest.TestCase):
             (dossiers / "jordan-parent.md").write_text(
                 "---\nslug: jordan-parent\n---\n\n# Jordan Bravo\n\n"
                 "## Relationship & cadence\n\nWarm intro via Casey.\n\n"
-                "## Identifiers\n\n- casey@example.com\n",
+                "## Identifiers\n\n- jordan.bravo@acme.com\n- casey@example.com\n",
                 encoding="utf-8")
             parent = self._parent(
                 "jordan-parent", "Jordan Bravo",
@@ -5170,8 +5220,11 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("Builds things", html)
         self.assertIn("<div><dt>Work</dt>", html)
         self.assertIn("<div><dt>Education</dt>", html)
-        # Contact merges match values with the dossier's Identifiers section.
-        self.assertIn("jordan@example.com · casey@example.com", html)
+        # Contact merges match values with the dossier's Identifiers section —
+        # but only identifiers the contact policy can prove are THIS person's:
+        # casey@example.com is someone else on the thread and never surfaces.
+        self.assertIn("jordan@example.com · jordan.bravo@acme.com", html)
+        self.assertNotIn("casey@example.com", html)
         self.assertIn("<h4>Relationship &amp; cadence</h4>", html)
         self.assertIn("Warm intro via Casey.", html)
         # Browse-only: no decision affordances anywhere in the pane.

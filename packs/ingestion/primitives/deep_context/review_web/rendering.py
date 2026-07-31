@@ -30,6 +30,8 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     REVIEW_MANIFEST,
     VERDICTS_JSONL,
+    contact_identifiers,
+    load_owner,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     linkedin_view,
@@ -148,30 +150,64 @@ def timeline_entries(parents_dir: Path, dossier_dir: Path, slug: str) -> list[st
     return entries
 
 
-_MEETING_URL_RE = re.compile(
-    r"(?i)\b(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com|teams\.live\.com|"
-    r"webex\.com|calendly\.com|cal\.com|whereby\.com|gotomeeting\.com)\b")
+def _owner_contact() -> tuple[list[str], list[str]]:
+    owner = load_owner() or {}
+    return (owner.get("emails") or [], owner.get("phones") or [])
 
 
-def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str) -> list[str]:
-    """Bare identifier values (emails/phones/etc.) from the dossier's "Identifiers"
-    section, so the card can bubble them up into its Contact line. Display-side
-    only (dossier files are never rewritten); meeting/scheduling URLs are
-    dropped because they are not contact info."""
+def dossier_identifiers(parents_dir: Path, dossier_dir: Path, slug: str, *,
+                        name: str = "", known: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """Contact-info values from the dossier's "Identifiers" section, so the card
+    can bubble them up into its Contact line. Display-side only (dossier files
+    are never rewritten). Every value passes the shared contact-identifier
+    policy: emails/phones only, owner's own endpoints dropped, and an email
+    survives only when `name`/`known` context can show it is this person's."""
     markdown = render_dossier(parents_dir, dossier_dir, slug)
     body = _dossier_section(markdown, "Identifiers")
-    values: list[str] = []
-    seen: set[str] = set()
-    for line in body.splitlines():
+    values = [_clean_text(bullet.group(1))
+              for bullet in map(_BULLET_RE.match, body.splitlines()) if bullet]
+    owner_emails, owner_phones = _owner_contact()
+    return contact_identifiers(values, name=name, known=known,
+                               owner_emails=owner_emails, owner_phones=owner_phones)
+
+
+def scrub_identifier_sections(markdown: str, *, name: str = "",
+                              known: list[str] | tuple[str, ...] = ()) -> str:
+    """Display-side rewrite of every "## Identifiers" section: bullets that fail
+    the contact-identifier policy disappear; a section left with no bullets
+    disappears entirely. The dossier file itself is never touched."""
+    owner_emails, owner_phones = _owner_contact()
+    out: list[str] = []
+    section: list[str] | None = None
+    keep_section = False
+
+    def flush() -> None:
+        nonlocal section, keep_section
+        if section is not None and keep_section:
+            out.extend(section)
+        section, keep_section = None, False
+
+    for line in markdown.splitlines():
+        if section is not None and line.startswith("## "):
+            flush()
+        if section is None:
+            if line.strip().lower() == "## identifiers":
+                section = [line]
+            else:
+                out.append(line)
+            continue
         bullet = _BULLET_RE.match(line)
-        if not bullet:
-            continue
-        value = _clean_text(bullet.group(1))
-        if not value or value.lower() in seen or _MEETING_URL_RE.search(value):
-            continue
-        values.append(value)
-        seen.add(value.lower())
-    return values
+        if bullet:
+            if not contact_identifiers(
+                    [_clean_text(bullet.group(1))], name=name, known=known,
+                    owner_emails=owner_emails, owner_phones=owner_phones):
+                continue
+            keep_section = True
+        elif line.strip():
+            keep_section = True
+        section.append(line)
+    flush()
+    return "\n".join(out)
 
 
 def render_dossier_markdown(parents_dir: Path, dossier_dir: Path, slug: str) -> str:
@@ -474,7 +510,9 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
     key = _worth_key(parent)
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
     slug = parent.get("dossier_slug") or parent.get("slug")
-    identifiers = dossier_identifiers(parents_dir, dossier_dir, slug)
+    identifiers = dossier_identifiers(
+        parents_dir, dossier_dir, slug, name=name,
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
     sparse_context = (
         not candidate.get("simple_summary")
         and not relationship_summary(parents_dir, dossier_dir, slug)
@@ -644,7 +682,9 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     placeholder = ("<p class='profile-note'>Not enough profile information "
                    "available.</p>" if cache_miss else "")
     identifiers = dossier_identifiers(
-        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
+        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
+        name=str(parent.get("name") or candidate.get("full_name") or ""),
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
     scroll_content = f"""
         {f"<div class='identity-eyebrow'>{esc(eyebrow)}</div>" if eyebrow else ""}
         <div class='profile-card'>
@@ -721,7 +761,9 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
     name = str(parent.get("name") or "this person")
     primary = candidates[0]
     identifiers = dossier_identifiers(
-        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"))
+        parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
+        name=name,
+        known=[*(primary.get("match_emails") or []), *(primary.get("match_phones") or [])])
     options = "".join(
         _linkedin_option(parent, cand, profile_cache_dir) for cand in candidates)
     # The person header + merged context appears once; the per-option profiles follow.
@@ -807,7 +849,10 @@ def _decision_row_html(parent: dict[str, Any], decision: str,
     reason = (_rejection_reason(parent) if decision == "no" else
               str((parent.get("machine_worth") or {}).get("reason") or "Worth adding"))
     dossier_slug = parent.get("dossier_slug") or parent.get("slug")
-    identifiers = (dossier_identifiers(parents_dir, dossier_dir, dossier_slug)
+    identifiers = (dossier_identifiers(
+        parents_dir, dossier_dir, dossier_slug,
+        name=str(parent.get("name") or candidate.get("full_name") or ""),
+        known=[*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])])
                    if parents_dir is not None and dossier_dir is not None else [])
     sparse_context = (
         parents_dir is not None
@@ -1404,9 +1449,12 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
         link += (f"<span class='linkedin-confidence'>LinkedIn Confidence: "
                  f"{round(confidence * 100)}%</span>")
     headline = "" if synthetic else str(candidate.get("headline") or "")
+    ground_truth = [*(candidate.get("match_emails") or []),
+                    *(candidate.get("match_phones") or [])]
     contacts = _merge_contacts(
-        [*(candidate.get("match_emails") or []), *(candidate.get("match_phones") or [])],
-        dossier_identifiers(parents_dir, dossier_dir, slug))
+        ground_truth,
+        dossier_identifiers(parents_dir, dossier_dir, slug,
+                            name=name, known=ground_truth))
     rows: list[str] = []
     if contacts:
         rows.append(f"<div><dt>Contact</dt><dd>{esc(' · '.join(contacts))}</dd></div>")
@@ -1435,7 +1483,8 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
         </form>
       </details>"""
     dossier_md, children_md = split_children_section(
-        directory_dossier(parents_dir, dossier_dir, slug))
+        scrub_identifier_sections(directory_dossier(parents_dir, dossier_dir, slug),
+                                  name=name, known=ground_truth))
     dossier = markdown_to_html(dossier_md)
     children_debug = ""
     if children_md:

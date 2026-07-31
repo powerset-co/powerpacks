@@ -49,8 +49,10 @@ from packs.ingestion.primitives.deep_context.common import (
     INDEX_MD,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
+    contact_identifiers,
     emit,
     load_index,
+    load_owner,
     read_jsonl,
     phone_digits,
     slugify,
@@ -271,8 +273,16 @@ def render_dossier(meta: dict[str, Any], merged: dict[str, Any], depth: dict[str
     contact_values = [*(meta.get("emails") or []), *(meta.get("phones") or [])]
     known = {v.lower() for v in contact_values}
     known |= {phone_digits(v) for v in contact_values if phone_digits(v)}
+    # Extracted identifiers pass the contact-info policy (emails/phones that
+    # are demonstrably this person's; never URLs) before rendering.
+    owner = load_owner() or {}
     idents = [
-        i for i in (merged.get("identifiers") or [])
+        i for i in contact_identifiers(
+            merged.get("identifiers"),
+            name=str(merged.get("canonical_name") or meta.get("name") or ""),
+            known=contact_values,
+            owner_emails=owner.get("emails") or [],
+            owner_phones=owner.get("phones") or [])
         if i.lower() not in known and phone_digits(i) not in known
     ]
     contact = [f"- {v}" for v in contact_values]
