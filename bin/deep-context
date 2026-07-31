@@ -42,7 +42,7 @@ review_server_pids() {
   # Only reconcile_review_web listeners on the port — never someone else's process.
   local pid
   for pid in $(lsof -ti :"$1" 2>/dev/null); do
-    if ps -p "$pid" -o command= 2>/dev/null | grep -q "reconcile_review_web"; then
+    if ps -p "$pid" -o command= 2>/dev/null | grep -Eq "reconcile_review_web|deep_context\.review_web"; then
       echo "$pid"
     fi
   done

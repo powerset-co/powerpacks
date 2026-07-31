@@ -76,6 +76,17 @@ class TestSendFeedback(unittest.TestCase):
         self.assertEqual((base, path, token), ("https://api.example.com", "/v2/feedback", "tok"))
         self.assertEqual(body["set_id"], SET_ID)
 
+    def test_missing_api_config_maps_to_failed_payload(self):
+        # api_base raises SystemExit when no env alias is set; the server's
+        # /feedback handler needs a payload, never an escaping exit.
+        with mock.patch.object(sf, "api_base",
+                               side_effect=SystemExit("missing required Powerset API config")), \
+             mock.patch.object(sf, "bearer_token") as token:
+            payload = sf.SendFeedback(self._request()).run()
+        token.assert_not_called()
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("Powerset API config", payload["error"])
+
     def test_signed_out_maps_to_needs_auth(self):
         with mock.patch.object(sf, "api_base", return_value="https://api.example.com"), \
              mock.patch.object(sf, "bearer_token",
