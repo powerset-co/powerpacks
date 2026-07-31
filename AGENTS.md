@@ -485,6 +485,9 @@ Routes:
   `packs/apollo/skills/build-outbound/SKILL.md`
 - `$powerset`, `$powerset setup`, Powerset login/status/whoami/sets/MCP/env credentials →
   `packs/powerset/skills/powerset/SKILL.md`
+- `$send-feedback`, send feedback, report a wrong search/deep-context result,
+  "we found the wrong person" reflect-and-report to the Powerset feedback API →
+  `packs/powerset/skills/send-feedback/SKILL.md`
 - `$update-powerpacks`, reinstall/update Powerpacks skills, canonical install/state cleanup, adopt `.codex` state →
   `packs/powerset/skills/update-powerpacks/SKILL.md`
 - `$fix-powerpacks`, diagnose/fix local Powerpacks state paths, copy newer `.powerpacks` state into canonical repo, validate linked source wiring →
