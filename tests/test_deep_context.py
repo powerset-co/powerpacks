@@ -5451,6 +5451,29 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("judge 0.90", debug)
         self.assertIn("<details", html)
 
+    def test_detached_identity_never_renders_in_the_pane(self):
+        # A judged-wrong (detached) LinkedIn shows NOTHING of the wrong person:
+        # no link, no confidence badge, no headline — only the guidance form
+        # still keys on the detached pub so re-research lands on the right row.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = {"slug": "jordan-bravo-p", "dossier_slug": "jordan-bravo-p",
+                      "name": "Jordan Bravo", "person_ids": ["pid-jordan"],
+                      "candidates": [{"pub": "jordan-namesake",
+                                      "url": "https://www.linkedin.com/in/jordan-namesake",
+                                      "full_name": "Jordan Namesake",
+                                      "headline": "NIH IT specialist",
+                                      "action": "detach", "approved": "auto",
+                                      "confidence": 0.93, "verdict": "wrong_person"}]}
+            pane = web_rendering.render_person_detail(
+                parent, base / "parents", base / "dossiers", base / "profiles")
+        self.assertNotIn("View LinkedIn", pane)
+        self.assertNotIn("linkedin.com/in/jordan-namesake", pane)
+        self.assertNotIn("LinkedIn Confidence", pane)
+        self.assertNotIn("NIH IT specialist", pane)
+        self.assertIn("data-retarget-form", pane)
+        self.assertIn("data-pub='jordan-namesake'", pane)
+
     def test_review_js_wires_the_directory_view(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn("setupDirectory", script)

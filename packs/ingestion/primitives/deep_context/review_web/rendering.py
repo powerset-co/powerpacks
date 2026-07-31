@@ -38,7 +38,7 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
 )
 
-from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, parent_status
+from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, candidate_state, parent_status
 from .retarget_queue import ESTIMATED_COST_USD
 from .workflow import _effective_no_row, _effective_yes, enrichment_handoff_completed, in_worth_view, needs_worth_review, pending_linkedin_candidates, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents
 
@@ -1382,7 +1382,16 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     Summary / Work / Education, cache-hydrated exactly like a card) above the
     full dossier rendered as HTML. The candidate is copied before hydration so
     this browse path never mutates the server's cached model."""
-    candidate = dict(_primary_candidate(parent))
+    primary = dict(_primary_candidate(parent))
+    # A detached/excluded/rejected identity is a judged-wrong (or user-refused)
+    # person: never render its link, confidence, headline, photo, or cached
+    # profile facts — only the contact's own emails/phones survive. The pub is
+    # kept separately so the wrong-person guidance form still keys correctly.
+    wrong_identity = candidate_state(primary) in {"detached", "excluded", "rejected"} \
+        if primary else False
+    candidate = ({"match_emails": primary.get("match_emails") or [],
+                  "match_phones": primary.get("match_phones") or []}
+                 if wrong_identity else primary)
     _hydrate_card_profile(candidate, profile_cache_dir)
     name = str(parent.get("name") or candidate.get("full_name") or "This person")
     slug = str(parent.get("dossier_slug") or parent.get("slug") or "")
@@ -1407,7 +1416,7 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     rows.extend(profile_fact_rows(candidate))
     facts = (f"<section class='details'><div class='details-body'>"
              f"<dl>{''.join(rows)}</dl></div></section>" if rows else "")
-    retarget_pub = str(candidate.get("pub")
+    retarget_pub = str(primary.get("pub")
                        or (parent.get("person_ids") or [""])[0] or "").strip()
     guidance_form = ""
     if retarget_pub:
