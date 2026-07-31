@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.8.0...powerpacks-v1.8.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **deep-context:** two-step worth decide — form first, move on send/skip ([#389](https://github.com/powerset-co/powerpacks/issues/389)) ([195098f](https://github.com/powerset-co/powerpacks/commit/195098f12e0cf8c8d4d7a4d9875902ebd47e9d48))
+
 ## [1.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.7.0...powerpacks-v1.8.0) (2026-07-31)
 
 
