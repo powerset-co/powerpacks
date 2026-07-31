@@ -6068,9 +6068,11 @@ class TestGuidedRetargets(unittest.TestCase):
         self.assertIn("needs_auth", script)
         self.assertIn("Sign in to Powerset", script)
         self.assertIn("/auth/login", script)
+        self.assertIn("renderFeedbackAlert", script)   # auto-path failures surface too
         server_src = (web_rendering.REVIEW_JS.parent / "server.py").read_text(encoding="utf-8")
         self.assertIn("/auth/login", server_src)
         self.assertIn("def start_auth_login", server_src)
+        self.assertIn("feedback_alert", server_src)
 
 
 if __name__ == "__main__":

@@ -73,7 +73,13 @@ from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapi
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
-from .feedback import FEEDBACK_ACTIONS, build_feedback_request, post_feedback_quietly, submit_directory_feedback
+from .feedback import (
+    FEEDBACK_ACTIONS,
+    FEEDBACK_ALERT,
+    build_feedback_request,
+    post_feedback_quietly,
+    submit_directory_feedback,
+)
 from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, run_guided_retarget
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
@@ -491,6 +497,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     "items": guided_queue.snapshot() if guided_queue else [],
                     "enabled": guided_queue is not None,
                     "estimated_cost_usd": ESTIMATED_COST_USD,
+                    "feedback_alert": dict(FEEDBACK_ALERT),
                 })
                 return
             if parsed.path == "/assets/reconcile-review.css":

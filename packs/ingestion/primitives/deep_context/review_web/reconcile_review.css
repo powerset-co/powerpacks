@@ -1376,6 +1376,19 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 
 .feedback-login:disabled { opacity: .5; pointer-events: none; }
 
+.retarget-feedback-alert {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--secondary);
+}
+
+.retarget-feedback-alert small { color: #b91c1c; font-size: 11px; }
+
 .feedback-actions { display: inline-flex; align-items: center; gap: 6px; }
 
 .feedback-skip {

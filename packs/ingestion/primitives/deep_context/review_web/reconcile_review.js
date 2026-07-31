@@ -1294,9 +1294,8 @@ function setupDirectory() {
   }
 
   // needs_auth recovery: one click starts auth.py's browser sign-in flow on
-  // this machine; the typed comment stays in the popover for a resend.
-  function offerSignIn(pop) {
-    if (pop.querySelector(".feedback-login")) return;
+  // this machine (used by the feedback popover and the retarget panel alert).
+  function signInButton(doneHint) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "feedback-login";
@@ -1306,14 +1305,46 @@ function setupDirectory() {
       button.textContent = "Waiting for sign-in…";
       try {
         await post("/auth/login", {});
-        announce("Sign-in opened in your browser — finish there, then Send again.");
+        announce(`Sign-in opened in your browser — finish there${doneHint}.`);
       } catch (error) {
         announce(error.message, true);
         button.disabled = false;
         button.textContent = "Sign in to Powerset";
       }
     });
-    pop.append(button);
+    return button;
+  }
+
+  function offerSignIn(pop) {
+    if (pop.querySelector(".feedback-login")) return;
+    pop.append(signInButton(", then Send again"));
+  }
+
+  // Auto-filed feedback (retarget guidance) has no popover; when its
+  // fire-and-forget post fails, the panel says so instead of staying silent.
+  function renderFeedbackAlert(alert) {
+    if (!retargetPanel) return false;
+    let box = retargetPanel.querySelector("[data-feedback-alert]");
+    if (!alert || !alert.status) {
+      box?.remove();
+      return false;
+    }
+    if (!box) {
+      box = document.createElement("div");
+      box.dataset.feedbackAlert = "";
+      box.className = "retarget-feedback-alert";
+      retargetPanel.append(box);
+    }
+    box.textContent = "";
+    const line = document.createElement("small");
+    line.textContent = `Feedback not sent: ${alert.error || alert.status}`;
+    box.append(line);
+    if (alert.status === "needs_auth") box.append(signInButton(""));
+    if (alert.error !== renderFeedbackAlert.lastError) {
+      renderFeedbackAlert.lastError = alert.error;
+      announce(alert.error || "Feedback could not be sent", true);
+    }
+    return true;
   }
 
   function feedbackPopover({ anchor, contextLabel, pub, slug, action, onDone }) {
@@ -1447,7 +1478,8 @@ function setupDirectory() {
       data = await response.json();
     } catch { return; }
     const items = data.items || [];
-    retargetPanel.hidden = !items.length;
+    const hasAlert = renderFeedbackAlert(data.feedback_alert);
+    retargetPanel.hidden = !items.length && !hasAlert;
     retargetItems.textContent = "";
     items.forEach((item) => retargetItems.append(retargetRow(item)));
     // A just-finished item announces itself and refreshes the open pane.
