@@ -5263,24 +5263,25 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("data-stage='directory'", html)
         self.assertIn("data-external-updates='false'", html)  # no SSE on this page
         self.assertIn("Pick a person", html)                  # no selection -> empty state
-        # Worth tabs sit UNDER the search bar: Yes/No only, Yes default-active.
+        # Worth tabs sit UNDER the search bar: Yes/Maybe/No, Yes default-active.
         self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>1</span>", html)
+        self.assertIn("data-directory-tab='maybe'>Maybe<span>0</span>", html)
         self.assertIn("data-directory-tab='no'>No<span>1</span>", html)
         self.assertLess(html.index("data-directory-search"),
                         html.index("data-directory-tab='yes'"))
         self.assertIn("Alpha tester.", picked)                # ?person= pre-renders the pane
         self.assertNotIn("Pick a person", picked)
 
-    def test_directory_tabs_are_yes_no_only(self):
+    def test_directory_maybe_tab_is_the_burn_down_pile(self):
         parents = [self._parent("mel-maybe", "Mel Maybe")]  # only undecided people
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
             html = web_rendering.directory_page_html(
                 parents, {}, parents_dir=base / "parents", dossier_dir=base / "dossiers",
                 profile_cache_dir=base / "profiles").decode("utf-8")
-        # Undecided people never get a tab; the Yes/No pair always renders and
-        # Yes stays the default even at zero.
-        self.assertNotIn("data-directory-tab='maybe'", html)
+        # Undecided people live on the Maybe tab (they re-roll every refresh
+        # until decided); Yes stays the default even at zero.
+        self.assertIn("data-directory-tab='maybe'>Maybe<span>1</span>", html)
         self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>0</span>", html)
         self.assertIn("data-directory-tab='no'>No<span>0</span>", html)
 
