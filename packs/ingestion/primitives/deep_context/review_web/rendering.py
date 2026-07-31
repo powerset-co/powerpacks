@@ -1485,6 +1485,9 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     dossier_md, children_md = split_children_section(
         scrub_identifier_sections(directory_dossier(parents_dir, dossier_dir, slug),
                                   name=name, known=ground_truth))
+    # Older parent dossiers title themselves "Name (canonical)" — an internal
+    # label, redundant on the pane (display-side; files are never rewritten).
+    dossier_md = re.sub(r"(?m)^(#{1,3} .*?) \(canonical\)\s*$", r"\1", dossier_md)
     dossier = markdown_to_html(dossier_md)
     children_debug = ""
     if children_md:
