@@ -42,4 +42,6 @@ def row_cost_usd(row: dict[str, Any], prices: dict[str, Any]) -> float | None:
     cost = (int(row.get("prompt_tokens") or 0) / 1e6) * float(table.get("input_per_1m") or 0.0)
     cost += (int(row.get("completion_tokens") or 0) / 1e6) * output_price
     cost += (int(row.get("reasoning_tokens") or 0) / 1e6) * float(table.get("reasoning_per_1m") or output_price)
+    if row.get("service_tier") == "flex":
+        cost *= 0.5  # OpenAI flex tier bills all tokens at half the standard rate
     return cost

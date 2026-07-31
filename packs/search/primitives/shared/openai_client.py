@@ -53,7 +53,7 @@ def _usage_row(requested_model: Any, resp: Any, latency_ms: int) -> dict[str, An
     completion = int(getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", 0) or 0)
     details = getattr(usage, "completion_tokens_details", None) or getattr(usage, "output_tokens_details", None)
     reasoning = int(getattr(details, "reasoning_tokens", 0) or 0) if details is not None else 0
-    return {
+    row = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model": str(getattr(resp, "model", None) or requested_model or ""),
         "stage": os.environ.get("POWERPACKS_USAGE_STAGE", "unknown"),
@@ -62,6 +62,10 @@ def _usage_row(requested_model: Any, resp: Any, latency_ms: int) -> dict[str, An
         "reasoning_tokens": reasoning,
         "latency_ms": latency_ms,
     }
+    tier = getattr(resp, "service_tier", None)
+    if tier and tier != "default":
+        row["service_tier"] = str(tier)  # flex is billed at half rate; pricing needs to know
+    return row
 
 
 def _append_row(log_path: str, row: dict[str, Any]) -> None:

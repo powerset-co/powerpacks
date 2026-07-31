@@ -140,6 +140,12 @@ class TestDatedModelIdPricing(unittest.TestCase):
         self.assertAlmostEqual(cr.row_cost_usd({**row, "model": "gpt-4.1-mini-2025-04-14"}, prices), 0.4)
         self.assertIsNone(cr.row_cost_usd({**row, "model": "gpt-9-2030-01-01"}, prices))
 
+    def test_flex_tier_bills_half(self) -> None:
+        prices = {"gpt-5.4": {"input_per_1m": 2.5, "output_per_1m": 15.0}}
+        row = {"model": "gpt-5.4-2026-03-05", "prompt_tokens": 1_000_000, "completion_tokens": 0, "reasoning_tokens": 0}
+        self.assertAlmostEqual(cr.row_cost_usd(row, prices), 2.5)
+        self.assertAlmostEqual(cr.row_cost_usd({**row, "service_tier": "flex"}, prices), 1.25)
+
 
 if __name__ == "__main__":
     unittest.main()
