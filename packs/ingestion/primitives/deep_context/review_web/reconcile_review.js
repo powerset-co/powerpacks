@@ -31,14 +31,19 @@ async function post(path, values) {
   if (!response.ok) {
     // Error bodies may be JSON payloads ({status, error}) — surface the human
     // message ("not signed in to Powerset; run $powerset login first"), never
-    // the raw JSON blob.
+    // the raw JSON blob. The status rides on the Error so callers can react
+    // (needs_auth -> offer the browser sign-in).
     const text = (await response.text()) || "Could not save";
     let message = text;
+    let status = "";
     try {
       const payload = JSON.parse(text);
       message = payload.error || payload.status || text;
+      status = payload.status || "";
     } catch { /* plain-text error body */ }
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = status;
+    throw error;
   }
   return response.json();
 }
@@ -1288,6 +1293,29 @@ function setupDirectory() {
     document.querySelector(".feedback-popover")?.remove();
   }
 
+  // needs_auth recovery: one click starts auth.py's browser sign-in flow on
+  // this machine; the typed comment stays in the popover for a resend.
+  function offerSignIn(pop) {
+    if (pop.querySelector(".feedback-login")) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "feedback-login";
+    button.textContent = "Sign in to Powerset";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Waiting for sign-in…";
+      try {
+        await post("/auth/login", {});
+        announce("Sign-in opened in your browser — finish there, then Send again.");
+      } catch (error) {
+        announce(error.message, true);
+        button.disabled = false;
+        button.textContent = "Sign in to Powerset";
+      }
+    });
+    pop.append(button);
+  }
+
   function feedbackPopover({ anchor, contextLabel, pub, slug, action, onDone }) {
     closeFeedbackPopover();
     const host = anchor.closest(".person-detail") || detail;
@@ -1334,6 +1362,7 @@ function setupDirectory() {
         await post("/feedback", { pub, parent_slug: slug, comment, action });
       } catch (error) {
         announce(error.message, true);
+        if (error.status === "needs_auth") offerSignIn(pop);
         send.disabled = false;
         skip.disabled = false;
         return;

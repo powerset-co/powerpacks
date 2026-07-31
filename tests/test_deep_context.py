@@ -6064,6 +6064,13 @@ class TestGuidedRetargets(unittest.TestCase):
         self.assertIn("onDone", script)
         self.assertIn("feedback-skip", script)
         self.assertIn("onDone: () => void applyWorth", script)
+        # needs_auth recovery: readable error + one-click browser sign-in.
+        self.assertIn("needs_auth", script)
+        self.assertIn("Sign in to Powerset", script)
+        self.assertIn("/auth/login", script)
+        server_src = (web_rendering.REVIEW_JS.parent / "server.py").read_text(encoding="utf-8")
+        self.assertIn("/auth/login", server_src)
+        self.assertIn("def start_auth_login", server_src)
 
 
 if __name__ == "__main__":

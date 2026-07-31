@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import threading
 import urllib.parse
@@ -96,6 +97,25 @@ ENRICH_SCOPE = {"include_candidates": True, "include_plausibly_absent": True}
 
 
 _job_lock = threading.Lock()
+
+# Browser re-login, offered by the UI when a feedback post returns needs_auth.
+# auth.py runs the whole authorization-code flow itself (local callback server,
+# auto-opens the browser, writes credentials.json); one flow at a time.
+AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
+_auth_login_lock = threading.Lock()
+_auth_login: dict[str, Any] = {"proc": None}
+
+
+def start_auth_login() -> str:
+    """Spawn `auth.py login` unless one is already mid-flight; returns status."""
+    with _auth_login_lock:
+        proc = _auth_login["proc"]
+        if proc is not None and proc.poll() is None:
+            return "already_running"
+        _auth_login["proc"] = subprocess.Popen(
+            [sys.executable, str(AUTH_SCRIPT), "login"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "login_started"
 
 
 def _mark_enrichment_failed(error: str) -> None:
@@ -666,7 +686,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment",
-                                   "/retarget", "/feedback"}:
+                                   "/retarget", "/feedback", "/auth/login"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
@@ -677,6 +697,10 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
             pub = (form.get("pub") or [""])[0]
+
+            if parsed.path == "/auth/login":
+                self.send_json({"ok": True, "status": start_auth_login()})
+                return
 
             if parsed.path == "/approve-enrichment":
                 try:
