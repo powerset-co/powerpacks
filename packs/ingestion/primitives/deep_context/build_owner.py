@@ -24,7 +24,6 @@ Changelog:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sqlite3
 import sys
@@ -40,7 +39,6 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_TEMPLATE,
     emit,
     load_env,
-    normalize_name,
     normalize_phone,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
@@ -86,10 +84,19 @@ def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[s
     }
 
 
-def _imessage_own_phones(chat_db: Path) -> list[str]:
-    """The account's own numbers straight from chat.db (authoritative):
-    `chat.account_login` P:-prefixed logins plus `destination_caller_id` on
-    received messages. Metadata columns only — no message bodies."""
+def harvest_owner_phones(chat_db: Path | None = None) -> list[str]:
+    """The owner's OWN phone numbers, straight from the SOURCE: iMessage
+    chat.db account metadata — `chat.account_login` P:-prefixed logins plus
+    `destination_caller_id` on received messages. Metadata columns only, never
+    message bodies. Downstream identifier policy drops these from every
+    CONTACT's reachability.
+
+    Deliberately no other source: derived contact CSVs are a name heuristic,
+    and the wacli stores offer nothing reliable (the session store's
+    paired-device JID is empty except while paired, and the message store's
+    `from_me` sender rows carry dozens of other people's JIDs through group
+    attribution)."""
+    chat_db = chat_db if chat_db is not None else Path.home() / "Library/Messages/chat.db"
     if not chat_db.exists():
         return []
     phones: list[str] = []
@@ -110,90 +117,6 @@ def _imessage_own_phones(chat_db: Path) -> list[str]:
                     phones.append(phone)
     except (sqlite3.Error, OSError):
         return phones
-    return phones
-
-
-def _wacli_own_phones(session_db: Path) -> list[str]:
-    """The paired WhatsApp account's own JID from the wacli session store
-    (authoritative when a device is paired; empty otherwise). The message
-    store's `from_me` sender rows are deliberately NOT used — real stores
-    carry dozens of distinct JIDs flagged from_me via group attribution."""
-    if not session_db.exists():
-        return []
-    phones: list[str] = []
-    try:
-        with closing(open_sqlite_readonly(session_db)) as conn:
-            for (jid,) in conn.execute("SELECT jid FROM whatsmeow_device"):
-                digits = str(jid or "").split(":", 1)[0].split("@", 1)[0]
-                phone = normalize_phone(digits)
-                if phone and phone not in phones:
-                    phones.append(phone)
-    except (sqlite3.Error, OSError):
-        return phones
-    return phones
-
-
-def harvest_owner_phones(owner: dict[str, Any],
-                         messages_dir: Path | None = None,
-                         *,
-                         chat_db: Path | None = None,
-                         wacli_session_db: Path | None = None) -> list[str]:
-    """The owner's OWN phone numbers, so the downstream identifier policy can
-    drop them from every CONTACT's reachability.
-
-    Sources, authoritative first:
-      1. iMessage chat.db account metadata (`P:` logins + destination caller id)
-      2. the wacli session store's paired-device JID
-      3. message-store contact self-rows — the name-match fallback that still
-         works on snapshots carrying only derived CSVs. A match is the exact
-         normalized name, an email local part ('jordanbravo88'), or the same
-         first+last name tokens ('Jordan B Bravo' == 'Jordan Bravo' — a middle
-         initial never blocks the self-row, while family sharing the surname
-         never matches). Scans both store layouts: discover/messages and the
-         older top-level messages dir."""
-    phones = _imessage_own_phones(
-        chat_db if chat_db is not None else Path.home() / "Library/Messages/chat.db")
-    for phone in _wacli_own_phones(
-            wacli_session_db if wacli_session_db is not None
-            else Path.home() / ".wacli/session.db"):
-        if phone not in phones:
-            phones.append(phone)
-
-    roots = ([messages_dir] if messages_dir is not None else
-             [Path(".powerpacks/network-import/discover/messages"),
-              Path(".powerpacks/messages")])
-    tokens = {normalize_name(owner.get("name") or "")} - {""}
-    name_parts = normalize_name(owner.get("name") or "").split()
-    first_last = (name_parts[0], name_parts[-1]) if len(name_parts) >= 2 else None
-    for value in owner.get("emails") or []:
-        local = str(value or "").split("@", 1)[0].strip().lower()
-        if len(local) >= 5:
-            tokens.add(local)
-
-    def is_self(raw_name: str) -> bool:
-        name = normalize_name(raw_name)
-        if not name:
-            return False
-        if name in tokens:
-            return True
-        parts = name.split()
-        return (first_last is not None and len(parts) >= 2
-                and (parts[0], parts[-1]) == first_last)
-
-    if tokens:
-        for root in roots:
-            if not root.exists():
-                continue
-            for path in sorted(root.rglob("*contacts.csv")):
-                try:
-                    with path.open(newline="", encoding="utf-8") as fh:
-                        for row in csv.DictReader(fh):
-                            if is_self(row.get("name") or ""):
-                                phone = normalize_phone(row.get("phone") or "")
-                                if phone and phone not in phones:
-                                    phones.append(phone)
-                except OSError:
-                    continue
     return phones
 
 
@@ -302,7 +225,7 @@ class BuildOwner(Node):
                 for value in previous.get(field) or []:
                     if value and value not in owner.setdefault(field, []):
                         owner[field].append(value)
-        for phone in harvest_owner_phones(owner):
+        for phone in harvest_owner_phones():
             if phone not in owner["phones"]:
                 owner["phones"].append(phone)
         self.out.parent.mkdir(parents=True, exist_ok=True)
