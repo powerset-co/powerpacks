@@ -61,7 +61,6 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context import assemble_synthetic_profile
 from packs.ingestion.primitives.deep_context import deep_research_contacts
 from packs.ingestion.primitives.deep_context import reconcile_deep_research
-from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_responses import (
     make_async_client,
     parse_json_response,
@@ -137,12 +136,19 @@ def linkedin_url_in_guidance(guidance: str) -> tuple[str, str]:
 
 
 _SPECIFIED_URL_PROMPT = (
-    "The user is giving retargeting guidance about which LinkedIn profile belongs to a "
-    "person. Output specified_linkedin_url: the exact LinkedIn profile URL the user "
-    "asserts IS the correct profile — only when they affirm it (\"this is the right "
-    "one\", \"use this\", \"their profile is …\", or the guidance is essentially just "
-    "the URL). Output an empty string when no URL is present, when a URL is mentioned "
-    "only as context, or when the user says a URL is NOT the person.")
+    "The user wrote guidance about which LinkedIn profile belongs to a person. Decide "
+    "whether the user is AFFIRMING that a specific LinkedIn profile URL IS that "
+    "person's correct profile.\n\n"
+    "Output specified_linkedin_url = that URL ONLY when the guidance affirms it:\n"
+    "- \"this is the right one <url>\" / \"use <url>\" / \"their profile is <url>\"\n"
+    "- a hedged affirmation still counts: \"i think it's <url>\" / \"pretty sure it's <url>\"\n"
+    "- the guidance is essentially just the URL by itself\n\n"
+    "Output specified_linkedin_url = \"\" (empty) in EVERY other case, including:\n"
+    "- the user says a URL is NOT the person, is wrong, or should be avoided\n"
+    "- a URL mentioned only as context (a coworker's page, a page where the person "
+    "is mentioned, a company page)\n"
+    "- no URL in the guidance at all\n\n"
+    "When in doubt, output the empty string.")
 
 _SPECIFIED_URL_SCHEMA = {
     "type": "object",
@@ -152,8 +158,15 @@ _SPECIFIED_URL_SCHEMA = {
 }
 
 
+# The intent read needs no reasoning: gpt-5-mini at minimal effort went 10/10
+# on the live affirm/negate/context/hedge cases where gpt-5.2-minimal leaked
+# negated URLs through. Small fails SAFE here (misses fall through to research
+# + the post-judge net; a false extract would mis-attach a profile).
+INTENT_MODEL = "gpt-5-mini"
+
+
 def specified_linkedin_url(guidance: str, *, use_llm: bool,
-                           model: str = DEFAULT_MODEL, timeout: int = 60) -> tuple[str, str]:
+                           model: str = INTENT_MODEL, timeout: int = 60) -> tuple[str, str]:
     """(url, pub) the user ASSERTS is the correct profile, else ("", "").
 
     A quick LLM intent read — a mentioned URL is not necessarily an assertion
