@@ -37,6 +37,10 @@ Inputs:
 - task state with a retrieved and hydrated candidate frontier
 - `hydrate_people.output.profiles_path` / `llm_profiles_path` covering the candidate frontier
 - `OPENAI_API_KEY`
+- `--model` defaults to `gpt-5.6-luna` and can be overridden with
+  `$POWERPACKS_LLM_FILTER_MODEL`.
+- `--reasoning-effort` defaults to `none` and can be overridden with
+  `$POWERPACKS_LLM_FILTER_REASONING_EFFORT`.
 
 Profile handoff:
 

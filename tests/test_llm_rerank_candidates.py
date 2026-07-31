@@ -17,6 +17,7 @@ No real network. No OpenAI credits spent. Safe in CI.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from packs.shared.csv_io import CsvIO
 
@@ -469,6 +471,35 @@ class DryRunTests(unittest.TestCase):
 
 
 class PromptContractTests(unittest.TestCase):
+    def test_defaults_use_luna_medium(self) -> None:
+        import importlib.util
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LLM_RERANK_MODEL", None)
+            os.environ.pop("LLM_RERANK_REASONING_EFFORT", None)
+            spec = importlib.util.spec_from_file_location("llm_rerank_candidates_defaults", RERANK_PY)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["llm_rerank_candidates_defaults"] = mod
+            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        self.assertEqual(mod.DEFAULT_MODEL, "gpt-5.6-luna")
+        self.assertEqual(mod.DEFAULT_REASONING_EFFORT, "medium")
+
+    def test_prompt_calibrates_inference_without_domain_examples(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_calibration", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_calibration"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+        calibration = mod.SYSTEM_PROMPT.split("=== EVIDENCE CALIBRATION ===", 1)[1]
+        self.assertIn("Treat scores as ranking confidence, not proof", calibration)
+        self.assertIn("reasonable inference 0.60-0.89", calibration)
+        self.assertIn("never invent exact metrics", calibration)
+        for domain_example in ("investor", "venture capital", "check size", "a16z"):
+            self.assertNotIn(domain_example, calibration.lower())
+
     def test_prompt_penalizes_over_senior_ic_query_matches(self) -> None:
         import importlib.util
 

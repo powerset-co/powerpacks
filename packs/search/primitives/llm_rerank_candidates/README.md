@@ -30,7 +30,8 @@ Powerpacks task-state (`--state`) after `hydrate_people` has run.
 - `--traits TRAIT` — expected traits (repeatable; pass once per trait)
 - `--concurrency N` — `asyncio.Semaphore` size (default follows
   `LLM_RERANK_CONCURRENCY`, then `SEARCH_V2_RERANK_MAX_CONCURRENT`, then `400`)
-- `--model NAME` — chat completion model (default `gpt-4o-mini`)
+- `--model NAME` — chat completion model (default `gpt-5.6-luna`)
+- `--reasoning-effort LEVEL` — reasoning effort for supported models (default `medium`)
 - `--api-base URL` — base URL (default `https://api.openai.com`; useful
   for testing against a localhost mock or a different OpenAI-compatible
   provider)
@@ -60,7 +61,7 @@ JSONL, one line per input. Order matches input order.
   "reason": "AI engineer at OpenAI; matches both traits.",
   "confidence": 0.88,
   "trait_scores": {"ai or software engineer": 0.92, "at openai": 1.0},
-  "model": "gpt-4o-mini",
+  "model": "gpt-5.6-luna",
   "elapsed_ms": 412,
   "error": null,
   "input": { ... original object ... }
