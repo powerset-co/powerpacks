@@ -146,7 +146,13 @@ class SendFeedback:
         body = self.request.body()
         if self.dry_run:
             return {"status": "dry_run", "path": FEEDBACK_PATH, "body": body}
-        base = api_base(self.env_file)
+        # api_base/bearer_token raise SystemExit on their guard paths; a caller
+        # (the review server's /feedback handler) must always get a payload,
+        # never a dead request thread.
+        try:
+            base = api_base(self.env_file)
+        except SystemExit as exc:
+            return {"status": "failed", "error": str(exc)}
         try:
             token = bearer_token()
         except SystemExit as exc:
