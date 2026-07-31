@@ -732,7 +732,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
             if parsed.path == "/feedback":
                 comment = (form.get("comment") or [""])[0].strip()
-                action = (form.get("action") or [""])[0].strip() or "person"
+                action = (form.get("action") or [""])[0].strip()
                 parent_slug = (form.get("parent_slug") or [""])[0].strip()
                 if not comment or len(comment) > 4000:
                     self.send_bytes(b"comment must be 1-4000 characters",

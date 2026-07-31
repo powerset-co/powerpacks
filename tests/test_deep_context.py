@@ -5706,7 +5706,7 @@ class TestGuidedRetargets(unittest.TestCase):
                 dossier_dir=base / "dossiers",
                 profile_cache_dir=base / "profiles").decode("utf-8")
             self.assertIn("data-retarget-panel", page)
-            self.assertIn("data-feedback-trigger", pane)
+            self.assertNotIn("data-feedback-trigger", pane)  # popover rides worth clicks only
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn("/api/retargets", script)
         self.assertIn("data-retarget-form", script)

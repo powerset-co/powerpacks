@@ -1312,7 +1312,7 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
   gap: 8px;
   padding: 12px;
   border-radius: 12px;
-  background: var(--bg);
+  background: var(--card);
   border: 1px solid var(--border);
   box-shadow: 0 4px 24px -4px rgba(0, 0, 0, .12);
   animation: feedback-pop-in .15s ease-out;
@@ -1342,7 +1342,7 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
   border: 0;
   outline: none;
   background: transparent;
-  color: var(--fg);
+  color: var(--foreground);
   font: inherit;
   font-size: 13px;
 }
@@ -1371,7 +1371,7 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
   transition: background .15s, color .15s;
 }
 
-.feedback-send:hover { color: var(--fg); }
+.feedback-send:hover { color: var(--foreground); }
 
 .feedback-send:disabled { opacity: .3; pointer-events: none; }
 
@@ -1382,7 +1382,7 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
   padding: 12px 16px;
 }
 
-.feedback-done p { margin: 0; font-size: 13px; font-weight: 500; color: var(--fg); }
+.feedback-done p { margin: 0; font-size: 13px; font-weight: 500; color: var(--foreground); }
 
 .feedback-done-badge {
   display: inline-flex;
@@ -1421,8 +1421,8 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
   resize: vertical;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg);
-  color: var(--fg);
+  background: var(--card);
+  color: var(--foreground);
   padding: 8px 10px;
   font: inherit;
   font-size: 13px;
@@ -1473,7 +1473,7 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 .retarget-name {
   border: 0;
   background: none;
-  color: var(--fg);
+  color: var(--foreground);
   font: inherit;
   font-weight: 600;
   padding: 0;

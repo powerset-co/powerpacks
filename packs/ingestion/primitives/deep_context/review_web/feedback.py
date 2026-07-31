@@ -30,7 +30,7 @@ from packs.powerset.primitives.send_feedback.send_feedback import (
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
 
 # One popover per decision; the action names travel in metadata + category.
-FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "person"}
+FEEDBACK_ACTIONS = {"worth_yes", "worth_no"}
 
 
 def _clean(value: Any) -> str:
@@ -86,7 +86,7 @@ def build_feedback_request(parent: dict[str, Any], candidate: dict[str, Any], *,
     }
     if guidance:
         metadata["retarget_guidance"] = guidance
-    category = "linkedin" if action == "person" or guidance else "worth"
+    category = "linkedin" if guidance else "worth"
     return FeedbackRequest(
         comment=comment,
         category=category,

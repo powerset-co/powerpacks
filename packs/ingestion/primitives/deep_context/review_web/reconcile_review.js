@@ -1325,19 +1325,6 @@ function setupDirectory() {
     setTimeout(() => document.addEventListener("click", away), 0);
   }
 
-  detail.addEventListener("click", (event) => {
-    const trigger = event.target.closest("[data-feedback-trigger]");
-    if (!trigger) return;
-    event.preventDefault();
-    feedbackPopover({
-      anchor: trigger,
-      contextLabel: `Feedback on ${trigger.dataset.name || "this person"}`,
-      pub: trigger.dataset.pub || "",
-      slug: trigger.dataset.parent || activeSlug,
-      action: "person",
-    });
-  });
-
   // Guided retargets: submit guidance from the person pane, watch the queue in
   // the sidebar panel. This page has no SSE by design, so the panel polls only
   // while an item is active and goes quiet when the queue drains.
