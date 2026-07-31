@@ -1551,17 +1551,17 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
                   "<p>Pick a person to read their dossier.</p></div>")
     payload = json.dumps(entries, ensure_ascii=False).replace("<", "\\u003c")
     # Worth tabs under the search bar (the review's decision-tabs component, as
-    # buttons: pure client-side filter, no navigation). Yes is the default, and
-    # only the two decided piles are shown — an undecided person is not listed
-    # until the review decides them. Counts are the same effective-worth
-    # numbers the review tabs report.
+    # buttons: pure client-side filter, no navigation). Yes is the default.
+    # Maybe is the burn-down pile: under the professional-worth evidence bar an
+    # undecided person re-rolls on every refresh until a human (or a later
+    # roll) decides them, so they must be visible and one click from settled.
     counts = {"yes": 0, "no": 0, "maybe": 0}
     for entry in entries:
         counts[entry["worth"]] += 1
     tabs = "".join(
         f"<button type='button' class='decision-tab{' active' if key == 'yes' else ''}' "
         f"data-directory-tab='{key}'>{label}<span>{counts[key]}</span></button>"
-        for key, label in (("yes", "Yes"), ("no", "No")))
+        for key, label in (("yes", "Yes"), ("maybe", "Maybe"), ("no", "No")))
     tab_nav = f"<nav class='decision-tabs directory-tabs' aria-label='Worth decision'>{tabs}</nav>"
     search = ("<div class='worth-search' data-directory-search>"
               "<input class='worth-search-input' type='search' placeholder='Search people…' "
