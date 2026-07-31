@@ -21,6 +21,13 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-07-30 (contact-info identifiers v2): `identifiers` is redefined as contact
+    info to reach the person — their own emails and phone numbers only; URLs,
+    handles, third-party and mailbox-owner endpoints are explicitly excluded
+    (a contact's own URLs belong in `owned_identifiers`). This is an intentional
+    semantic change, so SYNTHESIS_CONTRACT_VERSION bumps and every dossier
+    resynthesizes on the next run. The deterministic `contact_identifiers`
+    policy stays in force at every render/consumer regardless.
   2026-07-30 (house style): `_plan()` returns the frozen `SynthesisPlan` instead of
     a 3-tuple, and the run's numbers accumulate in `SynthesisTally` instead of a
     `counter`/`stop_reasons`/`usage_total` trio of string-keyed dicts. `execute()`
@@ -102,7 +109,7 @@ DEFAULT_SATURATION_ROUNDS = 2      # ...or after this many batches add nothing n
 DEFAULT_MAX_BATCHES = 20           # ...or this many batches (~1600 msgs) — hard ceiling
 DEFAULT_MAX_RETRIES = 6
 DEFAULT_CHUNK_PEOPLE = 200         # people loaded into memory at once (streaming bound)
-SYNTHESIS_CONTRACT_VERSION = "owned-identifiers-v1"
+SYNTHESIS_CONTRACT_VERSION = "contact-info-identifiers-v2"
 # Calibrated from real runs: ~10 chunks/s wall at high concurrency (ranged 6.7
 # on flex tier to 11.7 on default tier). Used only for the --dry-run ETA; actual
 # rate scales with --concurrency and your OpenAI usage tier.
@@ -115,15 +122,23 @@ SYSTEM_PROMPT = (
     "CONTACT — never attribute my identity to them.\n\n"
     "Pull employer(s) with current/past status, title, school, field of study, location, "
     "how I know them / our relationship, recurring topics we discuss, notable events with "
-    "rough dates, and any identifiers (emails, phones, social handles, URLs). Prefer "
-    "specific, evidence-backed facts over guesses; set low confidence when the signal is "
-    "thin. Leave a field empty rather than inventing it.\n\n"
-    "`identifiers` is the complete list of useful identifiers mentioned in the dossier. "
-    "Separately fill `owned_identifiers` with ONLY identifiers clearly owned by the CONTACT: "
-    "an email/phone/URL they use, present in a signature, or explicitly identify as theirs. "
-    "A third party\'s contact card, referral, booking number, quoted number, or a number merely "
-    "mentioned in conversation is NEVER owned by the CONTACT. Do not treat the supplied Known "
-    "phones as message evidence; those are already source-record identifiers.\n\n"
+    "rough dates, and their contact identifiers. Prefer specific, evidence-backed facts "
+    "over guesses; set low confidence when the signal is thin. Leave a field empty rather "
+    "than inventing it.\n\n"
+    "`identifiers` is CONTACT INFO TO REACH THIS PERSON: email addresses and phone numbers "
+    "ONLY, and only ones clearly the CONTACT's own — the address/number they send from, "
+    "one in their signature, or one they explicitly state is theirs. NEVER include: any "
+    "URL or link (websites, social posts, maps, calendar/scheduling links, tracking or "
+    "campaign links), usernames/handles, dates, physical addresses; the mailbox owner's "
+    "(MY) email or phone; or anyone else's contact info — a third party's contact card, a "
+    "referral, a quoted address, or another participant on a group thread is NEVER this "
+    "person's identifier. When unsure whose it is, leave it out.\n"
+    "Separately fill `owned_identifiers` with identifiers clearly owned by the CONTACT — "
+    "their own emails/phones AND their own URLs (personal site, portfolio, a social "
+    "profile they present as theirs). The same strictness applies: quoted, referred, "
+    "third-party, or merely-mentioned items are NEVER owned by the CONTACT. Do not treat "
+    "the supplied Known phones as message evidence; those are already source-record "
+    "identifiers.\n\n"
     "Also decide `network_worth`: is this contact worth adding to (or keeping in) my "
     "network? Use only the message dossier and the contact identifiers supplied with it. "
     "Never use or infer a LinkedIn profile. This is primarily a human-vs-noise filter, "
@@ -196,7 +211,8 @@ FACT_SCHEMA: dict[str, Any] = {
                 "required": ["date", "summary"],
             },
         },
-        "identifiers": {"type": "array", "items": {"type": "string"}},
+        "identifiers": {"type": "array", "items": {"type": "string"},
+                        "description": "Contact info to reach THIS person: their own email addresses and phone numbers only. Never URLs/links, handles, dates, the mailbox owner's endpoints, or anyone else's contact info."},
         "owned_identifiers": {
             "type": "object",
             "additionalProperties": False,
