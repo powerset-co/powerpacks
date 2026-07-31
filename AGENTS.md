@@ -485,6 +485,13 @@ Routes:
   `packs/apollo/skills/build-outbound/SKILL.md`
 - `$powerset`, `$powerset setup`, Powerset login/status/whoami/sets/MCP/env credentials →
   `packs/powerset/skills/powerset/SKILL.md`
+- `$feedback`, "report this", "file/send feedback", "flag this bad
+  result/search" → `packs/powerset/skills/feedback/SKILL.md`
+  The agent inspects the current session, composes one identifiers-only
+  feedback row (names/LinkedIn URLs/slugs/queries/commands/statuses — never
+  message content), previews it with `--dry-run` and asks whether to include
+  person identifiers, then posts to the Powerset feedback endpoint via the
+  send_feedback primitive.
 - `$update-powerpacks`, reinstall/update Powerpacks skills, canonical install/state cleanup, adopt `.codex` state →
   `packs/powerset/skills/update-powerpacks/SKILL.md`
 - `$fix-powerpacks`, diagnose/fix local Powerpacks state paths, copy newer `.powerpacks` state into canonical repo, validate linked source wiring →

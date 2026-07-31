@@ -8,7 +8,7 @@ BUNDLE_DIR="${CODEX_POWERPACKS_BUNDLE_DIR:-$CODEX_HOME/powerpacks}"
 
 MANAGED_SKILLS=(
   search search-company search-sql search-contacts build-local-search-index
-  powerset powerset-login powerset-set update-powerpacks fix-powerpacks install-powerpacks sales-nav-search build-outbound
+  powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks sales-nav-search build-outbound
   setup msgvault import-gmail import-twitter deep-context logbook
   import-messages clean-slate
 )
@@ -116,6 +116,7 @@ install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-l
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
+install_skill feedback "$REPO_ROOT/packs/powerset/skills/feedback/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
 install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill fix-powerpacks "$REPO_ROOT/packs/powerset/skills/fix-powerpacks/SKILL.md"
@@ -147,4 +148,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks sales-nav-search build-outbound setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"

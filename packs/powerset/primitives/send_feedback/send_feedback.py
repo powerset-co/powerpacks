@@ -4,7 +4,7 @@
 POSTs one row to `POST /v2/feedback` (the `user_feedback` table) using the
 credentials `$powerset login` already stores — the same silent-refresh bearer
 `pull_runtime_keys` uses, so no re-auth or login screen is involved. The
-`$send-feedback` skill composes the synopsis/guidance; this primitive only
+`$feedback` skill composes the synopsis/guidance; this primitive only
 validates, shapes, and ships the request.
 
 Contract facts this module encodes (from the API):
