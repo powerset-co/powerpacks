@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.8.1...powerpacks-v1.9.0) (2026-07-31)
+
+
+### Features
+
+* inline artifact attachments for $feedback (--artifact, gzip+base64) ([#390](https://github.com/powerset-co/powerpacks/issues/390)) ([efc2503](https://github.com/powerset-co/powerpacks/commit/efc25034705bf14284e1613e352d3d3937c7562c))
+
+
+### Bug Fixes
+
+* $feedback guidance for $deep-context sessions ([#393](https://github.com/powerset-co/powerpacks/issues/393)) ([3cb0462](https://github.com/powerset-co/powerpacks/commit/3cb0462c8e49cd0ff60cb0d817171202270f6e2a))
+
 ## [1.8.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.8.0...powerpacks-v1.8.1) (2026-07-31)
 
 
