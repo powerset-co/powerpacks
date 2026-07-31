@@ -32,7 +32,7 @@ ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
 
 # Popover actions (worth decisions) plus the automatic one: a guided-retarget
 # submit files its guidance as feedback with no extra input.
-FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget"}
+FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget", "general"}
 
 
 def _clean(value: Any) -> str:

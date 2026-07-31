@@ -1428,7 +1428,19 @@ def _worth_action_buttons(parent: dict[str, Any], slug: str) -> str:
         buttons = button("yes", "Move to Yes")
     else:
         buttons = button("yes", "Move to Yes") + button("no", "Move to No")
-    return f"<div class='person-detail-actions'>{buttons}</div>"
+    # "…" overflow: general feedback that isn't a worth decision or a retarget
+    # (wrong/missing info, anything else). Opens the same popover, action
+    # "general", no move attached.
+    menu = (
+        "<div class='person-menu' data-person-menu>"
+        "<button type='button' class='button button-outline person-menu-toggle' "
+        "aria-label='More actions' data-menu-toggle>&#8943;</button>"
+        "<div class='person-menu-items' hidden>"
+        f"<button type='button' data-feedback-general data-pub='{esc(key)}' "
+        f"data-parent='{esc(slug)}'>Leave feedback</button>"
+        "</div></div>"
+    )
+    return f"<div class='person-detail-actions'>{buttons}{menu}</div>"
 
 
 def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,

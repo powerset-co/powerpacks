@@ -1278,6 +1278,40 @@ function setupDirectory() {
     });
   });
 
+  // "…" overflow menu: general feedback that isn't a worth decision or a
+  // retarget (wrong/missing info). Same popover, action "general", no move.
+  detail.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-menu-toggle]");
+    if (toggle) {
+      event.preventDefault();
+      const items = toggle.parentElement.querySelector(".person-menu-items");
+      if (items) items.hidden = !items.hidden;
+      return;
+    }
+    const general = event.target.closest("[data-feedback-general]");
+    if (!general) return;
+    event.preventDefault();
+    general.closest(".person-menu-items")?.setAttribute("hidden", "");
+    const slug = general.dataset.parent || activeSlug;
+    const entry = people.find((item) => item.slug === slug);
+    const anchor = detail.querySelector(".person-detail-actions")
+      || detail.querySelector(".person-detail");
+    if (!anchor) return;
+    feedbackPopover({
+      anchor,
+      contextLabel: `Feedback on ${entry?.name || "this person"} — wrong or missing info?`,
+      pub: general.dataset.pub || "",
+      slug,
+      action: "general",
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("[data-person-menu]")) return;
+    detail.querySelectorAll(".person-menu-items:not([hidden])")
+      .forEach((el) => { el.hidden = true; });
+  });
+
   // Optional-feedback popover, mirrored off the network-search-app
   // FeedbackForm: context label, auto-grow textarea, ⌘+Enter, send icon,
   // then a "Got it, thanks!" beat before it closes. Posts to /feedback where
