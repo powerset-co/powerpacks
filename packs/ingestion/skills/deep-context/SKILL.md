@@ -31,6 +31,11 @@ Use the narrow path when the user names one:
   `bin/deep-context review`; it always opens the read-only A-Z directory
   (Yes/No tabs, search, full dossier + LinkedIn pane). Staged workflow launches
   use an explicit `--stage`.
+- `$deep-context refresh`, "resynthesize and show me the directory" -> run only
+  `bin/deep-context refresh`; it re-synthesizes stale dossiers (free when facts
+  are on the current synthesis contract; a contract bump re-runs everyone and
+  the dry estimate prints first — invoking refresh is the approval), rebuilds
+  parents, and opens the directory.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
   This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed

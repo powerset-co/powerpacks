@@ -83,6 +83,9 @@ usage: bin/deep-context <command> [args]
   migrate-legacy  turn stored legacy Parallel resolutions into pending retarget
                proposals for the normal judge/review loop (default dry run;
                --apply writes; --apply --judge also judges from cache, spends OpenAI)
+  refresh      re-synthesize stale dossiers, rebuild parents, open the directory
+               (free when facts are current; a contract bump re-runs everyone —
+               the dry estimate prints first and invoking refresh approves it)
   review       open the read-only people directory (A-Z dossiers + LinkedIn);
                pass --stage worth|enrich|linkedin for the staged workflow
                (local, free)
@@ -231,6 +234,23 @@ case "$cmd" in
     # ordinary merged people rows, so collection includes them without a flag.
     "${PY[@]}" "$PKG.collect_person_context" --force --include-groups
     "${PY[@]}" "$PKG.synthesize_person_context" --rejudge "$@"
+    ;;
+  refresh)
+    if (( wants_help )); then
+      echo "bin/deep-context refresh - re-synthesize stale dossiers, rebuild parents, open the directory." >&2
+      echo "Free when facts are current; after a synthesis-contract bump every dossier re-runs —" >&2
+      echo "the dry estimate prints first, and invoking refresh IS the approval to spend it." >&2
+      echo "Flags: --port N (directory server port, default 8765)." >&2
+      exit 0
+    fi
+    # Synthesis writes review-session files: release the single-writer lock first.
+    stop_review_server "$(review_port_from_args "$@")"
+    echo "refresh: operating on $ROOT/.powerpacks" >&2
+    "${PY[@]}" "$PKG.synthesize_person_context" --dry-run
+    echo "refresh: synthesizing stale dossiers (the estimate above is this run's spend)…" >&2
+    "${PY[@]}" "$PKG.synthesize_person_context"
+    "${PY[@]}" "$PKG.build_parents"
+    "${PY[@]}" "$PKG.reconcile_review_web" serve --open --stage directory "$@"
     ;;
   review)
     # A reused live server keeps serving the Python it loaded at startup, so a

@@ -1,0 +1,12 @@
+{
+  "artifact_dir": ".powerpacks/runs/artifacts/search-network-14222755-1e48-4545-8268-c8930e152981",
+  "created_at": "2026-07-31T17:24:07Z",
+  "csv": ".powerpacks/runs/artifacts/search-network-14222755-1e48-4545-8268-c8930e152981/search-network-14222755-1e48-4545-8268-c8930e152981.csv",
+  "frontier_count": 3,
+  "hydrated_count": 3,
+  "jsonl": ".powerpacks/runs/artifacts/search-network-14222755-1e48-4545-8268-c8930e152981/search-network-14222755-1e48-4545-8268-c8930e152981.jsonl",
+  "query": "software engineers in sf",
+  "row_count": 3,
+  "state": ".powerpacks/runs/search-network-14222755-1e48-4545-8268-c8930e152981-software-engineers-in-sf.json",
+  "task_id": "search-network-14222755-1e48-4545-8268-c8930e152981"
+}

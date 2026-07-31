@@ -1,0 +1,12 @@
+{
+  "id": "resolve-mutuals-to-urls",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/sales-nav-search/20260731T054148Z-808aa962/resolve-mutuals-to-urls/prompt.txt",
+  "query": "Lead 12345 has mutual_member_ids [67890, 11111, 22222] from a previous search. Show me their LinkedIn URLs.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "narrow-by-geography-after-search",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/sales-nav-search/20260731T003407Z-26cccb74/narrow-by-geography-after-search/prompt.txt",
+  "query": "I just ran a sales nav search for 'staff engineers at Anthropic' and got back 187 leads. Narrow it to just the Bay Area.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

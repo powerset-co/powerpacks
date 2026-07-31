@@ -1,0 +1,12 @@
+{
+  "id": "own-contacts-most-messaged-fields",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/search-contacts/20260731T060952Z-23b85995/own-contacts-most-messaged-fields/prompt.txt",
+  "query": "Show me my contacts ordered by most messages and include emails, Twitter, and LinkedIn.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

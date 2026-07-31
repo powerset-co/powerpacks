@@ -1,0 +1,12 @@
+{
+  "id": "missing-mcp",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/sales-nav-search/20260731T021615Z-9fef6a33/missing-mcp/prompt.txt",
+  "query": "Find VPs at Stripe. (Note: my powerset-search MCP is not installed yet.)",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

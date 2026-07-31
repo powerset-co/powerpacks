@@ -1,0 +1,98 @@
+{
+  "agentic_sql_candidate_count": 0,
+  "agentic_sql_tagged": 0,
+  "applied_filter": [
+    "seniority_band",
+    "In",
+    [
+      "senior",
+      "staff"
+    ]
+  ],
+  "base_id_batch_count": null,
+  "base_id_batch_size": null,
+  "batched_base_ids": false,
+  "bm25_queries": [
+    "software engineer",
+    "Software Engineer",
+    "Senior Software Engineer"
+  ],
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "bucket": "good",
+      "city": "San Francisco",
+      "company_id": "linkedin:company:one",
+      "company_name": null,
+      "country": "United States",
+      "has_adjacent_regex": false,
+      "has_core_regex": true,
+      "is_current": true,
+      "macro_region": null,
+      "matched_position_ids": [
+        "00000000-0000-0000-0000-000000000001-1"
+      ],
+      "metro_areas": [
+        "San Francisco Bay Area"
+      ],
+      "person_id": "00000000-0000-0000-0000-000000000001",
+      "position_id": "00000000-0000-0000-0000-000000000001-1",
+      "position_title": "Senior Software Engineer",
+      "role_track": "engineering",
+      "score": 0.049180327868852465,
+      "seniority_band": "senior",
+      "state": "California",
+      "vertical_sources": [
+        "hybrid",
+        "summary"
+      ]
+    },
+    {
+      "city": null,
+      "company_id": null,
+      "company_name": null,
+      "country": null,
+      "is_current": null,
+      "macro_region": null,
+      "matched_position_ids": [],
+      "metro_areas": null,
+      "person_id": "00000000-0000-0000-0000-000000000007",
+      "position_id": null,
+      "position_title": null,
+      "role_track": null,
+      "score": 0.016129032258064516,
+      "seniority_band": null,
+      "state": null,
+      "vertical_sources": [
+        "summary"
+      ]
+    }
+  ],
+  "company_union_added": 0,
+  "company_union_candidate_count": 0,
+  "namespace": "local_people_positions",
+  "prefilter_short_circuit": false,
+  "query": "software engineers",
+  "retrieval_mode": "hybrid",
+  "search_mode": "SEARCH_ONLY",
+  "semantic_query": null,
+  "vertical_source_counts": {
+    "hybrid": 1,
+    "summary": 2
+  },
+  "verticals": {
+    "company_signal": {
+      "namespace_row_count": 1,
+      "row_count": 0,
+      "status": "completed"
+    },
+    "role": {
+      "row_count": 1,
+      "status": "completed"
+    },
+    "summary": {
+      "row_count": 2,
+      "status": "completed"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "artifact_dir": ".powerpacks/runs/artifacts/search-network-9cf76d48-f431-4d60-8146-8f3e928b6b1b",
+  "created_at": "2026-07-31T17:35:19Z",
+  "csv": ".powerpacks/runs/artifacts/search-network-9cf76d48-f431-4d60-8146-8f3e928b6b1b/search-network-9cf76d48-f431-4d60-8146-8f3e928b6b1b.csv",
+  "frontier_count": 2,
+  "hydrated_count": 2,
+  "jsonl": ".powerpacks/runs/artifacts/search-network-9cf76d48-f431-4d60-8146-8f3e928b6b1b/search-network-9cf76d48-f431-4d60-8146-8f3e928b6b1b.jsonl",
+  "query": "software engineers in sf",
+  "row_count": 2,
+  "state": ".powerpacks/runs/search-network-9cf76d48-f431-4d60-8146-8f3e928b6b1b-software-engineers-in-sf.json",
+  "task_id": "search-network-9cf76d48-f431-4d60-8146-8f3e928b6b1b"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "vps-at-stripe",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/sales-nav-search/20260731T181123Z-f5097a9a/vps-at-stripe/prompt.txt",
+  "query": "Find VPs of engineering at Stripe.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

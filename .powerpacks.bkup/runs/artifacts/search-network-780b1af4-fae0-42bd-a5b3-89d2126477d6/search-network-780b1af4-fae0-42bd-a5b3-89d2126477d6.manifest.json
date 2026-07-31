@@ -1,0 +1,12 @@
+{
+  "artifact_dir": ".powerpacks/runs/artifacts/search-network-780b1af4-fae0-42bd-a5b3-89d2126477d6",
+  "created_at": "2026-07-31T06:46:55Z",
+  "csv": ".powerpacks/runs/artifacts/search-network-780b1af4-fae0-42bd-a5b3-89d2126477d6/search-network-780b1af4-fae0-42bd-a5b3-89d2126477d6.csv",
+  "frontier_count": 8,
+  "hydrated_count": 8,
+  "jsonl": ".powerpacks/runs/artifacts/search-network-780b1af4-fae0-42bd-a5b3-89d2126477d6/search-network-780b1af4-fae0-42bd-a5b3-89d2126477d6.jsonl",
+  "query": "platform companies hiring database architects",
+  "row_count": 8,
+  "state": ".powerpacks/runs/search-network-780b1af4-fae0-42bd-a5b3-89d2126477d6-platform-companies-hiring-database-architects.json",
+  "task_id": "search-network-780b1af4-fae0-42bd-a5b3-89d2126477d6"
+}

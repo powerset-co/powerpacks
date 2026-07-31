@@ -1,0 +1,12 @@
+{
+  "artifact_dir": ".powerpacks/runs/artifacts/search-network-a7da36bf-a33f-4d26-a2d3-88b912277a38",
+  "created_at": "2026-07-31T15:34:59Z",
+  "csv": ".powerpacks/runs/artifacts/search-network-a7da36bf-a33f-4d26-a2d3-88b912277a38/search-network-a7da36bf-a33f-4d26-a2d3-88b912277a38.csv",
+  "frontier_count": 4,
+  "hydrated_count": 4,
+  "jsonl": ".powerpacks/runs/artifacts/search-network-a7da36bf-a33f-4d26-a2d3-88b912277a38/search-network-a7da36bf-a33f-4d26-a2d3-88b912277a38.jsonl",
+  "query": "growth leaders at AI companies",
+  "row_count": 4,
+  "state": ".powerpacks/runs/search-network-a7da36bf-a33f-4d26-a2d3-88b912277a38-growth-leaders-at-ai-companies.json",
+  "task_id": "search-network-a7da36bf-a33f-4d26-a2d3-88b912277a38"
+}

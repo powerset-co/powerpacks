@@ -1,0 +1,12 @@
+{
+  "id": "email-domain-filter",
+  "mode": "dry-run",
+  "prompt_file": "/Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/.powerpacks/skill-evals/search-contacts/20260731T170438Z-f93739b7/email-domain-filter/prompt.txt",
+  "query": "Search my contacts for people with powerset.co emails.",
+  "skipped": true,
+  "validation": {
+    "ok": true,
+    "reasoning": "dry-run structural check only",
+    "violations": []
+  }
+}

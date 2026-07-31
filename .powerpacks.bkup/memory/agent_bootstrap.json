@@ -1,0 +1,22 @@
+{
+  "default_set_id": null,
+  "default_set_name": null,
+  "env_files": [],
+  "env_key_count": 0,
+  "env_nonempty_key_count": 0,
+  "generated_at": "2026-07-31T18:10:25Z",
+  "local_profile": {
+    "action": "unchanged",
+    "changed": false,
+    "path": ".codex/AGENTS.md"
+  },
+  "memory_files": {
+    "bootstrap": ".powerpacks/memory/agent_bootstrap.json",
+    "env_summary": ".powerpacks/memory/env_summary.json",
+    "set_ids": ".powerpacks/memory/set_ids.json"
+  },
+  "powerset_user_email": "arthur@powerset.co",
+  "set_count": 0,
+  "sets_error": "missing required Powerset API config: set one of POWERPACKS_API_URL, POWERSET_API_URL, POWERPACKS_SEARCH_API_URL, POWERPACKS_MCP_URL. Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use.",
+  "sets_refreshed": false
+}
