@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.9.0...powerpacks-v1.10.0) (2026-07-31)
+
+
+### Features
+
+* **search:** use Luna for filtering and reranking ([#382](https://github.com/powerset-co/powerpacks/issues/382)) ([8524a19](https://github.com/powerset-co/powerpacks/commit/8524a1966ab88c77a418ca7cc7de7932582af6cd))
+
 ## [1.9.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.8.1...powerpacks-v1.9.0) (2026-07-31)
 
 
