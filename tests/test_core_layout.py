@@ -17,7 +17,7 @@ class CoreLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             powerset_pack,
-            ["fix-powerpacks", "install-powerpacks", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
+            ["feedback", "fix-powerpacks", "install-powerpacks", "powerset", "powerset-login", "powerset-set", "update-powerpacks"],
         )
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
@@ -231,6 +231,16 @@ class CoreLayoutTests(unittest.TestCase):
 
         login_alias = (ROOT / "packs/powerset/skills/powerset-login/SKILL.md").read_text()
         self.assertIn("prefer the unified `$powerset setup`", login_alias)
+
+    def test_feedback_skill_is_identifiers_only_and_consent_gated(self) -> None:
+        text = (ROOT / "packs/powerset/skills/feedback/SKILL.md").read_text()
+        self.assertIn("packs/powerset/primitives/send_feedback/send_feedback.py", text)
+        self.assertIn("--dry-run", text)
+        self.assertIn("identifiers only", text)
+        self.assertIn("NEVER include: message bodies", text)
+        self.assertIn("send with person identifiers", text)
+        self.assertIn("data_inconsistency", text)
+        self.assertIn("$powerset setup", text)
 
     def test_search_surface_documents_company_entrypoint(self) -> None:
         text = (ROOT / "packs/search/docs/search-surface.md").read_text()

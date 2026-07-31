@@ -1,4 +1,4 @@
-"""$send-feedback primitive: request validation, dry-run shape, and the
+"""$feedback primitive: request validation, dry-run shape, and the
 submit/needs-auth/failed branches. All offline — post_json and bearer_token are
 patched where defined; fixtures are synthetic."""
 from __future__ import annotations

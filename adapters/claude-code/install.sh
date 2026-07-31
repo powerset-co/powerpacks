@@ -80,6 +80,7 @@ install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-l
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
 install_skill powerset-set "$REPO_ROOT/packs/powerset/skills/powerset-set/SKILL.md"
+install_skill feedback "$REPO_ROOT/packs/powerset/skills/feedback/SKILL.md"
 install_skill update-powerpacks "$REPO_ROOT/packs/powerset/skills/update-powerpacks/SKILL.md"
 install -m 755 "$REPO_ROOT/bin/update-powerpacks" "$SKILLS_DIR/update-powerpacks/update-powerpacks"
 install_skill install-powerpacks "$REPO_ROOT/packs/powerset/skills/install-powerpacks/SKILL.md"
@@ -99,6 +100,6 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" claude-code "$SKILLS_DIR/.powerpacks-install.json"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set update-powerpacks sales-nav-search build-outbound"
+echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks sales-nav-search build-outbound"
 echo "  setup import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
 echo
