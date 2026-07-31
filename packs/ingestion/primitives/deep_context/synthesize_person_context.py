@@ -21,6 +21,12 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-07-31 (network-value worth v4): a personal connection with purely social
+    threads still qualifies as yes when the person themselves is a confidently
+    identified valuable network connection (founder/executive/investor/
+    researcher/industry figure); suspected-but-unconfirmed notability is maybe,
+    and fame without a real relationship stays no. Folds into the v3 evidence
+    bar before any store migrated, so one contract bump covers both.
   2026-07-31 (professional worth v3): `network_worth` is an evidence bar, not a
     warmth bar — yes requires ANY work-related signal in the messages (job,
     employer, studies, projects, hiring, investing, collaboration); a real but
@@ -116,7 +122,7 @@ DEFAULT_SATURATION_ROUNDS = 2      # ...or after this many batches add nothing n
 DEFAULT_MAX_BATCHES = 20           # ...or this many batches (~1600 msgs) — hard ceiling
 DEFAULT_MAX_RETRIES = 6
 DEFAULT_CHUNK_PEOPLE = 200         # people loaded into memory at once (streaming bound)
-SYNTHESIS_CONTRACT_VERSION = "professional-worth-v3"
+SYNTHESIS_CONTRACT_VERSION = "professional-worth-v4"
 # Calibrated from real runs: ~10 chunks/s wall at high concurrency (ranged 6.7
 # on flex tier to 11.7 on default tier). Used only for the --dry-run ETA; actual
 # rate scales with --concurrency and your OpenAI usage tier.
@@ -156,22 +162,28 @@ SYSTEM_PROMPT = (
     "working/collaborating together. One credible signal is enough; colleagues, "
     "collaborators, founders, investors, operators, researchers, professors, and "
     "classmates with visible school/career context all belong here. A personal contact "
-    "(partner, family member, friend) is yes ONLY on the same evidence.\n"
+    "(partner, family member, friend) with purely social threads ALSO qualifies when "
+    "the person themselves is a valuable network connection — a founder, executive, "
+    "investor, researcher, or recognized industry figure — identified with reasonable "
+    "confidence from the messages or their identity (name, email domain). Knowing a "
+    "valuable person personally IS network value.\n"
     "- no: clearly automated/broadcast mail, newsletters, receipts/notifications, mass "
     "marketing, cold sales/recruiting/SEO/agency outreach I did not meaningfully engage "
     "with, spam, or a purely transactional support/vendor/service exchange (a service "
     "provider I only book and pay stays no even though their occupation is visible). "
     "ALSO no: any real personal relationship whose messages contain ZERO work-related "
-    "prose — pure social, family, dating, or logistics threads. Warmth without "
-    "professional evidence is no.\n"
+    "prose AND no identifiable professional standing. Warmth without professional "
+    "evidence or standing is no — and fame without a real two-way relationship is "
+    "still no (a broadcast from a notable person is noise).\n"
     "- maybe: use only when the evidence is genuinely balanced or incomplete — a thin "
-    "work-related hint you cannot confirm, or messages too sparse to tell noise from a "
-    "real professional tie. Maybe is exceptional, not a catch-all. Never use maybe "
-    "merely because their seniority or professional value is unknown. A recognizable or "
-    "notable name, or a plausible phone area code, may be a weak positive prior when "
-    "the message evidence is sparse, but never invent an identity or biographical fact "
-    "from either.\n"
-    "Give a terse concrete reason citing the work-related evidence or its absence."
+    "work-related hint you cannot confirm, suspected-but-unconfirmed notability (a "
+    "name you cannot confidently identify is maybe, never a guessed yes), or messages "
+    "too sparse to tell noise from a real tie. Maybe is exceptional, not a catch-all. "
+    "Never use maybe merely because their seniority or professional value is unknown. "
+    "A plausible phone area code may be a weak positive prior when the message "
+    "evidence is sparse, but never invent an identity or biographical fact.\n"
+    "Give a terse concrete reason citing the work-related evidence, the identified "
+    "professional standing, or the absence of both."
 )
 
 # Appended when an owner.json bio is present: lets the model infer era/school/
