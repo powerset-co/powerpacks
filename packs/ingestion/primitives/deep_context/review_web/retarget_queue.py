@@ -19,6 +19,11 @@ the SAME machinery the enrichment flow already uses:
 
 Everything after the submit is automatic — the guidance click was the human's
 word, so there is no second review queue:
+  * guidance ASSERTING a LinkedIn URL is the person (a quick LLM intent read;
+    plain URL presence offline) -> applied directly, no research, no judge,
+    no spend — the same trust as the review-stage fix form. And if that read
+    ever misses, the post-judge net still applies a research result whose
+    profile the guidance literally references;
   * judge CONFIRM at/above the confirm bar -> the retarget auto-approves
     (`approved=yes`, `source=user-guidance`) and the profile hydrates
     cache-first via RapidAPI;
@@ -41,8 +46,10 @@ artifacts are never deleted) and re-researches.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
+import re
 import shutil
 import threading
 from collections import deque
@@ -54,11 +61,18 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context import assemble_synthetic_profile
 from packs.ingestion.primitives.deep_context import deep_research_contacts
 from packs.ingestion.primitives.deep_context import reconcile_deep_research
+from packs.indexing.lib.llm_config import DEFAULT_MODEL
+from packs.indexing.lib.openai_responses import (
+    make_async_client,
+    parse_json_response,
+    responses_kwargs,
+)
 from packs.ingestion.primitives.deep_context.common import (
     DEEP_RESEARCH_DIR,
     FACTS_DIR,
     RAW_DIR,
     RECONCILE_DIR,
+    load_env,
     load_owner,
     owner_background_block,
 )
@@ -77,6 +91,10 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import load_over
 from packs.ingestion.primitives.deep_context.review_store import (
     RESEARCH_CONFIRM_THRESHOLD,
     write_override_rows,
+)
+from packs.ingestion.schemas.people_schema import (
+    extract_public_identifier,
+    normalize_linkedin_url,
 )
 
 # Fixed output home for guided re-research (one subdir per person handle,
@@ -97,6 +115,81 @@ TERMINAL_STATES = ("applied", "synthetic", "no_match", "failed")
 _RESEARCH_FILES = ("00_parallel_raw.json", "01_research_parallel.json")
 
 _REJECT_TRUTHY = {"1", "true", "yes"}
+
+# A LinkedIn profile URL inside the guidance text, scheme optional.
+_GUIDANCE_LINKEDIN_RE = re.compile(
+    r"(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/in/[A-Za-z0-9\-_%.]+", re.IGNORECASE)
+
+
+def linkedin_url_in_guidance(guidance: str) -> tuple[str, str]:
+    """(normalized url, public identifier) when the guidance contains a
+    LinkedIn profile URL; ("", "") otherwise. The OFFLINE fallback for
+    `specified_linkedin_url` — plain presence, no intent reading."""
+    match = _GUIDANCE_LINKEDIN_RE.search(guidance or "")
+    if not match:
+        return "", ""
+    raw = match.group(0)
+    if not raw.lower().startswith("http"):
+        raw = f"https://{raw}"
+    url = normalize_linkedin_url(raw)
+    pub = extract_public_identifier(url).lower()
+    return (url, pub) if pub else ("", "")
+
+
+_SPECIFIED_URL_PROMPT = (
+    "The user is giving retargeting guidance about which LinkedIn profile belongs to a "
+    "person. Output specified_linkedin_url: the exact LinkedIn profile URL the user "
+    "asserts IS the correct profile — only when they affirm it (\"this is the right "
+    "one\", \"use this\", \"their profile is …\", or the guidance is essentially just "
+    "the URL). Output an empty string when no URL is present, when a URL is mentioned "
+    "only as context, or when the user says a URL is NOT the person.")
+
+_SPECIFIED_URL_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"specified_linkedin_url": {"type": "string"}},
+    "required": ["specified_linkedin_url"],
+}
+
+
+def specified_linkedin_url(guidance: str, *, use_llm: bool,
+                           model: str = DEFAULT_MODEL, timeout: int = 60) -> tuple[str, str]:
+    """(url, pub) the user ASSERTS is the correct profile, else ("", "").
+
+    A quick LLM intent read — a mentioned URL is not necessarily an assertion
+    ("NOT this one" must extract nothing) — falling back to plain URL presence
+    when offline or when the call fails."""
+    if not (guidance or "").strip():
+        return "", ""
+    if not use_llm:
+        return linkedin_url_in_guidance(guidance)
+
+    async def driver() -> str:
+        client = make_async_client(timeout=timeout)
+        try:
+            kwargs = responses_kwargs(model, effort="minimal",
+                                      schema=_SPECIFIED_URL_SCHEMA,
+                                      schema_name="specified_linkedin")
+            response = await client.responses.create(
+                model=model,
+                input=[{"role": "system", "content": _SPECIFIED_URL_PROMPT},
+                       {"role": "user", "content": guidance.strip()}],
+                **kwargs)
+            return str(parse_json_response(
+                response, "specified_linkedin").get("specified_linkedin_url") or "")
+        finally:
+            await client.close()
+
+    try:
+        load_env()
+        raw = asyncio.run(driver()).strip()
+    except Exception:
+        return linkedin_url_in_guidance(guidance)
+    if not raw:
+        return "", ""
+    url = normalize_linkedin_url(raw if raw.lower().startswith("http") else f"https://{raw}")
+    pub = extract_public_identifier(url).lower()
+    return (url, pub) if pub else ("", "")
 
 
 def _mirror_into_engine_home(src_dir: Path, dst_dir: Path) -> None:
@@ -150,6 +243,26 @@ def run_guided_retarget(request: GuidedRetarget, *,
     key = request.pub.strip().lower()
     if not key:
         return {"state": "failed", "detail": "person has no review key"}
+
+    # The user handed us the answer: a URL they ASSERT is the right profile IS
+    # the decision — the same trust as the review-stage fix form. No research,
+    # no judge, no spend; the retarget applies directly. Intent is read by a
+    # quick LLM call (regex-presence only offline / on failure).
+    given_url, given_pub = specified_linkedin_url(request.guidance, use_llm=use_llm)
+    if given_pub:
+        rows = load_override_rows(review_path)
+        row_now = rows.setdefault(key, {"public_identifier": request.pub})
+        row_now.update({"action": "retarget", "approved": "yes",
+                        "new_linkedin_url": given_url,
+                        "new_public_identifier": given_pub,
+                        "confidence": "1.000",
+                        "reason": "LinkedIn URL provided by the user",
+                        "source": "user-guidance",
+                        "llm_reject": "", "llm_reject_confidence": "",
+                        "llm_reject_reason": "", "updated_at": now_iso()})
+        write_override_rows(review_path, rows)
+        return {"state": "applied", "new_url": given_url, "confidence": "1.000",
+                "detail": "user-provided LinkedIn applied directly (no research needed)"}
 
     subset_row = {
         "parent_slug": request.slug,
@@ -252,16 +365,40 @@ def run_guided_retarget(request: GuidedRetarget, *,
                 "detail": str(after.get("reason") or "")}
 
     # No usable LinkedIn (nothing found, or the judge rejected the proposal).
-    # The user already said the old link is the wrong person, so it detaches
-    # NOW, and a synthetic profile assembled from the fresh research supersedes
-    # it as the working identity — everything automatic, no second review.
     reason = (str(after.get("llm_reject_reason") or "").strip()
               if rejected else "research found no LinkedIn for this guidance")
+    if rejected and new_url:
+        # The user's word outranks the judge's corroboration bar: when the
+        # research came back with the very profile the guidance references
+        # (Parallel was told the hint is the strongest clue), apply it even
+        # though the judge could not corroborate it from the dossier alone.
+        proposed_pub = (str(after.get("new_public_identifier") or "").strip().lower()
+                        or extract_public_identifier(new_url).lower())
+        if proposed_pub and proposed_pub in request.guidance.lower():
+            after.update({"approved": "yes", "source": "user-guidance",
+                          "llm_reject": "", "llm_reject_confidence": "",
+                          "llm_reject_reason": "", "updated_at": now_iso()})
+            write_override_rows(review_path, rows)
+            return {"state": "applied", "new_url": new_url,
+                    "confidence": str(after.get("confidence") or ""),
+                    "detail": "research returned the profile your guidance references"}
+
+    # The user already said the old link is the wrong person, so it detaches
+    # NOW; when the research found nothing, a synthetic profile assembled from
+    # it supersedes the old identity — everything automatic, no second review.
     row_now = rows.setdefault(key, {"public_identifier": request.pub})
     row_now.update({"action": "detach", "approved": "yes",
                     "source": "user-guidance", "new_linkedin_url": "",
                     "new_public_identifier": "", "updated_at": now_iso()})
     write_override_rows(review_path, rows)
+    if rejected and new_url:
+        # Research DID find a profile but the judge could not corroborate it —
+        # assemble deliberately skips outputs that carry a LinkedIn (the
+        # retarget path owns them), so no synthetic is possible here. The wrong
+        # link is detached; naming the URL in guidance would apply it directly.
+        return {"state": "no_match", "new_url": new_url,
+                "detail": (f"judge could not verify {new_url} ({reason}); the old link was "
+                           "detached — paste the URL as guidance to apply it directly")}
     report("judging", "assembling a synthetic profile from the research")
     # run() returns the TYPED manifest (pipeline/contract.py Node.run) — read
     # attributes, never dict-get.

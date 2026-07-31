@@ -5616,9 +5616,10 @@ class TestGuidedRetargets(unittest.TestCase):
             self.assertEqual(row["source"], "user-guidance")
             self.assertIn("jordan-bravo-right", row["new_linkedin_url"])
 
-    def test_judge_rejection_detaches_and_stands_a_synthetic(self):
-        # Fully automatic: the user said wrong person; when the judge rejects the
-        # research proposal, the old link detaches and a synthetic supersedes it.
+    def test_judge_rejection_of_unreferenced_profile_detaches_and_says_so(self):
+        # The judge rejected a profile the guidance never referenced: the wrong
+        # link detaches (the user said wrong person) and the outcome is honest —
+        # no synthetic is possible when research returned a LinkedIn.
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
             review, facts, raw, out, engine = (base / "review.csv", base / "facts",
@@ -5630,7 +5631,6 @@ class TestGuidedRetargets(unittest.TestCase):
                                   "linkedin_status": "found"}}
             rejecting = _verdict("wrong_person", 0.9, reason="no non-name corroboration")
             assemble = mock.Mock()
-            assemble.return_value.run.return_value = mock.Mock(built=1, preserved_user_rows=0)
             with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
                                    side_effect=self._fake_research({}, profile)), \
                  mock.patch.object(dresearch, "judge_research_proposal",
@@ -5642,18 +5642,116 @@ class TestGuidedRetargets(unittest.TestCase):
                     people_csv=base / "missing-people.csv",
                     facts_dir=facts, raw_dir=raw, out_dir=out,
                     engine_dir=engine, use_llm=True)
-            self.assertEqual(result["state"], "synthetic")
-            self.assertIn("corroboration", result["detail"])
+            self.assertEqual(result["state"], "no_match")
+            self.assertIn("could not verify", result["detail"])
+            assemble.assert_not_called()                    # a found URL owns the person
             row = _rows_by_pub(review)["jordan-bravo-wrong"]
             self.assertEqual(row["action"], "detach")       # the wrong link is gone
             self.assertEqual(row["approved"], "yes")
             self.assertEqual(row["source"], "user-guidance")
             self.assertEqual(row["new_linkedin_url"], "")
+            # The guided result is mirrored into the engine's research home.
+            self.assertTrue((engine / "jordan-bravo-p" / "01_research_parallel.json").exists())
+
+    def test_no_linkedin_found_detaches_and_stands_a_synthetic(self):
+        # Research found no LinkedIn at all: detach + a synthetic supersedes.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts, raw, out, engine = (base / "review.csv", base / "facts",
+                                               base / "raw", base / "out", base / "engine")
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.75,
+                                  "notes": "No public LinkedIn presence found."},
+                       "social": {"linkedin_status": "not_found"}}
+            assemble = mock.Mock()
+            assemble.return_value.run.return_value = mock.Mock(built=1, preserved_user_rows=0)
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=self._fake_research({}, profile)), \
+                 mock.patch.object(web_retargets.assemble_synthetic_profile,
+                                   "AssembleSyntheticProfile", assemble):
+                result = web_retargets.run_guided_retarget(
+                    self._request(), review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=engine, use_llm=False)
+            self.assertEqual(result["state"], "synthetic")
+            row = _rows_by_pub(review)["jordan-bravo-wrong"]
+            self.assertEqual(row["action"], "detach")
+            self.assertEqual(row["approved"], "yes")
             kwargs = assemble.call_args.kwargs
             self.assertEqual(kwargs["research_dir"], out)
             self.assertFalse(kwargs["prune"])               # scoped run must never prune
-            # The guided result is mirrored into the engine's research home.
-            self.assertTrue((engine / "jordan-bravo-p" / "01_research_parallel.json").exists())
+
+    def test_pasted_linkedin_url_applies_directly_no_research_no_judge(self):
+        # "i literally gave it the linkedin": an asserted URL IS the decision —
+        # zero spend, no judge skepticism, applied immediately. The LLM intent
+        # read is consulted online (patched here); offline falls back to URL
+        # presence.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review = base / "review.csv"
+            with mock.patch.object(web_retargets.deep_research_contacts,
+                                   "run_research") as research, \
+                 mock.patch.object(dresearch, "judge_research_proposal") as judge, \
+                 mock.patch.object(
+                     web_retargets, "specified_linkedin_url",
+                     return_value=("https://www.linkedin.com/in/jordan-bravo-right",
+                                   "jordan-bravo-right")) as intent:
+                result = web_retargets.run_guided_retarget(
+                    self._request(
+                        guidance="this is the right one https://www.linkedin.com/in/jordan-bravo-right"),
+                    review_path=review, people_csv=base / "missing-people.csv",
+                    facts_dir=base / "facts", raw_dir=base / "raw",
+                    out_dir=base / "out", engine_dir=base / "engine", use_llm=True)
+            intent.assert_called_once()
+            self.assertTrue(intent.call_args.kwargs["use_llm"])
+            research.assert_not_called()
+            judge.assert_not_called()
+            self.assertEqual(result["state"], "applied")
+            self.assertIn("no research needed", result["detail"])
+            row = _rows_by_pub(review)["jordan-bravo-wrong"]
+            self.assertEqual(row["action"], "retarget")
+            self.assertEqual(row["approved"], "yes")
+            self.assertEqual(row["new_public_identifier"], "jordan-bravo-right")
+            self.assertEqual(row["source"], "user-guidance")
+        # Offline fallback: scheme-less URLs count; plain text does not.
+        self.assertEqual(
+            web_retargets.specified_linkedin_url(
+                "try linkedin.com/in/jordan-bravo-right pls", use_llm=False)[1],
+            "jordan-bravo-right")
+        self.assertEqual(
+            web_retargets.specified_linkedin_url("the DevRel at Acme", use_llm=False),
+            ("", ""))
+
+    def test_judge_rejection_yields_to_guidance_that_references_the_profile(self):
+        # Parallel is told the hint is the strongest clue; when it returns the
+        # very profile the guidance references, the user's word outranks the
+        # judge's corroboration bar.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts, raw, out, engine = (base / "review.csv", base / "facts",
+                                               base / "raw", base / "out", base / "engine")
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.9,
+                                  "notes": "Per the user hint."},
+                       "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                                  "linkedin_status": "found"}}
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=self._fake_research({}, profile)):
+                # use_llm=False: intent read falls back to URL presence (none
+                # here), and the deterministic judge always rejects — exactly
+                # the belt-and-suspenders case.
+                result = web_retargets.run_guided_retarget(
+                    self._request(guidance="pretty sure jordan-bravo-right is him"),
+                    review_path=review, people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=engine, use_llm=False)
+            self.assertEqual(result["state"], "applied")
+            self.assertIn("guidance references", result["detail"])
+            row = _rows_by_pub(review)["jordan-bravo-wrong"]
+            self.assertEqual(row["approved"], "yes")
+            self.assertEqual(row["llm_reject"], "")
+            self.assertEqual(row["new_public_identifier"], "jordan-bravo-right")
 
     def test_identical_guidance_reuses_paid_research_changed_guidance_rebills(self):
         # A retry after a crash must not re-bill: same guidance keeps the
