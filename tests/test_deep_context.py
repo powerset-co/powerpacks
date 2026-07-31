@@ -6059,6 +6059,11 @@ class TestGuidedRetargets(unittest.TestCase):
         self.assertIn("data-retarget-form", script)
         self.assertIn("/feedback", script)
         self.assertIn("feedbackPopover", script)
+        # Two-step decide: the form opens before the move; the move runs onDone
+        # (send or Skip), never before the popover settles.
+        self.assertIn("onDone", script)
+        self.assertIn("feedback-skip", script)
+        self.assertIn("onDone: () => void applyWorth", script)
 
 
 if __name__ == "__main__":

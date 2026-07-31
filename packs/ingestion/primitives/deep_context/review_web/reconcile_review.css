@@ -1358,6 +1358,24 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 
 .feedback-hint { font-size: 10px; opacity: .6; }
 
+.feedback-actions { display: inline-flex; align-items: center; gap: 6px; }
+
+.feedback-skip {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+
+.feedback-skip:hover { background: var(--secondary); color: var(--foreground); }
+
+.feedback-skip:disabled { opacity: .3; pointer-events: none; }
+
 .feedback-send {
   display: inline-flex;
   align-items: center;
