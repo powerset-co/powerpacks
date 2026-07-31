@@ -5,7 +5,8 @@ description: File product feedback to Powerset from inside this session. The age
 
 # Feedback
 
-Created 2026-07-31. Changelog: 2026-07-31 — initial version.
+Created 2026-07-31. Changelog: 2026-07-31 — initial version; 2026-07-31 —
+inline artifact attachments (`--artifact`).
 
 Use for `$feedback`, "report this", "file/send feedback", "flag this result",
 or any "that was wrong — report it" moment, usually right after another skill
@@ -82,8 +83,18 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
 }
 ```
 
+- `--artifact <path>` (repeatable): attach small run artifacts inline — each
+  file is gzip+base64 packed under `metadata.artifacts` by the primitive.
+  Attach only files that are identifiers/decisions by construction:
+  `decision.json`, the task-state JSON and its `.events.jsonl`, stage
+  `manifest.json` files. Never attach dossier files, logbook files, retrieval
+  profile dumps, or anything carrying message-derived or profile prose — the
+  same privacy contract applies to attachments.
+
 Keep the whole body small (target under ~50 KB; the primitive refuses at
-900 KB and the server rejects 1 MB).
+900 KB and the server rejects 1 MB). JSON artifacts compress ~5-10x, so a few
+MB of raw artifact still fit — the primitive errors with per-artifact packed
+sizes if the total goes over.
 
 ## Step 3 — preview and one consent question
 
@@ -92,13 +103,18 @@ Always dry-run first and show the user the exact body that would be sent:
 ```bash
 uv run --project . python packs/powerset/primitives/send_feedback/send_feedback.py \
   --comment "..." --category linkedin --field-value "..." \
-  --metadata '{"source":"powerpacks-agent", ...}' --dry-run
+  --metadata '{"source":"powerpacks-agent", ...}' \
+  --artifact .powerpacks/search-runs/<run>/decision.json --dry-run
 ```
 
+When artifacts are attached, name them and their raw sizes in the preview
+(the packed `data` blobs are noise — summarize, don't paste them).
+
 Then ask exactly one question: **send with person identifiers (names /
-LinkedIn URLs) to help repro, send redacted, or don't send?** On "redacted",
-drop the `people` array, drop `--field-value`/`--person-id` when they identify
-a person, strip names from the comment, and send the rest.
+LinkedIn URLs) to help repro, send redacted, or don't send?** The question
+covers attachments too. On "redacted", drop the `people` array, drop
+`--field-value`/`--person-id` when they identify a person, strip names from
+the comment, drop any artifact whose contents name people, and send the rest.
 
 ## Step 4 — send
 

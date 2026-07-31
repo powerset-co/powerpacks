@@ -3,11 +3,16 @@ submit/needs-auth/failed branches. All offline — post_json and bearer_token ar
 patched where defined; fixtures are synthetic."""
 from __future__ import annotations
 
+import base64
+import gzip
 import io
 import json
+import random
+import tempfile
 import unittest
 import urllib.error
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest import mock
 
 from packs.powerset.primitives.send_feedback import send_feedback as sf
@@ -47,6 +52,53 @@ class TestFeedbackRequest(unittest.TestCase):
         request = sf.FeedbackRequest(comment="x" * (sf.MAX_BODY_BYTES + 10))
         with self.assertRaises(SystemExit):
             request.body()
+
+
+class TestArtifacts(unittest.TestCase):
+    def _packed(self, content: dict) -> sf.Artifact:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "decision.json"
+            path.write_text(json.dumps(content))
+            return sf.pack_artifact(path)
+
+    def test_pack_roundtrips_under_metadata_artifacts(self):
+        content = {"surface": "people", "backend": "local", "depth": "fast"}
+        artifact = self._packed(content)
+        body = sf.FeedbackRequest(
+            comment="x", metadata={"query": "series b lead"},
+            artifacts=(artifact,)).body()
+        entry = body["metadata"]["artifacts"][0]
+        self.assertEqual(entry["name"], "decision.json")
+        self.assertEqual(entry["encoding"], "gzip+base64")
+        self.assertEqual(entry["raw_bytes"], len(json.dumps(content)))
+        self.assertEqual(
+            json.loads(gzip.decompress(base64.b64decode(entry["data"]))), content)
+        # --metadata keys survive alongside the attachments.
+        self.assertEqual(body["metadata"]["query"], "series b lead")
+
+    def test_artifacts_key_collision_is_refused(self):
+        artifact = self._packed({"a": 1})
+        request = sf.FeedbackRequest(
+            comment="x", metadata={"artifacts": []}, artifacts=(artifact,))
+        with self.assertRaises(SystemExit):
+            request.body()
+
+    def test_oversize_error_names_the_artifacts(self):
+        # Incompressible payload, so the packed size actually crosses the cap.
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "decision.json"
+            path.write_bytes(random.Random(0).randbytes(500_000))
+            artifact = sf.pack_artifact(path)
+        request = sf.FeedbackRequest(comment="x", artifacts=(artifact, artifact))
+        with self.assertRaises(SystemExit) as ctx:
+            request.body()
+        self.assertIn("decision.json", str(ctx.exception))
+
+    def test_missing_artifact_path_exits_2(self):
+        with redirect_stdout(io.StringIO()):
+            code = sf.main(["--comment", "x",
+                            "--artifact", "/nonexistent/decision.json", "--dry-run"])
+        self.assertEqual(code, 2)
 
 
 class TestSendFeedback(unittest.TestCase):
