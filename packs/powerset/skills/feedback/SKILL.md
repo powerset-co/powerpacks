@@ -6,7 +6,8 @@ description: File product feedback to Powerset from inside this session. The age
 # Feedback
 
 Created 2026-07-31. Changelog: 2026-07-31 — initial version; 2026-07-31 —
-inline artifact attachments (`--artifact`).
+inline artifact attachments (`--artifact`); 2026-07-31 — `$deep-context`
+surface notes.
 
 Use for `$feedback`, "report this", "file/send feedback", "flag this result",
 or any "that was wrong — report it" moment, usually right after another skill
@@ -95,6 +96,21 @@ Keep the whole body small (target under ~50 KB; the primitive refuses at
 900 KB and the server rejects 1 MB). JSON artifacts compress ~5-10x, so a few
 MB of raw artifact still fit — the primitive errors with per-artifact packed
 sizes if the total goes over.
+
+### `$deep-context` sessions
+
+The review UI already files pane-level worth/retarget feedback automatically
+(`review_web/feedback.py`); use `$feedback` for session-level issues the panes
+cannot express (a bad merge run, a stuck stage, systematic wrong-LinkedIn
+patterns). Deep-context specifics:
+
+- Identifiers: parent slug + `person_ids`, candidate LinkedIn slugs/URLs with
+  their confidences, machine/human worth DECISIONS and confidences.
+- Artifacts: `.powerpacks/deep-context/index.json` and the stage
+  `manifest.json` files (facts / parents / reconcile) — counts, statuses, and
+  slugs by construction.
+- Still never: dossier markdown, facts text, `llm_worth_reason` / judge reason
+  prose — all synthesized from message bodies.
 
 ## Step 3 — preview and one consent question
 
