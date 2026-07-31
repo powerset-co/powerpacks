@@ -241,6 +241,8 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("send with person identifiers", text)
         self.assertIn("data_inconsistency", text)
         self.assertIn("$powerset setup", text)
+        self.assertIn("--artifact", text)
+        self.assertIn("Never attach dossier files", text)
 
     def test_search_surface_documents_company_entrypoint(self) -> None:
         text = (ROOT / "packs/search/docs/search-surface.md").read_text()

@@ -17,15 +17,23 @@ Contract facts this module encodes (from the API):
   consumers cast `person_id::uuid` at query time, so a local slug would poison
   whole batches. Local identifiers belong in `metadata`.
 - Request bodies are capped at 1 MB server-side; this module refuses earlier.
+- Small file attachments ride inline: `--artifact <path>` packs each file as
+  gzip+base64 under `metadata.artifacts`. The wire cap is unchanged, but JSON
+  run artifacts compress ~5-10x, so several MB of raw artifact fit under it.
 
 Auth/base-URL helpers are imported from `pull_runtime_keys` (one home): env
 aliases resolve the API base, `bearer_token()` mints a fresh Auth0 token via
 `auth.py token --bearer-only` and raises with a `$powerset login` hint when
 signed out.
+
+Changelog:
+- 2026-07-31: inline artifact attachments (`--artifact`, gzip+base64).
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
 import json
 import sys
 import urllib.error
@@ -73,6 +81,26 @@ def _require_uuid(name: str, value: str) -> str:
 
 
 @dataclass(frozen=True)
+class Artifact:
+    """One attached file, packed at the boundary."""
+
+    name: str
+    source_path: str
+    raw_bytes: int
+    data: str  # base64(gzip(file bytes))
+
+
+def pack_artifact(path: Path) -> Artifact:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"cannot read --artifact {path}: {exc}") from None
+    packed = base64.b64encode(gzip.compress(raw, 9)).decode("ascii")
+    return Artifact(name=path.name, source_path=str(path),
+                    raw_bytes=len(raw), data=packed)
+
+
+@dataclass(frozen=True)
 class FeedbackRequest:
     """One feedback row, validated at construction — the one config door."""
 
@@ -81,6 +109,7 @@ class FeedbackRequest:
     category: str = ""
     field_value: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    artifacts: tuple[Artifact, ...] = ()
     conversation_id: str = ""
     set_id: str = ""
     interaction_id: str = ""
@@ -105,12 +134,27 @@ class FeedbackRequest:
             value = getattr(self, name)
             if value:
                 payload[name] = value
-        if self.metadata:
-            payload["metadata"] = self.metadata
+        metadata = dict(self.metadata)
+        if self.artifacts:
+            if "artifacts" in metadata:
+                raise SystemExit(
+                    "--metadata already carries an 'artifacts' key; attach files "
+                    "via --artifact only")
+            metadata["artifacts"] = [
+                {"name": a.name, "source_path": a.source_path,
+                 "raw_bytes": a.raw_bytes, "encoding": "gzip+base64",
+                 "data": a.data}
+                for a in self.artifacts
+            ]
+        if metadata:
+            payload["metadata"] = metadata
         encoded = json.dumps(payload, ensure_ascii=False)
         if len(encoded.encode("utf-8")) > MAX_BODY_BYTES:
+            sizes = "; ".join(
+                f"{a.name}={len(a.data)}B packed" for a in self.artifacts)
             raise SystemExit(
-                f"feedback body exceeds {MAX_BODY_BYTES} bytes; trim the comment/metadata")
+                f"feedback body exceeds {MAX_BODY_BYTES} bytes; trim the comment/metadata"
+                + (f" or drop artifacts ({sizes})" if self.artifacts else ""))
         return payload
 
 
@@ -187,6 +231,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="The wrong value currently shown (e.g. the wrong LinkedIn URL)")
     p.add_argument("--metadata", default="",
                    help="JSON object with structured context: query, local slugs, guidance")
+    p.add_argument("--artifact", action="append", default=[], metavar="PATH",
+                   help="Attach a small file inline (gzip+base64 into metadata.artifacts); "
+                        "repeatable. JSON artifacts pack ~5-10x under the wire cap.")
     p.add_argument("--conversation-id", default="", help="Prod conversation UUID if known")
     p.add_argument("--set-id", default="", help="Powerset set UUID (see POWERPACKS_DEFAULT_SET_ID)")
     p.add_argument("--interaction-id", default="")
@@ -212,10 +259,12 @@ def main(argv: list[str] | None = None) -> int:
             print("--metadata must be a JSON object", file=sys.stderr)
             return 2
     try:
+        artifacts = tuple(pack_artifact(Path(p)) for p in args.artifact)
         request = FeedbackRequest(
             comment=args.comment, feedback_type=args.feedback_type,
             category=args.category, field_value=args.field_value,
-            metadata=metadata, conversation_id=args.conversation_id,
+            metadata=metadata, artifacts=artifacts,
+            conversation_id=args.conversation_id,
             set_id=args.set_id, interaction_id=args.interaction_id,
             message_id=args.message_id, person_id=args.person_id)
     except SystemExit as exc:
