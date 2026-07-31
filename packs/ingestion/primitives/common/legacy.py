@@ -296,9 +296,10 @@ def message_linkedin_aliases(rows: list[dict[str, str]]) -> dict[str, str]:
 
 
 def ensure_owner_phones(owner_json: Path) -> bool:
-    """Stamp a missing "phones" key on owner.json, harvested from the message
-    stores. Idempotent: a present key (even empty) is left untouched.
-    Returns True when the file was rewritten."""
+    """Fill a missing OR empty "phones" key on owner.json from the message
+    stores' self-rows. An EMPTY key re-harvests (cheap, ~ms) so an install
+    whose message store arrives later still self-heals; a populated key is
+    never touched. Returns True when the file was rewritten."""
     from packs.ingestion.primitives.deep_context.build_owner import harvest_owner_phones
     if not owner_json.exists():
         return False
@@ -306,8 +307,11 @@ def ensure_owner_phones(owner_json: Path) -> bool:
         owner = json.loads(owner_json.read_text(encoding="utf-8")) or {}
     except (json.JSONDecodeError, OSError):
         return False
-    if not isinstance(owner, dict) or "phones" in owner:
+    if not isinstance(owner, dict) or owner.get("phones"):
         return False
-    owner["phones"] = harvest_owner_phones(owner)
+    phones = harvest_owner_phones(owner)
+    if not phones and "phones" in owner:
+        return False  # nothing found and the shape is already current
+    owner["phones"] = phones
     owner_json.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
     return True

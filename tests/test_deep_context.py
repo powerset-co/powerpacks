@@ -5576,6 +5576,20 @@ class TestOwnerPhoneLeak(unittest.TestCase):
             data = json.loads(owner_json.read_text())
             self.assertIn("phones", data)          # stamped (possibly empty)
             self.assertFalse(legacy.ensure_owner_phones(owner_json))  # idempotent
+            # An EMPTY key still re-harvests once a store appears (Jake-shape:
+            # owner.json carried phones: [] before the message store existed).
+            messages = Path(d) / ".powerpacks/network-import/discover/messages"
+            messages.mkdir(parents=True)
+            (messages / "contacts.csv").write_text(
+                "phone,name,source\n+15550100,jordanbravo88,imessage\n", encoding="utf-8")
+            import os
+            cwd = os.getcwd()
+            os.chdir(d)  # harvest resolves the store relative to the install root
+            try:
+                self.assertTrue(legacy.ensure_owner_phones(owner_json))
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(json.loads(owner_json.read_text())["phones"], ["+15550100"])
 
     def test_contact_merge_drops_owner_endpoints_from_any_source(self):
         with mock.patch.object(web_rendering, "load_owner",
