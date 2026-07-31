@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.5.0...powerpacks-v1.6.0) (2026-07-31)
+
+
+### Features
+
+* **deep-context:** directory decisions — guided retargets, feedback to prod, contact-identifier policy, synthesis v2 ([#375](https://github.com/powerset-co/powerpacks/issues/375)) ([11355c8](https://github.com/powerset-co/powerpacks/commit/11355c831626415545e01ec7e423ba4e4bc29d89))
+* Reflect bench CLI — score / report / gate (Phase 0, PR C, 3/4) ([#373](https://github.com/powerset-co/powerpacks/issues/373)) ([67e014b](https://github.com/powerset-co/powerpacks/commit/67e014b33573de8a2a4e80fa4e35accbee4b34b6))
+* Reflect bench scorers — GT survival funnel + NDCG (Phase 0, PR A, 2/4) ([#372](https://github.com/powerset-co/powerpacks/issues/372)) ([91c6c7b](https://github.com/powerset-co/powerpacks/commit/91c6c7bb29daead5b1d568f1c6156f223d004bc3))
+* usage capture + deep-loop timing (Phase 0, PR B, 4/4) ([#374](https://github.com/powerset-co/powerpacks/issues/374)) ([03e3f3a](https://github.com/powerset-co/powerpacks/commit/03e3f3ad70ea6a242343ca994eb7a1dc5069677e))
+
+
+### Documentation
+
+* commit Reflect bench objective, acceptance contract, and Search v2 proposal ([#371](https://github.com/powerset-co/powerpacks/issues/371)) ([4edc6d0](https://github.com/powerset-co/powerpacks/commit/4edc6d0a92c35edb8b397ee25acf44bb7a8ef2bb))
+
 ## [1.5.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.4.0...powerpacks-v1.5.0) (2026-07-30)
 
 
