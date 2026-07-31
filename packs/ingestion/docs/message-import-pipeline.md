@@ -1,5 +1,11 @@
 <!--
 Changelog:
+- 2026-07-30: The wacli binary client became a package,
+  `discover/messages/wacli/` (one concern per module: binary install/verify,
+  read-only store SQL, auth/pairing/QR, one sync pass, history backfill + the
+  depth stage, and the typed parses of wacli's JSON), with
+  `whatsapp_wacli.py` kept as its thin CLI at the same path. Commands, flags,
+  payloads, and artifacts are unchanged.
 - 2026-07-23: Split the WhatsApp discovery primitive in two. The install →
   auth → sync → deepen → export orchestrator moved to `extract_whatsapp.py`
   (`run`/`export`, parallels `extract_imessage.py`); the wacli binary lifecycle
@@ -325,7 +331,8 @@ shared `.powerpacks/network-import/import/<source>/people.csv` and
 | --- | --- |
 | Full agent workflow | [`import-messages/SKILL.md`](../skills/import-messages/SKILL.md) |
 | WhatsApp discovery (direct run/export) | [`messages/extract_whatsapp.py`](../primitives/discover/messages/extract_whatsapp.py) |
-| wacli client (install/auth/status/logout) | [`messages/whatsapp_wacli.py`](../primitives/discover/messages/whatsapp_wacli.py) |
+| wacli client CLI (install/auth/status/logout) | [`messages/whatsapp_wacli.py`](../primitives/discover/messages/whatsapp_wacli.py) |
+| wacli client internals (binary, store SQL, auth/QR, sync, history depth) | [`messages/wacli/`](../primitives/discover/messages/wacli/) |
 | Message discovery | [`messages.py`](../primitives/discover/messages/discover.py) |
 | iMessage extraction | [`messages/extract_imessage.py`](../primitives/discover/messages/extract_imessage.py) |
 | WhatsApp extraction | [`messages/extract_whatsapp.py`](../primitives/discover/messages/extract_whatsapp.py) |

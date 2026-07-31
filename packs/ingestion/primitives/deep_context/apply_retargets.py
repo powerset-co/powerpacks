@@ -16,6 +16,9 @@ Only rows with action=retarget AND approved ∈ {auto, yes} are applied (a user 
 retarget is skipped). Enrichment is automatic (RapidAPI is cache-first + effectively free).
 
 Changelog:
+  2026-07-30 (style): `USER_APPROVED` / `load_override_rows` are imported from their
+    definition home (`review_store`) instead of through `reconcile_linkedin`, which
+    only re-exported them. Same objects — no behavior change.
   2026-07-27 (declared contract): `ApplyRetargets` is a `pipeline/contract.py:Node`.
     It DECLARES the review decisions, merged people.csv, and profile cache it reads
     and `overrides/retarget-people.csv` (row model `PeopleRow`, the header it has
@@ -50,12 +53,10 @@ from packs.ingestion.primitives.deep_context.common import (
     RETARGET_PEOPLE_CSV,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
-    USER_APPROVED,
-    load_override_rows,
-)
 from packs.ingestion.primitives.deep_context.review_store import (
+    USER_APPROVED,
     judge_accepted_candidate_retarget,
+    load_override_rows,
     write_override_rows,
 )
 from packs.ingestion.primitives.enrich.profile_transforms import (

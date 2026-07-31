@@ -21,6 +21,14 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-07-30 (house style): `_plan()` returns the frozen `SynthesisPlan` instead of
+    a 3-tuple, and the run's numbers accumulate in `SynthesisTally` instead of a
+    `counter`/`stop_reasons`/`usage_total` trio of string-keyed dicts. `execute()`
+    has ONE exit: the "nothing pending" case is the `if plan.paths:` block being
+    skipped, not a second 25-field copy of the manifest — same values on both
+    paths (people=0, concurrency=0, zero tokens, $0), and `load_env()` plus the
+    OpenAI client still happen only when there is work. Sections read select ->
+    call -> mirror -> report. No behavior change.
   2026-07-27 (declared contract): `SynthesizePersonContext` is a
     `pipeline/contract.py:Node` named `deep_synthesize`. It declares the
     `{person_id}` raw-bundle template + owner.json as inputs and the `{person_id}`
@@ -44,6 +52,7 @@ import hashlib
 import json
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -565,6 +574,45 @@ def _chunked(seq: list[Any], size: int) -> Any:
         yield seq[i:i + size]
 
 
+@dataclass(frozen=True)
+class SynthesisPlan:
+    """Everything the free preamble decides, before a single token is spent:
+    who the owner is, the exact system prompt that will be sent, and which
+    bundles still need synthesis. Both the paid run and the `--dry-run` estimate
+    start from this same value, so they can never disagree about the population.
+    """
+
+    owner: dict[str, Any] | None
+    system_prompt: str
+    paths: list[Path]
+
+
+@dataclass
+class SynthesisTally:
+    """What the run accumulated, one field per manifest number.
+
+    Replaces a `counter` dict, a `stop_reasons` dict and a `usage_total` dict
+    threaded through the result callback by string key; `record` is the whole
+    update, applied once per completed person.
+    """
+
+    people_done: int = 0
+    errors: int = 0
+    batches: int = 0
+    stop_reasons: dict[str, int] = field(default_factory=dict)
+    tokens: dict[str, int] = field(default_factory=lambda: {
+        "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0})
+
+    def record(self, result: dict[str, Any]) -> None:
+        for key in self.tokens:
+            self.tokens[key] += result["usage"].get(key, 0)
+        self.people_done += 1
+        self.errors += result["errors"]
+        self.batches += result["batches_used"]
+        reason = result["stop_reason"]
+        self.stop_reasons[reason] = self.stop_reasons.get(reason, 0) + 1
+
+
 class SynthesizePersonContextManifest(StageManifest):
     """The stage's typed manifest payload — same keys as the raw dict it replaces.
     `updated_at` is stamped in `execute()` so the emitted payload keeps it, exactly
@@ -678,9 +726,8 @@ class SynthesizePersonContext(Node):
             self.manifest: str(self.facts_dir / "manifest.json"),
         }
 
-    def _plan(self) -> tuple[dict[str, Any] | None, str, list[Path]]:
-        """Owner context, the assembled system prompt, and the pending bundles —
-        the shared free preamble of both the paid run and the dry-run estimate."""
+    def _plan(self) -> SynthesisPlan:
+        """The shared free preamble of both the paid run and the dry-run estimate."""
         owner = load_owner() if not self.no_owner else None
         system_prompt = SYSTEM_PROMPT + (
             owner_identity_block(owner) + OWNER_PROMPT_SUFFIX + owner_background_block(owner) if owner else "")
@@ -695,7 +742,7 @@ class SynthesizePersonContext(Node):
             person_id=self.person,
             review_rows=review_rows,
         )
-        return owner, system_prompt, paths
+        return SynthesisPlan(owner=owner, system_prompt=system_prompt, paths=paths)
 
     def _batches(self, messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         newest = sorted(messages, key=lambda m: m.get("at") or "", reverse=True)
@@ -707,20 +754,20 @@ class SynthesizePersonContext(Node):
         it bypasses the run template so the estimate never becomes a manifest."""
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         encoder = tiktoken.get_encoding("o200k_base")
-        owner, system_prompt, paths = self._plan()
+        plan = self._plan()
         # Stream bundles one at a time to tally tokens without holding them all.
         profile_carry_tokens = 350
         floor_tokens = ceiling_tokens = ceiling_batches = people = 0
-        for path in paths:
+        for path in plan.paths:
             bundle = _load_bundle(path)
             if not bundle.get("messages"):
                 continue
             people += 1
             batches = self._batches(bundle["messages"])
             if batches:
-                floor_tokens += len(encoder.encode(system_prompt + render_batch(bundle, batches[0], None)))
+                floor_tokens += len(encoder.encode(plan.system_prompt + render_batch(bundle, batches[0], None)))
             for i, b in enumerate(batches):
-                ceiling_tokens += len(encoder.encode(system_prompt + render_batch(bundle, b, None)))
+                ceiling_tokens += len(encoder.encode(plan.system_prompt + render_batch(bundle, b, None)))
                 ceiling_tokens += profile_carry_tokens if i > 0 else 0
                 ceiling_batches += 1
         return {
@@ -731,7 +778,7 @@ class SynthesizePersonContext(Node):
             "model": self.model,
             "synthesis_version": SYNTHESIS_VERSION,
             "reasoning_effort": reasoning_effort(self.reasoning_effort),
-            "owner_context": bool(owner),
+            "owner_context": bool(plan.owner),
             # A dry run is never authority to delete the paid facts cache
             # (`prune_orphan_facts` returns 0 for it), so the estimate always
             # reports zero — the key stays for payload parity with a real run.
@@ -748,131 +795,108 @@ class SynthesizePersonContext(Node):
 
     def execute(self) -> SynthesizePersonContextManifest:
         started = time.monotonic()
+
+        # ---- SELECT: what still needs synthesis, and nothing stale. ----------
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         # Drop facts whose bundle left a completed full collection BEFORE
         # selection, so an obsolete identity cannot be re-billed. `--dry-run`
         # never reaches execute() (it bypasses to estimate()), so dry_run=False.
         orphan_facts_removed = prune_orphan_facts(
             self.raw_dir, self.facts_dir, scoped=bool(self.person), dry_run=False)
-        owner, system_prompt, paths = self._plan()
-
-        if not paths:
-            worth_sync = mirror_facts_worth(
-                self.review_csv,
-                self.facts_dir,
-                include_human_rows=bool(self.rejudge),
-            )
-            return SynthesizePersonContextManifest(
-                status="completed",
-                people=0,
-                chunk_people=self.chunk_people,
-                people_done=0,
-                batches_run=0,
-                avg_batches_per_person=0.0,
-                stop_reasons={},
-                errors=0,
-                model=self.model,
-                synthesis_version=SYNTHESIS_VERSION,
-                reasoning_effort=reasoning_effort(self.reasoning_effort),
-                owner_context=bool(owner),
-                orphan_facts_removed=orphan_facts_removed,
-                rejudge=bool(self.rejudge),
-                target_confidence=self.target_confidence,
-                max_batches=self.max_batches,
-                concurrency=0,
-                tokens={"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
-                estimated_cost_usd=0.0,
-                out_dir=str(self.facts_dir),
-                worth_sync=worth_sync,
-                elapsed_ms=int((time.monotonic() - started) * 1000),
-                updated_at=now_iso(),
-            )
-
-        load_env()
-        concurrency = self.concurrency or env_or_profile_int(
-            "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=16
-        )
+        plan = self._plan()
+        tally = SynthesisTally()
+        # Effort and concurrency are read from the environment the SPEND path
+        # loads. With nothing pending we never touch `.env`, so they keep their
+        # pre-`.env` values (no pool was sized, so concurrency is 0) — exactly
+        # what the old no-work branch reported.
+        concurrency = 0
         effort = reasoning_effort(self.reasoning_effort)
-        usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-        counter = {"done": 0, "errors": 0, "batches": 0}
-        stop_reasons: dict[str, int] = {}
-        total = len(paths)
 
-        def on_result(result: dict[str, Any]) -> None:
-            pid = result["person_id"]
-            rec = {
-                "chunk_index": 0,
-                "synthesis_version": SYNTHESIS_VERSION,
-                "facts": result["facts"],
-                "usage": result["usage"],
-                "batches_used": result["batches_used"],
-                "batches_total": result["batches_total"],
-                "messages_used": result["messages_used"],
-                "messages_available": result["messages_available"],
-                "final_confidence": result["final_confidence"],
-                "stop_reason": result["stop_reason"],
-            }
-            (self.facts_dir / f"{pid}.jsonl").write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
-            for key in usage_total:
-                usage_total[key] += result["usage"].get(key, 0)
-            counter["done"] += 1
-            counter["errors"] += result["errors"]
-            counter["batches"] += result["batches_used"]
-            stop_reasons[result["stop_reason"]] = stop_reasons.get(result["stop_reason"], 0) + 1
-            if counter["done"] % 25 == 0:
-                print(f"[synthesize] {counter['done']}/{total} people", file=sys.stderr, flush=True)
+        # ---- CALL: fan the pending bundles out through OpenAI. This block is
+        # the stage's ONLY spend, and an empty plan skips it whole — no env load,
+        # no client, no tokens.
+        if plan.paths:
+            load_env()
+            effort = reasoning_effort(self.reasoning_effort)  # `.env` may set it
+            concurrency = self.concurrency or env_or_profile_int(
+                "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=16
+            )
+            total = len(plan.paths)
 
-        async def driver() -> None:
-            client = make_async_client(timeout=self.timeout)
-            semaphore = asyncio.Semaphore(max(1, concurrency))
-            try:
-                # Process people in bounded chunks: load bodies -> batch -> drain -> free.
-                # Only one chunk's bundles/batches are resident at a time.
-                for chunk_paths in _chunked(paths, self.chunk_people):
-                    bundles = [b for b in (_load_bundle(p) for p in chunk_paths) if b.get("messages")]
-                    local_batches = {b["person_id"]: self._batches(b["messages"]) for b in bundles}
-                    coros = [
-                        synthesize_person(
-                            client, bundle, local_batches[bundle["person_id"]],
-                            model=self.model, effort=effort, semaphore=semaphore,
-                            max_retries=self.max_retries, system_prompt=system_prompt,
-                            target_confidence=self.target_confidence,
-                            saturation_rounds=self.saturation_rounds, max_batches=self.max_batches,
-                        )
-                        for bundle in bundles
-                    ]
-                    await drain_pool(coros, on_result)
-            finally:
-                await client.close()
+            def on_result(result: dict[str, Any]) -> None:
+                """Checkpoint ONE finished person: its facts file, then the tally."""
+                pid = result["person_id"]
+                rec = {
+                    "chunk_index": 0,
+                    "synthesis_version": SYNTHESIS_VERSION,
+                    "facts": result["facts"],
+                    "usage": result["usage"],
+                    "batches_used": result["batches_used"],
+                    "batches_total": result["batches_total"],
+                    "messages_used": result["messages_used"],
+                    "messages_available": result["messages_available"],
+                    "final_confidence": result["final_confidence"],
+                    "stop_reason": result["stop_reason"],
+                }
+                (self.facts_dir / f"{pid}.jsonl").write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+                tally.record(result)
+                if tally.people_done % 25 == 0:
+                    print(f"[synthesize] {tally.people_done}/{total} people", file=sys.stderr, flush=True)
 
-        asyncio.run(driver())
+            async def driver() -> None:
+                client = make_async_client(timeout=self.timeout)
+                semaphore = asyncio.Semaphore(max(1, concurrency))
+                try:
+                    # Process people in bounded chunks: load bodies -> batch -> drain -> free.
+                    # Only one chunk's bundles/batches are resident at a time.
+                    for chunk_paths in _chunked(plan.paths, self.chunk_people):
+                        bundles = [b for b in (_load_bundle(p) for p in chunk_paths) if b.get("messages")]
+                        local_batches = {b["person_id"]: self._batches(b["messages"]) for b in bundles}
+                        coros = [
+                            synthesize_person(
+                                client, bundle, local_batches[bundle["person_id"]],
+                                model=self.model, effort=effort, semaphore=semaphore,
+                                max_retries=self.max_retries, system_prompt=plan.system_prompt,
+                                target_confidence=self.target_confidence,
+                                saturation_rounds=self.saturation_rounds, max_batches=self.max_batches,
+                            )
+                            for bundle in bundles
+                        ]
+                        await drain_pool(coros, on_result)
+                finally:
+                    await client.close()
 
+            asyncio.run(driver())
+
+        # ---- MIRROR the machine worth onto review.csv, then report. ----------
+        # Runs on every path, including the no-work one: facts written by an
+        # earlier interrupted run still need their worth column mirrored.
         worth_sync = mirror_facts_worth(
             self.review_csv,
             self.facts_dir,
             include_human_rows=bool(self.rejudge),
         )
-        billed_output = usage_total["output_tokens"] + usage_total["reasoning_tokens"]
+        billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
             status="completed",
-            people=total,
+            people=len(plan.paths),
             chunk_people=self.chunk_people,
-            people_done=counter["done"],
-            batches_run=counter["batches"],
-            avg_batches_per_person=round(counter["batches"] / max(1, counter["done"]), 2),
-            stop_reasons=stop_reasons,
-            errors=counter["errors"],
+            people_done=tally.people_done,
+            batches_run=tally.batches,
+            avg_batches_per_person=round(tally.batches / max(1, tally.people_done), 2),
+            stop_reasons=tally.stop_reasons,
+            errors=tally.errors,
             model=self.model,
             synthesis_version=SYNTHESIS_VERSION,
             reasoning_effort=effort,
-            owner_context=bool(owner),
+            owner_context=bool(plan.owner),
             orphan_facts_removed=orphan_facts_removed,
             rejudge=bool(self.rejudge),
             target_confidence=self.target_confidence,
             max_batches=self.max_batches,
             concurrency=concurrency,
-            tokens=usage_total,
-            estimated_cost_usd=estimate_cost_usd(usage_total["input_tokens"], billed_output, self.model),
+            tokens=tally.tokens,
+            estimated_cost_usd=estimate_cost_usd(tally.tokens["input_tokens"], billed_output, self.model),
             out_dir=str(self.facts_dir),
             worth_sync=worth_sync,
             elapsed_ms=int((time.monotonic() - started) * 1000),

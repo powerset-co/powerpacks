@@ -16,10 +16,22 @@ Three things:
                      build by hand; the optional fields are `| None` so
                      `exclude_none` drops exactly the keys the old
                      `value not in (None, "")` filter dropped.
+                     `MessageChannelExtracted` also carries the channel's typed
+                     CONTRIBUTION to the stage manifest — a channel returns what
+                     it produced instead of writing it into a shared dict the
+                     store reads back afterwards.
   stage payloads     what the `MessagesDiscovery` store writes into
                      `discover/messages/manifest.json`.
 
 Changelog:
+  2026-07-30 (steps return results): `MessageChannelExtracted` gained the typed
+    `provider` / `pairing_state` / `pairing_notice` contribution fields, and the
+    two not-completed payloads gained `stage_error()`. Both replace untyped
+    hand-offs: the channels used to record their contribution by mutating a
+    `self.artifacts` dict the store unioned afterwards, and the store used to
+    re-read a channel payload's `.get("error") or .get("message") or <the dict>`
+    out of the DICT form of a payload it had just been handed typed. The
+    rendered manifest keys and values are unchanged.
   2026-07-25 (declared contract): ported from `StagePayload` dataclasses to the
     pydantic `StageManifest` of `pipeline/contract.py`, added `MessageContactRow`
     and the three channel payloads. Field names, defaults, and declaration order
@@ -101,14 +113,24 @@ class MessagesPrivacy(BaseModel):
 # --- channel payloads (one MessageChannel node's execute() result) ------------
 
 class MessageChannelExtracted(StageManifest):
-    """A channel extracted cleanly. Not persisted anywhere: the channel nodes
-    declare `manifest = ""` (they report into the store's stage manifest, via
-    `self.artifacts`), so this is only the store's run-loop signal. Its
-    predecessor was a bare `None`."""
+    """A channel extracted cleanly, and what it contributed.
+
+    Not persisted anywhere: the channel nodes declare `manifest = ""`, so this is
+    the store's run-loop signal AND the channel's report of what it produced. The
+    store renders the stage manifest's `artifacts` map from these returns
+    (`<channel>_contacts_csv`, `<channel>_provider`, `<channel>_pairing_*`) —
+    the channels no longer write those keys into a dict the store reads back.
+
+    `provider` is the backing client a channel went through (WhatsApp: `wacli`);
+    the `pairing_*` pair is the non-blocking "re-link for deeper history" nudge,
+    set only when the channel decides the nudge applies."""
 
     status: str = "completed"
     channel: str = ""
     contacts_csv: str = ""
+    provider: str | None = None
+    pairing_state: str | None = None
+    pairing_notice: str | None = None
 
 
 class MessageChannelBlocked(StageManifest):
@@ -124,6 +146,12 @@ class MessageChannelBlocked(StageManifest):
     qr_page: str | None = None
     continue_command: str = ""
 
+    def stage_error(self) -> Any:
+        """The `error` the stage payload reports for this child. A blocked child
+        carries no `error` of its own, so its message is the error text; a child
+        with neither falls back to its whole payload."""
+        return self.message or self.to_payload()
+
 
 class MessageChannelFailed(StageManifest):
     """A channel's extract step (or the store's merge) failed."""
@@ -132,6 +160,11 @@ class MessageChannelFailed(StageManifest):
     status: str = "failed"
     step_id: str = ""
     error: Any = None
+
+    def stage_error(self) -> Any:
+        """The `error` the stage payload reports for this child (its own error
+        text, or its whole payload when it has none)."""
+        return self.error or self.to_payload()
 
 
 # --- stage payloads (the MessagesDiscovery store's manifest) ------------------

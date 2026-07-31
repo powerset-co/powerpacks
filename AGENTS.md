@@ -134,13 +134,14 @@ The examples are ingestion-flavored but the rules apply repo-wide.
   `imports/directory.py` were both discover-stage squatters once).
 - Naming is symmetric across verticals: `extract_<source>.py` reads a raw local
   store into contacts (`extract_imessage`, `extract_whatsapp`, `extract_gmail`);
-  the external-binary lifecycle client is a separate module
-  (`whatsapp_wacli.py` for the wacli binary, `gmail/msgvault/sync.py` for the
+  the external-binary lifecycle client is a separate module or package
+  (`discover/messages/wacli/` for the wacli binary, `gmail/msgvault/` for the
   msgvault binary). Reader and binary-client never share a file.
 - Large drivers decompose into a clearly-named subpackage of ~200–300-line
   single-concern modules (`setup/automations/`, `gmail/msgvault/`,
-  `imports/gmail/steps/`, `discover/messages/channels/`); the original CLI path
-  stays a thin entry so skill commands never change.
+  `discover/messages/wacli/`, `imports/gmail/steps/`,
+  `discover/messages/channels/`); the original CLI path stays a thin entry so
+  skill commands never change.
 
 ### The orchestrator pattern (channel + store)
 

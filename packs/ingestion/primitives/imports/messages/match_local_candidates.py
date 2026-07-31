@@ -70,6 +70,8 @@ messages_match_local -> messages_import -> merge_people), and it contradicted th
 only real caller, which passes `import/{gmail,linkedin}/people.csv` concatenated.
 
 Changelog:
+  2026-07-30 (style pass): `MessageContactRow` is imported from its definition
+    home (`discover/messages/models.py`) instead of through `util`'s re-export.
   2026-07-26 (cyclic default removed): `--local-people` has NO default. It was
     `.powerpacks/network-import/merged/people.csv` — the fan-in merge's own output,
     fed by this node's own downstream import — which made the declared graph cyclic
@@ -112,9 +114,15 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso  # noqa: E402
 from packs.ingestion.primitives.common.paths import MESSAGES_OUT_DIR  # noqa: E402
+# The declared row shape of `.powerpacks/messages/contacts.csv`, imported from the
+# DISCOVERY module that owns the file. `graph.check_graph` compares row models by
+# IDENTITY, so every writer of that file must name THIS object — not an equal
+# copy, and not a second module that re-exports it.
+from packs.ingestion.primitives.discover.messages.models import (  # noqa: E402
+    MessageContactRow,
+)
 from packs.ingestion.primitives.imports.messages.util import (  # noqa: E402
     MATCH_ANNOTATION_COLUMNS,
-    MessageContactRow,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest  # noqa: E402
 from packs.ingestion.schemas.message_contacts import (  # noqa: E402
