@@ -1,6 +1,8 @@
 # Refresh message sources
 
 Runs every day at 6:00 AM in the machine's local timezone.
+Each run titles its Codex task `Refresh message sources MM/DD/YY` using that
+local run date.
 
 The automation:
 

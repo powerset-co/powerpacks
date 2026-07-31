@@ -113,6 +113,8 @@ class AutomationPackageTests(unittest.TestCase):
         prompt = automation["prompt"]
 
         self.assertEqual(automation["status"], "ACTIVE")
+        self.assertIn("Refresh message sources MM/DD/YY", prompt)
+        self.assertIn("current local date", prompt)
         self.assertIn("$import-gmail sync", prompt)
         self.assertIn("$import-messages sync", prompt)
         self.assertIn("skips anything needing human setup", prompt)

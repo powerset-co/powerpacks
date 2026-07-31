@@ -3,6 +3,9 @@ id = "refresh-message-sources"
 kind = "cron"
 name = "Refresh message sources"
 prompt = """
+At the start of the run, rename this Codex task to
+`Refresh message sources MM/DD/YY` using the current local date.
+
 Refresh the configured local message sources in this Powerpacks repository:
 
 1. Run `$import-gmail sync`.
