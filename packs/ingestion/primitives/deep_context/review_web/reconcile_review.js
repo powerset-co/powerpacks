@@ -1194,20 +1194,13 @@ function setupDirectory() {
     if (!Number.isNaN(current)) span.textContent = String(Math.max(0, current + delta));
   }
 
-  // Move-to-Yes/No on the person pane: the same /worth endpoint the review
-  // stages use; on success the island entry, tab counts, sidebar list, and
-  // the pane's own buttons all update in place.
-  detail.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-dir-worth]");
-    if (!button || button.disabled) return;
-    event.preventDefault();
-    const worth = button.dataset.dirWorth || "";
-    const slug = button.dataset.parent || activeSlug;
+  // Move-to-Yes/No on the person pane: the /worth post, island entry, tab
+  // counts, sidebar list, and advance-to-next all happen here — after the
+  // feedback popover settles, so the pane never swaps under an open form.
+  async function applyWorth({ pub, worth, slug }) {
     const prevIndex = filtered.findIndex((item) => item.slug === slug);
-    detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = true; });
     try {
-      await post("/worth", { pub: button.dataset.pub || "", worth,
-                             parent_slug: slug });
+      await post("/worth", { pub, worth, parent_slug: slug });
     } catch (error) {
       detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = false; });
       announce(error.message, true);
@@ -1221,8 +1214,13 @@ function setupDirectory() {
     }
     // Keep the sidebar where it was: the decided person leaves this tab, so
     // the same index now holds the next person — advance straight to them.
+    // refreshList only renders the first chunk; render until the old scroll
+    // offset exists again or the restore silently clamps to the top chunk.
     const listScroll = list.scrollTop;
     refreshList();
+    while (rendered < filtered.length && list.scrollHeight < listScroll + list.clientHeight) {
+      renderMore();
+    }
     list.scrollTop = listScroll;
     announce(`Moved ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"}`);
     const next = (prevIndex >= 0 && filtered.length)
@@ -1232,19 +1230,34 @@ function setupDirectory() {
     } else {
       await loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
     }
-    // The decision already stands; the popover only collects the optional why
-    // (keyed to the person just decided, not the newly shown pane).
+  }
+
+  // Two-step decide: clicking Yes/No opens the optional-why form on the person
+  // being decided; the move itself waits until the form settles (send or skip),
+  // so the label, the pane, and the feedback all refer to the same person.
+  detail.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-dir-worth]");
+    if (!button || button.disabled) return;
+    event.preventDefault();
+    const worth = button.dataset.dirWorth || "";
+    const slug = button.dataset.parent || activeSlug;
+    const pub = button.dataset.pub || "";
+    const entry = people.find((item) => item.slug === slug);
     const anchor = detail.querySelector(".person-detail-actions")
       || detail.querySelector(".person-detail");
-    if (anchor) {
-      feedbackPopover({
-        anchor,
-        contextLabel: `Moved ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"} — optional: why?`,
-        pub: button.dataset.pub || "",
-        slug,
-        action: worth === "yes" ? "worth_yes" : "worth_no",
-      });
+    if (!anchor) {
+      void applyWorth({ pub, worth, slug });
+      return;
     }
+    detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = true; });
+    feedbackPopover({
+      anchor,
+      contextLabel: `Move ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"} — optional: why?`,
+      pub,
+      slug,
+      action: worth === "yes" ? "worth_yes" : "worth_no",
+      onDone: () => void applyWorth({ pub, worth, slug }),
+    });
   });
 
   // Optional-feedback popover, mirrored off the network-search-app
@@ -1262,7 +1275,7 @@ function setupDirectory() {
     document.querySelector(".feedback-popover")?.remove();
   }
 
-  function feedbackPopover({ anchor, contextLabel, pub, slug, action }) {
+  function feedbackPopover({ anchor, contextLabel, pub, slug, action, onDone }) {
     closeFeedbackPopover();
     const host = anchor.closest(".person-detail") || detail;
     const pop = document.createElement("div");
@@ -1280,26 +1293,45 @@ function setupDirectory() {
     const footer = document.createElement("div");
     footer.className = "feedback-footer";
     footer.innerHTML = `<span class='feedback-hint'>&#8629; &#8984;+Enter</span>`
-      + `<button type='button' class='feedback-send' aria-label='Send feedback' disabled>${SEND_ICON}</button>`;
+      + `<span class='feedback-actions'>`
+      + `<button type='button' class='feedback-skip'>Skip</button>`
+      + `<button type='button' class='feedback-send' aria-label='Send feedback' disabled>${SEND_ICON}</button>`
+      + `</span>`;
     pop.append(textarea, footer);
     const send = footer.querySelector(".feedback-send");
+    const skip = footer.querySelector(".feedback-skip");
+
+    // Every way out lands here exactly once: send (after the thanks beat),
+    // Skip, Escape, or clicking away. The caller's onDone applies the move.
+    let settled = false;
+    function finish() {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("click", away);
+      pop.remove();
+      onDone?.();
+    }
 
     async function submit() {
       const comment = textarea.value.trim();
-      if (!comment) return;
+      if (!comment || settled) return;
       send.disabled = true;
+      skip.disabled = true;
       try {
         await post("/feedback", { pub, parent_slug: slug, comment, action });
       } catch (error) {
         announce(error.message, true);
         send.disabled = false;
+        skip.disabled = false;
         return;
       }
+      settled = true;
+      document.removeEventListener("click", away);
       pop.replaceChildren();
       pop.className = "feedback-popover feedback-done";
       pop.innerHTML = `<span class='feedback-done-badge'>${CHECK_ICON}</span>`
         + "<p>Got it, thanks! \u{1F64F}</p>";
-      setTimeout(() => pop.remove(), 900);
+      setTimeout(() => { pop.remove(); onDone?.(); }, 900);
     }
 
     textarea.addEventListener("input", () => {
@@ -1313,9 +1345,10 @@ function setupDirectory() {
         event.preventDefault();
         void submit();
       }
-      if (event.key === "Escape") pop.remove();
+      if (event.key === "Escape") finish();
     });
     send.addEventListener("click", () => void submit());
+    skip.addEventListener("click", finish);
     pop.addEventListener("click", (event) => event.stopPropagation());
 
     host.append(pop);
@@ -1329,10 +1362,7 @@ function setupDirectory() {
         document.removeEventListener("click", away);
         return;
       }
-      if (!pop.contains(event.target) && event.target !== anchor) {
-        pop.remove();
-        document.removeEventListener("click", away);
-      }
+      if (!pop.contains(event.target) && event.target !== anchor) finish();
     }
     setTimeout(() => document.addEventListener("click", away), 0);
   }
