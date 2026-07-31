@@ -5559,10 +5559,40 @@ class TestOwnerPhoneLeak(unittest.TestCase):
                 "+15550100,jordanbravo88,imessage\n"      # self-row: email local part
                 "+15550199,Casey Delta,imessage\n",       # a real contact
                 encoding="utf-8")
-            phones = build_owner.harvest_owner_phones(
-                {"name": "Jordan Bravo", "emails": ["jordanbravo88@example.com"]},
-                messages_dir=messages)
+            # DB sources are patched off so the dev machine's real chat.db
+            # never leaks into the fixture run.
+            with mock.patch.object(build_owner, "_imessage_own_phones", return_value=[]), \
+                 mock.patch.object(build_owner, "_wacli_own_phones", return_value=[]):
+                phones = build_owner.harvest_owner_phones(
+                    {"name": "Jordan Bravo", "emails": ["jordanbravo88@example.com"]},
+                    messages_dir=messages)
         self.assertEqual(phones, ["+15550100"])
+
+    def test_harvest_prefers_authoritative_db_sources(self):
+        from packs.ingestion.primitives.deep_context import build_owner
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            chat_db = base / "chat.db"
+            conn = sqlite3.connect(chat_db)
+            conn.execute("CREATE TABLE chat (account_login TEXT)")
+            conn.executemany("INSERT INTO chat VALUES (?)",
+                             [("E:jordanbravo88@example.com",), ("P:+15550100",)])
+            conn.execute("CREATE TABLE message (destination_caller_id TEXT, is_from_me INTEGER)")
+            conn.executemany("INSERT INTO message VALUES (?, ?)",
+                             [("+15550100", 0), ("+15550199", 1)])  # from_me rows never count
+            conn.commit()
+            conn.close()
+            session_db = base / "session.db"
+            conn = sqlite3.connect(session_db)
+            conn.execute("CREATE TABLE whatsmeow_device (jid TEXT)")
+            conn.execute("INSERT INTO whatsmeow_device VALUES ('15550100999:23@s.whatsapp.net')")
+            conn.commit()
+            conn.close()
+            phones = build_owner.harvest_owner_phones(
+                {"name": "Jordan Bravo", "emails": []},
+                messages_dir=base / "no-store-here",
+                chat_db=chat_db, wacli_session_db=session_db)
+        self.assertEqual(phones, ["+15550100", "+15550100999"])
 
     def test_legacy_shim_stamps_missing_phones_key_once(self):
         from packs.ingestion.primitives.common import legacy
@@ -5571,11 +5601,15 @@ class TestOwnerPhoneLeak(unittest.TestCase):
             owner_json.write_text(json.dumps(
                 {"name": "Jordan Bravo", "emails": ["jordanbravo88@example.com"]}),
                 encoding="utf-8")
-            with mock.patch.object(legacy, "ensure_owner_phones", wraps=legacy.ensure_owner_phones):
+            from packs.ingestion.primitives.deep_context import build_owner
+            with mock.patch.object(build_owner, "_imessage_own_phones", return_value=[]), \
+                 mock.patch.object(build_owner, "_wacli_own_phones", return_value=[]):
                 self.assertTrue(legacy.ensure_owner_phones(owner_json))
             data = json.loads(owner_json.read_text())
             self.assertIn("phones", data)          # stamped (possibly empty)
-            self.assertFalse(legacy.ensure_owner_phones(owner_json))  # idempotent
+            with mock.patch.object(build_owner, "_imessage_own_phones", return_value=[]), \
+                 mock.patch.object(build_owner, "_wacli_own_phones", return_value=[]):
+                self.assertFalse(legacy.ensure_owner_phones(owner_json))  # idempotent
             # An EMPTY key still re-harvests once a store appears (an install
             # can carry phones: [] from before its message store existed).
             messages = Path(d) / ".powerpacks/network-import/discover/messages"
@@ -5586,7 +5620,9 @@ class TestOwnerPhoneLeak(unittest.TestCase):
             cwd = os.getcwd()
             os.chdir(d)  # harvest resolves the store relative to the install root
             try:
-                self.assertTrue(legacy.ensure_owner_phones(owner_json))
+                with mock.patch.object(build_owner, "_imessage_own_phones", return_value=[]), \
+                     mock.patch.object(build_owner, "_wacli_own_phones", return_value=[]):
+                    self.assertTrue(legacy.ensure_owner_phones(owner_json))
             finally:
                 os.chdir(cwd)
             self.assertEqual(json.loads(owner_json.read_text())["phones"], ["+15550100"])

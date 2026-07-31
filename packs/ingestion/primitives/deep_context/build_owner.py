@@ -26,9 +26,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 from typing import Any
+
+from packs.ingestion.primitives.discover.messages.extract_imessage import open_sqlite_readonly
 
 from packs.ingestion.primitives.deep_context.common import (
     OWNER_JSON,
@@ -82,18 +86,79 @@ def owner_from_profile(normalized: dict[str, Any], *, email: str = "") -> dict[s
     }
 
 
-def harvest_owner_phones(owner: dict[str, Any],
-                         messages_dir: Path | None = None) -> list[str]:
-    """The owner's OWN phone numbers, from the message stores' self-rows.
+def _imessage_own_phones(chat_db: Path) -> list[str]:
+    """The account's own numbers straight from chat.db (authoritative):
+    `chat.account_login` P:-prefixed logins plus `destination_caller_id` on
+    received messages. Metadata columns only — no message bodies."""
+    if not chat_db.exists():
+        return []
+    phones: list[str] = []
+    try:
+        with closing(open_sqlite_readonly(chat_db)) as conn:
+            for (login,) in conn.execute("SELECT DISTINCT account_login FROM chat"):
+                value = str(login or "")
+                if value.startswith("P:"):
+                    phone = normalize_phone(value[2:])
+                    if phone and phone not in phones:
+                        phones.append(phone)
+            rows = conn.execute(
+                "SELECT DISTINCT destination_caller_id FROM message "
+                "WHERE is_from_me = 0 AND destination_caller_id LIKE '+%'")
+            for (caller_id,) in rows:
+                phone = normalize_phone(str(caller_id or ""))
+                if phone and phone not in phones:
+                    phones.append(phone)
+    except (sqlite3.Error, OSError):
+        return phones
+    return phones
 
-    A message-contact row whose name matches the owner's identity is the owner
-    on their own device — its phone is the owner's, and downstream identifier
-    policy must never render it as a CONTACT's reachability. A match is the
-    exact normalized name, an email local part ('jordanbravo88'), or the same
-    first+last name tokens ('Jordan B Bravo' == 'Jordan Bravo' — a middle
-    initial never blocks the self-row, while family sharing the surname never
-    matches). Scans both store layouts: discover/messages and the older
-    top-level messages dir."""
+
+def _wacli_own_phones(session_db: Path) -> list[str]:
+    """The paired WhatsApp account's own JID from the wacli session store
+    (authoritative when a device is paired; empty otherwise). The message
+    store's `from_me` sender rows are deliberately NOT used — real stores
+    carry dozens of distinct JIDs flagged from_me via group attribution."""
+    if not session_db.exists():
+        return []
+    phones: list[str] = []
+    try:
+        with closing(open_sqlite_readonly(session_db)) as conn:
+            for (jid,) in conn.execute("SELECT jid FROM whatsmeow_device"):
+                digits = str(jid or "").split(":", 1)[0].split("@", 1)[0]
+                phone = normalize_phone(digits)
+                if phone and phone not in phones:
+                    phones.append(phone)
+    except (sqlite3.Error, OSError):
+        return phones
+    return phones
+
+
+def harvest_owner_phones(owner: dict[str, Any],
+                         messages_dir: Path | None = None,
+                         *,
+                         chat_db: Path | None = None,
+                         wacli_session_db: Path | None = None) -> list[str]:
+    """The owner's OWN phone numbers, so the downstream identifier policy can
+    drop them from every CONTACT's reachability.
+
+    Sources, authoritative first:
+      1. iMessage chat.db account metadata (`P:` logins + destination caller id)
+      2. the wacli session store's paired-device JID
+      3. message-store contact self-rows — the name-match fallback that still
+         works on snapshots carrying only derived CSVs. A match is the exact
+         normalized name, an email local part ('jordanbravo88'), or the same
+         first+last name tokens ('Jordan B Bravo' == 'Jordan Bravo' — a middle
+         initial never blocks the self-row, while family sharing the surname
+         never matches). Scans both store layouts: discover/messages and the
+         older top-level messages dir."""
+    phones = _imessage_own_phones(
+        chat_db if chat_db is not None else Path.home() / "Library/Messages/chat.db")
+    for phone in _wacli_own_phones(
+            wacli_session_db if wacli_session_db is not None
+            else Path.home() / ".wacli/session.db"):
+        if phone not in phones:
+            phones.append(phone)
+
     roots = ([messages_dir] if messages_dir is not None else
              [Path(".powerpacks/network-import/discover/messages"),
               Path(".powerpacks/messages")])
@@ -104,8 +169,6 @@ def harvest_owner_phones(owner: dict[str, Any],
         local = str(value or "").split("@", 1)[0].strip().lower()
         if len(local) >= 5:
             tokens.add(local)
-    if not tokens:
-        return []
 
     def is_self(raw_name: str) -> bool:
         name = normalize_name(raw_name)
@@ -117,20 +180,20 @@ def harvest_owner_phones(owner: dict[str, Any],
         return (first_last is not None and len(parts) >= 2
                 and (parts[0], parts[-1]) == first_last)
 
-    phones: list[str] = []
-    for root in roots:
-        if not root.exists():
-            continue
-        for path in sorted(root.rglob("*contacts.csv")):
-            try:
-                with path.open(newline="", encoding="utf-8") as fh:
-                    for row in csv.DictReader(fh):
-                        if is_self(row.get("name") or ""):
-                            phone = normalize_phone(row.get("phone") or "")
-                            if phone and phone not in phones:
-                                phones.append(phone)
-            except OSError:
+    if tokens:
+        for root in roots:
+            if not root.exists():
                 continue
+            for path in sorted(root.rglob("*contacts.csv")):
+                try:
+                    with path.open(newline="", encoding="utf-8") as fh:
+                        for row in csv.DictReader(fh):
+                            if is_self(row.get("name") or ""):
+                                phone = normalize_phone(row.get("phone") or "")
+                                if phone and phone not in phones:
+                                    phones.append(phone)
+                except OSError:
+                    continue
     return phones
 
 
