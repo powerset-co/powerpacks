@@ -5576,8 +5576,8 @@ class TestOwnerPhoneLeak(unittest.TestCase):
             data = json.loads(owner_json.read_text())
             self.assertIn("phones", data)          # stamped (possibly empty)
             self.assertFalse(legacy.ensure_owner_phones(owner_json))  # idempotent
-            # An EMPTY key still re-harvests once a store appears (Jake-shape:
-            # owner.json carried phones: [] before the message store existed).
+            # An EMPTY key still re-harvests once a store appears (an install
+            # can carry phones: [] from before its message store existed).
             messages = Path(d) / ".powerpacks/network-import/discover/messages"
             messages.mkdir(parents=True)
             (messages / "contacts.csv").write_text(

@@ -168,7 +168,7 @@ class TestDeepenCommands(unittest.TestCase):
         return p
 
     def test_whatsapp_deepen_uses_backfill_executor(self):
-        csv = self._write("Founder,Cell,Emails,WhatsApp Groups\nJake Z,+16508048613,,Powerset Braintrust\n")
+        csv = self._write("Founder,Cell,Emails,WhatsApp Groups\nJordan B,+15550100,,Powerset Braintrust\n")
         args = Namespace(
             csv=str(csv),
             channels="whatsapp",

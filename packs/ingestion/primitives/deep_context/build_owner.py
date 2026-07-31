@@ -86,30 +86,51 @@ def harvest_owner_phones(owner: dict[str, Any],
                          messages_dir: Path | None = None) -> list[str]:
     """The owner's OWN phone numbers, from the message stores' self-rows.
 
-    A message-contact row whose name matches the owner's identity (their name,
-    or an email local part like 'thearthurchen') is the owner on their own
-    device — its phone is the owner's, and downstream identifier policy must
-    never render it as a CONTACT's reachability."""
-    messages_dir = messages_dir or Path(".powerpacks/network-import/discover/messages")
+    A message-contact row whose name matches the owner's identity is the owner
+    on their own device — its phone is the owner's, and downstream identifier
+    policy must never render it as a CONTACT's reachability. A match is the
+    exact normalized name, an email local part ('jordanbravo88'), or the same
+    first+last name tokens ('Jordan B Bravo' == 'Jordan Bravo' — a middle
+    initial never blocks the self-row, while family sharing the surname never
+    matches). Scans both store layouts: discover/messages and the older
+    top-level messages dir."""
+    roots = ([messages_dir] if messages_dir is not None else
+             [Path(".powerpacks/network-import/discover/messages"),
+              Path(".powerpacks/messages")])
     tokens = {normalize_name(owner.get("name") or "")} - {""}
+    name_parts = normalize_name(owner.get("name") or "").split()
+    first_last = (name_parts[0], name_parts[-1]) if len(name_parts) >= 2 else None
     for value in owner.get("emails") or []:
         local = str(value or "").split("@", 1)[0].strip().lower()
         if len(local) >= 5:
             tokens.add(local)
-    if not tokens or not messages_dir.exists():
+    if not tokens:
         return []
+
+    def is_self(raw_name: str) -> bool:
+        name = normalize_name(raw_name)
+        if not name:
+            return False
+        if name in tokens:
+            return True
+        parts = name.split()
+        return (first_last is not None and len(parts) >= 2
+                and (parts[0], parts[-1]) == first_last)
+
     phones: list[str] = []
-    for path in sorted(messages_dir.rglob("contacts.csv")):
-        try:
-            with path.open(newline="", encoding="utf-8") as fh:
-                for row in csv.DictReader(fh):
-                    name = normalize_name(row.get("name") or "")
-                    if name and name in tokens:
-                        phone = normalize_phone(row.get("phone") or "")
-                        if phone and phone not in phones:
-                            phones.append(phone)
-        except OSError:
+    for root in roots:
+        if not root.exists():
             continue
+        for path in sorted(root.rglob("*contacts.csv")):
+            try:
+                with path.open(newline="", encoding="utf-8") as fh:
+                    for row in csv.DictReader(fh):
+                        if is_self(row.get("name") or ""):
+                            phone = normalize_phone(row.get("phone") or "")
+                            if phone and phone not in phones:
+                                phones.append(phone)
+            except OSError:
+                continue
     return phones
 
 
