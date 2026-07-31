@@ -747,7 +747,7 @@ def run_pipeline(args) -> dict[str, Any]:
     for step,cmd in steps:
         if done(l,step) and not args.force: continue
         mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-        out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),step)
+        out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not args.search_only:
@@ -778,7 +778,7 @@ def run_pipeline(args) -> dict[str, Any]:
         for step,cmd in llm_steps:
             if done(l,step) and not args.force: continue
             mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-            out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True),step)
+            out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
             l.setdefault("artifacts",{}).update(collect_artifacts(out))
             mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     if not done(l,"persist_search_results") or args.force:
@@ -850,7 +850,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
     for step,cmd in steps:
         if done(l,step) and not args.force: continue
         mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-        out=require_ok(run(cmd, timeout=args.timeout, **run_kwargs),step)
+        out=require_ok(run(cmd, timeout=args.timeout, **{**run_kwargs,"extra_env":{**(run_kwargs.get("extra_env") or {}),"POWERPACKS_USAGE_STAGE":step}}),step)
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
 
@@ -867,7 +867,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
                 mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
                 # LLM children DO need .env (OPENAI_API_KEY) but must stay in
                 # local backend mode, so keep the env var and load env files.
-                out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env=run_kwargs["extra_env"]),step)
+                out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env={**run_kwargs["extra_env"],"POWERPACKS_USAGE_STAGE":step}),step)
                 l.setdefault("artifacts",{}).update(collect_artifacts(out))
                 mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
             if step=="llm_filter_candidates":

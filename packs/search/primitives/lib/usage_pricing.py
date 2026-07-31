@@ -21,9 +21,21 @@ def load_prices(path: Path | None = None) -> dict[str, Any]:
     return json.loads(target.read_text(encoding="utf-8"))
 
 
+def price_table_for(model: str, prices: dict[str, Any]) -> Any:
+    """Exact match, else longest '-'-boundary prefix — the API reports dated ids
+    (gpt-4.1-2025-04-14) while the committed table keys bare aliases (gpt-4.1);
+    longest-prefix keeps gpt-4.1-mini-* from matching the gpt-4.1 row."""
+    if model in prices:
+        return prices[model]
+    for key in sorted(prices, key=len, reverse=True):
+        if model.startswith(key + "-"):
+            return prices[key]
+    return None
+
+
 def row_cost_usd(row: dict[str, Any], prices: dict[str, Any]) -> float | None:
     """USD for one usage row, or None when the model has no usable price table."""
-    table = prices.get(row.get("model") or "")
+    table = price_table_for(str(row.get("model") or ""), prices)
     if not isinstance(table, dict):
         return None
     output_price = float(table.get("output_per_1m") or 0.0)

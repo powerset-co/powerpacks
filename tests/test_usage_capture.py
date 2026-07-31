@@ -131,5 +131,15 @@ class TestUsageCaptureAlwaysOn(unittest.TestCase):
         self.assertEqual(resp.model, "test-model")  # fail-open
 
 
+class TestDatedModelIdPricing(unittest.TestCase):
+    def test_dated_ids_prefix_match_and_mini_stays_separate(self) -> None:
+        prices = {"gpt-4.1": {"input_per_1m": 2.0, "output_per_1m": 8.0},
+                  "gpt-4.1-mini": {"input_per_1m": 0.4, "output_per_1m": 1.6}}
+        row = {"prompt_tokens": 1_000_000, "completion_tokens": 0, "reasoning_tokens": 0}
+        self.assertAlmostEqual(cr.row_cost_usd({**row, "model": "gpt-4.1-2025-04-14"}, prices), 2.0)
+        self.assertAlmostEqual(cr.row_cost_usd({**row, "model": "gpt-4.1-mini-2025-04-14"}, prices), 0.4)
+        self.assertIsNone(cr.row_cost_usd({**row, "model": "gpt-9-2030-01-01"}, prices))
+
+
 if __name__ == "__main__":
     unittest.main()
