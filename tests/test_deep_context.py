@@ -5675,6 +5675,23 @@ class TestGuidedRetargets(unittest.TestCase):
         # Dossier-synthesized prose stays local: decisions travel, reasons do not.
         self.assertNotIn("private synthesized prose", json.dumps(body))
 
+    def test_retarget_submit_files_its_guidance_as_feedback(self):
+        from packs.ingestion.primitives.deep_context.review_web import feedback as web_feedback
+        self.assertIn("retarget", web_feedback.FEEDBACK_ACTIONS)
+        request = web_feedback.build_feedback_request(
+            {"slug": "jordan-bravo-p", "name": "Jordan Bravo", "person_ids": ["pid-jordan"]},
+            {"pub": "jordan-bravo-wrong",
+             "url": "https://www.linkedin.com/in/jordan-bravo-wrong"},
+            action="retarget", comment="the DevRel lead at Acme",
+            retarget_items=[{"guidance": "the DevRel lead at Acme", "state": "queued"}],
+            environ={})
+        body = request.body()
+        self.assertEqual(body["comment"], "the DevRel lead at Acme")
+        self.assertEqual(body["category"], "linkedin")
+        self.assertEqual(body["metadata"]["action"], "retarget")
+        self.assertEqual(
+            body["metadata"]["retarget_guidance"][0]["guidance"], "the DevRel lead at Acme")
+
     def test_feedback_request_worth_category_and_junk_set_id(self):
         from packs.ingestion.primitives.deep_context.review_web import feedback as web_feedback
         request = web_feedback.build_feedback_request(

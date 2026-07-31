@@ -68,7 +68,7 @@ from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import A
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
-from .feedback import FEEDBACK_ACTIONS, build_feedback_request, submit_directory_feedback
+from .feedback import FEEDBACK_ACTIONS, build_feedback_request, post_feedback_quietly, submit_directory_feedback
 from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, run_guided_retarget
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
@@ -817,6 +817,22 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 except ValueError as exc:
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain", status=409)
                     return
+                # The guidance IS the feedback: auto-file it with the person's
+                # full context, fire-and-forget — no popover, no extra input,
+                # and never a UI error if the POST can't go out.
+                try:
+                    feedback_request = build_feedback_request(
+                        target_parent, target_candidate, action="retarget",
+                        comment=guidance,
+                        retarget_items=[
+                            entry for entry in guided_queue.snapshot()
+                            if entry.get("pub") == item["pub"]
+                            or entry.get("slug") == item["slug"]])
+                    threading.Thread(
+                        target=post_feedback_quietly, args=(feedback_request,),
+                        name="retarget-feedback", daemon=True).start()
+                except SystemExit as exc:
+                    print(f"[feedback] skipped: {exc}", file=sys.stderr, flush=True)
                 notify_agent()
                 self.send_json({"ok": True, "item": item,
                                 "estimated_cost_usd": ESTIMATED_COST_USD})

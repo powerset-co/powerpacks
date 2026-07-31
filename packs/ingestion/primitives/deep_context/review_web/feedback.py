@@ -17,6 +17,7 @@ their prose does not.
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,9 @@ from packs.powerset.primitives.send_feedback.send_feedback import (
 # The repo .env (canonical installs); os.environ still wins for worktree runs.
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
 
-# One popover per decision; the action names travel in metadata + category.
-FEEDBACK_ACTIONS = {"worth_yes", "worth_no"}
+# Popover actions (worth decisions) plus the automatic one: a guided-retarget
+# submit files its guidance as feedback with no extra input.
+FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget"}
 
 
 def _clean(value: Any) -> str:
@@ -100,3 +102,15 @@ def submit_directory_feedback(request: FeedbackRequest) -> dict[str, Any]:
     """Ship one composed row; returns the primitive's payload
     (submitted | needs_auth | failed | dry_run)."""
     return SendFeedback(request, env_file=ENV_FILE).run()
+
+
+def post_feedback_quietly(request: FeedbackRequest) -> None:
+    """Fire-and-forget shipper for automatic feedback (retarget submits):
+    a failure is a stderr line, never a UI error."""
+    try:
+        payload = submit_directory_feedback(request)
+        if payload.get("status") != "submitted":
+            print(f"[feedback] not submitted: {payload.get('status')}"
+                  f" {payload.get('error', '')}".rstrip(), file=sys.stderr, flush=True)
+    except Exception as exc:
+        print(f"[feedback] failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
