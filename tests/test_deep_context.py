@@ -5564,6 +5564,19 @@ class TestOwnerPhoneLeak(unittest.TestCase):
                 messages_dir=messages)
         self.assertEqual(phones, ["+15550100"])
 
+    def test_legacy_shim_stamps_missing_phones_key_once(self):
+        from packs.ingestion.primitives.common import legacy
+        with tempfile.TemporaryDirectory() as d:
+            owner_json = Path(d) / "owner.json"
+            owner_json.write_text(json.dumps(
+                {"name": "Jordan Bravo", "emails": ["jordanbravo88@example.com"]}),
+                encoding="utf-8")
+            with mock.patch.object(legacy, "ensure_owner_phones", wraps=legacy.ensure_owner_phones):
+                self.assertTrue(legacy.ensure_owner_phones(owner_json))
+            data = json.loads(owner_json.read_text())
+            self.assertIn("phones", data)          # stamped (possibly empty)
+            self.assertFalse(legacy.ensure_owner_phones(owner_json))  # idempotent
+
     def test_contact_merge_drops_owner_endpoints_from_any_source(self):
         with mock.patch.object(web_rendering, "load_owner",
                                return_value={"emails": ["jordan@example.com"],

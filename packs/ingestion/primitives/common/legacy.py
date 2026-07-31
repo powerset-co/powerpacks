@@ -12,6 +12,9 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-07-31: deep-context — `ensure_owner_phones`: owner.json predating the
+    phones field gets the owner's own numbers harvested from the message
+    stores' self-rows, so the contact-identifier policy can drop them.
   2026-07-28 (created): collected the gmail import's inline legacy unlinks
     (`ledger.json`, `candidates.csv`) into the one quarantine module.
   2026-07-30: deep-context section — pre-2026-07-27 parent-slug artifact
@@ -277,3 +280,34 @@ def message_linkedin_aliases(rows: list[dict[str, str]]) -> dict[str, str]:
             continue
         aliases[legacy_message_linkedin_id(pub)] = generate_person_id(pub)
     return aliases
+
+
+# -----------------------------------------------------------------------------
+# owner.json without a "phones" field
+#
+# Predates contact-info-identifiers-v2 (2026-07-31). Without the owner's own
+# numbers, the contact-identifier policy cannot drop them, and group-chat
+# channel metadata can attribute the owner's own iMessage number to a contact's
+# Contact row. Harvest once from the message stores' self-rows and stamp the
+# key (possibly empty); build_owner writes it on any later rebuild.
+#
+# REMOVAL CONDITION: delete once no install predates powerpacks v1.6.0.
+# -----------------------------------------------------------------------------
+
+
+def ensure_owner_phones(owner_json: Path) -> bool:
+    """Stamp a missing "phones" key on owner.json, harvested from the message
+    stores. Idempotent: a present key (even empty) is left untouched.
+    Returns True when the file was rewritten."""
+    from packs.ingestion.primitives.deep_context.build_owner import harvest_owner_phones
+    if not owner_json.exists():
+        return False
+    try:
+        owner = json.loads(owner_json.read_text(encoding="utf-8")) or {}
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(owner, dict) or "phones" in owner:
+        return False
+    owner["phones"] = harvest_owner_phones(owner)
+    owner_json.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
+    return True

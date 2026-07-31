@@ -1203,6 +1203,7 @@ function setupDirectory() {
     event.preventDefault();
     const worth = button.dataset.dirWorth || "";
     const slug = button.dataset.parent || activeSlug;
+    const prevIndex = filtered.findIndex((item) => item.slug === slug);
     detail.querySelectorAll("[data-dir-worth]").forEach((item) => { item.disabled = true; });
     try {
       await post("/worth", { pub: button.dataset.pub || "", worth,
@@ -1218,16 +1219,27 @@ function setupDirectory() {
       entry.worth = worth;
       bumpDirectoryTab(worth, 1);
     }
+    // Keep the sidebar where it was: the decided person leaves this tab, so
+    // the same index now holds the next person — advance straight to them.
+    const listScroll = list.scrollTop;
     refreshList();
-    announce(worth === "yes" ? "Moved to Yes" : "Moved to No");
-    await loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
-    // The decision already stands; the popover only collects the optional why.
+    list.scrollTop = listScroll;
+    announce(`Moved ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"}`);
+    const next = (prevIndex >= 0 && filtered.length)
+      ? filtered[Math.min(prevIndex, filtered.length - 1)] : null;
+    if (next && next.slug !== slug) {
+      await selectPerson(next.slug);
+    } else {
+      await loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
+    }
+    // The decision already stands; the popover only collects the optional why
+    // (keyed to the person just decided, not the newly shown pane).
     const anchor = detail.querySelector(".person-detail-actions")
       || detail.querySelector(".person-detail");
     if (anchor) {
       feedbackPopover({
         anchor,
-        contextLabel: `Moved to ${worth === "yes" ? "Yes" : "No"} — optional: why?`,
+        contextLabel: `Moved ${entry?.name || "person"} to ${worth === "yes" ? "Yes" : "No"} — optional: why?`,
         pub: button.dataset.pub || "",
         slug,
         action: worth === "yes" ? "worth_yes" : "worth_no",
