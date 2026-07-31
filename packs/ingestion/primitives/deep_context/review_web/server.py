@@ -53,6 +53,7 @@ from packs.ingestion.primitives.deep_context.common import (
     LINKEDIN_OVERRIDES_CSV,
     PARENTS_DIR,
     PROFILE_CACHE_DIR,
+    RAW_DIR,
     REVIEW_MANIFEST,
     VERDICTS_JSONL,
     acquire_review_session_lock,
@@ -67,6 +68,7 @@ from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import A
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
+from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, run_guided_retarget
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
@@ -220,7 +222,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                  avatar_dir: Path | None = None,
                  initial_parents: list[dict[str, Any]] | None = None,
                  agent_notifier: Callable[[], object] | None = None,
-                 run_jobs: bool | None = None):
+                 run_jobs: bool | None = None,
+                 guided_retargets: RetargetQueue | None = None):
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
     # In-app jobs call the primitives on their CANONICAL default paths, so they
     # only auto-enable for the canonical server (tests use temp paths -> off).
@@ -292,6 +295,31 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         connection_keys = load_connection_keys(people_csv)
         cached_rows = None
         return cached_parents
+
+    def _guided_runner(request: GuidedRetarget,
+                       report: Callable[[str, str], None]) -> dict[str, Any]:
+        """One guided retarget, serialized with the pipeline jobs (both write
+        review.csv slices), then the same cache-first profile hydration the
+        enrichment chain runs — the submit click covered this spend."""
+        with _job_lock:
+            result = run_guided_retarget(
+                request, review_path=review_path, people_csv=people_csv,
+                facts_dir=facts_dir, raw_dir=RAW_DIR, use_llm=True,
+                on_progress=report)
+        if result.get("state") == "applied":
+            report("hydrating", "fetching the confirmed profile")
+            try:
+                PrefetchProfiles(fetch=True).run()
+            except BaseException as exc:
+                result = {**result,
+                          "detail": f"applied; profile prefetch failed: {exc}"}
+        refresh_parents_from_disk()
+        notify_agent()
+        return result
+
+    guided_queue = guided_retargets
+    if guided_queue is None and run_jobs:
+        guided_queue = RetargetQueue(runner=_guided_runner, on_change=notify_views)
 
     # Parsed review.csv rows, loaded once; our own decision writes mutate the
     # dict in place, and refresh_parents_from_disk drops it after a job write.
@@ -425,6 +453,13 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     parents, manifest_path=manifest_path)
                 self.send_json(read_enrichment_manifest(
                     enrichment_manifest_path, selection=selection))
+                return
+            if parsed.path == "/api/retargets":
+                self.send_json({
+                    "items": guided_queue.snapshot() if guided_queue else [],
+                    "enabled": guided_queue is not None,
+                    "estimated_cost_usd": ESTIMATED_COST_USD,
+                })
                 return
             if parsed.path == "/assets/reconcile-review.css":
                 if not REVIEW_CSS.exists():
@@ -618,7 +653,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment"}:
+            if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment", "/retarget"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
@@ -691,6 +726,59 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     return
                 notify_agent()
                 self.send_json({"ok": True, "manifest": manifest, "progress": progress})
+                return
+
+            if parsed.path == "/retarget":
+                guidance = (form.get("guidance") or [""])[0].strip()
+                parent_slug = (form.get("parent_slug") or [""])[0].strip()
+                if not guidance or len(guidance) > 2000:
+                    self.send_bytes(b"guidance must be 1-2000 characters",
+                                    "text/plain", status=400)
+                    return
+                if guided_queue is None:
+                    self.send_bytes(b"in-app jobs are disabled on this server",
+                                    "text/plain", status=503)
+                    return
+                with mutation_lock:
+                    hit = candidate_in_snapshot(pub, prefer_slug=parent_slug) if pub else None
+                    if hit is not None:
+                        target_parent, target_candidate = hit
+                    else:
+                        # A person with no LinkedIn candidate yet: find them by
+                        # slug and key the retarget on their first person_id.
+                        target_parent = next(
+                            (p for p in parents_now()
+                             if str(p.get("dossier_slug") or p.get("slug") or "")
+                             == parent_slug), None)
+                        target_candidate = {}
+                    if target_parent is None:
+                        self.send_bytes(b"person not found", "text/plain", status=404)
+                        return
+                    key = (pub or str((target_parent.get("person_ids") or [""])[0])).strip()
+                    if not key:
+                        self.send_bytes(b"person has no review key", "text/plain", status=400)
+                        return
+                    request = GuidedRetarget(
+                        slug=str(target_parent.get("dossier_slug")
+                                 or target_parent.get("slug") or parent_slug),
+                        pub=key,
+                        name=str(target_parent.get("name") or ""),
+                        guidance=guidance,
+                        person_ids=tuple(
+                            str(value) for value in target_parent.get("person_ids") or []),
+                        linkedin_url=str(target_candidate.get("url") or ""),
+                        match_emails=tuple(
+                            str(value) for value in target_candidate.get("match_emails") or []),
+                        match_phones=tuple(
+                            str(value) for value in target_candidate.get("match_phones") or []))
+                try:
+                    item = guided_queue.submit(request)
+                except ValueError as exc:
+                    self.send_bytes(str(exc).encode("utf-8"), "text/plain", status=409)
+                    return
+                notify_agent()
+                self.send_json({"ok": True, "item": item,
+                                "estimated_cost_usd": ESTIMATED_COST_USD})
                 return
 
             if parsed.path == "/worth":

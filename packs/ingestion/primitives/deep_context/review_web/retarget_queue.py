@@ -1,0 +1,288 @@
+"""User-guided retarget queue behind the /directory person pane.
+
+A user reading a dossier who believes the attached LinkedIn is the WRONG person
+submits free-text guidance ("the Jordan Bravo who ran DevRel at Acme", or a
+pasted profile URL). Each submission enqueues ONE guided re-research that runs
+the SAME machinery the enrichment flow already uses:
+
+  build_queue (reconcile_deep_research)  -> one research row; the guidance
+                                            rides in as `retarget_hint`, which
+                                            the Parallel prompt treats as the
+                                            strongest identity clue
+  run_research (deep_research_contacts)  -> the paid Parallel.ai call; the
+                                            submit click IS the user's spend
+                                            approval (~$0.05 core2x + judge)
+  propose_retargets_from_output          -> the identity judge vets the
+                                            (dossier x proposed profile) pair
+                                            and sticky-upserts a `retarget`
+                                            row into review.csv
+
+A judge CONFIRM at/above the shared research confirm bar auto-approves the
+retarget (`approved=yes`, `source=user-guidance`): the human already spoke by
+submitting guidance, so the judge is the deciding check — not a second human
+queue. Anything else stays a pending retarget row with its llm_reject reason,
+visible in the review UI exactly like an engine proposal.
+
+The queue itself is memory-only and serial: submits never block, a single
+daemon worker drains items one at a time, and a restart forgets progress but
+never decisions — every durable effect lives in review.csv and the research
+artifacts under `retarget-guidance/`. Prior research outputs for a re-guided
+person are sidelined to `.bkup` (paid artifacts are never deleted) so the new
+guidance actually re-researches instead of reusing the stale answer.
+"""
+from __future__ import annotations
+
+import csv
+import threading
+from collections import deque
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context import deep_research_contacts
+from packs.ingestion.primitives.deep_context import reconcile_deep_research
+from packs.ingestion.primitives.deep_context.common import (
+    FACTS_DIR,
+    RAW_DIR,
+    RECONCILE_DIR,
+    load_owner,
+    owner_background_block,
+)
+from packs.ingestion.primitives.deep_context.deep_research_contacts import (
+    PROCESSOR_PRICING_USD,
+    ResearchRunParams,
+)
+from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
+    DEFAULT_PROCESSOR,
+    QUEUE_FIELDS,
+    RESEARCH_OK_STATUSES,
+    build_queue,
+    load_people_rows,
+)
+from packs.ingestion.primitives.deep_context.reconcile_linkedin import load_override_rows
+from packs.ingestion.primitives.deep_context.review_store import (
+    RESEARCH_CONFIRM_THRESHOLD,
+    write_override_rows,
+)
+
+# Fixed output home for guided re-research (one subdir per person handle,
+# overwritten in place — no run ids). Separate from the engine's deep-research
+# dir so `filter_already_done` there never mistakes a guided rerun for done work.
+GUIDED_RETARGET_DIR = RECONCILE_DIR / "retarget-guidance"
+
+# Shown on the submit button: one Parallel task + one identity-judge call.
+ESTIMATED_COST_USD = round(PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR] + 0.01, 2)
+
+# States an item moves through; ACTIVE ones block a duplicate submit for the
+# same person and keep the UI polling.
+ACTIVE_STATES = ("queued", "researching", "judging", "hydrating")
+TERMINAL_STATES = ("applied", "no_match", "failed")
+
+_REJECT_TRUTHY = {"1", "true", "yes"}
+
+
+@dataclass(frozen=True)
+class GuidedRetarget:
+    """One submit, parsed at the endpoint boundary from the in-memory parent."""
+
+    slug: str
+    pub: str  # the CURRENT (suspect) identity — the review.csv row key
+    name: str
+    guidance: str
+    person_ids: tuple[str, ...] = ()
+    linkedin_url: str = ""
+    match_emails: tuple[str, ...] = ()
+    match_phones: tuple[str, ...] = ()
+
+
+def run_guided_retarget(request: GuidedRetarget, *,
+                        review_path: Path,
+                        people_csv: Path,
+                        facts_dir: Path = FACTS_DIR,
+                        raw_dir: Path = RAW_DIR,
+                        out_dir: Path = GUIDED_RETARGET_DIR,
+                        use_llm: bool = True,
+                        on_progress: Callable[[str, str], None] | None = None,
+                        ) -> dict[str, Any]:
+    """Run one guided re-research end to end; returns the item outcome.
+
+    Outcome dicts: {"state": "applied", "new_url", "confidence", "detail"} |
+    {"state": "no_match", "detail", ...} | {"state": "failed", "detail"}.
+    """
+    report = on_progress or (lambda state, detail: None)
+    key = request.pub.strip().lower()
+    if not key:
+        return {"state": "failed", "detail": "person has no review key"}
+
+    subset_row = {
+        "parent_slug": request.slug,
+        "person_ids": list(request.person_ids),
+        "name": request.name,
+        # Keying the research handle on the CURRENT pub makes old_pub == the
+        # exact review.csv row the directory pane reads back.
+        "candidate_key": request.pub,
+        "linkedin": {"linkedin_url": request.linkedin_url},
+        "verdict": {"reason": "the user flagged the attached LinkedIn as the wrong person"},
+        "match_emails": list(request.match_emails),
+        "match_phones": list(request.match_phones),
+    }
+    people = load_people_rows(people_csv) if people_csv.exists() else {}
+    queue_rows = build_queue([subset_row], people, facts_dir, raw_dir)
+    if not queue_rows:
+        return {"state": "failed", "detail": "could not build a research row for this person"}
+    row = queue_rows[0]
+    # The user's words become the prompt's `User retarget hint` — its strongest
+    # clue. The machine context (wrong-link note + owner background) stays in
+    # known_info exactly as build_queue wrote it.
+    row["retarget_hint"] = request.guidance.strip()
+
+    # A re-guided person must actually re-research and re-judge: blank the
+    # sticky `approved` and the judge fingerprint on their existing row, and
+    # sideline (never delete — paid artifacts) any prior research output that
+    # would make run_research skip the handle as already done.
+    rows = load_override_rows(review_path)
+    prior = rows.get(key)
+    if prior is not None:
+        prior["approved"] = ""
+        prior["llm_judge_fingerprint"] = ""
+        write_override_rows(review_path, rows)
+    handle_dir = out_dir / str(row.get("handle") or request.slug)
+    for name in ("00_parallel_raw.json", "01_research_parallel.json"):
+        stale = handle_dir / name
+        if stale.exists():
+            stale.replace(stale.with_suffix(".json.bkup"))
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    queue_csv = out_dir / "research_queue.csv"
+    with queue_csv.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=QUEUE_FIELDS)
+        writer.writeheader()
+        writer.writerows(queue_rows)
+
+    report("researching", f"Parallel.ai {DEFAULT_PROCESSOR} research running")
+    try:
+        research = deep_research_contacts.run_research(ResearchRunParams(
+            input_csv=queue_csv, output_dir=out_dir, processor=DEFAULT_PROCESSOR))
+    except SystemExit as exc:  # the primitive's guard paths (missing key, bad queue)
+        return {"state": "failed", "detail": f"research blocked: {exc}"}
+    except Exception as exc:
+        return {"state": "failed", "detail": f"{type(exc).__name__}: {exc}"}
+    status = str(research.get("status") or "failed")
+    if status not in RESEARCH_OK_STATUSES:
+        detail = str(research.get("error") or f"research ended {status}")
+        return {"state": "failed", "detail": detail}
+
+    report("judging", "identity judge reviewing the proposed profile")
+    owner = load_owner()
+    reconcile_deep_research.propose_retargets_from_output(
+        out_dir, [subset_row], review_path,
+        facts_dir=facts_dir, raw_dir=raw_dir, use_llm=use_llm,
+        owner_block=owner_background_block(owner) if owner else "",
+        confirm_threshold=RESEARCH_CONFIRM_THRESHOLD)
+
+    rows = load_override_rows(review_path)
+    after = rows.get(key) or {}
+    action = str(after.get("action") or "").strip().lower()
+    new_url = str(after.get("new_linkedin_url") or "").strip()
+    if action != "retarget" or not new_url:
+        return {"state": "no_match",
+                "detail": "research did not find a usable LinkedIn for this guidance"}
+    if str(after.get("llm_reject") or "").strip().lower() in _REJECT_TRUTHY:
+        reason = str(after.get("llm_reject_reason") or
+                     "the identity judge rejected the proposed profile")
+        return {"state": "no_match", "detail": reason, "new_url": new_url}
+    # Judge confirmed at/above the bar — the guidance submit was the human's
+    # word, so the retarget stands without a second review pass.
+    after["approved"] = "yes"
+    after["source"] = "user-guidance"
+    write_override_rows(review_path, rows)
+    return {"state": "applied", "new_url": new_url,
+            "confidence": str(after.get("confidence") or ""),
+            "detail": str(after.get("reason") or "")}
+
+
+class RetargetQueue:
+    """Serial in-memory queue of guided retargets.
+
+    ``submit()`` never blocks; one daemon worker drains items through the
+    injected ``runner(request, report)`` one at a time. ``on_change`` fires on
+    every state transition (the server points it at its view nudge)."""
+
+    def __init__(self, runner: Callable[[GuidedRetarget, Callable[[str, str], None]], dict[str, Any]],
+                 *, on_change: Callable[[], None] | None = None) -> None:
+        self._runner = runner
+        self._on_change = on_change or (lambda: None)
+        self._lock = threading.Lock()
+        self._pending: deque[tuple[GuidedRetarget, dict[str, Any]]] = deque()
+        self._items: list[dict[str, Any]] = []
+        self._worker: threading.Thread | None = None
+
+    def submit(self, request: GuidedRetarget) -> dict[str, Any]:
+        """Enqueue one guided retarget; raises ValueError on a duplicate active one."""
+        with self._lock:
+            key = request.pub.strip().lower()
+            if any(item["pub"] == key and item["state"] in ACTIVE_STATES
+                   for item in self._items):
+                raise ValueError(f"{request.name or request.pub} is already being retargeted")
+            item = {"slug": request.slug, "pub": key,
+                    "name": request.name or request.slug,
+                    "guidance": request.guidance,
+                    "state": "queued", "detail": "",
+                    "submitted_at": now_iso(), "updated_at": now_iso()}
+            self._items.append(item)
+            self._pending.append((request, item))
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(
+                    target=self._drain, name="guided-retargets", daemon=True)
+                self._worker.start()
+        self._notify()
+        return dict(item)
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """All items newest-first — the /api/retargets payload."""
+        with self._lock:
+            return [dict(item) for item in reversed(self._items)]
+
+    def has_active(self) -> bool:
+        with self._lock:
+            return any(item["state"] in ACTIVE_STATES for item in self._items)
+
+    def _set(self, item: dict[str, Any], state: str, detail: str = "") -> None:
+        with self._lock:
+            item["state"] = state
+            item["detail"] = detail
+            item["updated_at"] = now_iso()
+        self._notify()
+
+    def _notify(self) -> None:
+        try:
+            self._on_change()
+        except Exception:
+            pass  # a view nudge must never break the queue
+
+    def _drain(self) -> None:
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._worker = None
+                    return
+                request, item = self._pending.popleft()
+
+            def report(state: str, detail: str, _item: dict[str, Any] = item) -> None:
+                self._set(_item, state, detail)
+
+            self._set(item, "researching", "starting research")
+            try:
+                result = self._runner(request, report)
+            # BaseException on purpose: primitives raise SystemExit on guard
+            # paths, which `except Exception` misses (same rationale as the
+            # server's pipeline-job runner).
+            except BaseException as exc:
+                self._set(item, "failed", f"{type(exc).__name__}: {exc}")
+                continue
+            state = str(result.get("state") or "failed")
+            with self._lock:
+                item.update({k: str(v) for k, v in result.items()
+                             if k not in {"state", "detail"}})
+            self._set(item, state, str(result.get("detail") or ""))

@@ -39,6 +39,7 @@ from packs.ingestion.schemas.people_schema import (
 )
 
 from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, parent_status
+from .retarget_queue import ESTIMATED_COST_USD
 from .workflow import _effective_no_row, _effective_yes, enrichment_handoff_completed, in_worth_view, needs_worth_review, pending_linkedin_candidates, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents
 
 DECISION_CHUNK_SIZE = 40
@@ -1406,6 +1407,24 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     rows.extend(profile_fact_rows(candidate))
     facts = (f"<section class='details'><div class='details-body'>"
              f"<dl>{''.join(rows)}</dl></div></section>" if rows else "")
+    retarget_pub = str(candidate.get("pub")
+                       or (parent.get("person_ids") or [""])[0] or "").strip()
+    guidance_form = ""
+    if retarget_pub:
+        guidance_form = f"""
+      <details class='retarget-guidance'>
+        <summary>Wrong person?</summary>
+        <form class='retarget-form' data-retarget-form
+              data-pub='{esc(retarget_pub)}' data-parent='{esc(slug)}'>
+          <textarea name='guidance' rows='3' maxlength='2000' required
+            placeholder="Who is this actually? e.g. 'the Jordan Bravo who ran DevRel at Acme' — or paste the right LinkedIn URL"></textarea>
+          <div class='retarget-form-row'>
+            <button type='submit' class='button button-primary'>
+              Queue re-research (≈${ESTIMATED_COST_USD:.2f})</button>
+            <span class='retarget-form-note' data-retarget-note hidden></span>
+          </div>
+        </form>
+      </details>"""
     dossier_md, children_md = split_children_section(
         directory_dossier(parents_dir, dossier_dir, slug))
     dossier = markdown_to_html(dossier_md)
@@ -1428,6 +1447,7 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
           {f"<span>{esc(candidate.get('location'))}</span>" if candidate.get('location') else ""}
         </div>
       </div>
+      {guidance_form}
       {facts}
       <section class='directory-dossier'>{dossier}</section>
       {children_debug}
@@ -1477,8 +1497,12 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
               "<span class='worth-search-count' data-search-count hidden></span></div>")
     banner = (f"<div class='directory-handoff'>{GO_BACK_HTML}</div>"
               if handoff else "")
+    retarget_panel = ("<section class='retarget-panel' data-retarget-panel hidden>"
+                      "<h3>Retargeting</h3>"
+                      "<ul class='retarget-items' data-retarget-items></ul>"
+                      "</section>")
     content = (f"{banner}<div class='directory-layout'>"
-               f"<aside class='directory-sidebar'>{search}{tab_nav}"
+               f"<aside class='directory-sidebar'>{search}{tab_nav}{retarget_panel}"
                "<nav class='directory-list' data-directory-list aria-label='People A to Z'></nav>"
                "</aside>"
                f"<section class='directory-detail' data-directory-detail>{detail}</section>"

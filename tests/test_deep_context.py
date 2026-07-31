@@ -49,6 +49,7 @@ from packs.ingestion.primitives.deep_context.review_web import (
     decisions as web_decisions,
     model as web_model,
     rendering as web_rendering,
+    retarget_queue as web_retargets,
     server as web_server,
     workflow as web_workflow,
 )
@@ -5457,6 +5458,212 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("data-directory-list", script)
         self.assertIn("data-directory-tab", script)
         self.assertIn("data-dir-worth", script)
+
+
+class TestGuidedRetargets(unittest.TestCase):
+    """The /directory wrong-person queue: guidance rides into the research row,
+    the judge decides, and only a confident confirm auto-approves. All offline —
+    run_research is patched where defined, fixtures are synthetic."""
+
+    def _facts(self, facts_dir: Path, pid: str, name: str) -> None:
+        facts_dir.mkdir(parents=True, exist_ok=True)
+        (facts_dir / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+            "canonical_name": name, "employers": [{"name": "Acme"}],
+            "relationship_to_owner": "friend", "confidence": 0.8}}) + "\n",
+            encoding="utf-8")
+
+    def _request(self, slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                 guidance="the Jordan Bravo who ran DevRel at Acme"):
+        return web_retargets.GuidedRetarget(
+            slug=slug, pub=pub, name="Jordan Bravo", guidance=guidance,
+            person_ids=("pid-jordan",),
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo-wrong",
+            match_emails=("casey@example.com",))
+
+    def _fake_research(self, out_dir_holder: dict, profile: dict):
+        """A run_research stand-in that writes the per-handle research JSON the
+        staging pass reads, exactly where the real primitive would."""
+        def fake(params):
+            rows = list(csv.DictReader(
+                io.StringIO(params.input_csv.read_text(encoding="utf-8"))))
+            out_dir_holder["queue_rows"] = rows
+            for row in rows:
+                handle_dir = params.output_dir / row["handle"]
+                handle_dir.mkdir(parents=True, exist_ok=True)
+                (handle_dir / "01_research_parallel.json").write_text(
+                    json.dumps(profile), encoding="utf-8")
+            return {"status": "completed"}
+        return fake
+
+    def test_confirmed_proposal_auto_approves_with_user_guidance_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts, raw, out = (base / "review.csv", base / "facts",
+                                       base / "raw", base / "out")
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            seen = {}
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.9,
+                                  "notes": "DevRel lead at Acme."},
+                       "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                                  "linkedin_status": "found"}}
+            confirming = _verdict("confirmed", 0.9, reason="employer matches")
+            states: list[str] = []
+            with mock.patch.object(dresearch, "run_research",
+                                   side_effect=self._fake_research(seen, profile)), \
+                 mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=self._fake_research(seen, profile)), \
+                 mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=confirming):
+                result = web_retargets.run_guided_retarget(
+                    self._request(), review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out, use_llm=True,
+                    on_progress=lambda state, detail: states.append(state))
+            self.assertEqual(result["state"], "applied")
+            self.assertIn("jordan-bravo-right", result["new_url"])
+            self.assertEqual(states, ["researching", "judging"])
+            # The user's words became the research row's retarget hint.
+            self.assertEqual(seen["queue_rows"][0]["retarget_hint"],
+                             "the Jordan Bravo who ran DevRel at Acme")
+            row = _rows_by_pub(review)["jordan-bravo-wrong"]
+            self.assertEqual(row["action"], "retarget")
+            self.assertEqual(row["approved"], "yes")
+            self.assertEqual(row["source"], "user-guidance")
+            self.assertIn("jordan-bravo-right", row["new_linkedin_url"])
+
+    def test_judge_rejection_stays_pending_as_no_match(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts, raw, out = (base / "review.csv", base / "facts",
+                                       base / "raw", base / "out")
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.6,
+                                  "notes": "A plausible namesake."},
+                       "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-namesake",
+                                  "linkedin_status": "found"}}
+            rejecting = _verdict("wrong_person", 0.9, reason="no non-name corroboration")
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=self._fake_research({}, profile)), \
+                 mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=rejecting):
+                result = web_retargets.run_guided_retarget(
+                    self._request(), review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out, use_llm=True)
+            self.assertEqual(result["state"], "no_match")
+            self.assertIn("corroboration", result["detail"])
+            row = _rows_by_pub(review)["jordan-bravo-wrong"]
+            self.assertEqual(row["approved"], "")          # never auto-approved on a reject
+            self.assertEqual(row["llm_reject"], "yes")
+
+    def test_reguided_person_unsticks_prior_decision_and_stale_output(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts, raw, out = (base / "review.csv", base / "facts",
+                                       base / "raw", base / "out")
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            write_rows(review, {"jordan-bravo-wrong": {
+                "public_identifier": "jordan-bravo-wrong", "action": "retarget",
+                "approved": "yes", "llm_judge_fingerprint": "stale-sha",
+                "new_linkedin_url": "https://www.linkedin.com/in/old-guess"}})
+            stale = out / "jordan-bravo-p" / "01_research_parallel.json"
+            stale.parent.mkdir(parents=True)
+            stale.write_text("{}", encoding="utf-8")
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.9,
+                                  "notes": "DevRel lead at Acme."},
+                       "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                                  "linkedin_status": "found"}}
+            confirming = _verdict("confirmed", 0.9, reason="employer matches")
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=self._fake_research({}, profile)), \
+                 mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=confirming) as jm:
+                result = web_retargets.run_guided_retarget(
+                    self._request(), review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out, use_llm=True)
+            self.assertEqual(result["state"], "applied")
+            jm.assert_called_once()  # stale fingerprint blanked -> re-judged
+            # Paid artifact sidelined, never deleted.
+            self.assertTrue(stale.with_suffix(".json.bkup").exists())
+            row = _rows_by_pub(review)["jordan-bravo-wrong"]
+            self.assertIn("jordan-bravo-right", row["new_linkedin_url"])
+
+    def test_failed_research_reports_failed_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   return_value={"status": "failed", "error": "PARALLEL_API_KEY missing"}):
+                result = web_retargets.run_guided_retarget(
+                    self._request(), review_path=base / "review.csv",
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=base / "facts", raw_dir=base / "raw",
+                    out_dir=base / "out", use_llm=False)
+            self.assertEqual(result["state"], "failed")
+            self.assertIn("PARALLEL_API_KEY", result["detail"])
+
+    def test_queue_drains_serially_and_reports_terminal_states(self):
+        order: list[str] = []
+
+        def runner(request, report):
+            order.append(request.pub)
+            report("judging", "checking")
+            if request.pub == "bad-person":
+                raise SystemExit("guard tripped")
+            return {"state": "applied", "detail": "done",
+                    "new_url": "https://www.linkedin.com/in/jordan-bravo-right"}
+
+        queue = web_retargets.RetargetQueue(runner)
+        first = queue.submit(self._request(pub="good-person"))
+        self.assertEqual(first["state"], "queued")
+        queue.submit(self._request(slug="casey-p", pub="bad-person"))
+        deadline = threading.Event()
+        for _ in range(100):
+            if not queue.has_active():
+                break
+            deadline.wait(0.05)
+        by_pub = {item["pub"]: item for item in queue.snapshot()}
+        self.assertEqual(order, ["good-person", "bad-person"])
+        self.assertEqual(by_pub["good-person"]["state"], "applied")
+        self.assertIn("jordan-bravo-right", by_pub["good-person"]["new_url"])
+        self.assertEqual(by_pub["bad-person"]["state"], "failed")
+        self.assertIn("guard tripped", by_pub["bad-person"]["detail"])
+
+    def test_queue_rejects_duplicate_active_submit(self):
+        release = threading.Event()
+
+        def runner(request, report):
+            release.wait(5)
+            return {"state": "applied", "detail": ""}
+
+        queue = web_retargets.RetargetQueue(runner)
+        queue.submit(self._request(pub="jordan-bravo-wrong"))
+        with self.assertRaises(ValueError):
+            queue.submit(self._request(pub="jordan-bravo-wrong"))
+        release.set()
+
+    def test_directory_pane_and_page_carry_the_retarget_ui(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            parent = {"slug": "jordan-bravo-p", "dossier_slug": "jordan-bravo-p",
+                      "name": "Jordan Bravo", "person_ids": ["pid-jordan"],
+                      "candidates": [{"pub": "jordan-bravo-wrong",
+                                      "url": "https://www.linkedin.com/in/jordan-bravo-wrong",
+                                      "full_name": "Jordan Bravo", "approved": "yes",
+                                      "action": "verify", "confidence": 0.9}]}
+            pane = web_rendering.render_person_detail(
+                parent, base / "parents", base / "dossiers", base / "profiles")
+            self.assertIn("data-retarget-form", pane)
+            self.assertIn("data-pub='jordan-bravo-wrong'", pane)
+            self.assertIn("Queue re-research", pane)
+            page = web_rendering.directory_page_html(
+                [parent], {}, parents_dir=base / "parents",
+                dossier_dir=base / "dossiers",
+                profile_cache_dir=base / "profiles").decode("utf-8")
+            self.assertIn("data-retarget-panel", page)
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn("/api/retargets", script)
+        self.assertIn("data-retarget-form", script)
 
 
 if __name__ == "__main__":

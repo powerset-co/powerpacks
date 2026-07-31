@@ -1223,6 +1223,86 @@ function setupDirectory() {
     void loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
   });
 
+  // Guided retargets: submit guidance from the person pane, watch the queue in
+  // the sidebar panel. This page has no SSE by design, so the panel polls only
+  // while an item is active and goes quiet when the queue drains.
+  const retargetPanel = document.querySelector("[data-retarget-panel]");
+  const retargetItems = document.querySelector("[data-retarget-items]");
+  const RETARGET_ACTIVE = ["queued", "researching", "judging", "hydrating"];
+  let retargetTimer = null;
+  const retargetSeen = {};
+
+  function retargetRow(item) {
+    const row = document.createElement("li");
+    row.className = `retarget-item retarget-${item.state}`;
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "retarget-name";
+    name.textContent = item.name || item.slug;
+    name.addEventListener("click", () => void selectPerson(item.slug));
+    const chip = document.createElement("span");
+    chip.className = "retarget-chip";
+    chip.textContent = (item.state || "").replace("_", " ");
+    row.append(name, chip);
+    if (item.detail) {
+      const line = document.createElement("small");
+      line.textContent = item.detail;
+      row.append(line);
+    }
+    return row;
+  }
+
+  async function refreshRetargets() {
+    if (!retargetPanel || !retargetItems) return;
+    let data;
+    try {
+      const response = await fetch("/api/retargets", { cache: "no-store" });
+      if (!response.ok) return;
+      data = await response.json();
+    } catch { return; }
+    const items = data.items || [];
+    retargetPanel.hidden = !items.length;
+    retargetItems.textContent = "";
+    items.forEach((item) => retargetItems.append(retargetRow(item)));
+    // A just-finished item announces itself and refreshes the open pane.
+    items.forEach((item) => {
+      const prev = retargetSeen[item.pub];
+      if (prev && RETARGET_ACTIVE.includes(prev) && !RETARGET_ACTIVE.includes(item.state)) {
+        if (item.state === "applied") announce(`Retargeted ${item.name}`);
+        else announce(`${item.name}: ${item.detail || item.state}`, item.state === "failed");
+        if (item.slug === activeSlug) void loadPerson(item.slug, { keepScroll: true });
+      }
+      retargetSeen[item.pub] = item.state;
+    });
+    const active = items.some((item) => RETARGET_ACTIVE.includes(item.state));
+    if (active && !retargetTimer) retargetTimer = setInterval(refreshRetargets, 3000);
+    if (!active && retargetTimer) { clearInterval(retargetTimer); retargetTimer = null; }
+  }
+
+  detail.addEventListener("submit", async (event) => {
+    const form = event.target.closest("[data-retarget-form]");
+    if (!form) return;
+    event.preventDefault();
+    const textarea = form.querySelector("textarea[name='guidance']");
+    const guidance = (textarea?.value || "").trim();
+    if (!guidance) return;
+    const button = form.querySelector("button[type='submit']");
+    if (button) button.disabled = true;
+    try {
+      await post("/retarget", { pub: form.dataset.pub || "",
+                                parent_slug: form.dataset.parent || "", guidance });
+      if (textarea) textarea.value = "";
+      announce("Queued for re-research");
+      void refreshRetargets();
+    } catch (error) {
+      announce(error.message, true);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
+
+  void refreshRetargets();
+
   list.addEventListener("click", (event) => {
     const item = event.target.closest(".directory-item");
     if (item) void selectPerson(item.dataset.slug || "");
