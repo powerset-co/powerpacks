@@ -5642,6 +5642,51 @@ class TestGuidedRetargets(unittest.TestCase):
             queue.submit(self._request(pub="jordan-bravo-wrong"))
         release.set()
 
+    def test_feedback_request_collects_identity_context_and_guidance(self):
+        from packs.ingestion.primitives.deep_context.review_web import feedback as web_feedback
+        parent = {"slug": "jordan-bravo-p", "dossier_slug": "jordan-bravo-p",
+                  "name": "Jordan Bravo", "person_ids": ["pid-jordan"],
+                  "worth_row": {"human": {"decision": "yes"},
+                                "machine": {"decision": "maybe",
+                                            "reason": "private synthesized prose"}}}
+        candidate = {"pub": "jordan-bravo-wrong", "confidence": 0.42,
+                     "url": "https://www.linkedin.com/in/jordan-bravo-wrong",
+                     "new_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                     "action": "retarget", "approved": ""}
+        items = [{"guidance": "the DevRel lead at Acme", "state": "applied",
+                  "new_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                  "submitted_at": "2026-07-30T00:00:00Z"},
+                 {"guidance": "", "state": "failed"}]
+        request = web_feedback.build_feedback_request(
+            parent, candidate, action="worth_no", comment="wrong person",
+            retarget_items=items,
+            environ={"POWERPACKS_DEFAULT_SET_ID": "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b"})
+        body = request.body()
+        meta = body["metadata"]
+        self.assertEqual(body["feedback_type"], "data_inconsistency")
+        self.assertEqual(body["category"], "linkedin")  # guidance present
+        self.assertEqual(body["set_id"], "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b")
+        self.assertEqual(meta["action"], "worth_no")
+        self.assertEqual(meta["human_worth"], "yes")
+        self.assertEqual(meta["machine_worth"], "maybe")
+        self.assertEqual(len(meta["retarget_guidance"]), 1)  # blank guidance dropped
+        self.assertEqual(meta["retarget_guidance"][0]["guidance"], "the DevRel lead at Acme")
+        self.assertNotIn("person_id", body)  # local ids never ride the UUID column
+        # Dossier-synthesized prose stays local: decisions travel, reasons do not.
+        self.assertNotIn("private synthesized prose", json.dumps(body))
+
+    def test_feedback_request_worth_category_and_junk_set_id(self):
+        from packs.ingestion.primitives.deep_context.review_web import feedback as web_feedback
+        request = web_feedback.build_feedback_request(
+            {"slug": "casey-p", "name": "Casey Delta", "person_ids": []},
+            {"pub": "casey-delta", "url": "https://www.linkedin.com/in/casey-delta"},
+            action="worth_yes", comment="great fit", retarget_items=[],
+            environ={"POWERPACKS_DEFAULT_SET_ID": "not-a-uuid"})
+        body = request.body()
+        self.assertEqual(body["category"], "worth")
+        self.assertNotIn("set_id", body)
+        self.assertNotIn("retarget_guidance", body["metadata"])
+
     def test_directory_pane_and_page_carry_the_retarget_ui(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -5661,9 +5706,12 @@ class TestGuidedRetargets(unittest.TestCase):
                 dossier_dir=base / "dossiers",
                 profile_cache_dir=base / "profiles").decode("utf-8")
             self.assertIn("data-retarget-panel", page)
+            self.assertIn("data-feedback-trigger", pane)
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn("/api/retargets", script)
         self.assertIn("data-retarget-form", script)
+        self.assertIn("/feedback", script)
+        self.assertIn("feedbackPopover", script)
 
 
 if __name__ == "__main__":

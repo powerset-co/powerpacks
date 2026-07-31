@@ -68,8 +68,9 @@ from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import A
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
+from .feedback import FEEDBACK_ACTIONS, build_feedback_request, submit_directory_feedback
 from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, run_guided_retarget
-from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
+from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
 
@@ -653,7 +654,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment", "/retarget"}:
+            if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment",
+                                   "/retarget", "/feedback"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
@@ -726,6 +728,45 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     return
                 notify_agent()
                 self.send_json({"ok": True, "manifest": manifest, "progress": progress})
+                return
+
+            if parsed.path == "/feedback":
+                comment = (form.get("comment") or [""])[0].strip()
+                action = (form.get("action") or [""])[0].strip() or "person"
+                parent_slug = (form.get("parent_slug") or [""])[0].strip()
+                if not comment or len(comment) > 4000:
+                    self.send_bytes(b"comment must be 1-4000 characters",
+                                    "text/plain", status=400)
+                    return
+                if action not in FEEDBACK_ACTIONS:
+                    self.send_bytes(b"unknown feedback action", "text/plain", status=400)
+                    return
+                with mutation_lock:
+                    hit = candidate_in_snapshot(pub, prefer_slug=parent_slug) if pub else None
+                    if hit is not None:
+                        target_parent, target_candidate = hit
+                    else:
+                        target_parent = next(
+                            (p for p in parents_now()
+                             if str(p.get("dossier_slug") or p.get("slug") or "")
+                             == parent_slug), None)
+                        target_candidate = dict(
+                            _primary_candidate(target_parent)) if target_parent else {}
+                    if target_parent is None:
+                        self.send_bytes(b"person not found", "text/plain", status=404)
+                        return
+                    slug_now = str(target_parent.get("dossier_slug")
+                                   or target_parent.get("slug") or parent_slug)
+                    items = [item for item in
+                             (guided_queue.snapshot() if guided_queue else [])
+                             if item.get("slug") == slug_now
+                             or (pub and item.get("pub") == pub.strip().lower())]
+                    request = build_feedback_request(
+                        target_parent, target_candidate, action=action,
+                        comment=comment, retarget_items=items)
+                payload = submit_directory_feedback(request)
+                status = 200 if payload.get("status") == "submitted" else 502
+                self.send_json({"ok": status == 200, **payload}, status=status)
                 return
 
             if parsed.path == "/retarget":

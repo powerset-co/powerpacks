@@ -1372,7 +1372,11 @@ def _worth_action_buttons(parent: dict[str, Any], slug: str) -> str:
         buttons = button("yes", "Move to Yes")
     else:
         buttons = button("yes", "Move to Yes") + button("no", "Move to No")
-    return f"<div class='person-detail-actions'>{buttons}</div>"
+    name = str(parent.get("name") or "").strip()
+    feedback = (f"<button type='button' class='button button-ghost feedback-trigger' "
+                f"data-feedback-trigger data-pub='{esc(key)}' data-parent='{esc(slug)}' "
+                f"data-name='{esc(name)}' aria-label='Give feedback'>Feedback</button>")
+    return f"<div class='person-detail-actions'>{feedback}{buttons}</div>"
 
 
 def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,

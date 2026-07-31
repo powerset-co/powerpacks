@@ -1300,6 +1300,104 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 
 .directory-debug[open] summary { margin-bottom: 8px; }
 
+/* Optional-feedback popover — mirrored off the network-search-app
+   FeedbackForm: 288px card, 12px radius, soft drop shadow, context label,
+   auto-grow textarea, ⌘+Enter hint + send icon, green "Got it" done beat. */
+.feedback-popover {
+  position: absolute;
+  z-index: 40;
+  width: 288px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, .12);
+  animation: feedback-pop-in .15s ease-out;
+}
+
+@keyframes feedback-pop-in {
+  from { opacity: 0; transform: scale(.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.feedback-context {
+  margin: 0;
+  padding: 0 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.feedback-popover textarea {
+  width: 100%;
+  min-height: 48px;
+  max-height: 140px;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.feedback-popover textarea::placeholder { color: var(--muted); opacity: .55; }
+
+.feedback-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+}
+
+.feedback-hint { font-size: 10px; opacity: .6; }
+
+.feedback-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--secondary);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+
+.feedback-send:hover { color: var(--fg); }
+
+.feedback-send:disabled { opacity: .3; pointer-events: none; }
+
+.feedback-done {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.feedback-done p { margin: 0; font-size: 13px; font-weight: 500; color: var(--fg); }
+
+.feedback-done-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  flex-shrink: 0;
+}
+
+.person-detail-actions .feedback-trigger { min-height: 36px; font-size: 13px; }
+
 /* Wrong-person guidance form on the pane + the sidebar retarget queue. */
 .retarget-guidance {
   margin: 12px 0 4px;

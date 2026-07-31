@@ -1220,7 +1220,122 @@ function setupDirectory() {
     }
     refreshList();
     announce(worth === "yes" ? "Moved to Yes" : "Moved to No");
-    void loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
+    await loadPerson(slug, { keepScroll: true }); // re-render buttons for the new state
+    // The decision already stands; the popover only collects the optional why.
+    const anchor = detail.querySelector(".person-detail-actions")
+      || detail.querySelector(".person-detail");
+    if (anchor) {
+      feedbackPopover({
+        anchor,
+        contextLabel: `Moved to ${worth === "yes" ? "Yes" : "No"} — optional: why?`,
+        pub: button.dataset.pub || "",
+        slug,
+        action: worth === "yes" ? "worth_yes" : "worth_no",
+      });
+    }
+  });
+
+  // Optional-feedback popover, mirrored off the network-search-app
+  // FeedbackForm: context label, auto-grow textarea, ⌘+Enter, send icon,
+  // then a "Got it, thanks!" beat before it closes. Posts to /feedback where
+  // the server folds in everything it knows (incl. retarget guidance).
+  const SEND_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
+    + " stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+    + "<path d='m22 2-7 20-4-9-9-4Z'/><path d='M22 2 11 13'/></svg>";
+  const CHECK_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
+    + " stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>"
+    + "<path d='M20 6 9 17l-5-5'/></svg>";
+
+  function closeFeedbackPopover() {
+    document.querySelector(".feedback-popover")?.remove();
+  }
+
+  function feedbackPopover({ anchor, contextLabel, pub, slug, action }) {
+    closeFeedbackPopover();
+    const host = anchor.closest(".person-detail") || detail;
+    const pop = document.createElement("div");
+    pop.className = "feedback-popover";
+    if (contextLabel) {
+      const label = document.createElement("p");
+      label.className = "feedback-context";
+      label.textContent = contextLabel;
+      pop.append(label);
+    }
+    const textarea = document.createElement("textarea");
+    textarea.rows = 2;
+    textarea.maxLength = 4000;
+    textarea.placeholder = 'e.g. "Wrong person — this is actually Jane Smith"';
+    const footer = document.createElement("div");
+    footer.className = "feedback-footer";
+    footer.innerHTML = `<span class='feedback-hint'>&#8629; &#8984;+Enter</span>`
+      + `<button type='button' class='feedback-send' aria-label='Send feedback' disabled>${SEND_ICON}</button>`;
+    pop.append(textarea, footer);
+    const send = footer.querySelector(".feedback-send");
+
+    async function submit() {
+      const comment = textarea.value.trim();
+      if (!comment) return;
+      send.disabled = true;
+      try {
+        await post("/feedback", { pub, parent_slug: slug, comment, action });
+      } catch (error) {
+        announce(error.message, true);
+        send.disabled = false;
+        return;
+      }
+      pop.replaceChildren();
+      pop.className = "feedback-popover feedback-done";
+      pop.innerHTML = `<span class='feedback-done-badge'>${CHECK_ICON}</span>`
+        + "<p>Got it, thanks! \u{1F64F}</p>";
+      setTimeout(() => pop.remove(), 900);
+    }
+
+    textarea.addEventListener("input", () => {
+      send.disabled = !textarea.value.trim();
+      textarea.style.height = "auto";
+      textarea.style.height = Math.min(textarea.scrollHeight, 140) + "px";
+    });
+    textarea.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        void submit();
+      }
+      if (event.key === "Escape") pop.remove();
+    });
+    send.addEventListener("click", () => void submit());
+    pop.addEventListener("click", (event) => event.stopPropagation());
+
+    host.append(pop);
+    const hostRect = host.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    pop.style.top = `${anchorRect.bottom - hostRect.top + host.scrollTop + 8}px`;
+    pop.style.right = `${Math.max(8, hostRect.right - anchorRect.right)}px`;
+    setTimeout(() => textarea.focus(), 80);
+    function away(event) {
+      if (!document.body.contains(pop)) {
+        document.removeEventListener("click", away);
+        return;
+      }
+      if (!pop.contains(event.target) && event.target !== anchor) {
+        pop.remove();
+        document.removeEventListener("click", away);
+      }
+    }
+    setTimeout(() => document.addEventListener("click", away), 0);
+  }
+
+  detail.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-feedback-trigger]");
+    if (!trigger) return;
+    event.preventDefault();
+    feedbackPopover({
+      anchor: trigger,
+      contextLabel: `Feedback on ${trigger.dataset.name || "this person"}`,
+      pub: trigger.dataset.pub || "",
+      slug: trigger.dataset.parent || activeSlug,
+      action: "person",
+    });
   });
 
   // Guided retargets: submit guidance from the person pane, watch the queue in
