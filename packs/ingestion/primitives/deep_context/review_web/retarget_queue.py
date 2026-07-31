@@ -33,13 +33,16 @@ later enrichment pass reuses them for free instead of re-billing.
 The queue itself is memory-only and serial: submits never block, a single
 daemon worker drains items one at a time, and a restart forgets progress but
 never decisions — every durable effect lives in review.csv and the research
-artifacts under `retarget-guidance/`. Prior research outputs for a re-guided
-person are sidelined to `.bkup` (paid artifacts are never deleted) so the new
-guidance actually re-researches instead of reusing the stale answer.
+artifacts under `retarget-guidance/`. The guidance itself is durable
+(`<handle>/guidance.json`) and doubles as the paid result's cache key: an
+IDENTICAL re-submit (e.g. retrying after a crash) reuses the existing research
+for free, while changed guidance sidelines the old output to `.bkup` (paid
+artifacts are never deleted) and re-researches.
 """
 from __future__ import annotations
 
 import csv
+import json
 import shutil
 import threading
 from collections import deque
@@ -182,10 +185,27 @@ def run_guided_retarget(request: GuidedRetarget, *,
         write_override_rows(review_path, rows)
     handle = str(row.get("handle") or request.slug)
     handle_dir = out_dir / handle
-    for name in _RESEARCH_FILES:
-        stale = handle_dir / name
-        if stale.exists():
-            stale.replace(stale.with_suffix(".json.bkup"))
+    # The guidance is durable (it survives crashes and restarts), and it is the
+    # paid result's cache key: an IDENTICAL re-submit reuses the existing
+    # research for free (run_research skips already-done handles); only CHANGED
+    # guidance sidelines the old result and re-researches.
+    guidance_file = handle_dir / "guidance.json"
+    prior_guidance = ""
+    if guidance_file.exists():
+        try:
+            prior_guidance = str(json.loads(
+                guidance_file.read_text(encoding="utf-8")).get("guidance") or "")
+        except (json.JSONDecodeError, OSError):
+            prior_guidance = ""
+    if request.guidance.strip() != prior_guidance.strip():
+        for name in _RESEARCH_FILES:
+            stale = handle_dir / name
+            if stale.exists():
+                stale.replace(stale.with_suffix(".json.bkup"))
+    handle_dir.mkdir(parents=True, exist_ok=True)
+    guidance_file.write_text(json.dumps(
+        {"guidance": request.guidance.strip(), "submitted_at": now_iso()},
+        ensure_ascii=False, indent=2), encoding="utf-8")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     queue_csv = out_dir / "research_queue.csv"
@@ -243,10 +263,12 @@ def run_guided_retarget(request: GuidedRetarget, *,
                     "new_public_identifier": "", "updated_at": now_iso()})
     write_override_rows(review_path, rows)
     report("judging", "assembling a synthetic profile from the research")
+    # run() returns the TYPED manifest (pipeline/contract.py Node.run) — read
+    # attributes, never dict-get.
     assembly = assemble_synthetic_profile.AssembleSyntheticProfile(
         research_dir=out_dir, queue_csv=queue_csv, prune=False).run()
-    stands = (int(assembly.get("built") or 0) > 0
-              or int(assembly.get("preserved_user_rows") or 0) > 0)
+    stands = (int(getattr(assembly, "built", 0) or 0) > 0
+              or int(getattr(assembly, "preserved_user_rows", 0) or 0) > 0)
     if stands:
         return {"state": "synthetic",
                 "detail": f"no LinkedIn confirmed — synthetic profile now stands ({reason})"}

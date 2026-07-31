@@ -5630,7 +5630,7 @@ class TestGuidedRetargets(unittest.TestCase):
                                   "linkedin_status": "found"}}
             rejecting = _verdict("wrong_person", 0.9, reason="no non-name corroboration")
             assemble = mock.Mock()
-            assemble.return_value.run.return_value = {"built": 1, "preserved_user_rows": 0}
+            assemble.return_value.run.return_value = mock.Mock(built=1, preserved_user_rows=0)
             with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
                                    side_effect=self._fake_research({}, profile)), \
                  mock.patch.object(dresearch, "judge_research_proposal",
@@ -5655,6 +5655,52 @@ class TestGuidedRetargets(unittest.TestCase):
             # The guided result is mirrored into the engine's research home.
             self.assertTrue((engine / "jordan-bravo-p" / "01_research_parallel.json").exists())
 
+    def test_identical_guidance_reuses_paid_research_changed_guidance_rebills(self):
+        # A retry after a crash must not re-bill: same guidance keeps the
+        # existing research (no sidelining); new guidance sidelines + reruns.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts, raw, out, engine = (base / "review.csv", base / "facts",
+                                               base / "raw", base / "out", base / "engine")
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            handle_dir = out / "jordan-bravo-p"
+            handle_dir.mkdir(parents=True)
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.9,
+                                  "notes": "DevRel lead at Acme."},
+                       "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                                  "linkedin_status": "found"}}
+            (handle_dir / "01_research_parallel.json").write_text(
+                json.dumps(profile), encoding="utf-8")
+            (handle_dir / "guidance.json").write_text(json.dumps(
+                {"guidance": "the Jordan Bravo who ran DevRel at Acme"}), encoding="utf-8")
+            confirming = _verdict("confirmed", 0.9, reason="employer matches")
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   return_value={"status": "no_work"}) as research, \
+                 mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=confirming):
+                result = web_retargets.run_guided_retarget(
+                    self._request(), review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=engine, use_llm=True)
+            self.assertEqual(result["state"], "applied")
+            research.assert_called_once()  # invoked, but nothing to re-bill
+            # Same guidance: the paid result stayed in place, no sideline.
+            self.assertFalse((handle_dir / "01_research_parallel.json.bkup").exists())
+            # Changed guidance: the old result is sidelined for a fresh run.
+            assemble = mock.Mock()
+            assemble.return_value.run.return_value = mock.Mock(built=1, preserved_user_rows=0)
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   return_value={"status": "completed"}), \
+                 mock.patch.object(web_retargets.assemble_synthetic_profile,
+                                   "AssembleSyntheticProfile", assemble):
+                web_retargets.run_guided_retarget(
+                    self._request(guidance="actually the Jordan Bravo at Globex"),
+                    review_path=review, people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=engine, use_llm=False)
+            self.assertTrue((handle_dir / "01_research_parallel.json.bkup").exists())
+
     def test_unusable_research_lands_no_match(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -5664,7 +5710,7 @@ class TestGuidedRetargets(unittest.TestCase):
             profile = {"person": {"full_name": "", "confidence": 0.0, "notes": ""},
                        "social": {"linkedin_status": "not_found"}}
             assemble = mock.Mock()
-            assemble.return_value.run.return_value = {"built": 0, "preserved_user_rows": 0}
+            assemble.return_value.run.return_value = mock.Mock(built=0, preserved_user_rows=0)
             with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
                                    side_effect=self._fake_research({}, profile)), \
                  mock.patch.object(web_retargets.assemble_synthetic_profile,
