@@ -27,13 +27,17 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[4]
 AUTH_SCRIPT = REPO / "packs/powerset/primitives/auth/auth.py"
 
-API_BASE_ENV_KEYS = (
-    "POWERPACKS_SEARCH_API_URL",
-    "POWERPACKS_API_BASE_URL",
-    "POWERSET_API_BASE",
-    "POWERPACKS_API_URL",
-    "POWERSET_API_URL",
-)
+# The one API-base env var. Legacy installs may still carry the retired
+# aliases (POWERPACKS_SEARCH_API_URL, POWERPACKS_API_BASE_URL,
+# POWERSET_API_BASE, POWERPACKS_API_URL); every template ever rendered set
+# them all to DEFAULT_API_BASE, so ignoring them changes nothing.
+API_BASE_ENV_KEY = "POWERSET_API_URL"
+
+# The hosted Powerset API (same host as packs/powerset/templates/
+# env.powerset.example). Used when POWERSET_API_URL is unset, so a machine
+# that never rendered the template — e.g. a local-search-only install —
+# still reaches the production API; the env var wins when present.
+DEFAULT_API_BASE = "https://search-api-7wk4uhe77q-uw.a.run.app"
 
 # env var -> (endpoint path, response field). The only keys the local machine
 # needs once processing runs on Modal. Extend this map to pull more.
@@ -47,14 +51,6 @@ ALLOWED_KEYS = set(KEY_SOURCES)
 
 def emit(payload: dict) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
-
-
-def missing_api_base_message() -> str:
-    keys = ", ".join(API_BASE_ENV_KEYS)
-    return (
-        f"missing required Powerset API config: set one of {keys}. "
-        "Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use."
-    )
 
 
 def _read_env_file(path: Path | None) -> dict[str, str]:
@@ -71,13 +67,11 @@ def _read_env_file(path: Path | None) -> dict[str, str]:
 
 
 def api_base(env_file: Path | None = None) -> str:
+    """POWERSET_API_URL (real env > env file) or the hosted default. Never fails."""
     values = _read_env_file(env_file)
     values.update(os.environ)
-    for key in API_BASE_ENV_KEYS:
-        value = (values.get(key) or "").strip()
-        if value:
-            return value.rstrip("/")
-    raise SystemExit(missing_api_base_message())
+    value = (values.get(API_BASE_ENV_KEY) or "").strip()
+    return value.rstrip("/") if value else DEFAULT_API_BASE
 
 
 def bearer_token() -> str:
@@ -143,16 +137,7 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
 
 def cmd_pull(args: argparse.Namespace) -> int:
     env_path = Path(args.env_file)
-    try:
-        base = api_base(env_path)
-    except SystemExit as exc:
-        emit({
-            "primitive": "pull_runtime_keys",
-            "command": "pull",
-            "status": "failed",
-            "error": str(exc),
-        })
-        return 2
+    base = api_base(env_path)
     token = bearer_token()
     # Group keys by endpoint so each is fetched once.
     by_path: dict[str, list[str]] = {}

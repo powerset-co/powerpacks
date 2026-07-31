@@ -7,6 +7,7 @@ import base64
 import gzip
 import io
 import json
+import os
 import random
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as prk
 from packs.powerset.primitives.send_feedback import send_feedback as sf
 
 SET_ID = "0b6f8f3e-8f3e-4e6f-9a2b-1c2d3e4f5a6b"
@@ -128,16 +130,16 @@ class TestSendFeedback(unittest.TestCase):
         self.assertEqual((base, path, token), ("https://api.example.com", "/v2/feedback", "tok"))
         self.assertEqual(body["set_id"], SET_ID)
 
-    def test_missing_api_config_maps_to_failed_payload(self):
-        # api_base raises SystemExit when no env alias is set; the server's
-        # /feedback handler needs a payload, never an escaping exit.
-        with mock.patch.object(sf, "api_base",
-                               side_effect=SystemExit("missing required Powerset API config")), \
-             mock.patch.object(sf, "bearer_token") as token:
+    def test_missing_env_uses_hosted_default_base(self):
+        # api_base never fails: with no env config at all it resolves to the
+        # hosted default, so a bare install can still post feedback.
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(sf, "bearer_token", return_value="tok"), \
+             mock.patch.object(sf, "post_json",
+                               return_value=(200, {"id": "fb-1"})) as post:
             payload = sf.SendFeedback(self._request()).run()
-        token.assert_not_called()
-        self.assertEqual(payload["status"], "failed")
-        self.assertIn("Powerset API config", payload["error"])
+        self.assertEqual(payload["status"], "submitted")
+        self.assertEqual(post.call_args[0][0], prk.DEFAULT_API_BASE)
 
     def test_signed_out_maps_to_needs_auth(self):
         with mock.patch.object(sf, "api_base", return_value="https://api.example.com"), \

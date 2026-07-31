@@ -190,13 +190,11 @@ class SendFeedback:
         body = self.request.body()
         if self.dry_run:
             return {"status": "dry_run", "path": FEEDBACK_PATH, "body": body}
-        # api_base/bearer_token raise SystemExit on their guard paths; a caller
-        # (the review server's /feedback handler) must always get a payload,
+        # api_base always resolves (POWERSET_API_URL or the hosted default).
+        # bearer_token raises SystemExit on its guard path; a caller (the
+        # review server's /feedback handler) must always get a payload,
         # never a dead request thread.
-        try:
-            base = api_base(self.env_file)
-        except SystemExit as exc:
-            return {"status": "failed", "error": str(exc)}
+        base = api_base(self.env_file)
         try:
             token = bearer_token()
         except SystemExit as exc:
