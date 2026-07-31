@@ -26,6 +26,21 @@ sf = _load("score_funnel")
 sg = _load("score_ground_truth_gaps")
 
 
+def _reflect_gt(labels: list[tuple[str, str]]) -> dict:
+    evidence = {person_id: (str(index + 1) * 64)[:64] for index, (person_id, _) in enumerate(labels)}
+    return {
+        "schema_version": "reflect.ground_truth.v1", "case_id": "synthetic-case", "case_hash": "a" * 64,
+        "corpus_snapshot_hash": "b" * 64,
+        "review_pool_evidence_hash": __import__("hashlib").sha256(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        "review_pool_evidence_hashes": evidence,
+        "labels": [{"person_id": person_id, "evidence_hash": evidence[person_id], "decision": decision,
+                    "reason_codes": ["synthetic"], "notes": "", "reviewer": "Synthetic Reviewer",
+                    "reviewed_at": "2026-07-31T00:00:00Z"} for person_id, decision in labels],
+        "finalized_at": "2026-07-31T00:00:00Z",
+    }
+
+
 def _write_jsonl(path: Path, records: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
@@ -147,6 +162,16 @@ class TestScoreFunnelTieredGt(unittest.TestCase):
         self.assertEqual(dispositions["Casey Delta"], "core_gated")
         self.assertEqual(dispositions["Nobody Known"], "unresolved_identity")
 
+    def test_finalized_human_gt_excludes_ineligible_labels(self) -> None:
+        fx = FunnelFixture()
+        path = fx.dir / "human_gt.json"
+        path.write_text(json.dumps(_reflect_gt([
+            ("p1", "eligible_strong"), ("p2", "eligible_bench"), ("p3", "ineligible")
+        ])), encoding="utf-8")
+        payload = fx.run_main(path)
+        self.assertEqual(payload["gt_size"], 2)
+        self.assertEqual({row["person_id"] for row in payload["gt_members"]}, {"p1", "p2"})
+
 
 class TestNdcg(unittest.TestCase):
     def test_perfect_order_is_one(self) -> None:
@@ -171,6 +196,26 @@ class TestNdcg(unittest.TestCase):
         gt, gains = sg.load_ground_truth(path, [])
         self.assertEqual(gains, {"a": 1.0, "b": 3.0})
         self.assertEqual(len(gt), 2)
+
+    def test_finalized_human_gt_scores_only_eligible_resolved_labels(self) -> None:
+        path = Path(tempfile.mkdtemp()) / "gt.json"
+        path.write_text(json.dumps(_reflect_gt([
+            ("strong", "eligible_strong"), ("bench", "eligible_bench"), ("out", "ineligible")
+        ])), encoding="utf-8")
+        gt, gains = sg.load_ground_truth(path, [])
+        self.assertEqual([row["person_id"] for row in gt], ["strong", "bench"])
+        self.assertEqual(gains, {"strong": 3.0, "bench": 2.0})
+
+    def test_precision_uses_conventional_k_denominator(self) -> None:
+        self.assertEqual(sg.precision_at_k({"positive"}, ["positive"], 25), 0.04)
+
+    def test_forged_reflect_v1_is_rejected_by_both_standalone_scorers(self) -> None:
+        path = Path(tempfile.mkdtemp()) / "forged.json"
+        path.write_text(json.dumps({"schema_version": "reflect.ground_truth.v1", "labels": []}) + "\n")
+        with self.assertRaises(ValueError):
+            sg.load_ground_truth(path, [])
+        with self.assertRaises(ValueError):
+            sf.load_ground_truth(path, {})
 
 
 class TestUsageCost(unittest.TestCase):

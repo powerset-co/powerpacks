@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reflect-corpus-snapshot.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "backend", "source", "verification_status", "set_id", "operator_scope_hash", "membership_hash", "namespace_schema_hashes", "evidence_hashes"],
+  "properties": {
+    "schema_version": {"const": "reflect.corpus_snapshot.v1"},
+    "backend": {"enum": ["powerset", "local", "synthetic"]},
+    "source": {"enum": ["pr_b_runner_snapshot", "local_deterministic_snapshot", "synthetic_test_fixture"]},
+    "verification_status": {"enum": ["verified_comparable", "unverified_non_comparable"]},
+    "set_id": {"type": "string", "minLength": 1},
+    "operator_scope_hash": {"$ref": "#/$defs/hash"},
+    "membership_hash": {"$ref": "#/$defs/hash"},
+    "namespace_schema_hashes": {
+      "type": "object", "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/hash"}
+    },
+    "native_content_version": {"type": "string", "minLength": 1},
+    "scoped_records_hash": {"$ref": "#/$defs/hash"},
+    "evidence_hashes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/hash"}
+    },
+    "observed_at": {"type": "string", "format": "date-time"}
+  },
+  "oneOf": [
+    {"required": ["native_content_version"], "not": {"required": ["scoped_records_hash"]}},
+    {"required": ["scoped_records_hash"], "not": {"required": ["native_content_version"]}}
+  ],
+  "$defs": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

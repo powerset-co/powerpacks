@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reflect-comparison-review.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "baseline_report_hash", "candidate_report_hash", "decision", "explanation", "reviewer", "reviewed_at", "regressions"],
+  "properties": {
+    "schema_version": {"const": "reflect.comparison_review.v1"}, "baseline_report_hash": {"$ref": "#/$defs/hash"}, "candidate_report_hash": {"$ref": "#/$defs/hash"},
+    "decision": {"enum": ["accepted", "rejected"]}, "explanation": {"type": "string", "minLength": 1}, "reviewer": {"type": "string", "minLength": 1}, "reviewed_at": {"type": "string", "format": "date-time"},
+    "regressions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/regression"}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "regression": {"type": "object", "additionalProperties": false, "required": ["case_id", "corpus_hash", "metric", "k", "baseline_score", "candidate_score", "delta"], "properties": {
+      "case_id": {"type": "string", "minLength": 1}, "corpus_hash": {"$ref": "#/$defs/hash"}, "metric": {"enum": ["ndcg@10", "ndcg@25"]}, "k": {"enum": [10, 25]},
+      "baseline_score": {"type": "number"}, "candidate_score": {"type": "number"}, "delta": {"type": "number", "exclusiveMaximum": 0}
+    }}
+  }
+}

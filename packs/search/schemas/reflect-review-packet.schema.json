@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reflect-review-packet.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "case_id", "case_hash", "corpus_snapshot_hash", "review_pool_evidence_hash", "rows"],
+  "properties": {
+    "schema_version": {"const": "reflect.review_packet.v1"},
+    "case_id": {"type": "string", "minLength": 1},
+    "case_hash": {"$ref": "#/$defs/hash"},
+    "corpus_snapshot_hash": {"$ref": "#/$defs/hash"},
+    "review_pool_evidence_hash": {"$ref": "#/$defs/hash"},
+    "rows": {"type": "array", "items": {"$ref": "#/$defs/row"}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nullableString": {"type": ["string", "null"]},
+    "human": {
+      "type": "object", "additionalProperties": false,
+      "required": ["decision", "reason_codes", "notes", "reviewer", "reviewed_at"],
+      "properties": {
+        "decision": {"type": ["string", "null"], "enum": [null, "eligible_strong", "eligible_bench", "ineligible", "insufficient_evidence"]},
+        "reason_codes": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "notes": {"type": "string"}, "reviewer": {"$ref": "#/$defs/nullableString"}, "reviewed_at": {"$ref": "#/$defs/nullableString"}
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "company", "location", "matched_positions", "retrieval_provenance", "relevant_profile_evidence"],
+      "properties": {
+        "role": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["title", "current"], "properties": {"title": {"type": "string", "minLength": 1}, "current": {"type": "boolean"}, "start_date": {"$ref": "#/$defs/nullableString"}, "end_date": {"$ref": "#/$defs/nullableString"}}}},
+        "company": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["name", "relationship"], "properties": {"name": {"type": "string"}, "relationship": {"type": "string"}}}},
+        "location": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["value", "source"], "properties": {"value": {"type": "string"}, "source": {"type": "string"}}}},
+        "matched_positions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["position_id", "title", "company", "location"], "properties": {"position_id": {"type": "string"}, "title": {"type": "string"}, "company": {"type": "string"}, "location": {"type": ["string", "null"]}}}},
+        "retrieval_provenance": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["lane", "probe", "rank", "score"], "properties": {"lane": {"type": "string"}, "probe": {"type": ["string", "null"]}, "rank": {"type": ["integer", "null"], "minimum": 1}, "score": {"type": ["number", "null"]}}}},
+        "relevant_profile_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "row": {
+      "type": "object", "additionalProperties": false,
+      "required": ["person_id", "evidence_hash", "evidence", "machine_proposal", "machine_reasoning", "human"],
+      "properties": {
+        "person_id": {"type": "string", "minLength": 1}, "evidence_hash": {"$ref": "#/$defs/hash"}, "evidence": {"$ref": "#/$defs/evidence"},
+        "machine_proposal": {"type": ["string", "null"], "enum": [null, "eligible_strong", "eligible_bench", "ineligible", "insufficient_evidence"]},
+        "machine_reasoning": {"$ref": "#/$defs/nullableString"}, "human": {"$ref": "#/$defs/human"}
+      }
+    }
+  }
+}

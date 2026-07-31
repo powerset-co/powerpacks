@@ -28,7 +28,7 @@ from typing import Any
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
-from score_ground_truth_gaps import load_records  # noqa: E402
+from score_ground_truth_gaps import load_records, validate_reflect_ground_truth  # noqa: E402
 
 TIER_GAINS = {"A": 3, "B": 2, "C": 1}
 
@@ -59,6 +59,7 @@ def load_ground_truth(path: Path, name_to_pid: dict[str, str]) -> tuple[list[dic
     excluded from GT entirely.
     """
     raw = json.loads(path.read_text(encoding="utf-8"))
+    validate_reflect_ground_truth(path, raw)
     members: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
     if isinstance(raw, list):
@@ -68,6 +69,19 @@ def load_ground_truth(path: Path, name_to_pid: dict[str, str]) -> tuple[list[dic
                 "name": rec.get("name"),
                 "gt_rank": i + 1,
                 "tier": rec.get("tier"),
+            })
+        return members, unresolved
+    if raw.get("schema_version") == "reflect.ground_truth.v1":
+        rank = 0
+        for label in raw.get("labels") or []:
+            if label.get("decision") not in {"eligible_strong", "eligible_bench"}:
+                continue
+            rank += 1
+            members.append({
+                "person_id": label["person_id"],
+                "name": None,
+                "gt_rank": rank,
+                "tier": "A" if label["decision"] == "eligible_strong" else "B",
             })
         return members, unresolved
     tiers = raw.get("tiers") or {}

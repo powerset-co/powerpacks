@@ -33,13 +33,25 @@ import sys
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from usage_pricing import PRICES_PATH as DEFAULT_PRICES_PATH, load_prices, row_cost_usd  # noqa: E402
+from packs.search.primitives.validate_artifact.validate_artifact import validate_file  # noqa: E402
+from packs.search.reflect.review import validate_ground_truth_semantics  # noqa: E402
 
 TIER_GAINS = {"A": 3.0, "B": 2.0, "C": 1.0}
 PRICES_PATH = DEFAULT_PRICES_PATH
+
+
+def validate_reflect_ground_truth(path: Path, raw: Any | None = None) -> None:
+    raw = raw if raw is not None else json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, dict) and raw.get("schema_version") == "reflect.ground_truth.v1":
+        document = validate_file("reflect-ground-truth", path)
+        validate_ground_truth_semantics(document)
 
 
 def load_records(path: Path) -> list[dict[str, Any]]:
@@ -75,12 +87,26 @@ def load_ground_truth(path: Path, epoch: list[dict[str, Any]]) -> tuple[list[dic
     sentinel) — they were not found, which is exactly what recall should say.
     """
     raw = json.loads(path.read_text(encoding="utf-8"))
+    validate_reflect_ground_truth(path, raw)
     if isinstance(raw, list):
         gains = {}
         for rec in raw:
             tier = str(rec.get("tier") or "")[:1].upper()
             gains[rec["person_id"]] = TIER_GAINS.get(tier, 1.0)
         return raw, gains
+
+    if raw.get("schema_version") == "reflect.ground_truth.v1":
+        records = []
+        gains = {}
+        for label in raw.get("labels") or []:
+            decision = label.get("decision")
+            if decision not in {"eligible_strong", "eligible_bench"}:
+                continue
+            person_id = label["person_id"]
+            gain = 3.0 if decision == "eligible_strong" else 2.0
+            records.append({"person_id": person_id, "tier": "A" if gain == 3.0 else "B"})
+            gains[person_id] = gain
+        return records, gains
 
     name_to_pid = {" ".join((r.get("name") or "").lower().split()): r.get("person_id") for r in epoch}
     records: list[dict[str, Any]] = []
@@ -137,10 +163,10 @@ def recall_at_k(gt_ids: set[str], epoch_ids: list[str], k: int) -> float:
 
 
 def precision_at_k(gt_ids: set[str], epoch_ids: list[str], k: int) -> float:
-    if not epoch_ids:
+    if k <= 0:
         return 0.0
     topk = epoch_ids[:k]
-    return round(sum(1 for pid in topk if pid in gt_ids) / min(k, len(topk)), 4)
+    return round(sum(1 for pid in topk if pid in gt_ids) / k, 4)
 
 
 def main() -> None:
@@ -160,14 +186,23 @@ def main() -> None:
     epoch_set = set(epoch_ids)
 
     gt, gains = load_ground_truth(Path(args.ground_truth), epoch)
+    raw_gt = json.loads(Path(args.ground_truth).read_text(encoding="utf-8"))
+    reviewed_pool = set((raw_gt.get("review_pool_evidence_hashes") or {}).keys()) if isinstance(raw_gt, dict) and raw_gt.get("schema_version") == "reflect.ground_truth.v1" else None
+    insufficient_ids = {
+        row["person_id"] for row in (raw_gt.get("labels") or []) if row.get("decision") == "insufficient_evidence"
+    } if reviewed_pool is not None else set()
+    scored_epoch_ids = [pid for pid in epoch_ids if pid not in insufficient_ids]
+    unreviewed = [pid for pid in epoch_ids if reviewed_pool is not None and pid not in reviewed_pool]
+    if unreviewed:
+        scored_epoch_ids = [pid for pid in scored_epoch_ids if pid not in set(unreviewed)]
     gt_rank = {r["person_id"]: i + 1 for i, r in enumerate(gt)}
     gt_name = {r["person_id"]: r.get("name") for r in gt}
     gt_ids = set(gt_rank)
 
     ks = [int(x) for x in args.ks.split(",") if x.strip()]
-    recall = {f"recall@{k}": recall_at_k(gt_ids, epoch_ids, k) for k in ks}
-    precision = {f"precision@{k}": precision_at_k(gt_ids, epoch_ids, k) for k in ks}
-    ndcg = {f"ndcg@{k}": ndcg_at_k(gains, epoch_ids, k) for k in ks}
+    recall = {f"recall@{k}": recall_at_k(gt_ids, scored_epoch_ids, k) for k in ks}
+    precision = {f"precision@{k}": precision_at_k(gt_ids, scored_epoch_ids, k) for k in ks}
+    ndcg = {f"ndcg@{k}": ndcg_at_k(gains, scored_epoch_ids, k) for k in ks}
 
     usage = usage_cost(Path(args.usage_log)) if args.usage_log and Path(args.usage_log).exists() else None
     cost_usd = args.cost_usd if args.cost_usd else (usage or {}).get("cost_usd", 0.0)
@@ -191,6 +226,7 @@ def main() -> None:
         "missed_count": len(missed),
         "missed": missed,
         "net_new_count": len(net_new),
+        "unreviewed_candidate_count": len(unreviewed),
         "cost_usd": cost_usd,
         "usage": usage,
     }
