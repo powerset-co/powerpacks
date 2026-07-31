@@ -243,6 +243,7 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("$powerset setup", text)
         self.assertIn("--artifact", text)
         self.assertIn("Never attach dossier files", text)
+        self.assertIn("$deep-context", text)
 
     def test_search_surface_documents_company_entrypoint(self) -> None:
         text = (ROOT / "packs/search/docs/search-surface.md").read_text()
