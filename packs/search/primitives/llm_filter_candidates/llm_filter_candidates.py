@@ -28,6 +28,7 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
 
 from powerpacks_contracts import validate_hydrated_profile  # noqa: E402
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
+from openai_client import make_async_openai_client  # noqa: E402
 
 
 RESULT_FILTER_BATCH_SYSTEM_PROMPT = """You are a fast pre-screener filtering search results.
@@ -459,7 +460,7 @@ async def score_batches(
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     if not args.api_key:
         raise RuntimeError("OPENAI_API_KEY is required unless --dry-run is used")
-    client = AsyncOpenAI(api_key=args.api_key, base_url=openai_base_url(args.api_base), timeout=args.timeout)
+    client = make_async_openai_client(args.api_key, args.api_base, timeout=args.timeout)
     semaphore = asyncio.Semaphore(worker_count)
     tasks = [
         asyncio.create_task(

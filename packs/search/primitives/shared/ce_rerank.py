@@ -18,6 +18,8 @@ from typing import Any
 
 import openai
 
+from openai_client import make_async_openai_client
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = os.environ.get("CE_RERANK_MODEL", "gpt-4.1-nano")
@@ -155,11 +157,7 @@ async def ce_rerank_companies(
             "elapsed_ms": 0,
             "skipped_no_api_key": True,
         }
-    base = api_base or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
-    if not base.endswith("/v1"):
-        base = base.rstrip("/") + "/v1"
-
-    client = openai.AsyncOpenAI(api_key=key, base_url=base)
+    client = make_async_openai_client(key, api_base)
     semaphore = asyncio.Semaphore(concurrency)
 
     # Build batches

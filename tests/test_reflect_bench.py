@@ -142,7 +142,7 @@ class TestCostReport(unittest.TestCase):
         self.assertIn("gpt-4.1-mini", prices)
         row = {"model": "gpt-4.1-mini", "prompt_tokens": 1_000_000, "completion_tokens": 0, "reasoning_tokens": 0}
         self.assertAlmostEqual(cr.row_cost_usd(row, prices), 0.4)
-        self.assertIsNone(cr.row_cost_usd({"model": "gpt-5.4", "prompt_tokens": 10}, prices))
+        self.assertIsNone(cr.row_cost_usd({"model": "gpt-5.2", "prompt_tokens": 10}, prices))  # delisted, kept null
 
 
 if __name__ == "__main__":

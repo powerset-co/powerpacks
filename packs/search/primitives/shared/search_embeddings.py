@@ -33,9 +33,9 @@ async def embedding(text: str) -> list[float]:
     if os.getenv("POWERPACKS_FAKE_EMBEDDINGS") == "1":
         return _fake_embedding(text)
     ensure_openai_package()
-    import openai
+    from openai_client import make_async_openai_client
 
-    client = openai.AsyncOpenAI()
+    client = make_async_openai_client()
     response = await client.embeddings.create(
         input=[text],
         model=os.getenv("POWERPACKS_EMBEDDING_MODEL", "text-embedding-3-small"),
