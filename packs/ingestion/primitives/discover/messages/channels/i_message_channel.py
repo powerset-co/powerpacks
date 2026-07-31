@@ -1,11 +1,11 @@
 """IMessageChannel: the declared `messages_imessage_extract` node.
 
 Owns its fixed output paths — the ``IMESSAGE_*`` module constants, assigned to
-instance attributes in ``__init__``. ``extract()`` calls
+instance attributes in ``__init__``. ``execute()`` calls
 ``IMessageExtractor().check(strict=True)`` in-process (the macOS Full Disk Access
 / Contacts gate; a non-``ok`` status returns ``blocked_user_action``) then
-``.extract(...)``, writing ``imessage.contacts.csv`` + raw jsonl + manifest.
-Metadata only — never selects message body columns.
+``.extract(...)``, writing ``imessage.contacts.csv`` + raw jsonl + manifest, and
+returns the CSV it produced. Metadata only — never selects message body columns.
 
 Declared contract:
   reads   ``~/Library/Messages/chat.db`` — external (macOS owns it) and
@@ -26,6 +26,11 @@ declared graph simply ignores it rather than modelling its deadness. Deleting it
 means dropping ``--output-jsonl`` from a documented CLI, which is its own cut.
 
 Changelog:
+  2026-07-30 (steps return results): ``extract()`` became ``execute()`` and
+    returns ``MessageChannelExtracted(channel, contacts_csv)`` instead of
+    returning ``None`` and stashing ``imessage_contacts_csv`` in a
+    ``self.artifacts`` dict for the store to read back. Same manifest key, same
+    value.
   2026-07-25 (declared contract): now a ``(MessageChannel, Node)`` — declares the
     node ``messages_imessage_extract`` with its chat.db input and contacts.csv
     output, and ``extract()`` returns the typed channel payloads. The extractor
@@ -96,7 +101,7 @@ class IMessageChannel(MessageChannel, Node):
     )
     payload = MessageChannelExtracted
     # "" — this node has no manifest.json of its own; it reports into the
-    # MessagesDiscovery stage manifest through `self.artifacts`.
+    # MessagesDiscovery stage manifest through the payload it RETURNS.
     manifest = ""
 
     def __init__(self, *, other_enabled: bool) -> None:
@@ -111,7 +116,7 @@ class IMessageChannel(MessageChannel, Node):
         patches ``IMESSAGE_CONTACTS`` still produces a key the template matches."""
         return {self.outputs[0].path: str(self.contacts_csv)}
 
-    def extract(self) -> MessageChannelBlocked | MessageChannelFailed | None:
+    def execute(self) -> MessageChannelExtracted | MessageChannelBlocked | MessageChannelFailed:
         extractor = IMessageExtractor()
         check = extractor.check(strict=True)
         if check.get("status") != "ok":
@@ -128,5 +133,4 @@ class IMessageChannel(MessageChannel, Node):
         )
         if result.get("status") != "completed":
             return failed_child("extract_imessage", result, "")
-        self.artifacts["imessage_contacts_csv"] = str(self.contacts_csv)
-        return None
+        return MessageChannelExtracted(channel=self.channel, contacts_csv=str(self.contacts_csv))

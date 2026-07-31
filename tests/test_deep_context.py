@@ -19,9 +19,18 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.ingestion.schemas.people_schema import (
+    generate_person_id,
+    legacy_message_linkedin_id,
+)
+from packs.ingestion.primitives.common.legacy import (
+    migrate_parent_slug_artifacts,
+    parent_slug_migrations,
+)
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context import (
     build_parents as parents,
+    check_readiness,
     cluster_merge_candidates as cluster,
     collect_person_context as collect,
     common,
@@ -778,6 +787,144 @@ class TestIncrementalSynthesis(unittest.TestCase):
         self.assertIn("PROFILE SO FAR", synth.render_batch(person, batch, {"title": "CTO"}))
 
 
+class _StubAsyncClient:
+    """Stands in for AsyncOpenAI. `execute()` only ever closes it — every request
+    goes through the patched `_call_one` — so `close()` is the whole surface."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class TestSynthesizeExecute(unittest.TestCase):
+    """`execute()` end to end with a stubbed OpenAI client: both paths through its
+    single exit. Nothing reaches the network — `_call_one` and the client factory
+    are replaced, so no key is read and no request is made."""
+
+    def _node(self, root: Path, **kw) -> synth.SynthesizePersonContext:
+        return synth.SynthesizePersonContext(
+            raw_dir=root / "raw",
+            out_dir=root / "facts",
+            review_csv=root / "review.csv",
+            concurrency=1,
+            no_owner=True,
+            **kw,
+        )
+
+    def _bundle(self, root: Path, pid: str = "p1") -> None:
+        (root / "raw").mkdir(exist_ok=True)
+        (root / "raw" / f"{pid}.json").write_text(json.dumps({
+            "person_id": pid,
+            "full_name": "Jordan Bravo",
+            "messages": [{"text": "lunch friday?", "at": "2026-01-02",
+                          "channel": "gmail", "direction": "from_them"}],
+        }), encoding="utf-8")
+
+    def _execute(self, root: Path, fake_call_one, **kw):
+        client = _StubAsyncClient()
+        with mock.patch.object(synth, "_call_one", fake_call_one), \
+                mock.patch.object(synth, "make_async_client", lambda **_: client):
+            return self._node(root, **kw).execute(), client
+
+    def test_nothing_pending_reports_a_zero_run_without_building_a_client(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "raw").mkdir()
+
+            def no_client(**_):
+                raise AssertionError("a run with nothing pending must not build a client")
+
+            with mock.patch.object(synth, "make_async_client", no_client):
+                payload = self._node(root).execute()
+            self.assertEqual(payload.status, "completed")
+            self.assertEqual(payload.people, 0)
+            self.assertEqual(payload.people_done, 0)
+            self.assertEqual(payload.batches_run, 0)
+            self.assertEqual(payload.avg_batches_per_person, 0.0)
+            self.assertEqual(payload.stop_reasons, {})
+            self.assertEqual(payload.errors, 0)
+            self.assertEqual(payload.concurrency, 0)  # no pool was ever sized
+            self.assertEqual(payload.tokens,
+                             {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0})
+            self.assertEqual(payload.estimated_cost_usd, 0.0)
+            self.assertEqual(payload.out_dir, str(root / "facts"))
+            self.assertIsInstance(payload.worth_sync, dict)  # the mirror still runs
+
+    def test_pending_bundle_is_synthesized_checkpointed_and_tallied(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._bundle(root)
+
+            async def fake_call_one(client, prompt, **kw):
+                return (_facts(confidence=0.95, topics=["lunch"],
+                               network_worth={"decision": "yes", "reason": "real person"}),
+                        {"input_tokens": 120, "output_tokens": 40, "reasoning_tokens": 8}, "")
+
+            payload, client = self._execute(root, fake_call_one)
+            self.assertEqual(payload.people, 1)
+            self.assertEqual(payload.people_done, 1)
+            self.assertEqual(payload.batches_run, 1)
+            self.assertEqual(payload.avg_batches_per_person, 1.0)
+            self.assertEqual(payload.stop_reasons, {"confident": 1})
+            self.assertEqual(payload.errors, 0)
+            self.assertEqual(payload.concurrency, 1)
+            self.assertEqual(payload.tokens,
+                             {"input_tokens": 120, "output_tokens": 40, "reasoning_tokens": 8})
+            self.assertTrue(client.closed)
+            record = json.loads((root / "facts" / "p1.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(record["synthesis_version"], synth.SYNTHESIS_VERSION)
+            self.assertEqual(record["stop_reason"], "confident")
+            self.assertEqual(record["facts"]["confidence"], 0.95)
+
+    def test_provider_error_is_counted_not_raised(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._bundle(root)
+
+            async def failing_call_one(client, prompt, **kw):
+                return ({}, {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0},
+                        "APIError: upstream refused")
+
+            payload, _ = self._execute(root, failing_call_one)
+            self.assertEqual(payload.status, "completed")
+            self.assertEqual(payload.people_done, 1)
+            self.assertEqual(payload.errors, 1)
+            self.assertEqual(payload.stop_reasons, {"exhausted": 1})
+
+    def test_plan_is_one_typed_value(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self._bundle(root)
+            plan = self._node(root)._plan()
+            self.assertEqual(plan.paths, [root / "raw" / "p1.json"])
+            self.assertIsNone(plan.owner)  # --no-owner
+            self.assertEqual(plan.system_prompt, synth.SYSTEM_PROMPT)
+
+    def test_tally_accumulates_tokens_stop_reasons_and_errors(self):
+        tally = synth.SynthesisTally()
+        tally.record({"usage": {"input_tokens": 3, "output_tokens": 2, "reasoning_tokens": 1},
+                      "errors": 0, "batches_used": 2, "stop_reason": "confident"})
+        tally.record({"usage": {"input_tokens": 5, "reasoning_tokens": 4},
+                      "errors": 1, "batches_used": 3, "stop_reason": "confident"})
+        self.assertEqual(tally.people_done, 2)
+        self.assertEqual(tally.errors, 1)
+        self.assertEqual(tally.batches, 5)
+        self.assertEqual(tally.stop_reasons, {"confident": 2})
+        self.assertEqual(tally.tokens,
+                         {"input_tokens": 8, "output_tokens": 2, "reasoning_tokens": 5})
+
+
+class TestCheckReadinessDefaults(unittest.TestCase):
+    def test_default_chat_db_follows_the_current_home(self):
+        with tempfile.TemporaryDirectory() as d:
+            expected = Path(d) / "Library" / "Messages" / "chat.db"
+            with mock.patch.dict(os.environ, {"HOME": d}):
+                self.assertEqual(check_readiness.default_chat_db(), expected)
+                self.assertEqual(check_readiness.CheckReadiness().chat_db, expected)
+
+
 class TestBuildOwner(unittest.TestCase):
     def test_owner_from_profile_maps_schools_and_jobs(self):
         from packs.ingestion.primitives.deep_context import build_owner
@@ -857,7 +1004,7 @@ class TestParents(unittest.TestCase):
     def test_parent_slug_migration_rewrites_artifacts_once(self):
         old_slug = "jordan-bravo-parent12"
         new_slug = "jordan-bravo-12345678"
-        mapping = parents.parent_slug_migrations(
+        mapping = parent_slug_migrations(
             {old_slug: {"parent_id": "parent-1234567890ab"}},
             {new_slug: {"parent_id": "parent-1234567890ab"}},
         )
@@ -898,7 +1045,7 @@ class TestParents(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            stats = parents.migrate_parent_slug_artifacts(
+            stats = migrate_parent_slug_artifacts(
                 mapping,
                 deep_research_dir=research,
                 verdicts_jsonl=verdicts_jsonl,
@@ -917,7 +1064,7 @@ class TestParents(unittest.TestCase):
             self.assertNotIn(old_slug, applied_csv.read_text(encoding="utf-8"))
             self.assertNotIn(old_slug, synthetic_csv.read_text(encoding="utf-8"))
 
-            rerun = parents.migrate_parent_slug_artifacts(
+            rerun = migrate_parent_slug_artifacts(
                 mapping,
                 deep_research_dir=research,
                 verdicts_jsonl=verdicts_jsonl,
@@ -2804,7 +2951,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                         "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
                         "match_emails": ["eugene6605@example.com"], "match_phones": [],
                         "verdict": _verdict("needs_review", 0.4)}
-        reconcile.revert_unconfirmed_name_matches([needs_review], 0.7, {}, Path("/nonexistent"))
+        reconcile.revert_unconfirmed_name_matches([needs_review], 0.7)
         self.assertTrue(needs_review["no_link"])                      # still reverts (invariant kept)
         self.assertEqual(needs_review["candidate_key"], "")
         rv = needs_review["name_match_review"]
@@ -2818,7 +2965,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                     "person_ids": ["msg-eugene"], "no_link": False, "name_matched": True,
                     "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
                     "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
-            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            reconcile.revert_unconfirmed_name_matches([task], 0.7)
             stats = reconcile.upsert_name_match_reviews(ov, [task])
             self.assertEqual(stats["name_match_reviews"], 1)
             rows = _rows_by_pub(ov)
@@ -2841,7 +2988,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                     "person_ids": ["msg-eugene"], "no_link": False, "name_matched": True,
                     "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
                     "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
-            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            reconcile.revert_unconfirmed_name_matches([task], 0.7)
             stats = reconcile.upsert_name_match_reviews(ov, [task])
             self.assertEqual(stats["preserved_user_rows"], 1)
             with ov.open(newline="", encoding="utf-8") as _fh:
@@ -2854,7 +3001,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                      "person_ids": ["msg-c"], "no_link": False, "name_matched": True,
                      "linkedin": {"linkedin_url": "https://www.linkedin.com/in/confirmedp"},
                      "match_emails": [], "match_phones": [], "verdict": _verdict("confirmed", 0.9)}
-        reconcile.revert_unconfirmed_name_matches([confirmed], 0.7, {}, Path("/nonexistent"))
+        reconcile.revert_unconfirmed_name_matches([confirmed], 0.7)
         self.assertNotIn("name_match_review", confirmed)              # confirmed stays an identity row
         with tempfile.TemporaryDirectory() as d:
             ov = Path(d) / "review.csv"
@@ -2876,7 +3023,7 @@ class TestUnsilencedNameMatch(unittest.TestCase):
                     "person_ids": [pid], "no_link": False, "name_matched": True,
                     "linkedin": {"linkedin_url": "https://www.linkedin.com/in/eugenewang"},
                     "match_emails": [], "match_phones": [], "verdict": _verdict("needs_review", 0.4)}
-            reconcile.revert_unconfirmed_name_matches([task], 0.7, {}, Path("/nonexistent"))
+            reconcile.revert_unconfirmed_name_matches([task], 0.7)
             reconcile.upsert_name_match_reviews(ov, [task])
             rows = _rows_by_pub(ov)
             name_row = rows["eugenewang"]
@@ -2914,7 +3061,7 @@ class TestReviewWeb(unittest.TestCase):
             facts = base / "facts"
             facts.mkdir()
             pub = "jordan-bravo"
-            retired = worth_view.legacy_message_linkedin_id(pub)
+            retired = legacy_message_linkedin_id(pub)
             phone_id = "candidate:phone:+15550100"
             for pid, decision in ((retired, "yes"), (phone_id, "maybe")):
                 (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
@@ -2953,8 +3100,8 @@ class TestReviewWeb(unittest.TestCase):
             facts = base / "facts"
             facts.mkdir()
             pub = "casey-delta"
-            retired = worth_view.legacy_message_linkedin_id(pub)
-            durable = worth_view.generate_person_id(pub)
+            retired = legacy_message_linkedin_id(pub)
+            durable = generate_person_id(pub)
             for pid in (retired, durable):
                 (facts / f"{pid}.jsonl").write_text(json.dumps({"facts": {
                     "canonical_name": "Casey Delta",
@@ -4351,7 +4498,8 @@ class TestAssembleSyntheticProfile(unittest.TestCase):
 
     def test_build_row_maps_research_to_people_schema(self) -> None:
         from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
-        contact = {"handle": "rpoo", "primary_email": "ross@x.com", "source_channel": "twitter"}
+        contact = asp.ResearchContact(handle="rpoo", primary_email="ross@x.com",
+                                      source_channel="twitter")
         original = {"id": "pid-7", "all_emails": "ross@x.com|r@y.com", "interaction_counts": "{'email': 12}"}
         row = asp.build_synthetic_row(self._profile(), contact, original, "pid-7")
         self.assertTrue(row["public_identifier"].startswith("synth-email-"))
@@ -4367,8 +4515,24 @@ class TestAssembleSyntheticProfile(unittest.TestCase):
 
     def test_low_completeness_waits_for_review(self) -> None:
         from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
-        row = asp.build_synthetic_row(self._profile(completeness=0.3), {"handle": "rpoo"}, None, "")
+        row = asp.build_synthetic_row(self._profile(completeness=0.3),
+                                      asp.ResearchContact(handle="rpoo"), None, "")
         self.assertEqual(row["approved"], "")
+
+    def test_research_contact_merges_sources_later_non_empty_wins(self) -> None:
+        from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
+        verdicts = {"display_name": "Jordan Bravo", "primary_email": "jordan@example.com",
+                    "source_parent_slug": "jordan-bravo-1111"}
+        queue = {"primary_email": "", "phone_e164": "+15550100", "source_channel": "email",
+                 "bio": "not part of the identity"}
+        contact = asp.ResearchContact.merged("jordan-bravo-1111", verdicts, queue)
+        self.assertEqual(contact.handle, "jordan-bravo-1111")
+        self.assertEqual(contact.display_name, "Jordan Bravo")
+        self.assertEqual(contact.primary_email, "jordan@example.com")  # blank never overrides
+        self.assertEqual(contact.phone_e164, "+15550100")
+        self.assertEqual(contact.source_channel, "email")
+        self.assertEqual(contact.source_candidate_public_identifier, "")  # absent -> default
+        self.assertFalse(hasattr(contact, "bio"))  # unknown columns are dropped, not carried
 
     def test_usability_floor(self) -> None:
         from packs.ingestion.primitives.deep_context import assemble_synthetic_profile as asp
@@ -4564,8 +4728,7 @@ class TestNameMatchAttach(unittest.TestCase):
                         "person_ids": ["candidate:email:b@x.com"], "no_link": False,
                         "name_matched": True, "linkedin": {"linkedin_url": "y"},
                         "verdict": _verdict("needs_review", 0.4)}
-        reverted = reconcile.revert_unconfirmed_name_matches(
-            [confirmed, needs_review], 0.7, {}, Path("/nonexistent"))
+        reverted = reconcile.revert_unconfirmed_name_matches([confirmed, needs_review], 0.7)
         self.assertEqual(reverted, 1)
         self.assertFalse(confirmed["no_link"])          # confirmed match stays an identity row
         self.assertTrue(confirmed["name_matched"])
@@ -4639,7 +4802,7 @@ class TestNameMatchAttach(unittest.TestCase):
         stale = {"parent_slug": "a", "name": "A", "candidate_key": "aconn",
                  "person_ids": ["candidate:email:a@x.com"], "no_link": False, "name_matched": True,
                  "linkedin": {"linkedin_url": "x"}, "verdict": _verdict("confirmed", 0.75)}
-        reverted = reconcile.revert_unconfirmed_name_matches([stale], 0.85, {}, Path("/nonexistent"))
+        reverted = reconcile.revert_unconfirmed_name_matches([stale], 0.85)
         self.assertEqual(reverted, 1)
         self.assertTrue(stale["no_link"])
         self.assertEqual(stale["candidate_key"], "")
@@ -5059,10 +5222,9 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>0</span>", html)
         self.assertIn("data-directory-tab='no'>No<span>0</span>", html)
 
-    def test_view_serve_stage_directory_lands_on_directory_and_writes_nothing(self):
-        # `bin/deep-context view` = serve --stage directory: the read-only
-        # browse landing. It must open /directory and never begin a
-        # people-review revision (no review manifest write).
+    def test_serve_stage_directory_lands_on_directory_and_writes_nothing(self):
+        # The explicit read-only browse landing opens /directory and never
+        # begins a people-review revision (no review manifest write).
         from packs.ingestion.primitives.deep_context.review_web import cli as web_cli
         parsed = web_cli.build_parser().parse_args(["serve", "--stage", "directory"])
         self.assertEqual(parsed.stage, "directory")
@@ -5098,7 +5260,7 @@ class TestDirectoryView(unittest.TestCase):
     def test_serve_reuses_live_server_without_touching_the_session_lock(self):
         # The live server HOLDS the session flock; the reuse path must never
         # try to take it (locking first refused the very server being reused —
-        # `view` and the enrichment-running review deferral both hit this).
+        # directory browsing and the enrichment-running review deferral hit this).
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
             manifest = base / "review" / "manifest.json"
@@ -5149,35 +5311,28 @@ class TestDirectoryView(unittest.TestCase):
             open=False, confirm_threshold=0.7, detach_threshold=0.85,
         )
 
-    def test_review_lands_on_directory_once_the_flow_is_complete(self):
-        # One door: with no explicit --stage, `review` derives the landing from
-        # the workflow status — mid-flow the current stage, done -> /directory.
-        for next_action, expected in (
-                ("realize", "http://127.0.0.1:43213/directory"),
-                ("review_people", "http://127.0.0.1:43213/?stage=worth")):
-            with tempfile.TemporaryDirectory() as dd:
-                base = Path(dd)
-                args = self._serve_args(base, base / "review" / "manifest.json",
-                                        43213, None)
-                fake_server = mock.Mock(server_address=("127.0.0.1", 43213))
-                out = io.StringIO()
-                with mock.patch.object(
-                        web_server.urllib.request, "urlopen",
-                        side_effect=web_server.urllib.error.URLError("down")), \
-                     mock.patch.object(web_server, "_all_review_parents",
-                                       return_value=[]), \
-                     mock.patch.object(web_server, "workflow_status_from_parents",
-                                       return_value={"next_action": next_action}), \
-                     mock.patch.object(web_server, "ThreadingHTTPServer",
-                                       return_value=fake_server), \
-                     contextlib.redirect_stdout(out):
-                    web_server.cmd_serve(args)
-                payload = json.loads(out.getvalue())
-                self.assertEqual(payload["url"], expected, next_action)
+    def test_review_always_lands_on_directory(self):
+        # Bare `review` is browse-only regardless of the workflow's current stage.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            args = self._serve_args(base, base / "review" / "manifest.json",
+                                    43213, None)
+            fake_server = mock.Mock(server_address=("127.0.0.1", 43213))
+            out = io.StringIO()
+            with mock.patch.object(
+                    web_server.urllib.request, "urlopen",
+                    side_effect=web_server.urllib.error.URLError("down")), \
+                 mock.patch.object(web_server, "_all_review_parents",
+                                   return_value=[]), \
+                 mock.patch.object(web_server, "ThreadingHTTPServer",
+                                   return_value=fake_server), \
+                 contextlib.redirect_stdout(out):
+                web_server.cmd_serve(args)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["url"], "http://127.0.0.1:43213/directory")
 
-    def test_reused_server_landing_follows_live_stage(self):
-        # Reuse with no explicit --stage: the live server's reported stage
-        # decides the landing, and its done state means the directory.
+    def test_reused_server_bare_review_lands_on_directory(self):
+        # A live staged server does not change bare `review` browse behavior.
         with tempfile.TemporaryDirectory() as dd:
             base = Path(dd)
             manifest = base / "review" / "manifest.json"
@@ -5185,7 +5340,7 @@ class TestDirectoryView(unittest.TestCase):
             live = mock.Mock()
             live.read.return_value = json.dumps({
                 "primitive": "reconcile_review_web", "manifest": str(manifest),
-                "stage": "done",
+                "stage": "linkedin",
             }).encode("utf-8")
             live.__enter__ = mock.Mock(return_value=live)
             live.__exit__ = mock.Mock(return_value=False)

@@ -18,6 +18,13 @@ a summary makes ZERO LLM calls. The review UI reads ``simple_summary`` from the
 cache at render time and shows it in the card "Summary" row in preference to the
 stored judge/deep-research reason.
 
+Every per-person decision — fetch miss, summary miss, and the not-summarizable
+hallucination guard — comes from ONE parse of that person's cache record
+(``read_profile_state`` -> ``CachedProfileState``) handed to ONE first-rule-wins
+``classify_link``; ``classify_queue`` just buckets the queue by its verdict. The
+cache is re-read on every classification pass, so the pass after the fetch sees
+what the fetch just wrote.
+
 Default is a spend-free dry run reporting BOTH miss counts (profiles not cached,
 and cached profiles with no summary) plus a combined cost estimate (RapidAPI
 calls + low/high LLM cost). Pass ``--fetch`` to actually fetch-then-summarize
@@ -27,6 +34,19 @@ stage's fixed manifest — no ledgers, no run ids.
 Run: uv run --project . python -m packs.ingestion.primitives.deep_context.prefetch_profiles
 
 Changelog:
+  2026-07-30 (boundary parse): each pub's cache record is parsed ONCE at the
+    boundary into the frozen `CachedProfileState` (`read_profile_state`), and the
+    per-link decision is the single first-rule-wins `classify_link` returning a
+    `QueueVerdict`. `classify_queue` became a trivial loop over that verdict and
+    returns the frozen `QueueBuckets` — built once from four local lists, never
+    appended to afterwards — instead of a string-keyed dict of lists.
+    Replaces the four module-level predicates (`has_cached_profile`,
+    `_cached_summary`, `profile_is_summarizable`, `cached_but_failed`) that each
+    re-opened the same cache file for the same pub. `_summary_concurrency(args)`
+    was inlined into `main()` (CLI = thin argparse over the node). No behavior
+    change: same buckets and membership, same manifest fields and values, and the
+    classification still re-reads the cache on every call so the post-fetch pass
+    still sees the fetch.
   2026-07-27 (declared contract): `PrefetchProfiles` is a `pipeline/contract.py:Node`.
     It DECLARES the review population it scans (verdicts, review.csv, synthetic
     people, facts/parents/dossier templates, merged people.csv) and the shared
@@ -45,6 +65,8 @@ import os
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -160,62 +182,178 @@ def review_queue_links(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
     return links
 
 
-def has_cached_profile(cache_dir: Path, pub: str) -> bool:
-    """True iff a usable RapidAPI profile is on disk for this pub (per-person,
-    no all-or-none assumption — works whether the cache is empty or partial)."""
-    return bool(read_usable_cached_profile(profile_cache_path(cache_dir, pub)))
+def _link_pub(link: dict[str, str]) -> str:
+    """A queue link's cache key: its lowercased public identifier, '' if it has none."""
+    return str(link.get("public_identifier") or "").strip().lower()
 
 
-def _cached_summary(cache_dir: Path, pub: str) -> str:
-    """The persisted ``simple_summary`` in this pub's cache record, or ''."""
+@dataclass(frozen=True)
+class CachedProfileState:
+    """One pub's profile-cache record, parsed ONCE at the boundary.
+
+    Every downstream decision (fetch miss, summary miss, hallucination guard,
+    stale-summary cleanup) reads these typed fields instead of re-opening the same
+    file behind another predicate.
+
+    - ``exists``: a cache FILE is on disk AND it parses to a JSON object. A file
+      that is missing or is not an object is indistinguishable from "never
+      fetched": both need a fetch, and neither is an attempt that already failed.
+    - ``usable``: ``read_usable_cached_profile`` accepts the record — a successful
+      fetch, including a legacy raw payload it re-normalizes on the fly. Anything
+      else needs a (re-)fetch, per-person: no all-or-none assumption, so this works
+      whether the cache is empty or partial.
+    - ``summarizable``: the usable profile is REAL enough to summarize —
+      ``normalized_profile.success`` is truthy AND at least one substantive field
+      is non-empty (headline, experiences, education, or the summary/about text).
+      A RapidAPI call can return ``success = False`` with an ``error`` (a bad
+      research-guess LinkedIn URL: "unrecognized linkedin profile payload"), and
+      those entries have no substance — feeding them to the LLM only produces
+      hallucinated filler.
+    - ``summary``: the persisted ``simple_summary``, read from the RAW record. The
+      dict ``read_usable_cached_profile`` rebuilds for a legacy file does not carry
+      it, so it must come from the record on disk.
+    """
+
+    exists: bool
+    usable: bool
+    summarizable: bool
+    summary: str
+
+    @property
+    def failed(self) -> bool:
+        """A record on disk that yields no usable profile: a fetch that already
+        TRIED and produced nothing summarizable. It still needs a (re-)fetch, but
+        it is excluded from the summary-miss projection (the hallucination guard).
+        Distinct from "uncached", which is no record at all."""
+        return self.exists and not self.usable
+
+
+NO_CACHED_PROFILE = CachedProfileState(exists=False, usable=False, summarizable=False, summary="")
+
+
+def read_profile_state(cache_dir: Path, pub: str) -> CachedProfileState:
+    """The one door onto the profile cache for this stage: parse a pub's record at
+    the boundary and hand back its typed state. Every missing-path / non-dict guard
+    lives here, so nothing downstream re-opens the file or re-checks its shape."""
     path = profile_cache_path(cache_dir, pub)
     if not path or not path.exists():
-        return ""
+        return NO_CACHED_PROFILE
     record = read_json(path, None)
     if not isinstance(record, dict):
-        return ""
-    return str(record.get(SUMMARY_FIELD) or "").strip()
-
-
-def profile_is_summarizable(cache_dir: Path, pub: str) -> bool:
-    """True only when the cached profile is REAL enough to summarize.
-
-    A RapidAPI fetch can return ``normalized_profile.success = False`` with an
-    ``error`` (e.g. a bad research-guess LinkedIn URL: "unrecognized linkedin
-    profile payload", "not a valid LinkedIn profile"). Those cache entries have no
-    substance, so feeding them to the LLM only produces hallucinated filler.
-
-    Summarizable requires BOTH:
-      1. ``normalized_profile.success`` is truthy, AND
-      2. at least one substantive field is non-empty — headline, experiences,
-         education, or the summary/about text.
-    """
-    cached = read_usable_cached_profile(profile_cache_path(cache_dir, pub))
+        return NO_CACHED_PROFILE
+    summary = str(record.get(SUMMARY_FIELD) or "").strip()
+    cached = read_usable_cached_profile(path)
     if not cached:
-        return False
+        return CachedProfileState(exists=True, usable=False, summarizable=False, summary=summary)
     normalized = cached.get("normalized_profile")
-    if not isinstance(normalized, dict) or not normalized.get("success"):
-        return False
-    return bool(normalized.get("headline") or normalized.get("experiences")
-                or normalized.get("education") or (normalized.get("summary") or "").strip())
+    summarizable = bool(
+        isinstance(normalized, dict) and normalized.get("success")
+        and (normalized.get("headline") or normalized.get("experiences")
+             or normalized.get("education") or (normalized.get("summary") or "").strip()))
+    return CachedProfileState(exists=True, usable=True, summarizable=summarizable, summary=summary)
 
 
-def cached_but_failed(cache_dir: Path, pub: str) -> bool:
-    """True when a cache FILE exists for this pub but it is a failed/empty fetch —
-    i.e. a record on disk that ``read_usable_cached_profile`` rejects because
-    ``normalized_profile.success`` is falsey / it carries an ``error`` / it has no
-    substance. This is distinct from "uncached" (no file at all): a failed fetch
-    already TRIED and produced nothing summarizable, so it is excluded from the
-    summary-miss projection (the hallucination guard). It still needs a (re-)fetch,
-    so it independently stays a fetch miss.
+class QueueVerdict(Enum):
+    """What one queue link needs — the whole decision space of ``classify_link``."""
+
+    NO_PUBLIC_IDENTIFIER = "no_public_identifier"
+    FETCH_THEN_SUMMARIZE = "fetch_then_summarize"
+    FETCH_NOT_SUMMARIZABLE = "fetch_not_summarizable"
+    SUMMARIZE_ONLY = "summarize_only"
+    ALREADY_DONE = "already_done"
+
+
+def classify_link(pub: str, state: CachedProfileState) -> QueueVerdict:
+    """The entire per-person decision, first rule wins.
+
+    It reads correctly BOTH before and after the fetch, which is why `execute()`
+    can simply re-run it against a freshly re-read cache:
+
+      no pub          -> nothing to fetch or summarize (defensive: `review_queue_links`
+                         already drops these, so normally unreachable)
+      failed record   -> re-fetch, and NEVER summarize. After the fetch this is
+                         exactly the bad-URL cohort: it is cached but not
+                         summarizable, so it drops OUT of the summary-miss set and
+                         never reaches the LLM (no "Jordan Bravo is a professional
+                         at a company" filler). Stale garbage summaries it may
+                         still carry are irrelevant — `cleanup_garbage_summaries`
+                         strips those first.
+      no usable record-> fetch, AND it is a summary miss: uncached today, and
+                         summarizable once the fetch lands, so the dry run must
+                         project its LLM cost.
+      no summary yet  -> a real cached profile that simply has not been summarized.
+      otherwise       -> cached and summarized: an already-summarized person is
+                         never a miss.
     """
-    path = profile_cache_path(cache_dir, pub)
-    if not path or not path.exists():
-        return False
-    if read_usable_cached_profile(path):
-        return False  # a usable profile is not "failed"
-    record = read_json(path, None)
-    return isinstance(record, dict)  # a file exists but yields no usable profile
+    if not pub:
+        return QueueVerdict.NO_PUBLIC_IDENTIFIER
+    if state.failed:
+        return QueueVerdict.FETCH_NOT_SUMMARIZABLE
+    if not state.usable:
+        return QueueVerdict.FETCH_THEN_SUMMARIZE
+    if not state.summary:
+        return QueueVerdict.SUMMARIZE_ONLY
+    return QueueVerdict.ALREADY_DONE
+
+
+@dataclass(frozen=True)
+class QueueBuckets:
+    """The classified review-profile queue.
+
+    ``fetch`` and ``summarize`` deliberately OVERLAP — an uncached person is in
+    both — which is why `execute()` does not subtract the fetch misses a second
+    time when it derives ``already_summarized``.
+
+    - ``fetch``: links with no usable cached RapidAPI profile (uncached, or cached
+      but failed) — they need a (re-)fetch.
+    - ``summarize``: summary misses — every link with no ``simple_summary`` except
+      cached-but-failed/empty profiles.
+    - ``not_summarizable``: cached but failed/empty profiles — surfaced for counts
+      and cleanup, never sent to the LLM. At execution time these are the fetches
+      we must NOT feed to the LLM.
+    - ``no_public_identifier``: queue rows we can neither fetch nor summarize
+      (defensive; normally empty).
+
+    Frozen and fully populated at construction: `classify_queue` fills four local
+    lists and builds this once, so the value is never appended to after the fact.
+    """
+
+    fetch: list[dict[str, str]]
+    summarize: list[dict[str, str]]
+    not_summarizable: list[dict[str, str]]
+    no_public_identifier: list[dict[str, str]]
+
+
+def classify_queue(links: list[dict[str, str]], cache_dir: Path) -> QueueBuckets:
+    """Bucket the whole review-profile queue by each link's ``classify_link`` verdict.
+
+    Reads the cache fresh on every call, per link: `execute()` classifies three
+    times (before the fetch, after it, and once more at the end) and the post-fetch
+    passes MUST see what the fetch just wrote, so nothing is carried across calls.
+    """
+    fetch: list[dict[str, str]] = []
+    summarize: list[dict[str, str]] = []
+    not_summarizable: list[dict[str, str]] = []
+    no_public_identifier: list[dict[str, str]] = []
+    for link in links:
+        pub = _link_pub(link)
+        verdict = classify_link(pub, read_profile_state(cache_dir, pub))
+        if verdict is QueueVerdict.NO_PUBLIC_IDENTIFIER:
+            no_public_identifier.append(link)
+        elif verdict is QueueVerdict.FETCH_NOT_SUMMARIZABLE:
+            fetch.append(link)
+            not_summarizable.append(link)
+        elif verdict is QueueVerdict.FETCH_THEN_SUMMARIZE:
+            fetch.append(link)
+            summarize.append(link)
+        elif verdict is QueueVerdict.SUMMARIZE_ONLY:
+            summarize.append(link)
+    return QueueBuckets(
+        fetch=fetch,
+        summarize=summarize,
+        not_summarizable=not_summarizable,
+        no_public_identifier=no_public_identifier,
+    )
 
 
 def cleanup_garbage_summaries(links: list[dict[str, str]], cache_dir: Path) -> list[str]:
@@ -224,67 +362,14 @@ def cleanup_garbage_summaries(links: list[dict[str, str]], cache_dir: Path) -> l
     a prior run may have written before this guard existed. Returns the cleaned pubs."""
     cleaned: list[str] = []
     for link in links:
-        pub = str(link.get("public_identifier") or "").strip().lower()
+        pub = _link_pub(link)
         if not pub:
             continue
-        if _cached_summary(cache_dir, pub) and not profile_is_summarizable(cache_dir, pub):
+        state = read_profile_state(cache_dir, pub)
+        if state.summary and not state.summarizable:
             _clear_summary(cache_dir, pub)
             cleaned.append(pub)
     return cleaned
-
-
-def classify_queue(links: list[dict[str, str]], cache_dir: Path) -> dict[str, list[dict[str, str]]]:
-    """Per-person checks over the whole review-profile queue.
-
-    A link is a **summary miss** when it has no ``simple_summary`` AND it is not a
-    cached-but-failed/empty profile. The one rule reads correctly both before and
-    after the fetch:
-
-    - Before the fetch, an UNCACHED person is a summary miss — they carry no
-      summary yet and (after a successful fetch) will be summarizable, so their
-      LLM cost must be projected in the dry run.
-    - After the fetch, a person whose fetch FAILED is now ``cached`` but not
-      summarizable, so they drop OUT of the summary-miss set and never reach the
-      LLM (the hallucination guard — no "Jordan Bravo is a professional at a
-      company" filler for a bad-URL fetch).
-    - An already-summarized person is never a miss.
-
-    Buckets:
-
-    - ``fetch``: links with no cached RapidAPI profile (need a fetch).
-    - ``summarize``: summary misses per the rule above — every link with no
-      ``simple_summary`` except cached-but-failed/empty profiles.
-    - ``not_summarizable``: cached but failed/empty profiles — surfaced for counts
-      and cleanup, never sent to the LLM. At execution time these are the fetches
-      we must NOT feed to the LLM.
-    - ``no_public_identifier``: queue rows we cannot fetch/summarize (defensive;
-      ``review_queue_links`` already drops these, so normally empty).
-    """
-    fetch: list[dict[str, str]] = []
-    summarize_links: list[dict[str, str]] = []
-    not_summarizable: list[dict[str, str]] = []
-    no_pub: list[dict[str, str]] = []
-    for link in links:
-        pub = str(link.get("public_identifier") or "").strip().lower()
-        if not pub:
-            no_pub.append(link)
-            continue
-        # Fetch decision: skip only when a USABLE profile is on disk. An uncached
-        # person AND a cached-but-failed one both need a (re-)fetch.
-        if not has_cached_profile(cache_dir, pub):
-            fetch.append(link)
-        if cached_but_failed(cache_dir, pub):
-            # A failed/empty fetch already tried and produced nothing summarizable
-            # → excluded from the summary-miss set (never fed to the LLM),
-            # regardless of any stale garbage summary it carries.
-            not_summarizable.append(link)
-        elif not _cached_summary(cache_dir, pub):
-            # No summary yet and NOT cached-failed → summary miss. Covers an
-            # uncached person (summarizable after a successful fetch) and a real
-            # cached profile that simply has not been summarized yet.
-            summarize_links.append(link)
-    return {"fetch": fetch, "summarize": summarize_links,
-            "not_summarizable": not_summarizable, "no_public_identifier": no_pub}
 
 
 def _summary_prompt(link: dict[str, str], cache_dir: Path) -> str:
@@ -368,14 +453,14 @@ def summarize(misses: list[dict[str, str]], cache_dir: Path, *, model: str,
               max_retries: int) -> dict[str, Any]:
     """Generate + persist one summary per miss (async fan-out); counts + tokens.
 
-    Run-time guard: only profiles that are summarizable AT THIS MOMENT
-    (``profile_is_summarizable`` — a successful fetch with substantive fields)
-    reach the LLM. A failed/empty fetch is skipped here even if it slipped into
-    the miss list, so we never hallucinate filler for a bad-URL profile.
+    Run-time guard: the cache state is re-read HERE, after the fetch, and only
+    profiles summarizable AT THIS MOMENT (a successful fetch with substantive
+    fields) reach the LLM — never a pre-fetch verdict. A failed/empty fetch is
+    skipped even if it slipped into the miss list, so we never hallucinate filler
+    for a bad-URL profile.
     """
     summarizable = [link for link in misses
-                    if profile_is_summarizable(
-                        cache_dir, str(link.get("public_identifier") or "").strip().lower())]
+                    if read_profile_state(cache_dir, _link_pub(link)).summarizable]
     results: dict[int, dict[str, Any]] = {}
 
     async def driver() -> None:
@@ -492,15 +577,6 @@ def _estimated_llm_cost(count: int, model: str) -> dict[str, float]:
                for _ in range(count))
     return {"estimated_llm_cost_usd_low": round(low, 6),
             "estimated_llm_cost_usd_high": round(high, 6)}
-
-
-def _summary_concurrency(args: argparse.Namespace) -> int:
-    """LLM summary fan-out: explicit --concurrency wins, else env/profile (owner
-    default 200). RapidAPI stays on the separate, bounded --fetch-concurrency."""
-    if args.concurrency:
-        return max(1, args.concurrency)
-    return env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency",
-                              fallback=DEFAULT_SUMMARY_CONCURRENCY)
 
 
 class PrefetchPrivacy(BaseModel):
@@ -633,7 +709,7 @@ class PrefetchProfiles(Node):
         self.reasoning_effort = reasoning_effort
         self.limit = limit
         # 0 = resolve from env/profile. The CLI passes the already-resolved value
-        # from `_summary_concurrency(args)` (explicit --concurrency wins there).
+        # (an explicit --concurrency wins there).
         self.summary_concurrency = summary_concurrency
         self.fetch_concurrency = fetch_concurrency
         self.rapidapi_rpm = rapidapi_rpm
@@ -664,8 +740,8 @@ class PrefetchProfiles(Node):
         # failed/empty profile, so it never lingers in the UI. Free, local, idempotent.
         cleaned_summaries = cleanup_garbage_summaries(links, cache_dir)
         buckets = classify_queue(links, cache_dir)
-        fetch_misses, summ_misses = buckets["fetch"], buckets["summarize"]
-        not_summarizable, no_pub = buckets["not_summarizable"], buckets["no_public_identifier"]
+        fetch_misses, summ_misses = buckets.fetch, buckets.summarize
+        not_summarizable, no_pub = buckets.not_summarizable, buckets.no_public_identifier
         use_llm = not self.no_llm
         summary_concurrency = self.summary_concurrency or env_or_profile_int(
             "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency",
@@ -740,14 +816,14 @@ class PrefetchProfiles(Node):
             # not_summarizable bucket, NOT the summarize bucket — so we never hand it
             # to the LLM. --limit caps the whole run.
             post = classify_queue(links, cache_dir)
-            payload.remaining_misses = len(post["fetch"])
+            payload.remaining_misses = len(post.fetch)
             status = "completed" if not counts["failed"] else "completed_with_failures"
-            pending_summary = post["summarize"]
+            pending_summary = post.summarize
             if self.limit:
                 pending_summary = pending_summary[:max(0, self.limit - counts["attempted"])]
             # Fetch failures show up as newly non-summarizable cached entries; report
             # them so the manifest explains why some fetched people got no summary.
-            skipped_no_profile = len(post["not_summarizable"])
+            skipped_no_profile = len(post.not_summarizable)
             summary_counts = {"summarized": 0, "failed": 0, "attempted": 0,
                               "already_summarized": already_summarized,
                               "skipped_no_profile": skipped_no_profile,
@@ -772,7 +848,7 @@ class PrefetchProfiles(Node):
                     status = "completed_with_failures"
             else:
                 payload.summary = PrefetchSummaryBlock(status="completed", counts=summary_counts)
-            payload.remaining_summary_misses = len(classify_queue(links, cache_dir)["summarize"])
+            payload.remaining_summary_misses = len(classify_queue(links, cache_dir).summarize)
             payload.status = status
         payload.duration_seconds = round(time.monotonic() - started, 2)
         return payload
@@ -814,6 +890,12 @@ def main(argv: list[str] | None = None) -> None:
                         help="retries per summary call on transient failures")
     args = parser.parse_args(argv)
     load_env()
+    # LLM summary fan-out: an explicit --concurrency wins, else env/profile (owner
+    # default 200). RapidAPI stays on the separate, bounded --fetch-concurrency.
+    summary_concurrency = (
+        max(1, args.concurrency) if args.concurrency
+        else env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency",
+                                fallback=DEFAULT_SUMMARY_CONCURRENCY))
     payload = PrefetchProfiles(
         verdicts=Path(args.verdicts),
         review=Path(args.review),
@@ -828,7 +910,7 @@ def main(argv: list[str] | None = None) -> None:
         model=args.model,
         reasoning_effort=args.reasoning_effort,
         limit=args.limit,
-        summary_concurrency=_summary_concurrency(args),
+        summary_concurrency=summary_concurrency,
         fetch_concurrency=args.fetch_concurrency,
         rapidapi_rpm=args.rapidapi_rpm,
         timeout=args.timeout,

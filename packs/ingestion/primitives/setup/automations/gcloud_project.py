@@ -8,6 +8,14 @@ project > deterministic default), Gmail API enablement, and Google Console
 URL building/opening.
 
 Changelog:
+  2026-07-29 (setup style pass):
+    - `choose_project_id` reads `load_setup_state(home, app_name).project_id`
+      instead of walking `oauth_apps.<name>` behind two isinstance guards.
+    - DELETED `set_gcloud_project`: `browser_flows` stopped calling it when the
+      flow moved to explicit `--project` flags and console URLs (it emits a
+      constant `selected_project: skipped` payload instead), leaving the
+      function with no production caller.
+    - Error text reads through `shell.command_error`.
   2026-07-23 (audit):
     - Split out of the former 1,770-line setup/msgvault_setup.py.
     - Setup-state persistence used by choose_project_id lives in
@@ -38,6 +46,7 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     setup_state_path,
 )
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    command_error,
     progress,
     run_command,
     run_visible_command,
@@ -184,12 +193,7 @@ def choose_project_id(home: Path, requested_project: str, email: str, account: s
     choice is pinned into setup state so re-runs stay stable."""
     if requested_project:
         return validate_project_id(requested_project), {"source": "argument"}
-    state = load_setup_state(home)
-    state_source = state
-    if app_name:
-        apps = state.get("oauth_apps") if isinstance(state.get("oauth_apps"), dict) else {}
-        state_source = apps.get(app_name) if isinstance(apps.get(app_name), dict) else {}
-    state_project = validate_project_id(str(state_source.get("project_id") or "")) if state_source.get("project_id") else ""
+    state_project = validate_project_id(load_setup_state(home, app_name).project_id)
     if state_project:
         return state_project, {"source": "state", "state_path": str(setup_state_path(home))}
     if email and account and email.lower() != account.lower():
@@ -249,7 +253,7 @@ def create_gcloud_project(
                 "requested_project": project_id,
                 "fallbacks_used": fallbacks_used,
             }
-        message = tail(result.get("stderr") or result.get("stdout") or "")
+        message = command_error(result)
         if is_gcloud_reauth_error(message):
             return {
                 "status": "reauth_required",
@@ -281,18 +285,6 @@ def create_gcloud_project(
     }
 
 
-def set_gcloud_project(project_id: str) -> dict[str, Any]:
-    """Set the active gcloud project via `gcloud config set project`."""
-    if not project_id:
-        return {"status": "skipped", "reason": "missing project"}
-    progress(f"Setting active Google Cloud project to {project_id}...")
-    result = run_command(["gcloud", "config", "set", "project", project_id, "--quiet"], timeout=30)
-    if result["ok"]:
-        progress(f"Active Google Cloud project set to {project_id}.")
-        return {"status": "ok", "project": project_id}
-    return {"status": "error", "project": project_id, "message": tail(result.get("stderr") or result.get("stdout") or "")}
-
-
 def enable_gmail_api(project: str | None) -> dict[str, Any]:
     """Enable the Gmail API service for the project via gcloud."""
     if not project:
@@ -304,7 +296,7 @@ def enable_gmail_api(project: str | None) -> dict[str, Any]:
     if result["ok"]:
         progress("Gmail API enabled.")
         return {"status": "ok", "project": project, "service": GMAIL_SERVICE}
-    message = tail(result.get("stderr") or result.get("stdout") or "")
+    message = command_error(result)
     if is_gcloud_reauth_error(message):
         return {
             "status": "reauth_required",

@@ -6,7 +6,11 @@ Cloud console still owns classic installed-app OAuth client creation for Gmail
 scopes; this primitive automates the local pieces around that step:
 install/status, Gmail API enabling, config.toml updates, account auth, and
 Codex MCP registration. Flow logic lives in `setup/automations/`; this module
-is argparse + cmd_* dispatch only.
+is argparse plus the exit-code policy.
+
+Flow: parse argv -> build the subcommand's frozen request from the namespace
+(the one place paths are expanded and names validated) -> run it -> emit its
+JSON payload -> map payload status to an exit code.
 
 Usage (run from the repo root):
 
@@ -30,6 +34,10 @@ Gmail API, configure the OAuth screen, create a Desktop OAuth client named
 msgvault setup. Exit codes: 0 ok, 1 error, 20 needs_user_action.
 
 Changelog:
+  2026-07-29 (setup style pass): dropped the `cmd_*(args)` dispatchers and the
+    `set_defaults(func=...)` indirection; `main` builds the subcommand's
+    request and calls it inline. Flows now return their payload, so emission
+    and the status-to-exit-code decision happen once, here, in EXIT_CODES.
   2026-07-23 (audit):
     - Decomposed the 1,770-line driver into setup/automations/ (shell,
       msgvault_home, gcloud_project, mcp, oauth_browser, accounts,
@@ -53,16 +61,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.setup.automations.accounts import (  # noqa: E402
-    check_accounts_payload,
-    status_payload,
-)
+from packs.ingestion.primitives.setup.automations import accounts, mcp  # noqa: E402
 from packs.ingestion.primitives.setup.automations.browser_flows import (  # noqa: E402
-    add_test_users_flow,
-    browser_setup_flow,
-)
-from packs.ingestion.primitives.setup.automations.mcp import (  # noqa: E402
-    install_mcp,
+    BrowserSetup,
+    TestUsers,
 )
 from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa: E402
     DEFAULT_HOME,
@@ -74,130 +76,32 @@ from packs.ingestion.primitives.setup.automations.oauth_browser import (  # noqa
     DEFAULT_OAUTH_CLIENT_NAME,
 )
 from packs.ingestion.primitives.setup.automations.setup_flows import (  # noqa: E402
-    add_account_flow,
-    configure_flow,
-    create_oauth_app_flow,
-    setup_flow,
+    AccountAuthorization,
+    ClientSecretConfig,
+    MsgvaultSetup,
+    OAuthAppInstructions,
 )
 from packs.ingestion.primitives.setup.automations.shell import expand  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 
 
-def cmd_status(args: argparse.Namespace) -> int:
-    """Emit the local msgvault setup status payload."""
-    emit(status_payload(expand(args.home)))
-    return 0
+# Exit-code policy, first rule wins. `status` and `mcp-install` are probes: they
+# report what they found and always exit 0. Every other subcommand maps its
+# payload status; anything unrecognized is a failure.
+PROBE_COMMANDS = frozenset({"status", "mcp-install"})
+EXIT_CODES = {
+    "ok": 0,
+    "configured": 0,
+    "needs_user_action": 20,
+}
+EXIT_UNRECOGNIZED = 1
 
 
-def cmd_auth_check(args: argparse.Namespace) -> int:
-    """Emit per-account Gmail OAuth health without downloading mail."""
-    payload = check_accounts_payload(expand(args.home), args.email)
-    emit(payload)
-    if payload["status"] == "needs_user_action":
-        return 20
-    return 1 if payload["status"] == "error" else 0
-
-
-def cmd_create_oauth_app(args: argparse.Namespace) -> int:
-    """Run the manual Google OAuth app instructions flow."""
-    return create_oauth_app_flow(
-        home=expand(args.home),
-        oauth_app=args.oauth_app,
-        email=args.email,
-        project=args.project,
-        enable_gmail_api=args.enable_gmail_api,
-        open_console=args.open_console,
-    )
-
-
-def cmd_browser_setup(args: argparse.Namespace) -> int:
-    """Run the Chrome-driven Google OAuth app creation flow."""
-    return browser_setup_flow(
-        home=expand(args.home),
-        oauth_app=args.oauth_app,
-        email=args.email,
-        project=args.project,
-        project_name=args.project_name,
-        oauth_client_name=args.oauth_client_name,
-        profile_dir=expand(args.profile_dir),
-        download_dir=expand(args.download_dir),
-        timeout_seconds=args.timeout_seconds,
-        audience=args.audience,
-        no_install=args.no_install,
-        init_db=args.init_db,
-        install_mcp=args.install_mcp,
-        enable_gmail_api=args.enable_gmail_api,
-        create_project=args.create_project,
-        add_account=args.add_account,
-        headless=args.headless,
-        force_auth=args.force_auth,
-        force_browser_setup=args.force_browser_setup,
-        no_copy_client_secret=args.no_copy_client_secret,
-        no_open_browser=getattr(args, "no_open_browser", False),
-    )
-
-
-def cmd_configure(args: argparse.Namespace) -> int:
-    """Store a downloaded client_secret JSON in msgvault config."""
-    return configure_flow(
-        home=expand(args.home),
-        oauth_app=args.oauth_app,
-        client_secret=expand(args.client_secret),
-        no_copy_client_secret=args.no_copy_client_secret,
-    )
-
-
-def cmd_setup(args: argparse.Namespace) -> int:
-    """Run the install/configure/authorize setup flow."""
-    return setup_flow(
-        home=expand(args.home),
-        oauth_app=args.oauth_app,
-        email=args.email,
-        project=args.project,
-        client_secret=args.client_secret,
-        no_install=args.no_install,
-        no_copy_client_secret=args.no_copy_client_secret,
-        init_db=args.init_db,
-        install_mcp=args.install_mcp,
-        enable_gmail_api=args.enable_gmail_api,
-        open_console=args.open_console,
-        headless=args.headless,
-        force_auth=args.force_auth,
-    )
-
-
-def cmd_add_account(args: argparse.Namespace) -> int:
-    """Authorize a Gmail account with msgvault."""
-    return add_account_flow(
-        home=expand(args.home),
-        oauth_app=args.oauth_app,
-        email=args.email,
-        headless=args.headless,
-        force_auth=args.force_auth,
-    )
-
-
-def cmd_add_test_users(args: argparse.Namespace) -> int:
-    """Add OAuth consent-screen test users through Google Console automation."""
-    return add_test_users_flow(
-        home=expand(args.home),
-        oauth_app=args.oauth_app,
-        project=args.project,
-        emails=args.emails,
-        test_user=args.test_user,
-        login_email=args.login_email,
-        oauth_client_name=args.oauth_client_name,
-        profile_dir=expand(args.profile_dir),
-        download_dir=expand(args.download_dir),
-        timeout_seconds=args.timeout_seconds,
-        no_open_browser=args.no_open_browser,
-    )
-
-
-def cmd_mcp_install(args: argparse.Namespace) -> int:
-    """Install the msgvault MCP server in Codex."""
-    emit(install_mcp())
-    return 0
+def exit_code(command: str, status: str) -> int:
+    """Map a subcommand's payload status to the process exit code."""
+    if command in PROBE_COMMANDS:
+        return 0
+    return EXIT_CODES.get(status, EXIT_UNRECOGNIZED)
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:
@@ -249,16 +153,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="Check local msgvault setup")
     add_common(status)
-    status.set_defaults(func=cmd_status)
 
     auth_check = sub.add_parser("auth-check", help="Check Gmail OAuth health without downloading mail")
     add_common(auth_check)
     auth_check.add_argument("--email", action="append", required=True, help="Gmail address to check (repeatable)")
-    auth_check.set_defaults(func=cmd_auth_check)
 
     setup = sub.add_parser("setup", help="Install/configure msgvault and optionally authorize an account")
     add_setup_args(setup)
-    setup.set_defaults(func=cmd_setup)
 
     create = sub.add_parser("create-oauth-app", help="Open/print the Google OAuth app setup flow")
     add_common(create)
@@ -269,18 +170,15 @@ def build_parser() -> argparse.ArgumentParser:
     create.set_defaults(enable_gmail_api=True)
     create.add_argument("--no-open-console", dest="open_console", action="store_false")
     create.set_defaults(open_console=True)
-    create.set_defaults(func=cmd_create_oauth_app)
 
     browser = sub.add_parser("browser-setup", help="Drive Google Console in Chrome to create the OAuth app")
     add_browser_setup_args(browser)
-    browser.set_defaults(func=cmd_browser_setup)
 
     configure = sub.add_parser("configure", help="Store client_secret JSON in msgvault config")
     add_common(configure)
     configure.add_argument("--client-secret", required=True)
     configure.add_argument("--oauth-app", default="")
     configure.add_argument("--no-copy-client-secret", action="store_true")
-    configure.set_defaults(func=cmd_configure)
 
     add = sub.add_parser("add-account", help="Authorize a Gmail account with msgvault")
     add_common(add)
@@ -288,7 +186,6 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--oauth-app", default="")
     add.add_argument("--headless", action="store_true")
     add.add_argument("--force-auth", action="store_true")
-    add.set_defaults(func=cmd_add_account)
 
     test_users = sub.add_parser("add-test-users", help="Add OAuth test users through Google Console automation")
     add_common(test_users)
@@ -302,21 +199,40 @@ def build_parser() -> argparse.ArgumentParser:
     test_users.add_argument("--download-dir", default=str(DEFAULT_DOWNLOAD_DIR), help="Directory for browser debug output")
     test_users.add_argument("--timeout-seconds", type=int, default=300, help="Browser automation timeout")
     test_users.add_argument("--no-open-browser", action="store_true", help="Do not open a browser for gcloud login")
-    test_users.set_defaults(func=cmd_add_test_users)
 
-    mcp = sub.add_parser("mcp-install", help="Install the msgvault MCP server in Codex")
-    mcp.set_defaults(func=cmd_mcp_install)
+    sub.add_parser("mcp-install", help="Install the msgvault MCP server in Codex")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Parse arguments and dispatch to the selected cmd_* handler."""
+    """Parse arguments, run the selected subcommand, emit its payload."""
     args = build_parser().parse_args(argv)
     try:
-        return int(args.func(args))
+        if args.command == "status":
+            payload = accounts.status_payload(expand(args.home))
+        elif args.command == "auth-check":
+            payload = accounts.check_accounts_payload(expand(args.home), args.email)
+        elif args.command == "create-oauth-app":
+            payload = OAuthAppInstructions.from_args(args).run()
+        elif args.command == "browser-setup":
+            payload = BrowserSetup.from_args(args).run()
+        elif args.command == "configure":
+            payload = ClientSecretConfig.from_args(args).run()
+        elif args.command == "setup":
+            payload = MsgvaultSetup.from_args(args).run()
+        elif args.command == "add-account":
+            payload = AccountAuthorization.from_args(args).run()
+        elif args.command == "add-test-users":
+            payload = TestUsers.from_args(args).run()
+        elif args.command == "mcp-install":
+            payload = mcp.install_mcp()
+        else:  # unreachable: argparse subcommands are required
+            raise ValueError(f"unknown command: {args.command}")
     except ValueError as exc:
         emit({"status": "error", "message": str(exc)})
         return 1
+    emit(payload)
+    return exit_code(args.command, payload["status"])
 
 
 if __name__ == "__main__":

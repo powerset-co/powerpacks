@@ -21,6 +21,10 @@ This stage owns exactly ONE index.json key — `parents` — and never touches `
 both record maps on write; see the index contract in `common.py`.
 
 Changelog:
+  2026-07-30: the parent-slug artifact migration (the pre-2026-07-27 slug scheme)
+    moved to the one cope-with-old-installs home, `common/legacy.py`, dated with
+    its removal condition; this stage now calls it with explicit paths. Pure move
+    — no behavior change.
   2026-07-27 (declared contract): `BuildParents` is a `pipeline/contract.py:Node`.
     Its per-person reads are declared as the shared `{person_id}`/`{slug}` templates,
     `index.json` is declared with `owns_columns=("parents",)` against
@@ -79,140 +83,14 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.common.contact_fields import normalize_email
+from packs.ingestion.primitives.common.legacy import (
+    migrate_parent_slug_artifacts,
+    parent_slug_migrations,
+)
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 PARENT_ANCHOR = "<!-- parent-link -->"
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
-
-
-def parent_slug_migrations(
-    old_parents: dict[str, dict[str, Any]],
-    new_parents: dict[str, dict[str, Any]],
-) -> dict[str, str]:
-    """Exact old-slug -> new-slug mapping for unchanged canonical parent IDs."""
-    old_by_id = {
-        str(parent.get("parent_id") or "").strip().lower(): slug
-        for slug, parent in old_parents.items()
-        if str(parent.get("parent_id") or "").strip()
-    }
-    new_by_id = {
-        str(parent.get("parent_id") or "").strip().lower(): slug
-        for slug, parent in new_parents.items()
-        if str(parent.get("parent_id") or "").strip()
-    }
-    return {
-        old_by_id[parent_id]: new_slug
-        for parent_id, new_slug in new_by_id.items()
-        if parent_id in old_by_id and old_by_id[parent_id] != new_slug
-    }
-
-
-def _rewrite_parent_slug_csv(
-    path: Path,
-    migrations: dict[str, str],
-    fields: tuple[str, ...],
-) -> int:
-    if not path.exists() or not migrations:
-        return 0
-    with path.open(newline="", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
-        fieldnames = list(reader.fieldnames or [])
-        rows = list(reader)
-    if not fieldnames or not any(field in fieldnames for field in fields):
-        return 0
-    changed = 0
-    for row in rows:
-        row_changed = False
-        for field in fields:
-            old = str(row.get(field) or "").strip()
-            if old in migrations:
-                row[field] = migrations[old]
-                row_changed = True
-        changed += row_changed
-    if not changed:
-        return 0
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    tmp.replace(path)
-    return changed
-
-
-def _rewrite_parent_slug_jsonl(
-    path: Path,
-    migrations: dict[str, str],
-) -> int:
-    if not path.exists() or not migrations:
-        return 0
-    records: list[dict[str, Any]] = []
-    changed = 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        record = json.loads(line)
-        old = str(record.get("parent_slug") or "").strip()
-        if old in migrations:
-            record["parent_slug"] = migrations[old]
-            changed += 1
-        records.append(record)
-    if not changed:
-        return 0
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        for record in records:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-    tmp.replace(path)
-    return changed
-
-
-def migrate_parent_slug_artifacts(
-    migrations: dict[str, str],
-    *,
-    deep_research_dir: Path = DEEP_RESEARCH_DIR,
-    verdicts_jsonl: Path = VERDICTS_JSONL,
-    verdicts_csv: Path = VERDICTS_CSV,
-    applied_csv: Path = RECONCILE_DIR / "applied.csv",
-    synthetic_people_csv: Path = SYNTHETIC_PEOPLE_CSV,
-) -> dict[str, int]:
-    """Rewrite exact parent-slug references without touching paid result bodies."""
-    directories_renamed = directory_conflicts = 0
-    for old_slug, new_slug in sorted(migrations.items()):
-        old_dir = deep_research_dir / old_slug
-        new_dir = deep_research_dir / new_slug
-        if not old_dir.exists():
-            continue
-        if new_dir.exists():
-            directory_conflicts += 1
-            continue
-        old_dir.rename(new_dir)
-        directories_renamed += 1
-
-    csv_rows_rewritten = 0
-    csv_rows_rewritten += _rewrite_parent_slug_csv(
-        deep_research_dir / "research_queue.csv",
-        migrations,
-        ("handle", "source_parent_slug"),
-    )
-    csv_rows_rewritten += _rewrite_parent_slug_csv(
-        verdicts_csv, migrations, ("parent_slug",)
-    )
-    csv_rows_rewritten += _rewrite_parent_slug_csv(
-        applied_csv, migrations, ("parent_slug",)
-    )
-    csv_rows_rewritten += _rewrite_parent_slug_csv(
-        synthetic_people_csv, migrations, ("source_parent_slug",)
-    )
-    return {
-        "keys": len(migrations),
-        "directories_renamed": directories_renamed,
-        "directory_conflicts": directory_conflicts,
-        "csv_rows_rewritten": csv_rows_rewritten,
-        "jsonl_rows_rewritten": _rewrite_parent_slug_jsonl(
-            verdicts_jsonl, migrations
-        ),
-    }
 
 
 def fold_owner_aliases(owner_slugs: set[str], slugs_info: dict[str, Any], raw_dir: Path) -> list[str]:
@@ -659,8 +537,16 @@ class BuildParents(Node):
 
         # Migrate exact slug-keyed artifacts BEFORE the index replacement, so an
         # unchanged parent_id keeps its paid deep-research directory and its rows.
-        slug_migrations = parent_slug_migrations(old_parents, index["parents"])
-        slug_migration = migrate_parent_slug_artifacts(slug_migrations)
+        # Cope-with-old-installs code lives in ONE place (`common/legacy.py`),
+        # dated with its removal condition; every path is passed explicitly.
+        slug_migration = migrate_parent_slug_artifacts(
+            parent_slug_migrations(old_parents, index["parents"]),
+            deep_research_dir=DEEP_RESEARCH_DIR,
+            verdicts_jsonl=VERDICTS_JSONL,
+            verdicts_csv=VERDICTS_CSV,
+            applied_csv=RECONCILE_DIR / "applied.csv",
+            synthetic_people_csv=SYNTHETIC_PEOPLE_CSV,
+        )
         write_index(self.index_json, index)
         # Parent construction is the first point where canonical membership exists.
         # Mirror child synthesis worth and migrate legacy human marks into one

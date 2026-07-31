@@ -15,10 +15,17 @@ signature-aware body cleaning, signal ranking). iMessage and WhatsApp read DM
 bodies by default. A separate opt-in reader can include small iMessage groups;
 WhatsApp groups remain excluded. The iMessage readers decode Apple's
 ``attributedBody`` blob when the plain ``text`` column is empty (newer macOS).
+
+Changelog:
+  2026-07-30 (style): `datetime`/`timezone` are imported at module top instead of
+    inside the two timestamp helpers. The old "lazy import keeps message-source
+    support optional" note was wrong — `datetime` is stdlib and always importable,
+    so the deferral bought nothing. No behavior change.
 """
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -490,11 +497,9 @@ def read_whatsapp(person: Person, wacli_db: Path = DEFAULT_WACLI_DB, cap: int = 
     return out
 
 
-# --- timestamp helpers (lazy import keeps message-source support optional) --
+# --- timestamp helpers ------------------------------------------------------
 
 def _apple_to_iso(value: Any) -> str | None:
-    from datetime import datetime, timezone
-
     if value is None:
         return None
     try:
@@ -516,8 +521,6 @@ def _apple_to_iso(value: Any) -> str | None:
 
 
 def _whatsapp_iso(value: Any) -> str:
-    from datetime import datetime, timezone
-
     if value in (None, "", 0):
         return ""
     try:

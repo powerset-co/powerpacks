@@ -23,9 +23,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    command_error,
     progress,
     run_command,
-    tail,
 )
 
 
@@ -37,7 +37,7 @@ def mcp_status() -> dict[str, Any]:
     return {
         "available": True,
         "installed": result["ok"],
-        "message": "" if result["ok"] else tail(result.get("stderr") or result.get("stdout") or ""),
+        "message": "" if result["ok"] else command_error(result),
     }
 
 
@@ -53,4 +53,4 @@ def install_mcp() -> dict[str, Any]:
     if result["ok"]:
         progress("msgvault MCP installed.")
         return {"status": "ok", "already_installed": False}
-    return {"status": "error", "message": tail(result.get("stderr") or result.get("stdout") or "")}
+    return {"status": "error", "message": command_error(result)}

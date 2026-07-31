@@ -134,13 +134,14 @@ The examples are ingestion-flavored but the rules apply repo-wide.
   `imports/directory.py` were both discover-stage squatters once).
 - Naming is symmetric across verticals: `extract_<source>.py` reads a raw local
   store into contacts (`extract_imessage`, `extract_whatsapp`, `extract_gmail`);
-  the external-binary lifecycle client is a separate module
-  (`whatsapp_wacli.py` for the wacli binary, `gmail/msgvault/sync.py` for the
+  the external-binary lifecycle client is a separate module or package
+  (`discover/messages/wacli/` for the wacli binary, `gmail/msgvault/` for the
   msgvault binary). Reader and binary-client never share a file.
 - Large drivers decompose into a clearly-named subpackage of ~200–300-line
   single-concern modules (`setup/automations/`, `gmail/msgvault/`,
-  `imports/gmail/steps/`, `discover/messages/channels/`); the original CLI path
-  stays a thin entry so skill commands never change.
+  `discover/messages/wacli/`, `imports/gmail/steps/`,
+  `discover/messages/channels/`); the original CLI path stays a thin entry so
+  skill commands never change.
 
 ### The orchestrator pattern (channel + store)
 
@@ -183,6 +184,32 @@ The examples are ingestion-flavored but the rules apply repo-wide.
   `needs_approval` payload + exit 20 (`common/gates.py`) emitted BEFORE any
   paid call. Resume comes from artifacts on disk (fixed paths, mtimes,
   fingerprints), never from `approve`/`continue` ledger runners.
+
+### Data plumbing style (2026-07)
+
+- **Parse at the boundary, once.** Anything crossing into a stage — a manifest,
+  a CSV row set, a queue record — is parsed into a frozen dataclass at the edge;
+  everything downstream takes typed values. The smells that mean the parse
+  happened too late: `isinstance(x, dict)` in business logic,
+  `str(x.get("a") or x.get("b") or "")` chains, `Path(str(...))` wrapping, and
+  two state keys one letter apart. Fix the boundary; do not add another guard.
+- **Steps return results; nothing mutates a shared blob.** A step takes typed
+  inputs and returns a typed result; the orchestrator composes returns and
+  renders the manifest from them at the end. Threading an untyped
+  `state`/`artifacts` dict through steps is the banned shape — transient
+  bookkeeping is not data flow, and a key written but never read is dead on
+  arrival.
+- **Policy is a visible decision.** Classification and status-mapping logic
+  lives in one small first-rule-wins function or a literal table that fits on
+  one screen; loops consume its output (`classify(row) -> label`, then bucket).
+  If reviewing a decision requires simulating an accumulation loop with three
+  parallel lists, extract the decision.
+- **Grossness is legal in exactly one place.** Cope-with-old-installs code
+  lives in `primitives/common/legacy.py`, called first at stage entry, each
+  entry dated with a removal condition ("delete once no install predates
+  vX.Y.Z") — a countdown, not a fixture. Dead code is deleted, never
+  quarantined. Tolerance for user-provided files stays at that file's parser.
+  Everything after the scrub call may assume current shapes.
 
 ### One home per concept
 

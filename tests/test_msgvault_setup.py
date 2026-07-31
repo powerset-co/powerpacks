@@ -143,7 +143,7 @@ class MsgvaultSetupTests(unittest.TestCase):
             project_id, choice = gcloud_project.choose_project_id(home, "", "me@example.com", "other@example.com")
             self.assertEqual(project_id, msgvault_home.default_project_id("me@example.com"))
             self.assertEqual(choice["source"], "deterministic_default")
-            self.assertEqual(msgvault_home.load_setup_state(home)["project_id"], project_id)
+            self.assertEqual(msgvault_home.load_setup_state(home).project_id, project_id)
 
     def test_gcloud_reauth_error_detection(self):
         self.assertTrue(gcloud_project.is_gcloud_reauth_error("There was a problem refreshing your current auth tokens"))
@@ -472,7 +472,6 @@ class MsgvaultSetupTests(unittest.TestCase):
             with mock.patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True, "path": "/bin/msgvault"}), \
                 mock.patch.object(gcloud_project, "ensure_gcloud_auth", return_value={"status": "ok", "account": "me@example.com"}) as auth, \
                 mock.patch.object(gcloud_project, "create_gcloud_project", return_value={"status": "ok", "project": "local-msg-vault-test", "created": True}), \
-                mock.patch.object(gcloud_project, "set_gcloud_project", return_value={"status": "ok"}), \
                 mock.patch.object(gcloud_project, "enable_gmail_api", return_value={"status": "ok"}), \
                 mock.patch.object(msgvault_home, "init_db", return_value={"status": "ok"}), \
                 mock.patch.object(mcp, "install_mcp", return_value={"status": "ok"}), \
@@ -575,7 +574,7 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(payload["project"], "local-msg-vault-test")
             self.assertEqual(payload["test_users"], ["test-user@example.com"])
             browser.assert_called_once()
-            self.assertEqual(msgvault_home.load_setup_state(home)["test_users"], ["test-user@example.com"])
+            self.assertEqual(msgvault_home.load_setup_state(home).test_users, ("test-user@example.com",))
 
 
 if __name__ == "__main__":

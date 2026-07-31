@@ -1,12 +1,17 @@
 """Subprocess runners and output helpers for msgvault setup automation.
 
 Everything here is side-effect plumbing shared by the other automations
-modules: JSON emission to stdout, progress lines to stderr, path expansion,
-and the three subprocess run styles (captured, visible/interactive, and
-streamed-stderr), plus text tailing and lenient JSON extraction from noisy
-CLI output.
+modules: progress lines to stderr, path expansion, the three subprocess run
+styles (captured, visible/interactive, and streamed-stderr), the two ways a
+probed CLI answers (`command_error` / `command_output`), plus text tailing and
+lenient JSON extraction from noisy CLI output.
 
 Changelog:
+  2026-07-29 (setup style pass): added `command_error` / `command_output`, the
+    single home for reading a `run_command` result's text. Twelve call sites
+    had inlined `tail(result.get("stderr") or result.get("stdout") or "")` and
+    two more the stdout-first variant; a two-key fallback chain repeated per
+    caller is a boundary that was never parsed.
   2026-07-24 (dedup): `run_command` is PINNED as deliberately divergent from
     `common/proc.run_cmd` rather than folded into it; the reasons live at its
     definition.
@@ -146,6 +151,23 @@ def tail(text: str, limit: int = 1600) -> str:
     """Return the trailing `limit` characters of stripped text."""
     text = (text or "").strip()
     return text[-limit:] if len(text) > limit else text
+
+
+def command_error(result: dict[str, Any]) -> str:
+    """Return a failed `run_command` result's message: stderr, else stdout, tailed.
+
+    The probed CLIs are inconsistent about which stream carries the failure
+    (gcloud uses stderr, msgvault sometimes stdout), so every error path reads
+    both in this order. It is read here once instead of at each call site."""
+    return tail(result.get("stderr") or result.get("stdout") or "")
+
+
+def command_output(result: dict[str, Any]) -> str:
+    """Return a successful `run_command` result's text: stdout, else stderr, stripped.
+
+    The mirror of `command_error` for the probes whose answer is the output
+    itself (`msgvault version`), which some builds print on stderr."""
+    return (result.get("stdout") or result.get("stderr") or "").strip()
 
 
 def parse_json_fragment(text: str) -> Any:

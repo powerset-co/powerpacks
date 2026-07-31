@@ -28,10 +28,9 @@ Use the narrow path when the user names one:
 - `$deep-context validate` -> run only `bin/deep-context validate`.
 - `$deep-context review`, "open the people/LinkedIn page", "browse my
   people", "open the directory", "show me the dossiers" -> run only
-  `bin/deep-context review`; the ONE UI door. Mid-flow it opens the current
-  stage; once the flow is complete it opens the read-only A-Z directory
-  (Yes/No tabs, search, full dossier + LinkedIn pane) — nobody re-reviews
-  without a fresh end-to-end run, so done means browse.
+  `bin/deep-context review`; it always opens the read-only A-Z directory
+  (Yes/No tabs, search, full dossier + LinkedIn pane). Staged workflow launches
+  use an explicit `--stage`.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
   This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed
@@ -291,7 +290,7 @@ path spends on a lookup.
 Launch the local UI once in a background terminal:
 
 ```bash
-bin/deep-context review --fresh
+bin/deep-context review --stage worth --fresh
 ```
 
 `review` first restarts any review server already running on the port so the UI

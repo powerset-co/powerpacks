@@ -10,6 +10,8 @@ and the baton pass to the next process. Views subscribe to `/api/events` (SSE)
 and re-snapshot `/api/status` on each nudge — the browser never polls.
 
 Changelog:
+  2026-07-30: Bare review launches always land on the read-only directory;
+    staged workflow launches opt in with an explicit --stage.
   2026-07-29 (single-writer rewrite): deleted the stat/signature invalidation
     apparatus (`input_signature`, `accept_local_write`, `accept_rows_write`,
     per-request stat checks) — sediment from defending an undesigned
@@ -1003,14 +1005,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
     synthetic_path = Path(args.synthetic_people)
     manifest_path = Path(args.manifest)
 
-    # "directory" is the read-only browse PATH, not a review stage: it lands on
-    # /directory and never begins a people-review revision (only worth writes).
-    # With no explicit --stage, `review` lands on the CURRENT stage — and once
-    # the whole flow is complete, on the directory: nobody "re-reviews" without
-    # a fresh end-to-end run, so the done screen's job is browsing.
-    def landing_stage(stage: str) -> str:
-        return "directory" if stage in {"done", "directory"} else stage
-
+    # "directory" is the read-only browse PATH, not a review stage: bare
+    # `review` always lands there and never begins a people-review revision.
+    # Workflow callers opt into a staged view explicitly with --stage.
     def query_for(stage: str) -> str:
         return ("directory" if stage == "directory"
                 else f"?stage={urllib.parse.quote(stage)}")
@@ -1035,7 +1032,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     # The reuse probe runs BEFORE the session flock below — the live server is
     # the one holding it, so locking first would refuse the very server we are
     # about to reuse (bin/deep-context's enrichment-running deferral and the
-    # `view` browse landing both reach this path with a server up).
+    # directory browse landing both reach this path with a server up).
     status_payload: dict[str, Any] = {}
     try:
         with urllib.request.urlopen(
@@ -1057,10 +1054,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
                 f"Port {args.port} belongs to a review server for {live_manifest}; "
                 f"this review uses {manifest_path}"
             )
-        # The live server already knows the current stage; honor an explicit
-        # --stage, otherwise land there (or on the directory once complete).
-        requested_stage = args.stage or landing_stage(
-            str(status_payload.get("stage") or "worth"))
+        requested_stage = args.stage or "directory"
         requested_url = f"http://{args.host}:{args.port}/{query_for(requested_stage)}"
         if args.fresh and requested_stage == "worth":
             begin_people_review(review_progress(build_initial_parents()))
@@ -1084,14 +1078,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         session_lock = acquire_review_session_lock()  # held until process exit  # noqa: F841
     parents = build_initial_parents()
     progress = review_progress(parents)
-    if args.stage:
-        requested_stage = args.stage
-    else:
-        status = workflow_status_from_parents(
-            parents, manifest_path=manifest_path,
-            enrichment_manifest_path=Path(args.enrichment_manifest))
-        requested_stage = landing_stage(
-            browser_stage_for_next_action(status["next_action"]))
+    requested_stage = args.stage or "directory"
     if requested_stage == "worth":
         begin_people_review(progress)
     # No launch self-heal kick: enrichment state is DERIVED at every enrich-page
