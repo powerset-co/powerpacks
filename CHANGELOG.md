@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.8.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.7.0...powerpacks-v1.8.0) (2026-07-31)
+
+
+### Features
+
+* $feedback skill — session-inspecting feedback filed to the Powerset endpoint ([#388](https://github.com/powerset-co/powerpacks/issues/388)) ([7d4a80e](https://github.com/powerset-co/powerpacks/commit/7d4a80e73173ff91a8b57c03ca46499512dfecf2))
+* **deep-context:** personal connections with network value are yes — professional-worth-v4 ([#386](https://github.com/powerset-co/powerpacks/issues/386)) ([b4fe861](https://github.com/powerset-co/powerpacks/commit/b4fe8616d4df1484d6c5728019b5435504a66dd4))
+
+
+### Bug Fixes
+
+* **powerset:** missing API config returns a failed payload, not an escaping exit ([#380](https://github.com/powerset-co/powerpacks/issues/380)) ([cc1f027](https://github.com/powerset-co/powerpacks/commit/cc1f0278e49c7d136982ed7cf0f4ac0907732d88))
+
 ## [1.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.6.0...powerpacks-v1.7.0) (2026-07-31)
 
 
