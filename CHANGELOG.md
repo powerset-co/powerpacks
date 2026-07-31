@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.6.0...powerpacks-v1.7.0) (2026-07-31)
+
+
+### Features
+
+* **deep-context:** network worth is an evidence bar — professional-worth-v3 ([#381](https://github.com/powerset-co/powerpacks/issues/381)) ([52b3a51](https://github.com/powerset-co/powerpacks/commit/52b3a5156fb2afadd015f97cc6084a74c7ed7652))
+
 ## [1.6.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.5.0...powerpacks-v1.6.0) (2026-07-31)
 
 
