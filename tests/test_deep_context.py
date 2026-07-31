@@ -5263,9 +5263,9 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("data-stage='directory'", html)
         self.assertIn("data-external-updates='false'", html)  # no SSE on this page
         self.assertIn("Pick a person", html)                  # no selection -> empty state
-        # Worth tabs sit UNDER the search bar: Yes/Maybe/No, Yes default-active.
+        # Worth tabs sit UNDER the search bar; Maybe hides at zero.
         self.assertIn("decision-tab active' data-directory-tab='yes'>Yes<span>1</span>", html)
-        self.assertIn("data-directory-tab='maybe'>Maybe<span>0</span>", html)
+        self.assertNotIn("data-directory-tab='maybe'", html)
         self.assertIn("data-directory-tab='no'>No<span>1</span>", html)
         self.assertLess(html.index("data-directory-search"),
                         html.index("data-directory-tab='yes'"))

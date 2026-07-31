@@ -1558,10 +1558,13 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
     counts = {"yes": 0, "no": 0, "maybe": 0}
     for entry in entries:
         counts[entry["worth"]] += 1
+    # Maybe only renders while there is something to burn down — at zero the
+    # pair of decided piles is the whole story.
+    tab_keys = [("yes", "Yes")] + ([("maybe", "Maybe")] if counts["maybe"] else []) + [("no", "No")]
     tabs = "".join(
         f"<button type='button' class='decision-tab{' active' if key == 'yes' else ''}' "
         f"data-directory-tab='{key}'>{label}<span>{counts[key]}</span></button>"
-        for key, label in (("yes", "Yes"), ("maybe", "Maybe"), ("no", "No")))
+        for key, label in tab_keys)
     tab_nav = f"<nav class='decision-tabs directory-tabs' aria-label='Worth decision'>{tabs}</nav>"
     search = ("<div class='worth-search' data-directory-search>"
               "<input class='worth-search-input' type='search' placeholder='Search people…' "
