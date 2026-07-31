@@ -236,10 +236,19 @@ def contact_identifiers(values: list[str] | None, *, name: str = "",
         low = value.lower()
         if not value or low in seen:
             continue
-        # A slash disqualifies both shapes up front: URLs with an embedded
-        # address (sprh.mn/?vip=x@y.com) are not emails, and dates (11/1/2023)
-        # are not phone numbers.
+        # A slash usually disqualifies both shapes — URLs with an embedded
+        # address (sprh.mn/?vip=x@y.com) are not emails, dates (11/1/2023) are
+        # not phone numbers — EXCEPT the old slash-separated phone format
+        # (650/856-7893): phone-charset only, >=10 digits, and not date-shaped.
         if "/" in value:
+            if (re.fullmatch(r"[+()\d\s./\-]+", value)
+                    and not re.fullmatch(r"\d{1,4}/\d{1,2}/\d{1,4}", value.strip())
+                    and len(phone_digits(value)) >= 10):
+                normalized = normalize_phone(value)
+                digits = phone_digits(normalized)
+                if normalized and digits not in owner_p and digits not in seen:
+                    seen.add(digits)
+                    out.append(normalized)
             continue
         if _IDENT_EMAIL_RE.match(value):
             if low in owner_e:
@@ -252,9 +261,9 @@ def contact_identifiers(values: list[str] | None, *, name: str = "",
             continue
         digits = phone_digits(value)
         if re.fullmatch(r"[+()\d\s.\-]{7,}", value) and len(digits) >= 7:
-            if digits in owner_p:
+            if digits in owner_p or digits in seen:
                 continue
-            seen.add(low)
+            seen.add(digits)
             out.append(value)
     return out
 

@@ -17,11 +17,18 @@ the SAME machinery the enrichment flow already uses:
                                             and sticky-upserts a `retarget`
                                             row into review.csv
 
-A judge CONFIRM at/above the shared research confirm bar auto-approves the
-retarget (`approved=yes`, `source=user-guidance`): the human already spoke by
-submitting guidance, so the judge is the deciding check — not a second human
-queue. Anything else stays a pending retarget row with its llm_reject reason,
-visible in the review UI exactly like an engine proposal.
+Everything after the submit is automatic — the guidance click was the human's
+word, so there is no second review queue:
+  * judge CONFIRM at/above the confirm bar -> the retarget auto-approves
+    (`approved=yes`, `source=user-guidance`) and the profile hydrates
+    cache-first via RapidAPI;
+  * no usable LinkedIn (nothing found, or the judge rejected the proposal) ->
+    the old wrong link detaches (the user already said it is the wrong person)
+    and a synthetic profile assembled from the fresh research supersedes it as
+    the standing identity;
+  * only an unusable research output lands `no_match`.
+Results are also mirrored into the engine's per-handle research home so a
+later enrichment pass reuses them for free instead of re-billing.
 
 The queue itself is memory-only and serial: submits never block, a single
 daemon worker drains items one at a time, and a restart forgets progress but
@@ -33,6 +40,7 @@ guidance actually re-researches instead of reusing the stale answer.
 from __future__ import annotations
 
 import csv
+import shutil
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -40,9 +48,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context import assemble_synthetic_profile
 from packs.ingestion.primitives.deep_context import deep_research_contacts
 from packs.ingestion.primitives.deep_context import reconcile_deep_research
 from packs.ingestion.primitives.deep_context.common import (
+    DEEP_RESEARCH_DIR,
     FACTS_DIR,
     RAW_DIR,
     RECONCILE_DIR,
@@ -77,9 +87,30 @@ ESTIMATED_COST_USD = round(PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR] + 0.01, 2)
 # States an item moves through; ACTIVE ones block a duplicate submit for the
 # same person and keep the UI polling.
 ACTIVE_STATES = ("queued", "researching", "judging", "hydrating")
-TERMINAL_STATES = ("applied", "no_match", "failed")
+TERMINAL_STATES = ("applied", "synthetic", "no_match", "failed")
+
+# Research result files mirrored into the engine's research home so a later
+# enrichment pass reuses the guided result for free instead of re-billing.
+_RESEARCH_FILES = ("00_parallel_raw.json", "01_research_parallel.json")
 
 _REJECT_TRUTHY = {"1", "true", "yes"}
+
+
+def _mirror_into_engine_home(src_dir: Path, dst_dir: Path) -> None:
+    """Copy the guided research result into the engine's per-handle research
+    home, sidelining anything already there (.bkup — paid artifacts are never
+    deleted). A later enrichment pass then reuses the guided result for free
+    instead of re-billing the same person."""
+    if not any((src_dir / name).exists() for name in _RESEARCH_FILES):
+        return
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for name in _RESEARCH_FILES:
+        stale = dst_dir / name
+        if stale.exists():
+            stale.replace(stale.with_suffix(".json.bkup"))
+        fresh = src_dir / name
+        if fresh.exists():
+            shutil.copy2(fresh, dst_dir / name)
 
 
 @dataclass(frozen=True)
@@ -102,13 +133,15 @@ def run_guided_retarget(request: GuidedRetarget, *,
                         facts_dir: Path = FACTS_DIR,
                         raw_dir: Path = RAW_DIR,
                         out_dir: Path = GUIDED_RETARGET_DIR,
+                        engine_dir: Path = DEEP_RESEARCH_DIR,
                         use_llm: bool = True,
                         on_progress: Callable[[str, str], None] | None = None,
                         ) -> dict[str, Any]:
     """Run one guided re-research end to end; returns the item outcome.
 
     Outcome dicts: {"state": "applied", "new_url", "confidence", "detail"} |
-    {"state": "no_match", "detail", ...} | {"state": "failed", "detail"}.
+    {"state": "synthetic", "detail"} | {"state": "no_match", "detail"} |
+    {"state": "failed", "detail"}.
     """
     report = on_progress or (lambda state, detail: None)
     key = request.pub.strip().lower()
@@ -147,8 +180,9 @@ def run_guided_retarget(request: GuidedRetarget, *,
         prior["approved"] = ""
         prior["llm_judge_fingerprint"] = ""
         write_override_rows(review_path, rows)
-    handle_dir = out_dir / str(row.get("handle") or request.slug)
-    for name in ("00_parallel_raw.json", "01_research_parallel.json"):
+    handle = str(row.get("handle") or request.slug)
+    handle_dir = out_dir / handle
+    for name in _RESEARCH_FILES:
         stale = handle_dir / name
         if stale.exists():
             stale.replace(stale.with_suffix(".json.bkup"))
@@ -180,26 +214,44 @@ def run_guided_retarget(request: GuidedRetarget, *,
         facts_dir=facts_dir, raw_dir=raw_dir, use_llm=use_llm,
         owner_block=owner_background_block(owner) if owner else "",
         confirm_threshold=RESEARCH_CONFIRM_THRESHOLD)
+    _mirror_into_engine_home(handle_dir, engine_dir / handle)
 
     rows = load_override_rows(review_path)
     after = rows.get(key) or {}
     action = str(after.get("action") or "").strip().lower()
     new_url = str(after.get("new_linkedin_url") or "").strip()
-    if action != "retarget" or not new_url:
-        return {"state": "no_match",
-                "detail": "research did not find a usable LinkedIn for this guidance"}
-    if str(after.get("llm_reject") or "").strip().lower() in _REJECT_TRUTHY:
-        reason = str(after.get("llm_reject_reason") or
-                     "the identity judge rejected the proposed profile")
-        return {"state": "no_match", "detail": reason, "new_url": new_url}
-    # Judge confirmed at/above the bar — the guidance submit was the human's
-    # word, so the retarget stands without a second review pass.
-    after["approved"] = "yes"
-    after["source"] = "user-guidance"
+    rejected = str(after.get("llm_reject") or "").strip().lower() in _REJECT_TRUTHY
+    if action == "retarget" and new_url and not rejected:
+        # Judge confirmed at/above the bar — the guidance submit was the
+        # human's word, so the retarget stands without a second review pass.
+        after["approved"] = "yes"
+        after["source"] = "user-guidance"
+        write_override_rows(review_path, rows)
+        return {"state": "applied", "new_url": new_url,
+                "confidence": str(after.get("confidence") or ""),
+                "detail": str(after.get("reason") or "")}
+
+    # No usable LinkedIn (nothing found, or the judge rejected the proposal).
+    # The user already said the old link is the wrong person, so it detaches
+    # NOW, and a synthetic profile assembled from the fresh research supersedes
+    # it as the working identity — everything automatic, no second review.
+    reason = (str(after.get("llm_reject_reason") or "").strip()
+              if rejected else "research found no LinkedIn for this guidance")
+    row_now = rows.setdefault(key, {"public_identifier": request.pub})
+    row_now.update({"action": "detach", "approved": "yes",
+                    "source": "user-guidance", "new_linkedin_url": "",
+                    "new_public_identifier": "", "updated_at": now_iso()})
     write_override_rows(review_path, rows)
-    return {"state": "applied", "new_url": new_url,
-            "confidence": str(after.get("confidence") or ""),
-            "detail": str(after.get("reason") or "")}
+    report("judging", "assembling a synthetic profile from the research")
+    assembly = assemble_synthetic_profile.AssembleSyntheticProfile(
+        research_dir=out_dir, queue_csv=queue_csv, prune=False).run()
+    stands = (int(assembly.get("built") or 0) > 0
+              or int(assembly.get("preserved_user_rows") or 0) > 0)
+    if stands:
+        return {"state": "synthetic",
+                "detail": f"no LinkedIn confirmed — synthetic profile now stands ({reason})"}
+    return {"state": "no_match",
+            "detail": f"{reason}; research output was not usable for a synthetic profile"}
 
 
 class RetargetQueue:

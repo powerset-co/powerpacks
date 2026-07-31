@@ -117,7 +117,9 @@ class TestContactIdentifierPolicy(unittest.TestCase):
              "randomperson@acme.com",              # someone else on the thread
              "known@example.net",                  # ground-truth channel email
              "+1 (555) 010-0000",                  # phone
+             "555/010-0000",                       # slash-separated phone, normalized
              "11/1/2023",                          # date is not a phone
+             "2023/07/30",                         # neither is y/m/d
              "https://maps.app.goo.gl/Zus2dp",     # maps link
              "https://sprh.mn/?vip=jordan@a.com",  # URL with embedded address
              "https://www.amazon.com/dp/1328663795",
@@ -127,8 +129,14 @@ class TestContactIdentifierPolicy(unittest.TestCase):
             known=["known@example.net"],
             owner_emails=["owner@example.com"],
             owner_phones=["+15550199"])
+        # The slash-format duplicate of the same number dedupes by digits.
         self.assertEqual(kept, ["jordan.bravo@acme.com", "casey@jordanbravo.com",
                                 "known@example.net", "+1 (555) 010-0000"])
+
+    def test_slash_phone_normalizes_but_dates_do_not(self):
+        self.assertEqual(common.contact_identifiers(["650/856-7893", "11/1/2023",
+                                                     "2023/07/30", "650/856"]),
+                         ["+16508567893"])
 
     def test_without_context_extracted_emails_drop(self):
         kept = common.contact_identifiers(["someone@example.com", "+15550100000"])
@@ -5593,7 +5601,8 @@ class TestGuidedRetargets(unittest.TestCase):
                 result = web_retargets.run_guided_retarget(
                     self._request(), review_path=review,
                     people_csv=base / "missing-people.csv",
-                    facts_dir=facts, raw_dir=raw, out_dir=out, use_llm=True,
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=base / "engine", use_llm=True,
                     on_progress=lambda state, detail: states.append(state))
             self.assertEqual(result["state"], "applied")
             self.assertIn("jordan-bravo-right", result["new_url"])
@@ -5607,30 +5616,68 @@ class TestGuidedRetargets(unittest.TestCase):
             self.assertEqual(row["source"], "user-guidance")
             self.assertIn("jordan-bravo-right", row["new_linkedin_url"])
 
-    def test_judge_rejection_stays_pending_as_no_match(self):
+    def test_judge_rejection_detaches_and_stands_a_synthetic(self):
+        # Fully automatic: the user said wrong person; when the judge rejects the
+        # research proposal, the old link detaches and a synthetic supersedes it.
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
-            review, facts, raw, out = (base / "review.csv", base / "facts",
-                                       base / "raw", base / "out")
+            review, facts, raw, out, engine = (base / "review.csv", base / "facts",
+                                               base / "raw", base / "out", base / "engine")
             self._facts(facts, "pid-jordan", "Jordan Bravo")
             profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.6,
                                   "notes": "A plausible namesake."},
                        "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-namesake",
                                   "linkedin_status": "found"}}
             rejecting = _verdict("wrong_person", 0.9, reason="no non-name corroboration")
+            assemble = mock.Mock()
+            assemble.return_value.run.return_value = {"built": 1, "preserved_user_rows": 0}
             with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
                                    side_effect=self._fake_research({}, profile)), \
                  mock.patch.object(dresearch, "judge_research_proposal",
-                                   return_value=rejecting):
+                                   return_value=rejecting), \
+                 mock.patch.object(web_retargets.assemble_synthetic_profile,
+                                   "AssembleSyntheticProfile", assemble):
                 result = web_retargets.run_guided_retarget(
                     self._request(), review_path=review,
                     people_csv=base / "missing-people.csv",
-                    facts_dir=facts, raw_dir=raw, out_dir=out, use_llm=True)
-            self.assertEqual(result["state"], "no_match")
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=engine, use_llm=True)
+            self.assertEqual(result["state"], "synthetic")
             self.assertIn("corroboration", result["detail"])
             row = _rows_by_pub(review)["jordan-bravo-wrong"]
-            self.assertEqual(row["approved"], "")          # never auto-approved on a reject
-            self.assertEqual(row["llm_reject"], "yes")
+            self.assertEqual(row["action"], "detach")       # the wrong link is gone
+            self.assertEqual(row["approved"], "yes")
+            self.assertEqual(row["source"], "user-guidance")
+            self.assertEqual(row["new_linkedin_url"], "")
+            kwargs = assemble.call_args.kwargs
+            self.assertEqual(kwargs["research_dir"], out)
+            self.assertFalse(kwargs["prune"])               # scoped run must never prune
+            # The guided result is mirrored into the engine's research home.
+            self.assertTrue((engine / "jordan-bravo-p" / "01_research_parallel.json").exists())
+
+    def test_unusable_research_lands_no_match(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts, raw, out, engine = (base / "review.csv", base / "facts",
+                                               base / "raw", base / "out", base / "engine")
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            profile = {"person": {"full_name": "", "confidence": 0.0, "notes": ""},
+                       "social": {"linkedin_status": "not_found"}}
+            assemble = mock.Mock()
+            assemble.return_value.run.return_value = {"built": 0, "preserved_user_rows": 0}
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=self._fake_research({}, profile)), \
+                 mock.patch.object(web_retargets.assemble_synthetic_profile,
+                                   "AssembleSyntheticProfile", assemble):
+                result = web_retargets.run_guided_retarget(
+                    self._request(), review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=engine, use_llm=False)
+            self.assertEqual(result["state"], "no_match")
+            self.assertIn("not usable", result["detail"])
+            # The user's wrong-person verdict still stands as a detach.
+            self.assertEqual(_rows_by_pub(review)["jordan-bravo-wrong"]["action"], "detach")
 
     def test_reguided_person_unsticks_prior_decision_and_stale_output(self):
         with tempfile.TemporaryDirectory() as d:
@@ -5657,7 +5704,8 @@ class TestGuidedRetargets(unittest.TestCase):
                 result = web_retargets.run_guided_retarget(
                     self._request(), review_path=review,
                     people_csv=base / "missing-people.csv",
-                    facts_dir=facts, raw_dir=raw, out_dir=out, use_llm=True)
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=base / "engine", use_llm=True)
             self.assertEqual(result["state"], "applied")
             jm.assert_called_once()  # stale fingerprint blanked -> re-judged
             # Paid artifact sidelined, never deleted.
