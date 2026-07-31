@@ -4,7 +4,7 @@ Feeds each labeled query to a REAL agent (codex or claude CLI) together with the
 decision rules extracted verbatim from the production SKILL.md (between the
 `<!-- decision-rules:start/end -->` markers, so the eval can never drift from
 what agents actually read), captures the decision JSON it returns, and scores
-surface / backend / depth against the labels in decision/cases.json.
+target / profile / backend against the labels in decision/cases.json.
 
 This replaces the deleted offline classifier eval (run_routing_eval.py /
 route_query.py): the model IS the router now, so the eval must run the model.
@@ -32,11 +32,17 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from packs.search.pipeline.routing import SearchRoute
+
 SKILL_PATH = ROOT / "packs/search/skills/search/SKILL.md"
 CASES_PATH = Path(__file__).resolve().parent / "decision/cases.json"
 REPORT_PATH = Path(__file__).resolve().parent / "decision/report.json"
@@ -44,11 +50,11 @@ REPORT_PATH = Path(__file__).resolve().parent / "decision/report.json"
 RULES_START = "<!-- decision-rules:start -->"
 RULES_END = "<!-- decision-rules:end -->"
 
-FIELDS = ("surface", "backend", "depth")
+FIELDS = ("target", "profile", "backend")
 ENUMS = {
-    "surface": {"people", "company", "sql", "contacts"},
+    "target": {"engine", "sql", "contacts"},
+    "profile": {"lookup", "gtm", "recruiting"},
     "backend": {"powerset", "local"},
-    "depth": {"fast", "deep"},
 }
 DEFAULT_ENV = {"local_db": True, "remote_creds": True}
 
@@ -74,8 +80,8 @@ def build_prompt(rules: str, case: dict) -> str:
     return (
         "You are the $search router for Powerpacks. Apply the decision rules below to the query "
         "and output ONLY a JSON object of the shape "
-        '{"surface": ..., "backend": ..., "depth": ..., "reason": "..."} — no prose, no markdown fence. '
-        "If surface is not people, output depth as \"fast\".\n\n"
+        '{"target": ..., "profile": ..., "backend": ..., "reason": "..."} — no prose, no markdown fence. '
+        "For sql or contacts, output profile and backend as null.\n\n"
         f"Decision rules (verbatim from the $search skill):\n\n{rules}\n\n"
         f"Environment assumptions:\n{env_lines}\n\n"
         f"Query:\n<<<\n{case['query']}\n>>>"
@@ -159,7 +165,12 @@ def score(cases: list[dict], results: dict[str, tuple[dict, str | None]]) -> dic
     misses = []
     for case in cases:
         decision, err = results[case["id"]]
-        labeled = [f for f in FIELDS if case.get(f) is not None]
+        if err is None:
+            try:
+                decision = SearchRoute.from_dict(decision).to_dict()
+            except (KeyError, TypeError, ValueError) as exc:
+                err = f"invalid_route: {exc}"
+        labeled = list(FIELDS)
         strict_ok = err is None
         lenient_ok = err is None
         if err is not None:
@@ -167,7 +178,8 @@ def score(cases: list[dict], results: dict[str, tuple[dict, str | None]]) -> dic
         for field in labeled:
             field_totals[field] += 1
             expected = case[field]
-            got = str(decision.get(field, "")).lower() if err is None else "<error>"
+            raw = decision.get(field) if err is None else "<error>"
+            got = raw if raw is None else str(raw).lower()
             confusion[field].setdefault(expected, {})
             confusion[field][expected][got] = confusion[field][expected].get(got, 0) + 1
             if got == expected:

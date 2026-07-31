@@ -209,6 +209,26 @@ def compact_positions(profile: dict[str, Any]) -> tuple[str, str]:
 
 
 def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
+    if state.get("schema_version") == "search.stage_result.v1":
+        rows = []
+        for rank, candidate in enumerate((state.get("frontier") or {}).get("candidates") or [], start=1):
+            profile = candidate.get("hydrated_profile") or {}
+            titles, companies = compact_positions(profile)
+            rows.append({
+                "rank": rank, "person_id": candidate.get("person_id", ""), "result_index": "",
+                "final_score": candidate.get("semantic_score") if candidate.get("semantic_score") is not None else candidate.get("deterministic_score", ""),
+                "trait_scores": "", "overall_reasoning": "", "matched_position_indexes": candidate.get("matched_position_indexes") or [],
+                "pre_rerank_score": candidate.get("retrieval_score", ""), "tags": "",
+                "vertical_sources": "; ".join(candidate.get("source_lanes") or []),
+                "name": profile.get("full_name") or profile.get("name", ""), "headline": profile.get("headline", ""),
+                "location": profile.get("location_raw") or profile.get("location", ""), "inferred_birth_year": profile.get("inferred_birth_year", ""),
+                "inferred_age": profile.get("inferred_age", ""), "current_titles": titles, "current_companies": companies,
+                "source_operator": "; ".join(profile.get("source_operators", []) or []),
+                "source_channel": "; ".join(profile.get("source_channels", []) or []),
+                "linkedin_url": profile.get("linkedin_url") or profile.get("public_profile_url", ""),
+                "hydrated": candidate.get("hydration_disposition") == "hydrated", "source_run": "", "source_query": "",
+            })
+        return rows
     profiles = hydrated_profiles(state)
     rerank_by_id = rerank_rows(state)
     ids = frontier_ids(state)

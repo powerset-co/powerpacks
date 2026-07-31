@@ -1,0 +1,636 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/search-spec.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "raw_request",
+    "profile",
+    "backend",
+    "corpus",
+    "lookup",
+    "role",
+    "person_filters",
+    "company_filters",
+    "tech_skills",
+    "soft_criteria",
+    "rank_mode",
+    "rank_model",
+    "rank_approved",
+    "sql_candidates",
+    "bounds",
+    "recruiting"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "search.spec.v1"
+    },
+    "raw_request": {
+      "type": "string"
+    },
+    "profile": {
+      "enum": [
+        "lookup",
+        "gtm",
+        "recruiting"
+      ]
+    },
+    "backend": {
+      "enum": [
+        "local",
+        "powerset"
+      ]
+    },
+    "corpus": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/localCorpus"
+        },
+        {
+          "$ref": "#/$defs/powersetCorpus"
+        }
+      ]
+    },
+    "lookup": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "field",
+            "value"
+          ],
+          "properties": {
+            "field": {
+              "enum": [
+                "name",
+                "email",
+                "phone",
+                "handle",
+                "profile_url",
+                "person_id"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "role": {
+      "$ref": "#/$defs/role"
+    },
+    "person_filters": {
+      "$ref": "#/$defs/personFilters"
+    },
+    "company_filters": {
+      "$ref": "#/$defs/companyFilters"
+    },
+    "tech_skills": {
+      "$ref": "#/$defs/strings"
+    },
+    "soft_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "description",
+          "weight"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "weight": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "rank_mode": {
+      "enum": ["deterministic", "semantic"]
+    },
+    "rank_model": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "rank_approved": {
+      "type": "boolean"
+    },
+    "sql_candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "person_id",
+          "evidence"
+        ],
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "$comment": "semantic_rank_limit <= retrieval_limit is enforced by SearchBounds at the parser and direct-constructor boundaries because standard JSON Schema cannot compare sibling numeric values.",
+      "additionalProperties": false,
+      "required": [
+        "retrieval_limit",
+        "output_limit",
+        "semantic_rank_limit",
+        "max_concurrent_probes",
+        "per_probe_limit",
+        "frontier_limit",
+        "triage_threshold",
+        "triage_score_threshold",
+        "judge_candidate_limit",
+        "judge_call_limit",
+        "exemplar_limit",
+        "expansion_thread_limit",
+        "epoch_limit",
+        "sourced_candidate_limit",
+        "spend_limit_usd",
+        "score_floor",
+        "sendable_score"
+      ],
+      "properties": {
+        "retrieval_limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "output_limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "semantic_rank_limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_concurrent_probes": {"type": "integer", "minimum": 1},
+        "per_probe_limit": {"type": "integer", "minimum": 1},
+        "frontier_limit": {"type": "integer", "minimum": 1},
+        "triage_threshold": {"type": "integer", "minimum": 1},
+        "triage_score_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+        "judge_candidate_limit": {"type": "integer", "minimum": 1},
+        "judge_call_limit": {"type": "integer", "minimum": 1},
+        "exemplar_limit": {"type": "integer", "minimum": 10, "maximum": 20},
+        "expansion_thread_limit": {"type": "integer", "minimum": 1, "maximum": 6},
+        "epoch_limit": {"type": "integer", "minimum": 1},
+        "sourced_candidate_limit": {"type": "integer", "minimum": 1},
+        "spend_limit_usd": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "score_floor": {"type": "number", "minimum": 0, "maximum": 1},
+        "sendable_score": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    ,
+    "recruiting": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "reviewed_plan_hash",
+            "plan_model",
+            "plan_approved",
+            "judge_implementation",
+            "judge_model",
+            "judge_approved",
+            "user_preferences"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reviewed_plan_hash": {
+              "oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]
+            },
+            "plan_model": {"type": ["string", "null"], "minLength": 1},
+            "plan_approved": {"type": "boolean"},
+            "judge_implementation": {"enum": ["profile_evaluator", "codex", null]},
+            "judge_model": {"type": ["string", "null"], "minLength": 1},
+            "judge_approved": {"type": "boolean"},
+            "user_preferences": {"type": "object"}
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "lookup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "value"],
+      "properties": {
+        "field": {"enum": ["name", "email", "phone", "handle", "profile_url", "person_id"]},
+        "value": {"type": "string", "minLength": 1}
+      }
+    },
+    "localCorpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "db_path"
+      ],
+      "properties": {
+        "kind": {
+          "const": "local"
+        },
+        "db_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "schema_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "membership_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]}
+      }
+    },
+    "powersetCorpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "set_id",
+        "operator_ids",
+        "namespace_schema_hashes"
+      ],
+      "properties": {
+        "kind": {
+          "const": "powerset"
+        },
+        "set_id": {
+          "type": "string"
+        },
+        "operator_ids": {
+          "allOf": [
+            {"$ref": "#/$defs/strings"},
+            {"minItems": 1, "items": {"type": "string", "minLength": 1}}
+          ]
+        },
+        "operator_scope_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "membership_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "namespace_schema_hashes": {
+          "type": "object",
+          "minProperties": 0,
+          "additionalProperties": {
+            "$ref": "#/$defs/hash"
+          }
+        },
+        "native_content_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scoped_records_hash": {
+          "oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "native_content_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "scoped_records_hash": {
+              "const": null
+            }
+          }
+        },
+        {
+          "properties": {
+            "native_content_version": {
+              "const": null
+            },
+            "scoped_records_hash": {
+              "$ref": "#/$defs/hash"
+            }
+          }
+        },
+        {
+          "properties": {"native_content_version": {"const": null}, "scoped_records_hash": {"const": null}}
+        }
+      ]
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role_ids",
+        "titles",
+        "bm25_queries",
+        "search_mode"
+      ],
+      "properties": {
+        "role_ids": {
+          "$ref": "#/$defs/strings"
+        },
+        "titles": {
+          "$ref": "#/$defs/strings"
+        },
+        "bm25_queries": {
+          "$ref": "#/$defs/strings"
+        },
+        "search_mode": {
+          "enum": ["SEARCH_ONLY", "COMPANY_INTERSECTION", "COMPANY_UNION"]
+        }
+      }
+    },
+    "personFilters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cities",
+        "states",
+        "countries",
+        "metro_areas",
+        "seniority_bands",
+        "role_tracks",
+        "education_ids",
+        "education_names",
+        "is_current_role",
+        "years_experience_min",
+        "years_experience_max"
+      ],
+      "properties": {
+        "cities": {
+          "$ref": "#/$defs/strings"
+        },
+        "states": {
+          "$ref": "#/$defs/strings"
+        },
+        "countries": {
+          "$ref": "#/$defs/strings"
+        },
+        "metro_areas": {
+          "$ref": "#/$defs/strings"
+        },
+        "seniority_bands": {
+          "$ref": "#/$defs/strings"
+        },
+        "role_tracks": {
+          "$ref": "#/$defs/strings"
+        },
+        "education_ids": {
+          "$ref": "#/$defs/strings"
+        },
+        "education_names": {
+          "$ref": "#/$defs/strings"
+        },
+        "is_current_role": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "years_experience_min": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "years_experience_max": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "companyFilters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "company_ids",
+        "company_names",
+        "sector_types",
+        "technology_types",
+        "entity_types",
+        "funding_stage_min",
+        "funding_stage_max",
+        "headcount_min",
+        "headcount_max",
+        "is_current_company"
+      ],
+      "properties": {
+        "company_ids": {
+          "$ref": "#/$defs/strings"
+        },
+        "company_names": {
+          "$ref": "#/$defs/strings"
+        },
+        "sector_types": {
+          "$ref": "#/$defs/strings"
+        },
+        "technology_types": {
+          "$ref": "#/$defs/strings"
+        },
+        "entity_types": {
+          "$ref": "#/$defs/strings"
+        },
+        "funding_stage_min": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "funding_stage_max": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headcount_min": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "headcount_max": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "is_current_company": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"rank_mode": {"const": "deterministic"}}
+      },
+      "then": {
+        "properties": {
+          "soft_criteria": {"maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"rank_mode": {"const": "semantic"}}
+      },
+      "then": {
+        "properties": {
+          "soft_criteria": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "not": {
+        "allOf": [
+          {"properties": {"person_filters": {"properties": {"is_current_role": {"const": true}}}}},
+          {"properties": {"company_filters": {"properties": {"is_current_company": {"const": false}}}}}
+        ]
+      }
+    },
+    {
+      "not": {
+        "allOf": [
+          {"properties": {"person_filters": {"properties": {"is_current_role": {"const": false}}}}},
+          {"properties": {"company_filters": {"properties": {"is_current_company": {"const": true}}}}}
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "backend": {
+            "const": "local"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "corpus": {
+            "$ref": "#/$defs/localCorpus"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "backend": {
+            "const": "powerset"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "corpus": {
+            "$ref": "#/$defs/powersetCorpus"
+          },
+          "sql_candidates": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "const": "lookup"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "lookup": {
+            "$ref": "#/$defs/lookup"
+          },
+          "recruiting": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "const": "gtm"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "lookup": {
+            "const": null
+          },
+          "recruiting": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "const": "recruiting"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "lookup": {
+            "const": null
+          },
+          "recruiting": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}

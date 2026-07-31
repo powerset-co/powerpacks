@@ -52,7 +52,16 @@ def validate_snapshot(snapshot: dict[str, Any], required_person_ids: Iterable[st
     source = snapshot.get("source")
     status = snapshot.get("verification_status")
     if backend == "powerset":
-        errors.append("Powerset snapshots are non_comparable until the PR B runner-owned producer exists")
+        if source != "pr_b_runner_snapshot":
+            errors.append("Powerset snapshots must use the typed runner producer")
+        if snapshot.get("enumeration_complete") is not True:
+            errors.append("Powerset snapshot membership enumeration is incomplete")
+        if snapshot.get("enumeration_truncated") is not False:
+            errors.append("Powerset snapshot membership enumeration was truncated")
+        if not isinstance(snapshot.get("enumerated_record_count"), int):
+            errors.append("Powerset snapshot record count proof is missing")
+        if snapshot.get("membership_id_count") != snapshot.get("enumerated_record_count"):
+            errors.append("Powerset snapshot count is not tied to membership proof")
     elif backend not in {"local", "synthetic"}:
         errors.append(f"unsupported snapshot backend: {backend}")
     if backend == "synthetic" and source != "synthetic_test_fixture":
@@ -70,7 +79,7 @@ def validate_snapshot(snapshot: dict[str, Any], required_person_ids: Iterable[st
             errors.append("observed_at must be a timezone-aware full ISO-8601 timestamp")
     native = snapshot.get("native_content_version")
     scoped = snapshot.get("scoped_records_hash")
-    if bool(native) == bool(scoped):
+    if status == "verified_comparable" and bool(native) == bool(scoped):
         errors.append("exactly one of native_content_version or scoped_records_hash is required")
     hashes = snapshot.get("evidence_hashes")
     if not isinstance(hashes, dict):

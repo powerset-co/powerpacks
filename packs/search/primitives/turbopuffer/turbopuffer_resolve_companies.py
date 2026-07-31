@@ -432,10 +432,10 @@ async def semantic_lookup(queries: list[str], filters: tuple | None, *, top_k: i
     return rows
 
 
-async def filter_only_company_rows(filters: tuple | None, *, page_size: int, max_results: int) -> list[dict[str, Any]]:
+async def filter_only_company_rows(filters: tuple | None, *, page_size: int, max_results: int) -> dict[str, Any]:
     if filters is None:
-        return []
-    return await turbopuffer_backend.filter_only_rows_for_namespace(
+        return {"rows": [], "completed": True, "truncated": False, "batch_count": 0, "row_count": 0}
+    return await turbopuffer_backend.enumerate_filter_only_rows_for_namespace(
         "companies",
         filters,
         COMPANY_INCLUDE_ATTRIBUTES,
@@ -512,16 +512,20 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
         # Soft filter rows always pass through (sector/entity type matches)
         if semantic_queries and soft_filters is not None and (strategy == "soft_union" or sector_strategy_broadened):
-            soft_rows = await filter_only_company_rows(
+            soft_result = await filter_only_company_rows(
                 soft_union_filters,
                 page_size=args.page_size,
                 max_results=args.max_soft_companies,
             )
+            soft_rows = soft_result["rows"]
             for row in soft_rows:
                 row["source"] = row.get("source") or "soft_filter"
             rows.extend(soft_rows)
     if filters is not None and not names and not semantic_queries:
-        rows.extend(await filter_only_company_rows(filters, page_size=args.page_size, max_results=args.max_companies))
+        company_result = await filter_only_company_rows(
+            filters, page_size=args.page_size, max_results=args.max_companies
+        )
+        rows.extend(company_result["rows"])
 
     rows = dedupe_rows(rows)
 

@@ -110,14 +110,11 @@ case follows the same packet, resumption, finalization, snapshot, score, and com
 steps; no private identity is committed.
 
 The deterministic lane is offline and PR-safe. Read-only snapshot capture is a separate
-manual producer boundary and must be scoped explicitly. The current primitives do not
-provide a complete, versioned set-scoped searchable-record enumeration, so this PR does
-not claim a native remote snapshot producer; absent that proof, comparisons remain
-`non_comparable` until the runner-owned producer lands. `backend=powerset` is therefore
-always non-comparable in this v1 implementation, even with a hand-authored content
-version. Only `local_deterministic_snapshot` and clearly labeled
-`synthetic_test_fixture` sources can be comparable; synthetic fixtures cannot identify
-themselves as Powerset.
+manual producer boundary at `capture_snapshot.py` and must be scoped explicitly. Local
+runner snapshots are deterministic. A Powerset snapshot is comparable only when the
+typed runner proves complete, untruncated scoped membership enumeration and stable native
+or set-scoped content identity; otherwise it is explicitly
+`unverified_non_comparable`. Synthetic fixtures cannot identify themselves as Powerset.
 
 Any model/judge or other paid quality run requires explicit approval immediately before
 execution, including cases, model, caps, estimated maximum spend, and local output path.

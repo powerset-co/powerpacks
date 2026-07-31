@@ -1,3 +1,4 @@
+import importlib.machinery
 import importlib.util
 import json
 import sqlite3
@@ -6,6 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ADAPTER_ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +17,13 @@ spec = importlib.util.spec_from_file_location("search_tui", TUI_PATH)
 search_tui = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(search_tui)
+
+POWERCLAW_PATH = ADAPTER_ROOT / "bin" / "powerclaw"
+powerclaw_loader = importlib.machinery.SourceFileLoader("powerclaw", str(POWERCLAW_PATH))
+powerclaw_spec = importlib.util.spec_from_loader("powerclaw", powerclaw_loader)
+assert powerclaw_spec is not None
+powerclaw = importlib.util.module_from_spec(powerclaw_spec)
+powerclaw_loader.exec_module(powerclaw)
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -106,6 +115,33 @@ def insert_outbound(session_dir: Path, seq: int, thread_id: str, text: str) -> N
 
 
 class SearchTuiTests(unittest.TestCase):
+    def test_defaults_to_canonical_search_runs_and_keeps_legacy_discovery(self) -> None:
+        self.assertEqual(search_tui.DEFAULT_RUNS_DIR.name, "search-runs")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".powerpacks"
+            canonical = root / "search-runs" / "canonical-role" / "result.json"
+            legacy = root / "runs" / "legacy.json"
+            write_json(canonical, {"schema_version": "search.stage_result.v1", "status": "completed"})
+            write_state(legacy)
+            runs = search_tui.discover_runs(root / "search-runs")
+        self.assertEqual({Path(row["path"]).name for row in runs}, {"result.json", "legacy.json"})
+
+    def test_powerclaw_resume_uses_nested_canonical_discovery_and_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            canonical = root / ".powerpacks" / "search-runs" / "canonical-role" / "result.json"
+            write_json(canonical, {"schema_version": "search.stage_result.v1", "status": "completed"})
+            captured = []
+            with (
+                mock.patch.dict("os.environ", {"POWERPACKS_ROOT": str(root)}),
+                mock.patch.object(powerclaw.subprocess, "call", side_effect=lambda argv: captured.append(argv) or 0),
+                mock.patch.object(sys, "argv", ["powerclaw", "--resume-run", "--dump"]),
+            ):
+                self.assertEqual(powerclaw.main(), 0)
+        argv = captured[0]
+        self.assertEqual(Path(argv[argv.index("--runs-dir") + 1]).name, "search-runs")
+        self.assertEqual(Path(argv[argv.index("--state") + 1]).name, "result.json")
+
     def test_approval_prompt_stale_after_terminal_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -156,6 +192,41 @@ class SearchTuiTests(unittest.TestCase):
             time.sleep(0.01)
             tui.refresh_active_state()
             self.assertEqual(tui.state["status"], "completed")
+
+    def test_opens_canonical_nested_result_with_discovered_run_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_path = root / "runs" / "founding-product-designer" / "result.json"
+            write_json(
+                run_path,
+                {
+                    "schema_version": "search.stage_result.v1",
+                    "status": "completed",
+                    "frontier": {
+                        "candidates": [
+                            {
+                                "person_id": "p1",
+                                "hydration_disposition": "hydrated",
+                                "hydrated_profile": {"name": "Ada Designer"},
+                            }
+                        ]
+                    },
+                },
+            )
+
+            tui = search_tui.SearchTui(None, root / "runs", None, root, None, None, None, False)
+            self.assertEqual(tui.runs[0]["task_id"], "founding-product-designer")
+            self.assertEqual(tui.runs[0]["query"], "founding product designer")
+
+            tui.open_selected_run()
+
+            self.assertEqual(tui.state["task_id"], "founding-product-designer")
+            self.assertEqual(tui.state["query"], "founding product designer")
+            self.assertEqual([row["person_id"] for row in tui.rows], ["p1"])
+            self.assertIn(
+                ("system", "Loaded 1 candidates for: founding product designer"),
+                tui.messages,
+            )
 
     def test_busy_input_queues_and_flushes_next_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

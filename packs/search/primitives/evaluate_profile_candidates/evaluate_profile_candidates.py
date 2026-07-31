@@ -710,6 +710,8 @@ async def evaluate_one(
     timeout: int,
     max_retries: int,
     service_tier: str | None = None,
+    max_completion_tokens: int = 32_000,
+    max_prompt_tokens: int = 128_000,
 ) -> dict[str, Any]:
     pid = candidate.get("person_id") or candidate.get("candidate_id")
     base = {
@@ -734,18 +736,38 @@ async def evaluate_one(
             "error": "missing_profile",
         }
     user_prompt = build_user_prompt(plan, profile)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+    from packs.search.primitives.lib.token_accounting import count_chat_prompt_tokens
+
+    prompt_tokens = count_chat_prompt_tokens(model, messages)
+    if prompt_tokens > max_prompt_tokens:
+        return {
+            **base,
+            "jd_score": 0.0,
+            "verdict": "out",
+            "seniority_fit": "unknown",
+            "must_have": [],
+            "nice_to_have": [],
+            "rationale": "Evaluation input exceeds the configured prompt ceiling; full evidence was preserved.",
+            "caveats": [{"text": "evaluation_input_too_large", "material": True}],
+            "error": (
+                f"recruiting judge input exceeds the {max_prompt_tokens}-token prompt ceiling "
+                f"({prompt_tokens} estimated); preserve the full evidence and provide a smaller input"
+            ),
+        }
     last_error = ""
     async with semaphore:
         for attempt in range(max_retries + 1):
             try:
                 kwargs: dict[str, Any] = {
                     "model": model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    "messages": messages,
                     "response_format": {"type": "json_object"},
                     "timeout": timeout,
+                    "max_completion_tokens": max_completion_tokens,
                 }
                 if reasoning_effort and supports_reasoning_effort(model):
                     kwargs["reasoning_effort"] = reasoning_effort

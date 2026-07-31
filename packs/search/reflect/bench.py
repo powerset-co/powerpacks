@@ -239,7 +239,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     funnel = _read_json(shortlist_dir / "funnel.json")
 
     epoch_candidates = None
-    for name in ("ranked_final.json", "shortlist_ranked.json", "ground_truth_ranked.json"):
+    for name in ("ranked_final.json", "shortlist_ranked.json"):
         if (shortlist_dir / name).exists():
             epoch_candidates = shortlist_dir / name
             break

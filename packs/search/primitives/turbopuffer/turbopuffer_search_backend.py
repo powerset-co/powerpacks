@@ -96,12 +96,28 @@ async def filter_only_rows_for_namespace(
     page_size: int = 10000,
     max_results: int = 0,
 ) -> list[dict[str, Any]]:
+    result = await enumerate_filter_only_rows_for_namespace(
+        logical_name, filters, include_attributes, page_size=page_size, max_results=max_results
+    )
+    return result["rows"]
+
+
+async def enumerate_filter_only_rows_for_namespace(
+    logical_name: str,
+    filters: tuple,
+    include_attributes: list[str],
+    *,
+    page_size: int = 10000,
+    max_results: int = 0,
+) -> dict[str, Any]:
+    """Enumerate rows and explicitly report whether pagination exhausted."""
     ns = namespace(logical_name)
     page_size = min(page_size, 10000)
     max_batches = int(os.getenv("TURBOPUFFER_FILTER_ONLY_MAX_BATCHES", "100"))
     all_rows: list[dict[str, Any]] = []
     last_id: str | None = None
     batch_count = 0
+    truncated = False
 
     while True:
         paginated = filters
@@ -125,13 +141,16 @@ async def filter_only_rows_for_namespace(
             all_rows.append(row_attrs(row, include_attributes))
         if max_results and len(all_rows) >= max_results:
             all_rows = all_rows[:max_results]
+            truncated = len(response.rows) == page_size or len(all_rows) >= max_results
             break
         if len(response.rows) < page_size:
             break
         last_id = str(response.rows[-1].id)
         if batch_count >= max_batches:
+            truncated = True
             break
-    return all_rows
+    return {"rows": all_rows, "completed": not truncated, "truncated": truncated,
+            "batch_count": batch_count, "row_count": len(all_rows)}
 
 
 async def filter_only_rows(filters: tuple, include_attributes: list[str], *, page_size: int = 10000, max_results: int = 0) -> list[dict[str, Any]]:
@@ -419,3 +438,101 @@ async def hybrid_role_rows(
     if is_filter_only_payload(payload):
         return await _filter_only_role_rows(filters, top_k=top_k, include_attributes=include_attributes)
     return await _hybrid_role_rows_single(payload, filters, top_k=top_k, include_attributes=include_attributes)
+
+
+async def hybrid_summary_rows(
+    payload: dict[str, Any],
+    filters: tuple | None,
+    *,
+    top_k: int,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    """Search person-grain summaries without inventing position evidence."""
+    semantic_query = str(payload.get("semantic_query") or "").strip()
+    bm25_queries = [str(query) for query in payload.get("bm25_queries") or [] if str(query).strip()]
+    queries: list[dict[str, Any]] = []
+    weights: list[float] = []
+    for query in bm25_queries:
+        tokens = word_tokenize(query)
+        if tokens:
+            queries.append(
+                {
+                    "rank_by": ("summary_tokens", "BM25", tokens),
+                    "top_k": top_k,
+                    "include_attributes": include_attributes,
+                    "filters": filters,
+                }
+            )
+            weights.append(0.4)
+    if semantic_query:
+        queries.append(
+            {
+                "rank_by": ("vector", "kNN", await embedding(semantic_query)),
+                "top_k": top_k,
+                "include_attributes": include_attributes,
+                "filters": filters if filters is not None else ("id", "NotEq", "__impossible__"),
+            }
+        )
+        weights.append(0.6)
+    if not queries:
+        return []
+
+    ns = namespace("summaries")
+
+    def run_multi_query() -> Any:
+        return ns.multi_query(queries=queries, consistency=STRONG_CONSISTENCY)
+
+    response = await asyncio.to_thread(run_multi_query)
+    result_sets = response.results or []
+    fused = reciprocal_rank_fusion([result.rows or [] for result in result_sets], weights[: len(result_sets)])
+    attrs = {
+        str(row.id): row_attrs(row, include_attributes)
+        for result in result_sets
+        for row in result.rows or []
+    }
+    return [
+        {
+            **attrs.get(doc_id, {"id": doc_id}),
+            "person_id": attrs.get(doc_id, {}).get("person_id")
+            or attrs.get(doc_id, {}).get("base_id")
+            or doc_id,
+            "score": score,
+            "retrieval_mode": "summary",
+        }
+        for doc_id, score in fused[:top_k]
+    ]
+
+
+async def semantic_company_signal_rows(
+    semantic_query: str,
+    filters: tuple | None,
+    *,
+    top_k: int,
+    include_attributes: list[str],
+) -> list[dict[str, Any]]:
+    """Search the company-signal namespace and return scored company IDs."""
+    semantic_query = semantic_query.strip()
+    if not semantic_query:
+        return []
+    ns = namespace("company_signals")
+    query_embedding = await embedding(semantic_query)
+
+    def run_query() -> Any:
+        return ns.query(
+            rank_by=("vector", "kNN", query_embedding),
+            filters=filters if filters is not None else ("id", "NotEq", "__impossible__"),
+            top_k=top_k,
+            include_attributes=include_attributes,
+            consistency=STRONG_CONSISTENCY,
+        )
+
+    response = await asyncio.to_thread(run_query)
+    return [
+        {
+            **row_attrs(row, include_attributes),
+            "company_id": str(row.id),
+            "score": 1.0 / rank,
+            "retrieval_mode": "company_signal",
+        }
+        for rank, row in enumerate(response.rows or [], start=1)
+    ]

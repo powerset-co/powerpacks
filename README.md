@@ -78,8 +78,8 @@ Product and architecture walkthroughs live in the
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`search`](packs/search/skills/search/SKILL.md) | `$search <query-or-jd>` | The single people-search door. The agent records a Step-1 decision (`decision.json`: surface / backend / depth) and dispatches. Ordinary queries: one expansion → hybrid retrieval (TurboPuffer+Postgres or local DuckDB) → LLM filter/rerank, behind one confirm gate. A JD / job-posting URL / role brief runs **deep mode**: resolve the recruiter contract → automated critic → one human Review → wide source → conservative triage → one selected judge → core-gated shortlist → expand-from-anchor until converged. Deep sourcing supports both Powerset and local DuckDB; the in-loop SQL lane and automated judge panel are planned. See the [search architecture](packs/search/docs/search-architecture.md). |
-| [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Resolves company names, descriptions, sectors, investor/funding filters into canonical TurboPuffer company IDs. |
+| [`search`](packs/search/skills/search/SKILL.md) | `$search <query-or-jd>`, NanoClaw `/search-network ...` | The live search router. Bare-person lookup executes through the typed deterministic path (local capability-derived fields; set-scoped Powerset person ID/name/handle/profile URL). Ordinary people searches retain the legacy `search_network_pipeline` Review/run flow; recruiting retains canonical `deep_search_loop` orchestration until atomic cutover. Ambiguous intent returns `needs_input` before retrieval. |
+| [`search-company`](packs/search/skills/search-company/SKILL.md) | `$search-company <query>` | Live company lookup/resolution surface for company IDs, sectors, investors, funding, and company sets; retained before cutover. |
 | [`search-sql`](packs/search/skills/search-sql/SKILL.md) | `$search-sql <question>` | Agentic read-only SQL over the local search DuckDB, for relational/aggregate people queries the filter DSL can't express (overlap joins, per-person aggregates, career-shape predicates). |
 | [`build-local-search-index`](packs/indexing/skills/build-local-search-index/SKILL.md) | `$build-local-search-index` | Builds the fixed local search index at `.powerpacks/search-index/local-search.duckdb` from the canonical merged people CSV without Modal, Postgres, or TurboPuffer. Planning is local-only; full builds may use configured providers for cache misses. |
 
@@ -106,7 +106,7 @@ Product and architecture walkthroughs live in the
 - make TurboPuffer and Postgres contracts explicit enough that agents do not
   guess field names, operators, or value types
 - give the agent operational entrypoints: `$search <query-or-jd>`,
-  `$search-company <query>`, `$powerset setup`, and the message import
+  `$search-company <query>`, `$search-sql <question>`, `$powerset setup`, and the message import
   skill
 - interpret standard queries and decompose deep recruiting roles into bounded
   candidate-archetype probes
@@ -203,7 +203,7 @@ codex mcp get powerset-search
 
 # 5. Inside the agent, run what you need:
 $search senior infra eng at fintech
-$search-company stripe-like fintech infra companies
+$search people at stripe-like fintech infrastructure companies
 $powerset setup                   # login + .env pull + powerset-search MCP
 $import-gmail                     # Gmail contact sync (free after OAuth)
 $import-messages                  # iMessage + WhatsApp contact sync

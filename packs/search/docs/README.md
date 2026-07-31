@@ -5,8 +5,9 @@
 | Need | Document |
 | --- | --- |
 | Product and system walkthrough | [`$search` architecture](search-architecture.md) |
-| Standard-search (`depth: fast`) execution contract | [`$search` skill](../skills/search/SKILL.md) |
-| Deep-search operator runbook | [Deep-mode runbook](../skills/search/deep-mode.md) |
+| Lookup dispatch and live legacy ordinary-search execution | [`$search` skill](../skills/search/SKILL.md) |
+| Canonical legacy recruiting runbook | [Deep-mode runbook](../skills/search/deep-mode.md) |
+| Additive typed validation candidate | [Architecture boundary](search-architecture.md) |
 | How the local DuckDB is built | [LinkedIn and Modal indexing](../../indexing/docs/linkedin-modal-pipeline.md) |
 
 The architecture page is the canonical prose description. `SKILL.md` files and
@@ -33,11 +34,11 @@ filter.
 - [Deep-search benchmark findings](deep-search-ground-truth-status.md) preserves
   the dated measurements that motivated the method, with explicit limitations.
 
-## Removed legacy material
+## Pre-cutover legacy ownership
 
-The V1 slice planner, per-slice harness body, frontier workflow fragments,
-README-only design primitives, session-specific parity tracker, and
-pre-implementation deep-search plans were removed. They described execution
-paths that neither standard nor deep search uses. Two short compatibility
-redirects preserve old task-flow and task-harness links; Git history remains the
-archive for the retired designs.
+Bare-person lookup is the narrow typed execution exception. The legacy
+standard-search and deep-recruiting orchestrators, task state,
+ledgers, compatibility artifacts, `$search-company`, `$search-network`, and
+NanoClaw `/search-network` remain live until their consumers and quality gates
+are migrated atomically. Do not infer retirement from the presence of typed
+candidate modules.

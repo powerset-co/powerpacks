@@ -1,33 +1,25 @@
 ## Powerpacks Search Rules
 
-Use `$search` as the single people-search door. Before dispatch, record the
-requested result surface, candidate backend, and search depth in `decision.json`.
+Use `$search` as the live router. For a sufficiently specific people request,
+record `SearchRoute(target, profile, backend, reason)`. Ambiguous intent returns
+`needs_input`; ask once and perform no retrieval or guessed routing.
 
-- Route company output to `$search-company`, relational or aggregate questions
-  to `$search-sql`, and known-contact queries to `$search-contacts`.
-- Treat explicit Powerset, set, team, or shared-network wording as binding to
-  the Powerset backend. Treat explicit local, offline, or imported-network
-  wording as binding to the local DuckDB backend. Never change retrieval
-  surfaces silently as a fallback.
-- Standard search (`depth: fast`) is the original one-pass `$search-network`
-  path: run `search_network_pipeline.py prepare`, show its exact preview once,
-  then run the emitted command with `--execute-approved` after confirmation.
-- Deep search is for JDs, role briefs, shortlists, and strongest-candidate
-  requests with a stated role or domain. Follow `deep-mode.md`: build the
-  recruiter contract, run the automated critic, stop once for Review, then
-  source diverse probes, judge evidence, apply deterministic gates, expand from
-  strong anchors, and converge without another human gate.
-- Deep probes preserve the approved backend, location, recruiter contract, and
-  plan binding. They are candidate-archetype hypotheses, not retrieval slices.
-- Powerset search uses TurboPuffer for retrieval and Postgres for set scope and
-  profile hydration. Local search uses the downloaded DuckDB index.
-- Do not invent fields, filter operators, enum values, or backend capabilities.
-  A stored backend attribute is not automatically a supported public filter.
-
-Current references:
-
-- `packs/search/skills/search/SKILL.md`
-- `packs/search/skills/search/deep-mode.md`
-- `packs/search/docs/search-architecture.md`
-- `packs/search/docs/turbopuffer-contract.md`
-- `packs/search/contracts/README.md`
+- Route ordinary people searches through the live legacy
+  `search_network_pipeline.py` prepare/Review/run flow.
+- Route bare-person lookup through `packs.search.pipeline.search`. Local fields
+  are capability-derived; Powerset supports set-scoped `person_id`, `name`,
+  `handle`, and `profile_url`, not email or phone.
+- Route people-at-company asks to GTM with company constraints.
+- Route company-only lookup/resolution to the live `$search-company` surface;
+  route relational local output to `$search-sql`.
+- Route contact-field/set-contact questions to `$search-contacts`.
+- Recruiting JDs and role briefs use canonical legacy `deep-mode.md` and
+  `deep_search_loop.py` until atomic cutover. Preserve task state and ledgers.
+- Except for deterministic bare-person lookup, `packs.search.pipeline.search`
+  is additive opt-in validation code only:
+  deterministic tests or approved read-only real-environment comparison, never
+  an implied production cutover or paid-run authorization.
+- Keep `$search-network` as a recognized alias and NanoClaw `/search-network` as
+  live while its task/result UI remains.
+- Powerset uses TurboPuffer for scoped retrieval and Postgres for hydration.
+  Local search uses the selected DuckDB. Never invent fields or capabilities.

@@ -1,30 +1,34 @@
-# Search entry points
+# Search surface
 
-> **Compatibility page.** The old `search-surface.md` filename is retained for
-> external links and layout checks. The canonical routing and execution contract
-> is the [`$search` architecture](search-architecture.md).
+`$search` is the live search router. For a sufficiently specific people request,
+its persisted typed candidate router contract is:
 
-`$search` is the single people-search door. It records the requested result
-surface, candidate backend, and search depth before dispatching.
+```json
+{"target":"engine|sql|contacts","profile":"lookup|gtm|recruiting|null","backend":"local|powerset|null","reason":"..."}
+```
 
-| Requested result | Current entry point |
+Bare-person lookup executes through `packs/search/pipeline/search.py`. Before
+cutover, ordinary people search remains canonical on the legacy
+`search_network_pipeline.py` prepare/Review/run flow, and recruiting remains
+canonical on `deep_search_loop.py`. `packs/search/pipeline/search.py` is an
+additive opt-in candidate path for GTM/recruiting deterministic tests and
+approved read-only real-environment validation only.
+
+| Request | Route |
 | --- | --- |
-| People | `$search <query-or-JD>` |
-| Companies or company lookup | `$search-company <query>` |
-| Relationships or aggregate questions | `$search-sql <query>` |
-| Known contacts | `$search-contacts <query>` |
+| Person identifier lookup | `engine + lookup`; execute the typed deterministic path. Local fields are capability-derived; Powerset supports set-scoped `person_id`, `name`, `handle`, and `profile_url` only, while email/phone return `unsupported_capability` |
+| People by role/company archetype | `engine + gtm`; legacy prepare/Review/run execution |
+| People at a named company | `engine + gtm` with company constraints; legacy execution |
+| JD, job URL, recruiting shortlist | `engine + recruiting`; canonical legacy deep execution |
+| Relational/aggregate local question | `sql`, profile/backend `null` |
+| Contact-field/set-contact question | `contacts`, profile/backend `null` |
+| Company-only lookup/resolution | live `$search-company` surface |
+| Ambiguous target, people, role/domain, or surface | `needs_input`; clarify once; no retrieval or guessed route |
 
-Older traces and integrations may use `/search-network <query>` or
-`/search-company <query>`. Those strings are historical aliases, not the
-canonical product vocabulary. The internal filename
-`search_network_pipeline.py` is also intentionally retained for compatibility.
+`$search-company`, `$search-sql`, and `$search-contacts` remain distinct live
+surfaces. `$search-network` remains a recognized alias, including NanoClaw's
+live `/search-network` command and task/result UI.
 
-For people searches, `depth: fast` means the original one-pass
-`$search-network` pipeline: prepare one query, confirm its preview, retrieve,
-filter, and rank. It is standard search, not a different data source or a
-lower-quality shortcut. `depth: deep` adds the recruiter contract, diversified
-probes, evidence judge, deterministic gates, and anchor expansion described in
-the architecture guide.
-
-Slice planning, per-slice approvals, frontier assessment, and the V1 task
-harness are retired and are not current execution stages.
+Credentials and typed `plan_approved`/`judge_approved` booleans are not paid
+quality-run authorization. Paid validation requires separate explicit approval
+for the named cases, model, bounds, private output path, and maximum spend.

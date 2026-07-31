@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/candidate-frontier.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidates",
+    "input_count",
+    "output_count",
+    "limit",
+    "truncated"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "candidate.frontier.v1"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    },
+    "input_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "output_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "person_id",
+        "retrieval_score",
+        "rank_components",
+        "matched_position_ids",
+        "matched_position_indexes",
+        "source_lanes",
+        "found_by",
+        "backend",
+        "hard_filter_evidence",
+        "structured",
+        "tech_skills",
+        "hydrated_profile",
+        "hydration_disposition",
+        "deterministic_score",
+        "semantic_score",
+        "triage",
+        "judge",
+        "deterministic_gates"
+      ],
+      "properties": {
+        "person_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retrieval_score": {
+          "type": "number"
+        },
+        "rank_components": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "matched_position_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "matched_position_indexes": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "uniqueItems": true
+        },
+        "source_lanes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "found_by": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "lane",
+              "rank",
+              "probe_id",
+              "probe_family",
+              "score"
+            ],
+            "properties": {
+              "lane": {
+                "type": "string"
+              },
+              "rank": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "probe_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "probe_family": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "score": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "backend": {
+          "enum": [
+            "local",
+            "powerset",
+            ""
+          ]
+        },
+        "hard_filter_evidence": {
+          "type": "object"
+        },
+        "structured": {
+          "type": "object"
+        },
+        "tech_skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "hydrated_profile": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "hydration_disposition": {
+          "enum": [
+            "pending",
+            "hydrated",
+            "missing_profile"
+          ]
+        },
+        "deterministic_score": {
+          "type": "number"
+        },
+        "semantic_score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "triage": {"type": ["object", "null"]},
+        "judge": {"type": ["object", "null"]},
+        "deterministic_gates": {"type": "object"}
+        }
+      }
+    }
+  }

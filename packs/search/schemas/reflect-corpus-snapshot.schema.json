@@ -16,17 +16,23 @@
       "type": "object", "minProperties": 1,
       "additionalProperties": {"$ref": "#/$defs/hash"}
     },
-    "native_content_version": {"type": "string", "minLength": 1},
-    "scoped_records_hash": {"$ref": "#/$defs/hash"},
+    "native_content_version": {"type": ["string", "null"], "minLength": 1},
+    "scoped_records_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
     "evidence_hashes": {
       "type": "object",
       "additionalProperties": {"$ref": "#/$defs/hash"}
     },
+    "enumeration_complete": {"type": "boolean"},
+    "enumeration_truncated": {"type": "boolean"},
+    "enumerated_record_count": {"type": "integer", "minimum": 0},
+    "membership_id_count": {"type": "integer", "minimum": 0},
     "observed_at": {"type": "string", "format": "date-time"}
   },
-  "oneOf": [
+  "anyOf": [
     {"required": ["native_content_version"], "not": {"required": ["scoped_records_hash"]}},
-    {"required": ["scoped_records_hash"], "not": {"required": ["native_content_version"]}}
+    {"required": ["scoped_records_hash"], "not": {"required": ["native_content_version"]}},
+    {"properties": {"verification_status": {"const": "unverified_non_comparable"},
+                    "native_content_version": {"const": null}, "scoped_records_hash": {"const": null}}}
   ],
   "$defs": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
 }

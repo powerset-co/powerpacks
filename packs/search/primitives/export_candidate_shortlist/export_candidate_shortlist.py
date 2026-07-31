@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Task 5b — Export a sendable shortlist CSV from captured evaluations.
 
-Reads candidate_evaluations.json and candidate_frontier.json, filters to
+Reads candidate_evaluations.json and candidate-frontier.json, filters to
 top_tier/high_potential verdicts, and writes a clean shortlist.csv suitable
 for sharing with hiring managers.
 
@@ -13,7 +13,7 @@ Usage:
 Or with explicit paths:
 
     ... --evaluations-json candidate_evaluations.json \
-        --frontier-json candidate_frontier.json \
+        --frontier-json candidate-frontier.json \
         --out-dir .powerpacks/search-network-jd/<slug>/
 """
 from __future__ import annotations
@@ -71,6 +71,28 @@ def req_summary(reqs: list[dict[str, Any]]) -> str:
     return "; ".join(parts)
 
 
+def shortlist_row(rank: int, evaluation: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    profile = candidate.get("hydrated_profile") or {}
+    structured = candidate.get("structured") or {}
+    return {
+        "Rank": rank,
+        "Name": profile.get("name") or profile.get("full_name") or candidate.get("name") or "",
+        "LinkedIn URL": (
+            profile.get("linkedin_url")
+            or profile.get("public_profile_url")
+            or structured.get("linkedin_url")
+            or structured.get("public_profile_url")
+            or candidate.get("linkedin_url")
+            or ""
+        ),
+        "Current Role": profile.get("current_title") or structured.get("position_title") or candidate.get("current_role") or candidate.get("current_title") or "",
+        "Current Company": profile.get("current_company") or structured.get("company_id") or candidate.get("current_company") or "",
+        "Source": candidate.get("backend") or candidate.get("source_operator") or "",
+        "Channel": "|".join(candidate.get("source_lanes") or []) or candidate.get("source_channel") or "",
+        "Rationale": evaluation.get("rationale", ""),
+    }
+
+
 def run(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir) if args.run_dir else None
 
@@ -78,8 +100,10 @@ def run(args: argparse.Namespace) -> None:
         (run_dir / "candidate_evaluations.json") if run_dir else None
     )
     frontier_path = Path(args.frontier_json) if args.frontier_json else (
-        (run_dir / "candidate_frontier.json") if run_dir else None
+        (run_dir / "candidate-frontier.json") if run_dir else None
     )
+    if args.frontier_json is None and frontier_path is not None and not frontier_path.exists():
+        frontier_path = run_dir / "candidate_frontier.json"  # type: ignore[operator]
     out_dir = Path(args.out_dir) if args.out_dir else (run_dir or Path("."))
 
     for label, p in [("evaluations_json", evals_path), ("frontier_json", frontier_path)]:
@@ -92,8 +116,10 @@ def run(args: argparse.Namespace) -> None:
 
     # Build frontier lookup
     frontier_map: dict[str, dict[str, Any]] = {}
-    for c in frontier.get("candidates", []):
-        frontier_map[c["candidate_id"]] = c
+    for candidate in frontier.get("candidates", []):
+        person_id = candidate.get("person_id")
+        if person_id:
+            frontier_map[str(person_id)] = candidate
 
     # Filter evaluations. Legacy verdicts map onto the new ladder so old
     # run dirs still export: strong->top_tier, maybe/weak->high_potential.
@@ -120,19 +146,9 @@ def run(args: argparse.Namespace) -> None:
     with shortlist_path.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=SHORTLIST_FIELDS)
         writer.writeheader()
-        for ev in filtered:
+        for rank, ev in enumerate(filtered, start=1):
             cid = ev.get("candidate_id", "")
-            cand = frontier_map.get(cid, {})
-            writer.writerow({
-                "Rank": ev.get("rank", ""),
-                "Name": cand.get("name") or "",
-                "LinkedIn URL": cand.get("linkedin_url") or "",
-                "Current Role": cand.get("current_role") or "",
-                "Current Company": cand.get("current_company") or "",
-                "Source": cand.get("source_operator") or "",
-                "Channel": cand.get("source_channel") or "",
-                "Rationale": ev.get("rationale", ""),
-            })
+            writer.writerow(shortlist_row(rank, ev, frontier_map.get(str(cid), {})))
 
     # Write shortlist manifest
     manifest = {
@@ -161,7 +177,7 @@ def main() -> None:
     )
     parser.add_argument("--run-dir", help="JD run directory")
     parser.add_argument("--evaluations-json", help="Path to candidate_evaluations.json")
-    parser.add_argument("--frontier-json", help="Path to candidate_frontier.json")
+    parser.add_argument("--frontier-json", help="Path to canonical candidate-frontier.json")
     parser.add_argument("--out-dir", help="Output directory (defaults to run-dir)")
     parser.add_argument("--min-verdict", default="high_potential",
                         choices=["top_tier", "high_potential", "out"],

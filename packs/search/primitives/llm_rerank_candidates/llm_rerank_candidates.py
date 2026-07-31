@@ -7,7 +7,7 @@ production configurable fan-out path in network-search-api, but
 Powerpacks-local.
 
 Differences from `llm_filter_candidates`:
-- Generic per-item prompts (not tied to task_state shape)
+- Generic per-item prompts over canonical candidate records
 - Async fan-out with `asyncio.Semaphore` (configurable, default 50)
 - Does NOT require `set_id` or any set context
 - Designed for testing concurrency / load / latency without a full

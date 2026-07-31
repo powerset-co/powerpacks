@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import jsonschema
 
@@ -66,6 +67,59 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("role_track", "In", ["engineering"]), filters[1])
         self.assertIn(("is_current", "Eq", True), filters[1])
         self.assertIn(("total_years_experience", "Gte", 3), filters[1])
+
+    def test_summary_search_uses_summary_namespace_filters_and_person_grain(self) -> None:
+        row = SimpleNamespace(
+            id="person-1",
+            model_extra={"person_id": "person-1", "summary": "Built distributed systems"},
+        )
+        namespace = SimpleNamespace(
+            multi_query=mock.Mock(return_value=SimpleNamespace(results=[SimpleNamespace(rows=[row])]))
+        )
+        filters = (
+            "And",
+            [("allowed_operator_ids", "ContainsAny", ["operator"]), ("id", "In", ["person-1"])],
+        )
+        with (
+            mock.patch.object(turbopuffer_client, "namespace", return_value=namespace),
+            mock.patch.object(turbopuffer_client, "embedding", new=mock.AsyncMock(return_value=[0.1, 0.2])),
+        ):
+            rows = asyncio.run(
+                turbopuffer_client.hybrid_summary_rows(
+                    {"semantic_query": "distributed systems", "bm25_queries": ["distributed systems"]},
+                    filters,
+                    top_k=10,
+                    include_attributes=["person_id", "summary"],
+                )
+            )
+
+        self.assertEqual(rows[0]["person_id"], "person-1")
+        self.assertNotIn("position_id", rows[0])
+        queries = namespace.multi_query.call_args.kwargs["queries"]
+        self.assertTrue(all(query["filters"] == filters for query in queries))
+        self.assertEqual({query["rank_by"][0] for query in queries}, {"summary_tokens", "vector"})
+
+    def test_company_signal_search_is_company_grain_and_operator_scoped(self) -> None:
+        row = SimpleNamespace(id="company-1", model_extra={"signals_semantic_text": "API infrastructure"})
+        namespace = SimpleNamespace(query=mock.Mock(return_value=SimpleNamespace(rows=[row])))
+        filters = ("allowed_operator_ids", "ContainsAny", ["operator"])
+        with (
+            mock.patch.object(turbopuffer_client, "namespace", return_value=namespace),
+            mock.patch.object(turbopuffer_client, "embedding", new=mock.AsyncMock(return_value=[0.1, 0.2])),
+        ):
+            rows = asyncio.run(
+                turbopuffer_client.semantic_company_signal_rows(
+                    "API infrastructure",
+                    filters,
+                    top_k=10,
+                    include_attributes=["signals_semantic_text"],
+                )
+            )
+
+        self.assertEqual(rows[0]["company_id"], "company-1")
+        self.assertEqual(rows[0]["score"], 1.0)
+        self.assertEqual(namespace.query.call_args.kwargs["filters"], filters)
+        self.assertEqual(namespace.query.call_args.kwargs["rank_by"][:2], ("vector", "kNN"))
 
     def test_required_location_families_can_be_conjunctive(self) -> None:
         filters = turbopuffer_client.filters_from_role_payload({

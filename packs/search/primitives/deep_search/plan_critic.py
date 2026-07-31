@@ -27,7 +27,6 @@ from typing import Any
 SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
-from openai_client import make_openai_client  # noqa: E402
 
 try:  # direct script execution
     from location_scope import location_scope_from_plan
@@ -147,6 +146,8 @@ def main() -> None:
     result["deterministic_issues"] = deterministic_checks(plan, backend=args.backend)
 
     if not args.no_llm:
+        from openai_client import make_openai_client
+
         key = os.environ.get("OPENAI_API_KEY")
         if not key:
             print(json.dumps({"primitive": "plan_critic", "status": "failed", "error": "OPENAI_API_KEY not set"}))

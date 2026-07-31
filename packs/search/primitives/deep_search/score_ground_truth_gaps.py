@@ -5,7 +5,7 @@ Ground truth = the trusted gold set built by the full agentic + mixture-of-judge
 primitive measures the gap so successive epochs can converge toward ground truth.
 
 Inputs:
-  --ground-truth  ground_truth_ranked.json (list of {person_id, name, mean_score, ...}),
+  --ground-truth  Reflect ground_truth.json (human-reviewed labels),
                   or a tiered {"tiers": {"A_...": [...], ...}} dict (names resolved against
                   the epoch candidates; REMOVED_* tiers excluded) for graded NDCG gains.
   --epoch-candidates  the epoch's candidates as JSONL or JSON list, each with person_id and

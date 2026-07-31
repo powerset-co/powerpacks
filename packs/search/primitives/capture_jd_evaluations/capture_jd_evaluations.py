@@ -18,8 +18,8 @@ Usage:
 
 Or with explicit paths:
 
-    ... --frontier-json candidate_frontier.json \
-        --plan-json plan.json \
+    ... --frontier-json candidate-frontier.json \
+        --plan-json review/plan.json \
         --raw-evaluations candidate_evaluations.raw.jsonl \
         --evaluator-mode harness_single_agent \
         --out-dir .powerpacks/search-network-jd/<slug>/
@@ -181,24 +181,39 @@ def enrich_evaluations(
 ) -> list[dict[str, Any]]:
     """Add person_id, name, linkedin_url etc. from frontier to evaluations."""
     frontier_map: dict[str, dict[str, Any]] = {}
-    for c in frontier.get("candidates", []):
-        frontier_map[c["candidate_id"]] = c
+    for candidate in frontier.get("candidates", []):
+        person_id = candidate.get("person_id")
+        if person_id:
+            frontier_map[str(person_id)] = candidate
 
     enriched = []
     for ev in evaluations:
         cid = ev["candidate_id"]
-        cand = frontier_map.get(cid, {})
+        cand = frontier_map.get(str(cid), {})
+        profile = cand.get("hydrated_profile") or {}
+        structured = cand.get("structured") or {}
+        found_by = cand.get("found_by") or []
+        probe_ids = {
+            match.get("probe_id")
+            for match in found_by
+            if isinstance(match, dict) and match.get("probe_id")
+        }
         # Ensure person_id is present if frontier has it
         if "person_id" not in ev or ev["person_id"] is None:
             ev["person_id"] = cand.get("person_id")
         # Carry display fields for CSV export (not part of schema, stripped
         # before writing evaluations JSON)
-        ev["_name"] = cand.get("name")
-        ev["_linkedin_url"] = cand.get("linkedin_url")
-        ev["_current_role"] = cand.get("current_role")
-        ev["_current_company"] = cand.get("current_company")
-        ev["_location"] = cand.get("location")
-        ev["_matched_probe_count"] = cand.get("duplicate_signal", {}).get("matched_probe_count", 1)
+        ev["_name"] = profile.get("name") or profile.get("full_name")
+        ev["_linkedin_url"] = (
+            profile.get("linkedin_url")
+            or profile.get("public_profile_url")
+            or structured.get("linkedin_url")
+            or structured.get("public_profile_url")
+        )
+        ev["_current_role"] = profile.get("current_title") or structured.get("position_title")
+        ev["_current_company"] = profile.get("current_company") or structured.get("company_id")
+        ev["_location"] = profile.get("location") or structured.get("location")
+        ev["_matched_probe_count"] = len(probe_ids) or len(found_by)
         enriched.append(ev)
     return enriched
 
@@ -255,11 +270,15 @@ def run(args: argparse.Namespace) -> None:
         (run_dir / "candidate_evaluations.raw.jsonl") if run_dir else None
     )
     frontier_path = Path(args.frontier_json) if args.frontier_json else (
-        (run_dir / "candidate_frontier.json") if run_dir else None
+        (run_dir / "candidate-frontier.json") if run_dir else None
     )
     plan_path = Path(args.plan_json) if args.plan_json else (
-        (run_dir / "plan.json") if run_dir else None
+        (run_dir / "review" / "plan.json") if run_dir else None
     )
+    if args.frontier_json is None and frontier_path is not None and not frontier_path.exists():
+        frontier_path = run_dir / "candidate_frontier.json"  # type: ignore[operator]
+    if args.plan_json is None and plan_path is not None and not plan_path.exists():
+        plan_path = run_dir / "plan.json"  # type: ignore[operator]
     out_dir = Path(args.out_dir) if args.out_dir else (run_dir or Path("."))
 
     for label, p in [("raw_evaluations", raw_path), ("frontier_json", frontier_path), ("plan_json", plan_path)]:
@@ -354,8 +373,8 @@ def main() -> None:
     )
     parser.add_argument("--run-dir", help="JD run directory")
     parser.add_argument("--raw-evaluations", help="Path to candidate_evaluations.raw.jsonl")
-    parser.add_argument("--frontier-json", help="Path to candidate_frontier.json")
-    parser.add_argument("--plan-json", help="Path to plan.json")
+    parser.add_argument("--frontier-json", help="Path to canonical candidate-frontier.json")
+    parser.add_argument("--plan-json", help="Path to reviewed review/plan.json")
     parser.add_argument("--out-dir", help="Output directory (defaults to run-dir)")
     parser.add_argument("--evaluator-mode", required=True, choices=sorted(EVALUATOR_MODES))
     parser.add_argument("--evaluator-model", help="Model used for evaluation")

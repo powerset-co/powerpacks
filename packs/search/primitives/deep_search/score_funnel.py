@@ -221,7 +221,7 @@ def main() -> None:
 
     shortlist_ids: set[str] = set()
     shortlist_source = None
-    for candidate in ("ranked_final.json", "shortlist_ranked.json", "ground_truth_ranked.json"):
+    for candidate in ("ranked_final.json", "shortlist_ranked.json"):
         path = run_dir / "shortlist" / candidate
         if path.exists():
             shortlist_ids = {r.get("person_id") for r in load_records(path) if r.get("person_id")}

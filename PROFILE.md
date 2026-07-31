@@ -26,7 +26,17 @@ Never paste secret env values into chat.
 - `$search`, people search, network search, role/title/location/school
   searches, or company-directory people lookups →
   `packs/search/skills/search/SKILL.md`
-- job posting URLs, pasted job descriptions, or complex role briefs → `$search`
-  deep mode (`packs/search/skills/search/deep-mode.md`)
-- `$search-company`, company lookup, company IDs, investor/funding/sector or
-  company-set resolution → `packs/search/skills/search-company/SKILL.md`
+- ordinary people search → live legacy `search_network_pipeline.py` prepare,
+  Review, and approved execution flow
+- bare-person lookup → typed `packs.search.pipeline.search`; local fields are
+  capability-derived and Powerset supports set-scoped person ID, name, handle,
+  and profile URL lookup only
+- job posting URLs, pasted job descriptions, or complex role briefs → canonical
+  legacy `$search` recruiting through `deep_search_loop.py` until atomic cutover
+- company lookup/resolution → live `$search-company`; relational local output →
+  `$search-sql`; contact-field output → `$search-contacts`
+- `packs.search.pipeline.search` → deterministic bare-person lookup owner;
+  otherwise an additive opt-in candidate path for
+  deterministic tests and approved read-only validation only, never an implied
+  production cutover or paid-run authorization
+- ambiguous intent → `needs_input` and one clarification, with no retrieval

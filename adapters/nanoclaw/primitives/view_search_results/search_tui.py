@@ -44,7 +44,8 @@ RESULTS_IO = (
     / "persist_search_results"
     / "results_io.py"
 )
-DEFAULT_RUNS_DIR = POWERPACKS_ROOT / ".powerpacks" / "runs"
+DEFAULT_RUNS_DIR = POWERPACKS_ROOT / ".powerpacks" / "search-runs"
+LEGACY_RUNS_DIR = POWERPACKS_ROOT / ".powerpacks" / "runs"
 TRANSCRIPT_REPLAY_LIMIT = int(os.environ.get("POWERPACKS_TUI_TRANSCRIPT_REPLAY_LIMIT", "500"))
 MESSAGE_HISTORY_LIMIT = int(os.environ.get("POWERPACKS_TUI_MESSAGE_HISTORY_LIMIT", "3000"))
 
@@ -78,7 +79,11 @@ def now_iso() -> str:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text())
+    state = json.loads(path.read_text())
+    if state.get("schema_version") == "search.stage_result.v1":
+        state["task_id"] = state.get("task_id") or path.parent.name
+        state["query"] = state.get("query") or path.parent.name.replace("-", " ")
+    return state
 
 
 def append_jsonl(path: Path, event: dict[str, Any]) -> None:
@@ -155,9 +160,14 @@ def state_sort_key(item: dict[str, Any]) -> str:
 
 def discover_run_dirs(runs_dir: Path, nanoclaw_dir: Path | None = None) -> list[Path]:
     dirs = [runs_dir]
+    if runs_dir.name == "search-runs":
+        dirs.append(runs_dir.parent / "runs")
+    elif runs_dir.name == "runs":
+        dirs.append(runs_dir.parent / "search-runs")
     if nanoclaw_dir:
         groups_dir = nanoclaw_dir / "groups"
         if groups_dir.exists():
+            dirs.extend(sorted(groups_dir.glob("*/.powerpacks/search-runs")))
             dirs.extend(sorted(groups_dir.glob("*/.powerpacks/runs")))
     deduped = []
     seen = set()
@@ -180,14 +190,16 @@ def discover_runs(runs_dir: Path, nanoclaw_dir: Path | None = None) -> list[dict
 
     runs = []
     for directory in run_dirs:
-        for path in directory.glob("*.json"):
+        paths = list(directory.glob("*.json")) + list(directory.glob("*/result.json"))
+        for path in paths:
             if path.name.endswith(".events.jsonl") or ".manifest." in path.name:
                 continue
             try:
                 state = read_json(path)
             except (OSError, json.JSONDecodeError):
                 continue
-            if not state.get("task_id") or not state.get("query"):
+            canonical = state.get("schema_version") == "search.stage_result.v1"
+            if not canonical and (not state.get("task_id") or not state.get("query")):
                 continue
             artifacts = state.get("artifacts") or {}
             rows = 0
@@ -197,8 +209,8 @@ def discover_runs(runs_dir: Path, nanoclaw_dir: Path | None = None) -> list[dict
                 rows = int(artifacts.get("row_count") or 0)
             runs.append({
                 "path": str(path),
-                "task_id": state.get("task_id"),
-                "query": state.get("query"),
+                "task_id": state.get("task_id") or path.parent.name,
+                "query": state.get("query") or path.parent.name.replace("-", " "),
                 "status": state.get("status") or state.get("summary", {}).get("status") or "",
                 "row_count": rows,
                 "hydrated_count": artifacts.get("hydrated_count"),

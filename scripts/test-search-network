@@ -161,7 +161,10 @@ case "$command" in
         py="python"
       fi
     fi
-    "$py" -m unittest tests.test_search_network_mock_openai -v "$@"
+    "$py" -m unittest \
+      tests.test_search_network_mock_openai \
+      tests.test_recruiting_pipeline \
+      tests.test_layered_search_engine -v "$@"
     ;;
   extractor-eval)
     require_query_dataset_dir

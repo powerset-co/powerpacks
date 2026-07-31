@@ -396,21 +396,16 @@ only; keep that scoped to the msgvault primitives.
   `.powerpacks/network-import/merged/people.csv` and writes
   `.powerpacks/search-index/`; do not run LLM, network, Supabase,
   Postgres, or TurboPuffer calls for this workflow.
-- **Search pack** (search, search-company, search-sql):
-  `$search` and `$search-company` require `.env` with TurboPuffer +
-  Postgres credentials. If `.env` is present, run the search
-  primitive directly and use its error to diagnose; use the doctor only if env or
-  auth looks broken and the cause is unclear. For `$search`, after
-  loading `packs/search/skills/search/SKILL.md`, make its Step-1 decision
-  yourself (surface/backend/depth, recorded to the run dir's `decision.json`)
-  and dispatch from its table — ordinary people searches use the
-  `search_network_pipeline.py prepare --query ...` path (add
-  `--backend local --db <db>` for the local DuckDB index); the primitive owns
-  company-directory fast path detection. Job posting URLs and pasted JDs decide
-  `depth: deep` — load `packs/search/skills/search/deep-mode.md` and run the
-  deep-search engine (a job URL runs through `deep_search_loop.py --jd-url`). Do not
-  grep/search/read search docs, schemas, primitive source, or prior artifacts on
-  the happy path.
+- **Search pack** (search, search-company, search-sql): load
+  `packs/search/skills/search/SKILL.md`. Bare-person lookup executes through the
+  typed deterministic path. Ordinary people searches retain the live
+  `search_network_pipeline.py` prepare/Review/run flow; recruiting retains the
+  canonical legacy `deep_search_loop.py` flow until atomic cutover. Company-only
+  lookup/resolution remains `$search-company`; relational local questions use
+  `$search-sql`; contact-field questions use `$search-contacts`. Ambiguous intent
+  returns `needs_input` before retrieval. `packs.search.pipeline.search` is an
+  additive opt-in candidate path for GTM/recruiting deterministic tests and
+  approved read-only real-environment validation only.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
 implies that pack.
@@ -425,21 +420,20 @@ internals, primitive sequences, or orchestration details.
 
 Routes:
 
-- `$search` (formerly `$search-network`; the old name still works as an
-  alias), people search, network search, local network search,
+- `$search`, people search, network search, local network search,
   role/title/location/school searches, "who is...", "find people...",
   company-directory queries →
   `packs/search/skills/search/SKILL.md`
-  The single people-search door: the agent makes the **Step-1 decision**
-  (surface `people|company|sql|contacts`, backend `powerset|local`, depth
-  `fast|deep`) per the SKILL's decision-rules block, records it to the run
-  dir's `decision.json`, then dispatches — JD/job-posting URL/deep asks →
-  **`$search` deep mode**, company → `$search-company`, relational/aggregate → `$search-sql`,
-  my/set contacts → `$search-contacts`, and ordinary people searches stay here
-  on the fast local DuckDB / TurboPuffer path. Explicit words bind the backend:
+  For routeable people requests the agent records
+  `SearchRoute(target, profile, backend, reason)`. Bare-person lookup uses the
+  typed deterministic composition root. Ordinary people search uses
+  the live legacy prepare/run pipeline; JD/job-posting URL asks use canonical
+  legacy recruiting. Company-only lookup/resolution remains `$search-company`;
+  SQL and contacts remain distinct surfaces. If the wording is ambiguous, ask
+  once and return `needs_input` without retrieval or a guessed route.
+  Explicit words bind the backend:
   "powerset"/set/team network → TurboPuffer+Postgres, "local"/"offline"/
-  "my imported network" → local DuckDB. The retrieval primitive is still
-  `search_network_pipeline.py` (only the skill/route was renamed).
+  "my imported network" → local DuckDB.
   **Deep mode** (job-posting URLs via `deep_search_loop.py --jd-url`, pasted JDs,
   complex role briefs, and "build a shortlist") loads
   `packs/search/skills/search/deep-mode.md` and runs the deep-search engine: a
@@ -447,8 +441,6 @@ Routes:
   evidence judge, a deterministic core gate, and capped expand-from-anchor
   epochs. A bare LinkedIn profile URL is a lookup, not a shipped profile-to-role
   deep-search intake; ask for the role/domain if similarity search was intended.
-- `$search-company`, company lookup, company IDs, investor/funding/sector or
-  company-set resolution → `packs/search/skills/search-company/SKILL.md`
 - `$search-sql`, relational/aggregate local people queries ("who overlapped
   with X at a company", "2+ startup stints", career-shape predicates),
   read-only SQL over the local search DuckDB →
@@ -456,20 +448,13 @@ Routes:
 - `$search-contacts`, my contacts, set contacts, contact field filtering →
   `packs/contacts/skills/search-contacts/SKILL.md`
 
-> **Search family (single `$search` door, consolidated 2026-07-01).** `$search` is the one
-> people-search door: the agent-made Step-1 decision (recorded to `decision.json`; rules live in
-> the SKILL's decision-rules block and are benchmarked by the agent decision eval,
-> `packs/search/evals/run_decision_eval.py` on `packs/search/evals/decision/cases.json`) dispatches
-> to its own **deep mode** (JD / job-posting URL / role brief / shortlist →
-> `packs/search/skills/search/deep-mode.md`, the deep-search engine), plus `$search-company`,
-> `$search-sql`, and `$search-contacts`, and keeps ordinary people searches on the fast local
-> DuckDB / TurboPuffer path. `$search-company` / `$search-sql` / `$search-contacts` remain
-> **distinct surfaces (kept, not folded)** — reached through `$search`'s router or directly.
-> **`$recruit` and `$search-profile` were removed**; recruiter/JD intake moved into `$search` deep
-> mode, while raw profile-to-role intake is not currently shipped. The engine
-> package is `packs/search/primitives/deep_search/`. `$search-network` stays a recognized deprecated
-> alias of `$search`. The retrieval primitive is still `search_network_pipeline.py` and the
-> `search-network-jd-*` schemas/tasks keep their names — only the skill routes were renamed.
+> **Search family.** `$search` is the router. Bare-person lookup uses the typed
+> deterministic path; the legacy fast and recruiting orchestration owners
+> remain canonical before cutover. `$search-company`,
+> `$search-sql`, and `$search-contacts` remain distinct live surfaces. The typed
+> pipeline is an additive deterministic/read-only validation candidate only.
+> `$search-network` remains a recognized legacy alias, and NanoClaw's live slash
+> command remains `/search-network` while its task/result integration exists.
 
 - `$build-local-search-index`, local indexing, build local search index,
   prepare `.powerpacks/search-index` artifacts →

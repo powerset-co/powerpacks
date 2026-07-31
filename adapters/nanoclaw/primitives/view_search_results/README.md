@@ -127,7 +127,8 @@ Session/resume behavior:
 - Resumed threads replay prior user/agent chat from NanoClaw's session
   `inbound.db` and `outbound.db` into the TUI chat pane.
 - `powerclaw --resume-run` and `/resume` resume the newest Powerpacks
-  search-result artifact in the TUI.
+  search-result artifact from canonical `.powerpacks/search-runs/*/result.json`
+  discovery, while still recognizing legacy `.powerpacks/runs/*.json` state.
 - `/session` shows active NanoClaw session rows from `data/v2.db`.
 
 Keyboard shortcuts:

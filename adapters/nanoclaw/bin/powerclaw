@@ -18,11 +18,16 @@ def read_jsonish_state(path: Path) -> bool:
 
 
 def discover_latest_state(runs_dir: Path) -> Path | None:
-    if not runs_dir.exists():
-        return None
+    directories = [runs_dir]
+    if runs_dir.name == "search-runs":
+        directories.append(runs_dir.parent / "runs")
+    elif runs_dir.name == "runs":
+        directories.append(runs_dir.parent / "search-runs")
     candidates = [
         path
-        for path in runs_dir.glob("*.json")
+        for directory in directories
+        if directory.exists()
+        for path in (*directory.glob("*.json"), *directory.glob("*/result.json"))
         if read_jsonish_state(path) and ".events." not in path.name
     ]
     if not candidates:
@@ -109,7 +114,7 @@ def main() -> int:
     parser.add_argument("--thread-id", "--thread", dest="thread_id", help="Resume a specific threaded NanoClaw CLI session.")
     parser.add_argument("--threads-dir", default=str(root / ".powerpacks" / "threads"))
     parser.add_argument("--state", help="Open a specific Powerpacks task state JSON.")
-    parser.add_argument("--runs-dir", default=str(root / ".powerpacks" / "runs"))
+    parser.add_argument("--runs-dir", default=str(root / ".powerpacks" / "search-runs"))
     parser.add_argument("--review-log")
     parser.add_argument("--nanoclaw-dir")
     parser.add_argument("--no-auto-start", action="store_true")

@@ -61,6 +61,9 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("skills/add-", text)
         self.assertNotIn("view_search_results", text)
         self.assertNotIn("workflows/query-decomposition.md", text)
+        self.assertIn("packs.search.pipeline.search", text)
+        self.assertIn("bare-person lookup", text)
+        self.assertIn("email and phone return `unsupported_capability`", text)
         self.assertIn("search_network_pipeline.py prepare", text)
 
     def test_search_company_skill_uses_company_resolver(self) -> None:
@@ -247,32 +250,26 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("Never attach dossier files", text)
         self.assertIn("$deep-context", text)
 
-    def test_search_surface_documents_company_entrypoint(self) -> None:
+    def test_search_surface_documents_typed_routes(self) -> None:
         text = (ROOT / "packs/search/docs/search-surface.md").read_text()
-        self.assertIn("/search-network <query>", text)
-        self.assertIn("/search-company <query>", text)
-        self.assertIn("company lookup", text.lower())
+        self.assertIn("engine + gtm", text)
+        self.assertIn("execute the typed deterministic path", text)
+        self.assertIn("Powerset supports set-scoped `person_id`, `name`, `handle`, and `profile_url`", text)
+        self.assertIn("live `$search-company` surface", text)
+        self.assertIn("needs_input", text)
+        self.assertIn("no retrieval or guessed route", text)
 
     def test_search_network_uses_expand_primitive_directly(self) -> None:
-        task = json.loads((ROOT / "packs/search/tasks/search-network.task.json").read_text())
-        task_step_ids = [step["id"] for step in task["steps"]]
-        self.assertIn("resolve_investors", task_step_ids)
-        self.assertIn("count_candidates", task_step_ids)
-        self.assertIn("execute_role_search", task_step_ids)
-        self.assertNotIn("direct_count", task_step_ids)
-        self.assertNotIn("direct_execute", task_step_ids)
-
-        expand_step = next(step for step in task["steps"] if step["id"] == "expand_search_request")
-        self.assertEqual(expand_step["kind"], "primitive")
-        self.assertEqual(expand_step["primitive"], "expand_search_request")
-        self.assertNotIn("skill", expand_step)
-
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
-        self.assertIn("Happy Path", text)
-        self.assertIn("search_network_pipeline.py prepare", text)
-        self.assertIn("company_directory_fast_path", text)
+        self.assertIn("packs.search.pipeline.search", text)
+        self.assertIn("target", text)
+        self.assertIn("profile", text)
         self.assertIn("deep-mode.md", text)
-        self.assertIn("Do not inspect repo docs, source, memory", text)
+        self.assertIn("legacy task manifest", text)
+        self.assertTrue((ROOT / "packs/search/pipeline/search.py").exists())
+        self.assertTrue((ROOT / "packs/search/pipeline/recruiting.py").exists())
+        # Retained until every legacy recruiting consumer/assertion is ported.
+        self.assertTrue((ROOT / "packs/search/tasks/search-network.task.json").exists())
 
     def test_json_contracts_and_schemas_parse(self) -> None:
         roots = [
@@ -306,8 +303,28 @@ class CoreLayoutTests(unittest.TestCase):
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
         self.assertIn("Execute this search or modify it?", text)
         self.assertNotIn("execute`, `modify`, or `search only`", text)
-        self.assertIn("--execute-approved", text)
-        self.assertIn("do not ask for another approval", text)
+        self.assertIn("Run only the emitted approved command", text)
+
+    def test_removed_orchestration_is_absent(self) -> None:
+        self.assertTrue((ROOT / "packs/search/pipeline/recruiting.py").exists())
+        self.assertTrue((ROOT / "packs/search/pipeline/recruiting_stages.py").exists())
+
+
+    def test_search_surface_documents_current_entrypoint(self) -> None:
+        text = (ROOT / "packs/search/docs/search-surface.md").read_text()
+        self.assertIn("`$search` is the live search router", text)
+        self.assertIn("People at a named company", text)
+        self.assertIn("`$search-company`, `$search-sql`, and `$search-contacts` remain distinct live", text)
+
+    def test_search_docs_keep_legacy_recruiting_and_paid_approval_boundary(self) -> None:
+        deep = (ROOT / "packs/search/skills/search/deep-mode.md").read_text()
+        architecture = (ROOT / "packs/search/docs/search-architecture.md").read_text()
+        self.assertIn("canonical recruiting owner", deep)
+        self.assertIn("recruiting.plan_approved=true", deep)
+        self.assertIn("recruiting.judge_approved=true", deep)
+        self.assertIn("do **not** authorize a paid quality run", deep)
+        self.assertIn("legacy `deep_search_loop.py`", architecture)
+        self.assertIn("additive and opt-in", architecture)
 
     def test_task_state_tracks_planned_steps_separately_from_execution_log(self) -> None:
         task_state = ROOT / "packs/search/primitives/task_state/task_state.py"
@@ -541,7 +558,6 @@ class CoreLayoutTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(lineage_events[0]["feedback_id"], "fb-1")
-
 
 if __name__ == "__main__":
     unittest.main()

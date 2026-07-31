@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerpacks/schemas/search-route.schema.json",
+  "title": "SearchRoute", "type": "object", "additionalProperties": false,
+  "required": ["target", "profile", "backend", "reason"],
+  "properties": {"target": {"enum": ["engine", "sql", "contacts"]}, "profile": {"enum": ["lookup", "gtm", "recruiting", null]}, "backend": {"enum": ["local", "powerset", null]}, "reason": {"type": "string", "minLength": 1}},
+  "allOf": [
+    {"if": {"properties": {"target": {"const": "engine"}}}, "then": {"properties": {"profile": {"enum": ["lookup", "gtm", "recruiting"]}, "backend": {"enum": ["local", "powerset"]}}}},
+    {"if": {"properties": {"target": {"enum": ["sql", "contacts"]}}}, "then": {"properties": {"profile": {"const": null}, "backend": {"const": null}}}}
+  ]
+}

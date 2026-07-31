@@ -82,6 +82,7 @@ TURBOPUFFER_NAMESPACES = {
     "schools": "aleph_education_v1",
     "education": "aleph_people_education_v1",
     "summaries": "aleph_summaries_v1",
+    "company_signals": "aleph_company_signals_v1",
     "companies": "aleph_companies_v1",
     "investors": "aleph_investors_v1",
 }

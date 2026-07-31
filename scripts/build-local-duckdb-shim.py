@@ -17,7 +17,7 @@ Example:
 Then test local search with:
 
   POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb \
-    uv run --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py ...
+    uv run --project . python -m packs.search.pipeline.search --spec <search_spec.json> --output-dir <run-dir>
 
 Changelog:
 - 2026-07-26: an external --records-dir that ships person_profiles.records.parquet

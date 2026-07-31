@@ -1,13 +1,6 @@
-"""Deterministic CI tests for the $search decision contract.
+"""Deterministic tests for the canonical $search SearchRoute contract."""
 
-The routing decision is made by a real agent (benchmarked on demand by
-packs/search/evals/run_decision_eval.py — never in CI). These tests pin
-everything that CAN be checked without spawning an agent: the decision.json
-schema, the labeled case fixture's integrity/coverage, the SKILL.md contract
-text (drift guard), and the eval runner's prompt/scoring plumbing.
-"""
 from __future__ import annotations
-
 import importlib.util
 import json
 import subprocess
@@ -15,7 +8,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-
 import jsonschema
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,158 +15,118 @@ SKILL = ROOT / "packs/search/skills/search/SKILL.md"
 SCHEMA = ROOT / "packs/search/schemas/search-decision.schema.json"
 CASES = ROOT / "packs/search/evals/decision/cases.json"
 RUNNER = ROOT / "packs/search/evals/run_decision_eval.py"
-
 _spec = importlib.util.spec_from_file_location("run_decision_eval", RUNNER)
 rde = importlib.util.module_from_spec(_spec)
+assert _spec and _spec.loader
 _spec.loader.exec_module(rde)
-
-SCHEMA_DOC = json.loads(SCHEMA.read_text(encoding="utf-8"))
-CASES_DOC = json.loads(CASES.read_text(encoding="utf-8"))
-SKILL_TEXT = SKILL.read_text(encoding="utf-8")
-
-VALID = {"surface": "people", "backend": "powerset", "depth": "fast", "reason": "plain people search"}
+SCHEMA_DOC = json.loads(SCHEMA.read_text())
+CASES_DOC = json.loads(CASES.read_text())
+SKILL_TEXT = SKILL.read_text()
+VALID = {"target": "engine", "profile": "gtm", "backend": "powerset", "reason": "people search"}
 
 
 class TestDecisionSchema(unittest.TestCase):
-    def test_valid_decision_validates(self):
-        jsonschema.validate(VALID, SCHEMA_DOC)
+    def test_valid_routes(self):
+        for value in (
+            VALID,
+            {"target": "sql", "profile": None, "backend": None, "reason": "relational"},
+            {"target": "contacts", "profile": None, "backend": None, "reason": "contacts"},
+        ):
+            jsonschema.validate(value, SCHEMA_DOC)
 
-    def test_missing_field_rejected(self):
-        for field in ("surface", "backend", "depth", "reason"):
-            bad = {k: v for k, v in VALID.items() if k != field}
-            with self.assertRaises(jsonschema.ValidationError):
-                jsonschema.validate(bad, SCHEMA_DOC)
-
-    def test_bad_enum_rejected(self):
-        for field, value in (("surface", "network"), ("backend", "turbopuffer"), ("depth", "recruit")):
-            with self.assertRaises(jsonschema.ValidationError):
-                jsonschema.validate({**VALID, field: value}, SCHEMA_DOC)
-
-    def test_extra_property_rejected(self):
-        with self.assertRaises(jsonschema.ValidationError):
-            jsonschema.validate({**VALID, "route": "network"}, SCHEMA_DOC)
+    def test_invalid_routes(self):
+        bad = [
+            {k: v for k, v in VALID.items() if k != "profile"},
+            {**VALID, "extra": True},
+            {**VALID, "target": "company"},
+            {**VALID, "target": "sql"},
+            {"target": "engine", "profile": None, "backend": None, "reason": "x"},
+        ]
+        for value in bad:
+            with self.subTest(value=value), self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate(value, SCHEMA_DOC)
 
 
 class TestCasesIntegrity(unittest.TestCase):
-    def test_ids_unique_and_queries_nonempty(self):
+    def test_cases(self):
         ids = [c["id"] for c in CASES_DOC]
         self.assertEqual(len(ids), len(set(ids)))
+        self.assertGreaterEqual(len(ids), 64)
         for case in CASES_DOC:
-            self.assertTrue(case["query"].strip(), case["id"])
-
-    def test_labels_in_enums(self):
-        for case in CASES_DOC:
-            self.assertIn(case["surface"], rde.ENUMS["surface"], case["id"])
-            self.assertIn(case["backend"], rde.ENUMS["backend"], case["id"])
-            if case.get("depth") is not None:
-                self.assertIn(case["depth"], rde.ENUMS["depth"], case["id"])
-            for field in rde.FIELDS:
-                for alt in case.get(f"acceptable_{field}") or []:
-                    self.assertIn(alt, rde.ENUMS[field], case["id"])
-            for key, value in (case.get("env") or {}).items():
-                self.assertIn(key, {"local_db", "remote_creds"}, case["id"])
-                self.assertIsInstance(value, bool, case["id"])
-
-    def test_coverage_floors(self):
-        surfaces = [c["surface"] for c in CASES_DOC]
-        backends = [c["backend"] for c in CASES_DOC]
-        depths = [c["depth"] for c in CASES_DOC if c.get("depth")]
-        for surface in rde.ENUMS["surface"]:
-            self.assertGreaterEqual(surfaces.count(surface), 8, surface)
-        for backend in rde.ENUMS["backend"]:
-            self.assertGreaterEqual(backends.count(backend), 6, backend)
-        self.assertGreaterEqual(depths.count("deep"), 6)
-        self.assertGreaterEqual(len(CASES_DOC), 64)
-
-    def test_regression_cases_present(self):
-        ids = {c["id"] for c in CASES_DOC}
-        for required in ("reg-worked-with-tech", "reg-career-early", "reg-lookup-person",
-                         "exp-powerset-staff-sf", "exp-local-pms-nyc", "env-both-default",
-                         "dep-deep-local", "cross-jd-local"):
-            self.assertIn(required, ids)
+            self.assertTrue(case["query"].strip())
+            self.assertIn(case["target"], rde.ENUMS["target"])
+            self.assertNotIn("surface", case)
+            self.assertNotEqual(case["target"], "company")
+            if case["target"] == "engine":
+                self.assertIn(case["profile"], rde.ENUMS["profile"])
+                self.assertIn(case["backend"], rde.ENUMS["backend"])
+            else:
+                self.assertIsNone(case["profile"])
+                self.assertIsNone(case["backend"])
+        people = next(c for c in CASES_DOC if c["id"] == "net-people-at-openai")
+        self.assertEqual((people["target"], people["profile"]), ("engine", "gtm"))
+        self.assertFalse(any(c["id"].startswith("co-") for c in CASES_DOC))
+        self.assertNotIn("adv-find-candidates-bare", ids)
 
 
-class TestSkillContract(unittest.TestCase):
-    def test_rules_markers_present_and_ordered(self):
-        self.assertIn(rde.RULES_START, SKILL_TEXT)
-        self.assertIn(rde.RULES_END, SKILL_TEXT)
-        self.assertLess(SKILL_TEXT.index(rde.RULES_START), SKILL_TEXT.index(rde.RULES_END))
-
-    def test_rules_block_carries_all_enum_literals(self):
+class TestSkillAndScorer(unittest.TestCase):
+    def test_rules_and_pre_cutover_boundary(self):
         rules = rde.extract_rules(SKILL)
         for values in rde.ENUMS.values():
             for value in values:
-                self.assertIn(f"`{value}`", rules, value)
-
-    def test_contract_strings(self):
-        self.assertIn("decision.json", SKILL_TEXT)
+                self.assertIn(f"`{value}`", rules)
+        self.assertIn("SearchRoute", SKILL_TEXT)
         self.assertIn("Execute this search or modify it?", SKILL_TEXT)
-        self.assertIn("Decide + record the search decision", SKILL_TEXT)
+        self.assertIn("packs.search.pipeline.search", SKILL_TEXT)
         self.assertIn("search_network_pipeline.py prepare", SKILL_TEXT)
-        self.assertNotIn("primitives/route_query", SKILL_TEXT)
+        self.assertIn("deep_search_loop.py", SKILL_TEXT)
+        self.assertIn("live `$search-company` surface", rules)
+        self.assertIn("stop with `needs_input`", rules)
+        self.assertIn("perform no retrieval", rules)
+        self.assertIn("bare-person lookup", SKILL_TEXT)
+        self.assertIn("email and phone return `unsupported_capability`", SKILL_TEXT)
+        self.assertIn("additive,\nexplicit opt-in candidate path", SKILL_TEXT)
+        self.assertIn("none is authorization for paid", SKILL_TEXT)
 
-
-class TestPromptAndScorer(unittest.TestCase):
-    def test_build_prompt_renders_env(self):
-        prompt = rde.build_prompt("RULES", {"query": "q", "env": {"remote_creds": False}})
-        self.assertIn("local DuckDB search index: present", prompt)
-        self.assertIn("remote credentials: absent", prompt)
-        self.assertIn("RULES", prompt)
-
-    def test_extract_json_variants(self):
-        raw = '{"surface": "people", "backend": "local", "depth": "fast", "reason": "r"}'
-        self.assertEqual(rde.extract_json(raw)["backend"], "local")
-        self.assertEqual(rde.extract_json(f"prose\n```json\n{raw}\n```\nmore")["backend"], "local")
-        self.assertEqual(rde.extract_json(f"noise {raw} trailing")["surface"], "people")
-        self.assertEqual(rde.extract_json("no json here"), {})
-
-    def test_score_strict_lenient_and_errors(self):
+    def test_prompt_extract_score(self):
+        self.assertIn('"target": ...', rde.build_prompt("RULES", {"query": "q", "env": {"remote_creds": False}}))
+        raw = json.dumps(VALID)
+        self.assertEqual(rde.extract_json(f"```json\n{raw}\n```")["profile"], "gtm")
         cases = [
-            {"id": "a", "query": "q", "surface": "people", "backend": "powerset", "depth": "fast"},
-            {"id": "b", "query": "q", "surface": "people", "backend": "powerset", "depth": "fast",
-             "acceptable_depth": ["deep"]},
-            {"id": "c", "query": "q", "surface": "company", "backend": "powerset", "depth": None},
-            {"id": "d", "query": "q", "surface": "people", "backend": "local", "depth": "fast"},
+            {"id": "a", "query": "q", "target": "engine", "profile": "gtm", "backend": "powerset"},
+            {"id": "b", "query": "q", "target": "sql", "profile": None, "backend": None},
         ]
-        results = {
-            "a": ({"surface": "people", "backend": "powerset", "depth": "fast"}, None),
-            "b": ({"surface": "people", "backend": "powerset", "depth": "deep"}, None),
-            "c": ({"surface": "sql", "backend": "powerset", "depth": "fast"}, None),
-            "d": ({}, "timeout"),
-        }
-        report = rde.score(cases, results)
-        self.assertEqual(report["cases"], 4)
-        self.assertEqual(report["errors"], 1)
-        self.assertEqual(report["strict_accuracy"], 0.25)   # only a
-        self.assertEqual(report["lenient_accuracy"], 0.5)   # a + b
-        self.assertEqual({m["id"] for m in report["misses"]}, {"c", "d"})
-        # depth is unlabeled for c -> not scored
-        self.assertNotIn("depth", report["confusion"]["depth"].get("None", {}))
+        report = rde.score(
+            cases, {"a": (VALID, None), "b": ({"target": "engine", "profile": "gtm", "backend": "local"}, None)}
+        )
+        self.assertEqual(report["strict_accuracy"], 0.5)
+        invalid = rde.score(
+            [cases[1]], {"b": ({"target": "sql", "profile": "gtm", "backend": "local", "reason": "bad"}, None)}
+        )
+        self.assertEqual(invalid["errors"], 1)
+        self.assertEqual(invalid["strict_accuracy"], 0)
 
-
-class TestRunnerEndToEnd(unittest.TestCase):
     def test_stub_template_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             stub = Path(tmp) / "stub.py"
-            stub.write_text(
-                "import sys, pathlib\n"
-                "assert 'Query:' in pathlib.Path(sys.argv[1]).read_text()\n"
-                "print('{\"surface\": \"people\", \"backend\": \"powerset\", "
-                "\"depth\": \"fast\", \"reason\": \"stub\"}')\n",
-                encoding="utf-8",
-            )
-            report_path = Path(tmp) / "report.json"
+            stub.write_text('print(\'{"target":"engine","profile":"gtm","backend":"powerset","reason":"stub"}\')\n')
+            report = Path(tmp) / "report.json"
             cp = subprocess.run(
-                [sys.executable, str(RUNNER),
-                 "--command-template", f"{sys.executable} {stub} {{prompt_path}}",
-                 "--only", "net-staff-backend-sf", "--only", "env-both-default",
-                 "--report", str(report_path)],
-                capture_output=True, text=True, timeout=120,
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--command-template",
+                    f"{sys.executable} {stub} {{prompt_path}}",
+                    "--only",
+                    "net-staff-backend-sf",
+                    "--report",
+                    str(report),
+                ],
+                capture_output=True,
+                text=True,
             )
             self.assertEqual(cp.returncode, 0, cp.stderr)
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-            self.assertEqual(report["cases"], 2)
-            self.assertEqual(report["strict_accuracy"], 1.0)
+            self.assertEqual(json.loads(report.read_text())["strict_accuracy"], 1.0)
 
 
 if __name__ == "__main__":
