@@ -81,9 +81,9 @@ def is_affiliated_candidate(root_queries: list[str], school_name: str) -> bool:
     return bool(tokens and tokens[0] in set(root_queries))
 
 
-async def query_school_rows(query: str, *, limit: int) -> list[dict[str, Any]]:
+async def query_school_rows(db_path: str, query: str, *, limit: int) -> list[dict[str, Any]]:
     filters = ("school_name", "ContainsAllTokens", query, {"last_as_prefix": True})
-    ns = local_backend.namespace("schools")
+    ns = local_backend.namespace(db_path, "schools")
 
     def run_query() -> Any:
         return ns.query(
@@ -97,11 +97,11 @@ async def query_school_rows(query: str, *, limit: int) -> list[dict[str, Any]]:
     return [row_attrs(row, ["school_name", "person_count"]) for row in (response.rows or [])]
 
 
-async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
+async def resolve_name(db_path: str, name: str, *, limit: int) -> dict[str, Any]:
     root_queries = affiliated_school_queries(name)
     query_rows: list[tuple[str, dict[str, Any]]] = []
     for query in [name, *root_queries]:
-        query_rows.extend((query, row) for row in await query_school_rows(query, limit=limit))
+        query_rows.extend((query, row) for row in await query_school_rows(db_path, query, limit=limit))
 
     counts: Counter[str] = Counter()
     names_by_id: dict[str, Counter[str]] = {}
@@ -170,7 +170,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     existing_ids = [str(value) for value in payload.get("education_ids") or [] if value]
     names = education_names(payload)
-    resolutions = [await resolve_name(name, limit=args.max_rows_per_name) for name in names]
+    resolutions = [await resolve_name(args.db, name, limit=args.max_rows_per_name) for name in names]
 
     resolved_ids = []
     for resolution in resolutions:
@@ -193,6 +193,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Resolve education names to canonical IDs")
     parser.add_argument("--state")
+    parser.add_argument("--db", required=True, help="Explicit local DuckDB path")
     parser.add_argument("--payload-json")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--write-state", action="store_true")

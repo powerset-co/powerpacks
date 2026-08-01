@@ -16,5 +16,5 @@ Cases: `/path/to/powerpacks/packs/search/evals/company-search/cases.json`
 | company_hard_sector_healthcare | pass | resolve_companies | hard_filter |  |  |
 | company_series_a_sf_startups | pass | resolve_companies | staged |  |  |
 | company_headcount_50_200_fintech | pass | resolve_companies | staged |  |  |
-| company_backed_by_sequoia | pass | resolve_investors, resolve_companies | staged |  |  |
+| company_backed_by_sequoia | pass | TurboPuffer source resolution | staged |  |  |
 | company_yc_ai_seed | pass | resolve_companies | soft_union |  |  |

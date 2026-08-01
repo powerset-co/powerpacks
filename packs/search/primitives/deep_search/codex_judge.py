@@ -5,7 +5,7 @@ It is a THIN SHIM: it reuses the canonical module's rubric (`SYSTEM_PROMPT`), pr
 (`build_user_prompt`), frontier/profile loaders, AND deterministic scorer (`normalize_evaluation`)
 — only the inference call is swapped for a `codex exec` subprocess. So the BAR is byte-identical to
 the paid judge; only the engine differs. Output is the same `candidate_evaluations.raw.jsonl`
-record shape, so `judge_consensus` ingests it unchanged.
+record shape consumed by the typed recruiting judge adapter.
 
 The model returns the rubric's RICH judgment (per-trait statuses, excellence, seniority, caveats);
 the deterministic scorer computes verdict + jd_score in code. We do NOT pass `--output-schema`

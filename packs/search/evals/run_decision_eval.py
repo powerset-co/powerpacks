@@ -74,7 +74,7 @@ def extract_rules(skill_path: Path) -> str:
 def build_prompt(rules: str, case: dict) -> str:
     env = {**DEFAULT_ENV, **(case.get("env") or {})}
     env_lines = (
-        f"- POWERPACKS_LOCAL_SEARCH_DB / local DuckDB search index: {'present' if env['local_db'] else 'absent'}\n"
+        f"- Explicit local DuckDB search index: {'present' if env['local_db'] else 'absent'}\n"
         f"- TurboPuffer/Powerset remote credentials: {'present' if env['remote_creds'] else 'absent'}"
     )
     return (

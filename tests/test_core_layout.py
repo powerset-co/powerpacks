@@ -62,16 +62,16 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("view_search_results", text)
         self.assertNotIn("workflows/query-decomposition.md", text)
         self.assertIn("packs.search.pipeline.search", text)
-        self.assertIn("bare-person lookup", text)
+        self.assertIn("--spec <run>/search_spec.json", text)
+        self.assertIn("--output-dir .powerpacks/search-runs/<run-id>", text)
         self.assertIn("email and phone return `unsupported_capability`", text)
-        self.assertIn("search_network_pipeline.py prepare", text)
+        self.assertNotIn("search_network_pipeline.py prepare", text)
+        self.assertNotIn("deep_search_loop.py", text)
+        self.assertNotIn("$search-company", text)
+        self.assertNotIn("/search-network", text)
 
-    def test_search_company_skill_uses_company_resolver(self) -> None:
-        text = (ROOT / "packs/search/skills/search-company/SKILL.md").read_text()
-        self.assertIn("resolve_companies", text)
-        self.assertIn("company_semantic_queries", text)
-        self.assertIn("investor_names", text)
-        self.assertIn("company_sector_strategy", text)
+    def test_search_company_skill_is_retired(self) -> None:
+        self.assertFalse((ROOT / "packs/search/skills/search-company/SKILL.md").exists())
 
 
     def test_pi_adapter_installs_skills(self) -> None:
@@ -253,23 +253,22 @@ class CoreLayoutTests(unittest.TestCase):
     def test_search_surface_documents_typed_routes(self) -> None:
         text = (ROOT / "packs/search/docs/search-surface.md").read_text()
         self.assertIn("engine + gtm", text)
-        self.assertIn("execute the typed deterministic path", text)
-        self.assertIn("Powerset supports set-scoped `person_id`, `name`, `handle`, and `profile_url`", text)
-        self.assertIn("live `$search-company` surface", text)
+        self.assertIn("typed `SearchSpec`", text)
+        self.assertIn("People at a named company", text)
+        self.assertIn("There is no public company-search command", text)
         self.assertIn("needs_input", text)
-        self.assertIn("no retrieval or guessed route", text)
+        self.assertIn("perform no retrieval", text)
 
-    def test_search_network_uses_expand_primitive_directly(self) -> None:
+    def test_search_skill_uses_typed_composition_root(self) -> None:
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
         self.assertIn("packs.search.pipeline.search", text)
         self.assertIn("target", text)
         self.assertIn("profile", text)
         self.assertIn("deep-mode.md", text)
-        self.assertIn("legacy task manifest", text)
+        self.assertIn("one schema-valid `search.spec.v1` document", text)
+        self.assertIn("There is no public company-search target", text)
         self.assertTrue((ROOT / "packs/search/pipeline/search.py").exists())
         self.assertTrue((ROOT / "packs/search/pipeline/recruiting.py").exists())
-        # Retained until every legacy recruiting consumer/assertion is ported.
-        self.assertTrue((ROOT / "packs/search/tasks/search-network.task.json").exists())
 
     def test_json_contracts_and_schemas_parse(self) -> None:
         roots = [
@@ -299,265 +298,69 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("review_research_web.py", text)
         self.assertNotIn("linkedin_modal_pipeline.py index-people", text)
 
-    def test_search_network_uses_single_execute_preview_gate(self) -> None:
+    def test_search_uses_single_persisted_spec_command(self) -> None:
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
-        self.assertIn("Execute this search or modify it?", text)
-        self.assertNotIn("execute`, `modify`, or `search only`", text)
-        self.assertIn("Run only the emitted approved command", text)
+        command = "uv run --project . python -m packs.search.pipeline.search"
+        self.assertEqual(text.count(command), 1)
+        self.assertIn("--spec <run>/search_spec.json", text)
+        self.assertNotIn("search_network_pipeline.py prepare", text)
+        self.assertNotIn("deep_search_loop.py", text)
 
     def test_removed_orchestration_is_absent(self) -> None:
         self.assertTrue((ROOT / "packs/search/pipeline/recruiting.py").exists())
         self.assertTrue((ROOT / "packs/search/pipeline/recruiting_stages.py").exists())
+        for path in (
+            "packs/search/primitives/deep_search/deep_search_loop.py",
+            "packs/search/primitives/deep_search/run_wide_search.py",
+            "packs/search/primitives/search_network_pipeline",
+            "packs/search/primitives/task_state",
+            "packs/search/tasks/search-network.task.json",
+            "packs/search/tasks/search-network-jd.task.json",
+            "packs/search/schemas/search-network-task.schema.json",
+            "packs/search/schemas/task-run.schema.json",
+            "packs/search/primitives/execute_search_slice",
+            "packs/search/primitives/merge_candidate_frontier",
+            "packs/search/primitives/agentic_candidate_review",
+            "packs/search/primitives/apply_prefilters",
+            "packs/search/primitives/execute_role_search",
+            "packs/search/primitives/count_candidates",
+            "packs/search/primitives/hydrate_people",
+            "packs/search/primitives/llm_filter_candidates",
+            "packs/search/primitives/persist_search_results",
+            "packs/search/primitives/shared/" + "search_backend" + "_mode.py",
+            "packs/search/evals/search-network/cases.json",
+            "packs/search/tasks/local-prod-parity.task.json",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse((ROOT / path).exists())
+        self.assertTrue((ROOT / "packs/search/schemas/search-network-jd-plan.schema.json").exists())
+
+        repository_gate = (ROOT / "scripts/test-powerpacks").read_text()
+        self.assertIn("tests.test_layered_search_engine", repository_gate)
+        self.assertNotIn("tests.test_local_search_pipeline", repository_gate)
 
 
     def test_search_surface_documents_current_entrypoint(self) -> None:
         text = (ROOT / "packs/search/docs/search-surface.md").read_text()
-        self.assertIn("`$search` is the live search router", text)
+        self.assertIn("`$search` is the public router", text)
         self.assertIn("People at a named company", text)
-        self.assertIn("`$search-company`, `$search-sql`, and `$search-contacts` remain distinct live", text)
+        self.assertIn("`$search-sql` and\n`$search-contacts` remain explicit non-engine targets", text)
 
-    def test_search_docs_keep_legacy_recruiting_and_paid_approval_boundary(self) -> None:
+    def test_search_deep_mode_documents_typed_review_resume_and_paid_boundary(self) -> None:
         deep = (ROOT / "packs/search/skills/search/deep-mode.md").read_text()
         architecture = (ROOT / "packs/search/docs/search-architecture.md").read_text()
-        self.assertIn("canonical recruiting owner", deep)
+        self.assertEqual(deep.count("uv run --project . python -m packs.search.pipeline.search"), 2)
+        self.assertIn("`awaiting_review`", deep)
+        self.assertIn("`review/binding.json`", deep)
+        self.assertIn("`plan_sha256`", deep)
+        self.assertIn("`recruiting.reviewed_plan_hash`", deep)
+        self.assertIn("`failed_binding`", deep)
         self.assertIn("recruiting.plan_approved=true", deep)
         self.assertIn("recruiting.judge_approved=true", deep)
-        self.assertIn("do **not** authorize a paid quality run", deep)
-        self.assertIn("legacy `deep_search_loop.py`", architecture)
-        self.assertIn("additive and opt-in", architecture)
-
-    def test_task_state_tracks_planned_steps_separately_from_execution_log(self) -> None:
-        task_state = ROOT / "packs/search/primitives/task_state/task_state.py"
-        with tempfile.TemporaryDirectory() as td:
-            state_path = Path(td) / "run.json"
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(task_state),
-                    "init",
-                    "--query",
-                    "software engineers in sf",
-                    "--out",
-                    str(state_path),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(task_state),
-                    "request-approval",
-                    "--state",
-                    str(state_path),
-                    "--reason",
-                    "test",
-                    "--proposed-next-step",
-                    "run planned steps",
-                    "--plan-json",
-                    json.dumps({"planned_steps": ["resolve_education", "count_candidates"]}),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(task_state),
-                    "record-step",
-                    "--state",
-                    str(state_path),
-                    "--step-id",
-                    "resolve_education",
-                    "--output-json",
-                    "{}",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-
-            state = json.loads(state_path.read_text())
-            self.assertEqual([step["id"] for step in state["steps"]], ["resolve_education"])
-            planned_by_id = {step["id"]: step for step in state["planned_steps"]}
-            self.assertEqual(planned_by_id["resolve_education"]["status"], "completed")
-            self.assertIn("completed_at", planned_by_id["resolve_education"])
-            self.assertEqual(planned_by_id["count_candidates"]["status"], "pending")
-
-    def test_task_state_accepts_bare_planned_steps_array(self) -> None:
-        task_state = ROOT / "packs/search/primitives/task_state/task_state.py"
-        with tempfile.TemporaryDirectory() as td:
-            state_path = Path(td) / "run.json"
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(task_state),
-                    "init",
-                    "--query",
-                    "software engineers in sf",
-                    "--out",
-                    str(state_path),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(task_state),
-                    "request-approval",
-                    "--state",
-                    str(state_path),
-                    "--reason",
-                    "test",
-                    "--proposed-next-step",
-                    "run planned steps",
-                    "--plan-json",
-                    json.dumps(["resolve_education", "count_candidates"]),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-
-            state = json.loads(state_path.read_text())
-            self.assertEqual(
-                [step["id"] for step in state["planned_steps"]],
-                ["resolve_education", "count_candidates"],
-            )
-
-    def test_task_state_appends_feedback_lineage(self) -> None:
-        task_state = ROOT / "packs/search/primitives/task_state/task_state.py"
-        with tempfile.TemporaryDirectory() as td:
-            state_path = Path(td) / "run.json"
-
-            def append_lineage(kind: str, payload: dict) -> subprocess.CompletedProcess[str]:
-                return subprocess.run(
-                    [
-                        sys.executable,
-                        str(task_state),
-                        "append-lineage",
-                        "--state",
-                        str(state_path),
-                        "--kind",
-                        kind,
-                        "--payload-json",
-                        json.dumps(payload),
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(task_state),
-                    "init",
-                    "--query",
-                    "cto technical cofounder",
-                    "--out",
-                    str(state_path),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            initialized = json.loads(state_path.read_text())
-            for field in [
-                "search_plan_revisions",
-                "candidate_feedback",
-                "criteria_mutations",
-                "run_lineage",
-                "exemplar_sets",
-                "fanout_threads",
-            ]:
-                self.assertEqual(initialized[field], [])
-
-            feedback_result = append_lineage(
-                "candidate_feedback",
-                {
-                    "feedback_id": "fb-1",
-                    "person_id": "person-1",
-                    "label": "false_positive",
-                    "reason": "not technical",
-                    "applied_to_next_search": True,
-                },
-            )
-            self.assertIn("candidate_feedback", feedback_result.stdout)
-            append_lineage(
-                "criteria_mutation",
-                {
-                    "source_feedback_ids": ["fb-1"],
-                    "reason": "tighten technical-depth evidence",
-                    "mutation": {"reject_criteria": ["non-technical operator"]},
-                },
-            )
-            append_lineage(
-                "search_plan_revision",
-                {
-                    "reason": "apply candidate feedback",
-                    "criteria_delta": {"reject_criteria": ["non-technical operator"]},
-                    "plan": {"initial_probes": 5},
-                },
-            )
-            append_lineage(
-                "run_lineage",
-                {
-                    "relationship": "follow_up",
-                    "task_id": "search-network-child",
-                    "state": ".powerpacks/runs/child.json",
-                    "artifact_dir": ".powerpacks/search/child",
-                },
-            )
-            append_lineage(
-                "exemplar_set",
-                {
-                    "name": "above-cutoff technical builders",
-                    "person_ids": ["person-1", "person-2"],
-                    "selection_reason": "score >= 0.3 and strong technical evidence",
-                },
-            )
-            append_lineage(
-                "fanout_thread",
-                {
-                    "cluster_label": "cloud cost infrastructure builders",
-                    "criteria": {"companies": ["Databricks", "Snowflake"]},
-                    "state": ".powerpacks/runs/fanout.json",
-                    "artifact_dir": ".powerpacks/search/fanout",
-                },
-            )
-
-            state = json.loads(state_path.read_text())
-            self.assertEqual(state["candidate_feedback"][0]["feedback_id"], "fb-1")
-            self.assertEqual(state["criteria_mutations"][0]["source_feedback_ids"], ["fb-1"])
-            self.assertIn("mutation_id", state["criteria_mutations"][0])
-            self.assertEqual(state["search_plan_revisions"][0]["revision"], 1)
-            self.assertIn("revision_id", state["search_plan_revisions"][0])
-            self.assertEqual(state["run_lineage"][0]["relationship"], "follow_up")
-            self.assertIn("lineage_id", state["run_lineage"][0])
-            self.assertEqual(state["exemplar_sets"][0]["person_ids"], ["person-1", "person-2"])
-            self.assertIn("exemplar_set_id", state["exemplar_sets"][0])
-            self.assertEqual(state["fanout_threads"][0]["cluster_label"], "cloud cost infrastructure builders")
-            self.assertIn("thread_id", state["fanout_threads"][0])
-
-            events = [json.loads(line) for line in state_path.with_suffix(".json.events.jsonl").read_text().splitlines()]
-            lineage_events = [event for event in events if event.get("event") == "append_lineage"]
-            self.assertEqual(
-                [event["kind"] for event in lineage_events],
-                [
-                    "candidate_feedback",
-                    "criteria_mutation",
-                    "search_plan_revision",
-                    "run_lineage",
-                    "exemplar_set",
-                    "fanout_thread",
-                ],
-            )
-            self.assertEqual(lineage_events[0]["feedback_id"], "fb-1")
+        self.assertIn("do not authorize a paid quality-validation run", deep)
+        self.assertNotIn("deep_search_loop.py", deep)
+        self.assertNotIn("deep_search_loop.py", architecture)
+        self.assertIn("one engine", architecture)
 
 if __name__ == "__main__":
     unittest.main()

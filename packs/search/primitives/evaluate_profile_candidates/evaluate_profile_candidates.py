@@ -22,8 +22,8 @@ Verdict ladder (bar-raiser model — default is out):
 
 Seniority is a hard gate enforced in code: too_senior / too_junior /
 wrong_track force verdict out and cap final_score at 0.3 regardless of
-trait scores. Writes candidate_evaluations.raw.jsonl in the Task 5a schema so
-capture_jd_evaluations / export_candidate_shortlist work unchanged.
+trait scores. Writes candidate_evaluations.raw.jsonl for canonical evaluation
+capture.
 """
 
 from __future__ import annotations
@@ -227,45 +227,16 @@ def best_source_score(candidate: dict[str, Any]) -> float:
     return best
 
 
-def collect_profiles(candidates: list[dict[str, Any]], run_dir: Path) -> dict[str, dict[str, Any]]:
-    """Load hydrated profiles for the wanted candidates from probe artifacts."""
-    wanted = {c.get("person_id") or c.get("candidate_id") for c in candidates}
-    profile_dirs: list[Path] = []
-    summaries = run_dir / "probe_summaries.json"
-    if summaries.exists():
-        for probe in load_probe_summaries(summaries):
-            artifact_dir = probe.get("artifact_dir")
-            if artifact_dir:
-                p = Path(artifact_dir)
-                profile_dirs.append(p if p.is_absolute() else ROOT / p)
-    # Also honor profile_context_ref run ids
-    for c in candidates:
-        ref = c.get("profile_context_ref")
-        if ref:
-            profile_dirs.append(ROOT / ".powerpacks/runs/artifacts" / ref)
-    out: dict[str, dict[str, Any]] = {}
-    seen_dirs = set()
-    for d in profile_dirs:
-        key = str(d)
-        if key in seen_dirs:
-            continue
-        seen_dirs.add(key)
-        gz = d / "hydrate_people" / "profiles.jsonl.gz"
-        if not gz.exists():
-            continue
-        try:
-            with gzip.open(gz, "rt") as handle:
-                for line in handle:
-                    obj = json.loads(line)
-                    pid = obj.get("person_id") or obj.get("id")
-                    if pid and pid in wanted and pid not in out:
-                        out[pid] = obj
-        except OSError:
-            continue
-        if len(out) == len(wanted):
-            break
-    return out
-
+def collect_profiles(candidates: list[dict[str, Any]], run_dir: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Return hydrated profiles embedded in canonical frontier candidates."""
+    del run_dir
+    profiles = {}
+    for candidate in candidates:
+        person_id = candidate.get("person_id") or candidate.get("candidate_id")
+        profile = candidate.get("hydrated_profile")
+        if person_id and isinstance(profile, dict):
+            profiles[str(person_id)] = profile
+    return profiles
 
 def build_user_prompt(plan: dict[str, Any], profile: dict[str, Any]) -> str:
     traits = plan.get("traits", {}) or {}

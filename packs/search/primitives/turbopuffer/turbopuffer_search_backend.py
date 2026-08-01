@@ -104,7 +104,7 @@ async def filter_only_rows_for_namespace(
 
 async def enumerate_filter_only_rows_for_namespace(
     logical_name: str,
-    filters: tuple,
+    filters: tuple | None,
     include_attributes: list[str],
     *,
     page_size: int = 10000,
@@ -122,15 +122,22 @@ async def enumerate_filter_only_rows_for_namespace(
     while True:
         paginated = filters
         if last_id is not None:
-            paginated = ("And", list(filters[1]) + [("id", "Gt", last_id)]) if filters[0] == "And" else ("And", [filters, ("id", "Gt", last_id)])
+            if filters is None:
+                paginated = ("id", "Gt", last_id)
+            else:
+                paginated = ("And", list(filters[1]) + [("id", "Gt", last_id)]) if filters[0] == "And" else ("And", [filters, ("id", "Gt", last_id)])
 
         def run_query() -> Any:
+            query = {
+                "rank_by": ["id", "asc"],
+                "top_k": page_size,
+                "include_attributes": include_attributes,
+                "consistency": STRONG_CONSISTENCY,
+            }
+            if paginated is not None:
+                query["filters"] = paginated
             return ns.query(
-                rank_by=["id", "asc"],
-                filters=paginated,
-                top_k=page_size,
-                include_attributes=include_attributes,
-                consistency=STRONG_CONSISTENCY,
+                **query,
             )
 
         response = await asyncio.to_thread(run_query)
@@ -390,7 +397,7 @@ async def _batched_base_id_rows(
     Reference: `RoleSearchVerticalV3` in `../network-search-api` batches large
     base_candidate_ids into 500-ID chunks so TurboPuffer kNN/BM25 does not carry
     one huge `base_id In [...]` filter. Company-id batching happens earlier in
-    `apply_prefilters.company_base_ids`, mirroring `CompanyPeoplePreFilterStage`.
+    typed company-union retrieval, mirroring `CompanyPeoplePreFilterStage`.
     """
     base_ids = [str(value) for value in payload.get("base_candidate_ids") or [] if value]
     batch_values = chunks(base_ids, BASE_ID_BATCH_SIZE)

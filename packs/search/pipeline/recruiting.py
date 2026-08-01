@@ -44,6 +44,145 @@ JUDGE_CALL_MAX_TOKENS = (128_000, 16_000, 16_000)
 PLAN_MAX_COMPLETION_TOKENS = PLAN_CALL_MAX_TOKENS[1] + PLAN_CALL_MAX_TOKENS[2]
 CRITIC_MAX_COMPLETION_TOKENS = CRITIC_CALL_MAX_TOKENS[1] + CRITIC_CALL_MAX_TOKENS[2]
 JUDGE_MAX_COMPLETION_TOKENS = JUDGE_CALL_MAX_TOKENS[1] + JUDGE_CALL_MAX_TOKENS[2]
+SHORTLIST_CSV_FIELDS = (
+    "Rank",
+    "Name",
+    "LinkedIn URL",
+    "Current Title",
+    "Current Company",
+    "Location",
+    "Verdict",
+    "Score",
+    "Seniority Fit",
+    "Rationale",
+    "Source/Channels",
+)
+
+
+class _SpendReservations:
+    """Reserve worst-case provider cost and release it only after captured usage."""
+
+    def __init__(self, root: Path | None, bounds: SearchBounds):
+        self.root = root
+        self.bounds = bounds
+        self.reserved_usd = 0.0
+
+    def _usage_rows(self) -> list[dict[str, Any]]:
+        if self.root is None:
+            raise JudgeBudgetExceeded("paid recruiting calls require a private artifact directory")
+        usage_log = self.root / "usage.jsonl"
+        if not usage_log.exists():
+            return []
+        from packs.search.reflect.cost_report import load_rows
+
+        try:
+            return load_rows(usage_log)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise JudgeBudgetExceeded(f"recruiting usage capture is unreadable: {exc}") from exc
+
+    def reserve(
+        self,
+        stage: str,
+        model: str | None,
+        maximum_tokens: tuple[int, int, int],
+    ) -> tuple[float, int, str]:
+        from packs.search.reflect.cost_report import DEFAULT_PRICES_PATH, build_report, load_prices
+        from packs.search.primitives.lib.usage_pricing import row_cost_usd
+
+        if not model:
+            raise JudgeBudgetExceeded(f"{stage} requires a priced model")
+        prices = load_prices(DEFAULT_PRICES_PATH)
+        rows = self._usage_rows()
+        totals = build_report(rows, prices)["totals"]
+        if not totals.get("fully_priced"):
+            raise JudgeBudgetExceeded("recruiting spend cannot be authorized with unpriced usage")
+        prompt, completion, reasoning = maximum_tokens
+        estimate = row_cost_usd(
+            {
+                "model": model,
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "reasoning_tokens": reasoning,
+            },
+            prices,
+        )
+        if estimate is None:
+            raise JudgeBudgetExceeded(f"recruiting spend cannot price model {model}")
+        current = float(totals.get("cost_usd") or 0)
+        if (
+            self.bounds.spend_limit_usd is not None
+            and current + self.reserved_usd + estimate > self.bounds.spend_limit_usd
+        ):
+            raise JudgeBudgetExceeded(
+                f"{stage} spend budget cannot authorize the maximum provider call"
+            )
+        self.reserved_usd += estimate
+        return estimate, len(rows), stage
+
+    def reconcile(self, reservation: tuple[float, int, str]) -> None:
+        estimate, prior_count, stage = reservation
+        rows = self._usage_rows()
+        if len(rows) != prior_count + 1 or rows[-1].get("stage") != stage:
+            raise JudgeBudgetExceeded(
+                f"{stage} usage was not captured; maximum cost remains reserved"
+            )
+        from packs.search.reflect.cost_report import DEFAULT_PRICES_PATH, load_prices
+        from packs.search.primitives.lib.usage_pricing import row_cost_usd
+
+        actual = row_cost_usd(rows[-1], load_prices(DEFAULT_PRICES_PATH))
+        if actual is None or actual > estimate:
+            raise JudgeBudgetExceeded(
+                f"{stage} usage could not be reconciled within its reservation"
+            )
+        self.reserved_usd -= estimate
+
+    def call(
+        self,
+        stage: str,
+        model: str | None,
+        maximum_tokens: tuple[int, int, int],
+        adapter: Callable[..., Any],
+        *args: Any,
+    ) -> Any:
+        reservation = self.reserve(stage, model, maximum_tokens)
+        with _usage_stage(stage), _required_usage_capture():
+            result = adapter(*args)
+        self.reconcile(reservation)
+        return result
+
+
+def shortlist_csv_row(rank: int, candidate: CandidateRecord) -> dict[str, Any]:
+    """Return the safe shareable recruiting projection; omit IDs and private evidence."""
+    profile = candidate.hydrated_profile or {}
+    structured = candidate.structured
+    judge = candidate.judge or {}
+    location = (
+        profile.get("location")
+        or profile.get("city")
+        or structured.get("location")
+        or structured.get("city")
+        or ""
+    )
+    source_channels = [candidate.backend, *candidate.source_lanes]
+    return {
+        "Rank": rank,
+        "Name": profile.get("name") or profile.get("full_name") or structured.get("name") or "",
+        "LinkedIn URL": (
+            profile.get("linkedin_url")
+            or profile.get("public_profile_url")
+            or structured.get("linkedin_url")
+            or structured.get("public_profile_url")
+            or ""
+        ),
+        "Current Title": profile.get("current_title") or structured.get("position_title") or "",
+        "Current Company": profile.get("current_company") or structured.get("company_name") or "",
+        "Location": location,
+        "Verdict": judge.get("verdict") or "",
+        "Score": judge.get("score") if judge.get("score") is not None else judge.get("jd_score") or "",
+        "Seniority Fit": judge.get("seniority_fit") or "",
+        "Rationale": judge.get("rationale") or "",
+        "Source/Channels": "|".join(str(value) for value in source_channels if value),
+    }
 
 
 def _ensure_prompt_limit(
@@ -253,6 +392,19 @@ def _usage_stage(stage: str):
             os.environ["POWERPACKS_USAGE_STAGE"] = prior
 
 
+@contextmanager
+def _required_usage_capture():
+    prior = os.environ.get("POWERPACKS_USAGE_REQUIRED")
+    os.environ["POWERPACKS_USAGE_REQUIRED"] = "1"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("POWERPACKS_USAGE_REQUIRED", None)
+        else:
+            os.environ["POWERPACKS_USAGE_REQUIRED"] = prior
+
+
 def _probe_spec(spec: SearchSpec, query: str) -> SearchSpec:
     return replace(
         spec,
@@ -426,6 +578,7 @@ def _run_recruiting(
     corpus_snapshot: Mapping[str, Any] | None = None,
 ) -> StageResult:
     root = _private_root(artifact_root)
+    spend = _SpendReservations(root, spec.bounds)
     started = time.monotonic()
     try:
         jd, source_metadata = _source(spec, fetcher)
@@ -475,17 +628,18 @@ def _run_recruiting(
     else:
         adapter = plan_adapter or _production_plan_adapter
         try:
-            if plan_adapter is None and not _within_spend_budget(
-                root,
-                spec.bounds,
-                model=spec.recruiting.plan_model,
-                maximum_tokens=PLAN_CALL_MAX_TOKENS,
-            ):
-                raise ValueError(
-                    "recruiting plan spend budget cannot authorize the maximum provider call"
+            extracted = (
+                adapter(jd, spec)
+                if plan_adapter is not None
+                else spend.call(
+                    "recruiting_plan",
+                    spec.recruiting.plan_model,
+                    PLAN_CALL_MAX_TOKENS,
+                    adapter,
+                    jd,
+                    spec,
                 )
-            with _usage_stage("recruiting_plan"):
-                extracted = adapter(jd, spec)
+            )
             plan = build_review_plan(
                 spec,
                 extracted,
@@ -507,17 +661,19 @@ def _run_recruiting(
     if not spec.recruiting.reviewed_plan_hash:
         adapter = critic_adapter or _production_critic_adapter
         try:
-            if critic_adapter is None and not _within_spend_budget(
-                root,
-                spec.bounds,
-                model=spec.recruiting.plan_model,
-                maximum_tokens=CRITIC_CALL_MAX_TOKENS,
-            ):
-                raise ValueError(
-                    "recruiting critic spend budget cannot authorize the maximum provider call"
+            critic_document.update(
+                adapter(jd, plan, spec)
+                if critic_adapter is not None
+                else spend.call(
+                    "recruiting_critic",
+                    spec.recruiting.plan_model,
+                    CRITIC_CALL_MAX_TOKENS,
+                    adapter,
+                    jd,
+                    plan,
+                    spec,
                 )
-            with _usage_stage("recruiting_critic"):
-                critic_document.update(adapter(jd, plan, spec))
+            )
         except Exception as exc:
             return StageResult("review", "needs_input", EMPTY, capability_report=report, errors=(str(exc),))
     paths = {}
@@ -566,6 +722,22 @@ def _run_recruiting(
         adapter = judge_adapter or _production_judge_adapter(spec)
     except ValueError as exc:
         return StageResult("judge", "needs_input", EMPTY, errors=(str(exc),), artifact_paths=paths)
+
+    if (
+        judge_adapter is None
+        and spec.recruiting.judge_implementation == "profile_evaluator"
+    ):
+        production_adapter = adapter
+
+        def adapter(candidate: CandidateRecord, reviewed_plan: Mapping[str, Any]) -> Mapping[str, Any]:
+            return spend.call(
+                "recruiting_judge",
+                spec.recruiting.judge_model,
+                JUDGE_CALL_MAX_TOKENS,
+                production_adapter,
+                candidate,
+                reviewed_plan,
+            )
 
     source_started = time.monotonic()
     sources = runner.resolve_sources(spec)
@@ -618,23 +790,12 @@ def _run_recruiting(
         if model_calls >= spec.bounds.judge_call_limit:
             break
         try:
-            with _usage_stage("recruiting_judge"):
-                result, calls = judge_candidate(
-                    row,
-                    plan,
-                    adapter,
-                    max_attempts=min(2, spec.bounds.judge_call_limit - model_calls),
-                    before_attempt=(
-                        None
-                        if judge_adapter is not None
-                        else lambda: _within_spend_budget(
-                            root,
-                            spec.bounds,
-                            model=spec.recruiting.judge_model,
-                            maximum_tokens=JUDGE_CALL_MAX_TOKENS,
-                        )
-                    ),
-                )
+            result, calls = judge_candidate(
+                row,
+                plan,
+                adapter,
+                max_attempts=min(2, spec.bounds.judge_call_limit - model_calls),
+            )
         except JudgeBudgetExceeded:
             budget_capped = True
             break
@@ -703,23 +864,12 @@ def _run_recruiting(
                     terminal = "completed_capped"
                     break
                 try:
-                    with _usage_stage("recruiting_judge"):
-                        result, calls = judge_candidate(
-                            row,
-                            plan,
-                            adapter,
-                            max_attempts=min(2, spec.bounds.judge_call_limit - model_calls),
-                            before_attempt=(
-                                None
-                                if judge_adapter is not None
-                                else lambda: _within_spend_budget(
-                                    root,
-                                    spec.bounds,
-                                    model=spec.recruiting.judge_model,
-                                    maximum_tokens=JUDGE_CALL_MAX_TOKENS,
-                                )
-                            ),
-                        )
+                    result, calls = judge_candidate(
+                        row,
+                        plan,
+                        adapter,
+                        max_attempts=min(2, spec.bounds.judge_call_limit - model_calls),
+                    )
                 except JudgeBudgetExceeded:
                     terminal = "completed_capped"
                     break
@@ -795,22 +945,14 @@ def _run_recruiting(
         with csv_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(
                 handle,
-                fieldnames=("rank", "current_role", "current_company", "score", "source_lanes"),
+                fieldnames=SHORTLIST_CSV_FIELDS,
                 lineterminator="\n",
             )
             writer.writeheader()
             for rank, row in enumerate(
                 (row for row in presented if row.deterministic_gates.get("shortlist")), start=1
             ):
-                writer.writerow(
-                    {
-                        "rank": rank,
-                        "current_role": (row.hydrated_profile or {}).get("current_title") or row.structured.get("position_title") or "",
-                        "current_company": (row.hydrated_profile or {}).get("current_company") or row.structured.get("company_id") or "",
-                        "score": row.deterministic_score,
-                        "source_lanes": "|".join(row.source_lanes),
-                    }
-                )
+                writer.writerow(shortlist_csv_row(rank, row))
         paths["shortlist_csv"] = str(csv_path)
     audit = hard_filter_validation_artifact(
         tuple(audit_rows), spec, corpus_snapshot_hash=binding["corpus_sha256"]

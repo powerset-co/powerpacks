@@ -22,6 +22,7 @@ HARD_FILTER_FIELDS = (
     "years_experience_min",
     "years_experience_max",
     "company_ids",
+    "investor_names",
     "sector_types",
     "technology_types",
     "entity_types",
@@ -48,6 +49,7 @@ def required_hard_filters(spec: SearchSpec) -> tuple[str, ...]:
         "years_experience_min": spec.person_filters.years_experience_min,
         "years_experience_max": spec.person_filters.years_experience_max,
         "company_ids": spec.company_filters.company_ids or spec.company_filters.company_names,
+        "investor_names": spec.company_filters.investor_names,
         "sector_types": spec.company_filters.sector_types,
         "technology_types": spec.company_filters.technology_types,
         "entity_types": spec.company_filters.entity_types,
@@ -118,6 +120,7 @@ def _validation_findings_for_branch(
         require_any("role_track", values(relevant, "role_track"), spec.person_filters.role_tracks)
     if company_branch:
         require_any("company_id", values(relevant, "company_id"), sources.company_ids)
+        require_any("investor_names", values(relevant, "investor_names"), sources.investor_names)
 
     for code, wanted, fields in (
         ("city", spec.person_filters.cities, ("city",)),

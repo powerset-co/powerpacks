@@ -42,13 +42,13 @@ def run_with_runner(
             capability_report=_capability_dict(capabilities),
             errors=(f"unsupported required hard filters: {', '.join(unsupported)}",),
         )
-    if spec.rank_mode == RankMode.SEMANTIC and (not spec.rank_model or not spec.rank_approved):
+    if spec.rank_mode == RankMode.SEMANTIC and not spec.rank_approved:
         return StageResult(
             "rank",
             "needs_input",
             EMPTY,
             capability_report=_capability_dict(capabilities),
-            errors=("semantic ranking requires explicit rank_model and rank_approved=true",),
+            errors=("semantic ranking requires rank_approved=true",),
         )
     if spec.profile == Profile.RECRUITING:
         from .recruiting import run_recruiting

@@ -478,11 +478,9 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             import local_search_backend as local_backend  # type: ignore
             from search_common import filters_from_role_payload  # type: ignore
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = db_payload["duckdb"]
             local_backend._local_store_for_path.cache_clear()
             try:
-                knn = local_backend.namespace("people").query(
+                knn = local_backend.namespace(db_payload["duckdb"], "people").query(
                     rank_by=("vector", "kNN", product_row["vector"]),
                     top_k=3,
                     include_attributes=["position_title", "base_id"],
@@ -492,6 +490,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertGreater(knn.rows[0].score, 0.99)
 
                 role_rows = asyncio.run(local_backend.hybrid_role_rows(
+                    db_payload["duckdb"],
                     {
                         "semantic_query": "Product manager building roadmaps and product strategy for users across a software company",
                         "bm25_queries": ["Product Manager"],
@@ -507,10 +506,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn("hybrid", role_rows[0]["retrieval_mode"])
             finally:
                 local_backend._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
 
     def test_pipeline_artifacts_match_copied_aleph_seed_field_shapes(self) -> None:
         self.skipTest("obsolete local-fake pipeline shape coverage replaced by mocked OpenAI artifact test")
@@ -724,16 +719,14 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
             local_backend._local_store_for_path.cache_clear()
             try:
-                people = local_backend.namespace("people").query(
+                people = local_backend.namespace(payload["duckdb"], "people").query(
                     rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
                     top_k=1,
                     include_attributes=["base_id", "position_title", "role_ids"],
                 )
-                companies = local_backend.namespace("companies").query(
+                companies = local_backend.namespace(payload["duckdb"], "companies").query(
                     rank_by=("vector", "kNN", [0.0, 1.0, 0.0]),
                     top_k=1,
                     include_attributes=["company_name", "entity_types", "sector_types"],
@@ -744,10 +737,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual(companies.rows[0].entity_types, ["developer_tool"])
             finally:
                 local_backend._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
 
     def test_company_classification_artifact_populates_pipeline_records(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -888,26 +877,24 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
             local_backend._local_store_for_path.cache_clear()
             try:
-                company = local_backend.namespace("companies").query(
+                company = local_backend.namespace(payload["duckdb"], "companies").query(
                     rank_by=["id", "asc"],
                     top_k=1,
                     include_attributes=["company_name", "semantic_text", "doc2query_text", "entity_sector_text"],
                 ).rows[0]
                 self.assertTrue(company.company_name)
                 self.assertTrue(company.semantic_text or company.doc2query_text or company.entity_sector_text)
-                self.assertTrue(local_backend.local_namespace_has_vectors("companies"))
-                self.assertTrue(local_backend.local_namespace_has_vectors("summaries"))
+                self.assertTrue(local_backend.local_namespace_has_vectors(payload["duckdb"], "companies"))
+                self.assertTrue(local_backend.local_namespace_has_vectors(payload["duckdb"], "summaries"))
 
-                env = os.environ.copy()
-                env["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
                 proc = subprocess.run(
                     [
                         sys.executable,
                         str(ROOT / "packs/search/primitives/local/local_resolve_companies.py"),
+                        "--db",
+                        payload["duckdb"],
                         "--payload-json",
                         json.dumps({"company_names": [company.company_name], "operator_ids": ["op-aleph-seed"]}),
                         "--no-ce",
@@ -916,7 +903,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                     check=False,
-                    env=env,
                     timeout=60,
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -925,10 +911,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn(company.id, resolved["company_ids"])
             finally:
                 local_backend._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
 
     def test_five_person_csv_builds_duckdb_and_local_search_smoke(self) -> None:
         self.skipTest("obsolete local-fake shim coverage replaced by mocked OpenAI DuckDB test")
@@ -962,11 +944,9 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
             local_backend._local_store_for_path.cache_clear()
             try:
-                response = local_backend.namespace("people").query(
+                response = local_backend.namespace(payload["duckdb"], "people").query(
                     filters=("position_title", "IGlob", "*Product*"),
                     top_k=5,
                     include_attributes=["base_id", "position_title", "allowed_operator_ids"],
@@ -976,10 +956,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn("op-acceptance", response.rows[0].allowed_operator_ids)
             finally:
                 local_backend._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
 
 
 if __name__ == "__main__":

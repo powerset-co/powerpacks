@@ -278,6 +278,7 @@ class PersonFilters:
 class CompanyFilters:
     company_ids: tuple[str, ...] = ()
     company_names: tuple[str, ...] = ()
+    investor_names: tuple[str, ...] = ()
     sector_types: tuple[str, ...] = ()
     technology_types: tuple[str, ...] = ()
     entity_types: tuple[str, ...] = ()
@@ -288,7 +289,14 @@ class CompanyFilters:
     is_current_company: bool | None = None
 
     def __post_init__(self) -> None:
-        for name in ("company_ids", "company_names", "sector_types", "technology_types", "entity_types"):
+        for name in (
+            "company_ids",
+            "company_names",
+            "investor_names",
+            "sector_types",
+            "technology_types",
+            "entity_types",
+        ):
             object.__setattr__(self, name, _tuple(getattr(self, name)))
         object.__setattr__(self, "is_current_company", _bool(self.is_current_company, "is_current_company"))
         for name in ("funding_stage_min", "funding_stage_max"):
@@ -310,7 +318,14 @@ class CompanyFilters:
     def from_dict(cls, data: Mapping[str, Any]) -> "CompanyFilters":
         fields = {f.name for f in cls.__dataclass_fields__.values()}
         _strict(data, fields, "CompanyFilters")
-        tuple_fields = {"company_ids", "company_names", "sector_types", "technology_types", "entity_types"}
+        tuple_fields = {
+            "company_ids",
+            "company_names",
+            "investor_names",
+            "sector_types",
+            "technology_types",
+            "entity_types",
+        }
         return cls(**{key: (_tuple(data.get(key)) if key in tuple_fields else data.get(key)) for key in fields})
 
 
@@ -328,7 +343,10 @@ class EvidenceCriterion:
             or not self.description.strip()
         ):
             raise ValueError("evidence criterion name and description are required")
-        object.__setattr__(self, "weight", _number(self.weight, "weight"))
+        weight = _number(self.weight, "weight")
+        if weight != 1.0:
+            raise ValueError("EvidenceCriterion weight must be 1.0")
+        object.__setattr__(self, "weight", weight)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "EvidenceCriterion":
@@ -487,7 +505,8 @@ class SearchSpec:
     tech_skills: tuple[str, ...] = ()
     soft_criteria: tuple[EvidenceCriterion, ...] = ()
     rank_mode: RankMode = RankMode.DETERMINISTIC
-    rank_model: str | None = None
+    rank_model: str = "gpt-5.6-luna"
+    rank_reasoning_effort: str = "medium"
     rank_approved: bool = False
     sql_candidates: tuple[SqlCandidate, ...] = ()
     bounds: SearchBounds = field(default_factory=SearchBounds)
@@ -524,8 +543,10 @@ class SearchSpec:
             raise ValueError("soft criteria require semantic rank_mode")
         if self.rank_mode == RankMode.SEMANTIC and not self.soft_criteria:
             raise ValueError("semantic rank_mode requires soft criteria")
-        if self.rank_model is not None and (not isinstance(self.rank_model, str) or not self.rank_model.strip()):
-            raise ValueError("rank_model must be non-empty or null")
+        if self.rank_model != "gpt-5.6-luna":
+            raise ValueError("typed GTM semantic rank_model must be gpt-5.6-luna")
+        if self.rank_reasoning_effort != "medium":
+            raise ValueError("typed GTM rank_reasoning_effort must be medium")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "SearchSpec":
@@ -566,7 +587,8 @@ class SearchSpec:
             _tuple(data.get("tech_skills")),
             tuple(EvidenceCriterion.from_dict(row) for row in (data.get("soft_criteria") or [])),
             RankMode(data.get("rank_mode", "deterministic")),
-            str(data["rank_model"]) if data.get("rank_model") else None,
+            str(data.get("rank_model") or "gpt-5.6-luna"),
+            str(data.get("rank_reasoning_effort") or "medium"),
             data.get("rank_approved", False),
             sql,
             SearchBounds.from_dict(data.get("bounds") or {}),
@@ -603,11 +625,15 @@ class ResolvedSources:
     company_ids: tuple[str, ...] = ()
     education_ids: tuple[str, ...] = ()
     records: tuple[Mapping[str, Any], ...] = ()
+    investor_urns: tuple[str, ...] = ()
+    investor_names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "company_ids", _tuple(self.company_ids))
         object.__setattr__(self, "education_ids", _tuple(self.education_ids))
         object.__setattr__(self, "records", tuple(MappingProxyType(dict(record)) for record in self.records))
+        object.__setattr__(self, "investor_urns", _tuple(self.investor_urns))
+        object.__setattr__(self, "investor_names", _tuple(self.investor_names))
 
     @property
     def unresolved_required_inputs(self) -> tuple[str, ...]:

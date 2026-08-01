@@ -11,7 +11,8 @@ Subcommands:
   schema  - dump tables, columns, and row counts so the agent never guesses
   query   - run one SELECT/WITH statement with a row cap
 
-No state is written anywhere; output is JSON on stdout only.
+No state is written anywhere; query output is JSON and schema output may be
+JSON or Markdown on stdout.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ class QueryGuardError(ValueError):
 
 
 def resolve_db_path(explicit: str | None) -> Path:
-    candidate = explicit or os.getenv("POWERPACKS_LOCAL_SEARCH_DB") or DEFAULT_DB_PATH
+    candidate = explicit or DEFAULT_DB_PATH
     return Path(candidate)
 
 
@@ -108,6 +109,24 @@ def run_schema(conn: Any) -> dict[str, Any]:
     return {"status": "ok", "tables": tables}
 
 
+def render_schema_markdown(payload: dict[str, Any]) -> str:
+    lines = ["# DuckDB schema", ""]
+    for table in payload["tables"]:
+        lines.extend(
+            [
+                f"## `{table['table']}`",
+                "",
+                f"Row count: {table['row_count']}",
+                "",
+                "| Column | DuckDB type |",
+                "| --- | --- |",
+            ]
+        )
+        lines.extend(f"| `{column['name']}` | `{column['type']}` |" for column in table["columns"])
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def run_query(conn: Any, sql: str, *, max_rows: int, raw: bool) -> dict[str, Any]:
     statement = validate_select_only(sql)
     cursor = conn.execute(statement)
@@ -130,10 +149,11 @@ def run_query(conn: Any, sql: str, *, max_rows: int, raw: bool) -> dict[str, Any
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only SQL queries against the local search DuckDB")
-    parser.add_argument("--db", help=f"DuckDB path (default: $POWERPACKS_LOCAL_SEARCH_DB or {DEFAULT_DB_PATH})")
+    parser.add_argument("--db", help=f"DuckDB path (default: {DEFAULT_DB_PATH})")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("schema", help="List tables, columns, and row counts")
+    schema_parser = subparsers.add_parser("schema", help="List tables, columns, and row counts")
+    schema_parser.add_argument("--format", choices=("json", "markdown"), default="json", help="Output format (default: json)")
 
     query_parser = subparsers.add_parser("query", help="Run one SELECT/WITH statement")
     sql_group = query_parser.add_mutually_exclusive_group(required=True)
@@ -166,7 +186,10 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
 
-    print(json.dumps(payload, ensure_ascii=False))
+    if args.command == "schema" and args.format == "markdown":
+        print(render_schema_markdown(payload))
+    else:
+        print(json.dumps(payload, ensure_ascii=False))
     return 0
 
 

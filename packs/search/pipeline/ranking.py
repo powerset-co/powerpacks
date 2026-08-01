@@ -49,7 +49,11 @@ def production_semantic_adapter(
         raise RuntimeError("OPENAI_API_KEY is required for authorized semantic ranking")
     items = [RerankItem(index, candidate.to_dict()) for index, candidate in enumerate(candidates)]
     traits = [
-        {"value": criterion.name, "temporal": "all", "meaning": "general"}
+        {
+            "value": f"{criterion.name}: {criterion.description}",
+            "temporal": "all",
+            "meaning": "general",
+        }
         for criterion in spec.soft_criteria
     ]
     results = asyncio.run(
@@ -59,8 +63,8 @@ def production_semantic_adapter(
             traits=traits,
             api_base="https://api.openai.com/v1",
             api_key=api_key,
-            model=str(spec.rank_model),
-            reasoning_effort=None,
+            model=spec.rank_model,
+            reasoning_effort=spec.rank_reasoning_effort,
             concurrency=min(10, max(1, len(items))),
             timeout=60,
             max_retries=1,

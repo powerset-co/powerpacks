@@ -1,79 +1,88 @@
-# Layered search candidate architecture and pre-cutover boundary
+# Layered `$search` architecture
 
-## Current profile boundary
+## Public routing boundary
 
-Bare-person lookup executes through the typed composition root. The live
-product still uses legacy `search_network_pipeline.py` for ordinary
-people search and legacy `deep_search_loop.py` for recruiting. Their task state,
-ledgers, artifacts, and helper owners remain canonical until atomic cutover.
+`$search` is the single router for person lookup, GTM people search, and
+recruiting. A specific request is first represented as a strict `SearchRoute`:
 
-For explicit validation, `$search` can record a strict `SearchRoute`; only
-`target=engine` creates a strict `SearchSpec`. The typed
-`packs/search/pipeline/search.py` composition root is additive and opt-in for
-deterministic tests and approved read-only real-environment comparison only.
+```text
+SearchRoute
+  target: engine | sql | contacts
+  profile: lookup | gtm | recruiting | null
+  backend: local | powerset | null
+  reason
+```
+
+Only `target=engine` creates a `SearchSpec`. Local relational or aggregate
+questions, including company-only local directory questions, route to
+`$search-sql`. Contact-field and set-contact questions route to
+`$search-contacts`. People-at-company requests are GTM searches with company
+constraints. There is no separate public company-search command.
 
 ```mermaid
 flowchart LR
-  Q[Request] --> A{Specific enough?}
-  A -->|no| N[needs_input; no retrieval]
-  A -->|bare-person lookup| R[SearchRoute]
-  A -->|ordinary GTM / recruiting| LEG[Legacy prepare / deep orchestration]
-  A -->|explicit validation opt-in| R[SearchRoute]
-  R -->|engine candidate| S[SearchSpec]
+  Q[Request] --> R{SearchRoute}
+  R -->|ambiguous| N[needs_input; no retrieval]
+  R -->|sql| SQL[Local read-only search-sql]
+  R -->|contacts| CT[search-contacts]
+  R -->|engine| S[Typed SearchSpec]
   S --> C{Explicit backend}
   C -->|local| L[LocalSearchRunner]
   C -->|powerset| P[TurboPufferSearchRunner]
-  L --> F[Canonical person frontier]
+  L --> F[Canonical CandidateFrontier]
   P --> F
-  F --> H[Hydrate once]
-  H --> V[Hard-filter revalidation]
-  V -->|accepted only| K[Deterministic rank]
-  V -->|violation/unknown/missing| X[Quarantine artifact]
-  A -->|company-only| CO[Live search-company]
-  A -->|relational| SQL[Local read-only SQL]
-  A -->|contact fields| CT[Contacts]
+  F --> SR[StageResult + canonical artifacts]
 ```
+
+## Canonical typed execution
+
+Every engine request persists one schema-valid `search.spec.v1` document and
+runs it through `packs/search/pipeline/search.py`. The composition root is the
+only backend-selection point. Local and Powerset runners import their own
+storage implementations directly; there is no ambient backend mode, registry,
+fallback, or compatibility wrapper.
+
+The three profiles select behavior within this one engine:
+
+- `lookup`: deterministic person identifier lookup with no semantic retrieval
+  or model call;
+- `gtm`: structured filters, bounded retrieval, hydration, hard-filter
+  revalidation, and deterministic or one bounded semantic rank pass;
+- `recruiting`: reviewed recruiter plan, differentiated probes, conditional
+  triage, one evidence judge, deterministic gates, and bounded expansion.
+
+`fast` and `deep` are not public pipeline modes. Explicit profile and bounds
+determine which typed stages execute. Recruiting uses the same persisted
+`SearchSpec` and command as lookup and GTM, with an `awaiting_review` first pass
+and a binding-checked resume described in
+[`deep-mode.md`](../skills/search/deep-mode.md).
 
 ## Contracts and invariants
 
-- Within the additive typed candidate path, the sole runner-selection point is
-  `pipeline/search.py`; shared pipeline modules import neither backend.
-- Local and Powerset runners import their own storage layers directly. There is
-  no registry, ambient backend mode, fallback, or compatibility wrapper.
-- Explicit company and education names have one disposition per input. Any
-  unresolved required name returns `needs_input` before retrieval.
-- Capabilities come from selected DuckDB columns or checked-in TurboPuffer
-  namespace contracts. Missing required fields return `unsupported_capability`.
+- `SearchSpec` is the sole engine input. It binds the raw request, profile,
+  backend, corpus, lookup/role/filter intent, skills, optional soft criteria,
+  bounds, and recruiting input.
+- `CandidateFrontier` is person-grain. Merges deduplicate by canonical person ID
+  while unioning matched positions, lanes, probes, evidence, and provenance.
+- Every layer returns a `StageResult` with status, frontier, counts, reason
+  histogram, capabilities, resolved sources, warnings/errors, and artifact
+  paths. A failed stage is never reinterpreted as zero results or convergence.
 - Hard constraints apply before retrieval bounds and are revalidated after
   hydration. Violations, unknown evidence, and missing hydration never rank.
-- Role, summary, company-signal, adjacency, SQL, and company-union lanes are
-  advertised only when the selected runner implements them. Provenance merges
-  at person grain.
-- SQL candidates must belong to the eligible person pool and join the same
-  frontier before one hydration/rank pass.
-- Remote lookup candidates must belong to a completely enumerated selected
-  operator scope before hydration or return. Powerset supports `person_id`,
-  `name`, `handle`, and `profile_url`; it does not advertise email or phone.
-- Soft criteria are rejected until an approved production semantic adapter
-  exists. There is no callback-only production capability.
-- Local corpus identity is derived from the selected read-only DuckDB. Supplied
-  hashes must match it. Powerset set/operator/membership/schema observations are
-  derived; incomplete searchable-content identity is honestly non-comparable.
-- Private JSON/JSONL and validation evidence live under repository
-  `.powerpacks/`. The CSV is redacted and contains no person identifiers or
-  hydrated identity fields.
+- Explicit company and education inputs receive one visible resolution
+  disposition. Unresolved required inputs stop before retrieval.
+- SQL candidates are local-only and join the same eligible frontier before one
+  hydration/rank pass.
+- Lookup and retrieval remain scoped to the selected corpus. There is no
+  cross-backend fallback.
+- Ambiguous requests return `needs_input` before retrieval or persistence of a
+  guessed engine request.
+- Private artifacts live under `.powerpacks/search-runs/`.
 
-## Current boundary
+## Approval boundary
 
-The typed candidate is the deterministic bare-person lookup owner. Its GTM and
-recruiting implementations do not imply cutover; those canonical live paths
-remain the legacy fast/deep owners. `$search-company` remains live for company-only
-lookup/resolution; `$search-sql` and `$search-contacts` remain separate.
-`$search-network` and NanoClaw `/search-network` remain live compatibility
-surfaces while their task/result consumers exist.
-
-Ambiguous requests stop as `needs_input` before retrieval. Typed
-`plan_approved` and `judge_approved` select reviewed adapters only; together
-with credentials they still do not authorize a paid quality run. Such a run
-requires separate explicit approval of cases, model, caps, private output path,
-and maximum spend immediately before execution.
+Credentials and typed approval fields authorize only their named execution
+adapter after explicit approval. They do not authorize a paid quality-validation
+run. Paid validation separately requires explicit approval of cases, model,
+candidate/call caps, private output path, and maximum spend immediately before
+execution.

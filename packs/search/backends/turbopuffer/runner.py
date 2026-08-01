@@ -68,6 +68,7 @@ class TurboPufferSearchRunner:
         }
         supported = tuple(name for name, field in mapping.items() if field in people_fields)
         company_mapping = {
+            "investor_names": "investor_urns",
             "sector_types": "sector_types",
             "technology_types": "technology_types",
             "entity_types": "entity_types",
@@ -89,7 +90,7 @@ class TurboPufferSearchRunner:
         if {"full_name", "public_identifier", "public_profile_url"} <= person_columns:
             fields.extend(("name", "handle", "profile_url"))
         lanes = ["role", "summary", "company_signal", "adjacency"]
-        return RunnerCapabilities(Backend.POWERSET, supported, tuple(lanes), skills, False, tuple(fields))
+        return RunnerCapabilities(Backend.POWERSET, supported, tuple(lanes), skills, True, tuple(fields))
 
     def lookup_person(self, lookup: LookupSpec | None) -> tuple[CandidateRecord, ...]:
         if lookup is None:
@@ -189,10 +190,57 @@ class TurboPufferSearchRunner:
     def resolve_sources(self, spec: SearchSpec) -> ResolvedSources:
         import asyncio
 
+        from .resolution import resolve_turbopuffer_investors
+
         companies = list(spec.company_filters.company_ids)
         education = list(spec.person_filters.education_ids)
+        investor_urns: list[str] = []
+        resolved_investor_names: list[str] = []
         records: list[dict[str, Any]] = []
+        if spec.company_filters.investor_names:
+            investor_rows = asyncio.run(
+                resolve_turbopuffer_investors(
+                    list(spec.company_filters.investor_names),
+                    allowed_operator_ids=list(self.corpus.operator_ids),
+                    top_k=1,
+                )
+            )
+            for name in spec.company_filters.investor_names:
+                matched = [
+                    row
+                    for row in investor_rows
+                    if str(row.get("query_name") or "").casefold() == name.casefold()
+                ]
+                if not matched:
+                    records.append(
+                        {
+                            "source": "investor",
+                            "input": name,
+                            "required": True,
+                            "disposition": "unresolved",
+                        }
+                    )
+                for row in matched:
+                    urn = str(row.get("urn") or "")
+                    resolved_name = str(row.get("canonical_name") or row.get("investor_name") or name)
+                    if urn and urn not in investor_urns:
+                        investor_urns.append(urn)
+                    if resolved_name and resolved_name not in resolved_investor_names:
+                        resolved_investor_names.append(resolved_name)
+                    if urn:
+                        records.append(
+                            {
+                                "source": "investor",
+                                "input": name,
+                                "required": True,
+                                "disposition": "resolved",
+                                "resolved_id": urn,
+                                "resolved_name": resolved_name,
+                                "match_type": str(row.get("match_type") or "exact"),
+                            }
+                        )
         archetype_payload = {
+            "investor_urns": investor_urns,
             "sector_types": list(spec.company_filters.sector_types),
             "technology_types": list(spec.company_filters.technology_types),
             "entity_types": list(spec.company_filters.entity_types),
@@ -290,7 +338,13 @@ class TurboPufferSearchRunner:
                         "resolved_id": value,
                     }
                 )
-        return ResolvedSources(tuple(companies), tuple(education), tuple(records))
+        return ResolvedSources(
+            company_ids=tuple(companies),
+            education_ids=tuple(education),
+            records=tuple(records),
+            investor_urns=tuple(investor_urns),
+            investor_names=tuple(resolved_investor_names),
+        )
 
     def _company_archetype_filter(self, payload: dict[str, Any]) -> tuple:
         clauses: list[tuple] = [
@@ -300,6 +354,7 @@ class TurboPufferSearchRunner:
             ("sector_types", "sector_types", "ContainsAny"),
             ("technology_types", "technology_types", "ContainsAny"),
             ("entity_types", "entity_types", "ContainsAny"),
+            ("investor_urns", "investor_urns", "ContainsAny"),
             ("headcount_min", "headcount", "Gte"),
             ("headcount_max", "headcount", "Lte"),
         ):
@@ -335,6 +390,7 @@ class TurboPufferSearchRunner:
             ("seniority_band", "In", spec.person_filters.seniority_bands),
             ("role_track", "In", spec.person_filters.role_tracks),
             ("company_id", "In", sources.company_ids),
+            ("investor_names", "ContainsAny", sources.investor_names),
         )
         clauses.extend(
             (field, op, list(value))
@@ -382,11 +438,18 @@ class TurboPufferSearchRunner:
             list(self.corpus.operator_ids),
         )
         company_filter = self._filters(spec, sources, include_role=False) if union else None
+        tech_skills_by_person: dict[str, tuple[str, ...]] = {}
         if sources.education_ids:
             education = asyncio.run(
                 storage.enumerate_filter_only_rows_for_namespace(
                     "education",
-                    ("canonical_education_id", "In", list(sources.education_ids)),
+                    (
+                        "And",
+                        [
+                            ("allowed_operator_ids", "ContainsAny", list(self.corpus.operator_ids)),
+                            ("canonical_education_id", "In", list(sources.education_ids)),
+                        ],
+                    ),
                     ["person_id"],
                     page_size=10000,
                 )
@@ -402,7 +465,6 @@ class TurboPufferSearchRunner:
             if company_filter is not None:
                 company_filter = ("And", [company_filter, clause])
         if spec.tech_skills:
-            self._required_skills = spec.tech_skills
             skills = asyncio.run(
                 storage.enumerate_filter_only_rows_for_namespace(
                     "summaries",
@@ -413,7 +475,7 @@ class TurboPufferSearchRunner:
                             ("tech_skills", "ContainsAny", list(spec.tech_skills)),
                         ],
                     ),
-                    ["base_id", "person_id"],
+                    ["base_id", "person_id", "tech_skills"],
                     page_size=10000,
                 )
             )
@@ -426,6 +488,19 @@ class TurboPufferSearchRunner:
                     if row.get("person_id") or row.get("base_id")
                 )
             )
+            for row in skills["rows"]:
+                person_id = str(row.get("person_id") or row.get("base_id") or "")
+                if not person_id:
+                    continue
+                tech_skills_by_person[person_id] = tuple(
+                    dict.fromkeys(
+                        (*tech_skills_by_person.get(person_id, ()), *(
+                            str(value)
+                            for value in row.get("tech_skills") or []
+                            if str(value)
+                        ))
+                    )
+                )
             clause = ("base_id", "In", skill_people)
             filters = ("And", [filters, clause])
             summary_filter = ("And", [summary_filter, clause])
@@ -491,6 +566,7 @@ class TurboPufferSearchRunner:
                 "summary_namespace_filter": summary_namespace_filter,
                 "signal_filter": signal_filter,
                 "company_filter": company_filter,
+                "tech_skills_by_person": tech_skills_by_person,
             },
         )
 
@@ -614,6 +690,7 @@ class TurboPufferSearchRunner:
             )
             lane_rows.append(("company_union", company_rows["rows"][: plan.spec.bounds.retrieval_limit]))
         out = []
+        indexed_skills = filters.compiled.get("tech_skills_by_person") or {}
         for lane, lane_values in lane_rows:
             for rank, row in enumerate(lane_values, start=1):
                 person_id = str(row.get("person_id") or row.get("base_id") or "")
@@ -621,6 +698,17 @@ class TurboPufferSearchRunner:
                     continue
                 position_id = "" if lane == "summary" else str(row.get("position_id") or row.get("id") or "")
                 score = float(row.get("score") or 0)
+                actual_skills = tuple(
+                    dict.fromkeys(
+                        str(value)
+                        for value in (
+                            row.get("tech_skills")
+                            or indexed_skills.get(person_id)
+                            or ()
+                        )
+                        if str(value)
+                    )
+                )
                 out.append(
                     CandidateRecord(
                         person_id,
@@ -632,6 +720,17 @@ class TurboPufferSearchRunner:
                         ),
                         backend="powerset",
                         structured={key: row.get(key) for key in attributes if key in row},
+                        tech_skills=actual_skills,
+                        hard_filter_evidence=(
+                            {
+                                "tech_skills": {
+                                    "source": "turbopuffer_summaries",
+                                    "values": list(actual_skills),
+                                }
+                            }
+                            if actual_skills
+                            else {}
+                        ),
                     )
                 )
         return tuple(out)
@@ -642,16 +741,26 @@ class TurboPufferSearchRunner:
         )
         by_id = {}
         for raw in rows:
-            profile = normalize_hydrated_context(raw.get("hydrated_context") or {})
+            profile = normalize_hydrated_context(raw)
             profile.update(
                 {key: value for key, value in raw.items() if key != "hydrated_context" and value is not None}
             )
-            if getattr(self, "_required_skills", ()):
-                profile["tech_skills"] = list(self._required_skills)
             by_id[str(raw["id"])] = profile
         hydrated = []
         for row in frontier.candidates:
             profile = by_id.get(row.person_id)
+            if profile is not None and row.tech_skills:
+                profile = dict(profile)
+                profile["tech_skills"] = list(
+                    dict.fromkeys(
+                        [
+                            str(value)
+                            for value in profile.get("tech_skills") or []
+                            if str(value)
+                        ]
+                        + list(row.tech_skills)
+                    )
+                )
             position_ids = set(row.matched_position_ids)
             indexes = tuple(
                 index
@@ -671,17 +780,86 @@ class TurboPufferSearchRunner:
         )
 
     def snapshot_corpus(self, scope: str, evidence_person_ids: tuple[str, ...]) -> dict[str, Any]:
+        import asyncio
+
+        if scope != self.corpus.set_id:
+            raise ValueError("snapshot scope must exactly match the selected Powerset set_id")
         operator_resolution = postgres_client.fetch_set_operator_ids(self.corpus.set_id)
+        if str(operator_resolution.get("set_id") or "") != self.corpus.set_id:
+            raise ValueError("Postgres resolved a different Powerset set_id")
         derived_operators = tuple(sorted(str(value) for value in operator_resolution.get("operator_ids") or []))
-        if derived_operators and derived_operators != tuple(sorted(self.corpus.operator_ids)):
+        if not derived_operators:
+            raise ValueError("selected Powerset set has no Postgres-derived operator scope")
+        if derived_operators != tuple(sorted(self.corpus.operator_ids)):
             raise ValueError("Powerset operator_ids do not match the selected set_id")
-        member_ids = sorted(self._scoped_person_ids())
-        hydrated = self.hydrate(CandidateFrontier.merge([CandidateRecord(value) for value in evidence_person_ids]))
-        evidence = {row.person_id: evidence_hash(dict(row.hydrated_profile or {})) for row in hydrated.candidates}
-        schema_hashes = {
-            path.stem: canonical_hash(json.loads(path.read_text()))
-            for path in sorted(CONTRACTS.glob("*.namespace.json"))
-        }
+        contracts = {}
+        for path in sorted(CONTRACTS.glob("*.namespace.json")):
+            contract = json.loads(path.read_text())
+            contracts[str(contract["name"])] = contract
+        required_namespaces = (
+            "people",
+            "summaries",
+            "companies",
+            "company_signals",
+            "education",
+            "schools",
+        )
+        if not set(required_namespaces) <= set(contracts):
+            raise ValueError("checked-in TurboPuffer snapshot contracts are incomplete")
+        contracts = {name: contracts[name] for name in required_namespaces}
+        operator_filter = (
+            "allowed_operator_ids",
+            "ContainsAny",
+            list(self.corpus.operator_ids),
+        )
+        records_by_namespace: dict[str, list[dict[str, Any]]] = {}
+        namespace_counts: dict[str, int] = {}
+        for name in required_namespaces:
+            contract = contracts[name]
+            attributes = list(dict.fromkeys(
+                [str(row["name"]) for row in contract.get("attributes") or []]
+                + (["vector"] if contract.get("vector") else [])
+            ))
+            enumeration = asyncio.run(
+                storage.enumerate_filter_only_rows_for_namespace(
+                    name,
+                    None if name == "schools" else operator_filter,
+                    attributes,
+                    page_size=10000,
+                )
+            )
+            if not enumeration.get("completed") or enumeration.get("truncated"):
+                raise RuntimeError(f"{name} snapshot enumeration is incomplete")
+            rows = list(enumeration.get("rows") or [])
+            if enumeration.get("row_count") != len(rows):
+                raise RuntimeError(f"{name} snapshot enumeration count mismatch")
+            records_by_namespace[name] = rows
+            namespace_counts[name] = len(rows)
+        member_ids = sorted({
+            str(row.get("person_id") or row.get("base_id") or row.get("id"))
+            for row in records_by_namespace["people"]
+            if row.get("person_id") or row.get("base_id") or row.get("id")
+        })
+        requested_ids = tuple(dict.fromkeys(str(value) for value in evidence_person_ids))
+        missing_members = sorted(set(requested_ids) - set(member_ids))
+        if missing_members:
+            raise ValueError("requested evidence person IDs are outside complete Powerset membership")
+        hydrated_rows = postgres_client.fetch_person_rows(list(requested_ids))
+        hydrated_by_id = {str(row.get("id")): row for row in hydrated_rows if row.get("id")}
+        missing_hydration = [value for value in requested_ids if value not in hydrated_by_id]
+        if missing_hydration:
+            raise RuntimeError("requested Powerset evidence hydration is missing")
+        evidence = {}
+        for person_id in requested_ids:
+            raw = hydrated_by_id[person_id]
+            profile = normalize_hydrated_context(raw)
+            profile.update({
+                key: value
+                for key, value in raw.items()
+                if key != "hydrated_context" and value is not None
+            })
+            evidence[person_id] = evidence_hash(profile)
+        schema_hashes = {name: canonical_hash(contract) for name, contract in contracts.items()}
         operator_hash = canonical_hash(sorted(self.corpus.operator_ids))
         membership_hash = canonical_hash(member_ids)
         for supplied, derived, name in (
@@ -692,22 +870,33 @@ class TurboPufferSearchRunner:
                 raise ValueError(f"supplied Powerset {name} does not match derived scope")
         if self.corpus.namespace_schema_hashes and dict(self.corpus.namespace_schema_hashes) != schema_hashes:
             raise ValueError("supplied Powerset namespace schema hashes do not match checked-in contracts")
-        if self.corpus.native_content_version or self.corpus.scoped_records_hash:
-            raise ValueError("caller-supplied Powerset content identity is not accepted")
-        return {
+        scoped_records_hash = canonical_hash(records_by_namespace)
+        supplied_content_identity = (
+            self.corpus.native_content_version or self.corpus.scoped_records_hash
+        )
+        if supplied_content_identity is not None and supplied_content_identity != scoped_records_hash:
+            raise ValueError("supplied Powerset content identity does not match derived scope")
+        native_content_version = (
+            scoped_records_hash if self.corpus.native_content_version is not None else None
+        )
+        snapshot = {
             "schema_version": "reflect.corpus_snapshot.v1",
             "backend": "powerset",
             "source": "pr_b_runner_snapshot",
-            "verification_status": "unverified_non_comparable",
+            "verification_status": "verified_comparable",
             "set_id": self.corpus.set_id,
             "operator_scope_hash": operator_hash,
             "membership_hash": membership_hash,
             "namespace_schema_hashes": schema_hashes,
-            "scoped_records_hash": None,
             "evidence_hashes": evidence,
             "enumeration_complete": True,
             "enumeration_truncated": False,
-            "enumerated_record_count": len(member_ids),
+            "enumerated_record_count": sum(namespace_counts.values()),
+            "namespace_record_counts": namespace_counts,
             "membership_id_count": len(member_ids),
             "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         }
+        snapshot[
+            "native_content_version" if native_content_version else "scoped_records_hash"
+        ] = native_content_version or scoped_records_hash
+        return snapshot

@@ -7,7 +7,7 @@ Own reusable data-ingestion and contract powerpacks adjacent to `data_pipeline_v
 
 ```txt
 contracts/
-primitives/hydrate_people/
+packs/search/backends/{local,turbopuffer}/runner.py
 primitives/query_postgres_profiles/
 primitives/contracts/
 primitives/pull_runtime_keys/

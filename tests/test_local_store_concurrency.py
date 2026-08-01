@@ -37,16 +37,14 @@ class LocalStoreForkTests(unittest.TestCase):
         self.db_path = Path(self.tmp.name) / "concurrency.duckdb"
         build_db(self.db_path)
         backend._local_store_for_path.cache_clear()
-        backend.configure_local_backend(self.db_path)
 
     def tearDown(self):
-        backend.configure_local_backend(None)
         backend._local_store_for_path.cache_clear()
         self.tmp.cleanup()
 
     def test_local_store_returns_per_call_forks_of_one_root(self):
-        first = backend.local_store()
-        second = backend.local_store()
+        first = backend.local_store(self.db_path)
+        second = backend.local_store(self.db_path)
         root = backend._local_store_for_path(str(self.db_path))
         self.assertIsNot(first, second)
         self.assertIsNot(first.conn, second.conn)
@@ -69,7 +67,7 @@ class LocalStoreForkTests(unittest.TestCase):
             }
             filters = filters_from_role_payload(payload)
             return await backend.filter_only_rows_for_namespace(
-                "people", filters, ["base_id", "position_title", "company_id"], max_results=0
+                self.db_path, "people", filters, ["base_id", "position_title", "company_id"], max_results=0
             )
 
         async def fan_out():

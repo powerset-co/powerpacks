@@ -277,12 +277,17 @@ def apply_deterministic_gates(
     hireable = not founder_exec or not founder_policy_applies or founder_policy == "eligible"
     location = candidate.hard_filter_evidence.get("disposition") == "accepted"
     score = float(judge.get("score") if judge.get("score") is not None else judge.get("jd_score") or 0)
-    seniority = judge.get("seniority_fit") in {"ideal", "acceptable", "in_band"}
+    known_seniority = judge.get("seniority_fit") in {"ideal", "acceptable", "in_band"}
+    valid_unknown_seniority = (
+        judge.get("seniority_fit") == "unknown"
+        and judge.get("_seniority_assessment_valid") is True
+    )
+    seniority = known_seniority or valid_unknown_seniority
     core = _core_group_met(judge, plan)
     judged = judge.get("status") == "judged"
     categorical = judge.get("verdict") not in {None, "out"}
     shortlist = judged and categorical and location and seniority and core and hireable and score >= score_floor
-    sendable = shortlist and score >= sendable_score
+    sendable = shortlist and known_seniority and score >= sendable_score
     gates = {
         "location": location,
         "core_groups": core,
@@ -300,7 +305,7 @@ def select_exemplars(candidates: tuple[CandidateRecord, ...], limit: int) -> tup
     strong = [row for row in candidates if row.deterministic_gates.get("shortlist")]
     strong.sort(key=lambda row: (-row.deterministic_score, row.person_id))
     if len(strong) < 10:
-        return tuple(strong)
+        return ()
     selected: list[CandidateRecord] = []
     seen_clusters: set[tuple[str, str]] = set()
     for row in strong:

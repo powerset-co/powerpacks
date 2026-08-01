@@ -13,22 +13,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def read_jsonish_state(path: Path) -> bool:
-    return path.is_file() and path.name.endswith(".json") and not path.name.endswith(".manifest.json")
+def is_valid_canonical_run(path: Path) -> bool:
+    if not path.is_file() or path.name != "result.json":
+        return False
+    try:
+        result = json.loads(path.read_text())
+        search_spec = json.loads(path.with_name("search_spec.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(result, dict)
+        and result.get("schema_version") == "search.stage_result.v1"
+        and isinstance(search_spec, dict)
+        and search_spec.get("schema_version") == "search.spec.v1"
+        and isinstance(search_spec.get("raw_request"), str)
+        and bool(search_spec["raw_request"].strip())
+        and search_spec.get("profile") in {"lookup", "gtm", "recruiting"}
+        and search_spec.get("backend") in {"local", "powerset"}
+        and isinstance(search_spec.get("corpus"), dict)
+    )
 
 
 def discover_latest_state(runs_dir: Path) -> Path | None:
-    directories = [runs_dir]
-    if runs_dir.name == "search-runs":
-        directories.append(runs_dir.parent / "runs")
-    elif runs_dir.name == "runs":
-        directories.append(runs_dir.parent / "search-runs")
     candidates = [
         path
-        for directory in directories
-        if directory.exists()
-        for path in (*directory.glob("*.json"), *directory.glob("*/result.json"))
-        if read_jsonish_state(path) and ".events." not in path.name
+        for path in runs_dir.glob("*/result.json")
+        if is_valid_canonical_run(path)
     ]
     if not candidates:
         return None

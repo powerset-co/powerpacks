@@ -17,6 +17,7 @@
     "soft_criteria",
     "rank_mode",
     "rank_model",
+    "rank_reasoning_effort",
     "rank_approved",
     "sql_candidates",
     "bounds",
@@ -115,7 +116,7 @@
             "minLength": 1
           },
           "weight": {
-            "type": "number"
+            "const": 1.0
           }
         }
       }
@@ -124,8 +125,10 @@
       "enum": ["deterministic", "semantic"]
     },
     "rank_model": {
-      "type": ["string", "null"],
-      "minLength": 1
+      "const": "gpt-5.6-luna"
+    },
+    "rank_reasoning_effort": {
+      "const": "medium"
     },
     "rank_approved": {
       "type": "boolean"
@@ -443,6 +446,7 @@
       "required": [
         "company_ids",
         "company_names",
+        "investor_names",
         "sector_types",
         "technology_types",
         "entity_types",
@@ -457,6 +461,9 @@
           "$ref": "#/$defs/strings"
         },
         "company_names": {
+          "$ref": "#/$defs/strings"
+        },
+        "investor_names": {
           "$ref": "#/$defs/strings"
         },
         "sector_types": {

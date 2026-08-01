@@ -79,13 +79,17 @@ class QueryExecutionTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_cli(self, argv: list[str]) -> tuple[int, dict]:
+    def run_cli_output(self, argv: list[str]) -> tuple[int, str]:
         buffer = io.StringIO()
         with redirect_stdout(buffer):
             code = mod.main(["--db", str(self.db_path), *argv])
-        return code, json.loads(buffer.getvalue())
+        return code, buffer.getvalue()
 
-    def test_schema_lists_tables_and_counts(self):
+    def run_cli(self, argv: list[str]) -> tuple[int, dict]:
+        code, output = self.run_cli_output(argv)
+        return code, json.loads(output)
+
+    def test_schema_defaults_to_json(self):
         code, payload = self.run_cli(["schema"])
         self.assertEqual(code, 0)
         tables = {t["table"]: t for t in payload["tables"]}
@@ -93,6 +97,35 @@ class QueryExecutionTests(unittest.TestCase):
         self.assertEqual(tables["local_people_positions"]["row_count"], 3)
         column_names = [c["name"] for c in tables["local_people_positions"]["columns"]]
         self.assertIn("person_id", column_names)
+
+    def test_schema_explicit_json(self):
+        code, payload = self.run_cli(["schema", "--format", "json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["tables"][0]["table"], "local_people_positions")
+
+    def test_schema_markdown_is_deterministic(self):
+        code, output = self.run_cli_output(["schema", "--format", "markdown"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            output,
+            "# DuckDB schema\n\n"
+            "## `local_people_positions`\n\n"
+            "Row count: 3\n\n"
+            "| Column | DuckDB type |\n"
+            "| --- | --- |\n"
+            "| `person_id` | `VARCHAR` |\n"
+            "| `position_title` | `VARCHAR` |\n"
+            "| `company_id` | `VARCHAR` |\n"
+            "| `start_date_epoch` | `BIGINT` |\n"
+            "| `end_date_epoch` | `BIGINT` |\n"
+            "| `vector` | `DOUBLE[]` |\n",
+        )
+
+    def test_schema_rejects_invalid_format(self):
+        with self.assertRaises(SystemExit) as raised:
+            mod.main(["--db", str(self.db_path), "schema", "--format", "yaml"])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_query_rows_and_truncation(self):
         code, payload = self.run_cli(

@@ -34,9 +34,6 @@ def load_module(name: str, path: Path):
 search_result_merge = load_module("search_result_merge", SHARED / "search_result_merge.py")
 turbopuffer_client = load_module("turbopuffer_search_backend", TURBOPUFFER / "turbopuffer_search_backend.py")
 resolve_companies = load_module("turbopuffer_resolve_companies", TURBOPUFFER / "turbopuffer_resolve_companies.py")
-apply_prefilters = load_module("apply_prefilters", ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py")
-hydrate_people = load_module("hydrate_people", ROOT / "packs/search/primitives/hydrate_people" / "hydrate_people.py")
-results_io = load_module("results_io", ROOT / "packs/search/primitives/persist_search_results" / "results_io.py")
 
 
 class TurbopufferPrimitiveTests(unittest.TestCase):
@@ -47,6 +44,27 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         os.environ.pop("POWERPACKS_DEFAULT_SET_ID", None)
         os.environ.pop("POWERPACKS_DEFAULT_OPERATOR_ID", None)
         os.environ.pop("POWERPACKS_DEFAULT_OPERATOR_IDS", None)
+
+    def test_unfiltered_enumeration_paginates_without_an_initial_filter(self) -> None:
+        first = [SimpleNamespace(id="a", model_extra={"value": 1})]
+        namespace = SimpleNamespace(
+            query=mock.Mock(
+                side_effect=[SimpleNamespace(rows=first), SimpleNamespace(rows=[])]
+            )
+        )
+        with mock.patch.object(turbopuffer_client, "namespace", return_value=namespace):
+            result = asyncio.run(
+                turbopuffer_client.enumerate_filter_only_rows_for_namespace(
+                    "schools", None, ["value"], page_size=1
+                )
+            )
+        self.assertTrue(result["completed"])
+        self.assertFalse(result["truncated"])
+        self.assertEqual(result["rows"], [{"id": "a", "value": 1}])
+        self.assertNotIn("filters", namespace.query.call_args_list[0].kwargs)
+        self.assertEqual(
+            namespace.query.call_args_list[1].kwargs["filters"], ("id", "Gt", "a")
+        )
 
     def test_filters_from_role_payload_uses_contract_fields(self) -> None:
         filters = turbopuffer_client.filters_from_role_payload(
@@ -419,16 +437,12 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
                 },
                 {"id": "resolve_education", "output": {"education_ids": ["urn:harmonic:school:stanford"]}},
                 {"id": "resolve_companies", "output": {"company_ids": ["urn:harmonic:company:meta"]}},
-                {"id": "resolve_investors", "output": {"investor_urns": ["urn:harmonic:person:8352"]}},
-                {"id": "apply_prefilters", "output": {"base_candidate_ids": ["p1", "p2"]}},
             ]
         }
 
         payload = turbopuffer_client.role_payload_from_state(state)
         self.assertEqual(payload["education_ids"], ["urn:harmonic:school:stanford"])
         self.assertEqual(payload["company_ids"], ["urn:harmonic:company:meta"])
-        self.assertEqual(payload["investors"], ["urn:harmonic:person:8352"])
-        self.assertEqual(payload["base_candidate_ids"], ["p1", "p2"])
 
     def test_company_sector_filters_are_configurable(self) -> None:
         payload = {
@@ -474,18 +488,6 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertIn(("funding_stage", "Gt", 0), filters[1])
         self.assertIn(("funding_stage", "Lte", 3), filters[1])
 
-    def test_frontier_ids_read_execute_role_search(self) -> None:
-        state = {
-            "steps": [
-                {
-                    "id": "execute_role_search",
-                    "output": {"candidate_ids": ["p1", "p2", "p1"]},
-                }
-            ]
-        }
-
-        self.assertEqual(hydrate_people.frontier_ids(state), ["p1", "p2"])
-        self.assertEqual(results_io.frontier_ids(state), ["p1", "p2"])
 
     def test_dedupe_people_limit_zero_keeps_full_frontier(self) -> None:
         rows = [
@@ -496,120 +498,10 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(len(search_result_merge.dedupe_people(rows, limit=0)), 3)
         self.assertEqual(len(search_result_merge.dedupe_people(rows, limit=2)), 2)
 
-    def test_compressed_hydration_jsonl_round_trips_for_results(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            path = Path(td) / "profiles.jsonl.gz"
-            rows = [{"person_id": "p1", "name": "A"}, {"person_id": "p2", "name": "B"}]
-            hydrate_people.write_jsonl(path, rows)
-            with gzip.open(path, "rt") as handle:
-                self.assertEqual(json.loads(handle.readline())["person_id"], "p1")
-            self.assertEqual(results_io.read_jsonl(path), rows)
 
-    def test_result_rows_use_execute_role_search_order(self) -> None:
-        state = {
-            "task_id": "task",
-            "query": "software engineers in sf",
-            "steps": [
-                {"id": "execute_role_search", "output": {"candidate_ids": ["p2", "p1"]}},
-                {
-                    "id": "hydrate_people",
-                    "output": {
-                        "profiles": [
-                            {"person_id": "p1", "name": "One", "positions": []},
-                            {"person_id": "p2", "name": "Two", "positions": []},
-                        ]
-                    },
-                },
-            ],
-        }
 
-        rows = results_io.result_rows(state)
-        self.assertEqual([row["person_id"] for row in rows], ["p2", "p1"])
-        self.assertEqual([row["name"] for row in rows], ["Two", "One"])
 
-    def test_result_rows_join_rerank_score_and_reason(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            query_results = Path(td) / "query_results.csv"
-            query_results.write_text(
-                "conversation_id,query,person_id,result_index,matched_position_indexes,"
-                "final_score,trait_scores,overall_reasoning,pre_rerank_score,tags,"
-                "vertical_sources,created_at\n"
-                'task,software engineers,p2,0,[],0.91,{},"Strong SWE match",0.4,,[],2026-01-01T00:00:00Z\n'
-                'task,software engineers,p1,1,[],0.72,{},"Relevant engineer",0.3,,[],2026-01-01T00:00:00Z\n'
-            )
-            state = {
-                "task_id": "task",
-                "query": "software engineers in sf",
-                "steps": [
-                    {
-                        "id": "llm_rerank_candidates",
-                        "output": {
-                            "ranked_candidate_ids": ["p2", "p1"],
-                            "artifacts": {"query_results_csv": str(query_results)},
-                        },
-                    },
-                    {
-                        "id": "hydrate_people",
-                        "output": {
-                            "profiles": [
-                                {"person_id": "p1", "name": "One", "positions": []},
-                                {"person_id": "p2", "name": "Two", "positions": []},
-                            ]
-                        },
-                    },
-                ],
-            }
 
-            rows = results_io.result_rows(state)
-            self.assertEqual([row["person_id"] for row in rows], ["p2", "p1"])
-            self.assertEqual(rows[0]["name"], "Two")
-            self.assertEqual(rows[0]["result_index"], "0")
-            self.assertEqual(rows[0]["final_score"], "0.91")
-            self.assertEqual(rows[0]["trait_scores"], "{}")
-            self.assertEqual(rows[0]["overall_reasoning"], "Strong SWE match")
-            self.assertEqual(rows[0]["matched_position_indexes"], "[]")
-
-    def test_result_rows_expose_inferred_age_fields(self) -> None:
-        state = {
-            "task_id": "task",
-            "query": "founders under 30",
-            "steps": [
-                {"id": "execute_role_search", "output": {"candidate_ids": ["p1", "p2"]}},
-                {
-                    "id": "hydrate_people",
-                    "output": {
-                        "profiles": [
-                            {"person_id": "p1", "name": "One", "positions": [], "inferred_birth_year": 1997, "inferred_age": 29},
-                            {"person_id": "p2", "name": "Two", "positions": []},
-                        ]
-                    },
-                },
-            ],
-        }
-        rows = results_io.result_rows(state)
-        self.assertEqual(rows[0]["inferred_birth_year"], 1997)
-        self.assertEqual(rows[0]["inferred_age"], 29)
-        self.assertEqual(rows[1]["inferred_birth_year"], "")
-        self.assertEqual(rows[1]["inferred_age"], "")
-        self.assertIn("inferred_birth_year", results_io.CSV_FIELDS)
-        self.assertIn("inferred_age", results_io.CSV_FIELDS)
-
-    def test_social_and_interaction_prefilters_are_postgres_backed(self) -> None:
-        original_social = apply_prefilters.fetch_social_filter_person_ids
-        original_interaction = apply_prefilters.fetch_interaction_filter_person_ids
-        try:
-            apply_prefilters.fetch_social_filter_person_ids = lambda payload, env_file=None: ["p1", "p2"]
-            apply_prefilters.fetch_interaction_filter_person_ids = lambda payload, env_file=None: ["p2", "p3"]
-            social = apply_prefilters.social_base_ids({"li_followers_min": 1000}, env_file=None, max_ids=10)
-            interaction = apply_prefilters.interaction_base_ids({"set_interaction_min": 5}, env_file=None, max_ids=10)
-        finally:
-            apply_prefilters.fetch_social_filter_person_ids = original_social
-            apply_prefilters.fetch_interaction_filter_person_ids = original_interaction
-
-        self.assertEqual(social[0], ["p1", "p2"])
-        self.assertEqual(social[1]["stage"], "social")
-        self.assertEqual(interaction[0], ["p2", "p3"])
-        self.assertEqual(interaction[1]["stage"], "interaction")
 
     def test_large_base_candidate_ids_are_batched_for_hybrid_search(self) -> None:
         original_batch_size = turbopuffer_client.BASE_ID_BATCH_SIZE
@@ -695,187 +587,18 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(merged[1]["position_id"], "p2-0")
         self.assertEqual(merged[1]["vertical_sources"], ["company_filter"])
 
-    def test_company_union_prefilter_records_union_without_role_base_ids(self) -> None:
-        original = apply_prefilters.bm25_adjacency_rows
 
-        async def fake_bm25_adjacency_rows(queries, filters, *, top_k, include_attributes):
-            self.assertIn("CTO", queries)
-            self.assertIn(("company_id", "In", ["c1"]), filters[1])
-            self.assertIn(("seniority_band", "NotIn", ["entry", "trainee"]), filters[1])
-            return [{"id": "p1-0", "base_id": "p1", "company_id": "c1", "position_title": "Engineering Manager", "score": 0.5}]
 
-        apply_prefilters.bm25_adjacency_rows = fake_bm25_adjacency_rows
-        try:
-            out = asyncio.run(apply_prefilters.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({
-                    "company_ids": ["c1"],
-                    "company_semantic_queries": ["fintech companies"],
-                    "sector_types": ["financial_services"],
-                    "role_tracks": ["engineering"],
-                }),
-                env_file=None,
-                page_size=10000,
-                max_ids=100,
-                company_prefilter_threshold=3000,
-                company_id_batch_size=500,
-                company_id_batch_concurrency=1,
-            )))
-        finally:
-            apply_prefilters.bm25_adjacency_rows = original
 
-        self.assertEqual(out["search_mode"], "COMPANY_UNION")
-        self.assertFalse(out["role_prefilter_ran"])
-        self.assertEqual(out["base_candidate_ids"], [])
-        self.assertEqual(out["company_union_candidate_ids"], ["p1"])
-        self.assertEqual(out["company_union_candidates"][0]["position_id"], "p1-0")
-        self.assertEqual(out["company_union_candidates"][0]["vertical_sources"], ["company_filter"])
-        self.assertEqual(out["stages"][-1]["adjacency_method"], "bm25")
 
-    def test_company_union_role_id_adjacency_uses_adjacent_filters(self) -> None:
-        original = apply_prefilters.filter_only_rows_for_namespace
 
-        async def fake_filter_only_rows_for_namespace(logical_name, filters, include_attributes, *, page_size=10000, max_results=0):
-            self.assertEqual(logical_name, "people")
-            self.assertIn(("company_id", "In", ["c1"]), filters[1])
-            self.assertIn(("role_ids", "ContainsAny", ["engineering_manager"]), filters[1])
-            self.assertIn(("role_track", "In", ["engineering"]), filters[1])
-            self.assertIn(("seniority_band", "NotIn", ["entry", "trainee"]), filters[1])
-            return [{"id": "p2-1", "base_id": "p2", "company_id": "c1", "position_title": "Engineering Manager"}]
-
-        apply_prefilters.filter_only_rows_for_namespace = fake_filter_only_rows_for_namespace
-        try:
-            out = asyncio.run(apply_prefilters.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({
-                    "company_ids": ["c1"],
-                    "company_semantic_queries": ["fintech companies"],
-                    "sector_types": ["financial_services"],
-                    "role_tracks": ["engineering"],
-                    "adjacent_role_ids": ["engineering_manager"],
-                    "adjacent_departments": ["engineering"],
-                }),
-                env_file=None,
-                page_size=10000,
-                max_ids=100,
-                company_prefilter_threshold=3000,
-                company_id_batch_size=500,
-                company_id_batch_concurrency=1,
-            )))
-        finally:
-            apply_prefilters.filter_only_rows_for_namespace = original
-
-        self.assertEqual(out["company_union_candidate_ids"], ["p2"])
-        self.assertEqual(out["stages"][-1]["adjacency_method"], "role_id")
-
-    def test_company_union_derives_static_adjacent_role_ids_when_role_ids_present(self) -> None:
-        original_rows = apply_prefilters.filter_only_rows_for_namespace
-        original_effective = apply_prefilters.effective_adjacent_role_ids
-        apply_prefilters.effective_adjacent_role_ids = lambda payload: ["engineering_manager", "technical_lead"]
-
-        async def fake_filter_only_rows_for_namespace(logical_name, filters, include_attributes, *, page_size=10000, max_results=0):
-            self.assertIn(("role_ids", "ContainsAny", ["engineering_manager", "technical_lead"]), filters[1])
-            return [{"id": "p3-0", "base_id": "p3", "company_id": "c1", "position_title": "Technical Lead"}]
-
-        apply_prefilters.filter_only_rows_for_namespace = fake_filter_only_rows_for_namespace
-        try:
-            out = asyncio.run(apply_prefilters.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({
-                    "company_ids": ["c1"],
-                    "company_semantic_queries": ["developer tools companies"],
-                    "sector_types": ["developer_tools"],
-                    "role_ids": ["software_engineer"],
-                }),
-                env_file=None,
-                page_size=10000,
-                max_ids=100,
-                company_prefilter_threshold=3000,
-                company_id_batch_size=500,
-                company_id_batch_concurrency=1,
-            )))
-        finally:
-            apply_prefilters.filter_only_rows_for_namespace = original_rows
-            apply_prefilters.effective_adjacent_role_ids = original_effective
-
-        self.assertEqual(out["company_union_candidate_ids"], ["p3"])
-        self.assertEqual(out["stages"][-1]["adjacency_method"], "role_id")
-
-    def test_company_adjacency_filters_non_operational_titles(self) -> None:
-        self.assertTrue(turbopuffer_client.is_non_operational_title("Board Member"))
-        self.assertTrue(turbopuffer_client.is_non_operational_title("Investor and Advisor"))
-        self.assertFalse(turbopuffer_client.is_non_operational_title("Board Member and CTO"))
-        self.assertFalse(turbopuffer_client.is_non_operational_title("Engineering Manager"))
-
-    def test_broad_company_semantic_union_batches_company_ids(self) -> None:
-        original = apply_prefilters.bm25_adjacency_rows
-        seen_batch_sizes = []
-
-        async def fake_bm25_adjacency_rows(queries, filters, *, top_k, include_attributes):
-            for clause in filters[1]:
-                if clause[0] == "company_id":
-                    seen_batch_sizes.append(len(clause[2]))
-                    return [{"id": f"p{len(seen_batch_sizes)}-0", "base_id": f"p{len(seen_batch_sizes)}", "position_title": "CTO"}]
-            self.fail("company_id filter missing")
-
-        apply_prefilters.bm25_adjacency_rows = fake_bm25_adjacency_rows
-        try:
-            out = asyncio.run(apply_prefilters.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({
-                    "company_ids": [f"c{i}" for i in range(1201)],
-                    "company_semantic_queries": ["fintech infrastructure companies"],
-                    "sector_types": ["financial_services"],
-                    "role_tracks": ["engineering"],
-                }),
-                env_file=None,
-                page_size=10000,
-                max_ids=10000,
-                company_prefilter_threshold=3000,
-                company_id_batch_size=500,
-                company_id_batch_concurrency=1,
-            )))
-        finally:
-            apply_prefilters.bm25_adjacency_rows = original
-
-        self.assertEqual(seen_batch_sizes, [500, 500, 201])
-        self.assertEqual(out["stages"][-1]["company_id_batches"], 3)
-        self.assertEqual(out["company_union_candidate_ids"], ["p1", "p2", "p3"])
-
-    def test_hydration_applies_retrieval_vertical_sources_and_matches(self) -> None:
-        state = {
-            "steps": [{
-                "id": "execute_role_search",
-                "output": {"candidates": [{
-                    "person_id": "p1",
-                    "position_id": "pos-1",
-                    "score": 0.42,
-                    "vertical_sources": ["hybrid", "company_filter"],
-                }]},
-            }]
-        }
-        meta = hydrate_people.candidate_metadata(state)
-        profile = {
-            "person_id": "p1",
-            "positions": [{"id": "pos-0", "title": "Advisor"}, {"id": "pos-1", "title": "CTO"}],
-            "vertical_sources": [],
-            "matched_position_indexes": [],
-        }
-        enriched = hydrate_people.apply_candidate_metadata(profile, meta["p1"])
-        self.assertEqual(enriched["base_score"], 0.42)
-        self.assertEqual(enriched["matched_position_indexes"], [1])
-        self.assertEqual(enriched["vertical_sources"], ["hybrid", "company_filter"])
 
     def test_scripts_do_not_import_aleph_mvp(self) -> None:
         for path in [
             TURBOPUFFER / "turbopuffer_search_backend.py",
-            ROOT / "packs/search/primitives/count_candidates" / "count_candidates.py",
-            ROOT / "packs/search/primitives/execute_role_search" / "execute_role_search.py",
-            ROOT / "packs/search/primitives/execute_search_slice" / "execute_search_slice.py",
             TURBOPUFFER / "turbopuffer_resolve_education.py",
-            ROOT / "packs/search/primitives/resolve_investors" / "resolve_investors.py",
+            ROOT / "packs/search/backends/turbopuffer" / "resolution.py",
             TURBOPUFFER / "turbopuffer_resolve_companies.py",
-            ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py",
         ]:
             text = path.read_text()
             self.assertNotIn("aleph-mvp", text)

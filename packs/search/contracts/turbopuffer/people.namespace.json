@@ -66,6 +66,7 @@
     {"field": "metro_areas", "operators": ["ContainsAny"], "value_type": "string[]"},
     {"field": "seniority_band", "operators": ["In", "NotIn"], "value_type": "string[]"},
     {"field": "company_id", "operators": ["In"], "value_type": "string[]"},
+    {"field": "investor_names", "operators": ["ContainsAny"], "value_type": "string[]"},
     {"field": "is_current", "operators": ["Eq"], "value_type": "boolean"},
     {"field": "total_years_experience", "operators": ["Gte", "Lte"], "value_type": "number"},
     {"field": "start_date_epoch", "operators": ["Lte"], "value_type": "integer"},

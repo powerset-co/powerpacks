@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,113 @@ FILTER_COLUMNS = {
     "headcount_max": "company_headcount",
     "is_current_company": "is_current",
 }
+
+_HYDRATION_INDEX_FIELDS = ("vector", "embedding", "token")
+
+
+def _json_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _without_index_fields(value: Any) -> Any:
+    """Remove retrieval-only payloads before evidence leaves the local runner."""
+    if isinstance(value, dict):
+        return {
+            str(key): _without_index_fields(item)
+            for key, item in value.items()
+            if not any(marker in str(key).casefold() for marker in _HYDRATION_INDEX_FIELDS)
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_index_fields(item) for item in value]
+    return value
+
+
+def _position_id(position: dict[str, Any]) -> str:
+    return str(position.get("position_id") or position.get("id") or position.get("linkedin_position_id") or "")
+
+
+def _canonical_position(raw: dict[str, Any]) -> dict[str, Any]:
+    evidence_fields = {
+        "id",
+        "position_id",
+        "linkedin_position_id",
+        "title",
+        "position_title",
+        "raw_title",
+        "description",
+        "dense_text",
+        "company",
+        "company_name",
+        "company_id",
+        "company_domain",
+        "company_linkedin_url",
+        "company_description",
+        "company_sector_types",
+        "company_technology_types",
+        "company_entity_types",
+        "company_headcount",
+        "company_funding_total",
+        "company_stage",
+        "investor_names",
+        "city",
+        "state",
+        "country",
+        "metro_areas",
+        "location",
+        "is_current",
+        "start_date",
+        "end_date",
+        "start_date_epoch",
+        "end_date_epoch",
+        "tenure_years",
+        "seniority_band",
+        "role_track",
+        "role_ids",
+        "total_years_experience",
+        "inferred_birth_year",
+    }
+    position = dict(_without_index_fields({key: value for key, value in raw.items() if key in evidence_fields}))
+    identifier = _position_id(position)
+    title = position.get("position_title") or position.get("raw_title") or position.get("title")
+    company = position.get("company_name") or position.get("company")
+    if identifier:
+        position["id"] = identifier
+        position["position_id"] = identifier
+    if title:
+        position["title"] = title
+        position["position_title"] = title
+    if company:
+        position["company"] = company
+        position["company_name"] = company
+    if not position.get("location"):
+        location = ", ".join(
+            str(position.get(field)) for field in ("city", "state", "country") if position.get(field)
+        )
+        if location:
+            position["location"] = location
+    return position
 
 
 def _and(clauses: list[tuple]) -> tuple | None:
@@ -462,7 +570,11 @@ class LocalSearchRunner:
         import duckdb
 
         wanted = [row.person_id for row in frontier.candidates]
-        profiles = {person_id: {"positions": []} for person_id in wanted}
+        profile_rows: dict[str, dict[str, Any]] = {}
+        position_rows: dict[str, list[dict[str, Any]]] = {person_id: [] for person_id in wanted}
+        education_rows: dict[str, list[dict[str, Any]]] = {person_id: [] for person_id in wanted}
+        summary_rows: dict[str, dict[str, Any]] = {}
+        interaction_counts: dict[str, int] = {}
         with duckdb.connect(self.db_path, read_only=True) as conn:
             tables = {
                 row[0]
@@ -474,7 +586,7 @@ class LocalSearchRunner:
                 (table for table in ("local_person_profiles", "local_people_profiles") if table in tables),
                 None,
             )
-            selected = []
+            selected: list[tuple[str, str | None]] = []
             if profile_table:
                 selected.append((profile_table, None))
             selected.extend(
@@ -494,25 +606,130 @@ class LocalSearchRunner:
                 ).fetchall()
                 for values in rows:
                     item = dict(zip(columns, values))
-                    profile = profiles[str(item[id_col])]
-                    if target in {"positions", "education"}:
-                        profile.setdefault(target, []).append(item)
+                    person_id = str(item[id_col])
+                    if target == "positions":
+                        position_rows[person_id].append(item)
+                    elif target == "education":
+                        education_rows[person_id].append(item)
                     elif target == "summary":
-                        profile["tech_skills"] = item.get("tech_skills") or []
+                        summary_rows[person_id] = item
                     else:
-                        profile.update(item)
+                        profile_rows[person_id] = item
+
+            if "local_person_source_summary" in tables:
+                columns = {
+                    row[1] for row in conn.execute("pragma table_info('local_person_source_summary')").fetchall()
+                }
+                if {"person_id", "total_interactions"} <= columns:
+                    rows = conn.execute(
+                        """
+                        SELECT cast(person_id AS varchar),
+                               sum(coalesce(try_cast(total_interactions AS bigint), 0))
+                        FROM local_person_source_summary
+                        WHERE cast(person_id AS varchar) IN (SELECT * FROM unnest(?))
+                        GROUP BY 1
+                        """,
+                        [wanted],
+                    ).fetchall()
+                    interaction_counts = {str(person_id): int(total or 0) for person_id, total in rows}
+
         hydrated = []
         for row in frontier.candidates:
-            profile = profiles.get(row.person_id)
+            raw_profile = profile_rows.get(row.person_id, {})
+            context = _json_mapping(raw_profile.get("hydrated_context"))
+            raw_positions = position_rows.get(row.person_id) or _json_list(
+                raw_profile.get("work_experiences")
+            ) or _json_list(context.get("positions"))
+            positions = [_canonical_position(item) for item in raw_positions if isinstance(item, dict)]
+            positions.sort(
+                key=lambda item: (
+                    not bool(item.get("is_current")),
+                    -int(item.get("start_date_epoch") or 0),
+                )
+            )
+            education = [
+                _without_index_fields(item)
+                for item in (
+                    education_rows.get(row.person_id)
+                    or _json_list(raw_profile.get("education"))
+                    or _json_list(context.get("education"))
+                )
+                if isinstance(item, dict)
+            ]
+            summary = summary_rows.get(row.person_id, {})
+            current = next((item for item in positions if item.get("is_current") is True), positions[0] if positions else {})
+            birth_year = raw_profile.get("inferred_birth_year") or context.get("inferred_birth_year")
+            if not birth_year:
+                birth_year = next((item.get("inferred_birth_year") for item in positions if item.get("inferred_birth_year")), None)
+            try:
+                birth_year = int(birth_year) if birth_year else None
+            except (TypeError, ValueError):
+                birth_year = None
+            total_interactions = interaction_counts.get(row.person_id)
+            if total_interactions is None:
+                total_interactions = raw_profile.get("total_interactions")
+            if total_interactions is None:
+                total_interactions = context.get("total_interactions")
+            location = raw_profile.get("location_raw") or context.get("location")
+            if not location:
+                location = ", ".join(
+                    str(raw_profile.get(field) or current.get(field))
+                    for field in ("city", "state", "country")
+                    if raw_profile.get(field) or current.get(field)
+                ) or None
+            years = context.get("years_of_experience") or raw_profile.get("total_years_experience")
+            if years is None:
+                years = next(
+                    (item.get("total_years_experience") for item in positions if item.get("total_years_experience") is not None),
+                    None,
+                )
+            title = raw_profile.get("current_title") or current.get("position_title") or current.get("title")
+            company = raw_profile.get("current_company") or current.get("company_name") or current.get("company")
+            headline = raw_profile.get("headline") or context.get("headline") or " at ".join(
+                str(value) for value in (title, company) if value
+            ) or title
+            profile = _without_index_fields(
+                {
+                    "person_id": row.person_id,
+                    "name": raw_profile.get("full_name") or context.get("name") or "",
+                    "full_name": raw_profile.get("full_name") or context.get("name") or "",
+                    "headline": headline,
+                    "summary": raw_profile.get("summary") or summary.get("summary") or context.get("summary"),
+                    "location": location,
+                    "location_raw": location,
+                    "city": raw_profile.get("city") or current.get("city"),
+                    "state": raw_profile.get("state") or current.get("state"),
+                    "country": raw_profile.get("country") or current.get("country"),
+                    "linkedin_url": raw_profile.get("linkedin_url")
+                    or raw_profile.get("public_profile_url")
+                    or context.get("linkedin_url"),
+                    "positions": positions,
+                    "education": education,
+                    "tech_skills": summary.get("tech_skills") or context.get("tech_skills") or [],
+                    "inferred_birth_year": birth_year,
+                    "inferred_age": date.today().year - birth_year if birth_year else None,
+                    "years_of_experience": years,
+                    "total_years_experience": years,
+                    "total_interactions": total_interactions,
+                }
+            )
             position_ids = set(row.matched_position_ids)
             indexes = tuple(
                 index
-                for index, position in enumerate((profile or {}).get("positions") or [])
-                if str(position.get("position_id") or position.get("id") or "") in position_ids
+                for index, position in enumerate(positions)
+                if _position_id(position) in position_ids
             )
-            disposition = (
-                "hydrated" if profile and (profile.get("positions") or profile.get("full_name")) else "missing_profile"
-            )
+            if not indexes:
+                matched_title = str(row.structured.get("position_title") or "").strip().casefold()
+                matched_company = str(row.structured.get("company_id") or "").strip().casefold()
+                indexes = tuple(
+                    index
+                    for index, position in enumerate(positions)
+                    if (not matched_title or str(position.get("position_title") or "").strip().casefold() == matched_title)
+                    and (not matched_company or str(position.get("company_id") or "").strip().casefold() == matched_company)
+                ) if matched_title or matched_company else ()
+            indexes = tuple(dict.fromkeys((*row.matched_position_indexes, *indexes)))
+            disposition = "hydrated" if positions or raw_profile else "missing_profile"
             hydrated.append(
                 replace(
                     row,

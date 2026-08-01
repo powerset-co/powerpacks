@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import random
 import tempfile
@@ -24,6 +25,7 @@ from packs.search.pipeline.recruiting import (
     _run_probes,
     _within_spend_budget,
     run_recruiting,
+    SHORTLIST_CSV_FIELDS,
 )
 from packs.search.pipeline.recruiting_stages import (
     JudgeBudgetExceeded,
@@ -32,6 +34,7 @@ from packs.search.pipeline.recruiting_stages import (
     build_review_plan,
     canonical_hash,
     judge_candidate,
+    select_exemplars,
 )
 from packs.search.pipeline.search import run_search
 
@@ -77,6 +80,7 @@ def good_judge(candidate, plan):
         "jd_score": 0.8,
         "verdict": "high_potential",
         "seniority_fit": "ideal",
+        "rationale": "Strong current systems evidence",
         "must_have": [
             {"trait": "production backend ownership", "status": "experienced", "evidence": "owned APIs"},
             {"trait": "operational reliability", "status": "capable", "evidence": "on-call"},
@@ -169,6 +173,7 @@ class FakeRunner:
                 hydrated_profile={
                     "name": f"Candidate {row.person_id}", "current_title": "Senior Backend Engineer",
                     "current_company": "Example", "city": "San Francisco",
+                    "linkedin_url": f"https://linkedin.com/in/{row.person_id}",
                     "positions": [{"seniority_band": "senior", "role_track": "ic", "city": "San Francisco"}],
                 },
                 hydration_disposition="hydrated",
@@ -286,6 +291,105 @@ class RecruitingPipelineTests(unittest.TestCase):
             runner.snapshot_hash = "e" * 64
             result = run_recruiting(approved, runner, artifact_root=root, judge_adapter=good_judge)
             self.assertEqual(result.status, "failed_binding")
+
+    def test_persisted_powerset_search_spec_resumes_after_recomputed_snapshot(self):
+        def offline_call(reservations, stage, model, maximum_tokens, adapter, *args):
+            return adapter(*args)
+
+        remote = replace(
+            recruiting_spec(),
+            backend=Backend.POWERSET,
+            corpus=PowersetCorpus("set", ("operator",)),
+            recruiting=replace(
+                recruiting_spec().recruiting,
+                plan_model="gpt-4.1",
+                plan_approved=True,
+            ),
+        )
+        namespace_rows = {
+            "people": [{"id": "position-1", "base_id": "person-1"}],
+            "summaries": [{"id": "person-1", "summary": "summary"}],
+            "companies": [],
+            "company_signals": [],
+            "education": [],
+            "schools": [],
+        }
+
+        async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
+            rows = namespace_rows[name]
+            return {
+                "rows": rows,
+                "completed": True,
+                "truncated": False,
+                "row_count": len(rows),
+            }
+
+        snapshot_patches = (
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                return_value={"set_id": "set", "operator_ids": ["operator"]},
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+                return_value=[],
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                new=mock.AsyncMock(side_effect=enumerate_namespace),
+            ),
+        )
+        with self.run_dir() as root:
+            with (
+                snapshot_patches[0],
+                snapshot_patches[1],
+                snapshot_patches[2],
+                mock.patch(
+                    "packs.search.pipeline.recruiting._production_plan_adapter",
+                    new=plan_adapter,
+                ),
+                mock.patch(
+                    "packs.search.pipeline.recruiting._production_critic_adapter",
+                    new=critic_adapter,
+                ),
+                mock.patch(
+                    "packs.search.pipeline.recruiting._SpendReservations.call",
+                    new=offline_call,
+                ),
+            ):
+                prepared = run_search(remote, output_dir=root)
+            self.assertEqual(prepared.status, "awaiting_review", prepared.errors)
+
+            persisted_path = Path(root) / "search_spec.json"
+            persisted_payload = json.loads(persisted_path.read_text())
+            self.assertIsNotNone(persisted_payload["corpus"]["scoped_records_hash"])
+            plan = json.loads((Path(root) / "review/plan.json").read_text())
+            persisted_payload["recruiting"]["reviewed_plan_hash"] = canonical_hash(plan)
+            approved = SearchSpec.from_dict(persisted_payload)
+
+            with (
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                    return_value={"set_id": "set", "operator_ids": ["operator"]},
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                    new=mock.AsyncMock(side_effect=enumerate_namespace),
+                ),
+                mock.patch(
+                    "packs.search.pipeline.recruiting._production_judge_adapter",
+                    return_value=good_judge,
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.TurboPufferSearchRunner.apply_hard_filters",
+                    return_value=HardFilterSet(0, (), {}),
+                ),
+            ):
+                resumed = run_search(approved, output_dir=root)
+            self.assertEqual(resumed.status, "completed_empty")
 
     def test_powerset_recruiting_stays_needs_input_for_unverified_snapshot(self):
         class RemoteRunner(FakeRunner):
@@ -405,23 +509,33 @@ class RecruitingPipelineTests(unittest.TestCase):
             recruiting=replace(
                 recruiting_spec().recruiting,
                 source="evidence " * 70_000,
-                plan_model="gpt-test",
+                plan_model="gpt-4.1",
                 plan_approved=True,
             ),
         )
         create = mock.Mock()
         client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
         with (
+            self.run_dir() as root,
             mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
             mock.patch(
                 "packs.search.primitives.shared.openai_client.make_openai_client",
                 return_value=client,
             ),
         ):
-            plan_result = run_recruiting(oversized_spec, FakeRunner())
+            plan_result = run_recruiting(oversized_spec, FakeRunner(), artifact_root=root)
+        with (
+            self.run_dir() as root,
+            mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+            mock.patch(
+                "packs.search.primitives.shared.openai_client.make_openai_client",
+                return_value=client,
+            ),
+        ):
             critic_result = run_recruiting(
                 oversized_spec,
                 FakeRunner(),
+                artifact_root=root,
                 plan_adapter=lambda jd, value: EXTRACTED,
             )
         self.assertEqual(plan_result.status, "needs_input")
@@ -581,7 +695,46 @@ class RecruitingPipelineTests(unittest.TestCase):
         self.assertEqual(judge_one.call_count, 2)
         self.assertEqual(retried.judge["status"], "judged")
 
-    def test_verdict_out_and_unknown_seniority_fail_shortlist(self):
+    def test_codex_run_counts_judgment_without_provider_usage_reconciliation(self):
+        configured = replace(
+            recruiting_spec(),
+            bounds=replace(
+                recruiting_spec().bounds,
+                judge_candidate_limit=1,
+                judge_call_limit=1,
+                spend_limit_usd=0.000001,
+            ),
+            recruiting=replace(
+                recruiting_spec().recruiting,
+                judge_implementation="codex",
+                judge_model="codex-test",
+                judge_approved=True,
+            ),
+        )
+        with self.run_dir() as root:
+            approved = self.prepare(configured, FakeRunner(1), root)
+            with (
+                mock.patch(
+                    "packs.search.primitives.deep_search.codex_judge.judge_one",
+                    return_value=({"seniority_fit": "ideal"}, None),
+                ) as judge_one,
+                mock.patch(
+                    "packs.search.primitives.evaluate_profile_candidates.evaluate_profile_candidates.normalize_evaluation",
+                    side_effect=lambda parsed, plan, profile: good_judge(
+                        CandidateRecord("p0", hydrated_profile=profile), plan
+                    ),
+                ),
+            ):
+                result = run_recruiting(approved, FakeRunner(1), artifact_root=root)
+
+            self.assertFalse((Path(root) / "usage.jsonl").exists())
+        self.assertEqual(judge_one.call_count, 1)
+        self.assertEqual(result.counts["judge_calls"], 1)
+        self.assertEqual(result.counts["unjudged"], 0)
+        self.assertEqual(result.status, "completed_no_anchors")
+        self.assertEqual(result.frontier.candidates[0].judge["implementation"], "codex")
+
+    def test_verdict_out_and_invalid_unknown_seniority_fail_shortlist(self):
         with self.run_dir() as root:
             approved = self.prepare(recruiting_spec(), FakeRunner(2), root)
             def judge(candidate, plan):
@@ -591,6 +744,58 @@ class RecruitingPipelineTests(unittest.TestCase):
                 return row
             result = run_recruiting(approved, FakeRunner(2), artifact_root=root, judge_adapter=judge)
             self.assertFalse(any(row.deterministic_gates.get("shortlist") for row in result.frontier.candidates))
+            with (Path(root) / "shortlist.csv").open() as handle:
+                self.assertEqual(list(csv.DictReader(handle)), [])
+
+    def test_explicit_valid_unknown_seniority_is_shortlisted_but_not_sendable(self):
+        plan = build_review_plan(
+            recruiting_spec(), EXTRACTED, created_at="2026-07-31T00:00:00Z"
+        )
+        base = CandidateRecord(
+            "unknown-seniority",
+            hydrated_profile={"current_title": "Senior Backend Engineer"},
+            hard_filter_evidence={"disposition": "accepted"},
+        )
+        valid = replace(
+            base,
+            judge={
+                **good_judge(base, plan),
+                "status": "judged",
+                "seniority_fit": "unknown",
+                "_seniority_assessment_valid": True,
+            },
+        )
+        gated = apply_deterministic_gates(valid, plan, score_floor=0.4, sendable_score=0.55)
+        self.assertTrue(gated.deterministic_gates["seniority_track"])
+        self.assertTrue(gated.deterministic_gates["shortlist"])
+        self.assertFalse(gated.deterministic_gates["sendable"])
+
+        invalid = replace(valid, judge={**valid.judge, "_seniority_assessment_valid": False})
+        gated = apply_deterministic_gates(invalid, plan, score_floor=0.4, sendable_score=0.55)
+        self.assertFalse(gated.deterministic_gates["seniority_track"])
+        self.assertFalse(gated.deterministic_gates["shortlist"])
+
+    def test_canonical_shortlist_csv_is_safe_shareable_exporter_equivalent(self):
+        with self.run_dir() as root:
+            approved = self.prepare(recruiting_spec(), FakeRunner(1), root)
+            result = run_recruiting(
+                approved, FakeRunner(1), artifact_root=root, judge_adapter=good_judge
+            )
+            self.assertEqual(result.status, "completed_no_anchors")
+            with (Path(root) / "shortlist.csv").open() as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+            self.assertEqual(tuple(reader.fieldnames or ()), SHORTLIST_CSV_FIELDS)
+            self.assertEqual(rows[0]["Name"], "Candidate p0")
+            self.assertEqual(rows[0]["LinkedIn URL"], "https://linkedin.com/in/p0")
+            self.assertEqual(rows[0]["Current Title"], "Senior Backend Engineer")
+            self.assertEqual(rows[0]["Current Company"], "Example")
+            self.assertEqual(rows[0]["Location"], "San Francisco")
+            self.assertEqual(rows[0]["Verdict"], "high_potential")
+            self.assertEqual(rows[0]["Seniority Fit"], "ideal")
+            self.assertEqual(rows[0]["Rationale"], "Strong current systems evidence")
+            self.assertEqual(rows[0]["Source/Channels"], "local|role|summary|company_signal")
+            self.assertNotIn("person_id", {key.casefold() for key in rows[0]})
 
     def test_founder_policy_only_gates_non_exec_ic_targets(self):
         extracted = {**EXTRACTED, "target_level": "manager"}
@@ -695,25 +900,42 @@ class RecruitingPipelineTests(unittest.TestCase):
             recruiting_spec(),
             bounds=replace(
                 recruiting_spec().bounds,
-                per_probe_limit=1,
+                per_probe_limit=10,
                 frontier_limit=1,
-                judge_candidate_limit=2,
+                judge_candidate_limit=11,
                 expansion_thread_limit=1,
-                sourced_candidate_limit=10,
+                sourced_candidate_limit=20,
             ),
         )
         with self.run_dir() as root:
-            approved = self.prepare(bounded, FakeRunner(1), root)
+            approved = self.prepare(bounded, FakeRunner(10), root)
             result = run_recruiting(
                 approved,
-                FakeRunner(1, expansion_new=True),
+                FakeRunner(10, expansion_new=True),
                 artifact_root=root,
                 judge_adapter=good_judge,
             )
             persisted = json.loads((Path(root) / "candidate-frontier.json").read_text())
-        self.assertEqual(result.counts["total_sourced"], 2)
-        self.assertEqual(len(result.frontier.candidates), 2)
-        self.assertEqual(len(persisted["candidates"]), 2)
+        self.assertEqual(result.counts["total_sourced"], 11)
+        self.assertEqual(len(result.frontier.candidates), 11)
+        self.assertEqual(len(persisted["candidates"]), 11)
+
+    def test_expansion_requires_ten_and_caps_at_twenty_strong_exemplars(self):
+        def strong(index):
+            return CandidateRecord(
+                f"p{index:02d}",
+                deterministic_score=1.0 - index / 100,
+                deterministic_gates={"shortlist": True},
+                hydrated_profile={
+                    "current_company": f"company-{index}",
+                    "current_title": f"title-{index}",
+                },
+            )
+
+        for count in (1, 9):
+            self.assertEqual(select_exemplars(tuple(strong(i) for i in range(count)), 20), ())
+        self.assertEqual(len(select_exemplars(tuple(strong(i) for i in range(10)), 20)), 10)
+        self.assertEqual(len(select_exemplars(tuple(strong(i) for i in range(25)), 25)), 20)
 
     def test_total_sourced_counts_raw_unique_people_before_presentation_limit(self):
         bounded = replace(
@@ -900,6 +1122,29 @@ class RecruitingPipelineTests(unittest.TestCase):
         self.assertEqual(result.status, "completed_capped")
         self.assertEqual(result.counts["unjudged"], 2)
         self.assertEqual(len(result.frontier.candidates), 2)
+
+    def test_production_judge_missing_usage_fails_closed_after_reserved_call(self):
+        configured = replace(
+            recruiting_spec(),
+            bounds=replace(recruiting_spec().bounds, spend_limit_usd=10.0),
+            recruiting=replace(
+                recruiting_spec().recruiting,
+                judge_implementation="profile_evaluator",
+                judge_model="gpt-4.1",
+                judge_approved=True,
+            ),
+        )
+        with self.run_dir() as root:
+            approved = self.prepare(configured, FakeRunner(2), root)
+            paid = mock.Mock(side_effect=good_judge)
+            with mock.patch(
+                "packs.search.pipeline.recruiting._production_judge_adapter",
+                return_value=paid,
+            ):
+                result = run_recruiting(approved, FakeRunner(2), artifact_root=root)
+        self.assertEqual(paid.call_count, 1)
+        self.assertEqual(result.status, "completed_capped")
+        self.assertEqual(result.counts["unjudged"], 2)
 
     def test_plan_and_critic_spend_checks_run_before_production_adapters(self):
         configured = replace(

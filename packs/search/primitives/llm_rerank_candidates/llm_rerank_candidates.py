@@ -6,7 +6,8 @@ in parallel under a configurable concurrency limit. Same shape as the
 production configurable fan-out path in network-search-api, but
 Powerpacks-local.
 
-Differences from `llm_filter_candidates`:
+This module provides the bounded semantic-rank implementation used by the
+typed ranking layer and an explicit JSONL behavior-eval CLI:
 - Generic per-item prompts over canonical candidate records
 - Async fan-out with `asyncio.Semaphore` (configurable, default 50)
 - Does NOT require `set_id` or any set context
@@ -663,79 +664,14 @@ def rerank_status_note(estimate_seconds: int) -> str:
         return "LLM filtering+reranking can take 2-3 minutes; do not cancel while this step is running"
     return "async fan-out is running; small runs should complete quickly"
 
-def append_event(state_path: Path, event: dict[str, Any]) -> None:
-    event_path = state_path.with_suffix(state_path.suffix + ".events.jsonl")
-    event_path.parent.mkdir(parents=True, exist_ok=True)
-    with event_path.open("a") as handle:
-        handle.write(json.dumps(event, sort_keys=True) + "\n")
 
 
-def step_output(state: dict[str, Any], step_id: str) -> dict[str, Any]:
-    for step in reversed(state.get("steps", [])):
-        if step.get("id") == step_id:
-            return step.get("output", {}) or {}
-    return {}
 
 
-def state_frontier_ids(state: dict[str, Any]) -> list[str]:
-    rerank = step_output(state, "llm_rerank_candidates")
-    ids = rerank.get("ranked_candidate_ids") or []
-    if ids:
-        return list(dict.fromkeys(str(pid) for pid in ids if pid))
-    llm_filter = step_output(state, "llm_filter_candidates")
-    ids = llm_filter.get("passed_candidate_ids") or []
-    if ids:
-        return list(dict.fromkeys(str(pid) for pid in ids if pid))
-    for step_id, key in [
-        ("merge_candidate_frontier", "frontier_candidate_ids"),
-        ("execute_role_search", "candidate_ids"),
-        ("execute_search_slice", "candidate_ids"),
-        ("direct_execute", "person_ids"),
-    ]:
-        ids = step_output(state, step_id).get(key) or []
-        if ids:
-            return list(dict.fromkeys(str(pid) for pid in ids if pid))
-    hydrate = step_output(state, "hydrate_people")
-    ids = hydrate.get("profile_ids") or []
-    if ids:
-        return list(dict.fromkeys(str(pid) for pid in ids if pid))
-    return list(dict.fromkeys(str(p["person_id"]) for p in hydrate.get("profiles", []) or [] if p.get("person_id")))
 
 
-def state_hydrated_profiles(state: dict[str, Any], *, llm_handoff: bool) -> dict[str, dict[str, Any]]:
-    hydrate = step_output(state, "hydrate_people")
-    path_key = "llm_profiles_path" if llm_handoff else "profiles_path"
-    profiles_path = hydrate.get(path_key) or hydrate.get("profiles_path")
-    rows = load_items(str(profiles_path)) if profiles_path else [RerankItem(position=i, payload=profile) for i, profile in enumerate(hydrate.get("profiles", []) or [])]
-    out: dict[str, dict[str, Any]] = {}
-    for item in rows:
-        profile = item.payload
-        if isinstance(profile, dict) and profile.get("person_id"):
-            out[str(profile["person_id"])] = profile
-    return out
 
 
-def state_traits(state: dict[str, Any]) -> list[dict[str, str]]:
-    """Get structured traits from the trait generator in expand_search_request.
-
-    Returns list of {"value": ..., "temporal": ..., "meaning": ...} dicts
-    directly from the trait generator output. No string conversion.
-    """
-    expand = step_output(state, "expand_search_request") or step_output(state, "expand")
-    generated = expand.get("traits") or []
-    traits = []
-    for t in generated:
-        if isinstance(t, dict) and t.get("value"):
-            traits.append({
-                "value": t["value"],
-                "temporal": t.get("temporal", "all"),
-                "meaning": t.get("meaning", "general"),
-            })
-    if not traits:
-        # Fallback: wrap query as a single trait
-        query = state.get("query") or "Relevant to the original query"
-        traits = [{"value": query, "temporal": "all", "meaning": "general"}]
-    return traits
 
 
 def format_traits_block(traits: list[dict[str, str]]) -> str:
@@ -756,42 +692,10 @@ def trait_values(traits: list[dict[str, str]]) -> list[str]:
     return [t["value"] for t in traits]
 
 
-def artifact_dir(state_path: Path, state: dict[str, Any]) -> Path:
-    existing = state.get("artifacts") or {}
-    if existing.get("artifact_dir"):
-        return Path(str(existing["artifact_dir"]))
-    return state_path.parent / "artifacts" / str(state.get("task_id") or state_path.stem)
 
 
-def compact_llm_profile(profile: dict[str, Any]) -> dict[str, Any]:
-    positions = profile.get("positions") or []
-    matched = set(profile.get("matched_position_indexes") or [])
-    selected = []
-    for idx, pos in enumerate(positions):
-        if isinstance(pos, dict) and (pos.get("is_current") or idx in matched):
-            selected.append(pos)
-    if not selected and positions:
-        selected = [positions[0]]
-    out = dict(profile)
-    out["positions"] = selected
-    return out
 
 
-def load_items_from_state(state_path: Path, *, max_candidates: Optional[int] = None) -> tuple[dict[str, Any], list[RerankItem]]:
-    state = read_json(state_path)
-    ids = state_frontier_ids(state)
-    # Rerank needs the full hydrated profile. LLM filtering may use the compact
-    # handoff, but reranking should see all profile evidence for final ordering.
-    profiles = state_hydrated_profiles(state, llm_handoff=False)
-    items: list[RerankItem] = []
-    for pid in ids:
-        profile = profiles.get(pid)
-        if not profile:
-            continue
-        items.append(RerankItem(position=len(items), payload=profile))
-        if max_candidates and len(items) >= max_candidates:
-            break
-    return state, items
 
 
 def load_items(path: str) -> list[RerankItem]:
@@ -826,105 +730,17 @@ def write_results(results: list[RerankResult], path: str) -> None:
         Path(path).write_text(body)
 
 
-QUERY_RESULTS_V2_FIELDS = [
-    "conversation_id",
-    "query",
-    "person_id",
-    "result_index",
-    "matched_position_indexes",
-    "final_score",
-    "trait_scores",
-    "overall_reasoning",
-    "pre_rerank_score",
-    "tags",
-    "vertical_sources",
-    "created_at",
-]
-
-
-def build_query_result_rows(
-    results: list[RerankResult],
-    *,
-    state: dict[str, Any],
-    query: str,
-    created_at: str,
-) -> list[dict[str, Any]]:
-    """Return rows shaped exactly like network-search-api QueryResultV2.to_full_dict()."""
-    conversation_id = str(state.get("conversation_id") or state.get("task_id") or "")
-    ordered = sorted(results, key=lambda r: r.score, reverse=True)
-    rows: list[dict[str, Any]] = []
-    for index, result in enumerate(ordered):
-        profile = result.input or {}
-        per_trait = result.trait_scores or {"overall": result.score}
-        trait_scores = {
-            trait: {"score": score, "reason": result.reason, "confidence": result.confidence}
-            for trait, score in per_trait.items()
-        }
-        rows.append({
-            "conversation_id": conversation_id,
-            "query": query,
-            "person_id": result.id,
-            "result_index": index,
-            "matched_position_indexes": profile.get("matched_position_indexes") or [],
-            "final_score": result.score,
-            "trait_scores": trait_scores,
-            "overall_reasoning": result.reason,
-            "pre_rerank_score": profile.get("base_score") or profile.get("score"),
-            "tags": profile.get("tags"),
-            "vertical_sources": profile.get("vertical_sources"),
-            "created_at": created_at,
-        })
-    return rows
-
-
-def write_query_results_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=QUERY_RESULTS_V2_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({
-                key: json.dumps(row.get(key), sort_keys=True) if isinstance(row.get(key), (dict, list)) else row.get(key)
-                for key in QUERY_RESULTS_V2_FIELDS
-            })
-
-
-def record_state_step(state_path: Path, state: dict[str, Any], output: dict[str, Any], elapsed_ms: int) -> None:
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    state.setdefault("steps", []).append({
-        "id": "llm_rerank_candidates",
-        "status": "completed",
-        "recorded_at": now,
-        "elapsed_ms": elapsed_ms,
-        "output": output,
-    })
-    state["updated_at"] = now
-    write_json(state_path, state)
-    append_event(state_path, {
-        "event": "record_step",
-        "task_id": state.get("task_id"),
-        "state": str(state_path),
-        "step_id": "llm_rerank_candidates",
-        "status": "completed",
-        "timestamp": now,
-        "ranked_count": output.get("ranked_count"),
-    })
-
-
 # ---------------------------------------------------------------------------
-# CLI
+# Explicit-input CLI
 # ---------------------------------------------------------------------------
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Async fan-out LLM rerank over a JSONL of candidates."
-    )
-    parser.add_argument("--in", dest="in_path", help="JSONL path or '-' for stdin")
-    parser.add_argument("--state", help="Powerpacks task-state path; reads full hydrate_people profiles_path and writes rerank artifacts")
+    parser = argparse.ArgumentParser(description="Async fan-out LLM rerank over candidate JSONL.")
+    parser.add_argument("--in", dest="in_path", required=True, help="JSONL path or '-' for stdin")
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
-    parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
-    parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable, wrapped to structured dict at parse time)")
+    parser.add_argument("--query", required=True, help="Search query (prompt context)")
+    parser.add_argument("--traits", action="append", default=[], help="Expected trait string (repeatable)")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
@@ -934,61 +750,34 @@ def main() -> int:
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--include-prompt", action="store_true")
-    parser.add_argument("--current-and-matched-only", action="store_true", help="Deprecated no-op in --state mode; rerank always reads full profiles_path")
-    parser.add_argument("--include-all-positions", action="store_true", help="Deprecated no-op in --state mode; rerank always reads full profiles_path")
     parser.add_argument("--max-candidates", type=int)
-    parser.add_argument("--write-state", action="store_true")
-    parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
 
-    # Normalize CLI --traits strings to structured dicts immediately
-    if args.traits and isinstance(args.traits[0], str):
-        args.traits = [{"value": t, "temporal": "all", "meaning": "general"} for t in args.traits]
-
-    if not args.in_path and not args.state:
-        print("error: --in or --state required", file=sys.stderr)
-        return 2
-
-    state: Optional[dict[str, Any]] = None
-    state_path: Optional[Path] = Path(args.state) if args.state else None
+    traits = [
+        {"value": trait, "temporal": "all", "meaning": "general"}
+        for trait in args.traits
+    ]
     try:
-        if state_path:
-            state, items = load_items_from_state(
-                state_path,
-                max_candidates=args.max_candidates,
-            )
-            if not args.query:
-                args.query = state.get("query") or ""
-            if not args.traits:
-                args.traits = state_traits(state)
-        else:
-            items = load_items(args.in_path)
-            if args.max_candidates:
-                items = items[: args.max_candidates]
-    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
-        print(f"error: {e}", file=sys.stderr)
+        items = load_items(args.in_path)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
-
-    if not args.query:
-        print("error: --query required unless --state has query", file=sys.stderr)
-        return 2
-
+    if args.max_candidates:
+        items = items[: args.max_candidates]
     if not items:
         print("error: no input items", file=sys.stderr)
         return 2
 
     estimate_seconds = estimate_rerank_seconds(len(items), args.concurrency)
-
     if args.dry_run:
         for item in items:
-            prompt = build_user_prompt(args.query, args.traits, item)
+            prompt = build_user_prompt(args.query, traits, item)
             sys.stderr.write(f"--- {item.id} ---\n{prompt}\n\n")
         sys.stderr.write(
             f"rerank: dry-run items={len(items)} concurrency={args.concurrency} "
             f"estimated={estimate_seconds}s profile_scope=full\n"
         )
         return 0
-
     if not args.api_key:
         print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
         return 2
@@ -1002,7 +791,7 @@ def main() -> int:
         rerank_all(
             items,
             query=args.query,
-            traits=args.traits,
+            traits=traits,
             api_base=args.api_base,
             api_key=args.api_key,
             model=args.model,
@@ -1014,52 +803,8 @@ def main() -> int:
         )
     )
     elapsed = time.monotonic() - started
-    elapsed_ms = int(elapsed * 1000)
-    token_usage_estimate = summarize_token_counts(
-        [result.prompt_tokens_estimate for result in results],
-        model=args.model,
-        elapsed_ms=elapsed_ms,
-    )
-
-    artifacts: dict[str, Any] = {}
-    if state_path and state is not None:
-        out_dir = artifact_dir(state_path, state) / "llm_rerank_candidates"
-        csv_path = out_dir / "query_results.csv"
-        raw_jsonl_path = out_dir / "raw_rerank_results.jsonl"
-        created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        query_result_rows = build_query_result_rows(
-            results,
-            state=state,
-            query=args.query,
-            created_at=created_at,
-        )
-        write_query_results_csv(csv_path, query_result_rows)
-        if args.dump_debug:
-            write_results(results, str(raw_jsonl_path))
-        ordered_ids = [row["person_id"] for row in query_result_rows]
-        artifacts = {
-            "query_results_csv": str(csv_path),
-        }
-        if args.dump_debug:
-            artifacts["raw_rerank_results_jsonl"] = str(raw_jsonl_path)
-        output = {
-            "model": args.model,
-            "reasoning_effort": args.reasoning_effort if supports_reasoning_effort(args.model) else None,
-            "concurrency": args.concurrency,
-            "estimated_seconds": estimate_seconds,
-            "ranked_count": len(results),
-            "ranked_candidate_ids": ordered_ids,
-            "profile_scope": "full",
-            "token_usage_estimate": token_usage_estimate,
-            "artifacts": artifacts,
-        }
-        if args.write_state:
-            record_state_step(state_path, state, output, elapsed_ms)
-        print(json.dumps(output, indent=2, sort_keys=True))
-    else:
-        write_results(results, args.out_path)
-
-    ok = sum(1 for r in results if r.error is None)
+    write_results(results, args.out_path)
+    ok = sum(1 for result in results if result.error is None)
     failed = len(results) - ok
     sys.stderr.write(
         f"rerank: items={len(results)} concurrency={args.concurrency} "

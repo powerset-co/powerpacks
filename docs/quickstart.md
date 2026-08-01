@@ -43,17 +43,16 @@ brew install uv git
 The adapter install also runs `bin/setup-python`; if `uv` is missing and
 Homebrew is available, setup installs `uv` automatically.
 
-### `search` / `search-company`
+### `$search`
 
-Use `$search <jd-or-brief>` when you want the agent to do the work. For
-complex JDs, it plans the recruiter loop internally, shows one search-plan approval, then
-orchestrates the planned searches against Powerset infrastructure. The default
-LLM review budget is 100 unique profiles across initial probes plus fan-out; this
-limits expensive review/rerank volume, not retrieval/count checks or final found
-count.
+Use `$search <query-or-jd>` for person lookup, GTM people search, or recruiting.
+The router persists a typed `SearchSpec`; one composition root selects the local
+or Powerset runner and returns typed `StageResult` data over a canonical
+person-grain frontier. Recruiting stops for Review before retrieval, then resumes
+the exact reviewed spec.
 
-`$search` and `$search-company` hit Powerset infrastructure, so you need
-a working `.env`. Run `$powerset setup` (below) to populate it, or copy
+Powerset search and model-backed stages need a working `.env`. Run `$powerset
+setup` (below) to populate it, or copy
 `packs/powerset/templates/env.example` to `.env` and fill it in manually.
 
 ### `$powerset setup` (recommended setup path)
@@ -169,33 +168,27 @@ runtime keys into `.env` (no values printed), and installs/refreshes the
 `powerset-search` MCP. `$powerset login` remains available as a smaller
 credential-refresh/backcompat command.
 
-### `$search` — recruiting search
+### `$search` — lookup, GTM, and recruiting
 
 ```text
 $search senior infra engineers at fintech infra startups in NYC, Stanford
 ```
 
-The skill first records the requested result surface, backend, and depth.
-Standard search prepares one query preview, confirms it once, then retrieves,
-hydrates, filters, and ranks. Deep search builds and critiques a recruiter
-contract, stops once for Review, then runs bounded candidate-archetype probes,
-evidence judging, deterministic gates, and anchor expansion autonomously.
-Artifacts land under `.powerpacks/search/...` or
-`.powerpacks/deep-search/...`.
+The skill records `SearchRoute(target, profile, backend, reason)`. Engine routes
+persist one schema-valid `SearchSpec` and use the canonical typed composition
+root. Lookup is deterministic; GTM applies structured filters and bounded
+ranking; recruiting builds and critiques a recruiter contract, stops once for
+Review, then resumes bounded probes, evidence judging, deterministic gates, and
+anchor expansion. Artifacts land under `.powerpacks/search-runs/...`.
+
+People-at-company requests use GTM with company constraints. Company-only local
+relational or directory questions route to `$search-sql`; there is no separate
+public company-search command.
 
 See the [`$search` architecture](../packs/search/docs/search-architecture.md)
 for the full lifecycle and the
-[deep-mode runbook](../packs/search/skills/search/deep-mode.md) for exact deep
+[typed recruiting runbook](../packs/search/skills/search/deep-mode.md) for exact
 commands and artifacts.
-
-### `$search-company` — company resolution
-
-```text
-$search-company crypto trading infra companies that raised series B
-```
-
-Resolves to canonical TurboPuffer company IDs you can hand to
-`search` as `company_filter`.
 
 ### Message ingestion - `$import-messages`
 

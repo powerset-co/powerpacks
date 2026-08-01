@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://powerpacks.local/schemas/search-network-jd-candidate-evaluations.schema.json",
-  "title": "Search Network JD Candidate Evaluations",
+  "$id": "https://powerpacks/schemas/candidate-evaluations.schema.json",
+  "title": "Candidate Evaluations",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -102,9 +102,8 @@
         },
         "verdict": {
           "enum": [
-            "strong",
-            "maybe",
-            "weak",
+            "top_tier",
+            "high_potential",
             "out"
           ]
         },
@@ -141,7 +140,7 @@
           "properties": {
             "matched_probe_count": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 0
             },
             "matched_probe_ids": {
               "type": "array",
@@ -163,7 +162,18 @@
         "caveats": {
           "type": "array",
           "items": {
-            "type": "string"
+            "oneOf": [
+              {"type": "string"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text"],
+                "properties": {
+                  "text": {"type": "string", "minLength": 1},
+                  "material": {"type": "boolean"}
+                }
+              }
+            ]
           }
         }
       }
@@ -183,9 +193,11 @@
         },
         "status": {
           "enum": [
-            "strong",
-            "partial",
-            "weak",
+            "doing_now",
+            "experienced",
+            "capable",
+            "foundational",
+            "thin",
             "missing",
             "unknown"
           ]

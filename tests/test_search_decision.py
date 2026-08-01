@@ -70,23 +70,29 @@ class TestCasesIntegrity(unittest.TestCase):
 
 
 class TestSkillAndScorer(unittest.TestCase):
-    def test_rules_and_pre_cutover_boundary(self):
+    def test_rules_and_typed_public_cutover(self):
         rules = rde.extract_rules(SKILL)
         for values in rde.ENUMS.values():
             for value in values:
                 self.assertIn(f"`{value}`", rules)
         self.assertIn("SearchRoute", SKILL_TEXT)
-        self.assertIn("Execute this search or modify it?", SKILL_TEXT)
         self.assertIn("packs.search.pipeline.search", SKILL_TEXT)
-        self.assertIn("search_network_pipeline.py prepare", SKILL_TEXT)
-        self.assertIn("deep_search_loop.py", SKILL_TEXT)
-        self.assertIn("live `$search-company` surface", rules)
+        self.assertIn("--spec <run>/search_spec.json", SKILL_TEXT)
+        self.assertIn("--output-dir .powerpacks/search-runs/<run-id>", SKILL_TEXT)
+        self.assertIn("There is no public company-search target", rules)
+        self.assertIn("People at a company are an engine GTM search", rules)
+        self.assertIn("company-only local\n     relational or directory questions", rules)
         self.assertIn("stop with `needs_input`", rules)
         self.assertIn("perform no retrieval", rules)
-        self.assertIn("bare-person lookup", SKILL_TEXT)
         self.assertIn("email and phone return `unsupported_capability`", SKILL_TEXT)
-        self.assertIn("additive,\nexplicit opt-in candidate path", SKILL_TEXT)
-        self.assertIn("none is authorization for paid", SKILL_TEXT)
+        self.assertIn('`rank_model="gpt-5.6-luna"`', SKILL_TEXT)
+        self.assertIn('`rank_reasoning_effort="medium"`', SKILL_TEXT)
+        self.assertIn("`rank_approved=true` only after explicit approval immediately before", SKILL_TEXT)
+        self.assertIn("Credential presence and approval booleans do not\nauthorize a paid quality-validation run", SKILL_TEXT)
+        self.assertNotIn("search_network_pipeline.py prepare", SKILL_TEXT)
+        self.assertNotIn("deep_search_loop.py", SKILL_TEXT)
+        self.assertNotIn("$search-company", SKILL_TEXT)
+        self.assertNotIn("/search-network", SKILL_TEXT)
 
     def test_prompt_extract_score(self):
         self.assertIn('"target": ...', rde.build_prompt("RULES", {"query": "q", "env": {"remote_creds": False}}))

@@ -133,7 +133,7 @@ exist locally in any form: a 1st-degree LinkedIn edge list. Risk to track: local
 
 The 19-step V1 task lifecycle (`search-network.task.json`) with its ~10 unused schemas
 and orphan primitives (`execute_search_slice`, `merge_candidate_frontier` legacy pieces,
-`agentic_candidate_review`, `count_candidates`), `build_investor_index.py` (zero
+`agentic_candidate_review`, `count_candidates`), the investor index builder (now owned by `packs/indexing/primitives/build_investor_index/`),
 consumers), the deleted router's committed `.pyc`, `export_candidate_shortlist.py`, the
 `ground_truth_ranked.json` compatibility alias, and an env merge that reads
 `../network-search-api/.env` from inside `search_network_pipeline.py:113`. The orphaned
@@ -355,7 +355,7 @@ already on a mini model but is one of two duplicated stages.
 | "Who works at X" / directory asks | Route to agentic SQL (`search-sql`) over the local DuckDB; the fast path's company-directory detection folds into the `fast` profile. |
 | `search-sql` | **Keep** as the escape hatch + fan-out lane. Cheat sheet becomes generated from the live index; agent runs `schema` first, always. |
 | V1 lifecycle: `search-network.task.json`, ~10 schemas, `execute_search_slice`, legacy `merge_candidate_frontier` pieces, `agentic_candidate_review`, `count_candidates` | Delete (verify real consumers by grep at execution time; `capture_jd_evaluations` is live and stays). |
-| `build_investor_index.py`, `route_query` `.pyc`, `export_candidate_shortlist.py`, `ground_truth_ranked.json` alias | Delete. |
+| `route_query` `.pyc`, `export_candidate_shortlist.py`, `ground_truth_ranked.json` alias | Delete after their canonical consumers are proven. The investor index builder remains owned by `packs/indexing/primitives/build_investor_index/`. |
 | `../network-search-api/.env` merge in `search_network_pipeline.py:113` | Delete — sibling-repo path baked into the env loader. |
 | Orphaned `search-network/cases.json` rubric eval | Re-point at the renamed `search` skill; it becomes the plan-quality half of the JD benchmark. |
 | Duplicated constants/stages (STATUS_VALUE, RRF ×3, filter ×2, location ×2, policy ×2) | Single homes, per the one-home-per-concept rule. |

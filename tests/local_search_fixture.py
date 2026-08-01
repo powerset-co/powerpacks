@@ -10,6 +10,8 @@ PERSON_SIGNAL = "00000000-0000-0000-0000-000000000005"
 PERSON_ENTRY_ADJACENT = "00000000-0000-0000-0000-000000000006"
 PERSON_GROWTH_ADJACENT = "00000000-0000-0000-0000-000000000007"
 PERSON_FOUNDER = "00000000-0000-0000-0000-000000000008"
+PERSON_PROFILE_ONLY = "00000000-0000-0000-0000-000000000009"
+PERSON_CONTEXT_ONLY = "00000000-0000-0000-0000-000000000010"
 OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
 STANFORD_ID = "linkedin:school:stanford-university"
 
@@ -250,6 +252,7 @@ def write_local_search_db(path: Path) -> None:
         "ALTER TABLE local_people_positions ADD COLUMN linkedin_followers BIGINT",
         "ALTER TABLE local_people_positions ADD COLUMN linkedin_connections BIGINT",
         "ALTER TABLE local_people_positions ADD COLUMN ig_followers BIGINT",
+        "ALTER TABLE local_people_positions ADD COLUMN inferred_birth_year BIGINT",
     ]:
         conn.execute(ddl)
     conn.execute(
@@ -261,6 +264,10 @@ def write_local_search_db(path: Path) -> None:
             ig_followers = CASE WHEN base_id = ? THEN 100 ELSE 10 END
         """,
         [PERSON_STANFORD, PERSON_STANFORD, PERSON_STANFORD, PERSON_STANFORD],
+    )
+    conn.execute(
+        "UPDATE local_people_positions SET inferred_birth_year = 1988 WHERE base_id = ?",
+        [PERSON_FOUNDER],
     )
     conn.execute(
         """
@@ -384,6 +391,112 @@ def write_local_search_db(path: Path) -> None:
                 [0.0, 1.0, 0.0],
                 [OPERATOR_ID],
             )
+        ],
+    )
+    conn.execute(
+        """
+        CREATE TABLE local_person_profiles (
+          id VARCHAR,
+          person_id VARCHAR,
+          base_id VARCHAR,
+          full_name VARCHAR,
+          headline VARCHAR,
+          summary VARCHAR,
+          city VARCHAR,
+          state VARCHAR,
+          country VARCHAR,
+          location_raw VARCHAR,
+          linkedin_url VARCHAR,
+          inferred_birth_year BIGINT,
+          work_experiences JSON,
+          education JSON,
+          hydrated_context JSON,
+          total_interactions BIGINT,
+          profile_tokens VARCHAR[],
+          embedding DOUBLE[]
+        )
+        """
+    )
+    conn.executemany(
+        "INSERT INTO local_person_profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                PERSON_STANFORD,
+                PERSON_STANFORD,
+                PERSON_STANFORD,
+                "Stanford Engineer",
+                "Senior Software Engineer at Company One",
+                "Builds production software systems.",
+                "San Francisco",
+                "California",
+                "United States",
+                "San Francisco, California, United States",
+                "https://www.linkedin.com/in/stanford-engineer",
+                1990,
+                "[]",
+                "[]",
+                '{"positions": [], "profile_vector": [0.1], "name_tokens": ["stanford"]}',
+                None,
+                ["stanford", "engineer"],
+                [0.1, 0.2],
+            ),
+            (
+                PERSON_PROFILE_ONLY,
+                PERSON_PROFILE_ONLY,
+                PERSON_PROFILE_ONLY,
+                "Profile Only Founder",
+                "Founder at OnlyCo",
+                "Builds startups.",
+                "New York",
+                "New York",
+                "United States",
+                "New York, New York, United States",
+                "https://www.linkedin.com/in/profile-only",
+                1985,
+                '[{"id":"profile-role","title":"Founder","company":"OnlyCo","is_current":true,"role_ids":["founder"],"seniority_band":"c_suite","word_tokens":["founder"],"vector":[0.5]}]',
+                "[]",
+                '{"positions": []}',
+                None,
+                ["profile", "founder"],
+                [0.5, 0.5],
+            ),
+            (
+                PERSON_CONTEXT_ONLY,
+                PERSON_CONTEXT_ONLY,
+                PERSON_CONTEXT_ONLY,
+                "Context Only Engineer",
+                "Staff Engineer at ContextCo",
+                "Builds context systems.",
+                "Seattle",
+                "Washington",
+                "United States",
+                "Seattle, Washington, United States",
+                "https://www.linkedin.com/in/context-only",
+                None,
+                "[]",
+                "[]",
+                '{"positions":[{"id":"context-role","position_title":"Staff Engineer","company_name":"ContextCo","is_current":true,"role_ids":["software_engineer"],"seniority_band":"staff","embedding":[0.2]}]}',
+                None,
+                ["context", "engineer"],
+                [0.2, 0.8],
+            ),
+        ],
+    )
+    conn.execute(
+        """
+        CREATE TABLE local_person_source_summary (
+          person_id VARCHAR,
+          source_channel VARCHAR,
+          total_interactions INTEGER
+        )
+        """
+    )
+    conn.executemany(
+        "INSERT INTO local_person_source_summary VALUES (?, ?, ?)",
+        [
+            (PERSON_STANFORD, "gmail", 7),
+            (PERSON_STANFORD, "imessage", 5),
+            (PERSON_PROFILE_ONLY, "gmail", 3),
         ],
     )
     conn.close()

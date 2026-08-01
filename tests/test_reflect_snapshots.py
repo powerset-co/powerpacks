@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from packs.search.reflect.snapshots import compare_snapshots, snapshot_identity, validate_complete_evidence
+from packs.search.reflect.snapshots import canonical_hash, compare_snapshots, snapshot_identity, validate_complete_evidence
 
 
 def snapshot(**changes):
@@ -22,6 +22,12 @@ def snapshot(**changes):
 class TestReflectSnapshots(unittest.TestCase):
     def test_observed_at_does_not_change_identity(self) -> None:
         self.assertEqual(snapshot_identity(snapshot()), snapshot_identity(snapshot(observed_at="2026-07-31T00:00:00Z")))
+
+    def test_nested_observed_at_is_part_of_canonical_record_identity(self) -> None:
+        self.assertNotEqual(
+            canonical_hash({"record": {"observed_at": "2026-07-30T00:00:00Z"}}),
+            canonical_hash({"record": {"observed_at": "2026-07-31T00:00:00Z"}}),
+        )
 
     def test_naive_observed_at_is_not_comparable(self) -> None:
         naive = snapshot(observed_at="2026-07-31T00:00:00")

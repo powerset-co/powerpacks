@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import search_backend_mode
 import search_result_merge
 from powerpacks_contracts import TURBOPUFFER_FILTER_OPERATORS
 
@@ -377,9 +376,6 @@ def comparison(field: str, op: str, value: Any) -> tuple:
 
 
 def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
-    if search_backend_mode.is_local_backend_configured():
-        return []
-
     explicit = payload.get("operator_ids") or payload.get("allowed_operator_ids")
     if explicit:
         return list(dict.fromkeys(str(value) for value in explicit if value))
@@ -669,21 +665,9 @@ def role_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
     if isinstance(resolved_companies, dict) and resolved_companies.get("company_ids"):
         payload["company_ids"] = list(dict.fromkeys(str(cid) for cid in resolved_companies["company_ids"] if cid))
 
-    resolved_investors = latest_step_output(state, "resolve_investors")
-    if isinstance(resolved_investors, dict) and resolved_investors.get("investor_urns"):
-        payload["investors"] = list(dict.fromkeys(str(iid) for iid in resolved_investors["investor_urns"] if iid))
-
     resolved_education = latest_step_output(state, "resolve_education")
     if isinstance(resolved_education, dict) and resolved_education.get("education_ids"):
         payload["education_ids"] = list(dict.fromkeys(str(eid) for eid in resolved_education["education_ids"] if eid))
-
-    prefilters = latest_step_output(state, "apply_prefilters")
-    if (
-        isinstance(prefilters, dict)
-        and prefilters.get("base_candidate_ids") is not None
-        and prefilters.get("role_prefilter_ran", True)
-    ):
-        payload["base_candidate_ids"] = list(dict.fromkeys(str(pid) for pid in prefilters["base_candidate_ids"] if pid))
 
     resolved_set = latest_step_output(state, "resolve_set_operators")
     if isinstance(resolved_set, dict) and resolved_set.get("operator_ids"):

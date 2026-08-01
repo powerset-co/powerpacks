@@ -16,8 +16,8 @@ Example:
 
 Then test local search with:
 
-  POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb \
-    uv run --project . python -m packs.search.pipeline.search --spec <search_spec.json> --output-dir <run-dir>
+  uv run --project . python -m packs.search.pipeline.search \
+    --spec <search_spec-with-explicit-local-corpus.json> --output-dir <run-dir>
 
 Changelog:
 - 2026-07-26: an external --records-dir that ships person_profiles.records.parquet
@@ -1408,7 +1408,7 @@ def main() -> None:
             "tables": table_counts,
             "table_diffs": table_diffs,
             "duckdb_update_mode": "incremental" if args.incremental else "rebuild",
-            "env": f"POWERPACKS_LOCAL_SEARCH_DB={db_path}",
+            "query_command": f"uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py --db {db_path} schema",
         })
 
 

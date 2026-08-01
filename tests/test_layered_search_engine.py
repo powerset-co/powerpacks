@@ -38,8 +38,14 @@ from packs.search.pipeline.models import (
 from packs.search.pipeline.routing import SearchRoute
 from packs.search.pipeline.ranking import SemanticOutcome, production_semantic_adapter
 from packs.search.reflect.snapshots import validate_snapshot
-from packs.search.primitives.persist_search_results.results_io import result_rows
-from tests.local_search_fixture import PERSON_OTHER, PERSON_STANFORD, write_local_search_db
+from adapters.nanoclaw.primitives.view_search_results.search_tui import result_rows
+from tests.local_search_fixture import (
+    PERSON_CONTEXT_ONLY,
+    PERSON_OTHER,
+    PERSON_PROFILE_ONLY,
+    PERSON_STANFORD,
+    write_local_search_db,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 HASH = "a" * 64
@@ -179,6 +185,16 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate(frontier, json.loads((schemas / "candidate-frontier.schema.json").read_text()))
 
+    def test_investor_intent_and_luna_rank_defaults_are_typed_and_persisted(self):
+        value = spec(company_filters=CompanyFilters(investor_names=("a16z", "a16z")))
+        self.assertEqual(value.company_filters.investor_names, ("a16z",))
+        self.assertEqual(value.rank_model, "gpt-5.6-luna")
+        self.assertEqual(value.rank_reasoning_effort, "medium")
+        parsed = SearchSpec.from_dict(value.to_dict())
+        self.assertEqual(parsed.company_filters.investor_names, ("a16z",))
+        schema = json.loads((ROOT / "packs/search/schemas/search-spec.schema.json").read_text())
+        jsonschema.validate(parsed.to_dict(), schema)
+
     def test_provenance_union_matched_positions_and_probe_family(self):
         one = CandidateRecord(
             "p",
@@ -240,6 +256,43 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(candidate.hydrated_profile["positions"])
             self.assertTrue(candidate.hydrated_profile["education"])
             self.assertIn("Python", candidate.hydrated_profile["tech_skills"])
+            self.assertEqual(candidate.matched_position_indexes, (0,))
+            self.assertEqual(candidate.hydrated_profile["total_interactions"], 12)
+            self.assertTrue(candidate.hard_filter_evidence["validated"])
+            self.assertEqual(result.hard_filter_validation["violation_count"], 0)
+
+    def test_local_hydration_restores_profile_only_position_fallbacks(self):
+        from packs.search.backends.local.runner import LocalSearchRunner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            runner = LocalSearchRunner(str(db))
+            frontier = CandidateFrontier.merge(
+                [
+                    CandidateRecord(PERSON_PROFILE_ONLY, matched_position_ids=("profile-role",), backend="local"),
+                    CandidateRecord(PERSON_CONTEXT_ONLY, matched_position_ids=("context-role",), backend="local"),
+                ]
+            )
+
+            hydrated = runner.hydrate(frontier)
+
+            self.assertTrue(all(isinstance(row, CandidateRecord) for row in hydrated.candidates))
+            by_id = {row.person_id: row for row in hydrated.candidates}
+            self.assertEqual(by_id[PERSON_PROFILE_ONLY].hydrated_profile["positions"][0]["title"], "Founder")
+            self.assertEqual(by_id[PERSON_PROFILE_ONLY].matched_position_indexes, (0,))
+            self.assertEqual(by_id[PERSON_CONTEXT_ONLY].hydrated_profile["positions"][0]["title"], "Staff Engineer")
+            self.assertEqual(by_id[PERSON_CONTEXT_ONLY].matched_position_indexes, (0,))
+            findings = validation_findings(
+                by_id[PERSON_PROFILE_ONLY].hydrated_profile,
+                spec(
+                    role=RoleIntent(("founder",), (), ()),
+                    person_filters=PersonFilters(seniority_bands=("c_suite",), is_current_role=True),
+                ),
+                ResolvedSources(),
+                ("role",),
+            )
+            self.assertEqual(findings, {"violations": (), "unknowns": ()})
 
     def test_nonsense_bm25_does_not_return_entire_eligible_corpus(self):
         from packs.search.pipeline.search import run_search
@@ -288,7 +341,7 @@ class PipelineTests(unittest.TestCase):
         result = run_with_runner(semantic, runner)
         self.assertEqual(result.status, "needs_input")
         calls = []
-        configured = replace(semantic, rank_model="gpt-test", rank_approved=True)
+        configured = replace(semantic, rank_approved=True)
 
         def adapter(value, candidates):
             calls.append(tuple(row.person_id for row in candidates))
@@ -339,7 +392,6 @@ class PipelineTests(unittest.TestCase):
                 soft_criteria=(EvidenceCriterion("fit", "company and role evidence"),),
                 rank_mode=RankMode.SEMANTIC,
             ),
-            rank_model="gpt-test",
             rank_approved=True,
         )
         rerank = mock.AsyncMock(
@@ -360,9 +412,25 @@ class PipelineTests(unittest.TestCase):
             )
         self.assertEqual(
             rerank.await_args.kwargs["traits"],
-            [{"value": "fit", "temporal": "all", "meaning": "general"}],
+            [
+                {
+                    "value": "fit: company and role evidence",
+                    "temporal": "all",
+                    "meaning": "general",
+                }
+            ],
         )
+        self.assertEqual(rerank.await_args.kwargs["model"], "gpt-5.6-luna")
+        self.assertEqual(rerank.await_args.kwargs["reasoning_effort"], "medium")
         self.assertEqual(outcomes[1], SemanticOutcome("two", None, "timeout"))
+
+    def test_evidence_criterion_rejects_unsupported_weight(self):
+        with self.assertRaisesRegex(ValueError, "weight must be 1.0"):
+            EvidenceCriterion("fit", "company and role evidence", 2.0)
+        with self.assertRaisesRegex(ValueError, "weight must be 1.0"):
+            EvidenceCriterion.from_dict(
+                {"name": "fit", "description": "company and role evidence", "weight": 0.5}
+            )
 
     def test_sql_fan_in_before_single_hydration_and_missing_disposition(self):
         class MissingRunner(FakeRunner):
@@ -705,6 +773,256 @@ class PipelineTests(unittest.TestCase):
             sources = runner.resolve_sources(remote)
         self.assertEqual(sources.unresolved_required_inputs, ("Missing School",))
 
+    def test_remote_investor_resolution_preserves_exact_alias_unresolved_and_scope(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator-a", "operator-b")))
+        remote = spec(
+            backend=Backend.POWERSET,
+            corpus=runner.corpus,
+            company_filters=CompanyFilters(
+                investor_names=("Sequoia Capital", "a16z", "Missing Investor")
+            ),
+        )
+        resolved = mock.AsyncMock(
+            return_value=[
+                {
+                    "query_name": "Sequoia Capital",
+                    "investor_name": "Sequoia Capital",
+                    "canonical_name": "Sequoia Capital",
+                    "urn": "urn:sequoia",
+                    "match_type": "exact",
+                },
+                {
+                    "query_name": "a16z",
+                    "investor_name": "a16z",
+                    "canonical_name": "Andreessen Horowitz",
+                    "urn": "urn:a16z",
+                    "match_type": "alias",
+                },
+            ]
+        )
+        companies = mock.AsyncMock(
+            return_value={
+                "rows": [{"id": "company-1"}],
+                "completed": True,
+                "truncated": False,
+            }
+        )
+        with (
+            mock.patch(
+                "packs.search.backends.turbopuffer.resolution.resolve_turbopuffer_investors",
+                new=resolved,
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.company_resolution.filter_only_company_rows",
+                new=companies,
+            ),
+        ):
+            sources = runner.resolve_sources(remote)
+
+        self.assertEqual(
+            resolved.await_args.kwargs["allowed_operator_ids"], ["operator-a", "operator-b"]
+        )
+        self.assertEqual(sources.investor_urns, ("urn:sequoia", "urn:a16z"))
+        self.assertEqual(
+            sources.investor_names, ("Sequoia Capital", "Andreessen Horowitz")
+        )
+        self.assertEqual(sources.unresolved_required_inputs, ("Missing Investor",))
+        investor_records = [row for row in sources.records if row["source"] == "investor"]
+        self.assertEqual(
+            [row["disposition"] for row in investor_records],
+            ["resolved", "resolved", "unresolved"],
+        )
+        self.assertEqual(
+            [row.get("match_type") for row in investor_records],
+            ["exact", "alias", None],
+        )
+        company_filter = companies.await_args.args[0]
+        self.assertIn(
+            ("allowed_operator_ids", "ContainsAny", ["operator-a", "operator-b"]),
+            company_filter[1],
+        )
+        self.assertIn(("investor_urns", "ContainsAny", ["urn:sequoia", "urn:a16z"]), company_filter[1])
+
+    def test_remote_investor_names_compile_into_scoped_people_filter(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        remote = spec(
+            backend=Backend.POWERSET,
+            corpus=runner.corpus,
+            company_filters=CompanyFilters(investor_names=("a16z",)),
+        )
+        enumerated = mock.AsyncMock(
+            return_value={"rows": [], "completed": True, "truncated": False}
+        )
+        sources = ResolvedSources(
+            company_ids=("company-1",),
+            investor_urns=("urn:a16z",),
+            investor_names=("Andreessen Horowitz",),
+        )
+        with mock.patch(
+            "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+            new=enumerated,
+        ):
+            hard_filters = runner.apply_hard_filters(remote, sources)
+        people_filter = enumerated.await_args_list[-1].args[1]
+        self.assertIn(("allowed_operator_ids", "ContainsAny", ["operator"]), people_filter[1])
+        self.assertIn(
+            ("investor_names", "ContainsAny", ["Andreessen Horowitz"]), people_filter[1]
+        )
+        role_rows = mock.AsyncMock(return_value=[])
+        with (
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.hybrid_role_rows",
+                new=role_rows,
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.hybrid_summary_rows",
+                new=mock.AsyncMock(return_value=[]),
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.semantic_company_signal_rows",
+                new=mock.AsyncMock(return_value=[]),
+            ),
+        ):
+            runner.retrieve_people(
+                SearchPlan(remote, runner.capabilities(remote), sources, ("retrieve",)),
+                hard_filters,
+            )
+        self.assertIn(
+            ("investor_names", "ContainsAny", ["Andreessen Horowitz"]),
+            role_rows.await_args.args[1][1],
+        )
+
+    def test_remote_required_skills_preserve_actual_match_any_evidence(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        remote = spec(
+            backend=Backend.POWERSET,
+            corpus=runner.corpus,
+            tech_skills=("Rust", "Python"),
+        )
+        enumerations = mock.AsyncMock(
+            side_effect=[
+                {
+                    "rows": [
+                        {
+                            "base_id": "person-1",
+                            "person_id": "person-1",
+                            "tech_skills": ["Rust", "Go"],
+                        }
+                    ],
+                    "completed": True,
+                    "truncated": False,
+                },
+                {
+                    "rows": [{"base_id": "person-1", "person_id": "person-1"}],
+                    "completed": True,
+                    "truncated": False,
+                },
+                {
+                    "rows": [{"base_id": "person-1", "person_id": "person-1"}],
+                    "completed": True,
+                    "truncated": False,
+                },
+            ]
+        )
+        with mock.patch(
+            "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+            new=enumerations,
+        ):
+            hard_filters = runner.apply_hard_filters(remote, ResolvedSources())
+        self.assertEqual(
+            hard_filters.compiled["tech_skills_by_person"]["person-1"],
+            ("Rust", "Go"),
+        )
+
+        role_rows = [{"base_id": "person-1", "position_id": "position-1", "score": 1.0}]
+        with (
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.hybrid_role_rows",
+                new=mock.AsyncMock(return_value=role_rows),
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.hybrid_summary_rows",
+                new=mock.AsyncMock(return_value=[]),
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.semantic_company_signal_rows",
+                new=mock.AsyncMock(return_value=[]),
+            ),
+        ):
+            retrieved = runner.retrieve_people(
+                SearchPlan(remote, runner.capabilities(remote), ResolvedSources(), ("retrieve",)),
+                hard_filters,
+            )
+        self.assertEqual(retrieved[0].tech_skills, ("Rust", "Go"))
+        self.assertEqual(
+            retrieved[0].hard_filter_evidence["tech_skills"],
+            {"source": "turbopuffer_summaries", "values": ["Rust", "Go"]},
+        )
+
+        with mock.patch(
+            "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+            return_value=[
+                {
+                    "id": "person-1",
+                    "hydrated_context": {"positions": [], "tech_skills": ["Go"]},
+                }
+            ],
+        ):
+            hydrated = runner.hydrate(CandidateFrontier.merge(retrieved)).candidates[0]
+        self.assertEqual(hydrated.hydrated_profile["tech_skills"], ["Go", "Rust"])
+        self.assertNotIn("Python", hydrated.hydrated_profile["tech_skills"])
+        self.assertEqual(
+            validation_findings(
+                hydrated.hydrated_profile, remote, ResolvedSources(), hydrated.source_lanes
+            )["violations"],
+            (),
+        )
+
+        mismatched = replace(hydrated, tech_skills=("Go",), hydrated_profile={"tech_skills": ["Go"]})
+        self.assertEqual(
+            validation_findings(
+                mismatched.hydrated_profile, remote, ResolvedSources(), mismatched.source_lanes
+            )["violations"],
+            ("tech_skills_mismatch",),
+        )
+
+    def test_remote_education_hard_filter_is_operator_scoped(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        remote = spec(
+            backend=Backend.POWERSET,
+            corpus=runner.corpus,
+            person_filters=PersonFilters(education_ids=("school",)),
+        )
+        enumerate_rows = mock.AsyncMock(
+            return_value={
+                "rows": [{"person_id": "person-1", "base_id": "person-1"}],
+                "completed": True,
+                "truncated": False,
+            }
+        )
+        with mock.patch(
+            "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+            new=enumerate_rows,
+        ):
+            runner.apply_hard_filters(remote, ResolvedSources(education_ids=("school",)))
+        education_filter = enumerate_rows.await_args_list[0].args[1]
+        self.assertIn(
+            ("allowed_operator_ids", "ContainsAny", ["operator"]), education_filter[1]
+        )
+        self.assertIn(("canonical_education_id", "In", ["school"]), education_filter[1])
+
     def test_remote_capabilities_do_not_depend_on_fixture_rows(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
         from packs.search.pipeline.models import PowersetCorpus
@@ -718,7 +1036,7 @@ class PipelineTests(unittest.TestCase):
             capabilities = runner.capabilities(remote)
         self.assertNotIn("email", capabilities.lookup_fields)
         self.assertNotIn("phone", capabilities.lookup_fields)
-        self.assertFalse(capabilities.supports_complete_snapshot)
+        self.assertTrue(capabilities.supports_complete_snapshot)
         self.assertIn("summary", capabilities.retrieval_lanes)
         self.assertIn("company_signal", capabilities.retrieval_lanes)
 
@@ -757,7 +1075,6 @@ class PipelineTests(unittest.TestCase):
             ),
         )
         with (
-            mock.patch.dict("os.environ", {"POWERPACKS_LOCAL_SEARCH_DB": "/should/not/be/read"}),
             mock.patch(
                 "packs.search.backends.turbopuffer.runner.company_resolution.allowed_operator_ids_from_payload",
                 side_effect=AssertionError("typed remote resolution must not use ambient operator scope"),
@@ -815,7 +1132,6 @@ class PipelineTests(unittest.TestCase):
             company_filters=CompanyFilters(company_names=("Scoped Co",)),
         )
         with (
-            mock.patch.dict("os.environ", {"POWERPACKS_LOCAL_SEARCH_DB": "/ambient/local.duckdb"}),
             mock.patch(
                 "packs.search.backends.turbopuffer.runner.company_resolution.allowed_operator_ids_from_payload",
                 side_effect=AssertionError("ambient operator resolution must not run"),
@@ -1108,6 +1424,193 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result.corpus_observation["verification_status"], "unverified_non_comparable")
         finally:
             shutil.rmtree(output, ignore_errors=True)
+
+    def test_remote_snapshot_hashes_complete_scoped_query_corpus_and_evidence(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        calls = []
+
+        async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
+            calls.append((name, filters, tuple(attributes)))
+            rows = {
+                "people": [{"id": "position-1", "base_id": "person-1", "vector": [0.1]}],
+                "summaries": [{"id": "person-1", "summary": "summary", "vector": [0.2]}],
+                "companies": [{"id": "company-1", "company_name": "Company", "vector": [0.3]}],
+                "company_signals": [{"id": "company-1", "signals_semantic_text": "signal", "vector": [0.4]}],
+                "education": [{"id": "education-1", "person_id": "person-1"}],
+                "schools": [{"id": "school-1", "school_name": "School"}],
+            }[name]
+            return {
+                "rows": rows,
+                "completed": True,
+                "truncated": False,
+                "row_count": len(rows),
+            }
+
+        hydrated = {
+            "id": "person-1",
+            "full_name": "Person",
+            "hydrated_context": {"positions": [{"title": "Engineer"}]},
+        }
+        with (
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                return_value={"set_id": "set", "operator_ids": ["operator"]},
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+                return_value=[hydrated],
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                new=mock.AsyncMock(side_effect=enumerate_namespace),
+            ),
+        ):
+            snapshot = runner.snapshot_corpus("set", ("person-1",))
+
+        self.assertEqual(snapshot["verification_status"], "verified_comparable")
+        self.assertEqual(snapshot["membership_id_count"], 1)
+        self.assertEqual(snapshot["enumerated_record_count"], 6)
+        self.assertEqual(set(snapshot["namespace_record_counts"]), {
+            "people", "summaries", "companies", "company_signals", "education", "schools"
+        })
+        self.assertEqual(validate_snapshot(snapshot, ("person-1",)), [])
+        self.assertEqual(calls[-1][0:2], ("schools", None))
+        for name, filters, attributes in calls[:-1]:
+            self.assertEqual(
+                filters, ("allowed_operator_ids", "ContainsAny", ["operator"]), name
+            )
+            contract = json.loads(
+                (ROOT / "packs/search/contracts/turbopuffer" / f"{name}.namespace.json").read_text()
+            )
+            expected = {row["name"] for row in contract["attributes"]}
+            if contract.get("vector"):
+                expected.add("vector")
+            self.assertEqual(set(attributes), expected)
+
+    def test_remote_snapshot_fails_closed_on_scope_enumeration_and_evidence_gaps(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        set_resolution = mock.patch(
+            "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+            return_value={"set_id": "set", "operator_ids": ["operator"]},
+        )
+        complete = {
+            "rows": [{"id": "position-1", "base_id": "person-1"}],
+            "completed": True,
+            "truncated": False,
+            "row_count": 1,
+        }
+        with set_resolution, mock.patch(
+            "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+            new=mock.AsyncMock(return_value={**complete, "completed": False, "truncated": True}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "enumeration is incomplete"):
+                runner.snapshot_corpus("set", ())
+
+        async def complete_namespaces(name, filters, attributes, *, page_size, max_results=0):
+            rows = complete["rows"] if name == "people" else []
+            return {"rows": rows, "completed": True, "truncated": False, "row_count": len(rows)}
+
+        for evidence_ids, hydrated, error in (
+            (("outside",), [], "outside complete Powerset membership"),
+            (("person-1",), [], "evidence hydration is missing"),
+        ):
+            with (
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                    return_value={"set_id": "set", "operator_ids": ["operator"]},
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+                    return_value=hydrated,
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                    new=mock.AsyncMock(side_effect=complete_namespaces),
+                ),
+            ):
+                with self.assertRaisesRegex((ValueError, RuntimeError), error):
+                    runner.snapshot_corpus("set", evidence_ids)
+
+    def test_remote_snapshot_requires_exact_nonempty_postgres_scope(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        for resolution, error in (
+            ({"set_id": "other", "operator_ids": ["operator"]}, "different Powerset set_id"),
+            ({"set_id": "set", "operator_ids": []}, "no Postgres-derived operator scope"),
+            ({"set_id": "set", "operator_ids": ["other"]}, "operator_ids do not match"),
+        ):
+            with mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                return_value=resolution,
+            ):
+                with self.assertRaisesRegex(ValueError, error):
+                    runner.snapshot_corpus("set", ())
+
+    def test_remote_snapshot_accepts_matching_persisted_content_identity_only(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        rows = {
+            "people": [{"id": "position-1", "base_id": "person-1"}],
+            "summaries": [{"id": "person-1", "summary": "summary"}],
+            "companies": [],
+            "company_signals": [],
+            "education": [],
+            "schools": [],
+        }
+
+        async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
+            values = rows[name]
+            return {
+                "rows": values,
+                "completed": True,
+                "truncated": False,
+                "row_count": len(values),
+            }
+
+        def snapshot(corpus):
+            with (
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                    return_value={"set_id": "set", "operator_ids": ["operator"]},
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+                    return_value=[],
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                    new=mock.AsyncMock(side_effect=enumerate_namespace),
+                ),
+            ):
+                return TurboPufferSearchRunner(corpus).snapshot_corpus("set", ())
+
+        initial = snapshot(PowersetCorpus("set", ("operator",)))
+        snapshot_schema = json.loads(
+            (ROOT / "packs/search/schemas/reflect-corpus-snapshot.schema.json").read_text()
+        )
+        jsonschema.validate(initial, snapshot_schema)
+        content_hash = initial["scoped_records_hash"]
+        rerun = snapshot(
+            PowersetCorpus("set", ("operator",), scoped_records_hash=content_hash)
+        )
+        self.assertEqual(rerun["scoped_records_hash"], content_hash)
+        native = snapshot(
+            PowersetCorpus("set", ("operator",), native_content_version=content_hash)
+        )
+        self.assertEqual(native["native_content_version"], content_hash)
+        self.assertNotIn("scoped_records_hash", native)
+        jsonschema.validate(native, snapshot_schema)
+        with self.assertRaisesRegex(ValueError, "content identity does not match"):
+            snapshot(PowersetCorpus("set", ("operator",), scoped_records_hash="f" * 64))
 
 
 class ImportFirewallTests(unittest.TestCase):

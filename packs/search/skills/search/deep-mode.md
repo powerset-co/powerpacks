@@ -1,79 +1,84 @@
-# `$search` deep mode — canonical legacy recruiting
+# `$search` deep mode — typed recruiting Review and resume
 
-Until the atomic recruiting cutover, the canonical recruiting owner is
-`packs/search/primitives/deep_search/deep_search_loop.py`. Its supporting
-`search_network_pipeline`, task-state, ledger, wide-search, judge, consensus,
-and expansion owners remain live. Do not replace this workflow with the typed
-candidate path during a normal recruiting request.
+Recruiting uses the same persisted `SearchSpec` and the same canonical command
+as lookup and GTM. It is a two-pass run in one unchanged output directory: the
+first pass creates Review artifacts and stops before retrieval; the second pass
+resumes only the exact reviewed plan.
 
-## One Review before retrieval
+Set `<run>` to `.powerpacks/search-runs/<run-id>` and keep the complete JD, role
+brief, or public job-posting URL in `recruiting.source`. Persist the complete
+`search.spec.v1` at `<run>/search_spec.json` with `profile="recruiting"`, the
+selected backend/corpus, explicit bounds, and:
 
-Write the complete pasted JD or role brief to `<run>/jd.txt`, or pass a public
-job-posting URL with `--jd-url`. The first invocation builds and critiques the
-plan, writes the legacy review artifacts under `<run>/epoch0/`, returns
-`awaiting_plan_approval`, and stops before sourcing:
+- `recruiting.reviewed_plan_hash=null` on the first pass;
+- an explicit `recruiting.plan_model` and `recruiting.plan_approved=true` before
+  production plan extraction and critic calls;
+- an explicit `recruiting.judge_implementation`, `recruiting.judge_model`, and
+  `recruiting.judge_approved=true` before production judging.
 
-```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/deep_search_loop.py \
-  --jd-file <run>/jd.txt --run-dir <run> --created-at <iso> \
-  --backend <local|powerset> [--db <duckdb>] [--set-id <set>]
-```
+There is no deterministic production plan or judge fallback.
 
-For a URL, replace `--jd-file ...` with `--jd-url <url>`. Review the exact plan,
-critic findings, recruiter-policy provenance, core groups, seniority/hireability
-policy, and structured location scope. User edits outrank JD inference, which
-outranks versioned defaults.
+## Pass 1 — create Review artifacts
 
-Resume only after the user approves that exact plan:
+After approval for any spend-bearing plan and critic calls, invoke:
 
 ```bash
-uv run --env-file .env --project . python \
-  packs/search/primitives/deep_search/deep_search_loop.py \
-  --jd-file <run>/jd.txt --run-dir <run> --created-at <iso> \
-  --backend <local|powerset> [--db <duckdb>] [--set-id <set>] \
-  --plan-approved
+uv run --project . python -m packs.search.pipeline.search \
+  --spec <run>/search_spec.json \
+  --output-dir .powerpacks/search-runs/<run-id>
 ```
 
-`--plan-approved` is the legacy CLI equivalent of the typed candidate field
-`recruiting.plan_approved=true`: it approves the reviewed recruiting plan only.
-It does not approve a judge, spend, or a paid quality run.
+The expected status is `awaiting_review`. No source retrieval may occur. Review
+all of these exact artifacts:
 
-## Judge and paid-run approval
+- `review/plan.json` — normalized recruiter plan, user/JD/default provenance,
+  core groups, seniority/track and hireability policy, location scope, and
+  must-have versus bonus evidence;
+- `review/critic.json` — deterministic and advisory critic findings;
+- `review/policy.json` — exact versioned recruiter policy snapshot;
+- `review/source.json` — normalized source and JD/source hash;
+- `review/corpus.json` — verified comparable corpus snapshot;
+- `review/binding.json` — canonical plan, JD, source, corpus, and policy binding.
 
-There is no deterministic production plan or judge default. Plan extraction and
-the advisory critic are model-backed unless an already reviewed plan is supplied
-through the supported legacy input. The selected production judge is also
-model-backed: `--judge gpt` is paid, while `--judge codex` uses the configured
-subscription CLI and remains a model judge rather than a deterministic fallback.
+Surface ambiguities instead of silently hardening them. User edits outrank JD
+inference, which outranks versioned defaults. If the source is thin/invalid, the
+corpus cannot be verified, or plan/critic execution is not approved, return
+`needs_input` without retrieval.
 
-Before any paid plan, critic, triage, or judge call, obtain explicit user approval
-for that spend-bearing execution. For the typed additive candidate path,
-`recruiting.plan_approved=true` and `recruiting.judge_approved=true` are required
-to select approved adapters, but those booleans and the presence of credentials
-do **not** authorize a paid quality run. Quality validation requires a separate,
-immediately preceding approval naming the cases, model, candidate/call caps,
-estimated maximum spend, and private output directory.
+## Pass 2 — bind and resume
 
-If paid execution has not been approved, stop with `needs_input` before the paid
-call. Do not silently substitute a deterministic plan/judge or another provider.
+After the user approves the exact Review, copy `plan_sha256` from
+`review/binding.json` into `recruiting.reviewed_plan_hash` in the same
+`<run>/search_spec.json`. Do not edit the reviewed plan or replace the source,
+corpus, or policy snapshot. Then rerun the exact same command:
 
-## Execution contract
+```bash
+uv run --project . python -m packs.search.pipeline.search \
+  --spec <run>/search_spec.json \
+  --output-dir .powerpacks/search-runs/<run-id>
+```
 
-After approved resume, the legacy loop owns diverse bounded probes, partial/all
-probe failure semantics, hydration, conservative triage, the selected evidence
-judge, deterministic gates, anchor expansion, convergence, and shortlist
-persistence. Preserve its full provenance and distinct failure/stop reasons.
+Resume loads the existing `review/plan.json` and `review/binding.json`, recomputes
+the binding, and requires exact plan/source/JD/corpus/policy equality. Missing
+artifacts, a wrong hash, or drift returns `failed_binding`; start a new run
+instead of repairing or bypassing the binding. Retrieval begins only after this
+check and after an explicit approved judge is configured.
 
-Canonical legacy outputs remain under the run directory, including the approved
-plan/binding, task/ledger state, sourced union/frontier, judge artifacts,
-consensus, and `shortlist/{shortlist_ranked,sendable_ranked,bench_ranked}.json`.
-Do not delete compatibility artifacts while live readers remain.
+## Execution and paid-call boundaries
 
-## Typed candidate validation seam
+The resumed typed pipeline owns bounded differentiated probes, partial/all-probe
+failure semantics, one person-grain frontier, hydration and hard-filter
+revalidation, conditional conservative triage, one selected evidence judge,
+deterministic gates, bounded anchor expansion, net-new-only judging, and distinct
+converged/no-anchor/capped outcomes. Preserve all provenance and visible errors.
 
-`packs.search.pipeline.search.run_search(SearchSpec)` is additive and opt-in
-before cutover. Use it only for deterministic tests or explicitly approved
-read-only real-environment comparison against the canonical legacy run. It must
-not become the user-facing recruiting owner, mutate production state, make an
-unapproved paid call, or justify deletion of legacy owners.
+`recruiting.plan_approved=true` and `recruiting.judge_approved=true` approve only
+their named adapters after explicit approval immediately before the spend-bearing
+calls. They do not authorize a paid quality-validation run. Credentials do not
+authorize one either. Paid quality validation separately requires explicit
+approval naming cases, model, candidate/call caps, estimated maximum spend, and
+private output directory. Without applicable approval, return `needs_input`; do
+not substitute another model, provider, backend, plan, or judge.
+
+Report the canonical top-level artifacts plus `review/*`, `shortlist_ranked.json`,
+`sendable_ranked.json`, and `bench_ranked.json` when produced.

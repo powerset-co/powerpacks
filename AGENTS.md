@@ -396,16 +396,14 @@ only; keep that scoped to the msgvault primitives.
   `.powerpacks/network-import/merged/people.csv` and writes
   `.powerpacks/search-index/`; do not run LLM, network, Supabase,
   Postgres, or TurboPuffer calls for this workflow.
-- **Search pack** (search, search-company, search-sql): load
-  `packs/search/skills/search/SKILL.md`. Bare-person lookup executes through the
-  typed deterministic path. Ordinary people searches retain the live
-  `search_network_pipeline.py` prepare/Review/run flow; recruiting retains the
-  canonical legacy `deep_search_loop.py` flow until atomic cutover. Company-only
-  lookup/resolution remains `$search-company`; relational local questions use
+- **Search pack** (search, search-sql): load
+  `packs/search/skills/search/SKILL.md`. One `$search` router owns deterministic
+  person lookup, GTM, and recruiting through a persisted typed `SearchSpec` and
+  `packs.search.pipeline.search`. People-at-company requests are GTM with
+  company constraints. Company-only local relational/directory questions use
   `$search-sql`; contact-field questions use `$search-contacts`. Ambiguous intent
-  returns `needs_input` before retrieval. `packs.search.pipeline.search` is an
-  additive opt-in candidate path for GTM/recruiting deterministic tests and
-  approved read-only real-environment validation only.
+  returns `needs_input` before retrieval. There is no public company-search
+  command or backend fallback.
 
 Don't run pack-specific checks pre-emptively. Only when the user's request
 implies that pack.
@@ -425,22 +423,22 @@ Routes:
   company-directory queries →
   `packs/search/skills/search/SKILL.md`
   For routeable people requests the agent records
-  `SearchRoute(target, profile, backend, reason)`. Bare-person lookup uses the
-  typed deterministic composition root. Ordinary people search uses
-  the live legacy prepare/run pipeline; JD/job-posting URL asks use canonical
-  legacy recruiting. Company-only lookup/resolution remains `$search-company`;
-  SQL and contacts remain distinct surfaces. If the wording is ambiguous, ask
-  once and return `needs_input` without retrieval or a guessed route.
+  `SearchRoute(target, profile, backend, reason)`. Engine routes persist one
+  typed `SearchSpec` and use the canonical composition root for lookup, GTM, or
+  recruiting. People-at-company requests are GTM with company constraints;
+  company-only local relational/directory questions route to `$search-sql`.
+  SQL and contacts remain explicit non-engine targets. If the wording is
+  ambiguous, ask once and return `needs_input` without retrieval or a guessed
+  route.
   Explicit words bind the backend:
   "powerset"/set/team network → TurboPuffer+Postgres, "local"/"offline"/
   "my imported network" → local DuckDB.
-  **Deep mode** (job-posting URLs via `deep_search_loop.py --jd-url`, pasted JDs,
-  complex role briefs, and "build a shortlist") loads
-  `packs/search/skills/search/deep-mode.md` and runs the deep-search engine: a
-  wide search of many small archetype probes, conservative triage, one selected
-  evidence judge, a deterministic core gate, and capped expand-from-anchor
-  epochs. A bare LinkedIn profile URL is a lookup, not a shipped profile-to-role
-  deep-search intake; ask for the role/domain if similarity search was intended.
+  **Recruiting profile** (job-posting URLs, pasted JDs, complex role briefs, and
+  "build a shortlist") loads `packs/search/skills/search/deep-mode.md` and uses
+  the same persisted `SearchSpec` and composition root: Review before retrieval,
+  bounded differentiated probes, conservative triage, one selected evidence
+  judge, deterministic gates, and capped expansion. A bare LinkedIn profile URL
+  is a lookup; ask for the role/domain if similarity search was intended.
 - `$search-sql`, relational/aggregate local people queries ("who overlapped
   with X at a company", "2+ startup stints", career-shape predicates),
   read-only SQL over the local search DuckDB →
@@ -448,13 +446,11 @@ Routes:
 - `$search-contacts`, my contacts, set contacts, contact field filtering →
   `packs/contacts/skills/search-contacts/SKILL.md`
 
-> **Search family.** `$search` is the router. Bare-person lookup uses the typed
-> deterministic path; the legacy fast and recruiting orchestration owners
-> remain canonical before cutover. `$search-company`,
-> `$search-sql`, and `$search-contacts` remain distinct live surfaces. The typed
-> pipeline is an additive deterministic/read-only validation candidate only.
-> `$search-network` remains a recognized legacy alias, and NanoClaw's live slash
-> command remains `/search-network` while its task/result integration exists.
+> **Search family.** `$search` is the router and typed engine owner for lookup,
+> GTM, and recruiting. `$search-sql` handles local relational/aggregate questions
+> and `$search-contacts` handles contact fields. There is no public company-search
+> command. Canonical results use the person-grain `CandidateFrontier` and typed
+> `StageResult` contract rather than legacy mode or task-state guidance.
 
 - `$build-local-search-index`, local indexing, build local search index,
   prepare `.powerpacks/search-index` artifacts →
@@ -587,9 +583,8 @@ powerpacks/
 │   │   ├── schemas/            # people and message-contact contracts
 │   │   └── docs/               # maintained ingestion product guides
 │   ├── indexing/               # build-local-search-index local artifacts
-│   ├── search/                 # search (router + deep mode), search-company, search-sql
+│   ├── search/                 # search router/typed engine + search-sql
 │   └── powerset/               # cross-pack tooling (doctor, auth, ...)
-├── skills/                     # core skills (search, search-company)
 ├── tests/                      # unittest, run with uv run --project . python -m unittest discover
 ├── adapters/codex/install.sh   # installs skills into ~/.codex/skills
 ├── bin/                        # update-codex, update-claude-code, agent-bootstrap, sync-agent-files.sh, etc.

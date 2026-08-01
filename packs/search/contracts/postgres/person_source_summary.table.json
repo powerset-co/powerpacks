@@ -5,7 +5,7 @@
   "optional": true,
   "description": "Optional interaction summary table. Missing table or rows should not fail hydration.",
   "required_for": [
-    "hydrate_people"
+    "TurboPufferSearchRunner.hydrate"
   ],
   "columns": [
     {"name": "person_id", "type": "uuid", "required": true},

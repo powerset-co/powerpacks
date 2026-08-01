@@ -26,6 +26,19 @@
     "enumeration_truncated": {"type": "boolean"},
     "enumerated_record_count": {"type": "integer", "minimum": 0},
     "membership_id_count": {"type": "integer", "minimum": 0},
+    "namespace_record_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["people", "summaries", "companies", "company_signals", "education", "schools"],
+      "properties": {
+        "people": {"type": "integer", "minimum": 0},
+        "summaries": {"type": "integer", "minimum": 0},
+        "companies": {"type": "integer", "minimum": 0},
+        "company_signals": {"type": "integer", "minimum": 0},
+        "education": {"type": "integer", "minimum": 0},
+        "schools": {"type": "integer", "minimum": 0}
+      }
+    },
     "observed_at": {"type": "string", "format": "date-time"}
   },
   "anyOf": [
@@ -33,6 +46,12 @@
     {"required": ["scoped_records_hash"], "not": {"required": ["native_content_version"]}},
     {"properties": {"verification_status": {"const": "unverified_non_comparable"},
                     "native_content_version": {"const": null}, "scoped_records_hash": {"const": null}}}
+  ],
+  "allOf": [
+    {
+      "if": {"properties": {"backend": {"const": "powerset"}}},
+      "then": {"required": ["enumeration_complete", "enumeration_truncated", "enumerated_record_count", "membership_id_count", "namespace_record_counts"]}
+    }
   ],
   "$defs": {"hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
 }

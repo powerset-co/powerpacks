@@ -1,34 +1,35 @@
 # Search surface
 
-`$search` is the live search router. For a sufficiently specific people request,
-its persisted typed candidate router contract is:
+`$search` is the public router for lookup, GTM, and recruiting. For a sufficiently
+specific request it persists:
 
 ```json
 {"target":"engine|sql|contacts","profile":"lookup|gtm|recruiting|null","backend":"local|powerset|null","reason":"..."}
 ```
 
-Bare-person lookup executes through `packs/search/pipeline/search.py`. Before
-cutover, ordinary people search remains canonical on the legacy
-`search_network_pipeline.py` prepare/Review/run flow, and recruiting remains
-canonical on `deep_search_loop.py`. `packs/search/pipeline/search.py` is an
-additive opt-in candidate path for GTM/recruiting deterministic tests and
-approved read-only real-environment validation only.
+Only `target=engine` produces a typed `SearchSpec` and executes
+`packs/search/pipeline/search.py`.
 
 | Request | Route |
 | --- | --- |
-| Person identifier lookup | `engine + lookup`; execute the typed deterministic path. Local fields are capability-derived; Powerset supports set-scoped `person_id`, `name`, `handle`, and `profile_url` only, while email/phone return `unsupported_capability` |
-| People by role/company archetype | `engine + gtm`; legacy prepare/Review/run execution |
-| People at a named company | `engine + gtm` with company constraints; legacy execution |
-| JD, job URL, recruiting shortlist | `engine + recruiting`; canonical legacy deep execution |
-| Relational/aggregate local question | `sql`, profile/backend `null` |
-| Contact-field/set-contact question | `contacts`, profile/backend `null` |
-| Company-only lookup/resolution | live `$search-company` surface |
-| Ambiguous target, people, role/domain, or surface | `needs_input`; clarify once; no retrieval or guessed route |
+| Person identifier lookup | `engine + lookup`; deterministic and corpus-scoped |
+| People by role, function, level, or company archetype | `engine + gtm` |
+| People at a named company | `engine + gtm` with company constraints |
+| JD, job URL, role brief, or recruiting shortlist | `engine + recruiting` |
+| Company-only local relational or directory question | `sql`, profile/backend `null` |
+| Other relational/aggregate local question | `sql`, profile/backend `null` |
+| Contact-field or set-contact question | `contacts`, profile/backend `null` |
+| Ambiguous target, people, role/domain, corpus, or backend | `needs_input`; clarify once and perform no retrieval |
 
-`$search-company`, `$search-sql`, and `$search-contacts` remain distinct live
-surfaces. `$search-network` remains a recognized alias, including NanoClaw's
-live `/search-network` command and task/result UI.
+There is no public company-search command. Company resolution is an internal
+backend stage for company-constrained people search. `$search-sql` and
+`$search-contacts` remain explicit non-engine targets.
 
-Credentials and typed `plan_approved`/`judge_approved` booleans are not paid
-quality-run authorization. Paid validation requires separate explicit approval
-for the named cases, model, bounds, private output path, and maximum spend.
+All engine profiles use one persisted `SearchSpec`, one selected concrete
+runner, a person-grain `CandidateFrontier`, and typed `StageResult` outputs.
+Profile and explicit bounds select the layers; legacy fast/deep modes, task
+state, and alternate public search aliases are not current product surfaces.
+
+Credentials and typed approval booleans are not paid quality-run authorization.
+Paid validation requires separate explicit approval for named cases, model,
+bounds, private output path, and maximum spend.

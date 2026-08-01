@@ -19,10 +19,10 @@ REQUIRED_IDENTITY_FIELDS = (
 
 
 def canonical_json(value: Any) -> bytes:
-    """Return deterministic UTF-8 JSON bytes, excluding observation metadata."""
+    """Return deterministic UTF-8 JSON bytes without silently dropping nested fields."""
     def stable(item: Any) -> Any:
         if isinstance(item, dict):
-            return {key: stable(val) for key, val in sorted(item.items()) if key != "observed_at"}
+            return {key: stable(val) for key, val in sorted(item.items())}
         if isinstance(item, list):
             return [stable(val) for val in item]
         return item
@@ -60,8 +60,15 @@ def validate_snapshot(snapshot: dict[str, Any], required_person_ids: Iterable[st
             errors.append("Powerset snapshot membership enumeration was truncated")
         if not isinstance(snapshot.get("enumerated_record_count"), int):
             errors.append("Powerset snapshot record count proof is missing")
-        if snapshot.get("membership_id_count") != snapshot.get("enumerated_record_count"):
-            errors.append("Powerset snapshot count is not tied to membership proof")
+        counts = snapshot.get("namespace_record_counts")
+        if not isinstance(counts, dict) or set(counts) != {
+            "people", "summaries", "companies", "company_signals", "education", "schools"
+        }:
+            errors.append("Powerset snapshot namespace count proof is missing")
+        elif sum(counts.values()) != snapshot.get("enumerated_record_count"):
+            errors.append("Powerset snapshot namespace counts do not match total enumeration")
+        if not isinstance(snapshot.get("membership_id_count"), int):
+            errors.append("Powerset snapshot membership count proof is missing")
     elif backend not in {"local", "synthetic"}:
         errors.append(f"unsupported snapshot backend: {backend}")
     if backend == "synthetic" and source != "synthetic_test_fixture":
