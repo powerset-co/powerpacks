@@ -264,6 +264,54 @@ class IndexProfileTests(unittest.TestCase):
             self.assertEqual(counts, {record["person_id"]: 229})
 
 
+class NameTierDedupeTests(unittest.TestCase):
+    """The name indexes count DISTINCT person ids, not catalog rows: one
+    person imported from two sources (same id, one row each) is a unique
+    exact-name match, while two different people sharing a name (distinct
+    ids) stay ambiguous."""
+
+    def contact(self, phone: str, name: str = "") -> dict:
+        row = {key: "" for key in match_mod.CSV_HEADERS}
+        row.update({"phone": phone, "name": name})
+        return row
+
+    def test_same_person_from_two_sources_is_a_unique_name_match(self):
+        candidates = [
+            match_mod.Candidate(id="p-1", name="Jordan Bravo",
+                                emails=["jordan@example.com"]),   # gmail source row
+            match_mod.Candidate(id="p-1", name="Jordan Bravo",
+                                linkedin_url="https://www.linkedin.com/in/jordanbravo"),
+        ]
+        rows = [self.contact("+15550100", name="Jordan Bravo")]
+        stats = match_mod.apply_matching(rows, candidates)
+        self.assertEqual(stats["matched"], 1)
+        self.assertEqual(rows[0]["match_status"], "matched")
+        self.assertEqual(rows[0]["match_method"], "name_exact_linkedin")
+        self.assertEqual(rows[0]["matched_person_id"], "p-1")
+
+    def test_two_distinct_people_sharing_a_name_stay_ambiguous(self):
+        candidates = [
+            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
+            match_mod.Candidate(id="p-2", name="Jordan Bravo"),
+        ]
+        rows = [self.contact("+15550100", name="Jordan Bravo")]
+        stats = match_mod.apply_matching(rows, candidates)
+        self.assertEqual(stats["suggested"], 1)
+        self.assertEqual(rows[0]["match_method"], "name_exact_ambiguous")
+        self.assertIn("2 exact-name candidates", rows[0]["match_reason"])
+
+    def test_first_and_last_name_tiers_also_dedupe_by_id(self):
+        candidates = [
+            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
+            match_mod.Candidate(id="p-1", name="Jordan Bravo"),
+        ]
+        rows = [self.contact("+15550100", name="Jordan B")]
+        match_mod.apply_matching(rows, candidates)
+        # One distinct person named Jordan -> the prefix/last-initial tier may
+        # suggest, but never with a "N candidates" plural built from one human.
+        self.assertNotIn("2 ", rows[0]["match_reason"])
+
+
 class TierZeroMatchingTests(unittest.TestCase):
     def contact(self, phone: str, name: str = "") -> dict:
         row = {key: "" for key in match_mod.CSV_HEADERS}
