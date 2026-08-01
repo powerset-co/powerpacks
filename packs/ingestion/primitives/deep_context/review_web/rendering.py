@@ -1519,6 +1519,11 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     dossier_md = re.sub(
         r"(?ms)^#{2,4} Possible same person\s*?\n\s*_?None detected\.?_?\s*(?=^#{1,4} |\Z)",
         "", dossier_md)
+    # The facts table above already has a "Summary" row (profile-derived), and
+    # the dossier's own "## Summary" heading made the pane say Summary twice.
+    # Keep the dossier's summary TEXT as the section's lead paragraph; drop
+    # only the duplicate label.
+    dossier_md = re.sub(r"(?m)^#{2,4} Summary[ \t]*\n", "", dossier_md, count=1)
     dossier = markdown_to_html(dossier_md)
     children_debug = ""
     if children_md:

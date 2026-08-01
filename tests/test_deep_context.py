@@ -5271,6 +5271,10 @@ class TestDirectoryView(unittest.TestCase):
                         html.index("data-directory-tab='yes'"))
         self.assertIn("Alpha tester.", picked)                # ?person= pre-renders the pane
         self.assertNotIn("Pick a person", picked)
+        # The facts table already carries a "Summary" row; the dossier's own
+        # heading is dropped so the pane never says Summary twice (the summary
+        # TEXT stays, asserted above).
+        self.assertNotIn("<h4>Summary</h4>", picked)
 
     def test_directory_maybe_tab_is_the_burn_down_pile(self):
         parents = [self._parent("mel-maybe", "Mel Maybe")]  # only undecided people
