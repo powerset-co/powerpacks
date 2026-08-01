@@ -22,11 +22,13 @@ Outputs (fixed dir):
 
 Changelog:
   2026-07-31 (professional content v5): CONTENT POLICY block in the prompt —
-    dossiers are read in a professional context, so personal life appears only
-    as neutral congratulatory-grade milestones (wedding, child, graduation,
-    home, relocation); sexual/romantic content, drugs/illicit activity,
-    nightlife specifics, medical/mental-health details, gambling, and crude
-    language are excluded from every field and never quoted. Such messages
+    dossiers are read in a professional context, so every field focuses on
+    professional substance (work, deals, studies, skills, neutral relationship
+    labels); personal life appears only as neutral congratulatory-grade
+    milestones (wedding, child, graduation, home, relocation) and everything
+    else personal stays out of every field, with quoting limited to
+    professional content. Deliberately allowlist-phrased — the prompt names
+    what belongs, not the unsavory categories it displaces. Such messages
     still count toward `network_worth` as relationship evidence. Intentional
     semantic change: SYNTHESIS_CONTRACT_VERSION bumps and every dossier
     resynthesizes on the next run.
@@ -148,19 +150,18 @@ SYSTEM_PROMPT = (
     "over guesses; set low confidence when the signal is thin. Leave a field empty rather "
     "than inventing it.\n\n"
     "CONTENT POLICY — the profile is read in a professional context (think: an investor "
-    "reviewing their network). Every field you write — summary, relationship, topics, "
-    "events, shared context, and any quoted evidence — must stay professional. Naming the "
-    "relationship neutrally (friend, partner, family member, college roommate) is fine. "
-    "Personal life beyond that appears ONLY as notable congratulatory-grade milestones, "
-    "stated neutrally: engagement/wedding, a child born, a graduation, a new home, a big "
-    "relocation. NEVER include, in any field: sexual or romantic content (dating life, "
-    "hookups, breakups, intimacy), drug use or dealing or any illicit activity, "
-    "partying/nightlife specifics, medical/mental-health/therapy details, gambling, or "
-    "crude/explicit language — never quote it even verbatim. When a message mixes such "
-    "content with professional signal, extract only the professional fact; when it "
-    "carries none, extract nothing from it. These messages still count as relationship "
-    "evidence for `network_worth` (a real friendship is real), but their content stays "
-    "out of the profile.\n\n"
+    "reviewing their network). Focus every field you write — summary, relationship, "
+    "topics, events, shared context, and any quoted evidence — on professional "
+    "substance: work, companies, roles, projects, deals, investments, studies, skills, "
+    "public achievements, and how I know them (a neutral relationship label like friend, "
+    "partner, family member, or college roommate is fine). From their personal life, "
+    "include only notable congratulatory-grade milestones, stated neutrally: an "
+    "engagement or wedding, a child born, a graduation, a new home, a big relocation. "
+    "Everything else about their personal life stays out of the profile, in every field. "
+    "Quote a message only for its professional content; if a message carries no "
+    "professional substance and no milestone, extract nothing from it. Such messages "
+    "still count as relationship evidence for `network_worth` (a real friendship is "
+    "real), but their content stays out of the profile.\n\n"
     "`identifiers` is CONTACT INFO TO REACH THIS PERSON: email addresses and phone numbers "
     "ONLY, and only ones clearly the CONTACT's own — the address/number they send from, "
     "one in their signature, or one they explicitly state is theirs. NEVER include: any "

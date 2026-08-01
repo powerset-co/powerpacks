@@ -954,11 +954,18 @@ class TestSynthesizeExecute(unittest.TestCase):
 
     def test_prompt_carries_the_content_policy(self):
         # v5: dossiers are professional-context documents. The policy block,
-        # the milestone allowance, and the never-quote rule must stay pinned.
+        # the milestone allowance, and the professional-quoting rule must stay
+        # pinned — and the phrasing stays allowlist-shaped (name what belongs,
+        # not the categories it displaces).
         self.assertIn("CONTENT POLICY", synth.SYSTEM_PROMPT)
         self.assertIn("congratulatory-grade milestones", synth.SYSTEM_PROMPT)
-        self.assertIn("never quote it even verbatim", synth.SYSTEM_PROMPT)
+        self.assertIn("Everything else about their personal life stays out",
+                      synth.SYSTEM_PROMPT)
+        self.assertIn("Quote a message only for its professional content",
+                      synth.SYSTEM_PROMPT)
         self.assertIn("still count as relationship evidence", synth.SYSTEM_PROMPT)
+        self.assertNotIn("sexual", synth.SYSTEM_PROMPT)
+        self.assertNotIn("drug", synth.SYSTEM_PROMPT)
         self.assertEqual(synth.SYNTHESIS_CONTRACT_VERSION, "professional-content-v5")
 
     def test_plan_is_one_typed_value(self):
