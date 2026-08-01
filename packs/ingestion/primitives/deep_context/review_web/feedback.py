@@ -32,7 +32,7 @@ ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
 
 # Popover actions (worth decisions) plus the automatic one: a guided-retarget
 # submit files its guidance as feedback with no extra input.
-FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget"}
+FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget", "general"}
 
 
 def _clean(value: Any) -> str:
@@ -104,13 +104,27 @@ def submit_directory_feedback(request: FeedbackRequest) -> dict[str, Any]:
     return SendFeedback(request, env_file=ENV_FILE).run()
 
 
+# Last auto-post outcome when it was NOT submitted, exposed via /api/retargets
+# so the retarget panel can say "your feedback isn't landing" (needs_auth gets
+# a sign-in button). A later successful post clears it.
+FEEDBACK_ALERT: dict[str, str] = {"status": "", "error": ""}
+
+
 def post_feedback_quietly(request: FeedbackRequest) -> None:
-    """Fire-and-forget shipper for automatic feedback (retarget submits):
-    a failure is a stderr line, never a UI error."""
+    """Fire-and-forget shipper for automatic feedback (retarget submits): no
+    popover and no blocking, but the outcome is recorded in FEEDBACK_ALERT and
+    a failure is a stderr line."""
     try:
         payload = submit_directory_feedback(request)
         if payload.get("status") != "submitted":
+            FEEDBACK_ALERT["status"] = str(payload.get("status") or "failed")
+            FEEDBACK_ALERT["error"] = str(payload.get("error") or "")
             print(f"[feedback] not submitted: {payload.get('status')}"
                   f" {payload.get('error', '')}".rstrip(), file=sys.stderr, flush=True)
+        else:
+            FEEDBACK_ALERT["status"] = ""
+            FEEDBACK_ALERT["error"] = ""
     except Exception as exc:
+        FEEDBACK_ALERT["status"] = "failed"
+        FEEDBACK_ALERT["error"] = f"{type(exc).__name__}: {exc}"
         print(f"[feedback] failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)

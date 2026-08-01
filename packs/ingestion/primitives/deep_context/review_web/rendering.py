@@ -1428,7 +1428,19 @@ def _worth_action_buttons(parent: dict[str, Any], slug: str) -> str:
         buttons = button("yes", "Move to Yes")
     else:
         buttons = button("yes", "Move to Yes") + button("no", "Move to No")
-    return f"<div class='person-detail-actions'>{buttons}</div>"
+    # "…" overflow: general feedback that isn't a worth decision or a retarget
+    # (wrong/missing info, anything else). Opens the same popover, action
+    # "general", no move attached.
+    menu = (
+        "<div class='person-menu' data-person-menu>"
+        "<button type='button' class='button button-outline person-menu-toggle' "
+        "aria-label='More actions' data-menu-toggle>&#8943;</button>"
+        "<div class='person-menu-items' hidden>"
+        f"<button type='button' data-feedback-general data-pub='{esc(key)}' "
+        f"data-parent='{esc(slug)}'>Leave feedback</button>"
+        "</div></div>"
+    )
+    return f"<div class='person-detail-actions'>{buttons}{menu}</div>"
 
 
 def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
@@ -1499,6 +1511,14 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     # Older parent dossiers title themselves "Name (canonical)" — an internal
     # label, redundant on the pane (display-side; files are never rewritten).
     dossier_md = re.sub(r"(?m)^(#{1,3} .*?) \(canonical\)\s*$", r"\1", dossier_md)
+    # More pane-display trims: the header already shows the name, the Contact
+    # row above already carries the identifiers, and an empty "Possible same
+    # person" section says nothing — drop all three from the rendered dossier.
+    dossier_md = re.sub(r"\A\s*# [^\n]+\n", "", dossier_md, count=1)
+    dossier_md = re.sub(r"(?ms)^#{2,4} Identifiers\s*?\n.*?(?=^#{1,4} |\Z)", "", dossier_md)
+    dossier_md = re.sub(
+        r"(?ms)^#{2,4} Possible same person\s*?\n\s*_?None detected\.?_?\s*(?=^#{1,4} |\Z)",
+        "", dossier_md)
     dossier = markdown_to_html(dossier_md)
     children_debug = ""
     if children_md:

@@ -7,7 +7,9 @@ function announce(message, isError = false) {
   toast.classList.toggle("error", isError);
   toast.classList.add("show");
   window.clearTimeout(announce.timer);
-  announce.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
+  // Errors stay long enough to actually read (auth hints, network failures).
+  announce.timer = window.setTimeout(
+    () => toast.classList.remove("show"), isError ? 6000 : 1800);
 }
 
 function lock(button) {
@@ -26,7 +28,23 @@ async function post(path, values) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
   });
-  if (!response.ok) throw new Error((await response.text()) || "Could not save");
+  if (!response.ok) {
+    // Error bodies may be JSON payloads ({status, error}) — surface the human
+    // message ("not signed in to Powerset; run $powerset login first"), never
+    // the raw JSON blob. The status rides on the Error so callers can react
+    // (needs_auth -> offer the browser sign-in).
+    const text = (await response.text()) || "Could not save";
+    let message = text;
+    let status = "";
+    try {
+      const payload = JSON.parse(text);
+      message = payload.error || payload.status || text;
+      status = payload.status || "";
+    } catch { /* plain-text error body */ }
+    const error = new Error(message);
+    error.status = status;
+    throw error;
+  }
   return response.json();
 }
 
@@ -1260,6 +1278,40 @@ function setupDirectory() {
     });
   });
 
+  // "…" overflow menu: general feedback that isn't a worth decision or a
+  // retarget (wrong/missing info). Same popover, action "general", no move.
+  detail.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-menu-toggle]");
+    if (toggle) {
+      event.preventDefault();
+      const items = toggle.parentElement.querySelector(".person-menu-items");
+      if (items) items.hidden = !items.hidden;
+      return;
+    }
+    const general = event.target.closest("[data-feedback-general]");
+    if (!general) return;
+    event.preventDefault();
+    general.closest(".person-menu-items")?.setAttribute("hidden", "");
+    const slug = general.dataset.parent || activeSlug;
+    const entry = people.find((item) => item.slug === slug);
+    const anchor = detail.querySelector(".person-detail-actions")
+      || detail.querySelector(".person-detail");
+    if (!anchor) return;
+    feedbackPopover({
+      anchor,
+      contextLabel: `Feedback on ${entry?.name || "this person"} — wrong or missing info?`,
+      pub: general.dataset.pub || "",
+      slug,
+      action: "general",
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("[data-person-menu]")) return;
+    detail.querySelectorAll(".person-menu-items:not([hidden])")
+      .forEach((el) => { el.hidden = true; });
+  });
+
   // Optional-feedback popover, mirrored off the network-search-app
   // FeedbackForm: context label, auto-grow textarea, ⌘+Enter, send icon,
   // then a "Got it, thanks!" beat before it closes. Posts to /feedback where
@@ -1273,6 +1325,60 @@ function setupDirectory() {
 
   function closeFeedbackPopover() {
     document.querySelector(".feedback-popover")?.remove();
+  }
+
+  // needs_auth recovery: one click starts auth.py's browser sign-in flow on
+  // this machine (used by the feedback popover and the retarget panel alert).
+  function signInButton(doneHint) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "feedback-login";
+    button.textContent = "Sign in to Powerset";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Waiting for sign-in…";
+      try {
+        await post("/auth/login", {});
+        announce(`Sign-in opened in your browser — finish there${doneHint}.`);
+      } catch (error) {
+        announce(error.message, true);
+        button.disabled = false;
+        button.textContent = "Sign in to Powerset";
+      }
+    });
+    return button;
+  }
+
+  function offerSignIn(pop) {
+    if (pop.querySelector(".feedback-login")) return;
+    pop.append(signInButton(", then Send again"));
+  }
+
+  // Auto-filed feedback (retarget guidance) has no popover; when its
+  // fire-and-forget post fails, the panel says so instead of staying silent.
+  function renderFeedbackAlert(alert) {
+    if (!retargetPanel) return false;
+    let box = retargetPanel.querySelector("[data-feedback-alert]");
+    if (!alert || !alert.status) {
+      box?.remove();
+      return false;
+    }
+    if (!box) {
+      box = document.createElement("div");
+      box.dataset.feedbackAlert = "";
+      box.className = "retarget-feedback-alert";
+      retargetPanel.append(box);
+    }
+    box.textContent = "";
+    const line = document.createElement("small");
+    line.textContent = `Feedback not sent: ${alert.error || alert.status}`;
+    box.append(line);
+    if (alert.status === "needs_auth") box.append(signInButton(""));
+    if (alert.error !== renderFeedbackAlert.lastError) {
+      renderFeedbackAlert.lastError = alert.error;
+      announce(alert.error || "Feedback could not be sent", true);
+    }
+    return true;
   }
 
   function feedbackPopover({ anchor, contextLabel, pub, slug, action, onDone }) {
@@ -1321,6 +1427,7 @@ function setupDirectory() {
         await post("/feedback", { pub, parent_slug: slug, comment, action });
       } catch (error) {
         announce(error.message, true);
+        if (error.status === "needs_auth") offerSignIn(pop);
         send.disabled = false;
         skip.disabled = false;
         return;
@@ -1405,7 +1512,8 @@ function setupDirectory() {
       data = await response.json();
     } catch { return; }
     const items = data.items || [];
-    retargetPanel.hidden = !items.length;
+    const hasAlert = renderFeedbackAlert(data.feedback_alert);
+    retargetPanel.hidden = !items.length && !hasAlert;
     retargetItems.textContent = "";
     items.forEach((item) => retargetItems.append(retargetRow(item)));
     // A just-finished item announces itself and refreshes the open pane.

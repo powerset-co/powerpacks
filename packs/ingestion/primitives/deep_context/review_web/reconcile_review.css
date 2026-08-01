@@ -1358,6 +1358,71 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 
 .feedback-hint { font-size: 10px; opacity: .6; }
 
+.feedback-login {
+  align-self: stretch;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--secondary);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s;
+}
+
+.feedback-login:hover { background: var(--border); }
+
+.feedback-login:disabled { opacity: .5; pointer-events: none; }
+
+.retarget-feedback-alert {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--secondary);
+}
+
+.retarget-feedback-alert small { color: #b91c1c; font-size: 11px; }
+
+/* "…" overflow menu on the person pane */
+.person-menu { position: relative; display: inline-flex; }
+
+.person-menu-toggle { min-width: 36px; padding: 6px 8px; font-size: 15px; line-height: 1; }
+
+.person-menu-items {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, .12);
+}
+
+.person-menu-items button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.person-menu-items button:hover { background: var(--secondary); }
+
 .feedback-actions { display: inline-flex; align-items: center; gap: 6px; }
 
 .feedback-skip {

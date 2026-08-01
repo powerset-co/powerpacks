@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import threading
 import urllib.parse
@@ -72,7 +73,13 @@ from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapi
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
-from .feedback import FEEDBACK_ACTIONS, build_feedback_request, post_feedback_quietly, submit_directory_feedback
+from .feedback import (
+    FEEDBACK_ACTIONS,
+    FEEDBACK_ALERT,
+    build_feedback_request,
+    post_feedback_quietly,
+    submit_directory_feedback,
+)
 from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, run_guided_retarget
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
@@ -96,6 +103,25 @@ ENRICH_SCOPE = {"include_candidates": True, "include_plausibly_absent": True}
 
 
 _job_lock = threading.Lock()
+
+# Browser re-login, offered by the UI when a feedback post returns needs_auth.
+# auth.py runs the whole authorization-code flow itself (local callback server,
+# auto-opens the browser, writes credentials.json); one flow at a time.
+AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
+_auth_login_lock = threading.Lock()
+_auth_login: dict[str, Any] = {"proc": None}
+
+
+def start_auth_login() -> str:
+    """Spawn `auth.py login` unless one is already mid-flight; returns status."""
+    with _auth_login_lock:
+        proc = _auth_login["proc"]
+        if proc is not None and proc.poll() is None:
+            return "already_running"
+        _auth_login["proc"] = subprocess.Popen(
+            [sys.executable, str(AUTH_SCRIPT), "login"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "login_started"
 
 
 def _mark_enrichment_failed(error: str) -> None:
@@ -471,6 +497,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     "items": guided_queue.snapshot() if guided_queue else [],
                     "enabled": guided_queue is not None,
                     "estimated_cost_usd": ESTIMATED_COST_USD,
+                    "feedback_alert": dict(FEEDBACK_ALERT),
                 })
                 return
             if parsed.path == "/assets/reconcile-review.css":
@@ -666,7 +693,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path not in {"/decide", "/worth", "/complete", "/approve-enrichment",
-                                   "/retarget", "/feedback"}:
+                                   "/retarget", "/feedback", "/auth/login"}:
                 self.send_bytes(b"not found", "text/plain", status=404)
                 return
             origin = (self.headers.get("Origin") or "").strip()
@@ -677,6 +704,10 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             length = min(int(self.headers.get("Content-Length", "0")), 32_768)
             form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
             pub = (form.get("pub") or [""])[0]
+
+            if parsed.path == "/auth/login":
+                self.send_json({"ok": True, "status": start_auth_login()})
+                return
 
             if parsed.path == "/approve-enrichment":
                 try:

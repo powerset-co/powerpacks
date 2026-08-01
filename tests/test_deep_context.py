@@ -6053,7 +6053,10 @@ class TestGuidedRetargets(unittest.TestCase):
                 dossier_dir=base / "dossiers",
                 profile_cache_dir=base / "profiles").decode("utf-8")
             self.assertIn("data-retarget-panel", page)
-            self.assertNotIn("data-feedback-trigger", pane)  # popover rides worth clicks only
+            self.assertNotIn("data-feedback-trigger", pane)  # no standalone button;
+            # feedback rides worth clicks + the "…" general-feedback menu.
+            self.assertIn("data-person-menu", pane)
+            self.assertIn("data-feedback-general", pane)
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn("/api/retargets", script)
         self.assertIn("data-retarget-form", script)
@@ -6064,6 +6067,15 @@ class TestGuidedRetargets(unittest.TestCase):
         self.assertIn("onDone", script)
         self.assertIn("feedback-skip", script)
         self.assertIn("onDone: () => void applyWorth", script)
+        # needs_auth recovery: readable error + one-click browser sign-in.
+        self.assertIn("needs_auth", script)
+        self.assertIn("Sign in to Powerset", script)
+        self.assertIn("/auth/login", script)
+        self.assertIn("renderFeedbackAlert", script)   # auto-path failures surface too
+        server_src = (web_rendering.REVIEW_JS.parent / "server.py").read_text(encoding="utf-8")
+        self.assertIn("/auth/login", server_src)
+        self.assertIn("def start_auth_login", server_src)
+        self.assertIn("feedback_alert", server_src)
 
 
 if __name__ == "__main__":
