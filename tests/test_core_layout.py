@@ -22,7 +22,7 @@ class CoreLayoutTests(unittest.TestCase):
         search_pack = sorted(
             path.name for path in (ROOT / "packs/search/skills").iterdir() if path.is_dir()
         )
-        self.assertEqual(search_pack, ["search", "search-company", "search-sql"])
+        self.assertEqual(search_pack, ["search", "search-sql"])
         ingestion_pack = sorted(
             path.name for path in (ROOT / "packs/ingestion/skills").iterdir() if path.is_dir()
         )
