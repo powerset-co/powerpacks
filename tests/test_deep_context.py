@@ -952,6 +952,15 @@ class TestSynthesizeExecute(unittest.TestCase):
             self.assertEqual(payload.errors, 1)
             self.assertEqual(payload.stop_reasons, {"exhausted": 1})
 
+    def test_prompt_carries_the_content_policy(self):
+        # v5: dossiers are professional-context documents. The policy block,
+        # the milestone allowance, and the never-quote rule must stay pinned.
+        self.assertIn("CONTENT POLICY", synth.SYSTEM_PROMPT)
+        self.assertIn("congratulatory-grade milestones", synth.SYSTEM_PROMPT)
+        self.assertIn("never quote it even verbatim", synth.SYSTEM_PROMPT)
+        self.assertIn("still count as relationship evidence", synth.SYSTEM_PROMPT)
+        self.assertEqual(synth.SYNTHESIS_CONTRACT_VERSION, "professional-content-v5")
+
     def test_plan_is_one_typed_value(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

@@ -21,6 +21,15 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-07-31 (professional content v5): CONTENT POLICY block in the prompt —
+    dossiers are read in a professional context, so personal life appears only
+    as neutral congratulatory-grade milestones (wedding, child, graduation,
+    home, relocation); sexual/romantic content, drugs/illicit activity,
+    nightlife specifics, medical/mental-health details, gambling, and crude
+    language are excluded from every field and never quoted. Such messages
+    still count toward `network_worth` as relationship evidence. Intentional
+    semantic change: SYNTHESIS_CONTRACT_VERSION bumps and every dossier
+    resynthesizes on the next run.
   2026-07-31 (network-value worth v4): a personal connection with purely social
     threads still qualifies as yes when the person themselves is a confidently
     identified valuable network connection (founder/executive/investor/
@@ -122,7 +131,7 @@ DEFAULT_SATURATION_ROUNDS = 2      # ...or after this many batches add nothing n
 DEFAULT_MAX_BATCHES = 20           # ...or this many batches (~1600 msgs) — hard ceiling
 DEFAULT_MAX_RETRIES = 6
 DEFAULT_CHUNK_PEOPLE = 200         # people loaded into memory at once (streaming bound)
-SYNTHESIS_CONTRACT_VERSION = "professional-worth-v4"
+SYNTHESIS_CONTRACT_VERSION = "professional-content-v5"
 # Calibrated from real runs: ~10 chunks/s wall at high concurrency (ranged 6.7
 # on flex tier to 11.7 on default tier). Used only for the --dry-run ETA; actual
 # rate scales with --concurrency and your OpenAI usage tier.
@@ -138,6 +147,20 @@ SYSTEM_PROMPT = (
     "rough dates, and their contact identifiers. Prefer specific, evidence-backed facts "
     "over guesses; set low confidence when the signal is thin. Leave a field empty rather "
     "than inventing it.\n\n"
+    "CONTENT POLICY — the profile is read in a professional context (think: an investor "
+    "reviewing their network). Every field you write — summary, relationship, topics, "
+    "events, shared context, and any quoted evidence — must stay professional. Naming the "
+    "relationship neutrally (friend, partner, family member, college roommate) is fine. "
+    "Personal life beyond that appears ONLY as notable congratulatory-grade milestones, "
+    "stated neutrally: engagement/wedding, a child born, a graduation, a new home, a big "
+    "relocation. NEVER include, in any field: sexual or romantic content (dating life, "
+    "hookups, breakups, intimacy), drug use or dealing or any illicit activity, "
+    "partying/nightlife specifics, medical/mental-health/therapy details, gambling, or "
+    "crude/explicit language — never quote it even verbatim. When a message mixes such "
+    "content with professional signal, extract only the professional fact; when it "
+    "carries none, extract nothing from it. These messages still count as relationship "
+    "evidence for `network_worth` (a real friendship is real), but their content stays "
+    "out of the profile.\n\n"
     "`identifiers` is CONTACT INFO TO REACH THIS PERSON: email addresses and phone numbers "
     "ONLY, and only ones clearly the CONTACT's own — the address/number they send from, "
     "one in their signature, or one they explicitly state is theirs. NEVER include: any "
