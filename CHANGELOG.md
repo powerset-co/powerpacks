@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.10.0...powerpacks-v1.11.0) (2026-08-01)
+
+
+### Features
+
+* **deep-context:** visible feedback errors, one-click re-login, general-feedback menu ([#397](https://github.com/powerset-co/powerpacks/issues/397)) ([afc4499](https://github.com/powerset-co/powerpacks/commit/afc4499f49ce3bc9e8deb81a0a1fe2c7ca846a93))
+
 ## [1.10.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.9.0...powerpacks-v1.10.0) (2026-07-31)
 
 
