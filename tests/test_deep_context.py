@@ -5151,8 +5151,11 @@ class TestDirectoryView(unittest.TestCase):
 
     @staticmethod
     def _parent(slug: str, name: str, **candidate: object) -> dict:
+        # Confirmed by default: the directory only renders machine ("auto") or
+        # human ("yes") confirmed identities; pass approved="" for a pending one.
         base = {
             "pub": f"{slug}-pub", "full_name": name,
+            "approved": "auto", "action": "verify",
             "match_emails": [], "match_phones": [],
         }
         base.update(candidate)
@@ -5449,6 +5452,62 @@ class TestDirectoryView(unittest.TestCase):
                        "name": "Kai Keyless", "candidates": []}
             html = web_rendering.render_person_detail(keyless, base / "p", base / "d", **kwargs)
             self.assertNotIn("data-dir-worth", html)
+
+    def test_pending_candidate_renders_publess_in_directory(self):
+        # The directory shows only confirmed identities. A pending
+        # (needs_review) candidate renders exactly like a detached one: the
+        # person stays, the link/confidence/photo do not, and the guidance
+        # form still keys on the pub.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            kwargs = {"profile_cache_dir": base / "profiles"}
+            pending = self._parent(
+                "jordan-bravo", "Jordan Bravo", approved="", confidence=0.62,
+                url="https://www.linkedin.com/in/jordan-bravo-wrong")
+            html = web_rendering.render_person_detail(pending, base / "p", base / "d", **kwargs)
+            self.assertNotIn("linkedin.com/in/jordan-bravo-wrong", html)
+            self.assertNotIn("LinkedIn Confidence", html)
+            self.assertIn("Jordan Bravo", html)              # the person remains
+            self.assertIn("data-retarget-form", html)        # and is retargetable
+
+    def test_confirmed_profile_name_promotes_degraded_display_name(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            kwargs = {"profile_cache_dir": base / "profiles"}
+            # Placeholder surname + confirmed profile -> profile name wins.
+            degraded = self._parent("jordan-last-name-unknown",
+                                    "Jordan (last name unknown)",
+                                    full_name="Jordan Bravo")
+            html = web_rendering.render_person_detail(degraded, base / "p", base / "d", **kwargs)
+            self.assertIn("<h2>Jordan Bravo</h2>", html)
+            self.assertNotIn("last name unknown", html)
+            # Single-token name + confirmed two-token profile -> promoted.
+            single = self._parent("casey", "Casey", full_name="Casey Example")
+            html = web_rendering.render_person_detail(single, base / "p", base / "d", **kwargs)
+            self.assertIn("<h2>Casey Example</h2>", html)
+            # A familiar multi-token message name is kept over the profile's.
+            familiar = self._parent("jb", "JB Bravo", full_name="Jordan Bravo")
+            html = web_rendering.render_person_detail(familiar, base / "p", base / "d", **kwargs)
+            self.assertIn("<h2>JB Bravo</h2>", html)
+            # An UNCONFIRMED profile never promotes: candidate facts are
+            # stripped, so the degraded name stays.
+            pending = self._parent("alex-last-name-unknown",
+                                   "Alex (last name unknown)",
+                                   full_name="Alex Impostor", approved="")
+            html = web_rendering.render_person_detail(pending, base / "p", base / "d", **kwargs)
+            self.assertIn("Alex (last name unknown)", html)
+            self.assertNotIn("Alex Impostor", html)
+        # The sidebar island promotes the same way (inline snapshot name; no
+        # cache hydration needed when the snapshot carries full_name).
+        entries = web_rendering.directory_entries([
+            self._parent("jordan-last-name-unknown", "Jordan (last name unknown)",
+                         full_name="Jordan Bravo"),
+            self._parent("alex-last-name-unknown", "Alex (last name unknown)",
+                         full_name="Alex Impostor", approved=""),
+        ])
+        names = {e["slug"]: e["name"] for e in entries}
+        self.assertEqual(names["jordan-last-name-unknown"], "Jordan Bravo")
+        self.assertEqual(names["alex-last-name-unknown"], "Alex (last name unknown)")
 
     def test_person_detail_linkedin_confidence_badge(self):
         with tempfile.TemporaryDirectory() as dd:
