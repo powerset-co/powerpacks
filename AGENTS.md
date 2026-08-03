@@ -517,7 +517,10 @@ Routes:
   per-person dossier from message bodies (Gmail + iMessage/WhatsApp DMs),
   "context/dossier on a person", "who is <phone/name> in my messages", find
   same-person/merge candidates, staged worth/LinkedIn review, candidate lookup,
-  synthetic profiles, fan-in + Modal index + validate. This is the single
+  synthetic profiles, fan-in + Modal index + validate; `$deep-context tend` is
+  the weekly self-heal/upkeep pass ("tend my store", "self-heal", "weekly
+  maintenance") — free + codex-subscription websearch identity recovery, paid
+  work parked in a report. This is the single
   post-import processing surface; `$deep-setup` is retired →
   `packs/ingestion/skills/deep-context/SKILL.md`
 - `$clean-slate`, "clean slate", "pipeclean", "start over from scratch" —

@@ -38,6 +38,15 @@ Use the narrow path when the user names one:
   parents, and opens the directory.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
+- `$deep-context tend`, "tend my store", "weekly upkeep", "self-heal pass" ->
+  run only `bin/deep-context tend` (see the Tend section). Free plus
+  codex-subscription websearch; it never crosses a spend gate. If message or
+  Gmail sources look stale, offer to re-run `$import-messages` /
+  `$import-gmail` first so the pass heals against current data.
+- `$deep-context web-resolve` -> `bin/deep-context web-resolve --dry-run`
+  first to show targets, then the run ($0 metered, codex subscription). The
+  separate `web-resolve --propose` step spends OpenAI (~cents per find) —
+  say the count, then run it; invoking it is the approval.
   This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed
   dossier, including mixed-source people and people with an attached LinkedIn.
   It ignores cached machine and human worth for selection, never uses LinkedIn
@@ -463,6 +472,34 @@ uv run --project . python packs/indexing/primitives/validate_search_index/valida
 
 Pass only on `status: ok`.
 
+## Tend (weekly self-heal)
+
+`bin/deep-context tend` is the standing maintenance pass — safe to run on a
+schedule or whenever the store feels stale. One command; it chains, in order:
+
+1. `collect` — pick up new message bodies (free, local).
+2. `compose` + `dedupe` (tier-0 deterministic merge) + `parents` — rebuild
+   canonical people, prune ghosts and orphans (free).
+3. `web-resolve` — local websearch agents (codex subscription, $0 metered)
+   research every high-confidence wrong-LinkedIn detach the judge flagged,
+   writing per-person research profiles. A find is final; a not-found retries
+   after 30 days. Conservative by design: the agent proposes nothing it could
+   not corroborate beyond the name.
+4. `validate` + `tend-report` — one JSON report pricing the paid work the pass
+   deliberately did NOT run:
+   - `resynthesis` — what `synthesize` would spend now (stale facts).
+   - `web_resolve_propose` — finds awaiting `web-resolve --propose` (the real
+     OpenAI identity judge, ~cents per find; judged proposals land as pending
+     retargets for the normal review/auto-stand flow, and those people drop
+     out of the paid Parallel queue).
+   - `parallel_tail` — what `reconcile-deep-research` would cost for the
+     people websearch could not crack.
+
+Present the report to the user as parked actions with their estimates; run a
+paid one only on their word. Before tend, if imports are stale, offer the
+`$import-messages` / `$import-gmail` re-run + `realize` so matcher fixes heal
+the store first (free, deterministic).
+
 ## Completion report
 
 Report terse counts: people/candidates dossiered, duplicate merges, explicit
@@ -480,6 +517,7 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/reconcile/              verdicts + reconcile manifest
 .powerpacks/deep-context/reconcile/deep-research/research_queue.csv
 .powerpacks/deep-context/reconcile/deep-research/manifest.json  fixed enrichment progress
+.powerpacks/deep-context/reconcile/web-resolve/  per-person websearch research + manifest
 .powerpacks/deep-context/review/manifest.json     current human stage completion
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
 .powerpacks/network-import/overrides/review.csv   durable worth/link decisions

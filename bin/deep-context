@@ -107,6 +107,13 @@ usage: bin/deep-context <command> [args]
                machine verdict incl. auto-verify/detach — replay the full
                staged journey without re-spending (free; dry run by default,
                --apply writes after .bkup backups)
+  web-resolve  find the right LinkedIn for detaches via local websearch agents
+               (codex subscription auth — $0 metered; --dry-run lists targets;
+               a separate `web-resolve --propose` judges the finds into pending
+               retargets — OpenAI, ~cents per find)
+  tend         weekly self-heal: free upkeep only — collect, compose, tier-0
+               dedupe, parents, web-resolve, validate, then one report pricing
+               the paid work it deliberately did NOT run
   reconcile-deep-research   find the right LinkedIn for detaches (Parallel.ai, $-gated)
   apply-retargets           enrich approved retargets -> retarget-people.csv
   persist-review-identities persist approved real LinkedIn identities -> directory.csv
@@ -299,6 +306,25 @@ case "$cmd" in
     else
       "${PY[@]}" "$PKG.reconcile_review_web" status "$@"
     fi
+    ;;
+  web-resolve)
+    # $0-metered identity recovery: local websearch agents (codex subscription)
+    # research the same detach queue the paid path would, proposing pending
+    # retargets for the review UI. The Parallel queue shrinks automatically.
+    "${PY[@]}" "$PKG.web_resolve" "$@"
+    ;;
+  tend)
+    # Weekly self-heal. Chains ONLY free / subscription-auth stages, in order,
+    # then prints one report pricing the paid work it did not run. Paid stages
+    # (synthesize, cluster, reconcile, reconcile-deep-research) keep their own
+    # separate estimate + approval flows — tend never crosses a spend gate.
+    "${PY[@]}" "$PKG.collect_person_context"
+    "${PY[@]}" "$PKG.compose_dossier"
+    "${PY[@]}" "$PKG.cluster_merge_candidates" --deterministic-only
+    "${PY[@]}" "$PKG.build_parents"
+    "${PY[@]}" "$PKG.web_resolve" "$@"
+    "${PY[@]}" "$PKG.validate_dossiers"
+    "${PY[@]}" "$PKG.tend_report"
     ;;
   reconcile-deep-research)
     # Find the right identity for high-confidence wrong_person detaches. Every

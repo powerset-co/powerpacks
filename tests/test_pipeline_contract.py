@@ -483,16 +483,16 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertIn("messages_match_local", report["edges"]["messages_import"])
 
     def test_the_deep_context_stage_is_registered(self) -> None:
-        # The twelve deep-context nodes; a rename or a lost registration import
+        # The thirteen deep-context nodes; a rename or a lost registration import
         # must not pass silently.
         names = set(check_graph(self._declared_nodes())["nodes"])
         self.assertLessEqual({
             "deep_owner", "deep_collect", "deep_synthesize", "deep_compose",
             "deep_cluster", "deep_parents", "deep_reconcile", "deep_research",
-            "deep_assemble_synthetic", "deep_prefetch", "deep_apply_retargets",
-            "deep_persist_review",
+            "deep_web_resolve", "deep_assemble_synthetic", "deep_prefetch",
+            "deep_apply_retargets", "deep_persist_review",
         }, names)
-        self.assertEqual(len(names), 26)
+        self.assertEqual(len(names), 27)
 
     def test_review_csv_has_two_disjoint_machine_writers(self) -> None:
         # review.csv is the graph's most-shared mutable file: synthesize owns the
