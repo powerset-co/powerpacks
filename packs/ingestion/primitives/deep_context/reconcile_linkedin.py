@@ -45,8 +45,9 @@ Changelog:
     cached), then re-splits the judgeable pool — rows that used to short-circuit
     to needs_review "no usable LinkedIn profile" reach the LLM judge instead.
     The dry run reports `profile_fetch_misses` + `estimated_rapidapi_credits`;
-    `--no-fetch` restores the old cache-only behavior; keyless installs skip
-    the fetch and keep it. --no-llm (free) runs never fetch.
+    keyless installs skip the fetch cleanly. No switches: the CLI `--no-llm`
+    flag (docs said "never pass it") is gone too — `no_llm` stays a
+    constructor-only testing seam, and deterministic/no-key paths never fetch.
   2026-07-30 (style): the verdict->action policy is now three named values plus two
     first-rule-wins functions (`decide_plain_task`, `decide_conflict_group`) that
     `decide_actions` merely applies — the decision is readable without simulating the
@@ -1676,7 +1677,6 @@ class ReconcileLinkedin(Node):
         limit: int = 0,
         no_overrides: bool = False,
         no_llm: bool = False,
-        no_fetch: bool = False,
         reapply: bool = False,
     ) -> None:
         self.index_json = Path(index_json or INDEX_JSON)
@@ -1700,7 +1700,6 @@ class ReconcileLinkedin(Node):
         self.limit = limit
         self.no_overrides = no_overrides
         self.no_llm = no_llm
-        self.no_fetch = no_fetch
         self.reapply = reapply
 
     def bindings(self) -> dict[str, str]:
@@ -1758,11 +1757,11 @@ class ReconcileLinkedin(Node):
         usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         use_llm = not self.no_llm
         # Prefer cache, always retrieve: a paid run hydrates the profiles the judge
-        # is missing (RapidAPI, cached; keyless installs skip) and re-splits the
-        # judgeable pool so those rows reach the LLM instead of short-circuiting
-        # to "no usable LinkedIn profile". --no-fetch restores cache-only.
+        # is missing (RapidAPI, cached; keyless installs skip cleanly) and
+        # re-splits the judgeable pool so those rows reach the LLM instead of
+        # short-circuiting to "no usable LinkedIn profile".
         fetch_counts: dict[str, int] = {}
-        if use_llm and not self.no_fetch:
+        if use_llm:
             fetch_counts = fetch_missing_profiles(tasks, people, self.profile_cache_dir)
             if fetch_counts.get("fetch_ok"):
                 judgeable = [
@@ -1928,9 +1927,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Only re-judge the first N tasks (0 = all). Results merge into verdicts.jsonl.")
     p.add_argument("--dry-run", action="store_true", help="Estimate cost only; no spend, no writes")
     p.add_argument("--no-overrides", action="store_true", help="Write verdicts but do NOT update the override table")
-    p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
-    p.add_argument("--no-fetch", action="store_true",
-                   help="Cache-only: do not RapidAPI-fetch missing attached profiles before judging")
     p.add_argument("--reapply", action="store_true",
                    help="Re-decide/write overrides from existing verdicts.jsonl (no re-judging, no OpenAI spend)")
     return p
@@ -1971,8 +1967,7 @@ def main(argv: list[str] | None = None) -> int:
         slug=args.slug,
         limit=args.limit,
         no_overrides=args.no_overrides,
-        no_llm=args.no_llm,
-        no_fetch=args.no_fetch,
+        
         reapply=args.reapply,
     ).run()
     emit(payload.to_payload())

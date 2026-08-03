@@ -236,10 +236,9 @@ bin/deep-context parents
 ```
 
 `parents` is free and idempotent — run it after whichever tier you reached, so
-the canonical layer always matches the merges that exist. Never pass `--no-llm`
-to `cluster` on a real network: that flag is the offline test stub and guesses
-the pairs it cannot settle, merging different people who happen to share a family
-email or a front-desk number. `dedupe` is the free path.
+the canonical layer always matches the merges that exist. `cluster` always
+judges with the LLM (the offline stub is a constructor-only testing seam, no
+longer a CLI flag); `dedupe` is the free path.
 
 Candidate dossiers participate, so candidate-to-existing-person merges happen
 with message context before any paid identity lookup. A candidate merged into an

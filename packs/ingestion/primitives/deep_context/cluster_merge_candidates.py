@@ -1044,9 +1044,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--deterministic-only", action="store_true",
                    help="Free TIER 0: merge only the code-decided pairs (identical name + shared "
                         "identifier), carry prior verdicts forward, leave the rest unjudged. No spend.")
-    p.add_argument("--no-llm", action="store_true",
-                   help="Offline/test stub: also guesses the unsettled pairs (not reusable as cache). "
-                        "Use --deterministic-only on a real network.")
     p.add_argument("--refresh", action="store_true",
                    help="Ignore the cached merge-verdicts.csv and re-judge every pair from scratch")
     return p
@@ -1069,7 +1066,6 @@ def main(argv: list[str] | None = None) -> int:
         timeout=args.timeout,
         max_retries=args.max_retries,
         deterministic_only=args.deterministic_only,
-        no_llm=args.no_llm,
         refresh=args.refresh,
     )
     # The estimate never touches the node template: it must not write (and so must
