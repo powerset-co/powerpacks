@@ -480,6 +480,19 @@ class RecruitingPipelineTests(unittest.TestCase):
             "schools": [],
         }
 
+        def live_schema(name):
+            contract = json.loads(
+                (
+                    Path(__file__).resolve().parents[1]
+                    / "packs/search/contracts/turbopuffer"
+                    / f"{name}.namespace.json"
+                ).read_text()
+            )
+            schema = {row["name"]: {"type": row["type"]} for row in contract["attributes"]}
+            if contract.get("vector"):
+                schema["vector"] = {"type": "vector"}
+            return schema
+
         async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
             rows = namespace_rows[name]
             return {
@@ -502,12 +515,17 @@ class RecruitingPipelineTests(unittest.TestCase):
                 "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
                 new=mock.AsyncMock(side_effect=enumerate_namespace),
             ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                side_effect=live_schema,
+            ),
         )
         with self.run_dir() as root:
             with (
                 snapshot_patches[0],
                 snapshot_patches[1],
                 snapshot_patches[2],
+                snapshot_patches[3],
                 mock.patch(
                     "packs.search.pipeline.recruiting._production_plan_adapter",
                     new=plan_adapter,
@@ -543,6 +561,10 @@ class RecruitingPipelineTests(unittest.TestCase):
                 mock.patch(
                     "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
                     new=mock.AsyncMock(side_effect=enumerate_namespace),
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                    side_effect=live_schema,
                 ),
                 mock.patch(
                     "packs.search.pipeline.recruiting._production_judge_adapter",
