@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
 from typing import Any, Mapping
+
+CANDIDATE_FRONTIER_NAME = "candidate-frontier.json"
 
 
 def _union(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
@@ -17,6 +20,35 @@ class ProbeMatch:
     probe_id: str | None = None
     probe_family: str | None = None
     score: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.lane, str) or not self.lane:
+            raise ValueError("ProbeMatch lane is required")
+        if isinstance(self.rank, bool) or not isinstance(self.rank, int) or self.rank < 1:
+            raise ValueError("ProbeMatch rank must be a positive integer")
+        for name in ("probe_id", "probe_family"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"ProbeMatch {name} must be a non-empty string or null")
+        if self.score is not None and (
+            isinstance(self.score, bool) or not isinstance(self.score, (int, float))
+        ):
+            raise ValueError("ProbeMatch score must be numeric or null")
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ProbeMatch":
+        expected = set(cls.__dataclass_fields__)
+        unknown = set(data) - expected
+        missing = {"lane", "rank"} - set(data)
+        if unknown or missing:
+            raise ValueError(f"invalid ProbeMatch fields: missing={sorted(missing)} unknown={sorted(unknown)}")
+        return cls(
+            lane=data["lane"],
+            rank=data["rank"],
+            probe_id=data.get("probe_id"),
+            probe_family=data.get("probe_family"),
+            score=data.get("score"),
+        )
 
 
 @dataclass(frozen=True)
@@ -59,7 +91,7 @@ class CandidateRecord:
             matched_position_ids=tuple(data.get("matched_position_ids") or ()),
             matched_position_indexes=tuple(int(v) for v in (data.get("matched_position_indexes") or ())),
             source_lanes=tuple(data.get("source_lanes") or ()),
-            found_by=tuple(ProbeMatch(**row) for row in (data.get("found_by") or ())),
+            found_by=tuple(ProbeMatch.from_dict(row) for row in (data.get("found_by") or ())),
             backend=str(data.get("backend") or ""),
             hard_filter_evidence=dict(data.get("hard_filter_evidence") or {}),
             structured=dict(data.get("structured") or {}),
@@ -123,6 +155,11 @@ class CandidateFrontier:
     limit: int | None
     truncated: bool
 
+    def __post_init__(self) -> None:
+        person_ids = tuple(row.person_id for row in self.candidates)
+        if len(person_ids) != len(set(person_ids)):
+            raise ValueError("CandidateFrontier contains duplicate person IDs")
+
     @classmethod
     def merge(
         cls, records: tuple[CandidateRecord, ...] | list[CandidateRecord], limit: int | None = None
@@ -150,6 +187,44 @@ class CandidateFrontier:
             "limit": self.limit,
             "truncated": self.truncated,
         }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "CandidateFrontier":
+        expected = {"schema_version", "candidates", "input_count", "output_count", "limit", "truncated"}
+        unknown = set(data) - expected
+        missing = expected - set(data)
+        if unknown or missing:
+            raise ValueError(f"invalid CandidateFrontier fields: missing={sorted(missing)} unknown={sorted(unknown)}")
+        if data["schema_version"] != "candidate.frontier.v1":
+            raise ValueError("unsupported CandidateFrontier schema_version")
+        if not isinstance(data["candidates"], list):
+            raise ValueError("CandidateFrontier candidates must be an array")
+        for field in ("input_count", "output_count"):
+            if isinstance(data[field], bool) or not isinstance(data[field], int):
+                raise ValueError(f"CandidateFrontier {field} must be an integer")
+        if data["limit"] is not None and (
+            isinstance(data["limit"], bool) or not isinstance(data["limit"], int)
+        ):
+            raise ValueError("CandidateFrontier limit must be an integer or null")
+        if not isinstance(data["truncated"], bool):
+            raise ValueError("CandidateFrontier truncated must be boolean")
+        candidates = tuple(CandidateRecord.from_dict(row) for row in data["candidates"])
+        frontier = cls(
+            candidates=candidates,
+            input_count=data["input_count"],
+            output_count=data["output_count"],
+            limit=data["limit"],
+            truncated=data["truncated"],
+        )
+        if frontier.output_count != len(candidates):
+            raise ValueError("CandidateFrontier output_count does not match candidates")
+        return frontier
+
+    @classmethod
+    def read(cls, path: str | Path) -> "CandidateFrontier":
+        from packs.search.primitives.validate_artifact.validate_artifact import validate_file
+
+        return cls.from_dict(validate_file("candidate-frontier", Path(path)))
 
 
 @dataclass(frozen=True)

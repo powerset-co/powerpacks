@@ -14,6 +14,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from .artifacts import REVIEW_EVIDENCE_NAME, ReviewEvidenceSnapshot
 from .filters import hard_filter_validation_artifact, unsupported_hard_filters, validation_findings
 from .frontier import CandidateFrontier, CandidateRecord, StageResult, lane_yield_counts
 from .models import RankMode, SearchBounds, SearchPlan, SearchSpec
@@ -32,6 +33,7 @@ from .recruiting_stages import (
     validate_review_plan,
     TransientJudgeError,
 )
+from .stage_membership import STAGE_MEMBERSHIP_NAME, build_stage_membership
 
 EMPTY = CandidateFrontier((), 0, 0, None, False)
 JudgeAdapter = Callable[[CandidateRecord, Mapping[str, Any]], Mapping[str, Any]]
@@ -248,6 +250,38 @@ def _private_root(root: str | Path | None) -> Path | None:
     if resolved != allowed and allowed not in resolved.parents:
         raise ValueError("recruiting artifacts must be written under .powerpacks/search-runs")
     return resolved
+
+
+def _completed_empty(
+    *,
+    root: Path | None,
+    spec: SearchSpec,
+    paths: dict[str, str],
+    binding: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    report: Mapping[str, Any],
+    stage: str,
+    counts: Mapping[str, int],
+) -> StageResult:
+    membership = build_stage_membership(
+        sourced=[], hydrated=[], triaged=[], ranked=(), shortlist_person_ids=set(),
+        status="completed_empty", epochs=0, bounds=spec.bounds,
+    )
+    audit = hard_filter_validation_artifact(
+        (), spec, corpus_snapshot_hash=str(binding["corpus_sha256"])
+    )
+    for key, name, value in (
+        (STAGE_MEMBERSHIP_NAME, STAGE_MEMBERSHIP_NAME, membership.to_dict()),
+        ("candidate-frontier.json", "candidate-frontier.json", EMPTY.to_dict()),
+        ("hard_filter_validation_json", "hard-filter-validation.json", audit),
+    ):
+        path = _write(root, name, value)
+        if path:
+            paths[key] = path
+    return StageResult(
+        stage, "completed_empty", EMPTY, counts=dict(counts), capability_report=dict(report),
+        artifact_paths=paths, hard_filter_validation=audit, corpus_observation=dict(snapshot),
+    )
 
 
 def _production_plan_adapter(jd: str, spec: SearchSpec) -> Mapping[str, Any]:
@@ -480,6 +514,9 @@ def _validate_hydrated(
 ) -> tuple[tuple[CandidateRecord, ...], tuple[CandidateRecord, ...]]:
     accepted, reviewed = [], []
     for row in frontier.candidates:
+        if row.hydration_disposition != "hydrated":
+            reviewed.append(row)
+            continue
         findings = validation_findings(row.hydrated_profile, spec, sources, row.source_lanes)
         disposition = "accepted" if not findings["violations"] and not findings["unknowns"] else "quarantined"
         validated = replace(
@@ -676,6 +713,13 @@ def _run_recruiting(
             )
         except Exception as exc:
             return StageResult("review", "needs_input", EMPTY, capability_report=report, errors=(str(exc),))
+    evidence_hashes = snapshot.get("evidence_hashes")
+    if not isinstance(evidence_hashes, dict):
+        return StageResult(
+            "review", "failed_binding", EMPTY, capability_report=report,
+            errors=("review corpus snapshot is missing evidence_hashes",),
+        )
+    review_evidence = ReviewEvidenceSnapshot.from_hashes(evidence_hashes)
     paths = {}
     for key, name, value in (
         ("review_plan_json", "review/plan.json", plan),
@@ -684,6 +728,7 @@ def _run_recruiting(
         ("review_policy_json", "review/policy.json", plan["recruiter_policy"]),
         ("review_source_json", "review/source.json", {**source_metadata, "normalized_jd": jd, "sha256": binding["jd_sha256"]}),
         ("review_corpus_json", "review/corpus.json", snapshot),
+        ("review_evidence_json", REVIEW_EVIDENCE_NAME, review_evidence.to_dict()),
     ):
         path = _write(root, name, value)
         if path:
@@ -745,7 +790,10 @@ def _run_recruiting(
         return StageResult("resolve_sources", "needs_input", EMPTY, errors=tuple(sources.unresolved_required_inputs))
     filters = runner.apply_hard_filters(spec, sources)
     if filters.eligible_count == 0:
-        return StageResult("hard_filter", "completed_empty", EMPTY, counts={"eligible_pool": 0})
+        return _completed_empty(
+            root=root, spec=spec, paths=paths, binding=binding, snapshot=snapshot,
+            report=report, stage="hard_filter", counts={"eligible_pool": 0, "total_sourced": 0},
+        )
     resolved_at = time.monotonic()
 
     probes = generate_initial_probes(spec, plan)
@@ -761,7 +809,12 @@ def _run_recruiting(
     sourced_records = list(frontier.candidates)
     sourced_person_ids = {row.person_id for row in frontier.candidates}
     if not frontier.candidates:
-        return StageResult("source", "completed_empty", frontier)
+        return _completed_empty(
+            root=root, spec=spec, paths=paths, binding=binding, snapshot=snapshot,
+            report=report, stage="source",
+            counts={"eligible_pool": filters.eligible_count, "initial_probes": len(probes),
+                    "probe_failures": len(failures), "total_sourced": 0},
+        )
     frontier = runner.hydrate(frontier)
     survivors, reviewed_initial = _validate_hydrated(spec, sources, frontier)
     audit_rows: list[CandidateRecord] = list(reviewed_initial)
@@ -782,6 +835,7 @@ def _run_recruiting(
         )
     )
     judge_queue = unjudged[: spec.bounds.judge_candidate_limit]
+    triage_records = list(unjudged)
     judged: list[CandidateRecord] = []
     model_calls = 0
     budget_capped = initial_source_capped
@@ -855,6 +909,7 @@ def _run_recruiting(
             if not net_new:
                 terminal = "completed_converged"
                 break
+            triage_records.extend(net_new)
             new_judged = []
             for row in net_new:
                 if (
@@ -925,7 +980,18 @@ def _run_recruiting(
     sendable = [row.to_dict() for row in presented if row.deterministic_gates.get("sendable")]
     bench = [row.to_dict() for row in presented if not row.deterministic_gates.get("shortlist")]
     unjudged_rows = [row.to_dict() for row in frontier.candidates if not row.judge or row.judge.get("status") != "judged"]
+    stage_membership = build_stage_membership(
+        sourced=sourced_records,
+        hydrated=audit_rows,
+        triaged=triage_records,
+        ranked=frontier.candidates,
+        shortlist_person_ids={row["person_id"] for row in shortlist},
+        status=terminal,
+        epochs=epochs,
+        bounds=spec.bounds,
+    )
     for name, value, jsonl in (
+        (STAGE_MEMBERSHIP_NAME, stage_membership.to_dict(), False),
         ("candidate-frontier.json", frontier.to_dict(), False),
         ("candidate-frontier.jsonl", [row.to_dict() for row in frontier.candidates], True),
         ("stages/probe-failures.json", failures, False),

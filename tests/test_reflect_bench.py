@@ -10,6 +10,7 @@ import unittest
 import subprocess
 import shutil
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +19,16 @@ TESTS_DIR = ROOT / "tests"
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 from test_score_funnel import FunnelFixture  # noqa: E402
+from test_recruiting_pipeline import (  # noqa: E402
+    FakeRunner,
+    canonical_hash as recruiting_hash,
+    critic_adapter,
+    good_judge,
+    plan_adapter,
+    recruiting_spec,
+    run_recruiting,
+)
+from packs.search.pipeline.artifacts import persist_result
 
 
 def _load(name: str, path: Path):
@@ -53,21 +64,59 @@ def _score_args(fx: FunnelFixture) -> argparse.Namespace:
     local = bench.GT_DIR / fx.dir.name
     local.mkdir(parents=True, exist_ok=True)
     case = local / "case.json"
-    spec = {"profile": "recruiting", "query": "Synthetic systems role"}
-    case.write_text(json.dumps({
-        "schema_version": "reflect.case.v1", "case_id": fx.dir.name,
-        "public_source": {"reference": "https://example.invalid/synthetic-role", "content_hash": "1" * 64},
-        "reviewed_search_spec": {"content": spec, "content_hash": bench.canonical_hash(spec)},
-    }, indent=2) + "\n")
+    base_spec = recruiting_spec()
+    plan = {"schema_version": "synthetic.review-plan.v1", "role": "Synthetic systems role"}
+    run_spec = replace(
+        base_spec,
+        bounds=replace(base_spec.bounds, frontier_limit=2),
+        corpus=replace(
+            base_spec.corpus,
+            content_hash="5" * 64,
+            schema_hash=bench.canonical_hash({"people": "4" * 64}),
+            membership_hash="3" * 64,
+        ),
+        recruiting=replace(base_spec.recruiting, reviewed_plan_hash=bench.canonical_hash(plan)),
+    )
+    spec = run_spec.to_dict()
     person_ids = [f"p{i}" for i in range(1, 12)] + ["p20"]
     evidence = {pid: bench.canonical_hash({"synthetic": pid}) for pid in person_ids}
     snapshot_doc = {
-        "schema_version": "reflect.corpus_snapshot.v1", "backend": "synthetic",
-        "source": "synthetic_test_fixture", "verification_status": "verified_comparable",
+        "schema_version": "reflect.corpus_snapshot.v1", "backend": "local",
+        "source": "local_deterministic_snapshot", "verification_status": "verified_comparable",
         "set_id": "synthetic-set", "operator_scope_hash": "2" * 64, "membership_hash": "3" * 64,
-        "namespace_schema_hashes": {"people": "4" * 64}, "native_content_version": "synthetic-v1",
+        "namespace_schema_hashes": {"people": "4" * 64}, "scoped_records_hash": "5" * 64,
         "evidence_hashes": evidence,
     }
+    run_corpus = dict(snapshot_doc)
+    stable_run_corpus = {key: value for key, value in run_corpus.items() if key != "observed_at"}
+    review_dir = fx.dir / "review"
+    review_dir.mkdir(exist_ok=True)
+    (fx.dir / "search_spec.json").write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+    (review_dir / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+    (review_dir / "corpus.json").write_text(json.dumps(run_corpus, indent=2, sort_keys=True) + "\n")
+    (review_dir / "source.json").write_text(json.dumps({
+        "normalized_jd": run_spec.recruiting.source,
+    }, indent=2, sort_keys=True) + "\n")
+    review_evidence = bench.ReviewEvidenceSnapshot.from_hashes(evidence)
+    (review_dir / "evidence.json").write_text(
+        json.dumps(review_evidence.to_dict(), indent=2, sort_keys=True) + "\n"
+    )
+    (review_dir / "binding.json").write_text(json.dumps({
+        "schema_version": "recruiting.review-binding.v1",
+        "plan_sha256": run_spec.recruiting.reviewed_plan_hash,
+        "source_sha256": bench.canonical_hash(run_spec.recruiting.source),
+        "jd_sha256": bench.canonical_hash(run_spec.recruiting.source),
+        "corpus_sha256": bench.canonical_hash(stable_run_corpus),
+        "corpus": stable_run_corpus,
+    }, indent=2, sort_keys=True) + "\n")
+    case.write_text(json.dumps({
+        "schema_version": "reflect.case.v1", "case_id": fx.dir.name,
+        "public_source": {
+            "reference": "https://example.invalid/synthetic-role",
+            "content_hash": bench.canonical_hash(run_spec.recruiting.source),
+        },
+        "reviewed_search_spec": {"content": spec, "content_hash": bench.canonical_hash(spec)},
+    }, indent=2) + "\n")
     snapshot = local / "snapshot.json"
     snapshot.write_text(json.dumps(snapshot_doc) + "\n")
     labels = [{"person_id": f"p{i}", "evidence_hash": evidence[f"p{i}"], "decision": "eligible_bench",
@@ -84,19 +133,50 @@ def _score_args(fx: FunnelFixture) -> argparse.Namespace:
     }
     gt = local / "ground-truth.json"
     gt.write_text(json.dumps(gt_doc) + "\n")
-    hard_filter = local / "hard-filter-validation.json"
+    hard_filter = fx.dir / "hard-filter-validation.json"
+    membership = json.loads((fx.dir / "stage-membership.json").read_text())
+    violations = [
+        {"person_id": row["person_id"], "reason_code": "synthetic_filter"}
+        for row in membership["candidates"] if row["disposition"] == "hard_filter_quarantined"
+    ]
     hard_filter.write_text(json.dumps({
-        "schema_version": "reflect.hard_filter_validation.v1", "case_id": fx.dir.name,
-        "case_hash": bench._file_hash(case), "corpus_snapshot_hash": bench.snapshot_identity(snapshot_doc),
-        "reviewed_count": len(evidence), "violation_count": 0, "violations": [],
-        "producer": "synthetic_contract_fixture", "generated_at": "2026-07-31T00:00:00Z",
+        "schema_version": "reflect.hard_filter_validation.v1", "case_id": "production",
+        "case_hash": bench.canonical_hash(spec), "corpus_snapshot_hash": bench.canonical_hash(stable_run_corpus),
+        "reviewed_count": membership["total_sourced"], "violation_count": len(violations), "violations": violations,
+        "producer": "typed_runner", "generated_at": "2026-07-31T00:00:00Z",
     }) + "\n")
+    manifest_artifacts = {
+        "search_spec_json": "search_spec.json",
+        "review_plan_json": "review/plan.json",
+        "review_binding_json": "review/binding.json",
+        "review_corpus_json": "review/corpus.json",
+        "review_source_json": "review/source.json",
+        "review_evidence_json": "review/evidence.json",
+        "stage-membership.json": "stage-membership.json",
+        "candidate-frontier.json": "candidate-frontier.json",
+        "hard_filter_validation_json": "hard-filter-validation.json",
+    }
+    (fx.dir / "manifest.json").write_text(json.dumps({
+        "schema_version": "search.manifest.v1",
+        "artifacts": {
+            key: {"path": relative, "sha256": bench._file_hash(fx.dir / relative)}
+            for key, relative in manifest_artifacts.items()
+        },
+    }, indent=2) + "\n")
     meta = bench.SUITE_DIR / fx.dir.name
     meta.mkdir(parents=True, exist_ok=True)
     (meta / "meta.json").write_text(json.dumps({"case_id": fx.dir.name, "job_family": "synthetic"}) + "\n")
     return argparse.Namespace(run_dir=str(fx.dir), gt=str(gt), case=str(case), slug=None, ks="10,25",
                               score_threshold=0.40, usage_log=None, snapshot=str(snapshot),
                               hard_filter_validation=str(hard_filter), out=None)
+
+
+def _refresh_manifest_hash(run_dir: Path, key: str) -> None:
+    path = run_dir / "manifest.json"
+    document = json.loads(path.read_text())
+    artifact = run_dir / document["artifacts"][key]["path"]
+    document["artifacts"][key]["sha256"] = bench._file_hash(artifact)
+    path.write_text(json.dumps(document, indent=2) + "\n")
 
 
 class TestBenchScoreAndReport(unittest.TestCase):
@@ -118,7 +198,298 @@ class TestBenchScoreAndReport(unittest.TestCase):
         self.assertTrue(result["funnel"]["probe_attribution"])
         self.assertIsNotNone(result["gaps"])
         self.assertIn("ndcg@10", result["gaps"])
+        self.assertEqual(result["gaps"]["overall_recall"], 0.7273)
+        self.assertGreater(result["gaps"]["overall_recall"], 2 / 11)  # includes ranked bench candidates
         self.assertIsNone(result["cost"])  # no usage.jsonl in the fixture
+        self.assertFalse((self.fx.dir / "convergence.csv").exists())
+
+    def test_typed_recruiting_run_scores_complete_frontier_strictly(self) -> None:
+        run = ROOT / ".powerpacks/search-runs" / f"reflect-typed-{uuid.uuid4().hex}"
+        run.mkdir(parents=True)
+        self.addCleanup(lambda: shutil.rmtree(run, ignore_errors=True))
+        runner = FakeRunner(4)
+        spec = recruiting_spec()
+        person_ids = [f"p{i}" for i in range(4)]
+        evidence = {person_id: bench.canonical_hash({"person_id": person_id}) for person_id in person_ids}
+        run_snapshot = runner.snapshot_corpus("local", ())
+        run_snapshot["evidence_hashes"] = evidence
+        prepared = run_recruiting(
+            spec,
+            runner,
+            artifact_root=run,
+            plan_adapter=plan_adapter,
+            critic_adapter=critic_adapter,
+            corpus_snapshot=run_snapshot,
+        )
+        self.assertEqual(prepared.status, "awaiting_review")
+        plan = json.loads((run / "review/plan.json").read_text())
+        approved = replace(
+            spec,
+            recruiting=replace(spec.recruiting, reviewed_plan_hash=recruiting_hash(plan)),
+        )
+        completed = run_recruiting(
+            approved, runner, artifact_root=run, judge_adapter=good_judge,
+            corpus_snapshot=run_snapshot,
+        )
+        self.assertIn(completed.status, {"completed_no_anchors", "completed_capped"})
+        self.assertTrue((run / "stage-membership.json").exists())
+        self.assertTrue((run / "candidate-frontier.json").exists())
+        persist_result(run, approved, completed)
+
+        slug = run.name
+        local = self.sandbox.tmp / "gt" / slug
+        local.mkdir(parents=True)
+        reviewed_spec = approved.to_dict()
+        case = local / "case.json"
+        run_binding = json.loads((run / "review/binding.json").read_text())
+        case.write_text(json.dumps({
+            "schema_version": "reflect.case.v1",
+            "case_id": slug,
+            "public_source": {
+                "reference": "https://example.invalid/synthetic-role",
+                "content_hash": run_binding["jd_sha256"],
+            },
+            "reviewed_search_spec": {"content": reviewed_spec, "content_hash": bench.canonical_hash(reviewed_spec)},
+        }, indent=2) + "\n")
+        snapshot_doc = json.loads((run / "review/corpus.json").read_text())
+        snapshot = local / "snapshot.json"
+        snapshot.write_text(json.dumps(snapshot_doc) + "\n")
+        decisions = ("eligible_strong", "eligible_bench", "ineligible", "ineligible")
+        labels = [
+            {
+                "person_id": person_id,
+                "evidence_hash": evidence[person_id],
+                "decision": decision,
+                "reason_codes": ["synthetic_fit"],
+                "notes": "",
+                "reviewer": "Synthetic Reviewer",
+                "reviewed_at": "2026-07-31T00:00:00Z",
+            }
+            for person_id, decision in zip(person_ids, decisions, strict=True)
+        ]
+        gt = local / "ground-truth.json"
+        gt.write_text(json.dumps({
+            "schema_version": "reflect.ground_truth.v1",
+            "case_id": slug,
+            "case_hash": bench._file_hash(case),
+            "corpus_snapshot_hash": bench.snapshot_identity(snapshot_doc),
+            "review_pool_evidence_hash": bench.canonical_hash(evidence),
+            "review_pool_evidence_hashes": evidence,
+            "labels": labels,
+            "finalized_at": "2026-07-31T00:00:00Z",
+        }) + "\n")
+        validation = run / "hard-filter-validation.json"
+        meta = self.sandbox.suite / slug
+        meta.mkdir(parents=True)
+        (meta / "meta.json").write_text(json.dumps({"case_id": slug, "job_family": "synthetic"}) + "\n")
+        args = argparse.Namespace(
+            run_dir=str(run),
+            gt=str(gt),
+            case=str(case),
+            slug=slug,
+            ks="10,25",
+            usage_log=None,
+            snapshot=str(snapshot),
+            hard_filter_validation=str(validation),
+            out=None,
+        )
+        with mock.patch.object(bench, "POWERPACKS_STATE", ROOT / ".powerpacks"):
+            bench.cmd_score(args)
+            production_validation = local / "production-hard-filter-validation.json"
+            production_validation.write_bytes(validation.read_bytes())
+            with self.assertRaisesRegex(ValueError, "run-produced hard-filter artifact"):
+                bench.cmd_score(argparse.Namespace(
+                    **{**vars(args), "hard_filter_validation": str(production_validation)}
+                ))
+            bench.cmd_report(argparse.Namespace(results_dir=None, out=None))
+            self.assertEqual(bench.cmd_gate(argparse.Namespace(
+                baseline=str(self.sandbox.report),
+                current=str(self.sandbox.report),
+                min_recall=None,
+                max_cost=None,
+                comparison_review=None,
+                review_template_out=str(self.sandbox.tmp / "comparison-review.json"),
+                enforce=True,
+            )), 0)
+        result = json.loads((self.sandbox.results / slug / "result.json").read_text())
+        self.assertEqual(result["source_recall"], 1.0)
+        self.assertEqual(result["gaps"]["overall_recall"], 1.0)
+        self.assertEqual(result["gaps"]["recall@10"], 1.0)
+        self.assertGreater(result["gaps"]["ndcg@10"], 0)
+        self.assertFalse((run / "convergence.csv").exists())
+
+    def test_completed_empty_run_scores_zero_recall_and_never_sourced(self) -> None:
+        run = ROOT / ".powerpacks/search-runs" / f"reflect-empty-{uuid.uuid4().hex}"
+        run.mkdir(parents=True)
+        self.addCleanup(lambda: shutil.rmtree(run, ignore_errors=True))
+        runner = FakeRunner(0)
+        spec = recruiting_spec()
+        evidence = {"gt-miss": bench.canonical_hash({"person_id": "gt-miss"})}
+        snapshot_doc = runner.snapshot_corpus("local", ())
+        snapshot_doc["evidence_hashes"] = evidence
+        prepared = run_recruiting(
+            spec, runner, artifact_root=run, plan_adapter=plan_adapter,
+            critic_adapter=critic_adapter, corpus_snapshot=snapshot_doc,
+        )
+        plan = json.loads((run / "review/plan.json").read_text())
+        approved = replace(
+            spec, recruiting=replace(spec.recruiting, reviewed_plan_hash=recruiting_hash(plan)),
+        )
+        completed = run_recruiting(
+            approved, runner, artifact_root=run, judge_adapter=good_judge,
+            corpus_snapshot=snapshot_doc,
+        )
+        self.assertEqual(completed.status, "completed_empty")
+        persist_result(run, approved, completed)
+
+        slug = run.name
+        local = self.sandbox.tmp / "gt" / slug
+        local.mkdir(parents=True)
+        binding = json.loads((run / "review/binding.json").read_text())
+        case = local / "case.json"
+        case.write_text(json.dumps({
+            "schema_version": "reflect.case.v1", "case_id": slug,
+            "public_source": {"reference": "https://example.invalid/empty-role",
+                              "content_hash": binding["jd_sha256"]},
+            "reviewed_search_spec": {"content": approved.to_dict(),
+                                     "content_hash": bench.canonical_hash(approved.to_dict())},
+        }, indent=2) + "\n")
+        snapshot = local / "snapshot.json"
+        snapshot.write_text(json.dumps(snapshot_doc) + "\n")
+        gt = local / "ground-truth.json"
+        gt.write_text(json.dumps({
+            "schema_version": "reflect.ground_truth.v1", "case_id": slug,
+            "case_hash": bench._file_hash(case),
+            "corpus_snapshot_hash": bench.snapshot_identity(snapshot_doc),
+            "review_pool_evidence_hash": bench.canonical_hash(evidence),
+            "review_pool_evidence_hashes": evidence,
+            "labels": [{"person_id": "gt-miss", "evidence_hash": evidence["gt-miss"],
+                        "decision": "eligible_strong", "reason_codes": ["synthetic_fit"],
+                        "notes": "", "reviewer": "Synthetic Reviewer",
+                        "reviewed_at": "2026-07-31T00:00:00Z"}],
+            "finalized_at": "2026-07-31T00:00:00Z",
+        }) + "\n")
+        meta = self.sandbox.suite / slug
+        meta.mkdir(parents=True)
+        (meta / "meta.json").write_text(json.dumps({"case_id": slug, "job_family": "synthetic"}) + "\n")
+        args = argparse.Namespace(
+            run_dir=str(run), gt=str(gt), case=str(case), slug=slug, ks="10,25",
+            usage_log=None, snapshot=str(snapshot),
+            hard_filter_validation=str(run / "hard-filter-validation.json"), out=None,
+        )
+        with mock.patch.object(bench, "POWERPACKS_STATE", ROOT / ".powerpacks"):
+            bench.cmd_score(args)
+        result = json.loads((self.sandbox.results / slug / "result.json").read_text())
+        self.assertEqual(result["gaps"]["overall_recall"], 0.0)
+        self.assertEqual(result["funnel"]["dispositions"], {"never_sourced": 1})
+        self.assertEqual(result["source_recall"], 0.0)
+
+    def test_missing_stage_membership_fails_instead_of_scoring_zero(self) -> None:
+        args = _score_args(self.fx)
+        (self.fx.dir / "stage-membership.json").unlink()
+        with self.assertRaisesRegex(ValueError, "hash does not match artifact: stage-membership.json"):
+            bench.cmd_score(args)
+
+    def test_malformed_stage_membership_fails_instead_of_scoring_zero(self) -> None:
+        args = _score_args(self.fx)
+        path = self.fx.dir / "stage-membership.json"
+        document = json.loads(path.read_text())
+        document["unexpected"] = True
+        path.write_text(json.dumps(document) + "\n")
+        _refresh_manifest_hash(self.fx.dir, "stage-membership.json")
+        with self.assertRaisesRegex(ValueError, "Additional properties.*unexpected"):
+            bench.cmd_score(args)
+
+    def test_malformed_candidate_frontier_fails_instead_of_coercing_values(self) -> None:
+        args = _score_args(self.fx)
+        path = self.fx.dir / "candidate-frontier.json"
+        document = json.loads(path.read_text())
+        document["candidates"][0]["person_id"] = 123
+        document["candidates"][0]["retrieval_score"] = True
+        path.write_text(json.dumps(document) + "\n")
+        _refresh_manifest_hash(self.fx.dir, "candidate-frontier.json")
+        with self.assertRaisesRegex(ValueError, "person_id.*not of type 'string'|retrieval_score.*not of type 'number'"):
+            bench.cmd_score(args)
+
+    def test_strict_score_rejects_case_for_a_different_run_spec(self) -> None:
+        args = _score_args(self.fx)
+        case = Path(args.case)
+        document = json.loads(case.read_text())
+        document["reviewed_search_spec"]["content"]["raw_request"] = "different run"
+        document["reviewed_search_spec"]["content_hash"] = bench.canonical_hash(
+            document["reviewed_search_spec"]["content"]
+        )
+        case.write_text(json.dumps(document, indent=2) + "\n")
+        with self.assertRaisesRegex(ValueError, "does not match the persisted run SearchSpec"):
+            bench.cmd_score(args)
+
+    def test_strict_score_rejects_changed_jd_content_at_same_url(self) -> None:
+        args = _score_args(self.fx)
+        case = Path(args.case)
+        document = json.loads(case.read_text())
+        reference = document["public_source"]["reference"]
+        document["public_source"]["content_hash"] = "0" * 64
+        case.write_text(json.dumps(document, indent=2) + "\n")
+        self.assertEqual(json.loads(case.read_text())["public_source"]["reference"], reference)
+        with self.assertRaisesRegex(ValueError, "normalized run JD"):
+            bench.cmd_score(args)
+
+    def test_strict_score_rejects_candidate_only_run_evidence(self) -> None:
+        args = _score_args(self.fx)
+        evidence_path = self.fx.dir / "review/evidence.json"
+        document = json.loads(evidence_path.read_text())
+        person_id = next(iter(document["evidence_hashes"]))
+        document = bench.ReviewEvidenceSnapshot.from_hashes({
+            person_id: document["evidence_hashes"][person_id]
+        }).to_dict()
+        evidence_path.write_text(json.dumps(document, indent=2) + "\n")
+        _refresh_manifest_hash(self.fx.dir, "review_evidence_json")
+        with self.assertRaisesRegex(ValueError, "review evidence.*review corpus"):
+            bench.cmd_score(args)
+
+    def test_strict_score_rejects_different_supplied_review_pool_evidence(self) -> None:
+        args = _score_args(self.fx)
+        snapshot_path = Path(args.snapshot)
+        snapshot = json.loads(snapshot_path.read_text())
+        person_id = next(iter(snapshot["evidence_hashes"]))
+        snapshot["evidence_hashes"][person_id] = "f" * 64
+        snapshot_path.write_text(json.dumps(snapshot) + "\n")
+        gt_path = Path(args.gt)
+        gt = json.loads(gt_path.read_text())
+        gt["review_pool_evidence_hashes"] = snapshot["evidence_hashes"]
+        gt["review_pool_evidence_hash"] = bench.canonical_hash(snapshot["evidence_hashes"])
+        gt["corpus_snapshot_hash"] = bench.snapshot_identity(snapshot)
+        for label in gt["labels"]:
+            label["evidence_hash"] = snapshot["evidence_hashes"][label["person_id"]]
+        gt_path.write_text(json.dumps(gt) + "\n")
+        with self.assertRaisesRegex(ValueError, "review-pool evidence snapshot"):
+            bench.cmd_score(args)
+
+    def test_strict_score_binds_membership_bounds_to_search_spec(self) -> None:
+        args = _score_args(self.fx)
+        membership = self.fx.dir / "stage-membership.json"
+        document = json.loads(membership.read_text())
+        document["score_floor"] = 0.41
+        membership.write_text(json.dumps(document) + "\n")
+        _refresh_manifest_hash(self.fx.dir, "stage-membership.json")
+        with self.assertRaisesRegex(ValueError, "scoring bounds"):
+            bench.cmd_score(args)
+
+    def test_strict_score_rejects_manifest_hash_and_review_binding_drift(self) -> None:
+        args = _score_args(self.fx)
+        frontier = self.fx.dir / "candidate-frontier.json"
+        frontier.write_text(frontier.read_text() + " ")
+        with self.assertRaisesRegex(ValueError, "manifest hash does not match artifact"):
+            bench.cmd_score(args)
+
+        args = _score_args(self.fx)
+        binding = self.fx.dir / "review/binding.json"
+        document = json.loads(binding.read_text())
+        document["corpus_sha256"] = "0" * 64
+        binding.write_text(json.dumps(document, indent=2) + "\n")
+        _refresh_manifest_hash(self.fx.dir, "review_binding_json")
+        with self.assertRaisesRegex(ValueError, "review/corpus binding"):
+            bench.cmd_score(args)
 
     def test_report_aggregates_and_lists_pending(self) -> None:
         bench.cmd_score(_score_args(self.fx))
@@ -192,8 +563,9 @@ class TestBenchGate(unittest.TestCase):
             "slug": "jd-1", "overall_recall": recall, "recall@10": recall, "recall@25": recall,
             "ndcg@10": ndcg10, "ndcg@25": ndcg25, "cost_usd": 1.0,
             "corpus_hash": identity, "case_hash": "b" * 64, "evidence_hash": "c" * 64,
-            "label_hash": "d" * 64, "source_recall": 0.8, "frontier_coverage": 0.8,
-            "triage_survival": 0.8, "hard_filter_violations": 0, "unreviewed_candidate_count": 0,
+            "label_hash": "d" * 64, "source_recall": 0.8, "hydration_coverage": 0.8,
+            "hard_filter_survival": 0.8, "triage_survival": 0.8,
+            "hard_filter_violations": 0, "unreviewed_candidate_count": 0,
         }]}) + "\n")
         return path
 
@@ -351,17 +723,28 @@ class TestBenchCliSubprocess(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
         root.mkdir(parents=True)
         script = ROOT / "packs/search/reflect/bench.py"
-        spec = {"query": "Synthetic role"}
+        base_spec = recruiting_spec()
+        plan = {"schema_version": "synthetic.review-plan.v1", "role": "Synthetic systems role"}
+        typed_spec = replace(
+            base_spec,
+            bounds=replace(base_spec.bounds, frontier_limit=2),
+            corpus=replace(base_spec.corpus, content_hash="5" * 64,
+                           schema_hash=bench.canonical_hash({"people": "4" * 64}),
+                           membership_hash="3" * 64),
+            recruiting=replace(base_spec.recruiting, reviewed_plan_hash=bench.canonical_hash(plan)),
+        )
+        spec = typed_spec.to_dict()
         case = root / "case.json"
         case.write_text(json.dumps({"schema_version": "reflect.case.v1", "case_id": "synthetic-gtm-senior-ic",
-            "public_source": {"reference": "https://example.invalid/role", "content_hash": "1" * 64},
+            "public_source": {"reference": "https://example.invalid/role",
+                              "content_hash": bench.canonical_hash(typed_spec.recruiting.source)},
             "reviewed_search_spec": {"content": spec, "content_hash": bench.canonical_hash(spec)}}) + "\n")
         evidence = candidate_evidence()
         evidence_hash = bench.canonical_hash(evidence)
-        snapshot_doc = {"schema_version": "reflect.corpus_snapshot.v1", "backend": "synthetic",
-            "source": "synthetic_test_fixture", "verification_status": "verified_comparable",
+        snapshot_doc = {"schema_version": "reflect.corpus_snapshot.v1", "backend": "local",
+            "source": "local_deterministic_snapshot", "verification_status": "verified_comparable",
             "set_id": "synthetic-set", "operator_scope_hash": "2" * 64, "membership_hash": "3" * 64,
-            "namespace_schema_hashes": {"people": "4" * 64}, "native_content_version": "v1",
+            "namespace_schema_hashes": {"people": "4" * 64}, "scoped_records_hash": "5" * 64,
             "evidence_hashes": {"synthetic-person": evidence_hash}}
         snapshot = root / "snapshot.json"
         snapshot.write_text(json.dumps(snapshot_doc) + "\n")
@@ -389,27 +772,65 @@ class TestBenchCliSubprocess(unittest.TestCase):
         self.assertEqual(json.loads(gt.read_text())["labels"][0]["decision"], "eligible_bench")
 
         run = root / "run"
-        (run / "epoch0").mkdir(parents=True)
-        (run / "judges").mkdir()
-        (run / "shortlist").mkdir()
-        (run / "master_union.jsonl").write_text(json.dumps({
-            "person_id": "synthetic-person", "found_by": ["synthetic-probe"]}) + "\n")
-        for name in ("candidate_frontier.full.jsonl", "candidate_frontier.to_judge.jsonl"):
-            (run / "epoch0" / name).write_text(json.dumps({"candidate_id": "synthetic-person"}) + "\n")
-        (run / "judges" / "loop.jsonl").write_text(json.dumps({"candidate_id": "synthetic-person"}) + "\n")
-        consensus = [{"person_id": "synthetic-person", "inband_votes": 1, "notout_votes": 1,
-                      "gated_votes": 0, "mean_score": 0.9, "core_met": True}]
-        (run / "shortlist" / "consensus.json").write_text(json.dumps(consensus) + "\n")
-        (run / "shortlist" / "ranked_final.json").write_text(json.dumps([
-            {"person_id": "synthetic-person", "rank": 1}]) + "\n")
-        hard_filter = root / "hard-filter-validation.json"
+        run.mkdir()
+        fixture = FunnelFixture()
+        membership = json.loads((fixture.dir / "stage-membership.json").read_text())
+        membership["candidates"] = [row for row in membership["candidates"] if row["person_id"] == "p1"]
+        membership["candidates"][0]["person_id"] = "synthetic-person"
+        membership["candidates"][0]["name"] = "Synthetic Person"
+        membership["total_sourced"] = 1
+        (run / "stage-membership.json").write_text(json.dumps(membership) + "\n")
+        frontier = json.loads((fixture.dir / "candidate-frontier.json").read_text())
+        frontier["candidates"] = [row for row in frontier["candidates"] if row["person_id"] == "p1"]
+        frontier["candidates"][0]["person_id"] = "synthetic-person"
+        frontier["candidates"][0]["hydrated_profile"]["name"] = "Synthetic Person"
+        frontier["input_count"] = frontier["output_count"] = 1
+        (run / "candidate-frontier.json").write_text(json.dumps(frontier) + "\n")
+        run_corpus = dict(snapshot_doc)
+        stable_run_corpus = {key: value for key, value in run_corpus.items() if key != "observed_at"}
+        (run / "search_spec.json").write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+        (run / "review").mkdir()
+        (run / "review/plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+        (run / "review/corpus.json").write_text(json.dumps(run_corpus, indent=2, sort_keys=True) + "\n")
+        (run / "review/source.json").write_text(json.dumps({
+            "normalized_jd": typed_spec.recruiting.source,
+        }, indent=2, sort_keys=True) + "\n")
+        (run / "review/evidence.json").write_text(json.dumps(
+            bench.ReviewEvidenceSnapshot.from_hashes(run_corpus["evidence_hashes"]).to_dict(),
+            indent=2, sort_keys=True,
+        ) + "\n")
+        (run / "review/binding.json").write_text(json.dumps({
+            "schema_version": "recruiting.review-binding.v1",
+            "plan_sha256": typed_spec.recruiting.reviewed_plan_hash,
+            "source_sha256": bench.canonical_hash(typed_spec.recruiting.source),
+            "jd_sha256": bench.canonical_hash(typed_spec.recruiting.source),
+            "corpus_sha256": bench.canonical_hash(stable_run_corpus),
+            "corpus": stable_run_corpus,
+        }, indent=2, sort_keys=True) + "\n")
+        hard_filter = run / "hard-filter-validation.json"
         hard_filter.write_text(json.dumps({
             "schema_version": "reflect.hard_filter_validation.v1",
-            "case_id": "synthetic-gtm-senior-ic", "case_hash": bench._file_hash(case),
-            "corpus_snapshot_hash": bench.snapshot_identity(snapshot_doc), "reviewed_count": 1,
-            "violation_count": 0, "violations": [], "producer": "synthetic_contract_fixture",
+            "case_id": "production", "case_hash": bench.canonical_hash(spec),
+            "corpus_snapshot_hash": bench.canonical_hash(stable_run_corpus), "reviewed_count": 1,
+            "violation_count": 0, "violations": [], "producer": "typed_runner",
             "generated_at": "2026-07-31T00:00:00Z",
         }) + "\n")
+        manifest_artifacts = {
+            "search_spec_json": "search_spec.json",
+            "review_plan_json": "review/plan.json",
+            "review_binding_json": "review/binding.json",
+            "review_corpus_json": "review/corpus.json",
+            "review_source_json": "review/source.json",
+            "review_evidence_json": "review/evidence.json",
+            "stage-membership.json": "stage-membership.json",
+            "candidate-frontier.json": "candidate-frontier.json",
+            "hard_filter_validation_json": "hard-filter-validation.json",
+        }
+        (run / "manifest.json").write_text(json.dumps({
+            "schema_version": "search.manifest.v1",
+            "artifacts": {key: {"path": relative, "sha256": bench._file_hash(run / relative)}
+                          for key, relative in manifest_artifacts.items()},
+        }, indent=2) + "\n")
         result_path = root / "results/synthetic-gtm-senior-ic/result.json"
         report_path = root / "report.json"
         strict_commands = [
@@ -428,7 +849,7 @@ class TestBenchCliSubprocess(unittest.TestCase):
         with self.assertRaises(ValueError):
             bench._local_output("/tmp/not-reflect.json", bench.GT_DIR / "x.json")
 
-    def test_direct_subprocess_legacy_diagnostic_score(self) -> None:
+    def test_direct_subprocess_rejects_incomplete_legacy_score(self) -> None:
         fixture = FunnelFixture()
         root = ROOT / ".powerpacks/reflect/test-legacy-diagnostic"
         shutil.rmtree(root, ignore_errors=True)
@@ -438,10 +859,8 @@ class TestBenchCliSubprocess(unittest.TestCase):
             sys.executable, str(ROOT / "packs/search/reflect/bench.py"), "score",
             "--run-dir", str(fixture.dir), "--gt", str(fixture.gt_flat()), "--ks", "10,25", "--out", str(out),
         ], cwd=ROOT, text=True, capture_output=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        document = json.loads(out.read_text())
-        self.assertIsNone(document["case_hash"])
-        self.assertIsNone(document["corpus_hash"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("strict scoring requires --case", result.stderr)
 
     def test_strict_score_rejects_run_outside_repo_powerpacks(self) -> None:
         args = _score_args(FunnelFixture())

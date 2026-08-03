@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from packs.search.pipeline.frontier import CandidateFrontier, CandidateRecord, ProbeMatch
+from packs.search.pipeline.artifacts import persist_result
 from packs.search.pipeline.models import (
     Backend, HardFilterSet, LocalCorpus, PersonFilters, PowersetCorpus, Profile, RecruitingInput,
     ResolvedSources, RoleIntent, RunnerCapabilities, SearchBounds, SearchSpec,
@@ -23,10 +24,12 @@ from packs.search.pipeline.recruiting import (
     _production_judge_adapter,
     _production_plan_adapter,
     _run_probes,
+    _validate_hydrated,
     _within_spend_budget,
     run_recruiting,
     SHORTLIST_CSV_FIELDS,
 )
+from packs.search.pipeline.stage_membership import build_stage_membership
 from packs.search.pipeline.recruiting_stages import (
     JudgeBudgetExceeded,
     TransientJudgeError,
@@ -125,7 +128,7 @@ class FakeRunner:
         self.calls.append("snapshot")
         return {
             "schema_version": "reflect.corpus_snapshot.v1", "backend": "local",
-            "verification_status": "verified_comparable", "source": "fake",
+            "verification_status": "verified_comparable", "source": "local_deterministic_snapshot",
             "set_id": "local", "operator_scope_hash": "b" * 64,
             "membership_hash": "c" * 64, "namespace_schema_hashes": {"people": "d" * 64},
             "scoped_records_hash": self.snapshot_hash, "evidence_hashes": {},
@@ -194,6 +197,111 @@ class RecruitingPipelineTests(unittest.TestCase):
         self.assertEqual(result.status, "awaiting_review")
         plan = json.loads((Path(root) / "review/plan.json").read_text())
         return replace(spec, recruiting=replace(spec.recruiting, reviewed_plan_hash=canonical_hash(plan)))
+
+    def test_missing_profile_is_not_hydrated_or_hard_filtered(self):
+        spec = recruiting_spec()
+        source = CandidateRecord(
+            "missing",
+            found_by=(ProbeMatch("role", 1, "probe", "title", 0.5),),
+            hydration_disposition="missing_profile",
+            hydrated_profile={"name": "stale placeholder"},
+        )
+        survivors, reviewed = _validate_hydrated(
+            spec, ResolvedSources(), CandidateFrontier((source,), 1, 1, None, False)
+        )
+        self.assertEqual(survivors, ())
+        self.assertEqual(reviewed[0].hard_filter_evidence, {})
+        membership = build_stage_membership(
+            sourced=[source], hydrated=list(reviewed), triaged=[], ranked=(),
+            shortlist_person_ids=set(), status="completed_empty", epochs=0, bounds=spec.bounds,
+        )
+        row = membership.candidates[0]
+        self.assertFalse(row.hydrated)
+        self.assertFalse(row.hard_filter_passed)
+        self.assertEqual(row.disposition, "hydration_missing")
+
+    def test_zero_eligible_pool_persists_scoreable_empty_contract(self):
+        class EmptyPoolRunner(FakeRunner):
+            def apply_hard_filters(self, spec, sources):
+                self.calls.append("filter")
+                return HardFilterSet(0, (), {"before_top_k": True})
+
+        runner = EmptyPoolRunner(0)
+        snapshot = runner.snapshot_corpus("local", ())
+        snapshot["evidence_hashes"] = {"gt-miss": canonical_hash({"person_id": "gt-miss"})}
+        with self.run_dir() as root:
+            prepared = run_recruiting(
+                recruiting_spec(), runner, artifact_root=root, plan_adapter=plan_adapter,
+                critic_adapter=critic_adapter, corpus_snapshot=snapshot,
+            )
+            plan = json.loads((Path(root) / "review/plan.json").read_text())
+            approved = replace(
+                recruiting_spec(),
+                recruiting=replace(recruiting_spec().recruiting, reviewed_plan_hash=canonical_hash(plan)),
+            )
+            result = run_recruiting(
+                approved, runner, artifact_root=root, judge_adapter=good_judge,
+                corpus_snapshot=snapshot,
+            )
+            self.assertEqual(result.status, "completed_empty")
+            persist_result(root, approved, result)
+            membership = json.loads((Path(root) / "stage-membership.json").read_text())
+            frontier = json.loads((Path(root) / "candidate-frontier.json").read_text())
+            manifest = json.loads((Path(root) / "manifest.json").read_text())
+            self.assertEqual(membership["candidates"], [])
+            self.assertEqual(frontier["candidates"], [])
+            self.assertFalse(frontier["truncated"])
+            self.assertTrue({"stage-membership.json", "candidate-frontier.json",
+                             "hard_filter_validation_json", "review_evidence_json"}.issubset(
+                                 manifest["artifacts"]
+                             ))
+
+    def test_successful_empty_probes_persist_scoreable_empty_contract(self):
+        class EmptyProbeRunner(FakeRunner):
+            def retrieve_people(self, plan, filters, probe_id=None, probe_family=None):
+                self.calls.append(("retrieve", probe_id))
+                return ()
+
+        runner = EmptyProbeRunner(1)
+        snapshot = runner.snapshot_corpus("local", ())
+        snapshot["evidence_hashes"] = {"gt-miss": canonical_hash({"person_id": "gt-miss"})}
+        with self.run_dir() as root:
+            prepared = run_recruiting(
+                recruiting_spec(), runner, artifact_root=root, plan_adapter=plan_adapter,
+                critic_adapter=critic_adapter, corpus_snapshot=snapshot,
+            )
+            plan = json.loads((Path(root) / "review/plan.json").read_text())
+            approved = replace(
+                recruiting_spec(),
+                recruiting=replace(recruiting_spec().recruiting, reviewed_plan_hash=canonical_hash(plan)),
+            )
+            result = run_recruiting(
+                approved, runner, artifact_root=root, judge_adapter=good_judge,
+                corpus_snapshot=snapshot,
+            )
+            self.assertEqual(result.status, "completed_empty")
+            self.assertEqual(result.counts["probe_failures"], 0)
+            persist_result(root, approved, result)
+            self.assertTrue((Path(root) / "manifest.json").exists())
+            self.assertEqual(json.loads((Path(root) / "candidate-frontier.json").read_text())["candidates"], [])
+
+    def test_membership_producer_rejects_contradictory_deterministic_gates(self):
+        with self.run_dir() as root:
+            approved = self.prepare(recruiting_spec(), FakeRunner(1), root)
+            result = run_recruiting(
+                approved, FakeRunner(1), artifact_root=root, judge_adapter=good_judge
+            )
+        candidate = result.frontier.candidates[0]
+        contradictory = replace(
+            candidate,
+            deterministic_gates={**candidate.deterministic_gates, "shortlist": False},
+        )
+        with self.assertRaisesRegex(ValueError, "shortlist gate contradicts"):
+            build_stage_membership(
+                sourced=[contradictory], hydrated=[contradictory], triaged=[contradictory],
+                ranked=(contradictory,), shortlist_person_ids=set(), status="completed_capped",
+                epochs=0, bounds=approved.bounds,
+            )
 
     def test_prepare_uses_real_jd_and_stops_before_source(self):
         runner = FakeRunner()
@@ -916,9 +1024,23 @@ class RecruitingPipelineTests(unittest.TestCase):
                 judge_adapter=good_judge,
             )
             persisted = json.loads((Path(root) / "candidate-frontier.json").read_text())
+            streamed = [
+                json.loads(line)
+                for line in (Path(root) / "candidate-frontier.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+            membership = json.loads((Path(root) / "stage-membership.json").read_text())
         self.assertEqual(result.counts["total_sourced"], 11)
         self.assertEqual(len(result.frontier.candidates), 11)
         self.assertEqual(len(persisted["candidates"]), 11)
+        self.assertEqual(streamed, persisted["candidates"])
+        self.assertEqual(membership["schema_version"], "search.stage_membership.v1")
+        self.assertEqual(membership["total_sourced"], 11)
+        self.assertEqual(len(membership["candidates"]), 11)
+        self.assertEqual(
+            [row["person_id"] for row in persisted["candidates"]],
+            [row.person_id for row in result.frontier.candidates],
+        )
 
     def test_expansion_requires_ten_and_caps_at_twenty_strong_exemplars(self):
         def strong(index):

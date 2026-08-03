@@ -35,6 +35,10 @@ from packs.search.reflect.review import (  # noqa: E402
 from packs.search.reflect.snapshots import (  # noqa: E402
     canonical_hash, snapshot_identity, validate_complete_evidence, validate_snapshot,
 )
+from packs.search.pipeline.frontier import CANDIDATE_FRONTIER_NAME  # noqa: E402
+from packs.search.pipeline.artifacts import REVIEW_EVIDENCE_NAME, ReviewEvidenceSnapshot  # noqa: E402
+from packs.search.pipeline.stage_membership import STAGE_MEMBERSHIP_NAME  # noqa: E402
+from packs.search.pipeline.models import SearchSpec  # noqa: E402
 
 DEEP_SEARCH_DIR = ROOT / "packs" / "search" / "primitives" / "deep_search"
 SUITE_DIR = Path(__file__).resolve().parent / "suite"
@@ -48,7 +52,7 @@ GT_DIR = REFLECT_STATE / "gt"
 RECALL_METRICS = ("recall@10", "recall@25")
 NDCG_METRICS = ("ndcg@10", "ndcg@25")
 IDENTITY_FIELDS = ("corpus_hash", "case_hash", "evidence_hash", "label_hash")
-STAGE_METRICS = ("source_recall", "frontier_coverage", "triage_survival")
+STAGE_METRICS = ("source_recall", "hydration_coverage", "hard_filter_survival", "triage_survival")
 HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
@@ -125,10 +129,71 @@ def _stage_metrics(funnel: dict[str, Any]) -> dict[str, float | None]:
         return {metric: None for metric in STAGE_METRICS}
     return {
         "source_recall": round(stages["sourced"] / total, 4) if "sourced" in stages else None,
-        # Current deep-search has no distinct hydration artifact. Frontier survival is
-        # the canonical hydration-preservation proxy until the typed runner lands.
-        "frontier_coverage": round(stages["frontier"] / total, 4) if "frontier" in stages else None,
+        "hydration_coverage": round(stages["hydrated"] / total, 4) if "hydrated" in stages else None,
+        "hard_filter_survival": round(stages["hard_filter_survived"] / total, 4)
+        if "hard_filter_survived" in stages else None,
         "triage_survival": round(stages["triage_survived"] / total, 4) if "triage_survived" in stages else None,
+    }
+
+
+def _run_artifacts(
+    run_dir: Path,
+) -> tuple[dict[str, Any], SearchSpec, dict[str, Any], dict[str, Any], ReviewEvidenceSnapshot]:
+    manifest_path = run_dir / "manifest.json"
+    manifest = _read_json(manifest_path)
+    if manifest.get("schema_version") != "search.manifest.v1" or not isinstance(manifest.get("artifacts"), dict):
+        raise ValueError("strict scoring requires a canonical search.manifest.v1")
+    required = {
+        "search_spec_json": "search_spec.json",
+        "review_plan_json": "review/plan.json",
+        "review_binding_json": "review/binding.json",
+        "review_corpus_json": "review/corpus.json",
+        "review_source_json": "review/source.json",
+        "review_evidence_json": REVIEW_EVIDENCE_NAME,
+        STAGE_MEMBERSHIP_NAME: STAGE_MEMBERSHIP_NAME,
+        CANDIDATE_FRONTIER_NAME: CANDIDATE_FRONTIER_NAME,
+        "hard_filter_validation_json": "hard-filter-validation.json",
+    }
+    for key, relative in required.items():
+        entry = manifest["artifacts"].get(key)
+        if not isinstance(entry, dict) or entry.get("path") != relative:
+            raise ValueError(f"run manifest is missing canonical artifact: {key}")
+        artifact = run_dir / relative
+        if not artifact.is_file() or entry.get("sha256") != _file_hash(artifact):
+            raise ValueError(f"run manifest hash does not match artifact: {relative}")
+    raw_spec = _validate("search-spec", run_dir / "search_spec.json")
+    spec = SearchSpec.from_dict(raw_spec)
+    binding = _read_json(run_dir / "review/binding.json")
+    plan = _read_json(run_dir / "review/plan.json")
+    corpus = _read_json(run_dir / "review/corpus.json")
+    source = _read_json(run_dir / "review/source.json")
+    evidence = ReviewEvidenceSnapshot.from_dict(_read_json(run_dir / REVIEW_EVIDENCE_NAME))
+    stable_corpus = {key: value for key, value in corpus.items() if key != "observed_at"}
+    if binding.get("schema_version") != "recruiting.review-binding.v1":
+        raise ValueError("run review binding has an unsupported schema_version")
+    if binding.get("corpus") != stable_corpus or binding.get("corpus_sha256") != canonical_hash(stable_corpus):
+        raise ValueError("run review/corpus binding does not match persisted corpus")
+    if evidence.evidence_hashes != corpus.get("evidence_hashes"):
+        raise ValueError("run review evidence does not match the persisted review corpus")
+    if (
+        spec.recruiting is None
+        or spec.recruiting.reviewed_plan_hash != binding.get("plan_sha256")
+        or binding.get("plan_sha256") != canonical_hash(plan)
+    ):
+        raise ValueError("persisted SearchSpec does not bind the reviewed run plan")
+    if (
+        binding.get("source_sha256") != canonical_hash(spec.recruiting.source)
+        or binding.get("jd_sha256") != canonical_hash(source.get("normalized_jd"))
+    ):
+        raise ValueError("persisted SearchSpec does not bind the reviewed run source")
+    return manifest, spec, binding, corpus, evidence
+
+
+def _corpus_contract(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in snapshot.items()
+        if key not in {"schema_version", "observed_at", "evidence_hashes"}
     }
 
 
@@ -184,16 +249,16 @@ def _strict_report_rows(report: dict[str, Any], name: str) -> list[dict[str, Any
 def cmd_score(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).resolve()
     slug = args.slug or run_dir.name
-    shortlist_dir = run_dir / "shortlist"
+    reflect_dir = run_dir / "reflect"
     evidence_args = (getattr(args, "case", None), getattr(args, "snapshot", None),
                      getattr(args, "hard_filter_validation", None))
-    strict = any(evidence_args)
-    if strict and not all(evidence_args):
-        raise ValueError("--case, --snapshot, and --hard-filter-validation are an all-or-none strict evidence bundle")
+    if not all(evidence_args):
+        raise ValueError("strict scoring requires --case, --snapshot, and --hard-filter-validation")
+    strict = True
 
     raw_ground_truth = _read_json(Path(args.gt))
-    if not strict and isinstance(raw_ground_truth, dict) and raw_ground_truth.get("schema_version") == "reflect.ground_truth.v1":
-        raise ValueError("Reflect v1 ground truth requires the complete strict evidence bundle")
+    if not isinstance(raw_ground_truth, dict) or raw_ground_truth.get("schema_version") != "reflect.ground_truth.v1":
+        raise ValueError("ground truth must use reflect.ground_truth.v1")
 
     case = snapshot = ground_truth = None
     case_hash = corpus_hash = evidence_hash_value = label_hash = None
@@ -203,9 +268,14 @@ def cmd_score(args: argparse.Namespace) -> int:
     if strict:
         if not run_dir.is_relative_to(POWERPACKS_STATE.resolve()):
             raise ValueError("strict scoring requires run_dir under repository .powerpacks/")
-        _require_local_inputs(args.case, args.snapshot, args.hard_filter_validation, args.gt)
+        _require_local_inputs(args.case, args.snapshot, args.gt)
+        manifest, run_spec, run_binding, run_corpus, run_evidence = _run_artifacts(run_dir)
         case_path = Path(args.case)
         case, case_hash = _case_document(case_path)
+        if case["reviewed_search_spec"]["content"] != run_spec.to_dict():
+            raise ValueError("case reviewed_search_spec does not match the persisted run SearchSpec")
+        if case["public_source"]["content_hash"] != run_binding["jd_sha256"]:
+            raise ValueError("case public_source content_hash does not match the normalized run JD")
         ground_truth = _validate("reflect-ground-truth", Path(args.gt))
         validate_ground_truth_semantics(ground_truth)
         snapshot = _validate("reflect-corpus-snapshot", Path(args.snapshot))
@@ -216,6 +286,12 @@ def cmd_score(args: argparse.Namespace) -> int:
         errors += validate_complete_evidence(expected_rows, snapshot)
         if ground_truth["corpus_snapshot_hash"] != corpus_hash:
             errors.append("ground truth corpus_snapshot_hash does not match snapshot")
+        if _corpus_contract(snapshot) != _corpus_contract(run_corpus):
+            errors.append("reviewed corpus snapshot does not match the run review/corpus binding")
+        if snapshot["evidence_hashes"] != run_evidence.evidence_hashes:
+            errors.append("review-pool evidence snapshot does not match the reviewed run")
+        if ground_truth["review_pool_evidence_hash"] != run_evidence.evidence_hash:
+            errors.append("ground-truth review-pool evidence hash does not match the reviewed run")
         if not meta_path.exists():
             errors.append(f"suite metadata is required for case: {slug}")
         expected_case_id = (meta or {}).get("case_id")
@@ -225,36 +301,53 @@ def cmd_score(args: argparse.Namespace) -> int:
             errors.append("ground truth case_hash does not match exact case bytes")
         if errors:
             raise ValueError("; ".join(errors))
-        validation = _validate("reflect-hard-filter-validation", Path(args.hard_filter_validation))
+        validation_path = Path(args.hard_filter_validation).resolve()
+        if validation_path != (run_dir / "hard-filter-validation.json").resolve():
+            raise ValueError("strict scoring requires the run-produced hard-filter artifact")
+        validation = _validate("reflect-hard-filter-validation", validation_path)
+        membership = _validate("stage-membership", run_dir / STAGE_MEMBERSHIP_NAME)
+        if (
+            membership["score_floor"] != run_spec.bounds.score_floor
+            or membership["sendable_score"] != run_spec.bounds.sendable_score
+            or membership["frontier_limit"] != run_spec.bounds.frontier_limit
+        ):
+            raise ValueError("stage membership scoring bounds do not match the persisted SearchSpec")
         hard_filter_violations = _validate_hard_filter(
-            validation, case_id=case["case_id"], case_hash=case_hash, corpus_hash=corpus_hash,
-            reviewed_count=len(ground_truth["review_pool_evidence_hashes"]),
+            validation,
+            case_id="production",
+            case_hash=canonical_hash(run_spec.to_dict()),
+            corpus_hash=run_binding["corpus_sha256"],
+            reviewed_count=membership["total_sourced"],
         )
+        expected_violations = {
+            row["person_id"] for row in membership["candidates"]
+            if row["disposition"] == "hard_filter_quarantined"
+        }
+        if {row["person_id"] for row in validation["violations"]} != expected_violations:
+            raise ValueError("run hard-filter artifact does not match stage membership dispositions")
         evidence_hash_value = ground_truth["review_pool_evidence_hash"]
         label_hash = canonical_hash(ground_truth["labels"])
 
     sf = _load_module("score_funnel", DEEP_SEARCH_DIR / "score_funnel.py")
-    _run_cli_main(sf, ["score_funnel", "--run-dir", str(run_dir), "--ground-truth", args.gt,
-                       "--score-threshold", str(args.score_threshold)])
-    funnel = _read_json(shortlist_dir / "funnel.json")
+    stage_membership = run_dir / STAGE_MEMBERSHIP_NAME
+    candidate_frontier = run_dir / CANDIDATE_FRONTIER_NAME
+    _run_cli_main(sf, [
+        "score_funnel",
+        "--stage-membership", str(stage_membership),
+        "--candidate-frontier", str(candidate_frontier),
+        "--ground-truth", args.gt,
+    ])
+    funnel = _read_json(reflect_dir / "funnel.json")
 
-    epoch_candidates = None
-    for name in ("ranked_final.json", "shortlist_ranked.json"):
-        if (shortlist_dir / name).exists():
-            epoch_candidates = shortlist_dir / name
-            break
-    gaps = None
-    if epoch_candidates is not None:
-        sg = _load_module("score_ground_truth_gaps", DEEP_SEARCH_DIR / "score_ground_truth_gaps.py")
-        argv = ["score_ground_truth_gaps", "--ground-truth", args.gt,
-                "--epoch-candidates", str(epoch_candidates), "--epoch-dir", str(shortlist_dir),
-                "--epoch-label", "bench-score", "--convergence-csv", str(run_dir / "convergence.csv"),
-                "--ks", args.ks]
-        usage_log = Path(args.usage_log) if args.usage_log else run_dir / "usage.jsonl"
-        if usage_log.exists():
-            argv += ["--usage-log", str(usage_log)]
-        _run_cli_main(sg, argv)
-        gaps = _read_json(shortlist_dir / "gaps.json")
+    sg = _load_module("score_ground_truth_gaps", DEEP_SEARCH_DIR / "score_ground_truth_gaps.py")
+    argv = ["score_ground_truth_gaps", "--ground-truth", args.gt,
+            "--candidate-frontier", str(candidate_frontier),
+            "--out", str(reflect_dir / "gaps.json"), "--ks", args.ks]
+    usage_log = Path(args.usage_log) if args.usage_log else run_dir / "usage.jsonl"
+    if usage_log.exists():
+        argv += ["--usage-log", str(usage_log)]
+    _run_cli_main(sg, argv)
+    gaps = _read_json(reflect_dir / "gaps.json")
 
     cost = None
     usage_log = Path(args.usage_log) if args.usage_log else run_dir / "usage.jsonl"
@@ -538,7 +631,6 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--case", default=None)
     score.add_argument("--slug", default=None)
     score.add_argument("--ks", default="10,25")
-    score.add_argument("--score-threshold", type=float, default=0.40)
     score.add_argument("--usage-log", default=None)
     score.add_argument("--snapshot", default=None)
     score.add_argument("--hard-filter-validation", default=None)

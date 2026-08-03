@@ -5,13 +5,57 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from .frontier import StageResult
 from .filters import hard_filter_validation_artifact
 from .models import SearchSpec
+
+REVIEW_EVIDENCE_NAME = "review/evidence.json"
+
+
+@dataclass(frozen=True)
+class ReviewEvidenceSnapshot:
+    schema_version: str
+    evidence_hashes: dict[str, str]
+    evidence_hash: str
+
+    @classmethod
+    def from_hashes(cls, evidence_hashes: dict[str, str]) -> "ReviewEvidenceSnapshot":
+        hashes = dict(evidence_hashes)
+        return cls("search.review_evidence.v1", hashes, _canonical_hash(hashes))
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ReviewEvidenceSnapshot":
+        if set(value) != {"schema_version", "evidence_hashes", "evidence_hash"}:
+            raise ValueError("review evidence artifact has invalid fields")
+        if value["schema_version"] != "search.review_evidence.v1":
+            raise ValueError("unsupported review evidence artifact")
+        hashes = value["evidence_hashes"]
+        if not isinstance(hashes, dict) or any(
+            not isinstance(person_id, str) or not person_id or not isinstance(digest, str)
+            or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest)
+            for person_id, digest in hashes.items()
+        ):
+            raise ValueError("review evidence hashes must map person IDs to hashes")
+        artifact = cls(value["schema_version"], dict(hashes), value["evidence_hash"])
+        if artifact.evidence_hash != _canonical_hash(artifact.evidence_hashes):
+            raise ValueError("review evidence aggregate hash does not match evidence_hashes")
+        return artifact
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "evidence_hashes": dict(self.evidence_hashes),
+            "evidence_hash": self.evidence_hash,
+        }
+
+
+def _canonical_hash(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 CSV_FIELDS = (
     "rank",

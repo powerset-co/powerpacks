@@ -6,8 +6,8 @@
 - 2026-07-30 — initial objective + acceptance contract (committed before any code, per
   the Phase 0 plan; full context in `packs/search/docs/reflect-and-search-v2-proposal.md`).
 
-The maintainer-side measurement harness for the `$search` deep engine. It scores
-existing deep-search run dirs against ground truth and turns "the search felt better"
+The maintainer-side measurement harness for the typed `$search` recruiting engine. It scores
+canonical `.powerpacks/search-runs/<case>/` outputs against ground truth and turns "the search felt better"
 into per-stage numbers. It is the acceptance mechanism for every future engine change.
 
 (Naming note: the user-side `$reflect` telemetry skill — draft PR #356,
@@ -71,11 +71,17 @@ For each case:
    `(0, 0.02]` require a matching accepted comparison review. Missing or changed corpus,
    case, evidence, or label identity is `non_comparable` and exits nonzero.
 
-`bench.py score --run-dir <run> --gt <legacy-list-or-tiered-gt>` remains a diagnostic
-compatibility path. It emits null strict identities/evidence and cannot satisfy `gate`.
-Reflect v1 GT requires the all-or-none strict bundle: `--case`, `--snapshot`, and
-`--hard-filter-validation`. Strict scoring also requires the run directory under the
-repository `.powerpacks/`, because funnel/gaps contain local GT identifiers.
+`bench.py score` accepts only `reflect.ground_truth.v1` and requires `--case`, `--snapshot`,
+and the run's own `--hard-filter-validation <run>/hard-filter-validation.json`. The run
+must remain under the repository `.powerpacks/` and contain `search_spec.json`,
+`review/plan.json`, `review/source.json`, `review/binding.json`, `review/corpus.json`, `stage-membership.json`,
+`review/evidence.json`, `candidate-frontier.json`, and `manifest.json`. The scorer verifies canonical manifest
+paths and hashes, exact persisted SearchSpec/case equality, review/corpus identity, and
+the complete frozen review-pool evidence map, normalized JD content hash, scoring bounds,
+and run-produced hard-filter dispositions before reading candidate quality. Candidate-only
+evidence cannot prove a larger reviewed pool. Truncated frontiers are not final scoreable
+runs. A legitimate `completed_empty` run persists the same canonical artifacts with an
+empty, untruncated frontier and scores GT members as `never_sourced` with zero recall.
 
 `gate --review-template-out .powerpacks/reflect/<case>/comparison-review.json` writes a
 deterministic rejected template when joint review is needed. After the reviewer fills
@@ -139,18 +145,15 @@ any accepted change — a stale baseline is a bug.
 above 0.02, rejected/stale/mismatched reviews, and non-comparable evidence exit nonzero.
 Generic recall floors and cost ceilings remain optional supplemental checks.
 
-The gate also requires non-regression in source recall, frontier coverage, and triage
-survival. Current deep-search artifacts have no distinct hydration artifact, so
-`frontier_coverage` is explicitly the current hydration-preservation proxy: GT members
-surviving into `candidate_frontier.full.jsonl` divided by finalized positive GT size.
-Funnel stage rows and probe attribution remain in result/report rows. Current deep-search
-also has no canonical hard-filter-violation artifact; scored runs therefore record
-`hard_filter_violations: null` and strict comparison fails closed unless a validated,
-exactly bound `reflect.hard_filter_validation.v1` artifact is supplied. Its producer is
-limited to `synthetic_contract_fixture` for current contract tests or future
-`typed_runner`; it binds case/corpus hashes, reviewed count, explicit violations, and a
-timezone-aware generation timestamp. No violation count is inferred. PR B's typed runner
-owns production generation; legacy/Powerset runs remain non-comparable until then.
+The gate also requires non-regression in source recall, hydration coverage, hard-filter
+survival, and triage survival. These are separate canonical `stage-membership.json`
+stages: hydration requires `hydration_disposition == "hydrated"`; only then can a person
+pass hard filters. Funnel stage rows and probe attribution remain in result/report rows.
+The producer and scorer share one first-rule gate disposition policy; shortlist/sendable
+flags must agree with prerequisite gates and the persisted score thresholds.
+The typed runner's `reflect.hard_filter_validation.v1` binds the persisted SearchSpec,
+review corpus, reviewed count, and explicit quarantined IDs. No violation count is
+inferred and no external or compatibility artifact can replace it.
 
 ### Phase 0 definition of done (per-PR, with proof artifacts)
 
@@ -169,11 +172,11 @@ Landing order (one PR per workstream): this README → **A** scorers → **C** b
 
 ```mermaid
 flowchart LR
-    RD[".powerpacks/deep-search/&lt;jd-slug&gt;/<br/>(run artifacts)"] --> SF["score_funnel.py<br/>(deep_search primitive)"]
-    GT[".powerpacks/reflect/gt/&lt;jd-slug&gt;/gt.json<br/>(local, gitignored)"] --> SF
+    RD[".powerpacks/search-runs/&lt;case&gt;/<br/>(typed run + manifest)"] --> SF["score_funnel.py<br/>(typed stage scorer)"]
+    GT[".powerpacks/reflect/gt/&lt;case&gt;/ground-truth.json<br/>(local, gitignored)"] --> SF
     RD --> GG["score_ground_truth_gaps.py<br/>(+ ndcg@k)"]
     GT --> GG
-    UL["&lt;run-dir&gt;/usage.jsonl<br/>(workstream B)"] --> CR["cost_report.py"]
+    UL["&lt;run-dir&gt;/usage.jsonl"] --> CR["cost_report.py"]
     MP["packs/search/data/model-prices.json"] --> CR
     SF --> RES[".powerpacks/reflect/results/&lt;jd-slug&gt;/result.json"]
     GG --> RES
@@ -190,7 +193,7 @@ flowchart LR
 | `bench.py` | CLI: review lifecycle, `score`, `report`, `gate` | local case/snapshot/review/run artifacts | `.powerpacks/reflect/` only | C |
 | `cost_report.py` | usage → per-stage tokens + USD | `usage.jsonl`, `model-prices.json` | cost summary JSON | C |
 | `suite/<jd-slug>/meta.json` | committed suite entry (job_family, expected_size_class, source URL, corpus fingerprint) | — | — | C |
-| `../primitives/deep_search/score_funnel.py` | GT survival funnel + per-probe attribution | run artifacts, GT | `<run-dir>/shortlist/funnel.json` | A |
+| `../primitives/deep_search/score_funnel.py` | GT survival funnel + per-probe attribution | `stage-membership.json`, `candidate-frontier.json`, Reflect v1 GT | `<run-dir>/reflect/funnel.json` | A |
 | `../data/model-prices.json` | per-1M-token price table | — | — | C |
 
 JD text and ground-truth person sets stay **local** under `.powerpacks/reflect/`
