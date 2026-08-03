@@ -39,6 +39,14 @@ invisible to the whole review, with no way to keep or reject them. They are revi
 but never research-eligible; the worth-gated candidate path owns paid lookups.
 
 Changelog:
+  2026-08-03 (prefer cache, always retrieve): a paid reconcile run now hydrates
+    missing attached profiles through the shared RapidAPI client/cache BEFORE
+    judging (fetch_missing_profiles; 1 credit per miss, permanent failures
+    cached), then re-splits the judgeable pool — rows that used to short-circuit
+    to needs_review "no usable LinkedIn profile" reach the LLM judge instead.
+    The dry run reports `profile_fetch_misses` + `estimated_rapidapi_credits`;
+    `--no-fetch` restores the old cache-only behavior; keyless installs skip
+    the fetch and keep it. --no-llm (free) runs never fetch.
   2026-07-30 (style): the verdict->action policy is now three named values plus two
     first-rule-wins functions (`decide_plain_task`, `decide_conflict_group`) that
     `decide_actions` merely applies — the decision is readable without simulating the
@@ -68,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import json
 import re
@@ -134,6 +143,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     write_override_rows,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
+from packs.ingestion.primitives.enrich.rapidapi_client import RapidApiClient
 from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
     read_usable_cached_profile,
@@ -1457,6 +1467,58 @@ def _prepared_tasks(*, index: dict[str, Any], people: dict[str, dict[str, str]],
     return tasks, connections, identity_judgeable
 
 
+def profile_fetch_candidates(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Tasks with an attached LinkedIn URL but no usable profile on either side —
+    the ones the judge would otherwise short-circuit to "no usable LinkedIn
+    profile" without ever running."""
+    return [
+        t for t in tasks
+        if not t.get("no_link") and not t.get("from_connections")
+        and (t.get("linkedin") or {}).get("linkedin_url")
+        and not (t.get("linkedin") or {}).get("has_profile")
+    ]
+
+
+def fetch_missing_profiles(tasks: list[dict[str, Any]], people: dict[str, dict[str, str]],
+                           cache_dir: Path, *, max_workers: int = 8) -> dict[str, int]:
+    """Prefer cache, always retrieve: hydrate the shared profile cache for tasks the
+    judge could not otherwise see (1 RapidAPI credit per miss; the client caches
+    permanent failures, so re-runs never re-bill dead URLs). A reconcile run is
+    already spend-approved — fetching the judge's own inputs inside it is the same
+    decision, not a new gate. Views are rebuilt in place so the LLM judge receives
+    a real profile; keyless installs skip cleanly and keep the old cache-only path."""
+    wanted = profile_fetch_candidates(tasks)
+    counts = {"fetch_wanted": len(wanted), "fetch_ok": 0, "fetch_failed": 0, "fetch_skipped_no_key": 0}
+    if not wanted:
+        return counts
+    if not RapidApiClient.resolve_key():
+        counts["fetch_skipped_no_key"] = len(wanted)
+        print(f"reconcile: no RAPIDAPI key — leaving {len(wanted)} attached profiles unfetched", file=sys.stderr)
+        return counts
+    client = RapidApiClient()
+
+    def fetch_one(task: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        li = task.get("linkedin") or {}
+        pub = li.get("public_identifier") or extract_public_identifier(li.get("linkedin_url") or "").lower()
+        result = client.fetch_profile(pub, li.get("linkedin_url") or "", cache_dir=cache_dir)
+        return task, bool(result.get("normalized_profile"))
+
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(wanted)))) as pool:
+        for task, ok in pool.map(fetch_one, wanted):
+            if not ok:
+                counts["fetch_failed"] += 1
+                continue
+            counts["fetch_ok"] += 1
+            row = next((people[pid] for pid in (task.get("person_ids") or [])
+                        if pid in people and linkedin_key(people[pid]) == (task.get("candidate_key") or "")),
+                       None)
+            if row is not None:
+                task["linkedin"] = linkedin_view(row, cache_dir)
+    print(f"reconcile: hydrated {counts['fetch_ok']}/{counts['fetch_wanted']} missing profiles "
+          f"({counts['fetch_failed']} failed)", file=sys.stderr)
+    return counts
+
+
 def dry_run_estimate(*, index_json: Path, people_csv: Path, profile_cache_dir: Path,
                      facts_dir: Path, raw_dir: Path, model: str, effort: str,
                      slug: list[str] | None = None, limit: int = 0) -> dict[str, Any]:
@@ -1471,11 +1533,16 @@ def dry_run_estimate(*, index_json: Path, people_csv: Path, profile_cache_dir: P
         index=index, people=people, facts_dir=Path(facts_dir), raw_dir=Path(raw_dir),
         cache_dir=Path(profile_cache_dir), slug=slug, limit=limit)
     # ~ cost bracket: judgeable tasks * (rich-context floor/ceiling) — no spend.
+    # A real run also hydrates missing attached profiles first (prefer cache,
+    # always retrieve), which grows the judged pool by `profile_fetch_misses`.
+    fetch_misses = len(profile_fetch_candidates(tasks))
     per_lo, per_hi = 0.004, 0.02
     # `judgeable` and `identity_judgeable` are the SAME count under two names —
     # both keys have always been emitted, so both stay, sourced from one value.
     return {
         "source": "reconcile_linkedin", "status": "dry_run",
+        "profile_fetch_misses": fetch_misses,
+        "estimated_rapidapi_credits": fetch_misses,
         "parents": len(index.get("parents", {})), "tasks": len(tasks),
         "judgeable": len(judgeable), "no_link": sum(1 for t in tasks if t.get("no_link")),
         "identity_judgeable": len(judgeable),
@@ -1516,6 +1583,7 @@ class ReconcileLinkedinManifest(StageManifest):
     conflicts: int = 0
     conflicts_auto_resolved: int = 0
     conflicts_to_review: int = 0
+    profile_fetch: dict[str, int] | None = None
     no_link: int = 0
     errors: int = 0
     overrides: dict[str, Any] = {}
@@ -1608,6 +1676,7 @@ class ReconcileLinkedin(Node):
         limit: int = 0,
         no_overrides: bool = False,
         no_llm: bool = False,
+        no_fetch: bool = False,
         reapply: bool = False,
     ) -> None:
         self.index_json = Path(index_json or INDEX_JSON)
@@ -1631,6 +1700,7 @@ class ReconcileLinkedin(Node):
         self.limit = limit
         self.no_overrides = no_overrides
         self.no_llm = no_llm
+        self.no_fetch = no_fetch
         self.reapply = reapply
 
     def bindings(self) -> dict[str, str]:
@@ -1687,6 +1757,20 @@ class ReconcileLinkedin(Node):
 
         usage_total = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         use_llm = not self.no_llm
+        # Prefer cache, always retrieve: a paid run hydrates the profiles the judge
+        # is missing (RapidAPI, cached; keyless installs skip) and re-splits the
+        # judgeable pool so those rows reach the LLM instead of short-circuiting
+        # to "no usable LinkedIn profile". --no-fetch restores cache-only.
+        fetch_counts: dict[str, int] = {}
+        if use_llm and not self.no_fetch:
+            fetch_counts = fetch_missing_profiles(tasks, people, self.profile_cache_dir)
+            if fetch_counts.get("fetch_ok"):
+                judgeable = [
+                    t for t in tasks
+                    if not t.get("no_link") and t["linkedin"].get("has_profile")
+                    and not t.get("from_connections")
+                ]
+        self._fetch_counts = fetch_counts
         owner_block = owner_background_block(load_owner()) if load_owner() else ""
 
         if use_llm and judgeable:
@@ -1798,6 +1882,7 @@ class ReconcileLinkedin(Node):
             self_reported_retargets=self_retargets.get("proposed", 0),
             name_match_reviews=name_match_reviews.get("name_match_reviews", 0),
             verdicts=counts, conflicts=len(conflict_tasks),
+            profile_fetch=getattr(self, "_fetch_counts", None) or None,
             conflicts_auto_resolved=sum(1 for t in conflict_tasks if t.get("via") == "conflict_resolved"),
             conflicts_to_review=sum(1 for t in conflict_tasks if t.get("action") == "review"),
             no_link=sum(1 for t in tasks if t.get("no_link")),
@@ -1844,6 +1929,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="Estimate cost only; no spend, no writes")
     p.add_argument("--no-overrides", action="store_true", help="Write verdicts but do NOT update the override table")
     p.add_argument("--no-llm", action="store_true", help="Deterministic fallback (offline/tests only)")
+    p.add_argument("--no-fetch", action="store_true",
+                   help="Cache-only: do not RapidAPI-fetch missing attached profiles before judging")
     p.add_argument("--reapply", action="store_true",
                    help="Re-decide/write overrides from existing verdicts.jsonl (no re-judging, no OpenAI spend)")
     return p
@@ -1885,6 +1972,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
         no_overrides=args.no_overrides,
         no_llm=args.no_llm,
+        no_fetch=args.no_fetch,
         reapply=args.reapply,
     ).run()
     emit(payload.to_payload())
