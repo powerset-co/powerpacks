@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.12.0...powerpacks-v1.13.0) (2026-08-03)
+
+
+### Features
+
+* **deep-context:** professional content policy for dossiers — professional-content-v5 ([#398](https://github.com/powerset-co/powerpacks/issues/398)) ([6551ab9](https://github.com/powerset-co/powerpacks/commit/6551ab9dcc0d706b5d5ec2ce69fd056bdb4f3dfd))
+
 ## [1.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.11.0...powerpacks-v1.12.0) (2026-08-02)
 
 
