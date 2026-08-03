@@ -4,6 +4,9 @@
   "version": "2026-04-29",
   "namespace": "aleph_summaries_v1",
   "document_grain": "person_summary",
+  "person_identity": {
+    "source": "row_id"
+  },
   "description": "Person-level summary namespace used as a bounded retrieval lane and explicit tech-skill prefilter.",
   "vector": {"dimension": 1536, "distance_metric": "cosine_distance"},
   "attributes": [

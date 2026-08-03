@@ -85,6 +85,41 @@ class TurboPufferSearchRunner:
         if not isinstance(corpus, PowersetCorpus):
             raise ValueError("TurboPuffer runner requires a Powerset corpus")
         self.corpus = corpus
+        self._namespace_schemas: dict[str, frozenset[str]] = {}
+
+    @staticmethod
+    def _namespace_contract(name: str) -> dict[str, Any]:
+        return json.loads((CONTRACTS / f"{name}.namespace.json").read_text())
+
+    def _namespace_attributes(self, name: str) -> frozenset[str]:
+        cached = self._namespace_schemas.get(name)
+        if cached is not None:
+            return cached
+        contract = self._namespace_contract(name)
+        return frozenset(str(row["name"]) for row in contract.get("attributes") or [])
+
+    def _include_attributes(self, name: str, *requested: str) -> list[str]:
+        """Request only attributes present in the selected namespace schema."""
+        available = self._namespace_attributes(name)
+        return [attribute for attribute in dict.fromkeys(requested) if attribute in available]
+
+    def _normalize_person_rows(
+        self, name: str, rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Normalize namespace-owned person identity once and fail closed on gaps."""
+        identity = self._namespace_contract(name).get("person_identity") or {}
+        source = str(identity.get("source") or "")
+        if source == "row_id":
+            source = "id"
+        if not source:
+            raise ValueError(f"{name} contract does not define canonical person identity")
+        normalized = []
+        for row in rows:
+            person_id = str(row.get(source) or "")
+            if not person_id:
+                raise RuntimeError(f"{name} row is missing canonical person identity from {source}")
+            normalized.append({**row, "person_id": person_id})
+        return normalized
 
     def capabilities(self, spec: SearchSpec) -> RunnerCapabilities:
         people = json.loads((CONTRACTS / "people.namespace.json").read_text())
@@ -209,7 +244,7 @@ class TurboPufferSearchRunner:
         if spec.person_filters.education_names:
             required["schools"].update(("school_name", "person_count"))
         if spec.tech_skills:
-            required["summaries"].update(("base_id", "tech_skills"))
+            required["summaries"].add("tech_skills")
 
         queries = tuple(dict.fromkeys((
             *spec.role.bm25_queries,
@@ -609,23 +644,20 @@ class TurboPufferSearchRunner:
                             ("tech_skills", "ContainsAny", list(spec.tech_skills)),
                         ],
                     ),
-                    ["base_id", "person_id", "tech_skills"],
+                    self._include_attributes("summaries", "tech_skills"),
                     page_size=10000,
                 )
             )
             if skills["truncated"] or not skills["completed"]:
                 raise RuntimeError("skills hard-filter enumeration incomplete")
+            skill_rows = self._normalize_person_rows("summaries", skills["rows"])
             skill_people = list(
                 dict.fromkeys(
-                    str(row.get("person_id") or row.get("base_id"))
-                    for row in skills["rows"]
-                    if row.get("person_id") or row.get("base_id")
+                    row["person_id"] for row in skill_rows
                 )
             )
-            for row in skills["rows"]:
-                person_id = str(row.get("person_id") or row.get("base_id") or "")
-                if not person_id:
-                    continue
+            for row in skill_rows:
+                person_id = row["person_id"]
                 tech_skills_by_person[person_id] = tuple(
                     dict.fromkeys(
                         (*tech_skills_by_person.get(person_id, ()), *(
@@ -767,9 +799,12 @@ class TurboPufferSearchRunner:
                     payload,
                     filters.compiled.get("summary_namespace_filter"),
                     top_k=plan.spec.bounds.retrieval_limit,
-                    include_attributes=["base_id", "person_id", "summary", "tech_skills"],
+                    include_attributes=self._include_attributes(
+                        "summaries", "summary", "tech_skills"
+                    ),
                 )
             )
+            summary_rows = self._normalize_person_rows("summaries", summary_rows)
             lane_rows.append(("summary", summary_rows))
         if "company_signal" in plan.capabilities.retrieval_lanes:
             signal_rows = asyncio.run(
@@ -972,6 +1007,7 @@ class TurboPufferSearchRunner:
                 )
             live_schema = storage.namespace_schema(name)
             live_schemas[name] = live_schema
+            self._namespace_schemas[name] = frozenset(live_schema)
             missing_required = sorted(schema_requirements[name] - set(live_schema))
             if missing_required:
                 raise ValueError(

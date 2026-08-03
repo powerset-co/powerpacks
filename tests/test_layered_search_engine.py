@@ -954,8 +954,7 @@ class PipelineTests(unittest.TestCase):
                 {
                     "rows": [
                         {
-                            "base_id": "person-1",
-                            "person_id": "person-1",
+                            "id": "person-1",
                             "tech_skills": ["Rust", "Go"],
                         }
                     ],
@@ -974,6 +973,9 @@ class PipelineTests(unittest.TestCase):
                 },
             ]
         )
+        runner._namespace_schemas["summaries"] = frozenset(
+            {"summary", "summary_tokens", "tech_skills", "allowed_operator_ids", "vector"}
+        )
         with mock.patch(
             "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
             new=enumerations,
@@ -983,6 +985,7 @@ class PipelineTests(unittest.TestCase):
             hard_filters.compiled["tech_skills_by_person"]["person-1"],
             ("Rust", "Go"),
         )
+        self.assertEqual(enumerations.await_args_list[0].args[2], ["tech_skills"])
 
         role_rows = [{"base_id": "person-1", "position_id": "position-1", "score": 1.0}]
         with (
@@ -993,7 +996,7 @@ class PipelineTests(unittest.TestCase):
             mock.patch(
                 "packs.search.backends.turbopuffer.runner.storage.hybrid_summary_rows",
                 new=mock.AsyncMock(return_value=[]),
-            ),
+            ) as summary_rows,
             mock.patch(
                 "packs.search.backends.turbopuffer.runner.storage.semantic_company_signal_rows",
                 new=mock.AsyncMock(return_value=[]),
@@ -1004,6 +1007,10 @@ class PipelineTests(unittest.TestCase):
                 hard_filters,
             )
         self.assertEqual(retrieved[0].tech_skills, ("Rust", "Go"))
+        self.assertEqual(
+            summary_rows.await_args.kwargs["include_attributes"],
+            ["summary", "tech_skills"],
+        )
         self.assertEqual(
             retrieved[0].hard_filter_evidence["tech_skills"],
             {"source": "turbopuffer_summaries", "values": ["Rust", "Go"]},
@@ -1258,7 +1265,7 @@ class PipelineTests(unittest.TestCase):
             ),
             "signal_filter": ("allowed_operator_ids", "ContainsAny", ["operator"]),
         }
-        summary = {"id": "summary-person", "person_id": "summary-person", "score": 0.7}
+        summary = {"id": "summary-person", "score": 0.7}
         signal = {"company_id": "signal-company", "score": 0.8}
         signal_person = {
             "id": "signal-position",
@@ -1295,6 +1302,10 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(by_lane["company_signal"].matched_position_ids, ("signal-position",))
         self.assertEqual(by_lane["company_signal"].person_id, "signal-person")
         self.assertEqual(summary_search.await_args.args[1], compiled["summary_namespace_filter"])
+        self.assertEqual(
+            summary_search.await_args.kwargs["include_attributes"],
+            ["summary", "tech_skills"],
+        )
         people_filter = enumerate_rows.await_args.args[1]
         self.assertIn(("role_ids", "ContainsAny", ["engineer"]), people_filter[1][0][1])
         self.assertEqual(people_filter[1][1], ("company_id", "In", ["signal-company"]))
@@ -1341,6 +1352,18 @@ class PipelineTests(unittest.TestCase):
         self.assertIn(("role_ids", "ContainsAny", ["engineer"]), people_summary_filter[1])
         self.assertIn(("company_id", "In", ["target"]), people_summary_filter[1])
         self.assertIn(("is_current", "Eq", True), people_summary_filter[1])
+
+    def test_remote_summary_identity_fails_closed_when_row_id_is_missing(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        with self.assertRaisesRegex(
+            RuntimeError, "summaries row is missing canonical person identity from id"
+        ):
+            runner._normalize_person_rows(
+                "summaries", [{"tech_skills": ["Synthetic Skill"]}]
+            )
 
     def test_snapshot_cli_restricts_output_to_reflect_state(self):
         script = ROOT / "packs/search/reflect/capture_snapshot.py"
@@ -1605,23 +1628,27 @@ class PipelineTests(unittest.TestCase):
         selected = spec(
             backend=Backend.POWERSET,
             corpus=PowersetCorpus("set", ("operator",)),
+            tech_skills=("Synthetic Skill",),
         )
 
         def live_schema(name):
             contract = json.loads(
                 (ROOT / "packs/search/contracts/turbopuffer" / f"{name}.namespace.json").read_text()
             )
+            omitted = {
+                "company_description",
+                "ig_followers",
+                "investor_names",
+                "linkedin_connections",
+                "linkedin_followers",
+                "x_twitter_followers",
+            }
+            if name == "summaries":
+                omitted.update(("base_id", "person_id"))
             fields = {
                 row["name"]: {"type": row["type"]}
                 for row in contract["attributes"]
-                if row["name"] not in {
-                    "company_description",
-                    "ig_followers",
-                    "investor_names",
-                    "linkedin_connections",
-                    "linkedin_followers",
-                    "x_twitter_followers",
-                }
+                if row["name"] not in omitted
             }
             if contract.get("vector"):
                 fields["vector"] = {"type": "vector"}
@@ -1662,6 +1689,8 @@ class PipelineTests(unittest.TestCase):
 
         people_schema = live_schema("people")
         self.assertNotIn("company_description", people_schema)
+        self.assertNotIn("person_id", live_schema("summaries"))
+        self.assertNotIn("base_id", live_schema("summaries"))
         self.assertEqual(snapshot["namespace_schema_hashes"]["people"], canonical_hash(people_schema))
         self.assertRegex(snapshot["scoped_records_hash"], r"^[a-f0-9]{64}$")
 
