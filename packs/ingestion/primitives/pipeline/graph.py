@@ -95,7 +95,6 @@ import packs.ingestion.primitives.deep_context.prefetch_profiles  # noqa: E402,F
 import packs.ingestion.primitives.deep_context.reconcile_deep_research  # noqa: E402,F401
 import packs.ingestion.primitives.deep_context.reconcile_linkedin  # noqa: E402,F401
 import packs.ingestion.primitives.deep_context.synthesize_person_context  # noqa: E402,F401
-import packs.ingestion.primitives.deep_context.web_resolve  # noqa: E402,F401
 import packs.ingestion.primitives.discover.gmail.discover  # noqa: E402,F401
 import packs.ingestion.primitives.discover.messages.discover  # noqa: E402,F401
 import packs.ingestion.primitives.enrich.enrich_people  # noqa: E402,F401

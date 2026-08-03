@@ -560,8 +560,7 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
                                   model: str = "", effort: str = "medium",
                                   confirm_threshold: float = DEFAULT_CONFIRM,
                                   timeout: int = 120, max_retries: int = 6,
-                                  heartbeat: Callable[[int, int], None] | None = None,
-                                  profile_name: str = "01_research_parallel.json") -> dict[str, Any]:
+                                  heartbeat: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     """After deep research, propose a `retarget` (pending) for each detached person whose research
     found a correct LinkedIn — into the same decisions table (sticky upsert).
 
@@ -587,7 +586,7 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     cached = grandfathered = 0
     for r in subset:
         handle = r.get("parent_slug", "")
-        profile = _read_json(out_dir / handle / profile_name)
+        profile = _read_json(out_dir / handle / "01_research_parallel.json")
         new_url = _find_linkedin(profile)
         old_pub = (r.get("candidate_key") or extract_public_identifier((r.get("linkedin") or {}).get("linkedin_url", ""))).lower()
         if not new_url or not old_pub:

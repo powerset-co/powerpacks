@@ -519,8 +519,8 @@ Routes:
   same-person/merge candidates, staged worth/LinkedIn review, candidate lookup,
   synthetic profiles, fan-in + Modal index + validate; `$deep-context tend` is
   the weekly self-heal/upkeep pass ("tend my store", "self-heal", "weekly
-  maintenance") — free + codex-subscription websearch identity recovery, paid
-  work parked in a report. This is the single
+  maintenance") — re-runs the free stages so ghosts prune and merges apply,
+  then prints the existing dry-run estimates for parked paid work. This is the single
   post-import processing surface; `$deep-setup` is retired →
   `packs/ingestion/skills/deep-context/SKILL.md`
 - `$clean-slate`, "clean slate", "pipeclean", "start over from scratch" —
