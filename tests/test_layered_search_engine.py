@@ -796,6 +796,27 @@ class PipelineTests(unittest.TestCase):
             rows = runner.lookup_person(LookupSpec("person_id", "matched"))
         self.assertEqual([row.person_id for row in rows], ["matched"])
         self.assertIn("base_id", str(scoped.await_args.args[1]))
+        self.assertEqual(scoped.await_args.args[2], ["base_id"])
+
+    def test_powerset_scope_enumeration_uses_live_base_id_identity(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        runner._namespace_schemas["people"] = frozenset(
+            {"base_id", "allowed_operator_ids"}
+        )
+        enumeration = mock.AsyncMock(return_value={
+            "rows": [{"base_id": "person-1"}],
+            "completed": True,
+            "truncated": False,
+        })
+        with mock.patch(
+            "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+            new=enumeration,
+        ):
+            self.assertEqual(runner._scoped_person_ids(), {"person-1"})
+        self.assertEqual(enumeration.await_args.args[2], ["base_id"])
 
     def test_remote_unresolved_education_preserves_input_disposition(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
@@ -1227,11 +1248,14 @@ class PipelineTests(unittest.TestCase):
         }
         capabilities = runner.capabilities(remote)
         plan = SearchPlan(remote, capabilities, ResolvedSources(), ("retrieve",))
+        runner._namespace_schemas["people"] = frozenset(
+            set(row) | {"base_id", "position_id"}
+        )
         with (
             mock.patch(
                 "packs.search.backends.turbopuffer.runner.storage.hybrid_role_rows",
                 new=mock.AsyncMock(return_value=[row]),
-            ),
+            ) as role_search,
             mock.patch(
                 "packs.search.backends.turbopuffer.runner.storage.hybrid_summary_rows",
                 new=mock.AsyncMock(return_value=[]),
@@ -1245,12 +1269,16 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(candidate.structured["raw_title"], "Eng")
         self.assertEqual(candidate.structured["company_stage"], "series_a")
         self.assertEqual(candidate.matched_position_ids, ("pos",))
+        self.assertNotIn("person_id", role_search.await_args.kwargs["include_attributes"])
 
     def test_remote_summary_and_company_signal_lanes_preserve_grain_and_filters(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
         from packs.search.pipeline.models import PowersetCorpus, SearchPlan
 
         runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        runner._namespace_schemas["people"] = frozenset(
+            {"base_id", "company_id", "position_title", "allowed_operator_ids"}
+        )
         remote = spec(
             backend=Backend.POWERSET,
             corpus=runner.corpus,
@@ -1309,6 +1337,7 @@ class PipelineTests(unittest.TestCase):
         people_filter = enumerate_rows.await_args.args[1]
         self.assertIn(("role_ids", "ContainsAny", ["engineer"]), people_filter[1][0][1])
         self.assertEqual(people_filter[1][1], ("company_id", "In", ["signal-company"]))
+        self.assertNotIn("person_id", enumerate_rows.await_args.args[2])
 
     def test_remote_summary_eligible_people_are_compiled_before_top_k(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
@@ -1353,6 +1382,50 @@ class PipelineTests(unittest.TestCase):
         self.assertIn(("company_id", "In", ["target"]), people_summary_filter[1])
         self.assertIn(("is_current", "Eq", True), people_summary_filter[1])
 
+    def test_remote_hard_filter_people_enumerations_use_live_base_id_identity(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        runner._namespace_schemas["people"] = frozenset({
+            "allowed_operator_ids",
+            "base_id",
+            "company_id",
+            "role_ids",
+            "seniority_band",
+        })
+        remote = spec(
+            backend=Backend.POWERSET,
+            corpus=runner.corpus,
+            role=RoleIntent(
+                ("engineer",),
+                bm25_queries=("engineer",),
+                search_mode="COMPANY_UNION",
+            ),
+            company_filters=CompanyFilters(company_ids=("target",)),
+        )
+        enumerations = mock.AsyncMock(side_effect=[
+            {"rows": [{"base_id": "summary-person"}], "completed": True, "truncated": False},
+            {"rows": [{"base_id": "role-person"}], "completed": True, "truncated": False},
+            {"rows": [{"base_id": "company-person"}], "completed": True, "truncated": False},
+        ])
+        with mock.patch(
+            "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+            new=enumerations,
+        ):
+            filters = runner.apply_hard_filters(
+                remote, ResolvedSources(company_ids=("target",))
+            )
+
+        self.assertEqual(
+            filters.eligible_person_ids,
+            ("role-person", "company-person"),
+        )
+        self.assertEqual(len(enumerations.await_args_list), 3)
+        for call in enumerations.await_args_list:
+            self.assertEqual(call.args[0], "people")
+            self.assertEqual(call.args[2], ["base_id"])
+
     def test_remote_summary_identity_fails_closed_when_row_id_is_missing(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
         from packs.search.pipeline.models import PowersetCorpus
@@ -1363,6 +1436,18 @@ class PipelineTests(unittest.TestCase):
         ):
             runner._normalize_person_rows(
                 "summaries", [{"tech_skills": ["Synthetic Skill"]}]
+            )
+
+    def test_remote_people_identity_fails_closed_without_base_id(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        with self.assertRaisesRegex(
+            RuntimeError, "people row is missing canonical person identity from base_id"
+        ):
+            runner._normalize_person_rows(
+                "people", [{"id": "position-1", "person_id": "alias-only"}]
             )
 
     def test_snapshot_cli_restricts_output_to_reflect_state(self):
@@ -1645,6 +1730,8 @@ class PipelineTests(unittest.TestCase):
             }
             if name == "summaries":
                 omitted.update(("base_id", "person_id"))
+            if name == "people":
+                omitted.add("person_id")
             fields = {
                 row["name"]: {"type": row["type"]}
                 for row in contract["attributes"]
@@ -1689,6 +1776,7 @@ class PipelineTests(unittest.TestCase):
 
         people_schema = live_schema("people")
         self.assertNotIn("company_description", people_schema)
+        self.assertNotIn("person_id", people_schema)
         self.assertNotIn("person_id", live_schema("summaries"))
         self.assertNotIn("base_id", live_schema("summaries"))
         self.assertEqual(snapshot["namespace_schema_hashes"]["people"], canonical_hash(people_schema))
@@ -1704,9 +1792,13 @@ class PipelineTests(unittest.TestCase):
             {"id": "a", "base_id": "person-1", "live_only": "first", "vector": [0.1, 0.2]},
             {"id": "b", "base_id": "person-2", "live_only": "second", "vector": [0.3, 0.4]},
         ]
-        combined = _NamespaceSnapshotAccumulator(retain_membership=True)
+        combined = _NamespaceSnapshotAccumulator(
+            retain_membership=True, person_identity_source="base_id"
+        )
         combined.consume_page(rows)
-        paged = _NamespaceSnapshotAccumulator(retain_membership=True)
+        paged = _NamespaceSnapshotAccumulator(
+            retain_membership=True, person_identity_source="base_id"
+        )
         paged.consume_page(rows[:1])
         paged.consume_page(rows[1:])
 

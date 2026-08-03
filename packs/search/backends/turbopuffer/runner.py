@@ -43,12 +43,18 @@ SCOPED_RECORDS_HASH_VERSION = "powerset.scoped_records.streaming.v1"
 class _NamespaceSnapshotAccumulator:
     """Hash complete canonical rows in stable TurboPuffer id order."""
 
-    def __init__(self, *, retain_membership: bool = False):
+    def __init__(
+        self,
+        *,
+        retain_membership: bool = False,
+        person_identity_source: str | None = None,
+    ):
         self._hash = hashlib.sha256()
         self._hash.update(b"powerset.namespace.rows.v1\0")
         self._last_id: str | None = None
         self.count = 0
         self.member_ids: set[str] | None = set() if retain_membership else None
+        self._person_identity_source = person_identity_source
 
     def consume_page(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
@@ -61,9 +67,10 @@ class _NamespaceSnapshotAccumulator:
             self._last_id = row_id
             self.count += 1
             if self.member_ids is not None:
-                person_id = row.get("person_id") or row.get("base_id") or row.get("id")
-                if person_id:
-                    self.member_ids.add(str(person_id))
+                person_id = str(row.get(self._person_identity_source or "") or "")
+                if not person_id:
+                    raise RuntimeError("snapshot row is missing canonical person identity")
+                self.member_ids.add(person_id)
 
     def hexdigest(self) -> str:
         return self._hash.hexdigest()
@@ -103,16 +110,22 @@ class TurboPufferSearchRunner:
         available = self._namespace_attributes(name)
         return [attribute for attribute in dict.fromkeys(requested) if attribute in available]
 
+    def _person_identity_source(self, name: str) -> str:
+        identity = self._namespace_contract(name).get("person_identity") or {}
+        source = str(identity.get("source") or "")
+        if source == "row_id":
+            return "id"
+        if source == "attribute":
+            attribute = str(identity.get("attribute") or "")
+            if attribute:
+                return attribute
+        raise ValueError(f"{name} contract does not define canonical person identity")
+
     def _normalize_person_rows(
         self, name: str, rows: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         """Normalize namespace-owned person identity once and fail closed on gaps."""
-        identity = self._namespace_contract(name).get("person_identity") or {}
-        source = str(identity.get("source") or "")
-        if source == "row_id":
-            source = "id"
-        if not source:
-            raise ValueError(f"{name} contract does not define canonical person identity")
+        source = self._person_identity_source(name)
         normalized = []
         for row in rows:
             person_id = str(row.get(source) or "")
@@ -323,14 +336,12 @@ class TurboPufferSearchRunner:
                         ("base_id", "In", list(candidate_ids)),
                     ],
                 ),
-                ["base_id"],
+                self._include_attributes("people", "base_id"),
                 page_size=min(10000, max(1, len(candidate_ids))),
             )
         )
         return {
-            str(row.get("person_id") or row.get("base_id"))
-            for row in rows
-            if row.get("person_id") or row.get("base_id")
+            row["person_id"] for row in self._normalize_person_rows("people", rows)
         }
 
     def _scoped_person_ids(self) -> set[str]:
@@ -342,16 +353,15 @@ class TurboPufferSearchRunner:
             storage.enumerate_filter_only_rows_for_namespace(
                 "people",
                 ("allowed_operator_ids", "ContainsAny", list(self.corpus.operator_ids)),
-                ["base_id", "person_id"],
+                self._include_attributes("people", "base_id"),
                 page_size=10000,
             )
         )
         if not result["completed"] or result["truncated"]:
             raise RuntimeError("selected Powerset scope enumeration is incomplete")
         values = {
-            str(row.get("person_id") or row.get("base_id"))
-            for row in result["rows"]
-            if row.get("person_id") or row.get("base_id")
+            row["person_id"]
+            for row in self._normalize_person_rows("people", result["rows"])
         }
         self._scope_person_ids = frozenset(values)
         return values
@@ -683,44 +693,48 @@ class TurboPufferSearchRunner:
         if len(summary_clauses) > 1:
             summary_enumeration = asyncio.run(
                 storage.enumerate_filter_only_rows_for_namespace(
-                    "people", summary_filter, ["base_id", "person_id"], page_size=10000
+                    "people",
+                    summary_filter,
+                    self._include_attributes("people", "base_id"),
+                    page_size=10000,
                 )
             )
             if summary_enumeration["truncated"] or not summary_enumeration["completed"]:
                 raise RuntimeError("summary eligibility enumeration incomplete")
-            summary_eligible_ids = list(
-                dict.fromkeys(
-                    str(row.get("person_id") or row.get("base_id") or "")
-                    for row in summary_enumeration["rows"]
-                    if row.get("person_id") or row.get("base_id")
+            summary_eligible_ids = list(dict.fromkeys(
+                row["person_id"]
+                for row in self._normalize_person_rows(
+                    "people", summary_enumeration["rows"]
                 )
-            )
+            ))
             summary_namespace_filter = (
                 "And",
                 [summary_namespace_filter, ("id", "In", summary_eligible_ids)],
             )
         enumeration = asyncio.run(
             storage.enumerate_filter_only_rows_for_namespace(
-                "people", filters, ["base_id", "person_id"], page_size=10000
+                "people",
+                filters,
+                self._include_attributes("people", "base_id"),
+                page_size=10000,
             )
         )
-        all_rows = list(enumeration["rows"])
+        all_rows = self._normalize_person_rows("people", enumeration["rows"])
         if company_filter is not None:
             company_enumeration = asyncio.run(
                 storage.enumerate_filter_only_rows_for_namespace(
-                    "people", company_filter, ["base_id", "person_id"], page_size=10000
+                    "people",
+                    company_filter,
+                    self._include_attributes("people", "base_id"),
+                    page_size=10000,
                 )
             )
             if company_enumeration["truncated"] or not company_enumeration["completed"]:
                 raise RuntimeError("company-union enumeration incomplete")
-            all_rows.extend(company_enumeration["rows"])
-        ids = tuple(
-            dict.fromkeys(
-                str(row.get("person_id") or row.get("base_id") or "")
-                for row in all_rows
-                if row.get("person_id") or row.get("base_id")
+            all_rows.extend(
+                self._normalize_person_rows("people", company_enumeration["rows"])
             )
-        )
+        ids = tuple(dict.fromkeys(row["person_id"] for row in all_rows))
         if enumeration["truncated"]:
             raise RuntimeError("hard-filter pool enumeration truncated")
         return HardFilterSet(
@@ -762,9 +776,9 @@ class TurboPufferSearchRunner:
             "role_ids": list(plan.spec.role.role_ids),
             "search_mode": plan.spec.role.search_mode,
         }
-        attributes = [
+        attributes = self._include_attributes(
+            "people",
             "base_id",
-            "person_id",
             "position_id",
             "id",
             "position_title",
@@ -783,7 +797,7 @@ class TurboPufferSearchRunner:
             "company_entity_types",
             "company_headcount",
             "company_stage",
-        ]
+        )
         rows = asyncio.run(
             storage.hybrid_role_rows(
                 payload,
@@ -792,6 +806,7 @@ class TurboPufferSearchRunner:
                 include_attributes=attributes,
             )
         )
+        rows = self._normalize_person_rows("people", rows)
         lane_rows = [("role", rows)]
         if "summary" in plan.capabilities.retrieval_lanes:
             summary_rows = asyncio.run(
@@ -834,37 +849,47 @@ class TurboPufferSearchRunner:
                         max_results=plan.spec.bounds.retrieval_limit,
                     )
                 )["rows"]
+                signal_people = self._normalize_person_rows("people", signal_people)
                 for row in signal_people:
                     row["score"] = company_scores.get(str(row.get("company_id") or ""), 0)
                 lane_rows.append(("company_signal", signal_people))
         if plan.spec.role.search_mode == "COMPANY_UNION" and queries:
+            adjacency_rows = asyncio.run(
+                storage.bm25_adjacency_rows(
+                    queries,
+                    filters.compiled["filter"],
+                    top_k=plan.spec.bounds.retrieval_limit,
+                    include_attributes=attributes,
+                )
+            )
             lane_rows.append(
                 (
                     "adjacency",
-                    asyncio.run(
-                        storage.bm25_adjacency_rows(
-                            queries,
-                            filters.compiled["filter"],
-                            top_k=plan.spec.bounds.retrieval_limit,
-                            include_attributes=attributes,
-                        )
-                    ),
+                    self._normalize_person_rows("people", adjacency_rows),
                 )
             )
         if filters.compiled.get("company_filter") is not None:
             company_rows = asyncio.run(
                 storage.enumerate_filter_only_rows_for_namespace(
-                    "people", filters.compiled["company_filter"], attributes, page_size=plan.spec.bounds.retrieval_limit
+                    "people",
+                    filters.compiled["company_filter"],
+                    attributes,
+                    page_size=plan.spec.bounds.retrieval_limit,
                 )
             )
-            lane_rows.append(("company_union", company_rows["rows"][: plan.spec.bounds.retrieval_limit]))
+            lane_rows.append(
+                (
+                    "company_union",
+                    self._normalize_person_rows(
+                        "people", company_rows["rows"][: plan.spec.bounds.retrieval_limit]
+                    ),
+                ),
+            )
         out = []
         indexed_skills = filters.compiled.get("tech_skills_by_person") or {}
         for lane, lane_values in lane_rows:
             for rank, row in enumerate(lane_values, start=1):
-                person_id = str(row.get("person_id") or row.get("base_id") or "")
-                if not person_id:
-                    continue
+                person_id = row["person_id"]
                 position_id = "" if lane == "summary" else str(row.get("position_id") or row.get("id") or "")
                 score = float(row.get("score") or 0)
                 actual_skills = tuple(
@@ -1014,7 +1039,12 @@ class TurboPufferSearchRunner:
                     f"{name} live schema is missing operationally required attributes: "
                     + ", ".join(missing_required)
                 )
-            accumulator = _NamespaceSnapshotAccumulator(retain_membership=name == "people")
+            accumulator = _NamespaceSnapshotAccumulator(
+                retain_membership=name == "people",
+                person_identity_source=(
+                    self._person_identity_source(name) if name == "people" else None
+                ),
+            )
             enumeration = asyncio.run(
                 storage.consume_filter_only_pages_for_namespace(
                     name,
