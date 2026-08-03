@@ -144,7 +144,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     write_override_rows,
 )
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
-from packs.ingestion.primitives.enrich.rapidapi_client import RapidApiClient
+from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles, RapidApiClient
 from packs.ingestion.primitives.enrich.profile_cache import (
     profile_cache_path,
     read_usable_cached_profile,
@@ -1496,25 +1496,21 @@ def fetch_missing_profiles(tasks: list[dict[str, Any]], people: dict[str, dict[s
         counts["fetch_skipped_no_key"] = len(wanted)
         print(f"reconcile: no RAPIDAPI key — leaving {len(wanted)} attached profiles unfetched", file=sys.stderr)
         return counts
-    client = RapidApiClient()
 
-    def fetch_one(task: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    def _task_pub(task: dict[str, Any]) -> str:
         li = task.get("linkedin") or {}
-        pub = li.get("public_identifier") or extract_public_identifier(li.get("linkedin_url") or "").lower()
-        result = client.fetch_profile(pub, li.get("linkedin_url") or "", cache_dir=cache_dir)
-        return task, bool(result.get("normalized_profile"))
-
-    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(wanted)))) as pool:
-        for task, ok in pool.map(fetch_one, wanted):
-            if not ok:
-                counts["fetch_failed"] += 1
-                continue
-            counts["fetch_ok"] += 1
-            row = next((people[pid] for pid in (task.get("person_ids") or [])
-                        if pid in people and linkedin_key(people[pid]) == (task.get("candidate_key") or "")),
-                       None)
-            if row is not None:
-                task["linkedin"] = linkedin_view(row, cache_dir)
+        return li.get("public_identifier") or extract_public_identifier(li.get("linkedin_url") or "").lower()
+    hydrated = hydrate_profiles(
+        [(_task_pub(t), (t.get("linkedin") or {}).get("linkedin_url") or "") for t in wanted],
+        cache_dir, max_workers=max_workers)
+    counts["fetch_ok"], counts["fetch_failed"] = hydrated["ok"], hydrated["failed"]
+    # Rebuild each view from the cache so a hydrated profile actually reaches the judge.
+    for task in wanted:
+        row = next((people[pid] for pid in (task.get("person_ids") or [])
+                    if pid in people and linkedin_key(people[pid]) == (task.get("candidate_key") or "")),
+                   None)
+        if row is not None:
+            task["linkedin"] = linkedin_view(row, cache_dir)
     print(f"reconcile: hydrated {counts['fetch_ok']}/{counts['fetch_wanted']} missing profiles "
           f"({counts['fetch_failed']} failed)", file=sys.stderr)
     return counts

@@ -60,6 +60,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -233,6 +234,37 @@ class RapidApiClient:
         if status in PERMANENT_FAILURE_STATUS_CODES:
             return True
         return status == 200 and normalized.get("success") is False
+
+
+def hydrate_profiles(items: "list[tuple[str, str]]", cache_dir: Path | str | None,
+                     *, max_workers: int = 8) -> dict[str, int]:
+    """Prefer cache, always retrieve: ensure a usable profile exists for each
+    (public_identifier, linkedin_url) pair, fetching the misses.
+
+    The ONE home for that policy — both judges that need a profile before
+    judging call this (the attached-link judge in reconcile_linkedin and the
+    retarget-proposal judge in reconcile_deep_research). Cache hits cost
+    nothing; a miss is one RapidAPI credit and permanent failures are cached,
+    so re-runs never re-bill a dead URL. A keyless install is not an error: it
+    returns `skipped_no_key` and leaves the caller on whatever it already had.
+    """
+    items = [(pub, url) for pub, url in items if pub]
+    counts = {"wanted": len(items), "ok": 0, "failed": 0, "skipped_no_key": 0}
+    if not items:
+        return counts
+    if not RapidApiClient.resolve_key():
+        counts["skipped_no_key"] = len(items)
+        return counts
+    client = RapidApiClient()
+
+    def one(item: "tuple[str, str]") -> bool:
+        pub, url = item
+        return bool(client.fetch_profile(pub, url, cache_dir=cache_dir).get("normalized_profile"))
+
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(items)))) as pool:
+        for ok in pool.map(one, items):
+            counts["ok" if ok else "failed"] += 1
+    return counts
 
 
 def rapidapi_key() -> str:
