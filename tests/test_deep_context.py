@@ -1013,7 +1013,23 @@ class TestSynthesizeExecute(unittest.TestCase):
         self.assertIn("still count as relationship evidence", synth.SYSTEM_PROMPT)
         self.assertNotIn("sexual", synth.SYSTEM_PROMPT)
         self.assertNotIn("drug", synth.SYSTEM_PROMPT)
-        self.assertEqual(synth.SYNTHESIS_CONTRACT_VERSION, "professional-content-v5")
+        self.assertEqual(synth.SYNTHESIS_CONTRACT_VERSION, "relationship-category-v6")
+
+    def test_relationship_category_schema_prompt_and_coercion(self):
+        # v6: the slice tag is forced by the schema enum, explained in the
+        # prompt, and coerced to a legal value at the parse boundary.
+        props = synth.FACT_SCHEMA["properties"]["relationship_category"]
+        self.assertEqual(props["enum"],
+                         ["work", "personal", "family", "service", "mixed", "unknown"])
+        self.assertIn("relationship_category", synth.FACT_SCHEMA["required"])
+        self.assertIn("`relationship_category` is ONE slice tag", synth.SYSTEM_PROMPT)
+        self.assertIn("never infer the category", synth.SYSTEM_PROMPT)
+        for raw, want in [("work", "work"), ("Personal", "personal"),
+                          ("colleague", "work"), ("friend", "personal"),
+                          ("vendor", "service"), ("both", "mixed"),
+                          ("", "unknown"), (None, "unknown"),
+                          ("bestie", "unknown"), (42, "unknown")]:
+            self.assertEqual(synth.coerce_relationship_category(raw), want, raw)
 
     def test_plan_is_one_typed_value(self):
         with tempfile.TemporaryDirectory() as d:
