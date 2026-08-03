@@ -66,6 +66,93 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             namespace.query.call_args_list[1].kwargs["filters"], ("id", "Gt", "a")
         )
 
+    def test_enumeration_can_include_every_live_attribute(self) -> None:
+        row = SimpleNamespace(
+            id="a",
+            vector=[0.1, 0.2],
+            model_extra={"contract_attribute": "value", "live_only_attribute": 7},
+        )
+        namespace = SimpleNamespace(
+            query=mock.Mock(return_value=SimpleNamespace(rows=[row]))
+        )
+        with mock.patch.object(turbopuffer_client, "namespace", return_value=namespace):
+            result = asyncio.run(
+                turbopuffer_client.enumerate_filter_only_rows_for_namespace(
+                    "people", None, True, page_size=10
+                )
+            )
+        self.assertEqual(
+            result["rows"],
+            [{
+                "id": "a",
+                "contract_attribute": "value",
+                "live_only_attribute": 7,
+                "vector": [0.1, 0.2],
+            }],
+        )
+        self.assertIs(namespace.query.call_args.kwargs["include_attributes"], True)
+
+    def test_all_attribute_enumeration_paginates_to_exhaustion(self) -> None:
+        pages = [
+            [SimpleNamespace(id="a", vector=[0.1], model_extra={"live_only": "first"})],
+            [SimpleNamespace(id="b", vector=[0.2], model_extra={"live_only": "second"})],
+            [],
+        ]
+        namespace = SimpleNamespace(
+            query=mock.Mock(side_effect=[SimpleNamespace(rows=page) for page in pages])
+        )
+        with mock.patch.object(turbopuffer_client, "namespace", return_value=namespace):
+            result = asyncio.run(
+                turbopuffer_client.enumerate_filter_only_rows_for_namespace(
+                    "people", None, True, page_size=1
+                )
+            )
+
+        self.assertEqual(
+            result["rows"],
+            [
+                {"id": "a", "live_only": "first", "vector": [0.1]},
+                {"id": "b", "live_only": "second", "vector": [0.2]},
+            ],
+        )
+        self.assertEqual(result["batch_count"], 3)
+        self.assertTrue(result["completed"])
+        self.assertFalse(result["truncated"])
+        calls = namespace.query.call_args_list
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(call.kwargs["include_attributes"] is True for call in calls))
+        self.assertNotIn("filters", calls[0].kwargs)
+        self.assertEqual(calls[1].kwargs["filters"], ("id", "Gt", "a"))
+        self.assertEqual(calls[2].kwargs["filters"], ("id", "Gt", "b"))
+
+    def test_namespace_schema_serializes_sdk_models_and_mapping_fallbacks(self) -> None:
+        sdk_config = mock.Mock()
+        sdk_config.model_dump.return_value = {
+            "type": "string",
+            "filterable": True,
+        }
+        namespace = SimpleNamespace(
+            schema=mock.Mock(
+                return_value={
+                    "sdk_attribute": sdk_config,
+                    "mapping_attribute": {"type": "integer", "optional": True},
+                }
+            )
+        )
+        with mock.patch.object(turbopuffer_client, "namespace", return_value=namespace):
+            result = turbopuffer_client.namespace_schema("people")
+
+        self.assertEqual(
+            result,
+            {
+                "sdk_attribute": {"type": "string", "filterable": True},
+                "mapping_attribute": {"type": "integer", "optional": True},
+            },
+        )
+        sdk_config.model_dump.assert_called_once_with(
+            mode="json", by_alias=True, exclude_none=True
+        )
+
     def test_filters_from_role_payload_uses_contract_fields(self) -> None:
         filters = turbopuffer_client.filters_from_role_payload(
             {

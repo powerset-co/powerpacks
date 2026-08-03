@@ -320,9 +320,17 @@ def apply_trait_currentness(filters: dict[str, Any], traits: Any) -> dict[str, A
     return out
 
 
-def row_attrs(row: Any, include_attributes: list[str]) -> dict[str, Any]:
+def row_attrs(row: Any, include_attributes: list[str] | bool) -> dict[str, Any]:
     attrs: dict[str, Any] = {"id": str(row.id)}
     extra = getattr(row, "model_extra", {}) or {}
+    if include_attributes is True:
+        attrs.update(extra)
+        vector = getattr(row, "vector", None)
+        if vector is not None:
+            attrs["vector"] = vector
+        return attrs
+    if include_attributes is False:
+        return attrs
     for key in include_attributes:
         if key in extra:
             attrs[key] = extra[key]

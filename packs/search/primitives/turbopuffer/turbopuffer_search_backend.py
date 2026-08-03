@@ -88,10 +88,23 @@ def namespace(logical_name: str = "people") -> Any:
     return client().namespace(namespace_name(logical_name))
 
 
+def namespace_schema(logical_name: str) -> dict[str, Any]:
+    """Return the complete live namespace schema as canonical JSON values."""
+    schema = namespace(logical_name).schema()
+    return {
+        str(name): (
+            config.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if hasattr(config, "model_dump")
+            else dict(config)
+        )
+        for name, config in schema.items()
+    }
+
+
 async def filter_only_rows_for_namespace(
     logical_name: str,
     filters: tuple,
-    include_attributes: list[str],
+    include_attributes: list[str] | bool,
     *,
     page_size: int = 10000,
     max_results: int = 0,
@@ -105,7 +118,7 @@ async def filter_only_rows_for_namespace(
 async def enumerate_filter_only_rows_for_namespace(
     logical_name: str,
     filters: tuple | None,
-    include_attributes: list[str],
+    include_attributes: list[str] | bool,
     *,
     page_size: int = 10000,
     max_results: int = 0,

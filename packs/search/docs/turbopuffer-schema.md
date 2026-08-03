@@ -5,8 +5,11 @@ Powerpacks uses fixed TurboPuffer namespace contracts. The `attributes` and
 [`contracts/turbopuffer/`](../contracts/turbopuffer/) are the source of truth
 for physical names, document grain, operators, and value types. Current
 orchestration comes from the `$search` skill and CLI, not free-text workflow
-rules retained in older contract versions. Do not query live namespace schemas
-on every run or maintain a second handwritten attribute inventory here.
+rules retained in older contract versions. Normal search runs do not query live
+namespace schemas or maintain a second handwritten attribute inventory here.
+Verified corpus snapshots are the exception: they enumerate live schemas so
+their identity covers every actual stored attribute while validating the
+contract fields required for filtering, text search, and vectors.
 
 ## Namespaces
 

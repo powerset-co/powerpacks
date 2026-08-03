@@ -41,7 +41,7 @@ from packs.search.pipeline.models import (
 )
 from packs.search.pipeline.routing import SearchRoute
 from packs.search.pipeline.ranking import SemanticOutcome, production_semantic_adapter
-from packs.search.reflect.snapshots import validate_snapshot
+from packs.search.reflect.snapshots import canonical_hash, validate_snapshot
 from adapters.nanoclaw.primitives.view_search_results.search_tui import result_rows
 from tests.local_search_fixture import (
     PERSON_CONTEXT_ONLY,
@@ -53,6 +53,16 @@ from tests.local_search_fixture import (
 
 ROOT = Path(__file__).resolve().parents[1]
 HASH = "a" * 64
+
+
+def turbopuffer_contract_schema(name):
+    contract = json.loads(
+        (ROOT / "packs/search/contracts/turbopuffer" / f"{name}.namespace.json").read_text()
+    )
+    schema = {row["name"]: {"type": row["type"]} for row in contract["attributes"]}
+    if contract.get("vector"):
+        schema["vector"] = {"type": "vector"}
+    return schema
 
 
 def spec(**changes) -> SearchSpec:
@@ -1529,8 +1539,11 @@ class PipelineTests(unittest.TestCase):
         runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
         calls = []
 
+        def live_schema(name):
+            return turbopuffer_contract_schema(name)
+
         async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
-            calls.append((name, filters, tuple(attributes)))
+            calls.append((name, filters, attributes))
             rows = {
                 "people": [{"id": "position-1", "base_id": "person-1", "vector": [0.1]}],
                 "summaries": [{"id": "person-1", "summary": "summary", "vector": [0.2]}],
@@ -1564,6 +1577,10 @@ class PipelineTests(unittest.TestCase):
                 "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
                 new=mock.AsyncMock(side_effect=enumerate_namespace),
             ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                side_effect=live_schema,
+            ),
         ):
             snapshot = runner.snapshot_corpus("set", ("person-1",))
 
@@ -1579,13 +1596,99 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(
                 filters, ("allowed_operator_ids", "ContainsAny", ["operator"]), name
             )
+            self.assertIs(attributes, True)
+
+    def test_remote_snapshot_accepts_absent_optional_attribute_and_hashes_live_schema(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        def live_schema(name):
             contract = json.loads(
                 (ROOT / "packs/search/contracts/turbopuffer" / f"{name}.namespace.json").read_text()
             )
-            expected = {row["name"] for row in contract["attributes"]}
+            fields = {
+                row["name"]: {"type": row["type"]}
+                for row in contract["attributes"]
+                if row["name"] != "company_description"
+            }
             if contract.get("vector"):
-                expected.add("vector")
-            self.assertEqual(set(attributes), expected)
+                fields["vector"] = {"type": "vector"}
+            fields["live_only_attribute"] = {"type": "string"}
+            return fields
+
+        async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
+            self.assertIs(attributes, True)
+            rows = (
+                [{"id": "position-1", "base_id": "person-1", "live_only_attribute": "covered"}]
+                if name == "people"
+                else []
+            )
+            return {"rows": rows, "completed": True, "truncated": False, "row_count": len(rows)}
+
+        with (
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                return_value={"set_id": "set", "operator_ids": ["operator"]},
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+                return_value=[],
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                side_effect=live_schema,
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                new=mock.AsyncMock(side_effect=enumerate_namespace),
+            ),
+        ):
+            snapshot = TurboPufferSearchRunner(
+                PowersetCorpus("set", ("operator",))
+            ).snapshot_corpus("set", ())
+
+        people_schema = live_schema("people")
+        self.assertNotIn("company_description", people_schema)
+        self.assertEqual(snapshot["namespace_schema_hashes"]["people"], canonical_hash(people_schema))
+        expected_rows = {
+            "people": [{"id": "position-1", "base_id": "person-1", "live_only_attribute": "covered"}],
+            "summaries": [], "companies": [], "company_signals": [], "education": [], "schools": [],
+        }
+        self.assertEqual(snapshot["scoped_records_hash"], canonical_hash(expected_rows))
+
+    def test_remote_snapshot_rejects_missing_required_live_attribute_before_enumeration(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        def drifted_schema(name):
+            schema = turbopuffer_contract_schema(name)
+            if name == "people":
+                schema.pop("allowed_operator_ids")
+            return schema
+
+        enumeration = mock.AsyncMock()
+        with (
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                return_value={"set_id": "set", "operator_ids": ["operator"]},
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                side_effect=drifted_schema,
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                new=enumeration,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "people live schema is missing required checked-in attributes: allowed_operator_ids",
+            ):
+                TurboPufferSearchRunner(
+                    PowersetCorpus("set", ("operator",))
+                ).snapshot_corpus("set", ())
+        enumeration.assert_not_awaited()
 
     def test_remote_snapshot_fails_closed_on_scope_enumeration_and_evidence_gaps(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
@@ -1602,9 +1705,16 @@ class PipelineTests(unittest.TestCase):
             "truncated": False,
             "row_count": 1,
         }
-        with set_resolution, mock.patch(
-            "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
-            new=mock.AsyncMock(return_value={**complete, "completed": False, "truncated": True}),
+        with (
+            set_resolution,
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                side_effect=turbopuffer_contract_schema,
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                new=mock.AsyncMock(return_value={**complete, "completed": False, "truncated": True}),
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "enumeration is incomplete"):
                 runner.snapshot_corpus("set", ())
@@ -1629,6 +1739,10 @@ class PipelineTests(unittest.TestCase):
                 mock.patch(
                     "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
                     new=mock.AsyncMock(side_effect=complete_namespaces),
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                    side_effect=turbopuffer_contract_schema,
                 ),
             ):
                 with self.assertRaisesRegex((ValueError, RuntimeError), error):
@@ -1686,6 +1800,10 @@ class PipelineTests(unittest.TestCase):
                 mock.patch(
                     "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
                     new=mock.AsyncMock(side_effect=enumerate_namespace),
+                ),
+                mock.patch(
+                    "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                    side_effect=turbopuffer_contract_schema,
                 ),
             ):
                 return TurboPufferSearchRunner(corpus).snapshot_corpus("set", ())

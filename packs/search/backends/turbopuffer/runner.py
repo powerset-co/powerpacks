@@ -814,17 +814,30 @@ class TurboPufferSearchRunner:
         )
         records_by_namespace: dict[str, list[dict[str, Any]]] = {}
         namespace_counts: dict[str, int] = {}
+        live_schemas: dict[str, dict[str, Any]] = {}
         for name in required_namespaces:
             contract = contracts[name]
-            attributes = list(dict.fromkeys(
-                [str(row["name"]) for row in contract.get("attributes") or []]
-                + (["vector"] if contract.get("vector") else [])
-            ))
+            live_schema = storage.namespace_schema(name)
+            live_schemas[name] = live_schema
+            required_attributes = {
+                str(row["field"])
+                for row in contract.get("filters") or []
+            } | {
+                str(value) for value in contract.get("text_query_fields") or []
+            }
+            if contract.get("vector"):
+                required_attributes.add("vector")
+            missing_required = sorted(required_attributes - set(live_schema))
+            if missing_required:
+                raise ValueError(
+                    f"{name} live schema is missing required checked-in attributes: "
+                    + ", ".join(missing_required)
+                )
             enumeration = asyncio.run(
                 storage.enumerate_filter_only_rows_for_namespace(
                     name,
                     None if name == "schools" else operator_filter,
-                    attributes,
+                    True,
                     page_size=10000,
                 )
             )
@@ -859,7 +872,7 @@ class TurboPufferSearchRunner:
                 if key != "hydrated_context" and value is not None
             })
             evidence[person_id] = evidence_hash(profile)
-        schema_hashes = {name: canonical_hash(contract) for name, contract in contracts.items()}
+        schema_hashes = {name: canonical_hash(live_schemas[name]) for name in required_namespaces}
         operator_hash = canonical_hash(sorted(self.corpus.operator_ids))
         membership_hash = canonical_hash(member_ids)
         for supplied, derived, name in (
@@ -869,7 +882,7 @@ class TurboPufferSearchRunner:
             if supplied is not None and supplied != derived:
                 raise ValueError(f"supplied Powerset {name} does not match derived scope")
         if self.corpus.namespace_schema_hashes and dict(self.corpus.namespace_schema_hashes) != schema_hashes:
-            raise ValueError("supplied Powerset namespace schema hashes do not match checked-in contracts")
+            raise ValueError("supplied Powerset namespace schema hashes do not match live schemas")
         scoped_records_hash = canonical_hash(records_by_namespace)
         supplied_content_identity = (
             self.corpus.native_content_version or self.corpus.scoped_records_hash
