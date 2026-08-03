@@ -955,10 +955,10 @@ class TestSynthesizeExecute(unittest.TestCase):
     def test_prompt_carries_the_content_policy(self):
         # v5: dossiers are professional-context documents. The policy block,
         # the milestone allowance, and the professional-quoting rule must stay
-        # pinned — and the phrasing stays allowlist-shaped (name what belongs,
-        # not the categories it displaces).
+        # pinned — phrasing stays allowlist-shaped (name the class of what
+        # belongs, not enumerated examples nor the categories it displaces).
         self.assertIn("CONTENT POLICY", synth.SYSTEM_PROMPT)
-        self.assertIn("congratulatory-grade milestones", synth.SYSTEM_PROMPT)
+        self.assertIn("the kind you would congratulate them on", synth.SYSTEM_PROMPT)
         self.assertIn("Everything else about their personal life stays out",
                       synth.SYSTEM_PROMPT)
         self.assertIn("Quote a message only for its professional content",

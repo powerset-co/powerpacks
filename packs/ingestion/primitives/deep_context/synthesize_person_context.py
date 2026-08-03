@@ -24,14 +24,15 @@ Changelog:
   2026-07-31 (professional content v5): CONTENT POLICY block in the prompt —
     dossiers are read in a professional context, so every field focuses on
     professional substance (work, deals, studies, skills, neutral relationship
-    labels); personal life appears only as neutral congratulatory-grade
-    milestones (wedding, child, graduation, home, relocation) and everything
-    else personal stays out of every field, with quoting limited to
-    professional content. Deliberately allowlist-phrased — the prompt names
-    what belongs, not the unsavory categories it displaces. Such messages
-    still count toward `network_worth` as relationship evidence. Intentional
-    semantic change: SYNTHESIS_CONTRACT_VERSION bumps and every dossier
-    resynthesizes on the next run.
+    labels); from personal life only openly-celebrated major milestones (the
+    congratulate-them kind), stated neutrally — everything else personal stays
+    out of every field, with quoting limited to professional content.
+    Deliberately allowlist-phrased and generalized — the prompt names the
+    class of what belongs, not enumerated examples nor the unsavory categories
+    it displaces. Such messages still count toward `network_worth` as
+    relationship evidence. Intentional semantic change:
+    SYNTHESIS_CONTRACT_VERSION bumps and every dossier resynthesizes on the
+    next run.
   2026-07-31 (network-value worth v4): a personal connection with purely social
     threads still qualifies as yes when the person themselves is a confidently
     identified valuable network connection (founder/executive/investor/
@@ -149,14 +150,13 @@ SYSTEM_PROMPT = (
     "rough dates, and their contact identifiers. Prefer specific, evidence-backed facts "
     "over guesses; set low confidence when the signal is thin. Leave a field empty rather "
     "than inventing it.\n\n"
-    "CONTENT POLICY — the profile is read in a professional context (think: an investor "
-    "reviewing their network). Focus every field you write — summary, relationship, "
-    "topics, events, shared context, and any quoted evidence — on professional "
-    "substance: work, companies, roles, projects, deals, investments, studies, skills, "
-    "public achievements, and how I know them (a neutral relationship label like friend, "
-    "partner, family member, or college roommate is fine). From their personal life, "
-    "include only notable congratulatory-grade milestones, stated neutrally: an "
-    "engagement or wedding, a child born, a graduation, a new home, a big relocation. "
+    "CONTENT POLICY — the profile is read in a professional context. Focus every field "
+    "you write — summary, relationship, topics, events, shared context, and any quoted "
+    "evidence — on professional substance: work, companies, roles, projects, deals, "
+    "investments, studies, skills, public achievements, and how I know them (a neutral "
+    "relationship label like friend, partner, family member, or college roommate is "
+    "fine). From their personal life, include only major milestones the person openly "
+    "celebrates — the kind you would congratulate them on — stated neutrally. "
     "Everything else about their personal life stays out of the profile, in every field. "
     "Quote a message only for its professional content; if a message carries no "
     "professional substance and no milestone, extract nothing from it. Such messages "
