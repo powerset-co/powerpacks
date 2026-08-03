@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.13.0...powerpacks-v1.14.0) (2026-08-03)
+
+
+### Features
+
+* **deep-context:** reconcile prefers cache but always retrieves missing profiles ([#408](https://github.com/powerset-co/powerpacks/issues/408)) ([0616bae](https://github.com/powerset-co/powerpacks/commit/0616bae3fa2d243cf03373e63e7ec132bb4ddc44))
+
 ## [1.13.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.12.0...powerpacks-v1.13.0) (2026-08-03)
 
 
