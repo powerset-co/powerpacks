@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +28,9 @@ from packs.search.pipeline.models import (
     PersonFilters,
     Profile,
     RankMode,
+    RecruitingInput,
+    REVIEW_POOL_MAX_PERSON_IDS,
+    REVIEW_POOL_PERSON_ID_MAX_LENGTH,
     ResolvedSources,
     RoleIntent,
     RunnerCapabilities,
@@ -144,6 +148,33 @@ class ContractTests(unittest.TestCase):
             PersonFilters(is_current_role=1)
         with self.assertRaisesRegex(ValueError, "semantic rank limit"):
             SearchBounds(2, 2, 3)
+
+    def test_review_pool_limits_match_schema_and_reject_instead_of_truncating(self):
+        schema = json.loads((ROOT / "packs/search/schemas/search-spec.schema.json").read_text())
+        pool_schema = schema["properties"]["recruiting"]["oneOf"][1]["properties"]["review_pool_person_ids"]
+        bounds = pool_schema["allOf"][1]
+        self.assertEqual(bounds["maxItems"], REVIEW_POOL_MAX_PERSON_IDS)
+        self.assertEqual(bounds["items"]["maxLength"], REVIEW_POOL_PERSON_ID_MAX_LENGTH)
+
+        accepted = tuple(f"synthetic-person-{index}" for index in range(REVIEW_POOL_MAX_PERSON_IDS))
+        self.assertEqual(len(RecruitingInput("Synthetic role", review_pool_person_ids=accepted).review_pool_person_ids), 500)
+        self.assertEqual(
+            RecruitingInput("Synthetic role", review_pool_person_ids=("x" * REVIEW_POOL_PERSON_ID_MAX_LENGTH,)).review_pool_person_ids,
+            ("x" * REVIEW_POOL_PERSON_ID_MAX_LENGTH,),
+        )
+        for rejected, message in (
+            (accepted + ("synthetic-person-over-limit",), "cannot exceed 500 IDs"),
+            (("x" * (REVIEW_POOL_PERSON_ID_MAX_LENGTH + 1),), "cannot exceed 256 characters"),
+        ):
+            with self.assertRaisesRegex(ValueError, message):
+                RecruitingInput("Synthetic role", review_pool_person_ids=rejected)
+            value = SearchSpec(
+                "search.spec.v1", "synthetic recruiting", Profile.RECRUITING, Backend.LOCAL,
+                LocalCorpus("/var/tmp/synthetic.duckdb"), recruiting=RecruitingInput("Synthetic role"),
+            ).to_dict()
+            value["recruiting"]["review_pool_person_ids"] = list(rejected)
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate(value, schema)
 
     def test_schema_parser_and_constructor_reject_currentness_and_empty_scope(self):
         schema = json.loads((ROOT / "packs/search/schemas/search-spec.schema.json").read_text())
@@ -1352,6 +1383,72 @@ class PipelineTests(unittest.TestCase):
                 self.assertTrue(out.exists())
             finally:
                 out.unlink(missing_ok=True)
+
+    def test_public_search_cli_round_trips_nonempty_review_pool_through_composition_root(self):
+        from packs.search.pipeline import search
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            requested = (PERSON_STANFORD,)
+            run_spec = SearchSpec(
+                "search.spec.v1",
+                "synthetic recruiting evaluation",
+                Profile.RECRUITING,
+                Backend.LOCAL,
+                LocalCorpus(str(db)),
+                role=RoleIntent(titles=("Synthetic Engineer",)),
+                bounds=SearchBounds(10, 10, 10),
+                recruiting=RecruitingInput(
+                    "Synthetic role brief with enough deterministic content for Review.",
+                    review_pool_person_ids=requested,
+                ),
+            )
+            spec_path = Path(tmp) / "search_spec.json"
+            spec_path.write_text(json.dumps(run_spec.to_dict()))
+            output = ROOT / ".powerpacks/search-runs" / f"test-review-pool-{uuid.uuid4().hex}"
+            import shutil
+
+            shutil.rmtree(output, ignore_errors=True)
+            try:
+                with (
+                    mock.patch.object(sys, "argv", ["search", "--spec", str(spec_path), "--output-dir", str(output)]),
+                    mock.patch("packs.search.pipeline.recruiting.run_recruiting") as recruiting,
+                    mock.patch("builtins.print"),
+                ):
+                    recruiting.return_value = StageResult(
+                        "review", "awaiting_review", CandidateFrontier((), 0, 0, None, False)
+                    )
+                    search.main()
+                received_spec = recruiting.call_args.args[0]
+                snapshot = recruiting.call_args.kwargs["corpus_snapshot"]
+                self.assertEqual(received_spec.recruiting.review_pool_person_ids, requested)
+                self.assertEqual(set(snapshot["evidence_hashes"]), set(requested))
+                persisted = json.loads((output / "search_spec.json").read_text())
+                self.assertEqual(persisted["recruiting"]["review_pool_person_ids"], list(requested))
+                manifest = json.loads((output / "manifest.json").read_text())
+                self.assertEqual(manifest["artifacts"]["search_spec_json"]["path"], "search_spec.json")
+            finally:
+                shutil.rmtree(output, ignore_errors=True)
+
+    def test_local_snapshot_rejects_out_of_scope_review_pool_id(self):
+        from packs.search.backends.local.runner import LocalSearchRunner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            with self.assertRaisesRegex(ValueError, "outside complete local membership"):
+                LocalSearchRunner(str(db)).snapshot_corpus("local", ("synthetic-out-of-scope-person",))
+
+    def test_local_snapshot_accepts_profile_only_review_pool_member(self):
+        from packs.search.backends.local.runner import LocalSearchRunner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "local.duckdb"
+            write_local_search_db(db)
+            snapshot = LocalSearchRunner(str(db)).snapshot_corpus("local", (PERSON_PROFILE_ONLY,))
+        self.assertEqual(set(snapshot["evidence_hashes"]), {PERSON_PROFILE_ONLY})
+        self.assertGreater(snapshot["membership_id_count"], 0)
 
     def test_nanoclaw_result_reader_shape_uses_canonical_frontier(self):
         row = CandidateRecord(

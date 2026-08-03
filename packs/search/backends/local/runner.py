@@ -754,22 +754,32 @@ class LocalSearchRunner:
             )
             schema = {table: conn.execute(f"pragma table_info('{table}')").fetchall() for table in tables}
             content = {table: conn.execute(f'SELECT * FROM "{table}" ORDER BY ALL').fetchall() for table in tables}
-            positions = next((table for table in tables if table == "local_people_positions"), None)
-            columns = (
-                []
-                if not positions
-                else [row[1] for row in conn.execute(f"pragma table_info('{positions}')").fetchall()]
+            profile_table = next(
+                (table for table in ("local_person_profiles", "local_people_profiles") if table in tables),
+                None,
             )
-            id_col = "person_id" if "person_id" in columns else "base_id"
-            member_ids = (
-                []
-                if not positions
-                else [
+            membership_tables = tuple(
+                table for table in (profile_table, "local_people_positions") if table and table in tables
+            )
+            member_ids_set: set[str] = set()
+            for table in membership_tables:
+                columns = [row[1] for row in conn.execute(f"pragma table_info('{table}')").fetchall()]
+                id_col = "person_id" if "person_id" in columns else "base_id" if "base_id" in columns else "id"
+                member_ids_set.update(
                     str(row[0])
-                    for row in conn.execute(f'SELECT DISTINCT "{id_col}" FROM "{positions}" ORDER BY 1').fetchall()
-                ]
-            )
-        hydrated = self.hydrate(CandidateFrontier.merge([CandidateRecord(value) for value in evidence_person_ids]))
+                    for row in conn.execute(f'SELECT DISTINCT "{id_col}" FROM "{table}"').fetchall()
+                )
+            member_ids = sorted(member_ids_set)
+        requested_ids = tuple(dict.fromkeys(str(value) for value in evidence_person_ids))
+        missing_members = sorted(set(requested_ids) - set(member_ids))
+        if missing_members:
+            raise ValueError("requested evidence person IDs are outside complete local membership")
+        hydrated = self.hydrate(CandidateFrontier.merge([CandidateRecord(value) for value in requested_ids]))
+        missing_hydration = [
+            row.person_id for row in hydrated.candidates if row.hydration_disposition != "hydrated"
+        ]
+        if missing_hydration:
+            raise RuntimeError("requested local evidence hydration is missing")
         return {
             "schema_version": "reflect.corpus_snapshot.v1",
             "backend": "local",

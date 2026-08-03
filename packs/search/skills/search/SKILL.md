@@ -59,8 +59,10 @@ For every `target=engine` route, write one schema-valid `search.spec.v1` documen
 to `<run>/search_spec.json`. Preserve the selected route's `profile` and
 `backend`, explicit corpus, lookup input where applicable, role and person/company
 filters, technology skills, soft criteria, SQL candidates (local only), bounds,
-and recruiting input (recruiting only). Do not add unknown fields or silently
-convert an unsupported hard filter into prompt text.
+and recruiting input (recruiting only). An evaluation recruiting run may also
+persist its frozen, independently reviewed pool as
+`recruiting.review_pool_person_ids`; ordinary recruiting omits it. Do not add
+unknown fields or silently convert an unsupported hard filter into prompt text.
 
 Lookup is deterministic. Local lookup fields are capability-derived. Powerset
 lookup is set-scoped and supports only `person_id`, `name`, `handle`, and

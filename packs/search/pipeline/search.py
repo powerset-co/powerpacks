@@ -43,7 +43,12 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
                 paths = persist_result(output_dir, spec, result)
                 result = replace(result, artifact_paths={**result.artifact_paths, **paths})
             return result
-        identity = runner.snapshot_corpus("local", ())
+        evidence_person_ids = (
+            spec.recruiting.review_pool_person_ids
+            if spec.recruiting is not None
+            else ()
+        )
+        identity = runner.snapshot_corpus("local", evidence_person_ids)
         derived = LocalCorpus(
             spec.corpus.db_path,
             identity["scoped_records_hash"],
@@ -78,7 +83,12 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
                 paths = persist_result(output_dir, spec, result)
                 result = replace(result, artifact_paths={**result.artifact_paths, **paths})
             return result
-        identity = runner.snapshot_corpus(spec.corpus.set_id, ())
+        evidence_person_ids = (
+            spec.recruiting.review_pool_person_ids
+            if spec.recruiting is not None
+            else ()
+        )
+        identity = runner.snapshot_corpus(spec.corpus.set_id, evidence_person_ids)
         spec = replace(
             spec,
             corpus=PowersetCorpus(

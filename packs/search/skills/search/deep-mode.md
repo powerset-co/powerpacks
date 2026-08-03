@@ -15,6 +15,8 @@ selected backend/corpus, explicit bounds, and:
   production plan extraction and critic calls;
 - an explicit `recruiting.judge_implementation`, `recruiting.judge_model`, and
   `recruiting.judge_approved=true` before production judging.
+- for a Reflect evaluation only, the complete frozen independent pool in
+  `recruiting.review_pool_person_ids`; omit this field for ordinary recruiting.
 
 There is no deterministic production plan or judge fallback.
 
@@ -38,7 +40,10 @@ all of these exact artifacts:
 - `review/policy.json` — exact versioned recruiter policy snapshot;
 - `review/source.json` — normalized source and JD/source hash;
 - `review/corpus.json` — verified comparable corpus snapshot;
-- `review/binding.json` — canonical plan, JD, source, corpus, and policy binding.
+- `review/evidence.json` — exact evidence hashes for every requested review-pool
+  person ID (empty for ordinary recruiting);
+- `review/binding.json` — canonical plan, JD, source, corpus, review-pool, and
+  policy binding.
 
 Surface ambiguities instead of silently hardening them. User edits outrank JD
 inference, which outranks versioned defaults. If the source is thin/invalid, the
@@ -59,7 +64,7 @@ uv run --project . python -m packs.search.pipeline.search \
 ```
 
 Resume loads the existing `review/plan.json` and `review/binding.json`, recomputes
-the binding, and requires exact plan/source/JD/corpus/policy equality. Missing
+the binding, and requires exact plan/source/JD/corpus/policy/review-pool equality. Missing
 artifacts, a wrong hash, or drift returns `failed_binding`; start a new run
 instead of repairing or bypassing the binding. Retrieval begins only after this
 check and after an explicit approved judge is configured.

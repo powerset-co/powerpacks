@@ -155,6 +155,8 @@ def review_binding(
         "source_sha256": canonical_hash(spec.recruiting.source),
         "corpus_sha256": canonical_hash(stable_corpus),
         "corpus": stable_corpus,
+        "review_pool_person_ids": list(spec.recruiting.review_pool_person_ids),
+        "review_pool_person_ids_sha256": canonical_hash(list(spec.recruiting.review_pool_person_ids)),
         "policy_id": policy["policy_id"],
         "policy_version": policy["policy_version"],
     }

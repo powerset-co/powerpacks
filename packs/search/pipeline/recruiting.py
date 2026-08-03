@@ -628,7 +628,8 @@ def _run_recruiting(
         return StageResult("capabilities", "unsupported_capability", EMPTY, errors=(", ".join(unsupported),))
     try:
         snapshot = dict(corpus_snapshot or runner.snapshot_corpus(
-            str(spec.corpus.to_dict().get("set_id") or "local"), ()
+            str(spec.corpus.to_dict().get("set_id") or "local"),
+            spec.recruiting.review_pool_person_ids,
         ))
     except Exception as exc:
         return StageResult("review", "needs_input", EMPTY, capability_report=report, errors=(str(exc),))
@@ -639,6 +640,18 @@ def _run_recruiting(
             EMPTY,
             capability_report=report,
             errors=("recruiting Review requires a verified comparable corpus snapshot",),
+            corpus_observation=snapshot,
+        )
+    evidence_hashes = snapshot.get("evidence_hashes")
+    if not isinstance(evidence_hashes, dict) or set(evidence_hashes) != set(
+        spec.recruiting.review_pool_person_ids
+    ):
+        return StageResult(
+            "review",
+            "failed_binding",
+            EMPTY,
+            capability_report=report,
+            errors=("review corpus evidence does not exactly match requested review-pool person IDs",),
             corpus_observation=snapshot,
         )
     supplied = spec.corpus.to_dict()
@@ -713,12 +726,6 @@ def _run_recruiting(
             )
         except Exception as exc:
             return StageResult("review", "needs_input", EMPTY, capability_report=report, errors=(str(exc),))
-    evidence_hashes = snapshot.get("evidence_hashes")
-    if not isinstance(evidence_hashes, dict):
-        return StageResult(
-            "review", "failed_binding", EMPTY, capability_report=report,
-            errors=("review corpus snapshot is missing evidence_hashes",),
-        )
     review_evidence = ReviewEvidenceSnapshot.from_hashes(evidence_hashes)
     paths = {}
     for key, name, value in (

@@ -52,6 +52,13 @@ For each case:
    set ID, operator-scope hash, complete membership hash, namespace/schema hashes, a
    native content version or deterministic set-scoped records hash, and canonical
    evidence hashes for every person in the full review pool.
+   Before the recruiting Review pass, persist that frozen pool in the canonical
+   `SearchSpec` as `recruiting.review_pool_person_ids`. The typed composition root
+   snapshots exactly those IDs; missing, out-of-scope, or substituted evidence
+   fails closed. The independently reviewed pool is capped at 500 IDs (the
+   canonical frontier ceiling), and each opaque UUID/URN-style ID is capped at
+   256 characters; oversized inputs are rejected, never truncated. Ordinary
+   recruiting omits the field and snapshots an empty pool.
 2. Build a broad, independent pool and a structured review packet with role, company,
    location, matched-position, retrieval-provenance, and relevant profile evidence.
 3. Resume human review only while case ID/hash, corpus snapshot, full-pool hash,
@@ -77,7 +84,7 @@ must remain under the repository `.powerpacks/` and contain `search_spec.json`,
 `review/plan.json`, `review/source.json`, `review/binding.json`, `review/corpus.json`, `stage-membership.json`,
 `review/evidence.json`, `candidate-frontier.json`, and `manifest.json`. The scorer verifies canonical manifest
 paths and hashes, exact persisted SearchSpec/case equality, review/corpus identity, and
-the complete frozen review-pool evidence map, normalized JD content hash, scoring bounds,
+the SearchSpec-bound complete frozen review-pool evidence map, normalized JD content hash, scoring bounds,
 and run-produced hard-filter dispositions before reading candidate quality. Candidate-only
 evidence cannot prove a larger reviewed pool. Truncated frontiers are not final scoreable
 runs. A legitimate `completed_empty` run persists the same canonical artifacts with an

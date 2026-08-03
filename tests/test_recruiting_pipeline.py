@@ -126,12 +126,16 @@ class FakeRunner:
 
     def snapshot_corpus(self, scope, evidence_person_ids):
         self.calls.append("snapshot")
+        evidence = {
+            person_id: canonical_hash({"person_id": person_id})
+            for person_id in evidence_person_ids
+        }
         return {
             "schema_version": "reflect.corpus_snapshot.v1", "backend": "local",
             "verification_status": "verified_comparable", "source": "local_deterministic_snapshot",
             "set_id": "local", "operator_scope_hash": "b" * 64,
             "membership_hash": "c" * 64, "namespace_schema_hashes": {"people": "d" * 64},
-            "scoped_records_hash": self.snapshot_hash, "evidence_hashes": {},
+            "scoped_records_hash": self.snapshot_hash, "evidence_hashes": evidence,
             "enumeration_complete": True, "enumeration_truncated": False,
             "enumerated_record_count": self.count, "membership_id_count": self.count,
             "observed_at": self.observed_at,
@@ -198,6 +202,53 @@ class RecruitingPipelineTests(unittest.TestCase):
         plan = json.loads((Path(root) / "review/plan.json").read_text())
         return replace(spec, recruiting=replace(spec.recruiting, reviewed_plan_hash=canonical_hash(plan)))
 
+    def test_review_pool_missing_or_substituted_evidence_fails_closed(self):
+        requested = ("synthetic-reviewed-person",)
+        run_spec = recruiting_spec(recruiting=replace(
+            recruiting_spec().recruiting, review_pool_person_ids=requested
+        ))
+        runner = FakeRunner()
+        for evidence in ({}, {requested[0]: "a" * 64, "synthetic-substitute": "b" * 64}):
+            snapshot = runner.snapshot_corpus("local", requested)
+            snapshot["evidence_hashes"] = evidence
+            result = run_recruiting(
+                run_spec,
+                runner,
+                plan_adapter=plan_adapter,
+                critic_adapter=critic_adapter,
+                corpus_snapshot=snapshot,
+            )
+            self.assertEqual(result.status, "failed_binding")
+            self.assertIn("exactly match", result.errors[0])
+
+    def test_review_pool_drift_on_resume_fails_binding(self):
+        first_ids = ("synthetic-reviewed-person-a",)
+        first = recruiting_spec(recruiting=replace(
+            recruiting_spec().recruiting, review_pool_person_ids=first_ids
+        ))
+        runner = FakeRunner()
+        with self.run_dir() as root:
+            approved = self.prepare(
+                first,
+                runner,
+                root,
+                corpus_snapshot=runner.snapshot_corpus("local", first_ids),
+            )
+            drifted_ids = ("synthetic-reviewed-person-b",)
+            drifted = replace(
+                approved,
+                recruiting=replace(approved.recruiting, review_pool_person_ids=drifted_ids),
+            )
+            result = run_recruiting(
+                drifted,
+                runner,
+                artifact_root=root,
+                judge_adapter=good_judge,
+                corpus_snapshot=runner.snapshot_corpus("local", drifted_ids),
+            )
+        self.assertEqual(result.status, "failed_binding")
+        self.assertIn("binding drifted", result.errors[0])
+
     def test_missing_profile_is_not_hydrated_or_hard_filtered(self):
         spec = recruiting_spec()
         source = CandidateRecord(
@@ -227,17 +278,20 @@ class RecruitingPipelineTests(unittest.TestCase):
                 return HardFilterSet(0, (), {"before_top_k": True})
 
         runner = EmptyPoolRunner(0)
-        snapshot = runner.snapshot_corpus("local", ())
-        snapshot["evidence_hashes"] = {"gt-miss": canonical_hash({"person_id": "gt-miss"})}
+        requested = ("synthetic-gt-miss",)
+        run_spec = recruiting_spec(recruiting=replace(
+            recruiting_spec().recruiting, review_pool_person_ids=requested
+        ))
+        snapshot = runner.snapshot_corpus("local", requested)
         with self.run_dir() as root:
             prepared = run_recruiting(
-                recruiting_spec(), runner, artifact_root=root, plan_adapter=plan_adapter,
+                run_spec, runner, artifact_root=root, plan_adapter=plan_adapter,
                 critic_adapter=critic_adapter, corpus_snapshot=snapshot,
             )
             plan = json.loads((Path(root) / "review/plan.json").read_text())
             approved = replace(
-                recruiting_spec(),
-                recruiting=replace(recruiting_spec().recruiting, reviewed_plan_hash=canonical_hash(plan)),
+                run_spec,
+                recruiting=replace(run_spec.recruiting, reviewed_plan_hash=canonical_hash(plan)),
             )
             result = run_recruiting(
                 approved, runner, artifact_root=root, judge_adapter=good_judge,
@@ -263,17 +317,20 @@ class RecruitingPipelineTests(unittest.TestCase):
                 return ()
 
         runner = EmptyProbeRunner(1)
-        snapshot = runner.snapshot_corpus("local", ())
-        snapshot["evidence_hashes"] = {"gt-miss": canonical_hash({"person_id": "gt-miss"})}
+        requested = ("synthetic-gt-miss",)
+        run_spec = recruiting_spec(recruiting=replace(
+            recruiting_spec().recruiting, review_pool_person_ids=requested
+        ))
+        snapshot = runner.snapshot_corpus("local", requested)
         with self.run_dir() as root:
             prepared = run_recruiting(
-                recruiting_spec(), runner, artifact_root=root, plan_adapter=plan_adapter,
+                run_spec, runner, artifact_root=root, plan_adapter=plan_adapter,
                 critic_adapter=critic_adapter, corpus_snapshot=snapshot,
             )
             plan = json.loads((Path(root) / "review/plan.json").read_text())
             approved = replace(
-                recruiting_spec(),
-                recruiting=replace(recruiting_spec().recruiting, reviewed_plan_hash=canonical_hash(plan)),
+                run_spec,
+                recruiting=replace(run_spec.recruiting, reviewed_plan_hash=canonical_hash(plan)),
             )
             result = run_recruiting(
                 approved, runner, artifact_root=root, judge_adapter=good_judge,

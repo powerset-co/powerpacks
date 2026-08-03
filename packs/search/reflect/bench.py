@@ -181,6 +181,13 @@ def _run_artifacts(
         or binding.get("plan_sha256") != canonical_hash(plan)
     ):
         raise ValueError("persisted SearchSpec does not bind the reviewed run plan")
+    requested_pool = list(spec.recruiting.review_pool_person_ids)
+    if (
+        binding.get("review_pool_person_ids") != requested_pool
+        or binding.get("review_pool_person_ids_sha256") != canonical_hash(requested_pool)
+        or set(requested_pool) != set(evidence.evidence_hashes)
+    ):
+        raise ValueError("persisted SearchSpec does not bind the reviewed evidence pool")
     if (
         binding.get("source_sha256") != canonical_hash(spec.recruiting.source)
         or binding.get("jd_sha256") != canonical_hash(source.get("normalized_jd"))

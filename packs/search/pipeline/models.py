@@ -10,6 +10,12 @@ from typing import Any, Mapping
 
 HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 
+# Reflect review pools are human-reviewed and snapshot in one bounded request.
+# Five hundred matches the canonical frontier ceiling without permitting an
+# accidentally unbounded hydration; 256 characters covers opaque UUID/URN IDs.
+REVIEW_POOL_MAX_PERSON_IDS = 500
+REVIEW_POOL_PERSON_ID_MAX_LENGTH = 256
+
 
 def _hash(value: str | None, name: str, *, optional: bool = False) -> str | None:
     if value is None and optional:
@@ -456,6 +462,7 @@ class RecruitingInput:
     judge_model: str | None = None
     judge_approved: bool = False
     user_preferences: Mapping[str, Any] = field(default_factory=dict)
+    review_pool_person_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, str) or not self.source.strip():
@@ -471,6 +478,17 @@ class RecruitingInput:
         if self.judge_implementation not in {None, "profile_evaluator", "codex"}:
             raise ValueError("judge_implementation must be profile_evaluator, codex, or null")
         object.__setattr__(self, "user_preferences", dict(self.user_preferences))
+        review_pool = _tuple(self.review_pool_person_ids)
+        if len(review_pool) > REVIEW_POOL_MAX_PERSON_IDS:
+            raise ValueError(
+                f"review_pool_person_ids cannot exceed {REVIEW_POOL_MAX_PERSON_IDS} IDs"
+            )
+        if any(len(person_id) > REVIEW_POOL_PERSON_ID_MAX_LENGTH for person_id in review_pool):
+            raise ValueError(
+                "review_pool_person_ids entries cannot exceed "
+                f"{REVIEW_POOL_PERSON_ID_MAX_LENGTH} characters"
+            )
+        object.__setattr__(self, "review_pool_person_ids", review_pool)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "RecruitingInput":
@@ -488,7 +506,23 @@ class RecruitingInput:
             data.get("judge_model"),
             data.get("judge_approved", False),
             preferences,
+            _tuple(data.get("review_pool_person_ids")),
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        value = {
+            "source": self.source,
+            "reviewed_plan_hash": self.reviewed_plan_hash,
+            "plan_model": self.plan_model,
+            "plan_approved": self.plan_approved,
+            "judge_implementation": self.judge_implementation,
+            "judge_model": self.judge_model,
+            "judge_approved": self.judge_approved,
+            "user_preferences": dict(self.user_preferences),
+        }
+        if self.review_pool_person_ids:
+            value["review_pool_person_ids"] = list(self.review_pool_person_ids)
+        return value
 
 
 @dataclass(frozen=True)

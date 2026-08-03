@@ -66,6 +66,7 @@ def _score_args(fx: FunnelFixture) -> argparse.Namespace:
     case = local / "case.json"
     base_spec = recruiting_spec()
     plan = {"schema_version": "synthetic.review-plan.v1", "role": "Synthetic systems role"}
+    person_ids = [f"p{i}" for i in range(1, 12)] + ["p20"]
     run_spec = replace(
         base_spec,
         bounds=replace(base_spec.bounds, frontier_limit=2),
@@ -75,10 +76,13 @@ def _score_args(fx: FunnelFixture) -> argparse.Namespace:
             schema_hash=bench.canonical_hash({"people": "4" * 64}),
             membership_hash="3" * 64,
         ),
-        recruiting=replace(base_spec.recruiting, reviewed_plan_hash=bench.canonical_hash(plan)),
+        recruiting=replace(
+            base_spec.recruiting,
+            reviewed_plan_hash=bench.canonical_hash(plan),
+            review_pool_person_ids=tuple(person_ids),
+        ),
     )
     spec = run_spec.to_dict()
-    person_ids = [f"p{i}" for i in range(1, 12)] + ["p20"]
     evidence = {pid: bench.canonical_hash({"synthetic": pid}) for pid in person_ids}
     snapshot_doc = {
         "schema_version": "reflect.corpus_snapshot.v1", "backend": "local",
@@ -108,6 +112,8 @@ def _score_args(fx: FunnelFixture) -> argparse.Namespace:
         "jd_sha256": bench.canonical_hash(run_spec.recruiting.source),
         "corpus_sha256": bench.canonical_hash(stable_run_corpus),
         "corpus": stable_run_corpus,
+        "review_pool_person_ids": person_ids,
+        "review_pool_person_ids_sha256": bench.canonical_hash(person_ids),
     }, indent=2, sort_keys=True) + "\n")
     case.write_text(json.dumps({
         "schema_version": "reflect.case.v1", "case_id": fx.dir.name,
@@ -208,11 +214,13 @@ class TestBenchScoreAndReport(unittest.TestCase):
         run.mkdir(parents=True)
         self.addCleanup(lambda: shutil.rmtree(run, ignore_errors=True))
         runner = FakeRunner(4)
-        spec = recruiting_spec()
         person_ids = [f"p{i}" for i in range(4)]
+        base_spec = recruiting_spec()
+        spec = replace(base_spec, recruiting=replace(
+            base_spec.recruiting, review_pool_person_ids=tuple(person_ids)
+        ))
         evidence = {person_id: bench.canonical_hash({"person_id": person_id}) for person_id in person_ids}
-        run_snapshot = runner.snapshot_corpus("local", ())
-        run_snapshot["evidence_hashes"] = evidence
+        run_snapshot = runner.snapshot_corpus("local", tuple(person_ids))
         prepared = run_recruiting(
             spec,
             runner,
@@ -235,13 +243,26 @@ class TestBenchScoreAndReport(unittest.TestCase):
         self.assertTrue((run / "stage-membership.json").exists())
         self.assertTrue((run / "candidate-frontier.json").exists())
         persist_result(run, approved, completed)
+        run_binding = json.loads((run / "review/binding.json").read_text())
+        self.assertEqual(run_binding["review_pool_person_ids"], person_ids)
+        self.assertEqual(
+            set(json.loads((run / "review/corpus.json").read_text())["evidence_hashes"]),
+            set(person_ids),
+        )
+        self.assertEqual(
+            set(json.loads((run / "review/evidence.json").read_text())["evidence_hashes"]),
+            set(person_ids),
+        )
+        manifest = json.loads((run / "manifest.json").read_text())
+        self.assertTrue({"search_spec_json", "review_binding_json", "review_corpus_json", "review_evidence_json"}.issubset(
+            manifest["artifacts"]
+        ))
 
         slug = run.name
         local = self.sandbox.tmp / "gt" / slug
         local.mkdir(parents=True)
         reviewed_spec = approved.to_dict()
         case = local / "case.json"
-        run_binding = json.loads((run / "review/binding.json").read_text())
         case.write_text(json.dumps({
             "schema_version": "reflect.case.v1",
             "case_id": slug,
@@ -323,10 +344,13 @@ class TestBenchScoreAndReport(unittest.TestCase):
         run.mkdir(parents=True)
         self.addCleanup(lambda: shutil.rmtree(run, ignore_errors=True))
         runner = FakeRunner(0)
-        spec = recruiting_spec()
-        evidence = {"gt-miss": bench.canonical_hash({"person_id": "gt-miss"})}
-        snapshot_doc = runner.snapshot_corpus("local", ())
-        snapshot_doc["evidence_hashes"] = evidence
+        person_id = "synthetic-gt-miss"
+        base_spec = recruiting_spec()
+        spec = replace(base_spec, recruiting=replace(
+            base_spec.recruiting, review_pool_person_ids=(person_id,)
+        ))
+        evidence = {person_id: bench.canonical_hash({"person_id": person_id})}
+        snapshot_doc = runner.snapshot_corpus("local", (person_id,))
         prepared = run_recruiting(
             spec, runner, artifact_root=run, plan_adapter=plan_adapter,
             critic_adapter=critic_adapter, corpus_snapshot=snapshot_doc,
@@ -363,7 +387,7 @@ class TestBenchScoreAndReport(unittest.TestCase):
             "corpus_snapshot_hash": bench.snapshot_identity(snapshot_doc),
             "review_pool_evidence_hash": bench.canonical_hash(evidence),
             "review_pool_evidence_hashes": evidence,
-            "labels": [{"person_id": "gt-miss", "evidence_hash": evidence["gt-miss"],
+            "labels": [{"person_id": person_id, "evidence_hash": evidence[person_id],
                         "decision": "eligible_strong", "reason_codes": ["synthetic_fit"],
                         "notes": "", "reviewer": "Synthetic Reviewer",
                         "reviewed_at": "2026-07-31T00:00:00Z"}],
@@ -731,7 +755,11 @@ class TestBenchCliSubprocess(unittest.TestCase):
             corpus=replace(base_spec.corpus, content_hash="5" * 64,
                            schema_hash=bench.canonical_hash({"people": "4" * 64}),
                            membership_hash="3" * 64),
-            recruiting=replace(base_spec.recruiting, reviewed_plan_hash=bench.canonical_hash(plan)),
+            recruiting=replace(
+                base_spec.recruiting,
+                reviewed_plan_hash=bench.canonical_hash(plan),
+                review_pool_person_ids=("synthetic-person",),
+            ),
         )
         spec = typed_spec.to_dict()
         case = root / "case.json"
@@ -806,6 +834,8 @@ class TestBenchCliSubprocess(unittest.TestCase):
             "jd_sha256": bench.canonical_hash(typed_spec.recruiting.source),
             "corpus_sha256": bench.canonical_hash(stable_run_corpus),
             "corpus": stable_run_corpus,
+            "review_pool_person_ids": ["synthetic-person"],
+            "review_pool_person_ids_sha256": bench.canonical_hash(["synthetic-person"]),
         }, indent=2, sort_keys=True) + "\n")
         hard_filter = run / "hard-filter-validation.json"
         hard_filter.write_text(json.dumps({

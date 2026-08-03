@@ -240,7 +240,17 @@
             "judge_implementation": {"enum": ["profile_evaluator", "codex", null]},
             "judge_model": {"type": ["string", "null"], "minLength": 1},
             "judge_approved": {"type": "boolean"},
-            "user_preferences": {"type": "object"}
+            "user_preferences": {"type": "object"},
+            "review_pool_person_ids": {
+              "$comment": "Bounded at the canonical 500-person frontier ceiling; 256 characters covers opaque UUID/URN person IDs. These values must match the code-owned RecruitingInput constants.",
+              "allOf": [
+                {"$ref": "#/$defs/strings"},
+                {
+                  "maxItems": 500,
+                  "items": {"type": "string", "minLength": 1, "maxLength": 256}
+                }
+              ]
+            }
           }
         }
       ]
