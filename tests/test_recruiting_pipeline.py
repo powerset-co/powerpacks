@@ -124,7 +124,7 @@ class FakeRunner:
         return RunnerCapabilities(Backend.LOCAL, ("cities", "seniority_bands", "role_tracks"),
                                   ("role", "summary", "company_signal"), False, True)
 
-    def snapshot_corpus(self, scope, evidence_person_ids):
+    def snapshot_corpus(self, scope, evidence_person_ids, *, spec=None):
         self.calls.append("snapshot")
         evidence = {
             person_id: canonical_hash({"person_id": person_id})
@@ -590,10 +590,10 @@ class RecruitingPipelineTests(unittest.TestCase):
                     False,
                 )
 
-            def snapshot_corpus(self, scope, evidence_person_ids):
+            def snapshot_corpus(self, scope, evidence_person_ids, *, spec=None):
                 self.calls.append("snapshot")
                 return {
-                    **super().snapshot_corpus(scope, evidence_person_ids),
+                    **super().snapshot_corpus(scope, evidence_person_ids, spec=spec),
                     "backend": "powerset",
                     "verification_status": "unverified_non_comparable",
                     "scoped_records_hash": None,

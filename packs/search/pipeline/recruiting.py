@@ -630,6 +630,7 @@ def _run_recruiting(
         snapshot = dict(corpus_snapshot or runner.snapshot_corpus(
             str(spec.corpus.to_dict().get("set_id") or "local"),
             spec.recruiting.review_pool_person_ids,
+            spec=spec,
         ))
     except Exception as exc:
         return StageResult("review", "needs_input", EMPTY, capability_report=report, errors=(str(exc),))

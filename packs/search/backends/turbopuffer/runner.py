@@ -92,6 +92,98 @@ class TurboPufferSearchRunner:
         lanes = ["role", "summary", "company_signal", "adjacency"]
         return RunnerCapabilities(Backend.POWERSET, supported, tuple(lanes), skills, True, tuple(fields))
 
+    @staticmethod
+    def _snapshot_schema_requirements(spec: SearchSpec | None) -> dict[str, set[str]]:
+        """Return only fields the snapshot scope and selected search will exercise."""
+        required = {
+            name: ({"allowed_operator_ids"} if name != "schools" else set())
+            for name in (
+                "people",
+                "summaries",
+                "companies",
+                "company_signals",
+                "education",
+                "schools",
+            )
+        }
+        # Complete membership is person-grain even though the people namespace is
+        # position-grain. TurboPuffer document ids alone cannot prove membership.
+        required["people"].add("base_id")
+        if spec is None:
+            return required
+
+        people_filters = (
+            ("role_ids", spec.role.role_ids),
+            ("city", spec.person_filters.cities),
+            ("state", spec.person_filters.states),
+            ("country", spec.person_filters.countries),
+            ("metro_areas", spec.person_filters.metro_areas),
+            ("seniority_band", spec.person_filters.seniority_bands),
+            ("role_track", spec.person_filters.role_tracks),
+            ("is_current", spec.person_filters.is_current_role),
+            ("total_years_experience", spec.person_filters.years_experience_min),
+            ("total_years_experience", spec.person_filters.years_experience_max),
+            ("is_current", spec.company_filters.is_current_company),
+        )
+        required["people"].update(
+            field for field, value in people_filters if value not in (None, (), [])
+        )
+
+        company_source_selected = bool(
+            spec.company_filters.company_names
+            or spec.company_filters.investor_names
+            or spec.company_filters.sector_types
+            or spec.company_filters.technology_types
+            or spec.company_filters.entity_types
+            or spec.company_filters.funding_stage_min is not None
+            or spec.company_filters.funding_stage_max is not None
+            or spec.company_filters.headcount_min is not None
+            or spec.company_filters.headcount_max is not None
+        )
+        if spec.company_filters.company_ids or company_source_selected:
+            required["people"].add("company_id")
+        if spec.company_filters.investor_names:
+            required["people"].add("investor_names")
+
+        company_filters = (
+            ("company_name", spec.company_filters.company_names),
+            ("investor_urns", spec.company_filters.investor_names),
+            ("sector_types", spec.company_filters.sector_types),
+            ("technology_types", spec.company_filters.technology_types),
+            ("entity_types", spec.company_filters.entity_types),
+            ("funding_stage", spec.company_filters.funding_stage_min),
+            ("funding_stage", spec.company_filters.funding_stage_max),
+            ("headcount", spec.company_filters.headcount_min),
+            ("headcount", spec.company_filters.headcount_max),
+        )
+        required["companies"].update(
+            field for field, value in company_filters if value not in (None, (), [])
+        )
+        if spec.company_filters.company_names:
+            required["companies"].add("name_aliases_text")
+
+        if spec.person_filters.education_ids or spec.person_filters.education_names:
+            required["education"].update(("person_id", "canonical_education_id"))
+        if spec.person_filters.education_names:
+            required["schools"].update(("school_name", "person_count"))
+        if spec.tech_skills:
+            required["summaries"].update(("base_id", "tech_skills"))
+
+        queries = tuple(dict.fromkeys((
+            *spec.role.bm25_queries,
+            *spec.role.titles,
+            *(value.replace("_", " ") for value in spec.role.role_ids),
+            *((spec.raw_request,) if spec.raw_request.strip() else ()),
+        )))
+        if queries:
+            required["people"].update(("phrase_tokens", "word_tokens"))
+            required["summaries"].add("summary_tokens")
+        if spec.raw_request.strip():
+            required["people"].add("vector")
+            required["summaries"].add("vector")
+            required["company_signals"].add("vector")
+        return required
+
     def lookup_person(self, lookup: LookupSpec | None) -> tuple[CandidateRecord, ...]:
         if lookup is None:
             return ()
@@ -779,7 +871,13 @@ class TurboPufferSearchRunner:
             tuple(hydrated), frontier.input_count, frontier.output_count, frontier.limit, frontier.truncated
         )
 
-    def snapshot_corpus(self, scope: str, evidence_person_ids: tuple[str, ...]) -> dict[str, Any]:
+    def snapshot_corpus(
+        self,
+        scope: str,
+        evidence_person_ids: tuple[str, ...],
+        *,
+        spec: SearchSpec | None = None,
+    ) -> dict[str, Any]:
         import asyncio
 
         if scope != self.corpus.set_id:
@@ -815,22 +913,26 @@ class TurboPufferSearchRunner:
         records_by_namespace: dict[str, list[dict[str, Any]]] = {}
         namespace_counts: dict[str, int] = {}
         live_schemas: dict[str, dict[str, Any]] = {}
+        schema_requirements = self._snapshot_schema_requirements(spec)
         for name in required_namespaces:
             contract = contracts[name]
-            live_schema = storage.namespace_schema(name)
-            live_schemas[name] = live_schema
-            required_attributes = {
-                str(row["field"])
-                for row in contract.get("filters") or []
-            } | {
-                str(value) for value in contract.get("text_query_fields") or []
+            contracted_attributes = {
+                str(row["name"]) for row in contract.get("attributes") or []
             }
             if contract.get("vector"):
-                required_attributes.add("vector")
-            missing_required = sorted(required_attributes - set(live_schema))
+                contracted_attributes.add("vector")
+            missing_contract = sorted(schema_requirements[name] - contracted_attributes)
+            if missing_contract:
+                raise ValueError(
+                    f"{name} checked-in contract is missing operationally required attributes: "
+                    + ", ".join(missing_contract)
+                )
+            live_schema = storage.namespace_schema(name)
+            live_schemas[name] = live_schema
+            missing_required = sorted(schema_requirements[name] - set(live_schema))
             if missing_required:
                 raise ValueError(
-                    f"{name} live schema is missing required checked-in attributes: "
+                    f"{name} live schema is missing operationally required attributes: "
                     + ", ".join(missing_required)
                 )
             enumeration = asyncio.run(

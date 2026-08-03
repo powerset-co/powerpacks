@@ -1602,6 +1602,11 @@ class PipelineTests(unittest.TestCase):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
         from packs.search.pipeline.models import PowersetCorpus
 
+        selected = spec(
+            backend=Backend.POWERSET,
+            corpus=PowersetCorpus("set", ("operator",)),
+        )
+
         def live_schema(name):
             contract = json.loads(
                 (ROOT / "packs/search/contracts/turbopuffer" / f"{name}.namespace.json").read_text()
@@ -1609,7 +1614,14 @@ class PipelineTests(unittest.TestCase):
             fields = {
                 row["name"]: {"type": row["type"]}
                 for row in contract["attributes"]
-                if row["name"] != "company_description"
+                if row["name"] not in {
+                    "company_description",
+                    "ig_followers",
+                    "investor_names",
+                    "linkedin_connections",
+                    "linkedin_followers",
+                    "x_twitter_followers",
+                }
             }
             if contract.get("vector"):
                 fields["vector"] = {"type": "vector"}
@@ -1643,9 +1655,9 @@ class PipelineTests(unittest.TestCase):
                 new=mock.AsyncMock(side_effect=enumerate_namespace),
             ),
         ):
-            snapshot = TurboPufferSearchRunner(
-                PowersetCorpus("set", ("operator",))
-            ).snapshot_corpus("set", ())
+            snapshot = TurboPufferSearchRunner(selected.corpus).snapshot_corpus(
+                "set", (), spec=selected
+            )
 
         people_schema = live_schema("people")
         self.assertNotIn("company_description", people_schema)
@@ -1655,6 +1667,68 @@ class PipelineTests(unittest.TestCase):
             "summaries": [], "companies": [], "company_signals": [], "education": [], "schools": [],
         }
         self.assertEqual(snapshot["scoped_records_hash"], canonical_hash(expected_rows))
+
+    def test_remote_snapshot_requires_selected_filter_query_and_vector_fields(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        selected = spec(
+            backend=Backend.POWERSET,
+            corpus=PowersetCorpus("set", ("operator",)),
+            person_filters=PersonFilters(cities=("Synthetic City",)),
+        )
+
+        def drifted_schema(name):
+            schema = turbopuffer_contract_schema(name)
+            if name == "people":
+                for field in ("city", "phrase_tokens", "vector"):
+                    schema.pop(field)
+            return schema
+
+        enumeration = mock.AsyncMock()
+        with (
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.postgres_client.fetch_set_operator_ids",
+                return_value={"set_id": "set", "operator_ids": ["operator"]},
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.namespace_schema",
+                side_effect=drifted_schema,
+            ),
+            mock.patch(
+                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                new=enumeration,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "people live schema is missing operationally required attributes: city, phrase_tokens, vector",
+            ):
+                TurboPufferSearchRunner(selected.corpus).snapshot_corpus(
+                    "set", (), spec=selected
+                )
+        enumeration.assert_not_awaited()
+
+    def test_remote_snapshot_does_not_require_query_fields_or_vectors_for_filter_only_spec(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        selected = spec(
+            raw_request="",
+            backend=Backend.POWERSET,
+            corpus=PowersetCorpus("set", ("operator",)),
+            role=RoleIntent(),
+            person_filters=PersonFilters(cities=("Synthetic City",)),
+        )
+        required = TurboPufferSearchRunner._snapshot_schema_requirements(selected)
+
+        self.assertIn("city", required["people"])
+        self.assertNotIn("phrase_tokens", required["people"])
+        self.assertNotIn("word_tokens", required["people"])
+        self.assertNotIn("vector", required["people"])
+        self.assertNotIn("summary_tokens", required["summaries"])
+        self.assertNotIn("vector", required["summaries"])
+        self.assertNotIn("vector", required["company_signals"])
 
     def test_remote_snapshot_rejects_missing_required_live_attribute_before_enumeration(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
@@ -1683,7 +1757,7 @@ class PipelineTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 ValueError,
-                "people live schema is missing required checked-in attributes: allowed_operator_ids",
+                "people live schema is missing operationally required attributes: allowed_operator_ids",
             ):
                 TurboPufferSearchRunner(
                     PowersetCorpus("set", ("operator",))

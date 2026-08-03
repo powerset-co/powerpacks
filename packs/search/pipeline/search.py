@@ -48,7 +48,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
             if spec.recruiting is not None
             else ()
         )
-        identity = runner.snapshot_corpus("local", evidence_person_ids)
+        identity = runner.snapshot_corpus("local", evidence_person_ids, spec=spec)
         derived = LocalCorpus(
             spec.corpus.db_path,
             identity["scoped_records_hash"],
@@ -88,7 +88,7 @@ def run_search(spec: SearchSpec, *, output_dir: str | Path | None = None) -> Any
             if spec.recruiting is not None
             else ()
         )
-        identity = runner.snapshot_corpus(spec.corpus.set_id, evidence_person_ids)
+        identity = runner.snapshot_corpus(spec.corpus.set_id, evidence_person_ids, spec=spec)
         spec = replace(
             spec,
             corpus=PowersetCorpus(

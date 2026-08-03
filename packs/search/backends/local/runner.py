@@ -742,7 +742,13 @@ class LocalSearchRunner:
             tuple(hydrated), frontier.input_count, frontier.output_count, frontier.limit, frontier.truncated
         )
 
-    def snapshot_corpus(self, scope: str, evidence_person_ids: tuple[str, ...]) -> dict[str, Any]:
+    def snapshot_corpus(
+        self,
+        scope: str,
+        evidence_person_ids: tuple[str, ...],
+        *,
+        spec: SearchSpec | None = None,
+    ) -> dict[str, Any]:
         import duckdb
 
         with duckdb.connect(self.db_path, read_only=True) as conn:

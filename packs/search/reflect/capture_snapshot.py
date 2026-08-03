@@ -46,7 +46,11 @@ def main() -> None:
     person_ids = json.loads(args.evidence_person_ids.read_text())
     if not isinstance(person_ids, list) or any(not isinstance(value, str) for value in person_ids):
         raise SystemExit("--evidence-person-ids must contain a JSON string array")
-    snapshot = selected_runner(spec).snapshot_corpus(args.scope, tuple(dict.fromkeys(person_ids)))
+    snapshot = selected_runner(spec).snapshot_corpus(
+        args.scope,
+        tuple(dict.fromkeys(person_ids)),
+        spec=spec,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
 
