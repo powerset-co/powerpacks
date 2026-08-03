@@ -999,6 +999,22 @@ class TestSynthesizeExecute(unittest.TestCase):
             self.assertEqual(payload.errors, 1)
             self.assertEqual(payload.stop_reasons, {"exhausted": 1})
 
+    def test_prompt_carries_the_content_policy(self):
+        # v5: dossiers are professional-context documents. The policy block,
+        # the milestone allowance, and the professional-quoting rule must stay
+        # pinned — phrasing stays allowlist-shaped (name the class of what
+        # belongs, not enumerated examples nor the categories it displaces).
+        self.assertIn("CONTENT POLICY", synth.SYSTEM_PROMPT)
+        self.assertIn("the kind you would congratulate them on", synth.SYSTEM_PROMPT)
+        self.assertIn("Everything else about their personal life stays out",
+                      synth.SYSTEM_PROMPT)
+        self.assertIn("Quote a message only for its professional content",
+                      synth.SYSTEM_PROMPT)
+        self.assertIn("still count as relationship evidence", synth.SYSTEM_PROMPT)
+        self.assertNotIn("sexual", synth.SYSTEM_PROMPT)
+        self.assertNotIn("drug", synth.SYSTEM_PROMPT)
+        self.assertEqual(synth.SYNTHESIS_CONTRACT_VERSION, "professional-content-v5")
+
     def test_plan_is_one_typed_value(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

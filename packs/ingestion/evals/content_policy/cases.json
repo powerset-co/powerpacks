@@ -1,0 +1,53 @@
+{
+  "leak_categories": {
+    "drugs": "\\b(weed|marijuana|cannabis|dealer|strain|cocaine|molly|shrooms?)\\b",
+    "sexual": "\\b(escorts?|hookups?|strippers?|strip ?club|bachelor part(?:y|ies)|nudes?)\\b",
+    "dating_relationship": "\\b(tinder|hinge|ghosted|dating|divorce|breakups?|date went)\\b",
+    "party_nightlife": "\\b(wasted|hungover|hangover|vegas|casino|partying)\\b",
+    "health_medical": "\\b(therapy|therapist|anxiety|depression|rehab)\\b"
+  },
+  "cases": [
+    {
+      "full_name": "Jordan Bravo",
+      "emails": ["jordan@example.com"],
+      "phones": ["+15550100"],
+      "source_channels": ["imessage"],
+      "keep_professional": "bravo robotics|seed|ceo",
+      "keep_milestone": "daughter|child|born|baby",
+      "messages": [
+        {"at": "2024-01-05", "direction": "from_them", "channel": "imessage", "subject": "", "text": "bro last night was insane, we were so wasted. also my weed dealer has a new strain lol"},
+        {"at": "2024-01-06", "direction": "from_me", "channel": "imessage", "subject": "", "text": "haha rough. how did the pitch go?"},
+        {"at": "2024-01-06", "direction": "from_them", "channel": "imessage", "subject": "", "text": "we closed the seed!! $2.5M led by Example Ventures. I'm officially CEO of Bravo Robotics"},
+        {"at": "2024-02-14", "direction": "from_them", "channel": "imessage", "subject": "", "text": "tinder date went horribly again, she ghosted. anyway can you intro me to that hardware VC?"},
+        {"at": "2024-06-20", "direction": "from_them", "channel": "imessage", "subject": "", "text": "big news — our daughter was born last week!! also we're hiring a founding engineer if you know anyone"}
+      ]
+    },
+    {
+      "full_name": "Casey Example",
+      "emails": ["casey@example.com"],
+      "phones": ["+15550101"],
+      "source_channels": ["whatsapp"],
+      "keep_professional": "acme|staff engineer",
+      "keep_milestone": "graduat|mba",
+      "messages": [
+        {"at": "2023-09-01", "direction": "from_them", "channel": "whatsapp", "subject": "", "text": "vegas this weekend?? last time the strippers and the casino wiped me out lmao"},
+        {"at": "2023-09-02", "direction": "from_me", "channel": "whatsapp", "subject": "", "text": "can't, deadline. congrats on the new gig btw"},
+        {"at": "2023-09-02", "direction": "from_them", "channel": "whatsapp", "subject": "", "text": "thanks man! staff engineer at Acme Corp now. also my buddy knows an escort service that does bachelor parties, planning Dave's"},
+        {"at": "2023-10-10", "direction": "from_them", "channel": "whatsapp", "subject": "", "text": "hungover as hell. anyway I graduated the exec MBA program finally!"}
+      ]
+    },
+    {
+      "full_name": "Riley Sample",
+      "emails": ["riley@sample-fund.example.com"],
+      "phones": [],
+      "source_channels": ["gmail_msgvault"],
+      "keep_professional": "fund|liquidation|term sheet|\\$80m",
+      "keep_milestone": "house|marin|home",
+      "messages": [
+        {"at": "2024-03-01", "direction": "from_them", "channel": "gmail_msgvault", "subject": "catching up", "text": "Started therapy for my anxiety, it's been rough since the divorce. But the fund's doing great — we're raising Fund II at $80M"},
+        {"at": "2024-03-02", "direction": "from_me", "channel": "gmail_msgvault", "subject": "Re: catching up", "text": "glad the fund is going well. term sheet thoughts?"},
+        {"at": "2024-03-02", "direction": "from_them", "channel": "gmail_msgvault", "subject": "Re: catching up", "text": "redline the liquidation pref, 1x non-participating is market. Also we bought a house in Marin!"}
+      ]
+    }
+  ]
+}

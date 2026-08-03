@@ -21,6 +21,18 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
+  2026-08-02 (professional content v5): CONTENT POLICY block in the prompt —
+    dossiers are read in a professional context, so every field focuses on
+    professional substance (work, deals, studies, skills, neutral relationship
+    labels); from personal life only openly-celebrated major milestones (the
+    congratulate-them kind), stated neutrally — everything else personal stays
+    out of every field, with quoting limited to professional content.
+    Deliberately allowlist-phrased and generalized — the prompt names the
+    class of what belongs, not enumerated examples nor the unsavory categories
+    it displaces. Such messages still count toward `network_worth` as
+    relationship evidence. Intentional semantic change:
+    SYNTHESIS_CONTRACT_VERSION bumps and every dossier resynthesizes on the
+    next run.
   2026-08-01 (phone identifier discipline): the identifiers paragraph of
     SYSTEM_PROMPT now instructs picking at most one or two numbers clearly the
     contact's own — mobile first, a second only for a clearly distinct line
@@ -131,7 +143,7 @@ DEFAULT_SATURATION_ROUNDS = 2      # ...or after this many batches add nothing n
 DEFAULT_MAX_BATCHES = 20           # ...or this many batches (~1600 msgs) — hard ceiling
 DEFAULT_MAX_RETRIES = 6
 DEFAULT_CHUNK_PEOPLE = 200         # people loaded into memory at once (streaming bound)
-SYNTHESIS_CONTRACT_VERSION = "professional-worth-v4"
+SYNTHESIS_CONTRACT_VERSION = "professional-content-v5"
 # Calibrated from real runs: ~10 chunks/s wall at high concurrency (ranged 6.7
 # on flex tier to 11.7 on default tier). Used only for the --dry-run ETA; actual
 # rate scales with --concurrency and your OpenAI usage tier.
@@ -147,6 +159,18 @@ SYSTEM_PROMPT = (
     "rough dates, and their contact identifiers. Prefer specific, evidence-backed facts "
     "over guesses; set low confidence when the signal is thin. Leave a field empty rather "
     "than inventing it.\n\n"
+    "CONTENT POLICY — the profile is read in a professional context. Focus every field "
+    "you write — summary, relationship, topics, events, shared context, and any quoted "
+    "evidence — on professional substance: work, companies, roles, projects, deals, "
+    "investments, studies, skills, public achievements, and how I know them (a neutral "
+    "relationship label like friend, partner, family member, or college roommate is "
+    "fine). From their personal life, include only major milestones the person openly "
+    "celebrates — the kind you would congratulate them on — stated neutrally. "
+    "Everything else about their personal life stays out of the profile, in every field. "
+    "Quote a message only for its professional content; if a message carries no "
+    "professional substance and no milestone, extract nothing from it. Such messages "
+    "still count as relationship evidence for `network_worth` (a real friendship is "
+    "real), but their content stays out of the profile.\n\n"
     "`identifiers` is CONTACT INFO TO REACH THIS PERSON: email addresses and phone numbers "
     "ONLY, and only ones clearly the CONTACT's own — the address/number they send from, "
     "one in their signature, or one they explicitly state is theirs. NEVER include: any "
