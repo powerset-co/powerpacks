@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.12.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.11.0...powerpacks-v1.12.0) (2026-08-02)
+
+
+### Features
+
+* **deep-context:** directory shows only confirmed LinkedIns; confirmed names promote ([#403](https://github.com/powerset-co/powerpacks/issues/403)) ([dbc544d](https://github.com/powerset-co/powerpacks/commit/dbc544dc92c5a52f300ffa5579a7321cc3eac1f5))
+
+
+### Bug Fixes
+
+* **deep-context:** drop footer-junk phones from dossier identifiers ([#404](https://github.com/powerset-co/powerpacks/issues/404)) ([5af745d](https://github.com/powerset-co/powerpacks/commit/5af745d839b8946f07e290d09f89e5dfcb08fd68))
+* **deep-context:** pane says Summary once — drop the dossier's duplicate label ([#401](https://github.com/powerset-co/powerpacks/issues/401)) ([a2a3cdc](https://github.com/powerset-co/powerpacks/commit/a2a3cdc7cffdfaba97e8fc30408e26c104fb1709))
+* **ingestion:** name indexes count distinct person ids, not catalog rows ([#400](https://github.com/powerset-co/powerpacks/issues/400)) ([31d7221](https://github.com/powerset-co/powerpacks/commit/31d7221017f71b082e7aa6b0abade825bc850573))
+
 ## [1.11.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.10.0...powerpacks-v1.11.0) (2026-08-01)
 
 

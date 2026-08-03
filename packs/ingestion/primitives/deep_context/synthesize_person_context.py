@@ -21,7 +21,7 @@ Outputs (fixed dir):
   <out-dir>/manifest.json       counts + token/cost totals
 
 Changelog:
-  2026-07-31 (professional content v5): CONTENT POLICY block in the prompt —
+  2026-08-02 (professional content v5): CONTENT POLICY block in the prompt —
     dossiers are read in a professional context, so every field focuses on
     professional substance (work, deals, studies, skills, neutral relationship
     labels); from personal life only openly-celebrated major milestones (the
@@ -33,6 +33,15 @@ Changelog:
     relationship evidence. Intentional semantic change:
     SYNTHESIS_CONTRACT_VERSION bumps and every dossier resynthesizes on the
     next run.
+  2026-08-01 (phone identifier discipline): the identifiers paragraph of
+    SYSTEM_PROMPT now instructs picking at most one or two numbers clearly the
+    contact's own — mobile first, a second only for a clearly distinct line
+    (e.g. a different country) — never Zoom/Teams/Webex conference dial-in
+    numbers from meeting invitations, and on multi-person threads attributing
+    a number to the contact only from their own signature or their own words.
+    SYNTHESIS_CONTRACT_VERSION is unchanged, but the prompt feeds the
+    SYNTHESIS_VERSION hash, so the fingerprint changes and dossiers
+    resynthesize on the next refresh.
   2026-07-31 (network-value worth v4): a personal connection with purely social
     threads still qualifies as yes when the person themselves is a confidently
     identified valuable network connection (founder/executive/investor/
@@ -169,7 +178,12 @@ SYSTEM_PROMPT = (
     "campaign links), usernames/handles, dates, physical addresses; the mailbox owner's "
     "(MY) email or phone; or anyone else's contact info — a third party's contact card, a "
     "referral, a quoted address, or another participant on a group thread is NEVER this "
-    "person's identifier. When unsure whose it is, leave it out.\n"
+    "person's identifier. For phone numbers, pick at most one or two clearly the CONTACT's "
+    "own — their mobile first, and a second only when it is clearly a distinct line of "
+    "theirs (for example a different country). NEVER conference/dial-in numbers from "
+    "meeting invitations — Zoom/Teams/Webex bridges are no one's personal number. On "
+    "threads with multiple people, attribute a number to the CONTACT only from their own "
+    "signature or their own words. When unsure whose it is, leave it out.\n"
     "Separately fill `owned_identifiers` with identifiers clearly owned by the CONTACT — "
     "their own emails/phones AND their own URLs (personal site, portfolio, a social "
     "profile they present as theirs). The same strictness applies: quoted, referred, "

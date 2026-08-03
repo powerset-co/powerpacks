@@ -107,7 +107,9 @@ class TestContactIdentifierPolicy(unittest.TestCase):
     """'Contact info to reach this person': emails/phones only, owner dropped,
     and an email must be provably theirs (ground truth, or a name token in its
     local part / domain). Everything else — URLs, maps/campaign/meeting links,
-    handles, dates — never survives."""
+    handles, dates — never survives. Phones additionally pass the footer-junk
+    scrub: toll-free drops unless it is the only phone, and at most two phones
+    survive (known first; a non-known second slot needs a different country)."""
 
     def test_policy_first_rule_wins(self):
         kept = common.contact_identifiers(
@@ -146,6 +148,44 @@ class TestContactIdentifierPolicy(unittest.TestCase):
         self.assertEqual(
             common.contact_identifiers(["+1 555 019 9000"],
                                        owner_phones=["5550199000"]), [])
+
+    def test_zoom_invite_bridge_numbers_capped(self):
+        # A meeting-invite footer: the contact's mobile plus a pile of dial-in
+        # bridge numbers. All bridges share the mobile's country, so none may
+        # take the second slot — only the real mobile survives the cap.
+        kept = common.contact_identifiers(
+            ["+1 555 010 0001",   # their mobile (listed first)
+             "+1 555 021 6800",   # bridge numbers below
+             "+1 555 646 8000",
+             "+1 555 669 9000",
+             "+1 555 253 2000",
+             "+1 555 301 7000"],
+            name="Jordan Bravo")
+        self.assertEqual(kept, ["+1 555 010 0001"])
+
+    def test_toll_free_drops_unless_only_phone(self):
+        # A company 800-line next to a real number is footer junk...
+        self.assertEqual(
+            common.contact_identifiers(["(800) 555-0199", "+1 555 010 0123"]),
+            ["+1 555 010 0123"])
+        # ...but as the person's ONLY phone it stays.
+        self.assertEqual(common.contact_identifiers(["(800) 555-0199"]),
+                         ["(800) 555-0199"])
+
+    def test_signature_known_first_then_different_country(self):
+        # A business-signature block: office + mobile (same country) + a line
+        # in another country. The ground-truth `known` number is kept first;
+        # the second slot goes to the different-country line, never the
+        # same-country office number. Emails are untouched by the cap.
+        kept = common.contact_identifiers(
+            ["jordan.bravo@example.com",
+             "+1 555 010 0111",     # office — same country as the known mobile
+             "+1 555 010 0222",     # mobile — in `known`
+             "+886 9 5550 0100"],   # their line in another country
+            name="Jordan Bravo",
+            known=["+15550100222"])
+        self.assertEqual(kept, ["jordan.bravo@example.com",
+                                "+1 555 010 0222", "+886 9 5550 0100"])
 
     def test_scrub_rewrites_identifier_sections_display_side(self):
         md = ("# Jordan Bravo\n\n## Identifiers\n\n- jordan@acme.com\n"
@@ -723,6 +763,13 @@ class TestSynthesize(unittest.TestCase):
 
     def test_schema_requires_owned_identifiers(self):
         self.assertIn("owned_identifiers", synth.FACT_SCHEMA["required"])
+
+    def test_prompt_phone_discipline(self):
+        prompt = synth.SYSTEM_PROMPT
+        self.assertIn("at most one or two", prompt)
+        self.assertIn("their mobile first", prompt)
+        self.assertIn("Zoom/Teams/Webex bridges are no one's personal number", prompt)
+        self.assertIn("their own signature or their own words", prompt)
 
     def test_contract_version_requeues_stale_terminal_facts(self):
         with tempfile.TemporaryDirectory() as d:
@@ -5167,8 +5214,11 @@ class TestDirectoryView(unittest.TestCase):
 
     @staticmethod
     def _parent(slug: str, name: str, **candidate: object) -> dict:
+        # Confirmed by default: the directory only renders machine ("auto") or
+        # human ("yes") confirmed identities; pass approved="" for a pending one.
         base = {
             "pub": f"{slug}-pub", "full_name": name,
+            "approved": "auto", "action": "verify",
             "match_emails": [], "match_phones": [],
         }
         base.update(candidate)
@@ -5287,6 +5337,10 @@ class TestDirectoryView(unittest.TestCase):
                         html.index("data-directory-tab='yes'"))
         self.assertIn("Alpha tester.", picked)                # ?person= pre-renders the pane
         self.assertNotIn("Pick a person", picked)
+        # The facts table already carries a "Summary" row; the dossier's own
+        # heading is dropped so the pane never says Summary twice (the summary
+        # TEXT stays, asserted above).
+        self.assertNotIn("<h4>Summary</h4>", picked)
 
     def test_directory_maybe_tab_is_the_burn_down_pile(self):
         parents = [self._parent("mel-maybe", "Mel Maybe")]  # only undecided people
@@ -5461,6 +5515,62 @@ class TestDirectoryView(unittest.TestCase):
                        "name": "Kai Keyless", "candidates": []}
             html = web_rendering.render_person_detail(keyless, base / "p", base / "d", **kwargs)
             self.assertNotIn("data-dir-worth", html)
+
+    def test_pending_candidate_renders_publess_in_directory(self):
+        # The directory shows only confirmed identities. A pending
+        # (needs_review) candidate renders exactly like a detached one: the
+        # person stays, the link/confidence/photo do not, and the guidance
+        # form still keys on the pub.
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            kwargs = {"profile_cache_dir": base / "profiles"}
+            pending = self._parent(
+                "jordan-bravo", "Jordan Bravo", approved="", confidence=0.62,
+                url="https://www.linkedin.com/in/jordan-bravo-wrong")
+            html = web_rendering.render_person_detail(pending, base / "p", base / "d", **kwargs)
+            self.assertNotIn("linkedin.com/in/jordan-bravo-wrong", html)
+            self.assertNotIn("LinkedIn Confidence", html)
+            self.assertIn("Jordan Bravo", html)              # the person remains
+            self.assertIn("data-retarget-form", html)        # and is retargetable
+
+    def test_confirmed_profile_name_promotes_degraded_display_name(self):
+        with tempfile.TemporaryDirectory() as dd:
+            base = Path(dd)
+            kwargs = {"profile_cache_dir": base / "profiles"}
+            # Placeholder surname + confirmed profile -> profile name wins.
+            degraded = self._parent("jordan-last-name-unknown",
+                                    "Jordan (last name unknown)",
+                                    full_name="Jordan Bravo")
+            html = web_rendering.render_person_detail(degraded, base / "p", base / "d", **kwargs)
+            self.assertIn("<h2>Jordan Bravo</h2>", html)
+            self.assertNotIn("last name unknown", html)
+            # Single-token name + confirmed two-token profile -> promoted.
+            single = self._parent("casey", "Casey", full_name="Casey Example")
+            html = web_rendering.render_person_detail(single, base / "p", base / "d", **kwargs)
+            self.assertIn("<h2>Casey Example</h2>", html)
+            # A familiar multi-token message name is kept over the profile's.
+            familiar = self._parent("jb", "JB Bravo", full_name="Jordan Bravo")
+            html = web_rendering.render_person_detail(familiar, base / "p", base / "d", **kwargs)
+            self.assertIn("<h2>JB Bravo</h2>", html)
+            # An UNCONFIRMED profile never promotes: candidate facts are
+            # stripped, so the degraded name stays.
+            pending = self._parent("alex-last-name-unknown",
+                                   "Alex (last name unknown)",
+                                   full_name="Alex Impostor", approved="")
+            html = web_rendering.render_person_detail(pending, base / "p", base / "d", **kwargs)
+            self.assertIn("Alex (last name unknown)", html)
+            self.assertNotIn("Alex Impostor", html)
+        # The sidebar island promotes the same way (inline snapshot name; no
+        # cache hydration needed when the snapshot carries full_name).
+        entries = web_rendering.directory_entries([
+            self._parent("jordan-last-name-unknown", "Jordan (last name unknown)",
+                         full_name="Jordan Bravo"),
+            self._parent("alex-last-name-unknown", "Alex (last name unknown)",
+                         full_name="Alex Impostor", approved=""),
+        ])
+        names = {e["slug"]: e["name"] for e in entries}
+        self.assertEqual(names["jordan-last-name-unknown"], "Jordan Bravo")
+        self.assertEqual(names["alex-last-name-unknown"], "Alex (last name unknown)")
 
     def test_person_detail_linkedin_confidence_badge(self):
         with tempfile.TemporaryDirectory() as dd:

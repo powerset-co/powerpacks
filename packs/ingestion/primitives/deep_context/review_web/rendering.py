@@ -1347,12 +1347,32 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
 # header/facts the review cards already know how to build. Nothing here writes.
 
 
-def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
+def _promoted_name(parent_name: str, profile_name: str) -> str:
+    """Display-name promotion: a CONFIRMED profile's full name replaces a
+    degraded message-derived display name — an explicit "(last name unknown)"
+    placeholder or a single-token name. A familiar multi-token message name is
+    kept even when the profile's differs (the message name is how the owner
+    knows them). Callers pass profile_name="" for unconfirmed identities, which
+    makes this a no-op."""
+    if not profile_name:
+        return parent_name
+    if "unknown)" in parent_name.lower():
+        return profile_name
+    if len(parent_name.split()) == 1 and len(profile_name.split()) >= 2:
+        return profile_name
+    return parent_name
+
+
+def directory_entries(parents: list[dict[str, Any]],
+                      profile_cache_dir: Path | None = None) -> list[dict[str, str]]:
     """One sidebar entry per person, A-Z by display name: the name, the dossier
     slug /api/person keys on, and the EFFECTIVE worth decision (yes/no/maybe —
     the same worth_view effective the review tabs group by) so the sidebar's
     Yes/No tabs match the review's numbers. Deduped by slug so split parents
-    sharing one dossier appear once."""
+    sharing one dossier appear once. Degraded display names get the confirmed
+    profile's full name (``_promoted_name``); cache hydration runs only for the
+    few degraded-named confirmed people whose snapshot lacks the profile name,
+    so the sidebar build stays cheap."""
     seen: set[str] = set()
     entries: list[dict[str, str]] = []
     for parent in parents:
@@ -1362,7 +1382,17 @@ def directory_entries(parents: list[dict[str, Any]]) -> list[dict[str, str]]:
         seen.add(slug)
         worth = str(((parent.get("worth_row") or {}).get("effective"))
                     or (parent.get("worth") or {}).get("decision") or "").strip().lower()
-        entries.append({"slug": slug, "name": str(parent.get("name") or slug),
+        name = str(parent.get("name") or slug)
+        degraded = "unknown)" in name.lower() or len(name.split()) == 1
+        primary = _primary_candidate(parent)
+        if degraded and primary and candidate_state(primary) in {"verified", "fixed"}:
+            profile_name = str(primary.get("full_name") or "").strip()
+            if not profile_name and profile_cache_dir is not None:
+                hydrated = dict(primary)
+                _hydrate_card_profile(hydrated, profile_cache_dir)
+                profile_name = str(hydrated.get("full_name") or "").strip()
+            name = _promoted_name(name, profile_name)
+        entries.append({"slug": slug, "name": name,
                         "worth": worth if worth in {"yes", "no"} else "maybe"})
     entries.sort(key=lambda entry: entry["name"].lower())
     return entries
@@ -1451,17 +1481,22 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     full dossier rendered as HTML. The candidate is copied before hydration so
     this browse path never mutates the server's cached model."""
     primary = dict(_primary_candidate(parent))
-    # A detached/excluded/rejected identity is a judged-wrong (or user-refused)
-    # person: never render its link, confidence, headline, photo, or cached
-    # profile facts — only the contact's own emails/phones survive. The pub is
-    # kept separately so the wrong-person guidance form still keys correctly.
-    wrong_identity = candidate_state(primary) in {"detached", "excluded", "rejected"} \
+    # The directory shows only CONFIRMED identities — machine-verified ("auto")
+    # or human-confirmed ("yes"). Judged-wrong (detached/excluded/rejected) AND
+    # still-pending ("review") candidates render publess alike: no link,
+    # confidence, headline, photo, or cached profile facts — only the contact's
+    # own emails/phones survive. The pub is kept separately so the wrong-person
+    # guidance form still keys correctly. (The review stages still show pending
+    # candidates — that is where they get decided; the directory is not.)
+    unconfirmed = candidate_state(primary) in {"detached", "excluded", "rejected", "review"} \
         if primary else False
     candidate = ({"match_emails": primary.get("match_emails") or [],
                   "match_phones": primary.get("match_phones") or []}
-                 if wrong_identity else primary)
+                 if unconfirmed else primary)
     _hydrate_card_profile(candidate, profile_cache_dir)
-    name = str(parent.get("name") or candidate.get("full_name") or "This person")
+    name = _promoted_name(
+        str(parent.get("name") or candidate.get("full_name") or "This person"),
+        str(candidate.get("full_name") or "").strip())
     slug = str(parent.get("dossier_slug") or parent.get("slug") or "")
     synthetic = bool(candidate.get("synthetic"))
     url = "" if synthetic else str(candidate.get("url") or "")
@@ -1519,6 +1554,11 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     dossier_md = re.sub(
         r"(?ms)^#{2,4} Possible same person\s*?\n\s*_?None detected\.?_?\s*(?=^#{1,4} |\Z)",
         "", dossier_md)
+    # The facts table above already has a "Summary" row (profile-derived), and
+    # the dossier's own "## Summary" heading made the pane say Summary twice.
+    # Keep the dossier's summary TEXT as the section's lead paragraph; drop
+    # only the duplicate label.
+    dossier_md = re.sub(r"(?m)^#{2,4} Summary[ \t]*\n", "", dossier_md, count=1)
     dossier = markdown_to_html(dossier_md)
     children_debug = ""
     if children_md:
@@ -1557,7 +1597,7 @@ def directory_page_html(parents: list[dict[str, Any]], params: dict[str, list[st
     the URL is shareable. Same shell as the review pages, no stepper, no SSE.
     ``handoff`` (the flow is complete and the agent's move is next) keeps the
     old done screen's copy-the-phrase affordance as a banner over the panel."""
-    entries = directory_entries(parents)
+    entries = directory_entries(parents, profile_cache_dir)
     selected = str((params.get("person") or [""])[0]).strip().lower()
     parent = next(
         (item for item in parents
