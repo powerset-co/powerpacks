@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any
+from typing import Any, Callable
 
 from powerpacks_contracts import TURBOPUFFER_NAMESPACES
 import search_common as _search_common
@@ -124,12 +124,34 @@ async def enumerate_filter_only_rows_for_namespace(
     max_results: int = 0,
 ) -> dict[str, Any]:
     """Enumerate rows and explicitly report whether pagination exhausted."""
+    all_rows: list[dict[str, Any]] = []
+    result = await consume_filter_only_pages_for_namespace(
+        logical_name,
+        filters,
+        include_attributes,
+        all_rows.extend,
+        page_size=page_size,
+        max_results=max_results,
+    )
+    return {**result, "rows": all_rows}
+
+
+async def consume_filter_only_pages_for_namespace(
+    logical_name: str,
+    filters: tuple | None,
+    include_attributes: list[str] | bool,
+    consume_page: Callable[[list[dict[str, Any]]], None],
+    *,
+    page_size: int = 10000,
+    max_results: int = 0,
+) -> dict[str, Any]:
+    """Consume strongly consistent id-ordered pages without retaining prior pages."""
     ns = namespace(logical_name)
     page_size = min(page_size, 10000)
     max_batches = int(os.getenv("TURBOPUFFER_FILTER_ONLY_MAX_BATCHES", "100"))
-    all_rows: list[dict[str, Any]] = []
     last_id: str | None = None
     batch_count = 0
+    row_count = 0
     truncated = False
 
     while True:
@@ -157,20 +179,28 @@ async def enumerate_filter_only_rows_for_namespace(
         batch_count += 1
         if not response or not response.rows:
             break
-        for row in response.rows:
-            all_rows.append(row_attrs(row, include_attributes))
-        if max_results and len(all_rows) >= max_results:
-            all_rows = all_rows[:max_results]
-            truncated = len(response.rows) == page_size or len(all_rows) >= max_results
+        response_ids = [str(row.id) for row in response.rows]
+        if response_ids != sorted(response_ids) or len(response_ids) != len(set(response_ids)):
+            raise RuntimeError(f"{logical_name} pagination returned non-increasing ids")
+        if last_id is not None and response_ids[0] <= last_id:
+            raise RuntimeError(f"{logical_name} pagination did not advance past id {last_id}")
+        page = [row_attrs(row, include_attributes) for row in response.rows]
+        if max_results:
+            page = page[:max(0, max_results - row_count)]
+        if page:
+            consume_page(page)
+            row_count += len(page)
+        if max_results and row_count >= max_results:
+            truncated = len(response.rows) == page_size or row_count >= max_results
             break
         if len(response.rows) < page_size:
             break
-        last_id = str(response.rows[-1].id)
+        last_id = response_ids[-1]
         if batch_count >= max_batches:
             truncated = True
             break
-    return {"rows": all_rows, "completed": not truncated, "truncated": truncated,
-            "batch_count": batch_count, "row_count": len(all_rows)}
+    return {"completed": not truncated, "truncated": truncated,
+            "batch_count": batch_count, "row_count": row_count}
 
 
 async def filter_only_rows(filters: tuple, include_attributes: list[str], *, page_size: int = 10000, max_results: int = 0) -> list[dict[str, Any]]:

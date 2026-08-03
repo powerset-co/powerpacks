@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import sys
+import hashlib
 import json
+import sys
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,7 @@ from ...pipeline.models import (
     SearchPlan,
     SearchSpec,
 )
-from ...reflect.snapshots import canonical_hash, evidence_hash
+from ...reflect.snapshots import canonical_hash, canonical_json, evidence_hash
 
 _PRIMITIVES = Path(__file__).resolve().parents[2] / "primitives"
 for _path in (_PRIMITIVES / "lib", _PRIMITIVES / "shared", _PRIMITIVES / "turbopuffer"):
@@ -36,6 +37,47 @@ import turbopuffer_resolve_education as education_resolution  # noqa: E402
 
 CONTRACT_ROOT = Path(__file__).resolve().parents[2] / "contracts"
 CONTRACTS = CONTRACT_ROOT / "turbopuffer"
+SCOPED_RECORDS_HASH_VERSION = "powerset.scoped_records.streaming.v1"
+
+
+class _NamespaceSnapshotAccumulator:
+    """Hash complete canonical rows in stable TurboPuffer id order."""
+
+    def __init__(self, *, retain_membership: bool = False):
+        self._hash = hashlib.sha256()
+        self._hash.update(b"powerset.namespace.rows.v1\0")
+        self._last_id: str | None = None
+        self.count = 0
+        self.member_ids: set[str] | None = set() if retain_membership else None
+
+    def consume_page(self, rows: list[dict[str, Any]]) -> None:
+        for row in rows:
+            row_id = str(row.get("id") or "")
+            if not row_id or (self._last_id is not None and row_id <= self._last_id):
+                raise RuntimeError("snapshot rows must have unique ids in stable ascending order")
+            encoded = canonical_json(row)
+            self._hash.update(len(encoded).to_bytes(8, "big"))
+            self._hash.update(encoded)
+            self._last_id = row_id
+            self.count += 1
+            if self.member_ids is not None:
+                person_id = row.get("person_id") or row.get("base_id") or row.get("id")
+                if person_id:
+                    self.member_ids.add(str(person_id))
+
+    def hexdigest(self) -> str:
+        return self._hash.hexdigest()
+
+
+def _streaming_scoped_records_hash(namespace_hashes: dict[str, str], counts: dict[str, int]) -> str:
+    """Version the aggregate because it replaces the former materialized JSON hash."""
+    return canonical_hash({
+        "version": SCOPED_RECORDS_HASH_VERSION,
+        "namespaces": {
+            name: {"count": counts[name], "rows_hash": namespace_hashes[name]}
+            for name in sorted(namespace_hashes)
+        },
+    })
 
 
 class TurboPufferSearchRunner:
@@ -910,9 +952,10 @@ class TurboPufferSearchRunner:
             "ContainsAny",
             list(self.corpus.operator_ids),
         )
-        records_by_namespace: dict[str, list[dict[str, Any]]] = {}
         namespace_counts: dict[str, int] = {}
+        namespace_hashes: dict[str, str] = {}
         live_schemas: dict[str, dict[str, Any]] = {}
+        member_ids: set[str] = set()
         schema_requirements = self._snapshot_schema_requirements(spec)
         for name in required_namespaces:
             contract = contracts[name]
@@ -935,26 +978,25 @@ class TurboPufferSearchRunner:
                     f"{name} live schema is missing operationally required attributes: "
                     + ", ".join(missing_required)
                 )
+            accumulator = _NamespaceSnapshotAccumulator(retain_membership=name == "people")
             enumeration = asyncio.run(
-                storage.enumerate_filter_only_rows_for_namespace(
+                storage.consume_filter_only_pages_for_namespace(
                     name,
                     None if name == "schools" else operator_filter,
                     True,
+                    accumulator.consume_page,
                     page_size=10000,
                 )
             )
             if not enumeration.get("completed") or enumeration.get("truncated"):
                 raise RuntimeError(f"{name} snapshot enumeration is incomplete")
-            rows = list(enumeration.get("rows") or [])
-            if enumeration.get("row_count") != len(rows):
+            if enumeration.get("row_count") != accumulator.count:
                 raise RuntimeError(f"{name} snapshot enumeration count mismatch")
-            records_by_namespace[name] = rows
-            namespace_counts[name] = len(rows)
-        member_ids = sorted({
-            str(row.get("person_id") or row.get("base_id") or row.get("id"))
-            for row in records_by_namespace["people"]
-            if row.get("person_id") or row.get("base_id") or row.get("id")
-        })
+            namespace_counts[name] = accumulator.count
+            namespace_hashes[name] = accumulator.hexdigest()
+            if accumulator.member_ids is not None:
+                member_ids.update(accumulator.member_ids)
+        sorted_member_ids = sorted(member_ids)
         requested_ids = tuple(dict.fromkeys(str(value) for value in evidence_person_ids))
         missing_members = sorted(set(requested_ids) - set(member_ids))
         if missing_members:
@@ -976,7 +1018,7 @@ class TurboPufferSearchRunner:
             evidence[person_id] = evidence_hash(profile)
         schema_hashes = {name: canonical_hash(live_schemas[name]) for name in required_namespaces}
         operator_hash = canonical_hash(sorted(self.corpus.operator_ids))
-        membership_hash = canonical_hash(member_ids)
+        membership_hash = canonical_hash(sorted_member_ids)
         for supplied, derived, name in (
             (self.corpus.operator_scope_hash, operator_hash, "operator_scope_hash"),
             (self.corpus.membership_hash, membership_hash, "membership_hash"),
@@ -985,7 +1027,7 @@ class TurboPufferSearchRunner:
                 raise ValueError(f"supplied Powerset {name} does not match derived scope")
         if self.corpus.namespace_schema_hashes and dict(self.corpus.namespace_schema_hashes) != schema_hashes:
             raise ValueError("supplied Powerset namespace schema hashes do not match live schemas")
-        scoped_records_hash = canonical_hash(records_by_namespace)
+        scoped_records_hash = _streaming_scoped_records_hash(namespace_hashes, namespace_counts)
         supplied_content_identity = (
             self.corpus.native_content_version or self.corpus.scoped_records_hash
         )
@@ -1008,7 +1050,7 @@ class TurboPufferSearchRunner:
             "enumeration_truncated": False,
             "enumerated_record_count": sum(namespace_counts.values()),
             "namespace_record_counts": namespace_counts,
-            "membership_id_count": len(member_ids),
+            "membership_id_count": len(sorted_member_ids),
             "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         }
         snapshot[

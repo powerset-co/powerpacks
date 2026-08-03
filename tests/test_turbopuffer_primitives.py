@@ -125,6 +125,49 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         self.assertEqual(calls[1].kwargs["filters"], ("id", "Gt", "a"))
         self.assertEqual(calls[2].kwargs["filters"], ("id", "Gt", "b"))
 
+    def test_page_consumer_does_not_accumulate_rows(self) -> None:
+        pages = [
+            [SimpleNamespace(id="a", vector=[0.1], model_extra={"live_only": "first"})],
+            [SimpleNamespace(id="b", vector=[0.2], model_extra={"live_only": "second"})],
+            [],
+        ]
+        namespace = SimpleNamespace(
+            query=mock.Mock(side_effect=[SimpleNamespace(rows=page) for page in pages])
+        )
+        consumed = []
+        with mock.patch.object(turbopuffer_client, "namespace", return_value=namespace):
+            result = asyncio.run(
+                turbopuffer_client.consume_filter_only_pages_for_namespace(
+                    "people", None, True, consumed.append, page_size=1
+                )
+            )
+
+        self.assertNotIn("rows", result)
+        self.assertEqual(result["row_count"], 2)
+        self.assertEqual(
+            consumed,
+            [
+                [{"id": "a", "live_only": "first", "vector": [0.1]}],
+                [{"id": "b", "live_only": "second", "vector": [0.2]}],
+            ],
+        )
+
+    def test_page_consumer_rejects_non_increasing_ids(self) -> None:
+        namespace = SimpleNamespace(
+            query=mock.Mock(
+                return_value=SimpleNamespace(
+                    rows=[SimpleNamespace(id="b", model_extra={}), SimpleNamespace(id="a", model_extra={})]
+                )
+            )
+        )
+        with mock.patch.object(turbopuffer_client, "namespace", return_value=namespace):
+            with self.assertRaisesRegex(RuntimeError, "non-increasing ids"):
+                asyncio.run(
+                    turbopuffer_client.consume_filter_only_pages_for_namespace(
+                        "people", None, True, lambda page: None, page_size=10
+                    )
+                )
+
     def test_namespace_schema_serializes_sdk_models_and_mapping_fallbacks(self) -> None:
         sdk_config = mock.Mock()
         sdk_config.model_dump.return_value = {

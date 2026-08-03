@@ -1542,7 +1542,7 @@ class PipelineTests(unittest.TestCase):
         def live_schema(name):
             return turbopuffer_contract_schema(name)
 
-        async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
+        async def enumerate_namespace(name, filters, attributes, consume_page, *, page_size, max_results=0):
             calls.append((name, filters, attributes))
             rows = {
                 "people": [{"id": "position-1", "base_id": "person-1", "vector": [0.1]}],
@@ -1552,8 +1552,8 @@ class PipelineTests(unittest.TestCase):
                 "education": [{"id": "education-1", "person_id": "person-1"}],
                 "schools": [{"id": "school-1", "school_name": "School"}],
             }[name]
+            consume_page(rows)
             return {
-                "rows": rows,
                 "completed": True,
                 "truncated": False,
                 "row_count": len(rows),
@@ -1574,7 +1574,7 @@ class PipelineTests(unittest.TestCase):
                 return_value=[hydrated],
             ),
             mock.patch(
-                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                 new=mock.AsyncMock(side_effect=enumerate_namespace),
             ),
             mock.patch(
@@ -1628,14 +1628,15 @@ class PipelineTests(unittest.TestCase):
             fields["live_only_attribute"] = {"type": "string"}
             return fields
 
-        async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
+        async def enumerate_namespace(name, filters, attributes, consume_page, *, page_size, max_results=0):
             self.assertIs(attributes, True)
             rows = (
                 [{"id": "position-1", "base_id": "person-1", "live_only_attribute": "covered"}]
                 if name == "people"
                 else []
             )
-            return {"rows": rows, "completed": True, "truncated": False, "row_count": len(rows)}
+            consume_page(rows)
+            return {"completed": True, "truncated": False, "row_count": len(rows)}
 
         with (
             mock.patch(
@@ -1651,7 +1652,7 @@ class PipelineTests(unittest.TestCase):
                 side_effect=live_schema,
             ),
             mock.patch(
-                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                 new=mock.AsyncMock(side_effect=enumerate_namespace),
             ),
         ):
@@ -1662,11 +1663,56 @@ class PipelineTests(unittest.TestCase):
         people_schema = live_schema("people")
         self.assertNotIn("company_description", people_schema)
         self.assertEqual(snapshot["namespace_schema_hashes"]["people"], canonical_hash(people_schema))
-        expected_rows = {
-            "people": [{"id": "position-1", "base_id": "person-1", "live_only_attribute": "covered"}],
-            "summaries": [], "companies": [], "company_signals": [], "education": [], "schools": [],
-        }
-        self.assertEqual(snapshot["scoped_records_hash"], canonical_hash(expected_rows))
+        self.assertRegex(snapshot["scoped_records_hash"], r"^[a-f0-9]{64}$")
+
+    def test_remote_streaming_snapshot_hash_is_page_invariant_and_complete(self):
+        from packs.search.backends.turbopuffer.runner import (
+            _NamespaceSnapshotAccumulator,
+            _streaming_scoped_records_hash,
+        )
+
+        rows = [
+            {"id": "a", "base_id": "person-1", "live_only": "first", "vector": [0.1, 0.2]},
+            {"id": "b", "base_id": "person-2", "live_only": "second", "vector": [0.3, 0.4]},
+        ]
+        combined = _NamespaceSnapshotAccumulator(retain_membership=True)
+        combined.consume_page(rows)
+        paged = _NamespaceSnapshotAccumulator(retain_membership=True)
+        paged.consume_page(rows[:1])
+        paged.consume_page(rows[1:])
+
+        self.assertEqual(combined.hexdigest(), paged.hexdigest())
+        self.assertEqual(
+            combined.hexdigest(),
+            "cd87932ddf36eb2682e6d5acd186ea1f23e1a999aaaed9d816a5f2031eb07be4",
+        )
+        self.assertEqual(combined.member_ids, {"person-1", "person-2"})
+        self.assertEqual(
+            _streaming_scoped_records_hash({"people": combined.hexdigest()}, {"people": 2}),
+            "1ca28a48f2fd97eb087b2662412ccea186b9cb4397c138c9cb78d69665eb333e",
+        )
+        empty = _NamespaceSnapshotAccumulator().hexdigest()
+        self.assertEqual(
+            _streaming_scoped_records_hash(
+                {"people": combined.hexdigest(), "schools": empty},
+                {"people": 2, "schools": 0},
+            ),
+            _streaming_scoped_records_hash(
+                {"schools": empty, "people": combined.hexdigest()},
+                {"schools": 0, "people": 2},
+            ),
+        )
+        for changed in (
+            [rows[0], {**rows[1], "live_only": "changed"}],
+            [rows[0], {**rows[1], "vector": [0.3, 0.5]}],
+        ):
+            accumulator = _NamespaceSnapshotAccumulator()
+            accumulator.consume_page(changed)
+            self.assertNotEqual(accumulator.hexdigest(), combined.hexdigest())
+
+        out_of_order = _NamespaceSnapshotAccumulator()
+        with self.assertRaisesRegex(RuntimeError, "stable ascending order"):
+            out_of_order.consume_page(list(reversed(rows)))
 
     def test_remote_snapshot_requires_selected_filter_query_and_vector_fields(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
@@ -1696,7 +1742,7 @@ class PipelineTests(unittest.TestCase):
                 side_effect=drifted_schema,
             ),
             mock.patch(
-                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                 new=enumeration,
             ),
         ):
@@ -1751,7 +1797,7 @@ class PipelineTests(unittest.TestCase):
                 side_effect=drifted_schema,
             ),
             mock.patch(
-                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                 new=enumeration,
             ),
         ):
@@ -1786,16 +1832,17 @@ class PipelineTests(unittest.TestCase):
                 side_effect=turbopuffer_contract_schema,
             ),
             mock.patch(
-                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                 new=mock.AsyncMock(return_value={**complete, "completed": False, "truncated": True}),
             ),
         ):
             with self.assertRaisesRegex(RuntimeError, "enumeration is incomplete"):
                 runner.snapshot_corpus("set", ())
 
-        async def complete_namespaces(name, filters, attributes, *, page_size, max_results=0):
+        async def complete_namespaces(name, filters, attributes, consume_page, *, page_size, max_results=0):
             rows = complete["rows"] if name == "people" else []
-            return {"rows": rows, "completed": True, "truncated": False, "row_count": len(rows)}
+            consume_page(rows)
+            return {"completed": True, "truncated": False, "row_count": len(rows)}
 
         for evidence_ids, hydrated, error in (
             (("outside",), [], "outside complete Powerset membership"),
@@ -1811,7 +1858,7 @@ class PipelineTests(unittest.TestCase):
                     return_value=hydrated,
                 ),
                 mock.patch(
-                    "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                    "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                     new=mock.AsyncMock(side_effect=complete_namespaces),
                 ),
                 mock.patch(
@@ -1852,10 +1899,10 @@ class PipelineTests(unittest.TestCase):
             "schools": [],
         }
 
-        async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
+        async def enumerate_namespace(name, filters, attributes, consume_page, *, page_size, max_results=0):
             values = rows[name]
+            consume_page(values)
             return {
-                "rows": values,
                 "completed": True,
                 "truncated": False,
                 "row_count": len(values),
@@ -1872,7 +1919,7 @@ class PipelineTests(unittest.TestCase):
                     return_value=[],
                 ),
                 mock.patch(
-                    "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                    "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                     new=mock.AsyncMock(side_effect=enumerate_namespace),
                 ),
                 mock.patch(

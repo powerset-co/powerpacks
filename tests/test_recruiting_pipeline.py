@@ -493,10 +493,10 @@ class RecruitingPipelineTests(unittest.TestCase):
                 schema["vector"] = {"type": "vector"}
             return schema
 
-        async def enumerate_namespace(name, filters, attributes, *, page_size, max_results=0):
+        async def enumerate_namespace(name, filters, attributes, consume_page, *, page_size, max_results=0):
             rows = namespace_rows[name]
+            consume_page(rows)
             return {
-                "rows": rows,
                 "completed": True,
                 "truncated": False,
                 "row_count": len(rows),
@@ -512,7 +512,7 @@ class RecruitingPipelineTests(unittest.TestCase):
                 return_value=[],
             ),
             mock.patch(
-                "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                 new=mock.AsyncMock(side_effect=enumerate_namespace),
             ),
             mock.patch(
@@ -559,7 +559,7 @@ class RecruitingPipelineTests(unittest.TestCase):
                     return_value=[],
                 ),
                 mock.patch(
-                    "packs.search.backends.turbopuffer.runner.storage.enumerate_filter_only_rows_for_namespace",
+                    "packs.search.backends.turbopuffer.runner.storage.consume_filter_only_pages_for_namespace",
                     new=mock.AsyncMock(side_effect=enumerate_namespace),
                 ),
                 mock.patch(
