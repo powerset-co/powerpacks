@@ -6279,6 +6279,33 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertIn("data-parent='jordan-bravo-ab12cd34'", html)
         self.assertIn("Queue re-research", html)
 
+    def test_blank_profile_card_leads_with_open_reresearch(self):
+        # A valid URL whose profile is 404/private/empty renders the WHY and
+        # the re-research box OPEN — "Is this the right profile?" is
+        # unanswerable against a blank card.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertIn("returned no profile data", html)
+        self.assertIn("<details class='retarget-guidance' open>", html)
+        self.assertIn("No profile data — give re-research guidance", html)
+
+    def test_rich_profile_card_keeps_collapsed_box(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "headline": "Founder at Bravo Robotics",
+                    "experiences": ["Founder @ Bravo Robotics"]}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertNotIn("returned no profile data", html)
+        self.assertIn("<details class='retarget-guidance'>", html)
+        self.assertIn("Neither — re-research this person", html)
+
     def test_multi_card_offers_guided_retarget_keyed_on_primary(self):
         parent = self._parent()
         cands = [{"pub": "jordan-bravo"}, {"pub": "jordan-bravo-b2"}]

@@ -648,7 +648,8 @@ def _skip_link(pub: Any, parent_slug: Any) -> str:
             "Skip</button>")
 
 
-def _retarget_guidance(pub: Any, slug: Any, *, label: str = "Wrong person?") -> str:
+def _retarget_guidance(pub: Any, slug: Any, *, label: str = "Wrong person?",
+                       open_by_default: bool = False) -> str:
     """The collapsed guided-retarget box: free-text guidance → POST /retarget.
 
     ONE markup for every surface — the directory person pane and the LinkedIn
@@ -659,8 +660,9 @@ def _retarget_guidance(pub: Any, slug: Any, *, label: str = "Wrong person?") -> 
     key = str(pub or "").strip()
     if not key:
         return ""
+    opened = " open" if open_by_default else ""
     return f"""
-      <details class='retarget-guidance'>
+      <details class='retarget-guidance'{opened}>
         <summary>{esc(label)}</summary>
         <form class='retarget-form' data-retarget-form
               data-pub='{esc(key)}' data-parent='{esc(slug)}'>
@@ -753,11 +755,14 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
           autocomplete='url' placeholder='linkedin.com/in/…' required>
         <button class='button button-outline' type='submit'>Use this</button></div>
       </form>"""
-    # Attached LinkedIn with nothing in the local profile cache: neutral copy
-    # only — no operator plumbing in the card. The UI never fetches; the skill's
-    # profile-prefetch stage fills the cache and logs every miss in its manifest.
-    placeholder = ("<p class='profile-note'>Not enough profile information "
-                   "available.</p>" if cache_miss else "")
+    # Attached LinkedIn with nothing renderable (404 / private / empty /
+    # local cache miss): say WHY the card is blank and lead with the
+    # re-research ask — "Is this the right profile?" is unanswerable against
+    # nothing. The UI never fetches; the skill's profile-prefetch stage fills
+    # the cache and logs every miss in its manifest.
+    placeholder = ("<p class='profile-note'>This LinkedIn returned no profile "
+                   "data — it may be private, deleted, or the wrong URL.</p>"
+                   if cache_miss else "")
     identifiers = dossier_identifiers(
         parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
         name=str(parent.get("name") or candidate.get("full_name") or ""),
@@ -791,7 +796,11 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
           {fix_form}
         </div>
         {_retarget_guidance(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
-                            parent.get('slug'), label="Neither — re-research this person")}
+                            parent.get('slug'),
+                            label=("No profile data — give re-research guidance"
+                                   if cache_miss and not synthetic
+                                   else "Neither — re-research this person"),
+                            open_by_default=cache_miss and not synthetic)}
       </div>
     </article>"""
 
