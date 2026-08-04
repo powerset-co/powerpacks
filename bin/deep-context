@@ -86,7 +86,9 @@ usage: bin/deep-context <command> [args]
   refresh      re-synthesize stale dossiers, rebuild parents, open the directory
                (free when facts are current; a contract bump re-runs everyone —
                the dry estimate prints first and invoking refresh approves it)
-  review       open the read-only people directory (A-Z dossiers + LinkedIn);
+  review       open the review UI — add a stage word to land there directly
+               (review linkedin | worth | enrich; default: the read-only
+               people directory, A-Z dossiers + LinkedIn);
                pass --stage worth|enrich|linkedin for the staged workflow
                (local, free)
   stop         stop the review UI server, releasing the single-writer review
@@ -266,7 +268,16 @@ case "$cmd" in
     elif (( ! wants_help )); then
       stop_review_server "$(review_port_from_args "$@")"
     fi
-    "${PY[@]}" "$PKG.reconcile_review_web" serve --open "$@"
+    # `review linkedin` / `review worth` / `review enrich` / `review directory`
+    # is sugar for the server's --stage flag: open the UI at that stage.
+    review_args=()
+    for arg in "$@"; do
+      case "$arg" in
+        worth|enrich|linkedin|directory) review_args+=(--stage "$arg") ;;
+        *) review_args+=("$arg") ;;
+      esac
+    done
+    "${PY[@]}" "$PKG.reconcile_review_web" serve --open "${review_args[@]}"
     ;;
   stop|stop-review)
     # Release the single-writer review session: kill the review server on the

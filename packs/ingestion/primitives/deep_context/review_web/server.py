@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.deep_context.enrichment_contract import (
+    STATE_DONE,
     STATE_FREE_PENDING,
     STATE_NEEDS_APPROVAL,
     STATUS_COMPLETED,
@@ -83,7 +84,7 @@ from .feedback import (
 )
 from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, run_guided_retarget
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
-from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
+from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, linkedin_review_queue, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
 
 def _manifest_for_review_path(review_path: Path) -> Path:
@@ -710,6 +711,38 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     if selection_sha:
                         _free_attempted.add(selection_sha)
                     start_free_enrichment_job()
+                preview_now = str((params.get("preview") or [""])[0]).strip() == "1"
+                if (not preview_now
+                        and enrichment_state["state"] == STATE_DONE
+                        and not enrichment_handoff_completed(manifest_path)):
+                    # A DONE enrich stage is not a page — hand off server-side
+                    # and land the browser straight on the LinkedIn stage (the
+                    # old flow rendered a ceremony screen that a script then
+                    # auto-clicked, flashing the stale page for a frame).
+                    enrichment_now = read_enrichment_manifest(
+                        enrichment_manifest_path, selection=selection)
+                    write_enrichment_handoff(
+                        enrichment_now, path=manifest_path,
+                        review_path=review_path, synthetic_path=synthetic_path)
+                    notify_agent()
+                    self.send_response(303)
+                    self.send_header("Location", "/?stage=linkedin")
+                    self.end_headers()
+                    return
+            elif _phase_view(params, {}, manifest_path) == "linkedin":
+                preview_now = str((params.get("preview") or [""])[0]).strip() == "1"
+                progress_now = review_progress(parents)
+                inflight_now = guided_inflight_slugs()
+                queue_empty = not linkedin_review_queue(parents, inflight_now or None)
+                if (not preview_now and queue_empty
+                        and not phase_is_completed("linkedin", progress_now, manifest_path)):
+                    # Same rule: an empty queue self-completes server-side, so
+                    # the render below paints the go-back handoff state
+                    # directly — never a Finish screen that clicks itself.
+                    write_review_manifest(
+                        "linkedin", "completed", progress_now, path=manifest_path,
+                        review_path=review_path, synthetic_path=synthetic_path)
+                    notify_agent()
             self.send_bytes(page_html(parents, params, review_path, parents_dir=parents_dir,
                                       dossier_dir=dossier_dir, manifest_path=manifest_path,
                                       enrichment_manifest_path=enrichment_manifest_path,
