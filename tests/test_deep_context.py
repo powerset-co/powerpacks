@@ -6292,5 +6292,58 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertIn('form.closest("[data-directory-detail]")', script)
 
 
+class WorthWhyNoteTests(unittest.TestCase):
+    """The worth review card carries an optional collapsed "why" box; whatever
+    is typed rides along with the Yes/No click — saved to review.csv
+    (user_worth_note, human-owned) and auto-filed as feedback."""
+
+    def test_worth_card_renders_collapsed_note_box(self):
+        parent = {"name": "Jordan Bravo", "slug": "jordan-bravo-ab12cd34",
+                  "dossier_slug": "jordan-bravo-ab12cd34",
+                  "person_ids": ["pid-1"], "candidates": []}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            html = web_rendering.render_worth_card(parent, d, d, profile_cache_dir=d)
+        self.assertIn("data-worth-note", html)
+        self.assertIn("Give feedback", html)
+        self.assertNotIn("<details class='worth-why' open", html)  # collapsed
+
+    def test_note_saves_with_decision_and_survives_noteless_redecision(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            review = Path(tmpdir) / "review.csv"
+            web_decisions.apply_worth_decision(
+                review, "parent-worth:pid-1", "no",
+                user_worth_note="Cold pitch, we said no twice")
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual(rows["parent-worth:pid-1"]["user_worth_note"],
+                             "Cold pitch, we said no twice")
+            # Flipping the decision without typing a new note keeps the old one.
+            web_decisions.apply_worth_decision(review, "parent-worth:pid-1", "yes")
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual(rows["parent-worth:pid-1"]["network_worth"], "yes")
+            self.assertEqual(rows["parent-worth:pid-1"]["user_worth_note"],
+                             "Cold pitch, we said no twice")
+
+    def test_old_review_csv_without_column_loads_and_rewrites(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            review = Path(tmpdir) / "review.csv"
+            old_cols = [c for c in reconcile.OVERRIDE_COLUMNS if c != "user_worth_note"]
+            review.write_text(
+                ",".join(old_cols) + "\njordan-bravo" + "," * (len(old_cols) - 1) + "\n",
+                encoding="utf-8")
+            web_decisions.apply_worth_decision(
+                review, "parent-worth:pid-1", "no", user_worth_note="spam")
+            rows = reconcile.load_override_rows(review)
+            self.assertIn("jordan-bravo", rows)                   # legacy row kept
+            self.assertEqual(rows["parent-worth:pid-1"]["user_worth_note"], "spam")
+            header = review.read_text(encoding="utf-8").splitlines()[0]
+            self.assertIn("user_worth_note", header)              # column added
+
+    def test_decide_click_sends_the_note(self):
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn('[data-worth-note]', script)
+        self.assertIn("note,", script)  # rides in the /worth POST payload
+
+
 if __name__ == "__main__":
     unittest.main()

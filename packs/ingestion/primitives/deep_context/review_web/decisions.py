@@ -200,6 +200,7 @@ def apply_worth_decision(
     person_ids: list[str] | None = None,
     llm_worth: str = "",
     llm_worth_reason: str = "",
+    user_worth_note: str = "",
 ) -> dict[str, str]:
     """Upsert the USER-owned ``network_worth`` on one canonical parent row."""
     pub = (pub or "").strip().lower()
@@ -222,6 +223,9 @@ def apply_worth_decision(
         row["llm_worth"] = llm_worth
         row["llm_worth_reason"] = llm_worth_reason
     row["network_worth"] = worth
+    # A note-less redecision keeps the last note; a new note replaces it.
+    if user_worth_note.strip():
+        row["user_worth_note"] = user_worth_note.strip()
     if worth == "yes" and (row.get("action") or "").strip().lower() == "exclude":
         row["action"], row["approved"] = "", ""
     row["source"] = row.get("source") or "deep-context-parent-worth"

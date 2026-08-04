@@ -548,6 +548,11 @@ def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Pa
     <article class='decision-card identity-card worth-card' data-card>
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
+        <details class='worth-why'>
+          <summary>Why? Give feedback (optional)</summary>
+          <textarea data-worth-note rows='2' maxlength='2000'
+            placeholder="Why yes / why no — anything worth knowing. Saved with your decision and shared as feedback."></textarea>
+        </details>
         <div class='binary-actions'>
           <button class='button button-outline' data-worth='no' data-pub='{esc(key)}' data-parent='{esc(slug)}'>No</button>
           <button class='button button-primary' data-worth='yes' data-pub='{esc(key)}' data-parent='{esc(slug)}'>Yes</button>

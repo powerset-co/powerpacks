@@ -70,6 +70,9 @@ OVERRIDE_COLUMNS = [
     "llm_worth_reason",
     # Human-owned worth. Machine writers must never change it.
     "network_worth",
+    # Human-owned free-text "why" captured with a worth decision (the optional
+    # collapsed box on the review card). Machine writers must never change it.
+    "user_worth_note",
 ]
 
 # The declared row shape of review.csv, generated FROM OVERRIDE_COLUMNS so the

@@ -886,6 +886,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(b"worth must be yes, no, or restore", "text/plain", status=400)
                     return
                 stored_worth = "" if worth_val == "restore" else worth_val
+                worth_note = (form.get("note") or [""])[0].strip()[:2000]
                 try:
                     with mutation_lock:
                         parents_now()
@@ -927,6 +928,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             person_ids=list(model_row.get("person_ids") or []),
                             llm_worth=str(machine.get("decision") or ""),
                             llm_worth_reason=str(machine.get("reason") or ""),
+                            user_worth_note=worth_note,
                         )
                         notify_views()
                         gate_key = str(
@@ -1046,6 +1048,19 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                     status=400)
                     return
+                if worth_note and stored_worth in {"yes", "no"}:
+                    # The note IS the feedback (same contract as retarget
+                    # guidance): auto-file it with the person's context,
+                    # fire-and-forget — never a UI error if the POST can't go out.
+                    try:
+                        feedback_request = build_feedback_request(
+                            target_parent, dict(_primary_candidate(target_parent)),
+                            action=f"worth_{stored_worth}", comment=worth_note)
+                        threading.Thread(
+                            target=post_feedback_quietly, args=(feedback_request,),
+                            name="worth-feedback", daemon=True).start()
+                    except SystemExit as exc:
+                        print(f"[feedback] skipped: {exc}", file=sys.stderr, flush=True)
                 notify_agent()
                 self.send_json({
                     "ok": True, "pub": pub, **result,

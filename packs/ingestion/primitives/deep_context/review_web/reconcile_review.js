@@ -164,6 +164,9 @@ function prefetchWorthCard(currentPub) {
 async function decideWorthCard(button, card) {
   const worth = button.dataset.worth;
   const pub = button.dataset.pub || "";
+  // The optional collapsed "why" box: whatever is in it when Yes/No lands
+  // rides along with the decision (saved to review.csv, filed as feedback).
+  const note = (card.querySelector("[data-worth-note]")?.value || "").trim();
   card.querySelectorAll("button").forEach((item) => { item.disabled = true; });
   card.classList.add("leaving");
   bumpTabCount("review", -1); // leaves the Review queue for the yes/no pile
@@ -174,7 +177,7 @@ async function decideWorthCard(button, card) {
   // parent_slug pins the patch to the exact parent this card was rendered
   // from — a worth key alone is ambiguous when split parents share a pub
   const postPromise = post("/worth", {
-    pub, worth, parent_slug: button.dataset.parent || "",
+    pub, worth, parent_slug: button.dataset.parent || "", note,
   }); // fire-and-track, no await
   postPromise.finally(() => inFlightWorth.delete(pub));
   const prefetched = worthPrefetch?.promise
