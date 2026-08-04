@@ -629,6 +629,33 @@ def _skip_link(pub: Any, parent_slug: Any) -> str:
             "Skip</button>")
 
 
+def _retarget_guidance(pub: Any, slug: Any, *, label: str = "Wrong person?") -> str:
+    """The collapsed guided-retarget box: free-text guidance → POST /retarget.
+
+    ONE markup for every surface — the directory person pane and the LinkedIn
+    review cards — so the same CSS and submit handling apply everywhere. The
+    review cards are where a reviewer actually discovers that every attached
+    profile is wrong (or that the person has no LinkedIn at all), so the
+    re-research escape hatch must be reachable there, not only from browsing."""
+    key = str(pub or "").strip()
+    if not key:
+        return ""
+    return f"""
+      <details class='retarget-guidance'>
+        <summary>{esc(label)}</summary>
+        <form class='retarget-form' data-retarget-form
+              data-pub='{esc(key)}' data-parent='{esc(slug)}'>
+          <textarea name='guidance' rows='3' maxlength='2000' required
+            placeholder="Who is this actually? e.g. 'the Jordan Bravo who ran DevRel at Acme' — or paste the right LinkedIn URL"></textarea>
+          <div class='retarget-form-row'>
+            <button type='submit' class='button button-primary'>
+              Queue re-research (≈${ESTIMATED_COST_USD:.2f})</button>
+            <span class='retarget-form-note' data-retarget-note hidden></span>
+          </div>
+        </form>
+      </details>"""
+
+
 def render_linkedin_card(parent: dict[str, Any],
                          candidates: dict[str, Any] | list[dict[str, Any]],
                          parents_dir: Path, dossier_dir: Path,
@@ -724,6 +751,8 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         <div class='alternate' id='fix-section-{esc(candidate.get('pub'))}' hidden>
           {fix_form}
         </div>
+        {_retarget_guidance(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
+                            parent.get('slug'), label="Neither — re-research this person")}
       </div>
     </article>"""
 
@@ -810,6 +839,8 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
         <div class='alternate' id='fix-section-{esc(primary.get('pub'))}' hidden>
           {fix_form}
         </div>
+        {_retarget_guidance(primary.get('pub') or (parent.get('person_ids') or [''])[0],
+                            parent.get('slug'), label="None of these — re-research this person")}
       </div>
     </article>"""
 
@@ -1528,24 +1559,8 @@ def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir:
     rows.extend(profile_fact_rows(candidate))
     facts = (f"<section class='details'><div class='details-body'>"
              f"<dl>{''.join(rows)}</dl></div></section>" if rows else "")
-    retarget_pub = str(primary.get("pub")
-                       or (parent.get("person_ids") or [""])[0] or "").strip()
-    guidance_form = ""
-    if retarget_pub:
-        guidance_form = f"""
-      <details class='retarget-guidance'>
-        <summary>Wrong person?</summary>
-        <form class='retarget-form' data-retarget-form
-              data-pub='{esc(retarget_pub)}' data-parent='{esc(slug)}'>
-          <textarea name='guidance' rows='3' maxlength='2000' required
-            placeholder="Who is this actually? e.g. 'the Jordan Bravo who ran DevRel at Acme' — or paste the right LinkedIn URL"></textarea>
-          <div class='retarget-form-row'>
-            <button type='submit' class='button button-primary'>
-              Queue re-research (≈${ESTIMATED_COST_USD:.2f})</button>
-            <span class='retarget-form-note' data-retarget-note hidden></span>
-          </div>
-        </form>
-      </details>"""
+    guidance_form = _retarget_guidance(
+        primary.get("pub") or (parent.get("person_ids") or [""])[0], slug)
     dossier_md, children_md = split_children_section(
         scrub_identifier_sections(directory_dossier(parents_dir, dossier_dir, slug),
                                   name=name, known=ground_truth))

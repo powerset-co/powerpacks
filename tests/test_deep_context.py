@@ -6220,10 +6220,6 @@ class TestGuidedRetargets(unittest.TestCase):
         self.assertIn("feedback_alert", server_src)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StepperPendingCountTests(unittest.TestCase):
     """A stage the ladder marked complete must still show pending work.
 
@@ -6251,3 +6247,50 @@ class StepperPendingCountTests(unittest.TestCase):
         html = web_rendering._step(1, "Review Decisions", True, False, 12, "/?stage=worth")
         self.assertIn("12 left", html)
         self.assertNotIn("✓", html)
+
+
+class LinkedinCardRetargetBoxTests(unittest.TestCase):
+    """The guided-retarget box is reachable from the LinkedIn review cards,
+    not only the directory pane. The review card is where a reviewer actually
+    discovers that every attached profile is the wrong person — or that the
+    person has no LinkedIn at all (both attached profiles judged wrong, deep
+    research verified identity everywhere BUT LinkedIn) — so the re-research
+    escape hatch must live on the card itself."""
+
+    def _parent(self):
+        return {"name": "Jordan Bravo", "slug": "jordan-bravo-ab12cd34",
+                "dossier_slug": "jordan-bravo-ab12cd34",
+                "person_ids": ["pid-1"], "candidates": []}
+
+    def test_single_card_offers_guided_retarget(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertIn("data-retarget-form", html)
+        self.assertIn("data-pub='jordan-bravo'", html)
+        self.assertIn("data-parent='jordan-bravo-ab12cd34'", html)
+        self.assertIn("Queue re-research", html)
+
+    def test_multi_card_offers_guided_retarget_keyed_on_primary(self):
+        parent = self._parent()
+        cands = [{"pub": "jordan-bravo"}, {"pub": "jordan-bravo-b2"}]
+        parent["candidates"] = cands
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            html = web_rendering.render_linkedin_card(
+                parent, cands, d, d, profile_cache_dir=d)
+        self.assertEqual(html.count("data-retarget-form"), 1)  # one box, on the parent
+        self.assertIn("data-pub='jordan-bravo'", html)
+
+    def test_review_submit_handler_excludes_directory_pane(self):
+        # The directory pane has its own handler (it refreshes the sidebar queue
+        # panel); the document-level one must skip its forms or submits double.
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn('form.closest("[data-directory-detail]")', script)
+
+
+if __name__ == "__main__":
+    unittest.main()

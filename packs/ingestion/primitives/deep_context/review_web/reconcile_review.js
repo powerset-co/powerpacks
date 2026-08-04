@@ -664,6 +664,36 @@ function wireFixForm(form) {
   });
 }
 
+// Guided retargets from a review card. The directory pane binds its own submit
+// handler (it also refreshes the sidebar queue panel), so directory forms are
+// excluded here; this document-level handler covers the LinkedIn review cards,
+// which are swapped in as fragments after every decision. The card stays put —
+// queueing is not a decision — with an inline note; the state-token observer
+// refreshes the page when the re-research lands a new profile.
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest("[data-retarget-form]");
+  if (!form || form.closest("[data-directory-detail]")) return;
+  event.preventDefault();
+  const textarea = form.querySelector("textarea[name='guidance']");
+  const guidance = (textarea?.value || "").trim();
+  if (!guidance) return;
+  const button = form.querySelector("button[type='submit']");
+  if (button) button.disabled = true;
+  try {
+    await post("/retarget", { pub: form.dataset.pub || "",
+                              parent_slug: form.dataset.parent || "", guidance });
+    const note = form.querySelector("[data-retarget-note]");
+    if (note) {
+      note.textContent = "Queued — the new profile shows up here when research finishes";
+      note.hidden = false;
+    }
+    announce("Queued for re-research");
+  } catch (error) {
+    if (button) button.disabled = false;
+    announce(error.message, true);
+  }
+});
+
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let scrollCueFrame = 0;
 
