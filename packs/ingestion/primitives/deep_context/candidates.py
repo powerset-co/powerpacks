@@ -198,23 +198,40 @@ def parent_by_candidate_identifier(index_json: Path = INDEX_JSON) -> dict[str, s
         for child_slug in parent.get("children") or []
     }
 
-    def owner(slug_list: Any) -> str:
+    def owners(slug_list: Any) -> set[str]:
+        found: set[str] = set()
         for slug in slug_list or []:
             if slug in parents:
-                return str(slug)
-            if slug in child_parent:
-                return child_parent[slug]
-        return ""
+                found.add(str(slug))
+            elif slug in child_parent:
+                found.add(child_parent[slug])
+        return found
 
+    # Only identifiers owned by exactly ONE parent may fold a synthetic — a
+    # shared/role email (family address, class list, info@) must never pick a
+    # co-owner arbitrarily. Phone keys can also collide after last-10
+    # normalization (two countries sharing a national tail); a collided key is
+    # dropped entirely, falling back to a standalone card — the safe default.
     mapping: dict[str, str] = {}
+    collided: set[str] = set()
+
+    def claim(key: str, target: str) -> None:
+        if key in collided:
+            return
+        if key in mapping and mapping[key] != target:
+            del mapping[key]
+            collided.add(key)
+            return
+        mapping[key] = target
+
     for email, slug_list in (index.get("by_email") or {}).items():
-        target = owner(slug_list)
-        if target:
-            mapping[candidate_identifier_key(f"candidate:email:{email}")] = target
+        found = owners(slug_list)
+        if len(found) == 1:
+            claim(candidate_identifier_key(f"candidate:email:{email}"), found.pop())
     for phone, slug_list in (index.get("by_phone") or {}).items():
-        target = owner(slug_list)
-        if target:
-            mapping[candidate_identifier_key(f"candidate:phone:{phone}")] = target
+        found = owners(slug_list)
+        if len(found) == 1:
+            claim(candidate_identifier_key(f"candidate:phone:{phone}"), found.pop())
     return mapping
 
 

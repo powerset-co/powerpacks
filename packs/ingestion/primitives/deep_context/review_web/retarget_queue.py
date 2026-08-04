@@ -399,11 +399,15 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # The user already said the old link is the wrong person, so it detaches
     # NOW; when the research found nothing, a synthetic profile assembled from
     # it supersedes the old identity — everything automatic, no second review.
+    # EXCEPT when the user decided this row while the research ran (the card
+    # stays interactive after queueing): an explicit human yes/no made after
+    # submit outranks the job's automatic detach and is left untouched.
     row_now = rows.setdefault(key, {"public_identifier": request.pub})
-    row_now.update({"action": "detach", "approved": "yes",
-                    "source": "user-guidance", "new_linkedin_url": "",
-                    "new_public_identifier": "", "updated_at": now_iso()})
-    write_override_rows(review_path, rows)
+    if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no"}:
+        row_now.update({"action": "detach", "approved": "yes",
+                        "source": "user-guidance", "new_linkedin_url": "",
+                        "new_public_identifier": "", "updated_at": now_iso()})
+        write_override_rows(review_path, rows)
     if rejected and new_url:
         # Research DID find a profile but the judge could not corroborate it —
         # assemble deliberately skips outputs that carry a LinkedIn (the

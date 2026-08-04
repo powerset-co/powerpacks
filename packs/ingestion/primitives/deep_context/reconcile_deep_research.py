@@ -125,7 +125,10 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     research_reject_fields,
     upsert_retargets,
 )
-from packs.ingestion.primitives.deep_context.review_store import RESEARCH_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.review_store import (
+    JUDGE_DETACH_THRESHOLD,
+    RESEARCH_CONFIRM_THRESHOLD,
+)
 # The enrichment manifest must stamp the SAME worth-selection digest the review UI computes,
 # so the two never drift and stall the flow. Single source of truth lives in review_web. The
 # research-profile view is reused so the judge sees the SAME (name/headline/experience/education)
@@ -204,6 +207,13 @@ def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _is_rejected_retarget(row: dict[str, str]) -> bool:
     """A retarget the judge rejected (llm_reject=yes) that the user has NOT approved. Such a row is
     a dead guess, not a decision — it must not permanently mark the person as "decided", so the
@@ -241,8 +251,15 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
                     and not _is_rejected_retarget(r)}
     excluded = {pub for pub, r in overrides.items()
                 if (r.get("action") or "").strip().lower() == "exclude"}
-    user_decided = {pub for pub, r in overrides.items()
-                    if (r.get("approved") or "").strip().lower() in {"yes", "no"}}
+    # A judge wrong_person AT/ABOVE the detach bar is decided even when the
+    # conflict group had no confirmed winner to auto-apply it (approved stays
+    # ''): the review UI hides those rows as detached, so re-queueing them here
+    # would silently re-bill research for people the reviewer never sees again.
+    user_decided = {
+        pub for pub, r in overrides.items()
+        if (r.get("approved") or "").strip().lower() in {"yes", "no"}
+        or ((r.get("action") or "").strip().lower() == "detach"
+            and _safe_float(r.get("confidence")) >= JUDGE_DETACH_THRESHOLD)}
     parents_with_kept = {
         r.get("parent_slug") for r in verdicts
         if (r.get("verdict") or {}).get("verdict") == "confirmed"

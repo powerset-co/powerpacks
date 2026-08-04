@@ -357,14 +357,19 @@ NO_PROFILE_SUMMARY = "Couldn't find profile"
 
 
 def _display_reason(reason: str) -> str:
-    """Card display only (stored CSV reasons are never rewritten): the
-    "deep research: <process notes>" text is NEVER shown. A real summary before
-    a "; deep research:" tail is kept; a reason that is only the research blob
-    (or empty) yields '' — the caller decides between omitting the row and the
-    no-profile fallback based on whether the card has a kept link."""
+    """Card display only (stored CSV reasons are never rewritten). A summary
+    before a "deep research:" tail keeps just the summary. A reason that is
+    ONLY the research blob keeps the blob's first ~280 chars instead of
+    vanishing — retarget rows have no other evidence, and a card that asks
+    "Is this the right profile?" with zero justification is undecidable."""
     marker = reason.lower().find("deep research:")
-    cleaned = reason if marker == -1 else reason[:marker]
-    return cleaned.strip().rstrip(";,·—–-").strip()
+    cleaned = (reason if marker == -1 else reason[:marker]).strip().rstrip(";,·—–-").strip()
+    if cleaned:
+        return cleaned
+    tail = reason[marker:].split(":", 1)[-1].strip() if marker != -1 else ""
+    if len(tail) > 280:
+        tail = tail[:280].rsplit(" ", 1)[0] + "…"
+    return tail
 
 
 FACT_LIST_PINNED = 3
@@ -513,7 +518,9 @@ def _recent_messages_html(parent: dict[str, Any], raw_dir: Path = RAW_DIR) -> st
 
 def render_worth_card(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,
                       profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
-    candidate = _primary_candidate(parent)
+    # A COPY: render-time hydration must never mutate the shared cached model
+    # (same invariant as render_person_detail and the LinkedIn cards).
+    candidate = dict(_primary_candidate(parent))
     # Cache-only: prefer the prefetch stage's profile summary in the Summary row
     # (display-only; never a provider call). Worth cards render identity=False, so
     # this is the ONLY thing that can put a Summary row on them.
@@ -608,18 +615,24 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
         return False
     pub = str(candidate.get("profile_pub") or candidate.get("pub") or "").strip().lower()
     url = str(candidate.get("url") or "")
+    if pub.startswith("candidate:"):
+        pub = ""  # a candidate id is not a LinkedIn public identifier
     if not pub and not url:
         return False
     view = linkedin_view({"public_identifier": pub or extract_public_identifier(url).lower(),
                           "linkedin_url": url}, profile_cache_dir)
+    copied = False
     if view.get("has_profile"):
         for field in ("full_name", "headline", "profile_pic_url", "experiences",
                       "education", "location"):
             if view.get(field):
                 candidate[field] = view[field]
+                copied = True
         candidate["has_profile"] = True
-        return False
-    return True  # attached link, nothing cached -> surface the prefetch note
+    # "Miss" means the CARD still has nothing to show — a cache record that
+    # reports has_profile but carries zero fields is as blank as no record.
+    return not (copied or candidate.get("experiences") or candidate.get("education")
+                or candidate.get("headline"))
 
 
 def _skip_link(pub: Any, parent_slug: Any) -> str:
@@ -627,8 +640,9 @@ def _skip_link(pub: Any, parent_slug: Any) -> str:
 
     A real ``<button>`` (keyboard-activatable, proper hit area, wired by the SAME
     ``data-decide`` click delegation as before) styled as a subtle secondary link.
-    Behavior is unchanged from the old standalone Skip button: detach the card,
-    keyed on the parent's pub/slug."""
+    Emits ``data-decide='detach'`` keyed on the CANDIDATE's pub; on a
+    multi-option card the /decide endpoint withdraws every other unapplied
+    option too, so one Skip resolves the whole parent."""
     return (f"<button type='button' class='skip-link' data-decide='detach' "
             f"data-toast='Skipped' data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
             "Skip</button>")
@@ -669,18 +683,33 @@ def render_linkedin_card(parent: dict[str, Any],
 
     A single candidate (the overwhelming common case — every normal person) renders
     EXACTLY as before via ``_render_single_linkedin_card``. A merged parent with more
-    than one pending candidate — e.g. two synthetic profiles for the same person after
-    a later cluster_merge — renders ONE card ("show the parent, not the children"): the
+    than one pending candidate — e.g. a real link plus a folded synthetic, or two
+    proposed profiles — renders ONE card ("show the parent, not the children"): the
     person once, then the candidate profiles as a selectable option list. Picking one
     resolves the whole parent (the /decide endpoint keeps the pick and withdraws the
     siblings)."""
     cand_list = [candidates] if isinstance(candidates, dict) else list(candidates)
-    if len(cand_list) <= 1:
-        candidate = cand_list[0] if cand_list else {}
+    # Cards render from COPIES: render-time hydration must never mutate the
+    # server's shared cached model (this path runs lock-free on card swaps).
+    # The /decide endpoint's sibling withdrawal still sees every original row.
+    cand_list = [dict(c) for c in cand_list]
+    # Two candidate rows retargeted to the SAME profile render byte-identical
+    # options — show one; a pick resolves the whole parent either way.
+    seen_profiles: set[str] = set()
+    display: list[dict[str, Any]] = []
+    for cand in cand_list:
+        identity = str(cand.get("profile_pub") or cand.get("url") or "").strip().lower()
+        if identity and not cand.get("synthetic"):
+            if identity in seen_profiles:
+                continue
+            seen_profiles.add(identity)
+        display.append(cand)
+    if len(display) <= 1:
+        candidate = display[0] if display else {}
         return _render_single_linkedin_card(
             parent, candidate, parents_dir, dossier_dir, profile_cache_dir)
     return _render_multi_linkedin_card(
-        parent, cand_list, parents_dir, dossier_dir, profile_cache_dir)
+        parent, display, parents_dir, dossier_dir, profile_cache_dir)
 
 
 def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
@@ -689,7 +718,12 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     name = str(parent.get("name") or candidate.get("full_name") or "this person")
     synthetic = bool(candidate.get("synthetic"))
     cache_miss = _hydrate_card_profile(candidate, profile_cache_dir)
-    profile_name = str(candidate.get("full_name") or name)
+    # The card is titled with the PERSON under review, not the profile being
+    # questioned; a profile's own name only promotes a degraded parent name and
+    # only once that profile is confirmed (same rule as the directory pane).
+    profile_name = _promoted_name(
+        name, str(candidate.get("full_name") or "").strip()
+        if candidate_state(candidate) in {"verified", "fixed"} else "")
     # The header shows the name, avatar, and — for a REAL profile — the genuine
     # LinkedIn headline + View-LinkedIn link. For a researched/synthetic row the
     # "headline" is an LLM relationship blurb ("Also known as… My relationship…"),
@@ -805,10 +839,23 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
     option resolves the whole parent (siblings are withdrawn server-side)."""
     name = str(parent.get("name") or "this person")
     primary = candidates[0]
+    # The Contact row unions EVERY option's ground-truth emails/phones — the
+    # identifier that disambiguates the options must not be hidden because it
+    # arrived on a sibling. (Mirrors the server's keep-time contact union.)
+    union_emails: list[str] = []
+    union_phones: list[str] = []
+    for cand in candidates:
+        for value in cand.get("match_emails") or []:
+            if value and value not in union_emails:
+                union_emails.append(value)
+        for value in cand.get("match_phones") or []:
+            if value and value not in union_phones:
+                union_phones.append(value)
+    known = [*union_emails, *union_phones]
+    primary = {**primary, "match_emails": union_emails, "match_phones": union_phones}
     identifiers = dossier_identifiers(
         parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
-        name=name,
-        known=[*(primary.get("match_emails") or []), *(primary.get("match_phones") or [])])
+        name=name, known=known)
     options = "".join(
         _linkedin_option(parent, cand, profile_cache_dir) for cand in candidates)
     # The person header + merged context appears once; the per-option profiles follow.
@@ -1195,8 +1242,8 @@ def linkedin_review_queue(
     """Stable queue of ONE entry per parent that still needs an identity decision,
     carrying ALL of that parent's pending candidates.
 
-    A merged parent with N pending candidates (e.g. two synthetic profiles for the
-    same person) is ONE card offering N options — the queue and the header/tab counts
+    A merged parent with N pending candidates (e.g. a real link plus a folded
+    synthetic) is ONE card offering N options — the queue and the header/tab counts
     are per-parent, never per-candidate ("show the parent, not the children")."""
     queue: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     ordered = sorted(parents, key=lambda parent: str(parent.get("name") or "").lower())
@@ -1255,17 +1302,18 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
     """Render the LinkedIn stage: one pending parent card inside the swap panel
     (the worth pattern), or the debug carousel."""
     note = "" if enrichment_complete else _enrichment_note(enrichment)
-    queue = linkedin_review_queue(parents)
 
-    if debug and queue:
-        index %= len(queue)
-        parent, pending = queue[index]
-        body = render_linkedin_card(
-            parent, pending, parents_dir, dossier_dir, profile_cache_dir)
-        return (
-            f"<div class='linkedin-stage' data-queue-index='{index}' "
-            f"data-queue-total='{len(queue)}'>{note}{_carousel_nav()}{body}</div>"
-        )
+    if debug:
+        queue = linkedin_review_queue(parents)
+        if queue:
+            index %= len(queue)
+            parent, pending = queue[index]
+            body = render_linkedin_card(
+                parent, pending, parents_dir, dossier_dir, profile_cache_dir)
+            return (
+                f"<div class='linkedin-stage' data-queue-index='{index}' "
+                f"data-queue-total='{len(queue)}'>{note}{_carousel_nav()}{body}</div>"
+            )
 
     card = linkedin_card_body(
         parents, progress, linkedin_complete=linkedin_complete,

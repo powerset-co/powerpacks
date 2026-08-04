@@ -837,6 +837,13 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     if target_parent is None:
                         self.send_bytes(b"person not found", "text/plain", status=404)
                         return
+                    # A synth- pub must never key a review.csv row (nothing reads
+                    # synthetic candidates from review.csv, and apply_retargets
+                    # would mint a contact-less person from it) — route it to the
+                    # candidate person id exactly like /decide does.
+                    if pub.strip().lower().startswith("synth-"):
+                        pub = (synthetic_worth_key(synthetic_path, pub)
+                               or str((target_parent.get("person_ids") or [""])[0])).strip()
                     key = (pub or str((target_parent.get("person_ids") or [""])[0])).strip()
                     if not key:
                         self.send_bytes(b"person has no review key", "text/plain", status=400)
@@ -1128,14 +1135,19 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         target_candidate["approved"] = result["approved"]
                         target_candidate["new_url"] = result.get("new_url", "")
 
-                    # One affirmative answer resolves a multi-match person: every OTHER
-                    # still-pending option on this parent is withdrawn as a link-level No
-                    # decision (never a person reject), so picking one option resolves the
-                    # whole parent and it does not reappear. A synthetic sibling's gate lives
-                    # in synthetic-people.csv, so it is withdrawn through its approve gate; a
-                    # real-LinkedIn sibling is detached in review.csv exactly as before.
+                    # ANY answer resolves a multi-match person: every OTHER unapplied
+                    # option on this parent is withdrawn as a link-level No decision
+                    # (never a person reject), so one click resolves the whole parent
+                    # and it does not reappear. That includes Skip (detach) — a Skip
+                    # that settled only the primary re-served the same person with the
+                    # remaining options next card. A synthetic sibling's gate lives in
+                    # synthetic-people.csv, so it is withdrawn through its approve gate
+                    # (link-level on a mixed parent per is_effective_no); a real
+                    # sibling is detached in review.csv. Display-detached rows (judge
+                    # wrong_person >= bar, approved still '') are settled here too —
+                    # leaving them unwritten kept them eligible for paid re-research.
                     resolved_pubs = [pub_lower]
-                    if decision in {"keep", "fix"}:
+                    if decision in {"keep", "fix", "detach"}:
                         for sibling in target_parent.get("candidates") or []:
                             sibling_pub = str(sibling.get("pub") or "").strip().lower()
                             if not sibling_pub or sibling_pub == pub_lower:
@@ -1146,18 +1158,35 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 # (auto == still pending, matching pending_linkedin_candidates).
                                 if sibling_approved in {"yes", "no"}:
                                     continue
-                                apply_synthetic_decision(synthetic_path, sibling_pub, "detach")
+                                try:
+                                    apply_synthetic_decision(synthetic_path, sibling_pub, "detach")
+                                except ValueError as exc:
+                                    # Best-effort withdrawal: a row pruned between render
+                                    # and click must not 400 the user's applied decision.
+                                    print(f"[decide] sibling skipped: {exc}",
+                                          file=sys.stderr, flush=True)
+                                    continue
                                 sibling["action"] = "verify"
                                 sibling["approved"] = "no"
                                 sibling["new_url"] = ""
                             else:
-                                if candidate_state(sibling) != "review":
+                                if (sibling_approved in {"yes", "no"}
+                                        or candidate_state(sibling) not in {"review", "detached"}):
                                     continue
                                 apply_decision(
                                     review_path, verdicts_path, sibling_pub, "detach", "",
                                     confirm_threshold, detach_threshold)
                                 sibling["action"] = "detach"
                                 sibling["approved"] = "yes"
+                        # Thinner synthetic duplicates pruned from the display model
+                        # still hold pending gates in synthetic-people.csv — settle
+                        # them with the parent so no row stays undecided forever.
+                        for pruned_pub in target_parent.get("pruned_synthetic_pubs") or []:
+                            try:
+                                apply_synthetic_decision(
+                                    synthetic_path, str(pruned_pub).strip().lower(), "detach")
+                            except ValueError:
+                                pass
                                 sibling["new_url"] = ""
                             resolved_pubs.append(sibling_pub)
                         # Carry the UNION of every candidate's contacts (kept + withdrawn

@@ -33,7 +33,6 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.deep_context.review_store import (
     judge_accepted_candidate_retarget,
-    judge_rejected_candidate_retarget,
 )
 
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _cand_rank, _all_review_parents, _worth_key, build_parents, candidate_state, extend_and_annotate, is_effective_no, summarize
@@ -113,34 +112,30 @@ def is_lookup_ready(parent: dict[str, Any]) -> bool:
 def pending_linkedin_candidates(parent: dict[str, Any]) -> list[dict[str, Any]]:
     """Candidates that still need the second human Yes/No.
 
-    Existing high-confidence links may remain machine-approved. Every new
-    identity originating from an import candidate must be explicitly checked;
-    ``approved=auto`` on a synthetic row is profile completeness, not confidence
-    that this is the right human, so it is still a pending identity decision.
+    Per-CANDIDATE logic — a merged parent can mix real links, proposed
+    retargets, and folded synthetics, so no parent-level flag may choose the
+    branch (keying on ``is_candidate_origin`` re-queued 123 judge-accepted
+    retargets after the fold stopped appending candidate person_ids):
+
+    - synthetic: pending until the user gates it (``approved=auto`` is profile
+      completeness, not confidence that this is the right human);
+    - judge-ACCEPTED retarget: stands (the predicate checks its own pub prefix;
+      re-confirming every acceptance was decision-theater at enrichment scale);
+    - everything else: pending iff its effective state is review. A judge-
+      REJECTED retarget stays review — it discards a LinkedIn the research
+      already found and paid for (75 of 92 such rejections on a real store had
+      a rich profile the judge never saw), so it returns to the human.
     """
     if is_import_candidate_parent(parent) or is_effective_no(parent):
         return []
-    from_candidate = is_candidate_origin(parent)
     pending: list[dict[str, Any]] = []
     for cand in parent.get("candidates") or []:
         approved = str(cand.get("approved") or "").strip().lower()
         if cand.get("synthetic"):
             if approved not in {"yes", "no"}:
                 pending.append(cand)
-        elif from_candidate:
-            # A judge-ACCEPTED found profile stands, and so does a rejection AT
-            # OR ABOVE the confirm bar (review_store's two predicates): the
-            # identity judge already vetted both against the dossier. Only
-            # unjudged candidates and sub-bar rejections — which conflate
-            # near-confirm flavors — still need the human Yes/No.
-            # A judge ACCEPTANCE still stands (re-confirming every one was
-            # decision-theater at enrichment scale). A REJECTION does not: it
-            # discards a LinkedIn the research already found and paid for, and
-            # on a real store 75 of 92 rejections that cited "no employer/
-            # experience" had a rich profile available the judge never saw. So
-            # rejections come back to the human, who can accept or move on.
-            if approved not in {"yes", "no"} and not judge_accepted_candidate_retarget(cand):
-                pending.append(cand)
+        elif judge_accepted_candidate_retarget(cand):
+            continue
         elif candidate_state(cand) == "review":
             pending.append(cand)
     return sorted(pending, key=_cand_rank)

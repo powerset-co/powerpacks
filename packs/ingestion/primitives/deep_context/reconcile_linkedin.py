@@ -1111,6 +1111,10 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
         carried = {column: prior.get(column, "") for column in (
             "llm_reject", "llm_reject_confidence", "llm_reject_reason",
             "llm_worth", "llm_worth_reason", "network_worth",
+            # Human-owned worth metadata rides with network_worth: membership
+            # keeps decisions surviving reclustering, and the reviewer's typed
+            # "why" note must never be wiped by a machine rerun.
+            "worth_person_ids", "user_worth_note",
         )}
         existing[pub] = {
             "public_identifier": pub, "action": ov_action, "approved": approved,

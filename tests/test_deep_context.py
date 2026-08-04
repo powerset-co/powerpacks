@@ -6410,8 +6410,12 @@ class SyntheticFoldTests(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         synths = [c["pub"] for c in merged[0]["candidates"] if c.get("synthetic")]
         self.assertEqual(synths, ["synth-rich"])
+        # The thinner sibling's gate is settled with the parent, not orphaned.
+        self.assertEqual(merged[0]["pruned_synthetic_pubs"], ["synth-thin"])
 
-    def test_settled_identity_drops_pending_synthetics(self):
+    def test_settled_identity_still_surfaces_the_synthetic(self):
+        # A verified link does NOT suppress a paid researched identity — the
+        # human sees both and picks (guided re-research must always surface).
         confirmed = [{"pub": "right-jordan", "action": "verify", "approved": "auto"}]
         with tempfile.TemporaryDirectory() as d:
             merged = web_model.collapse_by_current_parent(
@@ -6419,8 +6423,33 @@ class SyntheticFoldTests(unittest.TestCase):
                  self._synth("candidate:email:jordan@example.com", "synth-a", exp=2)],
                 self._index(d))
         self.assertEqual(len(merged), 1)
-        self.assertEqual([c["pub"] for c in merged[0]["candidates"]], ["right-jordan"])
-        self.assertEqual(web_workflow.pending_linkedin_candidates(merged[0]), [])
+        self.assertEqual([c["pub"] for c in merged[0]["candidates"]],
+                         ["right-jordan", "synth-a"])
+        self.assertEqual([c["pub"] for c in
+                          web_workflow.pending_linkedin_candidates(merged[0])],
+                         ["synth-a"])
+
+    def test_shared_identifier_never_folds(self):
+        # Two parents own the same email in the index -> the synthetic must not
+        # pick a co-owner arbitrarily; it stays a standalone card.
+        idx = {
+            "parents": {
+                "jordan-bravo-ab12cd34": {"children": ["jordan-bravo-aa11"]},
+                "casey-example-ff00aa11": {"children": ["casey-example-bb22"]}},
+            "slugs": {"jordan-bravo-aa11": {"person_id": "pid-1"},
+                      "casey-example-bb22": {"person_id": "pid-2"}},
+            "by_email": {"shared@example.com":
+                         ["jordan-bravo-aa11", "casey-example-bb22"]},
+            "by_phone": {},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "index.json"
+            path.write_text(json.dumps(idx), encoding="utf-8")
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:email:shared@example.com", "synth-s", exp=1)],
+                path)
+        self.assertEqual(len(merged), 2)
 
     def test_unmatched_synthetic_stays_standalone(self):
         with tempfile.TemporaryDirectory() as d:

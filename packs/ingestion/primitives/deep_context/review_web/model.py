@@ -213,24 +213,30 @@ def parent_status(parent: dict[str, Any]) -> str:
     return "review"
 
 
-def _cand_rank(cand: dict[str, Any]) -> tuple[int, float]:
-    """Stable best-first ordering shared by model decisions and the staged UI."""
+def _cand_rank(cand: dict[str, Any]) -> tuple[int, int, float]:
+    """Stable best-first ordering shared by model decisions and the staged UI.
+
+    Within the undecided bucket a REAL profile outranks a synthetic: a
+    synthetic's confidence is research completeness, not identity confidence,
+    so it must never beat an unjudged real LinkedIn to a multi-card's primary
+    slot (the primary keys the avatar, fix form, and Skip)."""
     state = candidate_state(cand)
     confidence = float(cand.get("confidence") or 0.0)
+    synthetic = 1 if cand.get("synthetic") else 0
     if state in {"verified", "fixed"}:
-        return (0, -confidence)
+        return (0, synthetic, -confidence)
     if state in {"detached", "excluded", "rejected"}:
-        return (4, -confidence)
+        return (4, synthetic, -confidence)
     if cand.get("verdict") == "confirmed":
-        return (1, -confidence)
+        return (1, synthetic, -confidence)
     if cand.get("verdict") == "wrong_person":
-        return (3, -confidence)
-    return (2, -confidence)
+        return (3, synthetic, -confidence)
+    return (2, synthetic, -confidence)
 
 
 def picked_link(parent: dict[str, Any]) -> str:
     """The LinkedIn this parent currently resolves to (verified link, retarget target, or none)."""
-    for c in parent["candidates"]:
+    for c in sorted(parent["candidates"], key=_cand_rank):
         st = candidate_state(c)
         if st == "fixed":
             return c.get("new_url") or ""
@@ -885,8 +891,8 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
             str(pid or "").strip() for pid in (r.get("person_ids") or [])
             if is_candidate_id(str(pid or ""))
         ]
-        import_candidate = bool(r.get("no_link") and candidate_person_ids)
-        worth_pub = candidate_person_ids[0].lower() if import_candidate else pub
+        raw_import_candidate = bool(r.get("no_link") and candidate_person_ids)
+        worth_pub = candidate_person_ids[0].lower() if raw_import_candidate else pub
         v = r.get("verdict") or {}
         li = r.get("linkedin") or {}
         dec = overrides.get(worth_pub, {})
@@ -896,6 +902,11 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
         new_pub = (str(dec.get("new_public_identifier") or "").strip().lower()
                    or extract_public_identifier(new_url).lower())
         proposed_retarget = action == "retarget" and bool(new_url and new_pub)
+        # A candidate with a research-PROPOSED LinkedIn has real pending review
+        # work; the import_candidate flag silences the whole parent's identity
+        # queue, so it must not cover proposed retargets (mirrors
+        # load_candidate_parents' `import_candidate: not identity_result`).
+        import_candidate = raw_import_candidate and not proposed_retarget
         p["candidates"].append({
             "pub": worth_pub,
             "profile_pub": new_pub if proposed_retarget else pub,
@@ -962,9 +973,14 @@ def is_effective_no(parent: dict[str, Any]) -> bool:
         return True
     if user_mark == "yes":
         return False
-    # a synthetic row's Detach/Exclude lives in its approved gate, not review.csv
-    if any(c.get("synthetic") and (c.get("approved") or "").strip().lower() == "no"
-           for c in parent["candidates"]):
+    # a synthetic row's Detach/Exclude lives in its approved gate, not review.csv.
+    # On an ALL-synthetic parent (a research-pool candidate person) gating the
+    # synthetic no IS rejecting the person. On a mixed parent (synthetic folded
+    # onto a real person) it is only a link-level "not this profile" — the
+    # person's worth stands and they resolve as no-LinkedIn.
+    if (not any(not c.get("synthetic") for c in parent["candidates"])
+            and any(c.get("synthetic") and (c.get("approved") or "").strip().lower() == "no"
+                    for c in parent["candidates"])):
         return True
     # LinkedIn connections are GROUND TRUTH — a machine no never rejects them
     if parent.get("connection"):
@@ -1047,10 +1063,16 @@ def collapse_by_current_parent(parents: list[dict[str, Any]],
     ident_map = parent_by_candidate_identifier(index_json)
 
     def current_slug(parent: dict[str, Any]) -> str:
+        # The identifier join is for SYNTHETIC-profile parents only: a synthetic
+        # is display-shell over a person the identifier union already owns.
+        # Import-candidate parents must NOT fold this way — their candidate
+        # dicts carry pending review work of their own (proposed retargets)
+        # and folding them silences it behind is_import_candidate_parent.
+        synthetic_parent = str(parent.get("slug") or "").startswith("synthetic-")
         for pid in parent.get("person_ids") or []:
             key = str(pid or "").strip().lower()
             slug = parent_map.get(key)
-            if not slug and key.startswith("candidate:"):
+            if not slug and synthetic_parent and key.startswith("candidate:"):
                 slug = ident_map.get(candidate_identifier_key(key))
             if slug:
                 return slug
@@ -1099,39 +1121,35 @@ def collapse_by_current_parent(parents: list[dict[str, Any]],
 
 
 def _prune_synthetic_options(parent: dict[str, Any]) -> None:
-    """One synthetic option per card, and none on a settled identity.
+    """One synthetic option per card: the RICHEST pending one stands.
 
     Two import candidates (an email and a phone) can each mint a synthetic for
     the same human; once both fold onto one parent, showing near-identical
-    researched identities is noise — the RICHEST pending one stands (most
+    researched identities is noise — the richest pending one stands (most
     experience+education entries, then longest headline) and the thinner sibling
-    is dropped from the model. No field-level merge: the parent's dossier below
-    the card is already the union of every child across eras, so the synthetic
-    row is only a profile-shaped shell over it. A parent whose real LinkedIn is
-    already settled (verified or user-fixed) drops pending synthetics entirely —
-    a resolved person never re-enters review over research noise. Synthetics the
-    user already decided (approved yes/no) are never touched."""
+    is dropped from the display model. No field-level merge: the parent's
+    dossier below the card is already the union of every child across eras.
+    Dropped pubs are stashed on ``pruned_synthetic_pubs`` so the decide
+    endpoint's sibling withdrawal can still gate their synthetic-people.csv
+    rows when the parent resolves. Synthetics the user already decided
+    (approved yes/no) are never touched, and a synthetic is never dropped just
+    because a real link is verified — paid re-research must always surface."""
     cands = parent.get("candidates") or []
     pending_synths = [
         c for c in cands if c.get("synthetic")
         and str(c.get("approved") or "").strip().lower() not in {"yes", "no"}
     ]
-    if not pending_synths:
+    if len(pending_synths) <= 1:
         return
-    settled = any(not c.get("synthetic") and candidate_state(c) in {"verified", "fixed"}
-                  for c in cands)
-    keep_ids: set[int] = set()
-    if not settled:
-        richest = max(pending_synths, key=lambda c: (
-            len(c.get("experiences") or []) + len(c.get("education") or []),
-            len(str(c.get("headline") or ""))))
-        keep_ids = {id(richest)}
-    parent["candidates"] = [
-        c for c in cands
-        if not (c.get("synthetic")
-                and str(c.get("approved") or "").strip().lower() not in {"yes", "no"}
-                and id(c) not in keep_ids)
-    ]
+    richest = max(pending_synths, key=lambda c: (
+        len(c.get("experiences") or []) + len(c.get("education") or []),
+        len(str(c.get("headline") or ""))))
+    dropped = [c for c in pending_synths if c is not richest]
+    parent["pruned_synthetic_pubs"] = sorted(
+        {str(c.get("pub") or "") for c in dropped if c.get("pub")}
+        | set(parent.get("pruned_synthetic_pubs") or []))
+    dropped_ids = {id(c) for c in dropped}
+    parent["candidates"] = [c for c in cands if id(c) not in dropped_ids]
 
 
 def extend_and_annotate(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],
