@@ -1261,7 +1261,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     # and review rows written under the pre-decisive judge-apply policy get
     # the 2026-08 promotions/demotions without a re-judge.
     ensure_owner_phones(OWNER_JSON)
-    resolve_stored_identity_policy(Path(args.review), INDEX_JSON)
+    resolve_stored_identity_policy(Path(args.review), INDEX_JSON, DEFAULT_PEOPLE_CSV)
     review_path = Path(args.review)
     verdicts_path = Path(args.verdicts)
     parents_dir = Path(args.parents_dir)

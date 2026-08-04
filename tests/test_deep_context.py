@@ -6613,7 +6613,7 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
                 ("jordan-bravo-2", "detach", "", 0.80, "pid-b")], index)
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
-        self.assertEqual(out, {"promoted": 1, "demoted": 1})
+        self.assertEqual(out, {"connections": 0, "promoted": 1, "demoted": 1})
         self.assertEqual(rows["jordan-bravo"]["approved"], "auto")
         self.assertEqual((rows["jordan-bravo-2"]["action"],
                           rows["jordan-bravo-2"]["approved"]), ("detach", "auto"))
@@ -6626,7 +6626,7 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
                 ("jordan-doppel", "verify", "", 0.62, "pid-a")])
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
-        self.assertEqual(out, {"promoted": 0, "demoted": 1})
+        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 1})
         self.assertEqual((rows["jordan-doppel"]["action"],
                           rows["jordan-doppel"]["approved"]), ("detach", "auto"))
         self.assertEqual(rows["jordan-bravo"]["approved"], "auto")  # untouched
@@ -6640,10 +6640,35 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
                 ("jordan-rt", "retarget", "", 0.99, "pid-c")])   # retargets never touched
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
-        self.assertEqual(out, {"promoted": 0, "demoted": 0})
+        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 0})
         self.assertEqual(rows["jordan-bravo"]["approved"], "")
         self.assertEqual(rows["jordan-user"]["approved"], "no")
         self.assertEqual(rows["jordan-rt"]["action"], "retarget")
+
+    def test_connection_row_auto_verifies(self):
+        # The AlSharekh shape: a restart-reset blanked a ground-truth
+        # connection row to action='' approved='' — it auto-verifies, and the
+        # freshly applied identity supersedes a doppelganger punt same-pass.
+        with tempfile.TemporaryDirectory() as d:
+            people = Path(d) / "people.csv"
+            people.write_text(
+                "id,public_identifier,source_channels\n"
+                "pid-a,jordan-bravo,\"linkedin_csv,gmail_msgvault\"\n",
+                encoding="utf-8")
+            review, idx = self._write(d, [
+                ("jordan-bravo", "", "", 1.0, "pid-a"),
+                ("jordan-doppel", "verify", "", 0.62, "pid-a")])
+            rows = reconcile.load_override_rows(review)
+            for key in rows:  # connection rows carry their URL
+                rows[key]["linkedin_url"] = f"https://www.linkedin.com/in/{key}"
+            reconcile.write_override_rows(review, rows)
+            out = legacy.resolve_stored_identity_policy(review, idx, people)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out, {"connections": 1, "promoted": 0, "demoted": 1})
+        self.assertEqual((rows["jordan-bravo"]["action"],
+                          rows["jordan-bravo"]["approved"]), ("verify", "auto"))
+        self.assertEqual((rows["jordan-doppel"]["action"],
+                          rows["jordan-doppel"]["approved"]), ("detach", "auto"))
 
     def test_idempotent(self):
         with tempfile.TemporaryDirectory() as d:
@@ -6652,7 +6677,7 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
                 ("jordan-doppel", "verify", "", 0.62, "pid-a")])
             legacy.resolve_stored_identity_policy(review, idx)
             second = legacy.resolve_stored_identity_policy(review, idx)
-        self.assertEqual(second, {"promoted": 0, "demoted": 0})
+        self.assertEqual(second, {"connections": 0, "promoted": 0, "demoted": 0})
 
 
 if __name__ == "__main__":

@@ -334,13 +334,23 @@ def ensure_owner_phones(owner_json: Path) -> bool:
 # -----------------------------------------------------------------------------
 
 
-def resolve_stored_identity_policy(review_csv: Path, index_json: Path) -> dict[str, int]:
+def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
+                                   people_csv: Path | None = None) -> dict[str, int]:
     """Promote/demote pending identity rows to the current apply policy.
+
+    Runs three deterministic rules, in order: (1) a ground-truth LinkedIn
+    CONNECTION row auto-verifies — the user is literally connected, identity
+    is not a question (a restart-review reset used to blank these to a bare
+    pending row); (2) a decisive pending confirm promotes and its pending
+    siblings drop; (3) a sub-decisive pending punt on a person who already
+    carries an applied identity detaches. Connections run first so a freshly
+    applied connection supersedes its doppelganger punts in the same pass.
 
     Never touches: user decisions (approved yes/no), retarget rows (accepted
     ones stand, rejected ones must resurface for review), exclude rows, or
     parent-worth rows. Idempotent: promoted/demoted rows carry approved=auto
-    and are skipped on the next pass. Returns {"promoted": n, "demoted": n}.
+    and are skipped on the next pass. Returns
+    {"connections": n, "promoted": n, "demoted": n}.
     """
     from packs.ingestion.primitives.common.jsonio import now_iso
     from packs.ingestion.primitives.deep_context.review_store import (
@@ -351,11 +361,32 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path) -> dict[s
         parent_ids_by_person,
         write_override_rows,
     )
+    from packs.ingestion.primitives.deep_context.review_web.model import (
+        load_connection_keys,
+    )
 
     if not review_csv.exists():
-        return {"promoted": 0, "demoted": 0}
+        return {"connections": 0, "promoted": 0, "demoted": 0}
     rows = load_override_rows(review_csv)
     parent_of = parent_ids_by_person(index_json)
+
+    connections = 0
+    connection_keys = load_connection_keys(people_csv) if people_csv else set()
+    if connection_keys:
+        for key, row in rows.items():
+            if is_parent_worth_row(row, key):
+                continue
+            if (row.get("approved") or "").strip().lower() in {"yes", "no", "auto"}:
+                continue
+            if (row.get("action") or "").strip().lower() not in {"", "verify"}:
+                continue
+            # Ground truth attaches to the CONNECTION'S OWN pub — never to
+            # other profiles that happen to hang on the same person (a
+            # doppelganger row must stay subject to the rules below).
+            if key in connection_keys and (row.get("linkedin_url") or "").strip():
+                row["action"], row["approved"] = "verify", "auto"
+                row["updated_at"] = now_iso()
+                connections += 1
 
     def confidence(row: dict[str, str]) -> float:
         try:
@@ -410,6 +441,6 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path) -> dict[s
                 row["action"], row["approved"] = "detach", "auto"
                 row["updated_at"] = now_iso()
                 demoted += 1
-    if promoted or demoted:
+    if connections or promoted or demoted:
         write_override_rows(review_csv, rows)
-    return {"promoted": promoted, "demoted": demoted}
+    return {"connections": connections, "promoted": promoted, "demoted": demoted}
