@@ -908,7 +908,7 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
         <ul class='linkedin-options'>{options}</ul>"""
     # "None of these" expands the guidance box (ONE input owns paste-the-URL
     # and re-research); the inline Skip stays folded into the question line.
-    question = f"Is this the right profile? Or {_skip_link(primary.get('pub'), parent.get('slug'))}?"
+    question = f"Pick the right profile. Or {_skip_link(primary.get('pub'), parent.get('slug'))}?"
     return f"""
     <article class='decision-card identity-card identity-card-multi' data-card
              data-parent='{esc(parent.get('slug'))}' data-multi-option>
