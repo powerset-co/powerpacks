@@ -6298,6 +6298,9 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertNotIn("View LinkedIn", html)          # no dead-link affordance
         self.assertIn("Invalid LinkedIn.", html)
         self.assertNotIn("Is this the right profile?", html)
+        self.assertNotIn("Use this profile", html)  # nothing to confirm
+        self.assertNotIn("data-open-fix", html)     # guidance box owns URL paste
+        self.assertIn("data-decide='detach'", html)  # Skip stays
 
     def test_machine_reason_and_placeholder_junk_never_render(self):
         # 'no usable LinkedIn profile' is judge state, not a summary; '--' is

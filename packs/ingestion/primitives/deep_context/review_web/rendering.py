@@ -808,11 +808,11 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         </div>
         {_details(parent, candidate, identity=True, profile_rows=profile_fact_rows(candidate),
                   identifiers=identifiers, profile_placeholder=placeholder)}"""
-    return f"""
-    <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
-      {_scroll_region(scroll_content)}
-      <div class='identity-decision'>
-        <div class='question'>{question}</div>
+    invalid = cache_miss and not synthetic
+    # An INVALID card has nothing to confirm and nothing to say No to — the
+    # guidance box (whose URL path applies a pasted link directly, no spend)
+    # plus the inline Skip is the complete decision surface.
+    actions = "" if invalid else f"""
         <div class='binary-actions'>
           <button class='button button-outline' data-open-fix aria-expanded='false'
                   aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>
@@ -822,13 +822,18 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         </div>
         <div class='alternate' id='fix-section-{esc(candidate.get('pub'))}' hidden>
           {fix_form}
-        </div>
+        </div>"""
+    return f"""
+    <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
+      {_scroll_region(scroll_content)}
+      <div class='identity-decision'>
+        <div class='question'>{question}</div>
+        {actions}
         {_retarget_guidance(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
                             parent.get('slug'),
                             label=("No profile data — give re-research guidance"
-                                   if cache_miss and not synthetic
-                                   else "Neither — re-research this person"),
-                            open_by_default=cache_miss and not synthetic)}
+                                   if invalid else "Neither — re-research this person"),
+                            open_by_default=invalid)}
       </div>
     </article>"""
 
