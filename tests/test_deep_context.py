@@ -4295,6 +4295,9 @@ class TestReviewWeb(unittest.TestCase):
             self.assertEqual(len(sam["candidates"]), 3)
             pending = web_workflow.pending_linkedin_candidates(sam)
             self.assertEqual([cand["pub"] for cand in pending], ["samreal", "sammaybe", "samwrong"])
+            # A candidate with real profile facts renders the confirm
+            # question; factless ones render the invalid-profile ask instead.
+            pending[0]["experiences"] = ["Founder @ Jones Robotics"]
             html = web_rendering.render_linkedin_card(sam, pending[0], d, d)
             self.assertIn("Is this the right profile?", html)
             self.assertIn("data-decide='keep'", html)
