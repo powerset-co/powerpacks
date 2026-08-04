@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.15.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.0...powerpacks-v1.15.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **deep-context:** ceremony-free stage advances and per-stage review verb ([#415](https://github.com/powerset-co/powerpacks/issues/415)) ([9822926](https://github.com/powerset-co/powerpacks/commit/9822926bc442b479d5cb297bc8e2a9562622957e))
+* **deep-context:** delete the Finish ceremony page entirely ([#417](https://github.com/powerset-co/powerpacks/issues/417)) ([cc53ddc](https://github.com/powerset-co/powerpacks/commit/cc53ddc4a2a985245ec43ca4917178cc2abaefc9))
+
 ## [1.15.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.14.0...powerpacks-v1.15.0) (2026-08-04)
 
 
