@@ -550,6 +550,17 @@ def judge_concurrency() -> int:
     return min(DEFAULT_JUDGE_CONCURRENCY, tier)
 
 
+def _evidence_weight(view: dict[str, Any]) -> int:
+    """How much identity evidence a profile view carries, for choosing between the
+    research payload and the cached profile. Experiences and education are what the
+    judge corroborates against; a headline or location alone is not enough to
+    displace a view that lists actual roles."""
+    return (2 * len(view.get("experiences") or [])
+            + 2 * len(view.get("education") or [])
+            + bool(view.get("headline"))
+            + bool(view.get("location")))
+
+
 def proposal_fingerprint(old_pub: str, new_url: str, dossier: dict[str, Any],
                          profile_view: dict[str, Any]) -> str:
     """Stable sha256 of the EVIDENCE one retarget judgment consumed: the identity pair
@@ -625,8 +636,12 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
         dossier = dossier_view(person_ids, facts_dir, raw_dir)
         li_view = _research_profile_view(profile)
         cached_view = linkedin_view({"linkedin_url": new_url}, cache_dir)
-        if cached_view.get("has_profile"):
-            # Keep the research write-up's reason; take the FACTS from the real profile.
+        # Prefer whichever view actually carries more evidence. The research payload
+        # is sometimes richer than the cached profile and sometimes empty, so
+        # "cache wins" would DEGRADE the judge's inputs as often as it helps
+        # (measured on a real store: 107 helped, 187 hurt). Keep the research
+        # write-up's `reason` either way — only the facts come from the profile.
+        if _evidence_weight(cached_view) > _evidence_weight(li_view):
             li_view = {**cached_view, "reason": li_view.get("reason", "")}
         fingerprint = proposal_fingerprint(old_pub, new_url, dossier, li_view)
         proposal = {
