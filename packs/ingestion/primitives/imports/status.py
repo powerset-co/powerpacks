@@ -6,7 +6,8 @@ ran, whether the import completed (manifest `status: completed` with an
 existing `outputs.people_csv`), whether it is still current (fingerprints
 match), and row counts — plus the merged people.csv summary. This is the
 presence check the import skills use to suggest missing sources. It writes
-nothing and always exits 0.
+nothing by default and always exits 0. Pass `--output <path>` to persist the
+same payload as one fixed JSON snapshot for scheduled-run reporting.
 
 The DISCOVER half reads the stage manifest and nothing else — for gmail and
 messages: `status` says whether discovery ran, and the declared output's row
@@ -55,7 +56,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import (  # noqa: E402
+    emit,
+    now_iso,
+    read_json,
+    write_json,
+)
 from packs.ingestion.primitives.common.paths import DEFAULT_BASE_DIR, DEFAULT_IMPORT_DIR  # noqa: E402
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery  # noqa: E402
 from packs.ingestion.primitives.discover.messages.discover import MessagesDiscovery  # noqa: E402
@@ -132,8 +138,12 @@ def import_status(source: str, import_dir: Path) -> dict[str, Any]:
     manifest_path = import_dir / source / "manifest.json"
     manifest = read_json(manifest_path, {}) or {}
     outputs = manifest.get("outputs") if isinstance(manifest.get("outputs"), dict) else {}
+    stats = manifest.get("stats") if isinstance(manifest.get("stats"), dict) else {}
     people_csv = str(outputs.get("people_csv") or "")
     candidates_csv = str(outputs.get("candidates_csv") or "")
+    candidates = stats.get("candidates")
+    if not isinstance(candidates, int):
+        candidates = csv_count(candidates_csv)
     imported = (
         manifest.get("status") == "completed"
         and bool(people_csv)
@@ -149,7 +159,7 @@ def import_status(source: str, import_dir: Path) -> dict[str, Any]:
         "people_csv": people_csv if imported else "",
         "people": csv_count(people_csv) if imported else 0,
         "candidates_csv": candidates_csv if candidates_csv and Path(candidates_csv).exists() else "",
-        "candidates": csv_count(candidates_csv),
+        "candidates": candidates,
         "updated_at": str(manifest.get("updated_at") or ""),
     }
 
@@ -186,13 +196,21 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[*FAN_IN_SOURCES, "all"],
         default="all",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Optional fixed JSON snapshot path.",
+    )
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     sources = FAN_IN_SOURCES if args.source == "all" else [args.source]
-    emit(status_payload(sources))
+    payload = status_payload(sources)
+    if args.output:
+        write_json(args.output, payload)
+    emit(payload)
     return 0
 
 

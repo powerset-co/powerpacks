@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Install a tracked Powerpacks automation into the native Codex App store."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+AUTOMATIONS_DIR = ROOT / "automations"
+DEFAULT_CODEX_HOME = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+
+
+def render_automation(
+    source: Path,
+    workspace: Path,
+    *,
+    active: bool,
+    existing: Path | None = None,
+    now_ms: int | None = None,
+) -> tuple[str, str]:
+    template = source.read_text(encoding="utf-8")
+    id_match = re.search(r'^id = "([^"]+)"$', template, flags=re.MULTILINE)
+    if id_match is None:
+        raise ValueError(f"{source} must define a non-empty string id")
+    automation_id = id_match.group(1)
+    if 'cwds = ["${workspace}"]' not in template:
+        raise ValueError(f"{source} must define cwds = [\"${{workspace}}\"]")
+
+    workspace_text = json.dumps(str(workspace.resolve()))
+    rendered = template.replace(
+        'cwds = ["${workspace}"]',
+        f"cwds = [{workspace_text}]",
+        1,
+    )
+    rendered, status_replacements = re.subn(
+        r'^status = "(?:ACTIVE|PAUSED)"$',
+        f'status = "{"ACTIVE" if active else "PAUSED"}"',
+        rendered,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if status_replacements != 1:
+        raise ValueError(f"{source} must define an ACTIVE or PAUSED status")
+
+    timestamp = now_ms if now_ms is not None else int(time.time() * 1000)
+    created_at = timestamp
+    if existing is not None and existing.exists():
+        try:
+            prior_text = existing.read_text(encoding="utf-8")
+            prior_created_at = re.search(
+                r"^created_at = ([0-9]+)$",
+                prior_text,
+                flags=re.MULTILINE,
+            )
+            if prior_created_at is not None:
+                created_at = int(prior_created_at.group(1))
+        except OSError:
+            pass
+
+    rendered = rendered.rstrip() + (
+        f"\ncreated_at = {created_at}\n"
+        f"updated_at = {timestamp}\n"
+    )
+    return automation_id, rendered
+
+
+def install(
+    name: str,
+    workspace: Path,
+    codex_home: Path,
+    *,
+    active: bool,
+    dry_run: bool,
+) -> Path:
+    source = AUTOMATIONS_DIR / name / "automation.toml"
+    if not source.is_file():
+        raise ValueError(f"unknown automation {name!r}: {source} does not exist")
+    if not workspace.is_dir():
+        raise ValueError(f"workspace does not exist: {workspace}")
+
+    template_text = source.read_text(encoding="utf-8")
+    template_id_match = re.search(
+        r'^id = "([^"]+)"$',
+        template_text,
+        flags=re.MULTILINE,
+    )
+    if template_id_match is None:
+        raise ValueError(f"{source} must define a non-empty string id")
+    template_id = template_id_match.group(1)
+    destination = codex_home / "automations" / str(template_id) / "automation.toml"
+    automation_id, rendered = render_automation(
+        source,
+        workspace,
+        active=active,
+        existing=destination,
+    )
+    destination = codex_home / "automations" / automation_id / "automation.toml"
+
+    if dry_run:
+        print(rendered, end="")
+        print(f"# destination: {destination}", file=sys.stderr)
+        return destination
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(".toml.tmp")
+    temporary.write_text(rendered, encoding="utf-8")
+    temporary.replace(destination)
+    print(
+        json.dumps(
+            {
+                "id": automation_id,
+                "path": str(destination),
+                "status": "ACTIVE" if active else "PAUSED",
+                "workspace": str(workspace.resolve()),
+            },
+            sort_keys=True,
+        )
+    )
+    return destination
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("name", help="directory name under automations/")
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=ROOT,
+        help="Powerpacks checkout in which the automation should run",
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=DEFAULT_CODEX_HOME,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--activate",
+        action="store_true",
+        help="enable the schedule immediately (installs paused by default)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="render the native file without installing it",
+    )
+    args = parser.parse_args()
+
+    try:
+        install(
+            args.name,
+            args.workspace,
+            args.codex_home,
+            active=args.activate,
+            dry_run=args.dry_run,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
