@@ -460,6 +460,12 @@ async function decideLinkedinCard(card, values, message) {
     postPromise.then((response) => {
       adoptMutationState(response);
       applyProgress(response.progress);
+      if (Number(response.progress?.linkedin_pending) === 0) {
+        // Last decision: a non-preview page load self-completes the stage
+        // server-side and paints the go-back handoff state directly.
+        leaveAndNavigate("Review complete", "/?stage=linkedin");
+        return;
+      }
       announce(message);
     }).catch((error) => {
       // The save failed after the optimistic swap: restore the undecided card.
