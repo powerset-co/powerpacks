@@ -234,6 +234,21 @@ def _cand_rank(cand: dict[str, Any]) -> tuple[int, int, float]:
     return (2, synthetic, -confidence)
 
 
+def attached_linkedin_url(parent: dict[str, Any], candidate: dict[str, Any]) -> str:
+    """The old/attached LinkedIn URL a guided re-research is second-guessing.
+
+    Prefer the candidate the box was opened on. A synthetic card has no URL,
+    so fall back to the parent's first REAL attached link — that URL keys the
+    detach of the wrong LinkedIn's own review row when research supersedes it."""
+    url = str(candidate.get("url") or "")
+    if url:
+        return url
+    for cand in parent.get("candidates") or []:
+        if cand.get("url") and not cand.get("synthetic"):
+            return str(cand["url"])
+    return ""
+
+
 def picked_link(parent: dict[str, Any]) -> str:
     """The LinkedIn this parent currently resolves to (verified link, retarget target, or none)."""
     for c in sorted(parent["candidates"], key=_cand_rank):
