@@ -875,6 +875,13 @@ DETACH = ("detach", "normal")
 CONFLICT_KEEP = ("confirm", "conflict_resolved")
 CONFLICT_DROP = ("detach", "conflict_resolved")
 
+# A DECISIVE confirm ends its conflict group outright: the winner keeps its
+# profile and every other candidate detaches regardless of detach confidence —
+# a 0.97 confirm must never sit hostage to a loser's 0.80. TWO decisive-or-bar
+# confirms in one group is genuine ambiguity (family collisions) and stays
+# with the human.
+DECISIVE_CONFIRM = 0.95
+
 
 class ConfidenceBars:
     """The ASYMMETRIC, keep-biased confidence bars, resolved once per pass.
@@ -912,13 +919,24 @@ def decide_conflict_group(judged: list[dict[str, Any]],
     """`index into judged -> (action, via)` for ONE conflict parent — one canonical
     person carrying MULTIPLE different attached LinkedIns.
 
-    Auto-RESOLVE only the unambiguous shape: exactly ONE confirmed above the
-    confirm bar and EVERY other candidate a wrong_person above the detach bar.
-    Keep the confirmed, detach the wrong. Any other conflict shape stays review,
-    which is what an empty mapping means. Positions, not `id(task)`: the caller
-    walks the same list, and object identity is a fragile key for plain dicts."""
+    Two auto-resolve shapes. A DECISIVE winner — the group's only bar-clearing
+    confirm, at/above DECISIVE_CONFIRM — keeps its profile and detaches every
+    other candidate regardless of their detach confidence. Otherwise the
+    unanimity shape: exactly ONE confirmed above the confirm bar and EVERY
+    other candidate a wrong_person above the detach bar. Any other conflict
+    shape stays review, which is what an empty mapping means. Positions, not
+    `id(task)`: the caller walks the same list, and object identity is a
+    fragile key for plain dicts."""
     confirmed_hi = [i for i, t in enumerate(judged) if bar.clears(t, "confirmed")]
     wrong_hi = [i for i, t in enumerate(judged) if bar.clears(t, "wrong_person")]
+    if len(confirmed_hi) == 1 and len(judged) >= 2:
+        winner = judged[confirmed_hi[0]]
+        confidence = float((winner.get("verdict") or {}).get("confidence") or 0.0)
+        if confidence >= DECISIVE_CONFIRM:
+            # Decisive winner: keep it, drop everyone else — no unanimity needed.
+            return {confirmed_hi[0]: CONFLICT_KEEP,
+                    **{i: CONFLICT_DROP for i in range(len(judged))
+                       if i != confirmed_hi[0]}}
     if not (len(confirmed_hi) == 1 and len(wrong_hi) == len(judged) - 1 and len(judged) >= 2):
         return {}
     return {confirmed_hi[0]: CONFLICT_KEEP, **{i: CONFLICT_DROP for i in wrong_hi}}

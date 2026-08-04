@@ -6544,5 +6544,42 @@ class LinearRetargetFlowTests(unittest.TestCase):
         self.assertIn("/api/linkedin-card?exclude=", script)
 
 
+class DecisiveConfirmTests(unittest.TestCase):
+    """A conflict group's only bar-clearing confirm at >= DECISIVE_CONFIRM wins
+    outright: keep it, detach every loser regardless of detach confidence — a
+    0.97 confirm never sits hostage to a loser's 0.80. Two bar-clearing
+    confirms is genuine ambiguity (family collisions) and stays human."""
+
+    def _task(self, verdict, confidence):
+        return {"verdict": {"verdict": verdict, "confidence": confidence}}
+
+    def _bars(self):
+        return reconcile.ConfidenceBars(reconcile.DEFAULT_CONFIRM,
+                                        reconcile.DEFAULT_DETACH)
+
+    def test_decisive_winner_drops_below_bar_loser(self):
+        judged = [self._task("confirmed", 0.97), self._task("wrong_person", 0.80)]
+        resolved = reconcile.decide_conflict_group(judged, self._bars())
+        self.assertEqual(resolved[0], reconcile.CONFLICT_KEEP)
+        self.assertEqual(resolved[1], reconcile.CONFLICT_DROP)
+
+    def test_decisive_winner_drops_unjudged_punt_too(self):
+        judged = [self._task("confirmed", 0.96), self._task("needs_review", 0.40)]
+        resolved = reconcile.decide_conflict_group(judged, self._bars())
+        self.assertEqual(resolved[0], reconcile.CONFLICT_KEEP)
+        self.assertEqual(resolved[1], reconcile.CONFLICT_DROP)
+
+    def test_sub_decisive_winner_still_needs_unanimity(self):
+        judged = [self._task("confirmed", 0.90), self._task("wrong_person", 0.80)]
+        self.assertEqual(reconcile.decide_conflict_group(judged, self._bars()), {})
+        judged = [self._task("confirmed", 0.90), self._task("wrong_person", 0.90)]
+        resolved = reconcile.decide_conflict_group(judged, self._bars())
+        self.assertEqual(resolved[0], reconcile.CONFLICT_KEEP)
+
+    def test_two_bar_clearing_confirms_stay_human(self):
+        judged = [self._task("confirmed", 0.97), self._task("confirmed", 0.75)]
+        self.assertEqual(reconcile.decide_conflict_group(judged, self._bars()), {})
+
+
 if __name__ == "__main__":
     unittest.main()
