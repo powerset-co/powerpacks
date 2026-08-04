@@ -135,6 +135,7 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.review_store import (
+    JUDGE_DETACH_THRESHOLD,
     OVERRIDE_COLUMNS,
     USER_APPROVED,
     ReviewRow,
@@ -158,7 +159,7 @@ from packs.ingestion.schemas.people_schema import (
 )
 
 DEFAULT_CONFIRM = 0.70         # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
-DEFAULT_DETACH = 0.85          # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error)
+DEFAULT_DETACH = JUDGE_DETACH_THRESHOLD  # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error); shared with review display via review_store
 SECTION_ANCHOR = "## LinkedIn identity"
 SAMPLE_PER_DIRECTION = 4
 SAMPLE_CHARS = 200

@@ -81,6 +81,14 @@ OVERRIDE_COLUMNS = [
 # objects on one path as a schema mismatch.
 ReviewRow = row_model_for("ReviewRow", OVERRIDE_COLUMNS)
 
+# The identity judge's asymmetric detach bar (dropping a real person is the
+# costly error). reconcile_linkedin auto-APPLIES a wrong_person verdict at/above
+# this only when a confirmed sibling wins the conflict group — but the verdict
+# itself is authoritative either way: review surfaces treat an unapplied >= bar
+# detach as detached (the human never re-reviews a hard-contradicted profile),
+# while a below-bar detach stays a pending human decision.
+JUDGE_DETACH_THRESHOLD = 0.85
+
 HUMAN_WORTH_VALUES = {"yes", "no"}
 MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}
 USER_APPROVED = {"yes", "no"}

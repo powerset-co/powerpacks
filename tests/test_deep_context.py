@@ -6431,5 +6431,51 @@ class SyntheticFoldTests(unittest.TestCase):
         self.assertEqual(len(merged), 2)  # no identifier overlap -> untouched
 
 
+class HighConfidenceDetachTests(unittest.TestCase):
+    """A wrong_person verdict at/above the judge's detach bar is authoritative
+    for review display even when the conflict group had no confirmed winner to
+    trigger write-time auto-apply. The human never re-reviews (or sees an empty
+    card for) a hard-contradicted profile; a below-bar detach stays pending."""
+
+    def test_at_bar_unapplied_detach_reads_detached(self):
+        cand = {"pub": "wrong-jordan", "action": "detach", "approved": "",
+                "confidence": 0.95}
+        self.assertEqual(web_model.candidate_state(cand), "detached")
+
+    def test_below_bar_detach_stays_review(self):
+        cand = {"pub": "maybe-jordan", "action": "detach", "approved": "",
+                "confidence": 0.6}
+        self.assertEqual(web_model.candidate_state(cand), "review")
+
+    def test_no_winner_group_shows_only_the_synthetic(self):
+        # The reported shape: both attached LinkedIns judged wrong at 0.95+,
+        # no confirmed sibling, a synthetic folded in. The card offers the
+        # synthetic alone — no blank wrong-person boxes.
+        parent = {"slug": "jordan-bravo-p", "dossier_slug": "jordan-bravo-p",
+                  "name": "Jordan Bravo", "person_ids": ["pid-1"], "sources": [],
+                  "candidates": [
+                      {"pub": "wrong-a", "action": "detach", "approved": "",
+                       "confidence": 0.95},
+                      {"pub": "wrong-b", "action": "detach", "approved": "",
+                       "confidence": 0.98},
+                      {"pub": "synth-a", "synthetic": True, "approved": "",
+                       "action": "", "experiences": ["x"], "education": []},
+                  ]}
+        pending = web_workflow.pending_linkedin_candidates(parent)
+        self.assertEqual([c["pub"] for c in pending], ["synth-a"])
+
+    def test_all_high_conf_detached_no_synthetic_no_card(self):
+        parent = {"slug": "jordan-bravo-p", "dossier_slug": "jordan-bravo-p",
+                  "name": "Jordan Bravo", "person_ids": ["pid-1"], "sources": [],
+                  "candidates": [
+                      {"pub": "wrong-a", "action": "detach", "approved": "",
+                       "confidence": 0.95}]}
+        self.assertEqual(web_workflow.pending_linkedin_candidates(parent), [])
+        self.assertFalse(web_workflow.identity_in_scope(parent))
+
+    def test_bar_is_shared_with_reconcile(self):
+        self.assertEqual(reconcile.DEFAULT_DETACH, reconcile.JUDGE_DETACH_THRESHOLD)
+
+
 if __name__ == "__main__":
     unittest.main()

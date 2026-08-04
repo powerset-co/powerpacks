@@ -43,6 +43,7 @@ from packs.ingestion.primitives.deep_context.common import (
     slugify,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
+    JUDGE_DETACH_THRESHOLD,
     USER_APPROVED,
     linkedin_view,
     load_override_rows,
@@ -182,6 +183,17 @@ def candidate_state(cand: dict[str, Any]) -> str:
         return "detached" if action == "detach" else "verified"
     if approved == "no":
         return "rejected"
+    # A wrong_person verdict at/above the judge's detach bar is authoritative
+    # even when the conflict group had no confirmed winner to trigger the
+    # write-time auto-apply (approved stays ""). The human never re-reviews a
+    # hard-contradicted profile; a below-bar detach stays a pending decision.
+    if action == "detach":
+        try:
+            confidence = float(cand.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if confidence >= JUDGE_DETACH_THRESHOLD:
+            return "detached"
     return "review"  # pending
 
 
