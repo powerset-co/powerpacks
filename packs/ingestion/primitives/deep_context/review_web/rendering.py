@@ -356,6 +356,22 @@ def _merge_contacts(contacts: list[str], identifiers: list[str]) -> list[str]:
 NO_PROFILE_SUMMARY = "Couldn't find profile"
 
 
+# Stored machine punt phrases that must never render as if they were a
+# profile summary — the card's why-note carries that state instead.
+_MACHINE_REASONS = {"no usable linkedin profile"}
+
+
+def _displayable(text: str) -> str:
+    """Display-worthy text or '': machine punt phrases and letterless
+    placeholders ('--', '—', '.') hide rather than render as content."""
+    value = (text or "").strip()
+    if value.lower().rstrip(".") in _MACHINE_REASONS:
+        return ""
+    if not re.search(r"[^\W_]", value):
+        return ""
+    return value
+
+
 def _display_reason(reason: str) -> str:
     """Card display only (stored CSV reasons are never rewritten). A summary
     before a "deep research:" tail keeps just the summary. A reason that is
@@ -363,13 +379,14 @@ def _display_reason(reason: str) -> str:
     vanishing — retarget rows have no other evidence, and a card that asks
     "Is this the right profile?" with zero justification is undecidable."""
     marker = reason.lower().find("deep research:")
-    cleaned = (reason if marker == -1 else reason[:marker]).strip().rstrip(";,·—–-").strip()
+    cleaned = _displayable(
+        (reason if marker == -1 else reason[:marker]).strip().rstrip(";,·—–-").strip())
     if cleaned:
         return cleaned
     tail = reason[marker:].split(":", 1)[-1].strip() if marker != -1 else ""
     if len(tail) > 280:
         tail = tail[:280].rsplit(" ", 1)[0] + "…"
-    return tail
+    return _displayable(tail)
 
 
 FACT_LIST_PINNED = 3
@@ -758,7 +775,7 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         # URL survives as plain text in the why-note below.
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
                 "<span aria-hidden='true'>↗</span></a>") if url and not cache_miss else ""
-        header_headline = str(candidate.get("headline") or "")
+        header_headline = _displayable(str(candidate.get("headline") or ""))
     fix_form = f"""<form class='linkedin-fix-form' data-fix-form
           data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
         <label class='sr-only' for='fix-{esc(candidate.get('pub'))}'>LinkedIn URL</label>

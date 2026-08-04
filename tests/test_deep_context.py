@@ -6300,6 +6300,25 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertIn("Researched LinkedIn is invalid", html)
         self.assertNotIn("Is this the right profile?", html)
 
+    def test_machine_reason_and_placeholder_junk_never_render(self):
+        # 'no usable LinkedIn profile' is judge state, not a summary; '--' is
+        # a letterless placeholder headline. Neither renders as content.
+        self.assertEqual(web_rendering._display_reason("no usable LinkedIn profile"), "")
+        self.assertEqual(web_rendering._displayable("--"), "")
+        self.assertEqual(web_rendering._displayable("—"), "")
+        self.assertEqual(web_rendering._displayable("Founder at Bravo"), "Founder at Bravo")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "headline": "--",
+                    "reason": "no usable LinkedIn profile"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertNotIn("--", html.split("<article")[1][:2000])
+        self.assertNotIn("no usable LinkedIn profile", html)
+        self.assertIn("Researched LinkedIn is invalid", html)
+
     def test_headline_only_shell_counts_as_blank(self):
         # The Ace Padua shape: cache holds "Student at ..." and nothing else.
         # A headline alone is a shell — same no-profile bar as the judge.
