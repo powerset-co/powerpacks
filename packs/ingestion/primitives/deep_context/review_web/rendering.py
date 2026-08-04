@@ -1081,9 +1081,15 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int],
 
 def _step(number: int, label: str, active: bool, complete: bool, count: int = 0,
           href: str = "") -> str:
-    state = " active" if active else (" complete" if complete else "")
-    marker = "✓" if complete else str(number)
-    count_html = f"<small>{count} left</small>" if count and not complete else ""
+    # PENDING WORK ALWAYS SHOWS. `complete` is the ladder gate — once a stage is
+    # recorded completed it stays completed so the user is never yanked backward
+    # — but enrichment can add decisions AFTER that, and a latched flag must not
+    # hide them. A stage with pending items keeps its number and its count; only
+    # a genuinely empty stage gets the checkmark.
+    done = complete and not count
+    state = " active" if active else (" complete" if done else "")
+    marker = "✓" if done else str(number)
+    count_html = f"<small>{count} left</small>" if count else ""
     current = " aria-current='step'" if active else ""
     content = f"<span>{marker}</span><div>{esc(label)}{count_html}</div>"
     if href:

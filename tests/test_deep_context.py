@@ -6222,3 +6222,32 @@ class TestGuidedRetargets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StepperPendingCountTests(unittest.TestCase):
+    """A stage the ladder marked complete must still show pending work.
+
+    Real report: manifest had stage=linkedin, status=awaiting_user, total=674,
+    pending=573 — but `completed_stages` still contained "linkedin" from an
+    earlier pass, so the renderer showed a checkmark and suppressed the count.
+    Enrichment adds decisions after a stage completes; the latched gate flag
+    must not hide them.
+    """
+
+    def test_completed_stage_with_pending_shows_count_not_check(self):
+        html = web_rendering._step(3, "Check LinkedIn", False, True, 573, "/?stage=linkedin")
+        self.assertIn("573 left", html)
+        self.assertNotIn("✓", html)
+        self.assertIn(">3<", html)          # keeps its number
+        self.assertNotIn("step complete", html)
+
+    def test_completed_stage_with_zero_pending_still_checks(self):
+        html = web_rendering._step(3, "Check LinkedIn", False, True, 0, "/?stage=linkedin")
+        self.assertIn("✓", html)
+        self.assertIn("step complete", html)
+        self.assertNotIn("left", html)
+
+    def test_incomplete_stage_shows_count(self):
+        html = web_rendering._step(1, "Review Decisions", True, False, 12, "/?stage=worth")
+        self.assertIn("12 left", html)
+        self.assertNotIn("✓", html)

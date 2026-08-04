@@ -133,9 +133,13 @@ def pending_linkedin_candidates(parent: dict[str, Any]) -> list[dict[str, Any]]:
             # identity judge already vetted both against the dossier. Only
             # unjudged candidates and sub-bar rejections — which conflate
             # near-confirm flavors — still need the human Yes/No.
-            if (approved not in {"yes", "no"}
-                    and not judge_accepted_candidate_retarget(cand)
-                    and not judge_rejected_candidate_retarget(cand)):
+            # A judge ACCEPTANCE still stands (re-confirming every one was
+            # decision-theater at enrichment scale). A REJECTION does not: it
+            # discards a LinkedIn the research already found and paid for, and
+            # on a real store 75 of 92 rejections that cited "no employer/
+            # experience" had a rich profile available the judge never saw. So
+            # rejections come back to the human, who can accept or move on.
+            if approved not in {"yes", "no"} and not judge_accepted_candidate_retarget(cand):
                 pending.append(cand)
         elif candidate_state(cand) == "review":
             pending.append(cand)
