@@ -299,6 +299,10 @@ class PipelineTests(unittest.TestCase):
             self.assertIn("Python", candidate.hydrated_profile["tech_skills"])
             self.assertEqual(candidate.matched_position_indexes, (0,))
             self.assertEqual(candidate.hydrated_profile["total_interactions"], 12)
+            self.assertEqual(
+                candidate.hydrated_profile["years_of_experience"],
+                candidate.hydrated_profile["total_years_experience"],
+            )
             self.assertTrue(candidate.hard_filter_evidence["validated"])
             self.assertEqual(result.hard_filter_validation["violation_count"], 0)
 
@@ -817,6 +821,69 @@ class PipelineTests(unittest.TestCase):
         ):
             self.assertEqual(runner._scoped_person_ids(), {"person-1"})
         self.assertEqual(enumeration.await_args.args[2], ["base_id"])
+
+    def test_remote_hydration_exposes_experience_for_strict_validation(self):
+        from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
+        from packs.search.pipeline.models import PowersetCorpus
+
+        runner = TurboPufferSearchRunner(PowersetCorpus("set", ("operator",)))
+        remote = spec(
+            backend=Backend.POWERSET,
+            corpus=runner.corpus,
+            role=RoleIntent(),
+            person_filters=PersonFilters(years_experience_min=3),
+        )
+        frontier = CandidateFrontier.merge((CandidateRecord("synthetic-person", backend="powerset"),))
+        with mock.patch(
+            "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+            return_value=[{
+                "id": "synthetic-person",
+                "hydrated_context": {
+                    "positions": [{
+                        "title": "Engineer",
+                        "start_date": "2018-01-01",
+                        "end_date": "2024-01-01",
+                    }],
+                },
+            }],
+        ):
+            hydrated = runner.hydrate(frontier).candidates[0]
+
+        profile = hydrated.hydrated_profile
+        self.assertEqual(profile["years_of_experience"], profile["total_years_experience"])
+        self.assertGreater(profile["total_years_experience"], 3)
+        self.assertEqual(
+            validation_findings(profile, remote, ResolvedSources(), hydrated.source_lanes),
+            {"violations": (), "unknowns": ()},
+        )
+
+        below_minimum = {**profile, "years_of_experience": 2.0, "total_years_experience": 2.0}
+        self.assertEqual(
+            validation_findings(below_minimum, remote, ResolvedSources())["violations"],
+            ("years_experience_min_mismatch",),
+        )
+        truly_unknown = {"positions": [{"title": "Engineer"}]}
+        self.assertEqual(
+            validation_findings(truly_unknown, remote, ResolvedSources())["unknowns"],
+            ("years_experience_min_unknown",),
+        )
+        with mock.patch(
+            "packs.search.backends.turbopuffer.runner.postgres_client.fetch_person_rows",
+            return_value=[{
+                "id": "synthetic-person",
+                "hydrated_context": {
+                    "positions": [{
+                        "title": "Engineer",
+                        "start_date": "2018-01-01",
+                        "end_date": "2024-01-01",
+                    }],
+                    "years_of_experience": 0,
+                },
+            }],
+        ):
+            zero = runner.hydrate(frontier).candidates[0].hydrated_profile
+        self.assertEqual(zero["years_of_experience"], 0)
+        self.assertEqual(zero["total_years_experience"], 0)
 
     def test_remote_unresolved_education_preserves_input_disposition(self):
         from packs.search.backends.turbopuffer.runner import TurboPufferSearchRunner
