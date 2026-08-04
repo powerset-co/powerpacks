@@ -610,8 +610,9 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
     candidate["simple_summary"] = _cached_simple_summary(candidate, profile_cache_dir)
     if candidate.get("synthetic"):
         return False
-    if (candidate.get("experiences") or candidate.get("education")
-            or candidate.get("headline")):
+    # Same no-profile definition as the retarget judge: a headline alone is a
+    # SHELL, not content — still worth hydrating, never enough to decide on.
+    if candidate.get("experiences") or candidate.get("education"):
         return False
     pub = str(candidate.get("profile_pub") or candidate.get("pub") or "").strip().lower()
     url = str(candidate.get("url") or "")
@@ -629,10 +630,11 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
                 candidate[field] = view[field]
                 copied = True
         candidate["has_profile"] = True
-    # "Miss" means the CARD still has nothing to show — a cache record that
-    # reports has_profile but carries zero fields is as blank as no record.
-    return not (copied or candidate.get("experiences") or candidate.get("education")
-                or candidate.get("headline"))
+    # "Miss" means the CARD has nothing DECIDABLE — same bar as the retarget
+    # judge (experiences or education). A headline-only shell renders its
+    # headline but still counts as a miss, so the card says why it is thin
+    # and leads with the re-research ask.
+    return not (candidate.get("experiences") or candidate.get("education"))
 
 
 def _skip_link(pub: Any, parent_slug: Any) -> str:
@@ -745,8 +747,11 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         header_headline = ""
     else:
         url = str(candidate.get("url") or "")
+        # A dead/empty/unfetched profile gets NO View-LinkedIn affordance — a
+        # link that 404s (or opens a shell) is worse than none. The attached
+        # URL survives as plain text in the why-note below.
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
-                "<span aria-hidden='true'>↗</span></a>") if url else ""
+                "<span aria-hidden='true'>↗</span></a>") if url and not cache_miss else ""
         header_headline = str(candidate.get("headline") or "")
     fix_form = f"""<form class='linkedin-fix-form' data-fix-form
           data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
@@ -760,9 +765,13 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # re-research ask — "Is this the right profile?" is unanswerable against
     # nothing. The UI never fetches; the skill's profile-prefetch stage fills
     # the cache and logs every miss in its manifest.
-    placeholder = ("<p class='profile-note'>This LinkedIn returned no profile "
-                   "data — it may be private, deleted, or the wrong URL.</p>"
-                   if cache_miss else "")
+    placeholder = ""
+    if cache_miss:
+        dead_url = "" if synthetic else str(candidate.get("url") or "").strip()
+        url_note = f" <span class='profile-note-url'>({esc(dead_url)})</span>" if dead_url else ""
+        placeholder = ("<p class='profile-note'>The attached LinkedIn has no usable "
+                       "profile content — it may be a shell account, private, "
+                       f"deleted, or the wrong person's.{url_note}</p>")
     identifiers = dossier_identifiers(
         parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
         name=str(parent.get("name") or candidate.get("full_name") or ""),
@@ -819,9 +828,12 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
     pub = str(candidate.get("pub") or "")
     synthetic = bool(candidate.get("synthetic"))
     url = "" if synthetic else str(candidate.get("url") or "")
+    # Same dead-profile rule as the single card: no anchor to a husk.
+    has_content = bool(candidate.get("experiences") or candidate.get("education"))
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer' "
             "aria-label='View LinkedIn profile'><span aria-hidden='true'>↗</span></a>"
-            if url else "<span class='linkedin-label-na'>N/A</span>")
+            if url and has_content else "<span class='linkedin-label-na'>"
+            + ("N/A" if synthetic or not url else "no profile") + "</span>")
     summary = (str(candidate.get("simple_summary") or "").strip()
                or _display_reason(str(candidate.get("reason") or "")))
     rows: list[str] = [f"<div><dt>LinkedIn</dt><dd>{link}</dd></div>"]

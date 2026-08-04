@@ -6289,9 +6289,26 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
                     "url": "https://www.linkedin.com/in/jordan-bravo"}
             html = web_rendering.render_linkedin_card(
                 self._parent(), cand, d, d, profile_cache_dir=d)
-        self.assertIn("returned no profile data", html)
+        self.assertIn("no usable profile content", html)
         self.assertIn("<details class='retarget-guidance' open>", html)
         self.assertIn("No profile data — give re-research guidance", html)
+        self.assertNotIn("View LinkedIn", html)          # no dead-link affordance
+        self.assertIn("linkedin.com/in/jordan-bravo", html)  # url survives as text
+
+    def test_headline_only_shell_counts_as_blank(self):
+        # The Ace Padua shape: cache holds "Student at ..." and nothing else.
+        # A headline alone is a shell — same no-profile bar as the judge.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "headline": "Student at Example University"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertIn("Student at Example University", html)  # still shown
+        self.assertIn("no usable profile content", html)
+        self.assertIn("<details class='retarget-guidance' open>", html)
+        self.assertNotIn("View LinkedIn", html)  # a shell is not a LinkedIn
 
     def test_rich_profile_card_keeps_collapsed_box(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -6302,9 +6319,10 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
                     "experiences": ["Founder @ Bravo Robotics"]}
             html = web_rendering.render_linkedin_card(
                 self._parent(), cand, d, d, profile_cache_dir=d)
-        self.assertNotIn("returned no profile data", html)
+        self.assertNotIn("no usable profile content", html)
         self.assertIn("<details class='retarget-guidance'>", html)
         self.assertIn("Neither — re-research this person", html)
+        self.assertIn("View LinkedIn", html)  # real profile keeps its link
 
     def test_multi_card_offers_guided_retarget_keyed_on_primary(self):
         parent = self._parent()
