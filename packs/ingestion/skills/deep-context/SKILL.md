@@ -38,6 +38,11 @@ Use the narrow path when the user names one:
   parents, and opens the directory.
 - `$deep-context rejudge` -> preview with `bin/deep-context rejudge --dry-run`,
   show the OpenAI estimate, get fresh approval, then run the exact paid command.
+- `$deep-context tend`, "tend my store", "weekly upkeep", "self-heal pass" ->
+  run only `bin/deep-context tend` (see the Tend section). Free; it never
+  crosses a spend gate. If message or Gmail sources look stale, offer to
+  re-run `$import-messages` / `$import-gmail` first so the pass heals
+  against current data.
   This re-runs synthesis for every Gmail/iMessage/WhatsApp message-backed
   dossier, including mixed-source people and people with an attached LinkedIn.
   It ignores cached machine and human worth for selection, never uses LinkedIn
@@ -461,6 +466,24 @@ uv run --project . python packs/indexing/primitives/validate_search_index/valida
 ```
 
 Pass only on `status: ok`.
+
+## Tend (weekly self-heal)
+
+`bin/deep-context tend` is the standing maintenance pass — safe to run on a
+schedule or whenever the store feels stale. No new machinery: it re-runs the
+existing FREE stages in pipeline order (`collect` -> `compose` -> `dedupe`
+tier-0 -> `parents` -> `validate`), which is the whole healing mechanism —
+fixed output paths mean each stage overwrites in place, so ghost parents
+prune, deterministic merges apply, and matcher fixes retroactively heal old
+data. It then prints the two EXISTING dry-run estimates for the paid work it
+deliberately did NOT run: `synthesize --dry-run` (stale-facts resynthesis)
+and `reconcile-deep-research --dry-run` (the Parallel.ai identity-recovery
+tail).
+
+Present those two estimates to the user as parked actions; run a paid one
+only on their word. Before tend, if imports are stale, offer the
+`$import-messages` / `$import-gmail` re-run + `realize` so matcher fixes
+heal the store first (free, deterministic).
 
 ## Completion report
 
