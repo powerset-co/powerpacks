@@ -234,6 +234,9 @@ class GuidedRetarget:
     guidance: str
     person_ids: tuple[str, ...] = ()
     linkedin_url: str = ""
+    # EVERY real candidate row key on the parent, from the endpoint that can
+    # see them all. Settlement iterates these — no deriving row keys from URLs.
+    candidate_pubs: tuple[str, ...] = ()
     match_emails: tuple[str, ...] = ()
     match_phones: tuple[str, ...] = ()
 
@@ -305,13 +308,12 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # sticky `approved` and the judge fingerprint on their existing row, and
     # sideline (never delete — paid artifacts) any prior research output that
     # would make run_research skip the handle as already done.
-    # The person's row can be keyed by a person/candidate id while the OLD
-    # LinkedIn lives on its own pub-keyed row — blank BOTH, or the wrong link
-    # survives the whole re-research untouched.
-    old_pub = extract_public_identifier(request.linkedin_url or "").lower()
+    # The person's row can be keyed by a person/candidate id while each OLD
+    # LinkedIn lives on its own pub-keyed row — blank them all, or a wrong
+    # link survives the whole re-research untouched.
     rows = load_override_rows(review_path)
     touched = False
-    for row_key in {key, old_pub} - {""}:
+    for row_key in {key, *request.candidate_pubs} - {""}:
         prior = rows.get(row_key)
         if prior is not None:
             prior["approved"] = ""
@@ -412,9 +414,9 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # EXCEPT when the user decided this row while the research ran (the card
     # stays interactive after queueing): an explicit human yes/no made after
     # submit outranks the job's automatic detach and is left untouched.
-    # Detach the person's row AND the old LinkedIn's own pub-keyed row (they
-    # can differ); a human decision made while the research ran wins per row.
-    for row_key in {key, extract_public_identifier(request.linkedin_url or "").lower()} - {""}:
+    # Detach the person's row AND every old LinkedIn's own pub-keyed row
+    # (they can differ); a human decision made while research ran wins per row.
+    for row_key in {key, *request.candidate_pubs} - {""}:
         row_now = rows.setdefault(row_key, {"public_identifier": row_key})
         if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no"}:
             row_now.update({"action": "detach", "approved": "yes",

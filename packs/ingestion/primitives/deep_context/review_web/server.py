@@ -81,7 +81,7 @@ from .feedback import (
     submit_directory_feedback,
 )
 from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, run_guided_retarget
-from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, attached_linkedin_url, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
+from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
 
@@ -877,8 +877,11 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         guidance=guidance,
                         person_ids=tuple(
                             str(value) for value in target_parent.get("person_ids") or []),
-                        linkedin_url=attached_linkedin_url(
-                            target_parent, target_candidate),
+                        linkedin_url=str(target_candidate.get("url") or ""),
+                        candidate_pubs=tuple(sorted({
+                            str(c.get("pub") or "").strip().lower()
+                            for c in target_parent.get("candidates") or []
+                            if c.get("pub") and not c.get("synthetic")})),
                         match_emails=tuple(
                             str(value) for value in target_candidate.get("match_emails") or []),
                         match_phones=tuple(
