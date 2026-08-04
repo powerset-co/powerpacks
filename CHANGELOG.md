@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.15.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.14.0...powerpacks-v1.15.0) (2026-08-04)
+
+
+### Features
+
+* **deep-context:** linear re-research review flow, stored-row identity policy, and card UX overhaul ([#413](https://github.com/powerset-co/powerpacks/issues/413)) ([acc0d32](https://github.com/powerset-co/powerpacks/commit/acc0d32543de5d981950833f4e0ae16f13ef5c2d))
+
+
+### Bug Fixes
+
+* **deep-context:** hydrate the proposed profile before judging a retarget ([#410](https://github.com/powerset-co/powerpacks/issues/410)) ([1cfe083](https://github.com/powerset-co/powerpacks/commit/1cfe083fe654c8ba437d2f964b8dae4f9b66deb2))
+* **deep-context:** prefer the richer profile view when judging a retarget ([#412](https://github.com/powerset-co/powerpacks/issues/412)) ([75ee8d4](https://github.com/powerset-co/powerpacks/commit/75ee8d4a2943b144af0560711ada86316624bd47))
+
 ## [1.14.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.13.0...powerpacks-v1.14.0) (2026-08-03)
 
 
