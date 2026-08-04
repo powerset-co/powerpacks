@@ -12,6 +12,10 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-08-04: deep-context — `resolve_stored_identity_policy`: review.csv
+    rows written under the pre-decisive judge-apply policy get the 2026-08
+    promotions/demotions (decisive confirm wins its group; a punt on an
+    already-settled identity detaches) without a re-judge.
   2026-07-31: deep-context — `ensure_owner_phones`: owner.json predating the
     phones field gets the owner's own numbers harvested from chat.db account
     metadata, so the contact-identifier policy can drop them.
@@ -315,3 +319,128 @@ def ensure_owner_phones(owner_json: Path) -> bool:
     owner["phones"] = phones
     owner_json.write_text(json.dumps(owner, indent=2) + "\n", encoding="utf-8")
     return True
+
+
+# -----------------------------------------------------------------------------
+# deep-context: 2026-08 identity-resolution policy over STORED review.csv rows.
+# The judge-apply pass gained two deterministic rules (PR #413): a DECISIVE
+# confirm (>= 0.95, the group's only bar-clearing confirm) wins its conflict
+# group outright, and a pending punt on a person who already carries an APPLIED
+# identity is superseded. Both are pure functions of fields the rows already
+# store (action/approved/confidence), so old stores get the same outcomes here
+# at review entry — no re-judge, no spend.
+# REMOVAL CONDITION: delete once no supported install predates the release
+# carrying PR #413.
+# -----------------------------------------------------------------------------
+
+
+def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
+                                   people_csv: Path | None = None) -> dict[str, int]:
+    """Promote/demote pending identity rows to the current apply policy.
+
+    Runs three deterministic rules, in order: (1) a ground-truth LinkedIn
+    CONNECTION row auto-verifies — the user is literally connected, identity
+    is not a question (a restart-review reset used to blank these to a bare
+    pending row); (2) a decisive pending confirm promotes and its pending
+    siblings drop; (3) a sub-decisive pending punt on a person who already
+    carries an applied identity detaches. Connections run first so a freshly
+    applied connection supersedes its doppelganger punts in the same pass.
+
+    Never touches: user decisions (approved yes/no), retarget rows (accepted
+    ones stand, rejected ones must resurface for review), exclude rows, or
+    parent-worth rows. Idempotent: promoted/demoted rows carry approved=auto
+    and are skipped on the next pass. Returns
+    {"connections": n, "promoted": n, "demoted": n}.
+    """
+    from packs.ingestion.primitives.common.jsonio import now_iso
+    from packs.ingestion.primitives.deep_context.review_store import (
+        DECISIVE_CONFIRM_THRESHOLD,
+        JUDGE_CONFIRM_THRESHOLD,
+        is_parent_worth_row,
+        load_override_rows,
+        parent_ids_by_person,
+        write_override_rows,
+    )
+    from packs.ingestion.primitives.deep_context.review_web.model import (
+        load_connection_keys,
+    )
+
+    if not review_csv.exists():
+        return {"connections": 0, "promoted": 0, "demoted": 0}
+    rows = load_override_rows(review_csv)
+    parent_of = parent_ids_by_person(index_json)
+
+    connections = 0
+    connection_keys = load_connection_keys(people_csv) if people_csv else set()
+    if connection_keys:
+        for key, row in rows.items():
+            if is_parent_worth_row(row, key):
+                continue
+            if (row.get("approved") or "").strip().lower() in {"yes", "no", "auto"}:
+                continue
+            if (row.get("action") or "").strip().lower() not in {"", "verify"}:
+                continue
+            # Ground truth attaches to the CONNECTION'S OWN pub — never to
+            # other profiles that happen to hang on the same person (a
+            # doppelganger row must stay subject to the rules below).
+            if key in connection_keys and (row.get("linkedin_url") or "").strip():
+                row["action"], row["approved"] = "verify", "auto"
+                row["updated_at"] = now_iso()
+                connections += 1
+
+    def confidence(row: dict[str, str]) -> float:
+        try:
+            return float(row.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # Group identity rows (verify/detach only) by the person they belong to —
+    # the current deep-context parent when the index knows one, else the row's
+    # own person_id.
+    groups: dict[str, list[str]] = {}
+    for key, row in rows.items():
+        if is_parent_worth_row(row, key):
+            continue
+        if (row.get("action") or "").strip().lower() not in {"verify", "detach"}:
+            continue
+        person_id = (row.get("person_id") or "").strip().lower()
+        group = parent_of.get(person_id) or person_id or key
+        groups.setdefault(group, []).append(key)
+
+    promoted = demoted = 0
+    for keys in groups.values():
+        group_rows = [rows[k] for k in keys]
+        applied = [r for r in group_rows
+                   if (r.get("approved") or "").strip().lower() in {"yes", "auto"}
+                   and (r.get("action") or "").strip().lower() == "verify"]
+        pending = [r for r in group_rows if not (r.get("approved") or "").strip()]
+        pending_verify = [r for r in pending
+                          if (r.get("action") or "").strip().lower() == "verify"]
+        decisive = [r for r in pending_verify
+                    if confidence(r) >= DECISIVE_CONFIRM_THRESHOLD]
+        bar_clearing = [r for r in pending_verify
+                        if confidence(r) >= JUDGE_CONFIRM_THRESHOLD]
+        if not applied and len(decisive) == 1 and len(bar_clearing) == 1:
+            # Decisive winner: keep it, drop every other pending identity row.
+            winner = decisive[0]
+            winner["approved"] = "auto"
+            winner["updated_at"] = now_iso()
+            promoted += 1
+            for row in pending:
+                if row is winner:
+                    continue
+                row["action"], row["approved"] = "detach", "auto"
+                row["updated_at"] = now_iso()
+                demoted += 1
+        elif applied:
+            # Superseded punts: an applied identity already answers the
+            # question; a sub-decisive pending verify re-asks it blind.
+            for row in pending_verify:
+                if confidence(row) >= DECISIVE_CONFIRM_THRESHOLD:
+                    continue  # a decisive rival is a REAL conflict — keep human
+                row["action"], row["approved"] = "detach", "auto"
+                row["updated_at"] = now_iso()
+                demoted += 1
+    if connections or promoted or demoted:
+        write_override_rows(review_csv, rows)
+    return {"connections": connections, "promoted": promoted, "demoted": demoted}

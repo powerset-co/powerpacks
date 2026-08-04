@@ -58,6 +58,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.review_web.decisions import sync_synthetic_gate
+from packs.ingestion.primitives.deep_context.review_web.model import SYNTHETIC_PEOPLE_CSV
 from packs.ingestion.primitives.deep_context import assemble_synthetic_profile
 from packs.ingestion.primitives.deep_context import deep_research_contacts
 from packs.ingestion.primitives.deep_context import reconcile_deep_research
@@ -232,6 +234,9 @@ class GuidedRetarget:
     guidance: str
     person_ids: tuple[str, ...] = ()
     linkedin_url: str = ""
+    # EVERY real candidate row key on the parent, from the endpoint that can
+    # see them all. Settlement iterates these — no deriving row keys from URLs.
+    candidate_pubs: tuple[str, ...] = ()
     match_emails: tuple[str, ...] = ()
     match_phones: tuple[str, ...] = ()
 
@@ -303,11 +308,18 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # sticky `approved` and the judge fingerprint on their existing row, and
     # sideline (never delete — paid artifacts) any prior research output that
     # would make run_research skip the handle as already done.
+    # The person's row can be keyed by a person/candidate id while each OLD
+    # LinkedIn lives on its own pub-keyed row — blank them all, or a wrong
+    # link survives the whole re-research untouched.
     rows = load_override_rows(review_path)
-    prior = rows.get(key)
-    if prior is not None:
-        prior["approved"] = ""
-        prior["llm_judge_fingerprint"] = ""
+    touched = False
+    for row_key in {key, *request.candidate_pubs} - {""}:
+        prior = rows.get(row_key)
+        if prior is not None:
+            prior["approved"] = ""
+            prior["llm_judge_fingerprint"] = ""
+            touched = True
+    if touched:
         write_override_rows(review_path, rows)
     handle = str(row.get("handle") or request.slug)
     handle_dir = out_dir / handle
@@ -399,10 +411,17 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # The user already said the old link is the wrong person, so it detaches
     # NOW; when the research found nothing, a synthetic profile assembled from
     # it supersedes the old identity — everything automatic, no second review.
-    row_now = rows.setdefault(key, {"public_identifier": request.pub})
-    row_now.update({"action": "detach", "approved": "yes",
-                    "source": "user-guidance", "new_linkedin_url": "",
-                    "new_public_identifier": "", "updated_at": now_iso()})
+    # EXCEPT when the user decided this row while the research ran (the card
+    # stays interactive after queueing): an explicit human yes/no made after
+    # submit outranks the job's automatic detach and is left untouched.
+    # Detach the person's row AND every old LinkedIn's own pub-keyed row
+    # (they can differ); a human decision made while research ran wins per row.
+    for row_key in {key, *request.candidate_pubs} - {""}:
+        row_now = rows.setdefault(row_key, {"public_identifier": row_key})
+        if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no"}:
+            row_now.update({"action": "detach", "approved": "yes",
+                            "source": "user-guidance", "new_linkedin_url": "",
+                            "new_public_identifier": "", "updated_at": now_iso()})
     write_override_rows(review_path, rows)
     if rejected and new_url:
         # Research DID find a profile but the judge could not corroborate it —
@@ -420,6 +439,12 @@ def run_guided_retarget(request: GuidedRetarget, *,
     stands = (int(getattr(assembly, "built", 0) or 0) > 0
               or int(getattr(assembly, "preserved_user_rows", 0) or 0) > 0)
     if stands:
+        # Deterministic, linear review: the user explicitly asked for this
+        # re-research, so the assembled synthetic APPLIES (gate yes) — the
+        # person never returns to the queue for a second confirmation.
+        for gate_key in (key, *(str(pid) for pid in request.person_ids or ())):
+            if gate_key and sync_synthetic_gate(SYNTHETIC_PEOPLE_CSV, gate_key, "yes"):
+                break
         return {"state": "synthetic",
                 "detail": f"no LinkedIn confirmed — synthetic profile now stands ({reason})"}
     return {"state": "no_match",

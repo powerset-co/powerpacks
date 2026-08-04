@@ -70,6 +70,9 @@ OVERRIDE_COLUMNS = [
     "llm_worth_reason",
     # Human-owned worth. Machine writers must never change it.
     "network_worth",
+    # Human-owned free-text "why" captured with a worth decision (the optional
+    # collapsed box on the review card). Machine writers must never change it.
+    "user_worth_note",
 ]
 
 # The declared row shape of review.csv, generated FROM OVERRIDE_COLUMNS so the
@@ -77,6 +80,26 @@ OVERRIDE_COLUMNS = [
 # reference THIS object — the graph checker treats two different row-model
 # objects on one path as a schema mismatch.
 ReviewRow = row_model_for("ReviewRow", OVERRIDE_COLUMNS)
+
+# The identity judge's asymmetric bars, in the ONE home every reader shares
+# (reconcile_linkedin aliases these for its apply pass; review display and the
+# legacy stored-row scrub read them directly).
+#
+# Confirm (low, keep-biased): a confirmed link auto-verifies here — keeping a
+# slightly-wrong link is cheap because the user fixes it in review.
+JUDGE_CONFIRM_THRESHOLD = 0.70
+# Detach (high): dropping a real person is the costly error. reconcile
+# auto-APPLIES a wrong_person verdict at/above this only when a confirmed
+# sibling wins the conflict group — but the verdict itself is authoritative
+# either way: review surfaces treat an unapplied >= bar detach as detached
+# (the human never re-reviews a hard-contradicted profile), while a below-bar
+# detach stays a pending human decision.
+JUDGE_DETACH_THRESHOLD = 0.85
+# Decisive: a group's ONLY bar-clearing confirm at/above this wins outright —
+# keep it, detach every other candidate regardless of detach confidence. Two
+# bar-clearing confirms is genuine ambiguity (family collisions) and stays
+# with the human.
+DECISIVE_CONFIRM_THRESHOLD = 0.95
 
 HUMAN_WORTH_VALUES = {"yes", "no"}
 MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}

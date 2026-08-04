@@ -135,6 +135,9 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.review_store import (
+    DECISIVE_CONFIRM_THRESHOLD,
+    JUDGE_CONFIRM_THRESHOLD,
+    JUDGE_DETACH_THRESHOLD,
     OVERRIDE_COLUMNS,
     USER_APPROVED,
     ReviewRow,
@@ -157,8 +160,8 @@ from packs.ingestion.schemas.people_schema import (
     parse_jsonish,
 )
 
-DEFAULT_CONFIRM = 0.70         # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
-DEFAULT_DETACH = 0.85          # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error)
+DEFAULT_CONFIRM = JUDGE_CONFIRM_THRESHOLD  # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
+DEFAULT_DETACH = JUDGE_DETACH_THRESHOLD  # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error); shared with review display via review_store
 SECTION_ANCHOR = "## LinkedIn identity"
 SAMPLE_PER_DIRECTION = 4
 SAMPLE_CHARS = 200
@@ -874,6 +877,10 @@ DETACH = ("detach", "normal")
 CONFLICT_KEEP = ("confirm", "conflict_resolved")
 CONFLICT_DROP = ("detach", "conflict_resolved")
 
+# A DECISIVE confirm ends its conflict group outright (shared bar in
+# review_store — the stored-row legacy scrub applies the same policy).
+DECISIVE_CONFIRM = DECISIVE_CONFIRM_THRESHOLD
+
 
 class ConfidenceBars:
     """The ASYMMETRIC, keep-biased confidence bars, resolved once per pass.
@@ -911,13 +918,24 @@ def decide_conflict_group(judged: list[dict[str, Any]],
     """`index into judged -> (action, via)` for ONE conflict parent — one canonical
     person carrying MULTIPLE different attached LinkedIns.
 
-    Auto-RESOLVE only the unambiguous shape: exactly ONE confirmed above the
-    confirm bar and EVERY other candidate a wrong_person above the detach bar.
-    Keep the confirmed, detach the wrong. Any other conflict shape stays review,
-    which is what an empty mapping means. Positions, not `id(task)`: the caller
-    walks the same list, and object identity is a fragile key for plain dicts."""
+    Two auto-resolve shapes. A DECISIVE winner — the group's only bar-clearing
+    confirm, at/above DECISIVE_CONFIRM — keeps its profile and detaches every
+    other candidate regardless of their detach confidence. Otherwise the
+    unanimity shape: exactly ONE confirmed above the confirm bar and EVERY
+    other candidate a wrong_person above the detach bar. Any other conflict
+    shape stays review, which is what an empty mapping means. Positions, not
+    `id(task)`: the caller walks the same list, and object identity is a
+    fragile key for plain dicts."""
     confirmed_hi = [i for i, t in enumerate(judged) if bar.clears(t, "confirmed")]
     wrong_hi = [i for i, t in enumerate(judged) if bar.clears(t, "wrong_person")]
+    if len(confirmed_hi) == 1 and len(judged) >= 2:
+        winner = judged[confirmed_hi[0]]
+        confidence = float((winner.get("verdict") or {}).get("confidence") or 0.0)
+        if confidence >= DECISIVE_CONFIRM:
+            # Decisive winner: keep it, drop everyone else — no unanimity needed.
+            return {confirmed_hi[0]: CONFLICT_KEEP,
+                    **{i: CONFLICT_DROP for i in range(len(judged))
+                       if i != confirmed_hi[0]}}
     if not (len(confirmed_hi) == 1 and len(wrong_hi) == len(judged) - 1 and len(judged) >= 2):
         return {}
     return {confirmed_hi[0]: CONFLICT_KEEP, **{i: CONFLICT_DROP for i in wrong_hi}}
@@ -1110,6 +1128,10 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
         carried = {column: prior.get(column, "") for column in (
             "llm_reject", "llm_reject_confidence", "llm_reject_reason",
             "llm_worth", "llm_worth_reason", "network_worth",
+            # Human-owned worth metadata rides with network_worth: membership
+            # keeps decisions surviving reclustering, and the reviewer's typed
+            # "why" note must never be wiped by a machine rerun.
+            "worth_person_ids", "user_worth_note",
         )}
         existing[pub] = {
             "public_identifier": pub, "action": ov_action, "approved": approved,

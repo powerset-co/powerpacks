@@ -1490,6 +1490,31 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
   background: var(--secondary);
 }
 
+/* The worth card's optional "why" box: same quiet collapsed treatment as the
+   retarget guidance; whatever is typed rides along with the Yes/No click. */
+.worth-why { margin: 0 0 10px; }
+
+.worth-why summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.worth-why[open] summary { margin-bottom: 8px; }
+
+.worth-why textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
 .retarget-guidance summary {
   color: var(--muted);
   font-size: 13px;

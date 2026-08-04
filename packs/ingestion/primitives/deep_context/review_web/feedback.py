@@ -76,7 +76,11 @@ def build_feedback_request(parent: dict[str, Any], candidate: dict[str, Any], *,
         "action": action,
         "person_name": _clean(parent.get("name")),
         "parent_slug": slug,
-        "person_ids": [_clean(v) for v in parent.get("person_ids") or [] if _clean(v)],
+        # candidate:email:*/candidate:phone:* ids are RAW contact identifiers,
+        # not opaque person ids — feedback context stays identity-level
+        # (names, slugs, URLs, decisions), so they are dropped here.
+        "person_ids": [_clean(v) for v in parent.get("person_ids") or []
+                       if _clean(v) and not _clean(v).lower().startswith("candidate:")],
         "public_identifier": _clean(candidate.get("pub")),
         "linkedin_url": url,
         "proposed_linkedin_url": new_url,

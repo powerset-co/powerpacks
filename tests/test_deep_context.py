@@ -28,6 +28,7 @@ from packs.ingestion.primitives.common.legacy import (
     parent_slug_migrations,
 )
 from packs.ingestion.primitives.common.jsonio import write_json
+from packs.ingestion.primitives.common import legacy
 from packs.ingestion.primitives.deep_context import (
     build_parents as parents,
     check_readiness,
@@ -3757,15 +3758,19 @@ class TestReviewWeb(unittest.TestCase):
             self.assertEqual(result["counts"]["pending"], 1)
             self.assertTrue(web_workflow.phase_is_completed("worth", progress, manifest))
 
-            with self.assertRaisesRegex(ValueError, "decisions still need an answer"):
-                web_workflow.write_review_manifest(
-                    "linkedin",
-                    "completed",
-                    {**progress, "linkedin_total": 1, "linkedin_pending": 1},
-                    path=manifest,
-                    review_path=Path(dd) / "review.csv",
-                    synthetic_path=Path(dd) / "synthetic.csv",
-                )
+            # LinkedIn is skippable too — Finish means finish. Undecided
+            # identities stay undecided (pending stays visible in the
+            # stepper) and realization simply skips them.
+            result = web_workflow.write_review_manifest(
+                "linkedin",
+                "completed",
+                {**progress, "linkedin_total": 1, "linkedin_pending": 1},
+                path=manifest,
+                review_path=Path(dd) / "review.csv",
+                synthetic_path=Path(dd) / "synthetic.csv",
+            )
+            self.assertIn("linkedin", result["completed_stages"])
+            self.assertEqual(result["counts"]["pending"], 1)
 
     def test_unresolved_maybe_stays_out_of_lookup_after_people_completion(self):
         maybe = self._maybe_parent()
@@ -3950,10 +3955,9 @@ class TestReviewWeb(unittest.TestCase):
             script.index("panel.innerHTML = nextHtml; // next parent's card"),
         )
         self.assertIn(
-            'document.querySelectorAll("[data-fix-form] input[name=\'new_url\']")',
+            'document.querySelectorAll("[data-retarget-form] textarea[name=\'guidance\']")',
             script,
         )
-        self.assertIn('!input.closest("[hidden]")', script)
         self.assertIn('document.body.dataset.preview === "true"', script)
         self.assertIn(
             "!isStagePreview && state.stage && state.stage !== currentStage",
@@ -4290,12 +4294,16 @@ class TestReviewWeb(unittest.TestCase):
             self.assertEqual(len(sam["candidates"]), 3)
             pending = web_workflow.pending_linkedin_candidates(sam)
             self.assertEqual([cand["pub"] for cand in pending], ["samreal", "sammaybe", "samwrong"])
+            # A candidate with real profile facts renders the confirm
+            # question; factless ones render the invalid-profile ask instead.
+            pending[0]["experiences"] = ["Founder @ Jones Robotics"]
             html = web_rendering.render_linkedin_card(sam, pending[0], d, d)
             self.assertIn("Is this the right profile?", html)
             self.assertIn("data-decide='keep'", html)
-            self.assertIn("data-open-fix", html)
-            self.assertIn("class='alternate'", html)
-            self.assertIn("hidden>", html)
+            # "No" expands the guidance box — one input owns paste-the-URL
+            # and re-research; there is no separate fix form.
+            self.assertIn("data-open-guidance", html)
+            self.assertNotIn("data-fix-form", html)
             self.assertNotIn("Use a different LinkedIn", html)
             # Skip is folded INTO the question line as an inline secondary link, not a
             # standalone button; its detach behavior is unchanged.
@@ -4712,17 +4720,15 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertNotIn("synthetic-correction", html)
             self.assertIn("Is this the right profile?", html)
             self.assertIn("<div class='binary-actions'>", html)
-            self.assertIn("class='sr-only' for='fix-synth-email-abc'>LinkedIn URL</label>", html)
-            self.assertNotIn("<label for='fix-synth-email-abc'>LinkedIn URL</label>", html)
             self.assertNotIn("Use a different LinkedIn", html)
-            self.assertIn(">Use this</button>", html)
             # Skip is the inline secondary link folded into the question line.
             self.assertIn("class='skip-link' data-decide='detach'", html)
             self.assertIn(">Skip</button>?", html)
             self.assertNotIn("alternate-skip", html)
-            # The hidden fix form sits behind the No button (same as a real card).
-            self.assertIn("data-open-fix", html)
-            self.assertIn("class='alternate' id='fix-section-synth-email-abc' hidden", html)
+            # "No" expands the guidance box (no separate fix form, same as a
+            # real card); a pasted URL in guidance applies directly.
+            self.assertIn("data-open-guidance", html)
+            self.assertNotIn("data-fix-form", html)
             # synthetic keep still routes through the synthetic approve gate (/decide
             # treats a keep on a synth- pub as the synthetic-people.csv approval).
             self.assertIn("data-decide='keep'", html)
@@ -5318,7 +5324,7 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("<h4>Relationship &amp; cadence</h4>", html)
         self.assertIn("Warm intro via Casey.", html)
         # Browse-only: no decision affordances anywhere in the pane.
-        for marker in ("data-worth", "data-decide", "data-complete", "data-open-fix"):
+        for marker in ("data-worth", "data-decide", "data-complete", "data-open-guidance"):
             self.assertNotIn(marker, html)
 
     def test_directory_page_embeds_island_and_selected_person(self):
@@ -6189,7 +6195,7 @@ class TestGuidedRetargets(unittest.TestCase):
                 parent, base / "parents", base / "dossiers", base / "profiles")
             self.assertIn("data-retarget-form", pane)
             self.assertIn("data-pub='jordan-bravo-wrong'", pane)
-            self.assertIn("Queue re-research", pane)
+            self.assertIn(">Re-research</button>", pane)
             page = web_rendering.directory_page_html(
                 [parent], {}, parents_dir=base / "parents",
                 dossier_dir=base / "dossiers",
@@ -6218,6 +6224,528 @@ class TestGuidedRetargets(unittest.TestCase):
         self.assertIn("/auth/login", server_src)
         self.assertIn("def start_auth_login", server_src)
         self.assertIn("feedback_alert", server_src)
+
+
+class StepperPendingCountTests(unittest.TestCase):
+    """A stage the ladder marked complete must still show pending work.
+
+    Real report: manifest had stage=linkedin, status=awaiting_user, total=674,
+    pending=573 — but `completed_stages` still contained "linkedin" from an
+    earlier pass, so the renderer showed a checkmark and suppressed the count.
+    Enrichment adds decisions after a stage completes; the latched gate flag
+    must not hide them.
+    """
+
+    def test_completed_stage_with_pending_shows_count_not_check(self):
+        html = web_rendering._step(3, "Check LinkedIn", False, True, 573, "/?stage=linkedin")
+        self.assertIn("573 left", html)
+        self.assertNotIn("✓", html)
+        self.assertIn(">3<", html)          # keeps its number
+        self.assertNotIn("step complete", html)
+
+    def test_completed_stage_with_zero_pending_still_checks(self):
+        html = web_rendering._step(3, "Check LinkedIn", False, True, 0, "/?stage=linkedin")
+        self.assertIn("✓", html)
+        self.assertIn("step complete", html)
+        self.assertNotIn("left", html)
+
+    def test_incomplete_stage_shows_count(self):
+        html = web_rendering._step(1, "Review Decisions", True, False, 12, "/?stage=worth")
+        self.assertIn("12 left", html)
+        self.assertNotIn("✓", html)
+
+
+class LinkedinCardRetargetBoxTests(unittest.TestCase):
+    """The guided-retarget box is reachable from the LinkedIn review cards,
+    not only the directory pane. The review card is where a reviewer actually
+    discovers that every attached profile is the wrong person — or that the
+    person has no LinkedIn at all (both attached profiles judged wrong, deep
+    research verified identity everywhere BUT LinkedIn) — so the re-research
+    escape hatch must live on the card itself."""
+
+    def _parent(self):
+        return {"name": "Jordan Bravo", "slug": "jordan-bravo-ab12cd34",
+                "dossier_slug": "jordan-bravo-ab12cd34",
+                "person_ids": ["pid-1"], "candidates": []}
+
+    def test_single_card_offers_guided_retarget(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertIn("data-retarget-form", html)
+        self.assertIn("data-pub='jordan-bravo'", html)
+        self.assertIn("data-parent='jordan-bravo-ab12cd34'", html)
+        self.assertIn(">Re-research</button>", html)
+
+    def test_blank_profile_card_leads_with_open_reresearch(self):
+        # A valid URL whose profile is 404/private/empty renders the WHY and
+        # the re-research box OPEN — "Is this the right profile?" is
+        # unanswerable against a blank card.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertNotIn("no usable profile content", html)  # no why-paragraph
+        self.assertIn("<details class='retarget-guidance' open>", html)
+        self.assertIn("No profile data — give re-research guidance", html)
+        self.assertNotIn("View LinkedIn", html)          # no dead-link affordance
+        self.assertIn("Invalid LinkedIn.", html)
+        self.assertNotIn("Is this the right profile?", html)
+        self.assertNotIn("Use this profile", html)  # nothing to confirm
+        self.assertNotIn("data-open-guidance", html)  # no buttons at all on invalid cards
+        self.assertIn("data-decide='detach'", html)  # Skip stays
+
+    def test_machine_reason_and_placeholder_junk_never_render(self):
+        # 'no usable LinkedIn profile' is judge state, not a summary; '--' is
+        # a letterless placeholder headline. Neither renders as content.
+        self.assertEqual(web_rendering._display_reason("no usable LinkedIn profile"), "")
+        self.assertEqual(web_rendering._displayable("--"), "")
+        self.assertEqual(web_rendering._displayable("—"), "")
+        self.assertEqual(web_rendering._displayable("Founder at Bravo"), "Founder at Bravo")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "headline": "--",
+                    "reason": "no usable LinkedIn profile"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertNotIn("--", html.split("<article")[1][:2000])
+        self.assertNotIn("no usable LinkedIn profile", html)
+        self.assertIn("Invalid LinkedIn.", html)
+
+    def test_headline_only_shell_counts_as_blank(self):
+        # The Ace Padua shape: cache holds "Student at ..." and nothing else.
+        # A headline alone is a shell — same no-profile bar as the judge.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "headline": "Student at Example University"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertIn("Student at Example University", html)  # still shown
+        self.assertIn("<details class='retarget-guidance' open>", html)
+        self.assertNotIn("View LinkedIn", html)  # a shell is not a LinkedIn
+
+    def test_rich_profile_card_keeps_collapsed_box(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "headline": "Founder at Bravo Robotics",
+                    "experiences": ["Founder @ Bravo Robotics"]}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertNotIn("no usable profile content", html)
+        self.assertIn("<details class='retarget-guidance'>", html)
+        self.assertIn("No — provide LinkedIn or re-research this person", html)
+        self.assertIn("View LinkedIn", html)  # real profile keeps its link
+
+    def test_multi_card_offers_guided_retarget_keyed_on_primary(self):
+        parent = self._parent()
+        cands = [{"pub": "jordan-bravo"}, {"pub": "jordan-bravo-b2"}]
+        parent["candidates"] = cands
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            html = web_rendering.render_linkedin_card(
+                parent, cands, d, d, profile_cache_dir=d)
+        self.assertEqual(html.count("data-retarget-form"), 1)  # one box, on the parent
+        self.assertIn("data-pub='jordan-bravo'", html)
+
+    def test_review_submit_handler_excludes_directory_pane(self):
+        # The directory pane has its own handler (it refreshes the sidebar queue
+        # panel); the document-level one must skip its forms or submits double.
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn('form.closest("[data-directory-detail]")', script)
+
+
+class WorthWhyNoteTests(unittest.TestCase):
+    """The worth review card carries an optional collapsed "why" box; whatever
+    is typed rides along with the Yes/No click — saved to review.csv
+    (user_worth_note, human-owned) and auto-filed as feedback."""
+
+    def test_worth_card_renders_collapsed_note_box(self):
+        parent = {"name": "Jordan Bravo", "slug": "jordan-bravo-ab12cd34",
+                  "dossier_slug": "jordan-bravo-ab12cd34",
+                  "person_ids": ["pid-1"], "candidates": []}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            html = web_rendering.render_worth_card(parent, d, d, profile_cache_dir=d)
+        self.assertIn("data-worth-note", html)
+        self.assertIn("Give feedback", html)
+        self.assertNotIn("<details class='worth-why' open", html)  # collapsed
+
+    def test_note_saves_with_decision_and_survives_noteless_redecision(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            review = Path(tmpdir) / "review.csv"
+            web_decisions.apply_worth_decision(
+                review, "parent-worth:pid-1", "no",
+                user_worth_note="Cold pitch, we said no twice")
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual(rows["parent-worth:pid-1"]["user_worth_note"],
+                             "Cold pitch, we said no twice")
+            # Flipping the decision without typing a new note keeps the old one.
+            web_decisions.apply_worth_decision(review, "parent-worth:pid-1", "yes")
+            rows = reconcile.load_override_rows(review)
+            self.assertEqual(rows["parent-worth:pid-1"]["network_worth"], "yes")
+            self.assertEqual(rows["parent-worth:pid-1"]["user_worth_note"],
+                             "Cold pitch, we said no twice")
+
+    def test_old_review_csv_without_column_loads_and_rewrites(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            review = Path(tmpdir) / "review.csv"
+            old_cols = [c for c in reconcile.OVERRIDE_COLUMNS if c != "user_worth_note"]
+            review.write_text(
+                ",".join(old_cols) + "\njordan-bravo" + "," * (len(old_cols) - 1) + "\n",
+                encoding="utf-8")
+            web_decisions.apply_worth_decision(
+                review, "parent-worth:pid-1", "no", user_worth_note="spam")
+            rows = reconcile.load_override_rows(review)
+            self.assertIn("jordan-bravo", rows)                   # legacy row kept
+            self.assertEqual(rows["parent-worth:pid-1"]["user_worth_note"], "spam")
+            header = review.read_text(encoding="utf-8").splitlines()[0]
+            self.assertIn("user_worth_note", header)              # column added
+
+    def test_decide_click_sends_the_note(self):
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn('[data-worth-note]', script)
+        self.assertIn("note,", script)  # rides in the /worth POST payload
+
+
+class SyntheticFoldTests(unittest.TestCase):
+    """A synthetic minted for an import candidate folds onto the REAL person's
+    card via the identifier union index.json already encodes (by_email/by_phone),
+    instead of minting a duplicate standalone card. One synthetic option per
+    card (richest pending wins); none on a settled identity."""
+
+    def _index(self, d):
+        idx = {
+            "parents": {"jordan-bravo-ab12cd34": {
+                "children": ["jordan-bravo-aa11"], "parent_id": "parent-1"}},
+            "slugs": {"jordan-bravo-aa11": {"person_id": "pid-1"}},
+            "by_email": {"jordan@example.com":
+                         ["jordan-bravo-aa11", "jordan-bravo-ab12cd34"]},
+            "by_phone": {"5550100999": ["jordan-bravo-aa11"]},
+        }
+        path = Path(d) / "index.json"
+        path.write_text(json.dumps(idx), encoding="utf-8")
+        return path
+
+    def _real(self, cands=None):
+        return {"slug": "jordan-bravo-ab12cd34",
+                "dossier_slug": "jordan-bravo-ab12cd34",
+                "name": "Jordan Bravo", "person_ids": ["pid-1"], "sources": [],
+                "candidates": cands if cands is not None else [
+                    {"pub": "wrong-jordan", "action": "detach", "approved": ""}]}
+
+    def _synth(self, pid, pub, exp=0, edu=0, headline=""):
+        return {"slug": f"synthetic-{pub}", "dossier_slug": f"synthetic-{pub}",
+                "name": "Jordan Bravo", "person_ids": [pid], "sources": [],
+                "candidates": [{"pub": pub, "synthetic": True, "approved": "",
+                                "action": "", "experiences": ["x"] * exp,
+                                "education": ["e"] * edu, "headline": headline}]}
+
+    def test_email_synthetic_folds_onto_real_parent(self):
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:email:jordan@example.com", "synth-a", exp=2)],
+                self._index(d))
+        self.assertEqual(len(merged), 1)
+        pubs = [c["pub"] for c in merged[0]["candidates"]]
+        self.assertIn("synth-a", pubs)
+        self.assertIn("wrong-jordan", pubs)
+
+    def test_phone_digits_normalize_for_the_join(self):
+        # +1 country code vs index.json's 10-digit national key.
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:phone:+15550100999", "synth-p", exp=1)],
+                self._index(d))
+        self.assertEqual(len(merged), 1)
+        self.assertIn("synth-p", [c["pub"] for c in merged[0]["candidates"]])
+
+    def test_two_synthetics_richest_pending_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:email:jordan@example.com", "synth-rich",
+                             exp=2, edu=2),
+                 self._synth("candidate:phone:+15550100999", "synth-thin")],
+                self._index(d))
+        self.assertEqual(len(merged), 1)
+        synths = [c["pub"] for c in merged[0]["candidates"] if c.get("synthetic")]
+        self.assertEqual(synths, ["synth-rich"])
+        # The thinner sibling's gate is settled with the parent, not orphaned.
+        self.assertEqual(merged[0]["pruned_synthetic_pubs"], ["synth-thin"])
+
+    def test_settled_identity_still_surfaces_the_synthetic(self):
+        # A verified link does NOT suppress a paid researched identity — the
+        # human sees both and picks (guided re-research must always surface).
+        confirmed = [{"pub": "right-jordan", "action": "verify", "approved": "auto"}]
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(cands=confirmed),
+                 self._synth("candidate:email:jordan@example.com", "synth-a", exp=2)],
+                self._index(d))
+        self.assertEqual(len(merged), 1)
+        self.assertEqual([c["pub"] for c in merged[0]["candidates"]],
+                         ["right-jordan", "synth-a"])
+        self.assertEqual([c["pub"] for c in
+                          web_workflow.pending_linkedin_candidates(merged[0])],
+                         ["synth-a"])
+
+    def test_shared_identifier_never_folds(self):
+        # Two parents own the same email in the index -> the synthetic must not
+        # pick a co-owner arbitrarily; it stays a standalone card.
+        idx = {
+            "parents": {
+                "jordan-bravo-ab12cd34": {"children": ["jordan-bravo-aa11"]},
+                "casey-example-ff00aa11": {"children": ["casey-example-bb22"]}},
+            "slugs": {"jordan-bravo-aa11": {"person_id": "pid-1"},
+                      "casey-example-bb22": {"person_id": "pid-2"}},
+            "by_email": {"shared@example.com":
+                         ["jordan-bravo-aa11", "casey-example-bb22"]},
+            "by_phone": {},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "index.json"
+            path.write_text(json.dumps(idx), encoding="utf-8")
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:email:shared@example.com", "synth-s", exp=1)],
+                path)
+        self.assertEqual(len(merged), 2)
+
+    def test_unmatched_synthetic_stays_standalone(self):
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:email:casey@example.com", "synth-x", exp=1)],
+                self._index(d))
+        self.assertEqual(len(merged), 2)  # no identifier overlap -> untouched
+
+
+class HighConfidenceDetachTests(unittest.TestCase):
+    """A wrong_person verdict at/above the judge's detach bar is authoritative
+    for review display even when the conflict group had no confirmed winner to
+    trigger write-time auto-apply. The human never re-reviews (or sees an empty
+    card for) a hard-contradicted profile; a below-bar detach stays pending."""
+
+    def test_at_bar_unapplied_detach_reads_detached(self):
+        cand = {"pub": "wrong-jordan", "action": "detach", "approved": "",
+                "confidence": 0.95}
+        self.assertEqual(web_model.candidate_state(cand), "detached")
+
+    def test_below_bar_detach_stays_review(self):
+        cand = {"pub": "maybe-jordan", "action": "detach", "approved": "",
+                "confidence": 0.6}
+        self.assertEqual(web_model.candidate_state(cand), "review")
+
+    def test_no_winner_group_shows_only_the_synthetic(self):
+        # The reported shape: both attached LinkedIns judged wrong at 0.95+,
+        # no confirmed sibling, a synthetic folded in. The card offers the
+        # synthetic alone — no blank wrong-person boxes.
+        parent = {"slug": "jordan-bravo-p", "dossier_slug": "jordan-bravo-p",
+                  "name": "Jordan Bravo", "person_ids": ["pid-1"], "sources": [],
+                  "candidates": [
+                      {"pub": "wrong-a", "action": "detach", "approved": "",
+                       "confidence": 0.95},
+                      {"pub": "wrong-b", "action": "detach", "approved": "",
+                       "confidence": 0.98},
+                      {"pub": "synth-a", "synthetic": True, "approved": "",
+                       "action": "", "experiences": ["x"], "education": []},
+                  ]}
+        pending = web_workflow.pending_linkedin_candidates(parent)
+        self.assertEqual([c["pub"] for c in pending], ["synth-a"])
+
+    def test_all_high_conf_detached_no_synthetic_no_card(self):
+        parent = {"slug": "jordan-bravo-p", "dossier_slug": "jordan-bravo-p",
+                  "name": "Jordan Bravo", "person_ids": ["pid-1"], "sources": [],
+                  "candidates": [
+                      {"pub": "wrong-a", "action": "detach", "approved": "",
+                       "confidence": 0.95}]}
+        self.assertEqual(web_workflow.pending_linkedin_candidates(parent), [])
+        self.assertFalse(web_workflow.identity_in_scope(parent))
+
+    def test_bar_is_shared_with_reconcile(self):
+        self.assertEqual(reconcile.DEFAULT_DETACH, reconcile.JUDGE_DETACH_THRESHOLD)
+
+
+class LinearRetargetFlowTests(unittest.TestCase):
+    """Review is LINEAR: queueing a re-research removes the person from the
+    queue (server excludes active guided jobs), results apply automatically in
+    the background, and the finish screen reports in-flight counts instead of
+    ever re-serving a card. Completion is never blocked."""
+
+    def _pending_parent(self, slug="jordan-bravo-p"):
+        return {"slug": slug, "dossier_slug": slug, "name": "Jordan Bravo",
+                "person_ids": ["pid-1"], "sources": [],
+                "candidates": [{"pub": "jordan-bravo", "action": "", "approved": ""}]}
+
+    def test_queue_excludes_inflight_parents(self):
+        parent = self._pending_parent()
+        self.assertEqual(len(web_rendering.linkedin_review_queue([parent])), 1)
+        self.assertEqual(
+            web_rendering.linkedin_review_queue([parent], frozenset({"jordan-bravo-p"})),
+            [])
+
+    def test_finished_body_reports_inflight_and_never_blocks(self):
+        html = web_rendering.linkedin_finished_body(
+            {"linkedin_done": 42}, linkedin_complete=True, retargets_in_flight=3)
+        self.assertIn("3 re-researches still running", html)
+        self.assertIn("go back to Codex", html)
+        html_one = web_rendering.linkedin_finished_body(
+            {"linkedin_done": 42}, linkedin_complete=False, retargets_in_flight=1)
+        self.assertIn("1 re-research still running", html_one)
+        self.assertIn("data-complete='linkedin'", html_one)  # Finish stays clickable
+
+    def test_retarget_submit_advances_the_card(self):
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn("Queued for re-research — moving on", script)
+        self.assertIn("/api/linkedin-card?exclude=", script)
+
+
+class DecisiveConfirmTests(unittest.TestCase):
+    """A conflict group's only bar-clearing confirm at >= DECISIVE_CONFIRM wins
+    outright: keep it, detach every loser regardless of detach confidence — a
+    0.97 confirm never sits hostage to a loser's 0.80. Two bar-clearing
+    confirms is genuine ambiguity (family collisions) and stays human."""
+
+    def _task(self, verdict, confidence):
+        return {"verdict": {"verdict": verdict, "confidence": confidence}}
+
+    def _bars(self):
+        return reconcile.ConfidenceBars(reconcile.DEFAULT_CONFIRM,
+                                        reconcile.DEFAULT_DETACH)
+
+    def test_decisive_winner_drops_below_bar_loser(self):
+        judged = [self._task("confirmed", 0.97), self._task("wrong_person", 0.80)]
+        resolved = reconcile.decide_conflict_group(judged, self._bars())
+        self.assertEqual(resolved[0], reconcile.CONFLICT_KEEP)
+        self.assertEqual(resolved[1], reconcile.CONFLICT_DROP)
+
+    def test_decisive_winner_drops_unjudged_punt_too(self):
+        judged = [self._task("confirmed", 0.96), self._task("needs_review", 0.40)]
+        resolved = reconcile.decide_conflict_group(judged, self._bars())
+        self.assertEqual(resolved[0], reconcile.CONFLICT_KEEP)
+        self.assertEqual(resolved[1], reconcile.CONFLICT_DROP)
+
+    def test_sub_decisive_winner_still_needs_unanimity(self):
+        judged = [self._task("confirmed", 0.90), self._task("wrong_person", 0.80)]
+        self.assertEqual(reconcile.decide_conflict_group(judged, self._bars()), {})
+        judged = [self._task("confirmed", 0.90), self._task("wrong_person", 0.90)]
+        resolved = reconcile.decide_conflict_group(judged, self._bars())
+        self.assertEqual(resolved[0], reconcile.CONFLICT_KEEP)
+
+    def test_two_bar_clearing_confirms_stay_human(self):
+        judged = [self._task("confirmed", 0.97), self._task("confirmed", 0.75)]
+        self.assertEqual(reconcile.decide_conflict_group(judged, self._bars()), {})
+
+
+class StoredIdentityPolicyScrubTests(unittest.TestCase):
+    """The 2026-08 judge-apply policy re-derived over STORED review.csv rows at
+    review entry (legacy scrub): decisive confirms promote and their siblings
+    drop; punts superseded by an applied identity detach — no re-judge."""
+
+    def _write(self, d, rows_spec, index=None):
+        review = Path(d) / "review.csv"
+        rows = {}
+        for pub, action, approved, conf, pid in rows_spec:
+            rows[pub] = {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                         "public_identifier": pub, "action": action,
+                         "approved": approved, "confidence": str(conf),
+                         "person_id": pid}
+        reconcile.write_override_rows(review, rows)
+        idx = Path(d) / "index.json"
+        idx.write_text(json.dumps(index or {"parents": {}, "slugs": {}}),
+                       encoding="utf-8")
+        return review, idx
+
+    def test_decisive_confirm_promotes_and_sibling_drops(self):
+        # The Langshur shape: two persons under one parent, winner 0.97
+        # pending, loser wrong-person 0.80 pending.
+        index = {"parents": {"jordan-p": {"parent_id": "parent-1",
+                                          "children": ["c1", "c2"]}},
+                 "slugs": {"c1": {"person_id": "pid-a"}, "c2": {"person_id": "pid-b"}}}
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._write(d, [
+                ("jordan-bravo", "verify", "", 0.97, "pid-a"),
+                ("jordan-bravo-2", "detach", "", 0.80, "pid-b")], index)
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out, {"connections": 0, "promoted": 1, "demoted": 1})
+        self.assertEqual(rows["jordan-bravo"]["approved"], "auto")
+        self.assertEqual((rows["jordan-bravo-2"]["action"],
+                          rows["jordan-bravo-2"]["approved"]), ("detach", "auto"))
+
+    def test_superseded_punt_detaches(self):
+        # The Petkov shape: applied verify + a 0.62 punt on the same person.
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._write(d, [
+                ("jordan-bravo", "verify", "auto", 0.90, "pid-a"),
+                ("jordan-doppel", "verify", "", 0.62, "pid-a")])
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 1})
+        self.assertEqual((rows["jordan-doppel"]["action"],
+                          rows["jordan-doppel"]["approved"]), ("detach", "auto"))
+        self.assertEqual(rows["jordan-bravo"]["approved"], "auto")  # untouched
+
+    def test_ambiguity_and_user_rows_untouched(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._write(d, [
+                ("jordan-bravo", "verify", "", 0.97, "pid-a"),   # decisive but…
+                ("jordan-rival", "verify", "", 0.75, "pid-a"),   # …a rival clears the bar
+                ("jordan-user", "detach", "no", 0.99, "pid-b"),  # user said no
+                ("jordan-rt", "retarget", "", 0.99, "pid-c")])   # retargets never touched
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 0})
+        self.assertEqual(rows["jordan-bravo"]["approved"], "")
+        self.assertEqual(rows["jordan-user"]["approved"], "no")
+        self.assertEqual(rows["jordan-rt"]["action"], "retarget")
+
+    def test_connection_row_auto_verifies(self):
+        # The AlSharekh shape: a restart-reset blanked a ground-truth
+        # connection row to action='' approved='' — it auto-verifies, and the
+        # freshly applied identity supersedes a doppelganger punt same-pass.
+        with tempfile.TemporaryDirectory() as d:
+            people = Path(d) / "people.csv"
+            people.write_text(
+                "id,public_identifier,source_channels\n"
+                "pid-a,jordan-bravo,\"linkedin_csv,gmail_msgvault\"\n",
+                encoding="utf-8")
+            review, idx = self._write(d, [
+                ("jordan-bravo", "", "", 1.0, "pid-a"),
+                ("jordan-doppel", "verify", "", 0.62, "pid-a")])
+            rows = reconcile.load_override_rows(review)
+            for key in rows:  # connection rows carry their URL
+                rows[key]["linkedin_url"] = f"https://www.linkedin.com/in/{key}"
+            reconcile.write_override_rows(review, rows)
+            out = legacy.resolve_stored_identity_policy(review, idx, people)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out, {"connections": 1, "promoted": 0, "demoted": 1})
+        self.assertEqual((rows["jordan-bravo"]["action"],
+                          rows["jordan-bravo"]["approved"]), ("verify", "auto"))
+        self.assertEqual((rows["jordan-doppel"]["action"],
+                          rows["jordan-doppel"]["approved"]), ("detach", "auto"))
+
+    def test_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._write(d, [
+                ("jordan-bravo", "verify", "auto", 0.90, "pid-a"),
+                ("jordan-doppel", "verify", "", 0.62, "pid-a")])
+            legacy.resolve_stored_identity_policy(review, idx)
+            second = legacy.resolve_stored_identity_policy(review, idx)
+        self.assertEqual(second, {"connections": 0, "promoted": 0, "demoted": 0})
 
 
 if __name__ == "__main__":

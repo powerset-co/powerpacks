@@ -125,7 +125,10 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     research_reject_fields,
     upsert_retargets,
 )
-from packs.ingestion.primitives.deep_context.review_store import RESEARCH_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.review_store import (
+    JUDGE_DETACH_THRESHOLD,
+    RESEARCH_CONFIRM_THRESHOLD,
+)
 # The enrichment manifest must stamp the SAME worth-selection digest the review UI computes,
 # so the two never drift and stall the flow. Single source of truth lives in review_web. The
 # research-profile view is reused so the judge sees the SAME (name/headline/experience/education)
@@ -204,6 +207,13 @@ def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _is_rejected_retarget(row: dict[str, str]) -> bool:
     """A retarget the judge rejected (llm_reject=yes) that the user has NOT approved. Such a row is
     a dead guess, not a decision — it must not permanently mark the person as "decided", so the
@@ -241,8 +251,15 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
                     and not _is_rejected_retarget(r)}
     excluded = {pub for pub, r in overrides.items()
                 if (r.get("action") or "").strip().lower() == "exclude"}
-    user_decided = {pub for pub, r in overrides.items()
-                    if (r.get("approved") or "").strip().lower() in {"yes", "no"}}
+    # A judge wrong_person AT/ABOVE the detach bar is decided even when the
+    # conflict group had no confirmed winner to auto-apply it (approved stays
+    # ''): the review UI hides those rows as detached, so re-queueing them here
+    # would silently re-bill research for people the reviewer never sees again.
+    user_decided = {
+        pub for pub, r in overrides.items()
+        if (r.get("approved") or "").strip().lower() in {"yes", "no"}
+        or ((r.get("action") or "").strip().lower() == "detach"
+            and _safe_float(r.get("confidence")) >= JUDGE_DETACH_THRESHOLD)}
     parents_with_kept = {
         r.get("parent_slug") for r in verdicts
         if (r.get("verdict") or {}).get("verdict") == "confirmed"
@@ -550,17 +567,6 @@ def judge_concurrency() -> int:
     return min(DEFAULT_JUDGE_CONCURRENCY, tier)
 
 
-def _evidence_weight(view: dict[str, Any]) -> int:
-    """How much identity evidence a profile view carries, for choosing between the
-    research payload and the cached profile. Experiences and education are what the
-    judge corroborates against; a headline or location alone is not enough to
-    displace a view that lists actual roles."""
-    return (2 * len(view.get("experiences") or [])
-            + 2 * len(view.get("education") or [])
-            + bool(view.get("headline"))
-            + bool(view.get("location")))
-
-
 def proposal_fingerprint(old_pub: str, new_url: str, dossier: dict[str, Any],
                          profile_view: dict[str, Any]) -> str:
     """Stable sha256 of the EVIDENCE one retarget judgment consumed: the identity pair
@@ -636,12 +642,14 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
         dossier = dossier_view(person_ids, facts_dir, raw_dir)
         li_view = _research_profile_view(profile)
         cached_view = linkedin_view({"linkedin_url": new_url}, cache_dir)
-        # Prefer whichever view actually carries more evidence. The research payload
-        # is sometimes richer than the cached profile and sometimes empty, so
-        # "cache wins" would DEGRADE the judge's inputs as often as it helps
-        # (measured on a real store: 107 helped, 187 hurt). Keep the research
-        # write-up's `reason` either way — only the facts come from the profile.
-        if _evidence_weight(cached_view) > _evidence_weight(li_view):
+        # THE REAL LINKEDIN WINS. The judge's question is "is this LinkedIn profile
+        # the same person as my contact?", so it must see the profile itself; the
+        # research payload is web findings ABOUT someone, not profile content. A
+        # LinkedIn listing fewer roles than the web turned up is still the profile
+        # being judged. Fall back to the research view only when the cache holds no
+        # real profile content (an empty shell or a failed fetch). The research
+        # write-up's `reason` is kept either way.
+        if cached_view.get("experiences") or cached_view.get("education"):
             li_view = {**cached_view, "reason": li_view.get("reason", "")}
         fingerprint = proposal_fingerprint(old_pub, new_url, dossier, li_view)
         proposal = {

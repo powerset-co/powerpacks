@@ -164,6 +164,9 @@ function prefetchWorthCard(currentPub) {
 async function decideWorthCard(button, card) {
   const worth = button.dataset.worth;
   const pub = button.dataset.pub || "";
+  // The optional collapsed "why" box: whatever is in it when Yes/No lands
+  // rides along with the decision (saved to review.csv, filed as feedback).
+  const note = (card.querySelector("[data-worth-note]")?.value || "").trim();
   card.querySelectorAll("button").forEach((item) => { item.disabled = true; });
   card.classList.add("leaving");
   bumpTabCount("review", -1); // leaves the Review queue for the yes/no pile
@@ -174,7 +177,7 @@ async function decideWorthCard(button, card) {
   // parent_slug pins the patch to the exact parent this card was rendered
   // from — a worth key alone is ambiguous when split parents share a pub
   const postPromise = post("/worth", {
-    pub, worth, parent_slug: button.dataset.parent || "",
+    pub, worth, parent_slug: button.dataset.parent || "", note,
   }); // fire-and-track, no await
   postPromise.finally(() => inFlightWorth.delete(pub));
   const prefetched = worthPrefetch?.promise
@@ -560,14 +563,15 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  if (button.hasAttribute("data-open-fix")) {
+  if (button.hasAttribute("data-open-guidance")) {
+    // "No" / "None of these" expands the card's guidance box — ONE input owns
+    // both paste-the-right-URL (applies directly, no spend) and re-research.
     event.preventDefault();
-    const sectionId = button.getAttribute("aria-controls");
-    const section = sectionId ? document.getElementById(sectionId) : null;
-    if (section instanceof HTMLElement) {
-      section.hidden = false;
+    const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
+    if (details instanceof HTMLElement) {
+      details.open = true;
       button.setAttribute("aria-expanded", "true");
-      section.querySelector("input[name='new_url']")?.focus({ preventScroll: true });
+      details.querySelector("textarea[name='guidance']")?.focus({ preventScroll: true });
     }
     return;
   }
@@ -635,34 +639,50 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-function wireFixForm(form) {
-  if (form.dataset.wired) return;
-  form.dataset.wired = "true";
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const input = form.querySelector("input[name='new_url']");
-    const values = {
-      pub: form.dataset.pub || "",
-      parent_slug: form.dataset.parent || "",
-      decision: "fix",
-      new_url: input?.value.trim() || "",
-    };
+// Guided retargets from a review card. The directory pane binds its own submit
+// handler (it also refreshes the sidebar queue panel), so directory forms are
+// excluded here; this document-level handler covers the LinkedIn review cards,
+// which are swapped in as fragments after every decision. LINEAR review:
+// queueing removes the person from the queue (the server excludes active
+// re-research), so on success the panel advances straight to the next card —
+// results apply automatically in the background, and only a failed job brings
+// the person back.
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest("[data-retarget-form]");
+  if (!form || form.closest("[data-directory-detail]")) return;
+  event.preventDefault();
+  const textarea = form.querySelector("textarea[name='guidance']");
+  const guidance = (textarea?.value || "").trim();
+  if (!guidance) return;
+  const button = form.querySelector("button[type='submit']");
+  if (button) button.disabled = true;
+  try {
+    await post("/retarget", { pub: form.dataset.pub || "",
+                              parent_slug: form.dataset.parent || "", guidance });
+    announce("Queued for re-research — moving on");
     const card = form.closest(".identity-card");
-    if (card) {
-      void decideLinkedinCard(card, values, "LinkedIn updated");
-      return;
+    const panel = card?.closest("[data-linkedin-panel]");
+    if (panel) {
+      const slug = card.dataset.parent || form.dataset.parent || "";
+      const next = await fetchText(
+        `/api/linkedin-card?exclude=${encodeURIComponent(slug)}`);
+      if (next !== null) {
+        panel.innerHTML = next;
+        wireDynamicContent(panel);
+        return;
+      }
     }
-    const button = form.querySelector("button[type='submit']");
-    lock(button);
-    try {
-      await post("/decide", values);
-      leaveAndReload("LinkedIn updated");
-    } catch (error) {
-      unlock(button);
-      announce(error.message, true);
+    // Directory-adjacent or non-panel surfaces keep the inline note.
+    const note = form.querySelector("[data-retarget-note]");
+    if (note) {
+      note.textContent = "Queued — results apply automatically in the background";
+      note.hidden = false;
     }
-  });
-}
+  } catch (error) {
+    if (button) button.disabled = false;
+    announce(error.message, true);
+  }
+});
 
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 let scrollCueFrame = 0;
@@ -735,7 +755,6 @@ function wireDecisionRow(row) {
 function wireDynamicContent(root) {
   root.querySelectorAll(".details[data-slug]").forEach((details) => { void loadDossier(details); });
   root.querySelectorAll("details.decision-row[data-slug]").forEach(wireDecisionRow);
-  root.querySelectorAll("[data-fix-form]").forEach(wireFixForm);
   root.querySelectorAll("[data-worth-search]").forEach(wireWorthSearch);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
   refreshScrollCues();
@@ -1034,8 +1053,8 @@ function maybeAutoComplete(root) {
 }
 
 function hasIdentityDraft() {
-  return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(
-    (input) => !input.closest("[hidden]") && Boolean(input.value.trim()),
+  return Array.from(document.querySelectorAll("[data-retarget-form] textarea[name='guidance']")).some(
+    (textarea) => Boolean(textarea.value.trim()),
   );
 }
 
