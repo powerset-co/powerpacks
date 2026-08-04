@@ -849,10 +849,13 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
     url = "" if synthetic else str(candidate.get("url") or "")
     # Same dead-profile rule as the single card: no anchor to a husk.
     has_content = bool(candidate.get("experiences") or candidate.get("education"))
+    # A synthetic option says what it IS — the reviewer must see at a glance
+    # which option is the real LinkedIn and which is the researched identity.
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer' "
             "aria-label='View LinkedIn profile'><span aria-hidden='true'>↗</span></a>"
             if url and has_content else "<span class='linkedin-label-na'>"
-            + ("N/A" if synthetic or not url else "no profile") + "</span>")
+            + ("N/A — research-derived profile" if synthetic
+               else ("N/A" if not url else "no profile")) + "</span>")
     summary = (str(candidate.get("simple_summary") or "").strip()
                or _display_reason(str(candidate.get("reason") or "")))
     rows: list[str] = [f"<div><dt>LinkedIn</dt><dd>{link}</dd></div>"]
