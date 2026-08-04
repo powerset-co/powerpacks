@@ -760,7 +760,7 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # An invalid/empty profile changes the QUESTION: there is nothing to
     # confirm, so the ask is guidance (or Skip) — never "is this right?".
     if cache_miss and not synthetic:
-        question = ("Researched LinkedIn is invalid. Give re-research guidance, "
+        question = ("Invalid LinkedIn. Give re-research guidance, "
                     f"or {_skip_link(candidate.get('pub'), parent.get('slug'))}.")
     else:
         question = f"Is this the right profile? Or {_skip_link(candidate.get('pub'), parent.get('slug'))}?"
