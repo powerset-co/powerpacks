@@ -848,7 +848,7 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
     # A synthetic option says what it IS — the reviewer must see at a glance
     # which option is the real LinkedIn and which is the researched identity.
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer' "
-            "aria-label='View LinkedIn profile'><span aria-hidden='true'>↗</span></a>"
+            "aria-label='View LinkedIn profile'>View profile<span aria-hidden='true'>↗</span></a>"
             if url and has_content else "<span class='linkedin-label-na'>"
             + ("N/A — research-derived profile" if synthetic
                else ("N/A" if not url else "no profile")) + "</span>")
