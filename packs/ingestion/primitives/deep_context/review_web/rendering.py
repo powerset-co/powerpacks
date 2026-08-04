@@ -42,7 +42,6 @@ from packs.ingestion.schemas.people_schema import (
 )
 
 from .model import APPLIED_APPROVED, _cached_profile_pic, _primary_candidate, _worth_key, candidate_state, parent_status
-from .retarget_queue import ESTIMATED_COST_USD
 from .workflow import _effective_no_row, _effective_yes, enrichment_handoff_completed, in_worth_view, needs_worth_review, pending_linkedin_candidates, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents
 
 DECISION_CHUNK_SIZE = 40
@@ -688,8 +687,7 @@ def _retarget_guidance(pub: Any, slug: Any, *, label: str = "Wrong person?",
           <textarea name='guidance' rows='3' maxlength='2000' required
             placeholder="Who is this actually? e.g. 'the Jordan Bravo who ran DevRel at Acme' — or paste the right LinkedIn URL"></textarea>
           <div class='retarget-form-row'>
-            <button type='submit' class='button button-primary'>
-              Queue re-research (≈${ESTIMATED_COST_USD:.2f})</button>
+            <button type='submit' class='button button-primary'>Re-research</button>
             <span class='retarget-form-note' data-retarget-note hidden></span>
           </div>
         </form>
@@ -776,13 +774,6 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
                 "<span aria-hidden='true'>↗</span></a>") if url and not cache_miss else ""
         header_headline = _displayable(str(candidate.get("headline") or ""))
-    fix_form = f"""<form class='linkedin-fix-form' data-fix-form
-          data-pub='{esc(candidate.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
-        <label class='sr-only' for='fix-{esc(candidate.get('pub'))}'>LinkedIn URL</label>
-        <div><input id='fix-{esc(candidate.get('pub'))}' name='new_url' inputmode='url'
-          autocomplete='url' placeholder='linkedin.com/in/…' required>
-        <button class='button button-outline' type='submit'>Use this</button></div>
-      </form>"""
     # Attached LinkedIn with nothing renderable (404 / private / empty /
     # local cache miss): say WHY the card is blank and lead with the
     # re-research ask — "Is this the right profile?" is unanswerable against
@@ -811,17 +802,16 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     invalid = cache_miss and not synthetic
     # An INVALID card has nothing to confirm and nothing to say No to — the
     # guidance box (whose URL path applies a pasted link directly, no spend)
-    # plus the inline Skip is the complete decision surface.
+    # plus the inline Skip is the complete decision surface. On a VALID card,
+    # "No" expands the same guidance box — ONE input owns both paste-the-URL
+    # and re-research; there is no separate fix form.
     actions = "" if invalid else f"""
         <div class='binary-actions'>
-          <button class='button button-outline' data-open-fix aria-expanded='false'
-                  aria-controls='fix-section-{esc(candidate.get('pub'))}'>No</button>
+          <button class='button button-outline' data-open-guidance
+                  aria-expanded='false'>No</button>
           <button class='button button-primary' data-decide='keep'
                   data-pub='{esc(candidate.get('pub'))}'
                   data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
-        </div>
-        <div class='alternate' id='fix-section-{esc(candidate.get('pub'))}' hidden>
-          {fix_form}
         </div>"""
     return f"""
     <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
@@ -832,7 +822,8 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         {_retarget_guidance(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
                             parent.get('slug'),
                             label=("No profile data — give re-research guidance"
-                                   if invalid else "Neither — re-research this person"),
+                                   if invalid
+                                   else "No — provide LinkedIn or re-research this person"),
                             open_by_default=invalid)}
       </div>
     </article>"""
@@ -915,16 +906,8 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
         {_details(parent, primary, identity=True, identifiers=identifiers)}
         <div class='linkedin-options-intro'>We found more than one possible profile — pick the right one.</div>
         <ul class='linkedin-options'>{options}</ul>"""
-    # "None of these" / the inline Skip act on the parent via its primary candidate's
-    # pub, reusing the existing fix-form + detach paths unchanged. Skip is folded into
-    # the question line (secondary link), not a standalone button.
-    fix_form = f"""<form class='linkedin-fix-form' data-fix-form
-          data-pub='{esc(primary.get('pub'))}' data-parent='{esc(parent.get('slug'))}'>
-        <label class='sr-only' for='fix-{esc(primary.get('pub'))}'>LinkedIn URL</label>
-        <div><input id='fix-{esc(primary.get('pub'))}' name='new_url' inputmode='url'
-          autocomplete='url' placeholder='linkedin.com/in/…' required>
-        <button class='button button-outline' type='submit'>Use this</button></div>
-      </form>"""
+    # "None of these" expands the guidance box (ONE input owns paste-the-URL
+    # and re-research); the inline Skip stays folded into the question line.
     question = f"Is this the right profile? Or {_skip_link(primary.get('pub'), parent.get('slug'))}?"
     return f"""
     <article class='decision-card identity-card identity-card-multi' data-card
@@ -933,14 +916,12 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
       <div class='identity-decision'>
         <div class='question'>{question}</div>
         <div class='binary-actions'>
-          <button class='button button-outline' data-open-fix aria-expanded='false'
-                  aria-controls='fix-section-{esc(primary.get('pub'))}'>None of these</button>
-        </div>
-        <div class='alternate' id='fix-section-{esc(primary.get('pub'))}' hidden>
-          {fix_form}
+          <button class='button button-outline' data-open-guidance
+                  aria-expanded='false'>None of these</button>
         </div>
         {_retarget_guidance(primary.get('pub') or (parent.get('person_ids') or [''])[0],
-                            parent.get('slug'), label="None of these — re-research this person")}
+                            parent.get('slug'),
+                            label="None of these — provide LinkedIn or re-research")}
       </div>
     </article>"""
 

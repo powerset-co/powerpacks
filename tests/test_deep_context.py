@@ -3955,10 +3955,9 @@ class TestReviewWeb(unittest.TestCase):
             script.index("panel.innerHTML = nextHtml; // next parent's card"),
         )
         self.assertIn(
-            'document.querySelectorAll("[data-fix-form] input[name=\'new_url\']")',
+            'document.querySelectorAll("[data-retarget-form] textarea[name=\'guidance\']")',
             script,
         )
-        self.assertIn('!input.closest("[hidden]")', script)
         self.assertIn('document.body.dataset.preview === "true"', script)
         self.assertIn(
             "!isStagePreview && state.stage && state.stage !== currentStage",
@@ -4301,9 +4300,10 @@ class TestReviewWeb(unittest.TestCase):
             html = web_rendering.render_linkedin_card(sam, pending[0], d, d)
             self.assertIn("Is this the right profile?", html)
             self.assertIn("data-decide='keep'", html)
-            self.assertIn("data-open-fix", html)
-            self.assertIn("class='alternate'", html)
-            self.assertIn("hidden>", html)
+            # "No" expands the guidance box — one input owns paste-the-URL
+            # and re-research; there is no separate fix form.
+            self.assertIn("data-open-guidance", html)
+            self.assertNotIn("data-fix-form", html)
             self.assertNotIn("Use a different LinkedIn", html)
             # Skip is folded INTO the question line as an inline secondary link, not a
             # standalone button; its detach behavior is unchanged.
@@ -4720,17 +4720,15 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertNotIn("synthetic-correction", html)
             self.assertIn("Is this the right profile?", html)
             self.assertIn("<div class='binary-actions'>", html)
-            self.assertIn("class='sr-only' for='fix-synth-email-abc'>LinkedIn URL</label>", html)
-            self.assertNotIn("<label for='fix-synth-email-abc'>LinkedIn URL</label>", html)
             self.assertNotIn("Use a different LinkedIn", html)
-            self.assertIn(">Use this</button>", html)
             # Skip is the inline secondary link folded into the question line.
             self.assertIn("class='skip-link' data-decide='detach'", html)
             self.assertIn(">Skip</button>?", html)
             self.assertNotIn("alternate-skip", html)
-            # The hidden fix form sits behind the No button (same as a real card).
-            self.assertIn("data-open-fix", html)
-            self.assertIn("class='alternate' id='fix-section-synth-email-abc' hidden", html)
+            # "No" expands the guidance box (no separate fix form, same as a
+            # real card); a pasted URL in guidance applies directly.
+            self.assertIn("data-open-guidance", html)
+            self.assertNotIn("data-fix-form", html)
             # synthetic keep still routes through the synthetic approve gate (/decide
             # treats a keep on a synth- pub as the synthetic-people.csv approval).
             self.assertIn("data-decide='keep'", html)
@@ -5326,7 +5324,7 @@ class TestDirectoryView(unittest.TestCase):
         self.assertIn("<h4>Relationship &amp; cadence</h4>", html)
         self.assertIn("Warm intro via Casey.", html)
         # Browse-only: no decision affordances anywhere in the pane.
-        for marker in ("data-worth", "data-decide", "data-complete", "data-open-fix"):
+        for marker in ("data-worth", "data-decide", "data-complete", "data-open-guidance"):
             self.assertNotIn(marker, html)
 
     def test_directory_page_embeds_island_and_selected_person(self):
@@ -6197,7 +6195,7 @@ class TestGuidedRetargets(unittest.TestCase):
                 parent, base / "parents", base / "dossiers", base / "profiles")
             self.assertIn("data-retarget-form", pane)
             self.assertIn("data-pub='jordan-bravo-wrong'", pane)
-            self.assertIn("Queue re-research", pane)
+            self.assertIn(">Re-research</button>", pane)
             page = web_rendering.directory_page_html(
                 [parent], {}, parents_dir=base / "parents",
                 dossier_dir=base / "dossiers",
@@ -6280,7 +6278,7 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertIn("data-retarget-form", html)
         self.assertIn("data-pub='jordan-bravo'", html)
         self.assertIn("data-parent='jordan-bravo-ab12cd34'", html)
-        self.assertIn("Queue re-research", html)
+        self.assertIn(">Re-research</button>", html)
 
     def test_blank_profile_card_leads_with_open_reresearch(self):
         # A valid URL whose profile is 404/private/empty renders the WHY and
@@ -6299,7 +6297,7 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertIn("Invalid LinkedIn.", html)
         self.assertNotIn("Is this the right profile?", html)
         self.assertNotIn("Use this profile", html)  # nothing to confirm
-        self.assertNotIn("data-open-fix", html)     # guidance box owns URL paste
+        self.assertNotIn("data-open-guidance", html)  # no buttons at all on invalid cards
         self.assertIn("data-decide='detach'", html)  # Skip stays
 
     def test_machine_reason_and_placeholder_junk_never_render(self):
@@ -6346,7 +6344,7 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
                 self._parent(), cand, d, d, profile_cache_dir=d)
         self.assertNotIn("no usable profile content", html)
         self.assertIn("<details class='retarget-guidance'>", html)
-        self.assertIn("Neither — re-research this person", html)
+        self.assertIn("No — provide LinkedIn or re-research this person", html)
         self.assertIn("View LinkedIn", html)  # real profile keeps its link
 
     def test_multi_card_offers_guided_retarget_keyed_on_primary(self):

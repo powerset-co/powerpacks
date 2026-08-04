@@ -563,14 +563,15 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
-  if (button.hasAttribute("data-open-fix")) {
+  if (button.hasAttribute("data-open-guidance")) {
+    // "No" / "None of these" expands the card's guidance box — ONE input owns
+    // both paste-the-right-URL (applies directly, no spend) and re-research.
     event.preventDefault();
-    const sectionId = button.getAttribute("aria-controls");
-    const section = sectionId ? document.getElementById(sectionId) : null;
-    if (section instanceof HTMLElement) {
-      section.hidden = false;
+    const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
+    if (details instanceof HTMLElement) {
+      details.open = true;
       button.setAttribute("aria-expanded", "true");
-      section.querySelector("input[name='new_url']")?.focus({ preventScroll: true });
+      details.querySelector("textarea[name='guidance']")?.focus({ preventScroll: true });
     }
     return;
   }
@@ -637,35 +638,6 @@ document.addEventListener("click", async (event) => {
     }
   }
 });
-
-function wireFixForm(form) {
-  if (form.dataset.wired) return;
-  form.dataset.wired = "true";
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const input = form.querySelector("input[name='new_url']");
-    const values = {
-      pub: form.dataset.pub || "",
-      parent_slug: form.dataset.parent || "",
-      decision: "fix",
-      new_url: input?.value.trim() || "",
-    };
-    const card = form.closest(".identity-card");
-    if (card) {
-      void decideLinkedinCard(card, values, "LinkedIn updated");
-      return;
-    }
-    const button = form.querySelector("button[type='submit']");
-    lock(button);
-    try {
-      await post("/decide", values);
-      leaveAndReload("LinkedIn updated");
-    } catch (error) {
-      unlock(button);
-      announce(error.message, true);
-    }
-  });
-}
 
 // Guided retargets from a review card. The directory pane binds its own submit
 // handler (it also refreshes the sidebar queue panel), so directory forms are
@@ -783,7 +755,6 @@ function wireDecisionRow(row) {
 function wireDynamicContent(root) {
   root.querySelectorAll(".details[data-slug]").forEach((details) => { void loadDossier(details); });
   root.querySelectorAll("details.decision-row[data-slug]").forEach(wireDecisionRow);
-  root.querySelectorAll("[data-fix-form]").forEach(wireFixForm);
   root.querySelectorAll("[data-worth-search]").forEach(wireWorthSearch);
   root.querySelectorAll(".identity-scroll-shell").forEach(wireScrollShell);
   refreshScrollCues();
@@ -1082,8 +1053,8 @@ function maybeAutoComplete(root) {
 }
 
 function hasIdentityDraft() {
-  return Array.from(document.querySelectorAll("[data-fix-form] input[name='new_url']")).some(
-    (input) => !input.closest("[hidden]") && Boolean(input.value.trim()),
+  return Array.from(document.querySelectorAll("[data-retarget-form] textarea[name='guidance']")).some(
+    (textarea) => Boolean(textarea.value.trim()),
   );
 }
 
