@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.1...powerpacks-v1.15.2) (2026-08-04)
+
+
+### Miscellaneous Chores
+
+* cut 1.15.2 so the review skill-route doc ships to stable ([9129d95](https://github.com/powerset-co/powerpacks/commit/9129d95e736cbaedd1fb48417029f1e3684b0cff))
+
 ## [1.15.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.0...powerpacks-v1.15.1) (2026-08-04)
 
 
