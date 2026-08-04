@@ -370,6 +370,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             for item in guided_queue.snapshot()
             if item.get("state") not in TERMINAL_STATES and item.get("slug"))
 
+    # One free-enrichment attempt per worth-selection per process: a job that
+    # FAILS must not restart on every page load (each restart rotates the state
+    # token, which reloads the page, which restarts the job — an infinite
+    # bounce). A new decision (new selection sha) or a server restart retries.
+    _free_attempted: set[str] = set()
+
     # Parsed review.csv rows, loaded once; our own decision writes mutate the
     # dict in place, and refresh_parents_from_disk drops it after a job write.
     cached_rows: dict[str, dict[str, str]] | None = None
@@ -687,13 +693,19 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                  and not enrichment_state.get("approvable")
                                  and not enrichment_state.get("approval_current")))
                 progress_now = review_progress(parents)
-                if run_jobs and free_work and (
+                selection_sha = str(selection.get("sha256") or "")
+                failed_already = (
+                    str(enrichment_state.get("status") or "") == "failed"
+                    and selection_sha in _free_attempted)
+                if run_jobs and free_work and not failed_already and (
                         progress_now["worth_pending"] == 0
                         or phase_is_completed("worth", progress_now, manifest_path)):
                     # Render keeps the derived free_pending/needs_approval screen
                     # ("Preparing…"); the next poll derives running + heartbeat.
                     # Feed-forward: a completed worth stage keeps the free job
                     # eligible even when later machine maybes exist.
+                    if selection_sha:
+                        _free_attempted.add(selection_sha)
                     start_free_enrichment_job()
             self.send_bytes(page_html(parents, params, review_path, parents_dir=parents_dir,
                                       dossier_dir=dossier_dir, manifest_path=manifest_path,
