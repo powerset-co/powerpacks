@@ -1112,8 +1112,7 @@ def _phase_view(params: dict[str, list[str]], progress: dict[str, int], manifest
 
 
 def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int],
-                      *, worth_complete: bool = False,
-                      auto_continue: bool = False) -> str:
+                      *, worth_complete: bool = False) -> str:
     """Render one derived enrichment state (see derive_enrichment_state) as HTML.
     Purely presentational — the state rules live in the derive function alone."""
     state = str(enrichment.get("state") or STATE_FREE_PENDING)
@@ -1174,18 +1173,17 @@ def render_enrichment(enrichment: dict[str, Any], progress: dict[str, int],
                 f"<p>{details}</p>{progress_bar}"
                 f"<button class='button button-primary' data-approve-enrichment>Approve ${estimate:.2f}</button></div>")
     if state == STATE_DONE:
-        # Nothing to decide here — first arrival auto-continues to LinkedIn
-        # (same data-auto-complete contract as the worth stage); deliberate
-        # revisits keep the button. "N profiles ready" is the LAST RUN's
-        # completed count, so a run that had nothing to do says so instead of
-        # a misleading "0 profiles ready".
-        auto_attr = " data-auto-complete" if auto_continue else ""
+        # Reached only from preview mode and deliberate revisits — a normal
+        # page load with a DONE stage hands off server-side and 303s straight
+        # to the LinkedIn stage without rendering this. "N profiles ready" is
+        # the LAST RUN's completed count, so a run that had nothing to do says
+        # so instead of a misleading "0 profiles ready".
         ready = (f"{completed} profiles ready" if completed
                  else "No new lookups were needed")
         return ("<div class='empty-state enrich-state'><div class='empty-mark'>✓</div>"
                 "<h2>Contacts enriched</h2>"
                 f"<p>{ready}</p>{progress_bar}"
-                f"<button class='button button-primary' data-complete='enrich'{auto_attr}>"
+                "<button class='button button-primary' data-complete='enrich'>"
                 "Continue</button></div>")
     # free_pending: the render already started-or-joined the free job; show work.
     if enrichment.get("status") in {"failed", "completed_with_errors"}:
@@ -1455,8 +1453,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
                 selection, verdicts_path=verdicts_path, review_path=review_path,
                 facts_dir=facts_dir, manifest_path=enrichment_manifest_path)
         content = render_enrichment(
-            enrichment_state, progress, worth_complete=bool(worth_complete),
-            auto_continue=(not preview and not enrichment_continued))
+            enrichment_state, progress, worth_complete=bool(worth_complete))
     elif view == "linkedin":
         content = linkedin_review_body(
             parents, progress, enrichment_complete=bool(enrichment_complete),
