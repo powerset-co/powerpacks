@@ -15,7 +15,9 @@ from typing import Any
 
 from packs.ingestion.primitives.deep_context.candidates import (
     NETWORK_WORTH_VALUES,
+    candidate_identifier_key,
     current_parent_by_person_id,
+    parent_by_candidate_identifier,
     effective_network_worth,
     is_candidate_id,
     llm_network_worth,
@@ -1025,10 +1027,19 @@ def collapse_by_current_parent(parents: list[dict[str, Any]],
     still get one card each.
     """
     parent_map = current_parent_by_person_id(index_json)
+    # Synthetic profiles are keyed to candidate people (candidate:email:X /
+    # candidate:phone:Y), which never cluster against real people — but the real
+    # parent's identifier union (index.json by_email/by_phone) knows who owns the
+    # candidate's email/phone. Resolving through it folds the synthetic onto the
+    # REAL person's card instead of minting a duplicate standalone card.
+    ident_map = parent_by_candidate_identifier(index_json)
 
     def current_slug(parent: dict[str, Any]) -> str:
         for pid in parent.get("person_ids") or []:
-            slug = parent_map.get(str(pid or "").strip().lower())
+            key = str(pid or "").strip().lower()
+            slug = parent_map.get(key)
+            if not slug and key.startswith("candidate:"):
+                slug = ident_map.get(candidate_identifier_key(key))
             if slug:
                 return slug
         return ""
@@ -1053,7 +1064,13 @@ def collapse_by_current_parent(parents: list[dict[str, Any]],
                 continue
             seen.add(pub)
             base["candidates"].append(cand)
+        # A candidate:* id is the folded synthetic's provenance, not membership:
+        # appending it would flip the REAL parent into candidate-origin review
+        # logic and drag its machine-verified LinkedIn back to a human confirm.
+        base_has_real = any(not is_candidate_id(str(p)) for p in base["person_ids"])
         for pid in parent.get("person_ids") or []:
+            if base_has_real and is_candidate_id(str(pid)):
+                continue
             if pid not in base["person_ids"]:
                 base["person_ids"].append(pid)
         base_sources = base.get("sources") or []
@@ -1061,10 +1078,48 @@ def collapse_by_current_parent(parents: list[dict[str, Any]],
             if source not in base_sources:
                 base_sources.append(source)
         base["sources"] = base_sources
+    for base in groups.values():
+        _prune_synthetic_options(base)
     merged = passthrough + [groups[slug] for slug in order]
     # Preserve the original relative ordering as closely as possible (grouped parents
     # keep the position of their first occurrence).
     return merged
+
+
+def _prune_synthetic_options(parent: dict[str, Any]) -> None:
+    """One synthetic option per card, and none on a settled identity.
+
+    Two import candidates (an email and a phone) can each mint a synthetic for
+    the same human; once both fold onto one parent, showing near-identical
+    researched identities is noise — the RICHEST pending one stands (most
+    experience+education entries, then longest headline) and the thinner sibling
+    is dropped from the model. No field-level merge: the parent's dossier below
+    the card is already the union of every child across eras, so the synthetic
+    row is only a profile-shaped shell over it. A parent whose real LinkedIn is
+    already settled (verified or user-fixed) drops pending synthetics entirely —
+    a resolved person never re-enters review over research noise. Synthetics the
+    user already decided (approved yes/no) are never touched."""
+    cands = parent.get("candidates") or []
+    pending_synths = [
+        c for c in cands if c.get("synthetic")
+        and str(c.get("approved") or "").strip().lower() not in {"yes", "no"}
+    ]
+    if not pending_synths:
+        return
+    settled = any(not c.get("synthetic") and candidate_state(c) in {"verified", "fixed"}
+                  for c in cands)
+    keep_ids: set[int] = set()
+    if not settled:
+        richest = max(pending_synths, key=lambda c: (
+            len(c.get("experiences") or []) + len(c.get("education") or []),
+            len(str(c.get("headline") or ""))))
+        keep_ids = {id(richest)}
+    parent["candidates"] = [
+        c for c in cands
+        if not (c.get("synthetic")
+                and str(c.get("approved") or "").strip().lower() not in {"yes", "no"}
+                and id(c) not in keep_ids)
+    ]
 
 
 def extend_and_annotate(parents: list[dict[str, Any]], overrides: dict[str, dict[str, str]],

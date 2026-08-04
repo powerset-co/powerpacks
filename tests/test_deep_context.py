@@ -6345,5 +6345,91 @@ class WorthWhyNoteTests(unittest.TestCase):
         self.assertIn("note,", script)  # rides in the /worth POST payload
 
 
+class SyntheticFoldTests(unittest.TestCase):
+    """A synthetic minted for an import candidate folds onto the REAL person's
+    card via the identifier union index.json already encodes (by_email/by_phone),
+    instead of minting a duplicate standalone card. One synthetic option per
+    card (richest pending wins); none on a settled identity."""
+
+    def _index(self, d):
+        idx = {
+            "parents": {"jordan-bravo-ab12cd34": {
+                "children": ["jordan-bravo-aa11"], "parent_id": "parent-1"}},
+            "slugs": {"jordan-bravo-aa11": {"person_id": "pid-1"}},
+            "by_email": {"jordan@example.com":
+                         ["jordan-bravo-aa11", "jordan-bravo-ab12cd34"]},
+            "by_phone": {"5550100999": ["jordan-bravo-aa11"]},
+        }
+        path = Path(d) / "index.json"
+        path.write_text(json.dumps(idx), encoding="utf-8")
+        return path
+
+    def _real(self, cands=None):
+        return {"slug": "jordan-bravo-ab12cd34",
+                "dossier_slug": "jordan-bravo-ab12cd34",
+                "name": "Jordan Bravo", "person_ids": ["pid-1"], "sources": [],
+                "candidates": cands if cands is not None else [
+                    {"pub": "wrong-jordan", "action": "detach", "approved": ""}]}
+
+    def _synth(self, pid, pub, exp=0, edu=0, headline=""):
+        return {"slug": f"synthetic-{pub}", "dossier_slug": f"synthetic-{pub}",
+                "name": "Jordan Bravo", "person_ids": [pid], "sources": [],
+                "candidates": [{"pub": pub, "synthetic": True, "approved": "",
+                                "action": "", "experiences": ["x"] * exp,
+                                "education": ["e"] * edu, "headline": headline}]}
+
+    def test_email_synthetic_folds_onto_real_parent(self):
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:email:jordan@example.com", "synth-a", exp=2)],
+                self._index(d))
+        self.assertEqual(len(merged), 1)
+        pubs = [c["pub"] for c in merged[0]["candidates"]]
+        self.assertIn("synth-a", pubs)
+        self.assertIn("wrong-jordan", pubs)
+
+    def test_phone_digits_normalize_for_the_join(self):
+        # +1 country code vs index.json's 10-digit national key.
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:phone:+15550100999", "synth-p", exp=1)],
+                self._index(d))
+        self.assertEqual(len(merged), 1)
+        self.assertIn("synth-p", [c["pub"] for c in merged[0]["candidates"]])
+
+    def test_two_synthetics_richest_pending_wins(self):
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:email:jordan@example.com", "synth-rich",
+                             exp=2, edu=2),
+                 self._synth("candidate:phone:+15550100999", "synth-thin")],
+                self._index(d))
+        self.assertEqual(len(merged), 1)
+        synths = [c["pub"] for c in merged[0]["candidates"] if c.get("synthetic")]
+        self.assertEqual(synths, ["synth-rich"])
+
+    def test_settled_identity_drops_pending_synthetics(self):
+        confirmed = [{"pub": "right-jordan", "action": "verify", "approved": "auto"}]
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(cands=confirmed),
+                 self._synth("candidate:email:jordan@example.com", "synth-a", exp=2)],
+                self._index(d))
+        self.assertEqual(len(merged), 1)
+        self.assertEqual([c["pub"] for c in merged[0]["candidates"]], ["right-jordan"])
+        self.assertEqual(web_workflow.pending_linkedin_candidates(merged[0]), [])
+
+    def test_unmatched_synthetic_stays_standalone(self):
+        with tempfile.TemporaryDirectory() as d:
+            merged = web_model.collapse_by_current_parent(
+                [self._real(),
+                 self._synth("candidate:email:casey@example.com", "synth-x", exp=1)],
+                self._index(d))
+        self.assertEqual(len(merged), 2)  # no identifier overlap -> untouched
+
+
 if __name__ == "__main__":
     unittest.main()
