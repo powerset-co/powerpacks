@@ -753,17 +753,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         # cache, so `review-status` can never disagree.
                         current_parents = refresh_parents_from_disk()
                         progress = review_progress(current_parents)
-                        # People review may be completed with unresolved Maybe
-                        # rows; they remain Maybe and are excluded from the
-                        # existing Yes-only lookup eligibility. LinkedIn
-                        # completion stays strict.
-                        pending_key = {"linkedin": "linkedin_pending"}.get(stage)
-                        if pending_key and progress[pending_key]:
-                            self.send_bytes(
-                                (f"{progress[pending_key]} people still need review — "
-                                 "the page refreshed with the current queue").encode("utf-8"),
-                                "text/plain; charset=utf-8", status=409)
-                            return
+                        # Finish means finish — every stage completes on the
+                        # user's word, exactly like worth's unresolved Maybes.
+                        # Undecided people stay visible (the stepper always
+                        # shows pending counts) and the queue stays reachable;
+                        # in-flight guided re-research applies in the
+                        # background either way.
                         if stage == "enrich":
                             selection = worth_selection_from_parents(
                                 current_parents, manifest_path=manifest_path)
