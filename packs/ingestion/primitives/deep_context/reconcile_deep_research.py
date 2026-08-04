@@ -22,6 +22,14 @@ Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
   manifest.json          subset size, estimated cost, gate decision, run status
 
 Changelog:
+  2026-08-03 (hydrate the proposed profile): before judging a retarget proposal,
+    the proposed LinkedIn is hydrated through the shared
+    `rapidapi_client.hydrate_profiles` (cache first, RapidAPI on miss) and the
+    judge sees the REAL profile instead of whatever positions Parallel happened
+    to return. Parallel finds the right URL but frequently returns no
+    experiences, and the judge was rejecting correct links for "no
+    employer/experience". Keyless installs fall back to the research payload
+    exactly as before.
   2026-07-27 (declared contract): `ReconcileDeepResearch` is a
     `pipeline/contract.py:Node` ("deep_research"). `run(args)` became
     `execute()`; the TERMINAL enrichment-manifest write routes through the Node
@@ -107,6 +115,7 @@ from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest, row_model_for
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
+    linkedin_view,
     RESEARCH_CONFIDENCE_FLOOR,
     USER_APPROVED,
     dossier_view,
@@ -124,6 +133,8 @@ from packs.ingestion.primitives.deep_context.review_store import RESEARCH_CONFIR
 from packs.ingestion.primitives.deep_context.review_web.model import (
     _research_profile_view,
 )
+from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles
+from packs.ingestion.primitives.common.paths import DEFAULT_PROFILE_CACHE_DIR
 from packs.ingestion.primitives.deep_context.review_web.workflow import (
     current_worth_selection,
 )
@@ -560,7 +571,8 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
                                   model: str = "", effort: str = "medium",
                                   confirm_threshold: float = DEFAULT_CONFIRM,
                                   timeout: int = 120, max_retries: int = 6,
-                                  heartbeat: Callable[[int, int], None] | None = None) -> dict[str, Any]:
+                                  heartbeat: Callable[[int, int], None] | None = None,
+                                  profile_cache_dir: Path | None = None) -> dict[str, Any]:
     """After deep research, propose a `retarget` (pending) for each detached person whose research
     found a correct LinkedIn — into the same decisions table (sticky upsert).
 
@@ -580,6 +592,21 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     render honest progress. User-decided rows are never touched (sticky upsert)."""
     facts_dir = facts_dir if facts_dir is not None else FACTS_DIR
     raw_dir = raw_dir if raw_dir is not None else RAW_DIR
+    cache_dir = Path(profile_cache_dir) if profile_cache_dir is not None else DEFAULT_PROFILE_CACHE_DIR
+    # Prefer cache, always retrieve — the research payload carries the URL but often
+    # no positions, and judging a blank profile rejects LinkedIns that are correct
+    # (75 of 92 such rejections on a real store had a rich profile available). Same
+    # policy as the attached-link judge; keyless installs fall back to the payload.
+    proposed = [
+        (extract_public_identifier(url).lower(), url)
+        for url in (
+            _find_linkedin(_read_json(out_dir / (r.get("parent_slug") or "") / "01_research_parallel.json"))
+            for r in subset
+        )
+        if url
+    ]
+    if proposed:
+        hydrate_profiles(proposed, cache_dir)
     existing = load_override_rows(overrides_csv)
     proposals: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
@@ -597,6 +624,10 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
         person_ids = r.get("person_ids") or []
         dossier = dossier_view(person_ids, facts_dir, raw_dir)
         li_view = _research_profile_view(profile)
+        cached_view = linkedin_view({"linkedin_url": new_url}, cache_dir)
+        if cached_view.get("has_profile"):
+            # Keep the research write-up's reason; take the FACTS from the real profile.
+            li_view = {**cached_view, "reason": li_view.get("reason", "")}
         fingerprint = proposal_fingerprint(old_pub, new_url, dossier, li_view)
         proposal = {
             "old_public_identifier": old_pub, "new_linkedin_url": new_url,
