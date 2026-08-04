@@ -6603,9 +6603,12 @@ class LinearRetargetFlowTests(unittest.TestCase):
         self.assertIn("3 re-researches still running", html)
         self.assertIn("go back to Codex", html)
         html_one = web_rendering.linkedin_finished_body(
-            {"linkedin_done": 42}, linkedin_complete=False, retargets_in_flight=1)
+            {"linkedin_done": 42}, linkedin_complete=False, retargets_in_flight=1,
+            auto_continue=True)
         self.assertIn("1 re-research still running", html_one)
-        self.assertIn("data-complete='linkedin'", html_one)  # Finish stays clickable
+        # An empty queue self-completes — the reviewer only ever sees the
+        # go-back state; the button still exists for the non-auto edge.
+        self.assertIn("data-complete='linkedin' data-auto-complete", html_one)
 
     def test_retarget_submit_advances_the_card(self):
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")

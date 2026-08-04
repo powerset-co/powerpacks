@@ -619,13 +619,15 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         debug=debug, index=index)
                 else:
                     inflight = guided_inflight_slugs()
+                    linkedin_done = phase_is_completed("linkedin", progress, manifest_path)
                     body = linkedin_card_body(
                         parents, progress,
-                        linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
+                        linkedin_complete=linkedin_done,
                         parents_dir=parents_dir, dossier_dir=dossier_dir,
                         profile_cache_dir=profile_cache_dir,
                         exclude=frozenset(exclude | inflight) or None,
-                        retargets_in_flight=len(inflight))
+                        retargets_in_flight=len(inflight),
+                        auto_continue=not linkedin_done)
                 self.send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/person":
