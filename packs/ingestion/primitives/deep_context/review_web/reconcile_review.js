@@ -628,7 +628,9 @@ document.addEventListener("click", async (event) => {
       const next = {
         worth: ["People complete", "/?stage=enrich"],
         enrich: ["Enrichment complete", "/?stage=linkedin"],
-        linkedin: ["All set", "/directory"],
+        // Finish transforms THIS screen into the go-back handoff state —
+        // never a surprise jump to the directory.
+        linkedin: ["Review complete", "/?stage=linkedin"],
       }[button.dataset.complete] || ["Saved", window.location.href];
       leaveAndNavigate(next[0], next[1]);
     } catch (error) {
