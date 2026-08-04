@@ -788,13 +788,9 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # re-research ask — "Is this the right profile?" is unanswerable against
     # nothing. The UI never fetches; the skill's profile-prefetch stage fills
     # the cache and logs every miss in its manifest.
+    # No why-paragraph: the question line ("Invalid LinkedIn…") already
+    # carries the state; a second explanation is noise.
     placeholder = ""
-    if cache_miss:
-        dead_url = "" if synthetic else str(candidate.get("url") or "").strip()
-        url_note = f" <span class='profile-note-url'>({esc(dead_url)})</span>" if dead_url else ""
-        placeholder = ("<p class='profile-note'>The attached LinkedIn has no usable "
-                       "profile content — it may be a shell account, private, "
-                       f"deleted, or the wrong person's.{url_note}</p>")
     identifiers = dossier_identifiers(
         parents_dir, dossier_dir, parent.get("dossier_slug") or parent.get("slug"),
         name=str(parent.get("name") or candidate.get("full_name") or ""),

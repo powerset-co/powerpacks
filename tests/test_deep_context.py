@@ -6292,11 +6292,10 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
                     "url": "https://www.linkedin.com/in/jordan-bravo"}
             html = web_rendering.render_linkedin_card(
                 self._parent(), cand, d, d, profile_cache_dir=d)
-        self.assertIn("no usable profile content", html)
+        self.assertNotIn("no usable profile content", html)  # no why-paragraph
         self.assertIn("<details class='retarget-guidance' open>", html)
         self.assertIn("No profile data — give re-research guidance", html)
         self.assertNotIn("View LinkedIn", html)          # no dead-link affordance
-        self.assertIn("linkedin.com/in/jordan-bravo", html)  # url survives as text
         self.assertIn("Invalid LinkedIn.", html)
         self.assertNotIn("Is this the right profile?", html)
 
@@ -6330,7 +6329,6 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
             html = web_rendering.render_linkedin_card(
                 self._parent(), cand, d, d, profile_cache_dir=d)
         self.assertIn("Student at Example University", html)  # still shown
-        self.assertIn("no usable profile content", html)
         self.assertIn("<details class='retarget-guidance' open>", html)
         self.assertNotIn("View LinkedIn", html)  # a shell is not a LinkedIn
 
