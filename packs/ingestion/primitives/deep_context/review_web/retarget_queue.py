@@ -305,11 +305,19 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # sticky `approved` and the judge fingerprint on their existing row, and
     # sideline (never delete — paid artifacts) any prior research output that
     # would make run_research skip the handle as already done.
+    # The person's row can be keyed by a person/candidate id while the OLD
+    # LinkedIn lives on its own pub-keyed row — blank BOTH, or the wrong link
+    # survives the whole re-research untouched.
+    old_pub = extract_public_identifier(request.linkedin_url or "").lower()
     rows = load_override_rows(review_path)
-    prior = rows.get(key)
-    if prior is not None:
-        prior["approved"] = ""
-        prior["llm_judge_fingerprint"] = ""
+    touched = False
+    for row_key in {key, old_pub} - {""}:
+        prior = rows.get(row_key)
+        if prior is not None:
+            prior["approved"] = ""
+            prior["llm_judge_fingerprint"] = ""
+            touched = True
+    if touched:
         write_override_rows(review_path, rows)
     handle = str(row.get("handle") or request.slug)
     handle_dir = out_dir / handle
@@ -404,12 +412,15 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # EXCEPT when the user decided this row while the research ran (the card
     # stays interactive after queueing): an explicit human yes/no made after
     # submit outranks the job's automatic detach and is left untouched.
-    row_now = rows.setdefault(key, {"public_identifier": request.pub})
-    if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no"}:
-        row_now.update({"action": "detach", "approved": "yes",
-                        "source": "user-guidance", "new_linkedin_url": "",
-                        "new_public_identifier": "", "updated_at": now_iso()})
-        write_override_rows(review_path, rows)
+    # Detach the person's row AND the old LinkedIn's own pub-keyed row (they
+    # can differ); a human decision made while the research ran wins per row.
+    for row_key in {key, extract_public_identifier(request.linkedin_url or "").lower()} - {""}:
+        row_now = rows.setdefault(row_key, {"public_identifier": row_key})
+        if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no"}:
+            row_now.update({"action": "detach", "approved": "yes",
+                            "source": "user-guidance", "new_linkedin_url": "",
+                            "new_public_identifier": "", "updated_at": now_iso()})
+    write_override_rows(review_path, rows)
     if rejected and new_url:
         # Research DID find a profile but the judge could not corroborate it —
         # assemble deliberately skips outputs that carry a LinkedIn (the

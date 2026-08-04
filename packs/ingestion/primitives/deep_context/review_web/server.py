@@ -877,7 +877,15 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         guidance=guidance,
                         person_ids=tuple(
                             str(value) for value in target_parent.get("person_ids") or []),
-                        linkedin_url=str(target_candidate.get("url") or ""),
+                        # The old-link URL keys the detach of the wrong
+                        # LinkedIn's own review row; when the box was keyed on
+                        # a synthetic/person id the candidate dict is empty, so
+                        # fall back to the parent's real attached link.
+                        linkedin_url=str(
+                            target_candidate.get("url")
+                            or next((c.get("url") for c in
+                                     target_parent.get("candidates") or []
+                                     if c.get("url") and not c.get("synthetic")), "")),
                         match_emails=tuple(
                             str(value) for value in target_candidate.get("match_emails") or []),
                         match_phones=tuple(
