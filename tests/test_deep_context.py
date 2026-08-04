@@ -3757,15 +3757,19 @@ class TestReviewWeb(unittest.TestCase):
             self.assertEqual(result["counts"]["pending"], 1)
             self.assertTrue(web_workflow.phase_is_completed("worth", progress, manifest))
 
-            with self.assertRaisesRegex(ValueError, "decisions still need an answer"):
-                web_workflow.write_review_manifest(
-                    "linkedin",
-                    "completed",
-                    {**progress, "linkedin_total": 1, "linkedin_pending": 1},
-                    path=manifest,
-                    review_path=Path(dd) / "review.csv",
-                    synthetic_path=Path(dd) / "synthetic.csv",
-                )
+            # LinkedIn is skippable too — Finish means finish. Undecided
+            # identities stay undecided (pending stays visible in the
+            # stepper) and realization simply skips them.
+            result = web_workflow.write_review_manifest(
+                "linkedin",
+                "completed",
+                {**progress, "linkedin_total": 1, "linkedin_pending": 1},
+                path=manifest,
+                review_path=Path(dd) / "review.csv",
+                synthetic_path=Path(dd) / "synthetic.csv",
+            )
+            self.assertIn("linkedin", result["completed_stages"])
+            self.assertEqual(result["counts"]["pending"], 1)
 
     def test_unresolved_maybe_stays_out_of_lookup_after_people_completion(self):
         maybe = self._maybe_parent()

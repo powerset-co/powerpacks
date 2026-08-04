@@ -353,11 +353,11 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
     if stage == "enrich":
         raise ValueError("Enrich completion must be written from the enrichment manifest")
     counts = phase_counts(progress, stage)
-    # People review is explicitly skippable: unresolved Maybe rows stay Maybe
-    # and only effective Yes rows feed enrichment. LinkedIn remains strict
-    # because realization needs every in-scope identity decision settled.
-    if status == "completed" and counts["pending"] and stage != "worth":
-        raise ValueError(f"{counts['pending']} decisions still need an answer")
+    # Every stage is skippable — Finish means finish. Unresolved Maybe rows
+    # stay Maybe, undecided identities stay undecided (the person keeps no
+    # link), pending counts stay visible in the stepper, and the queue stays
+    # reachable. Nothing downstream needs a forced answer: realization simply
+    # skips undecided rows.
     existing = read_review_manifest(path)
     completed = {str(value) for value in existing.get("completed_stages") or []
                  if value in {"worth", "enrich", "linkedin"}}
