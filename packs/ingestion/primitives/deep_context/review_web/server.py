@@ -80,7 +80,7 @@ from .feedback import (
     post_feedback_quietly,
     submit_directory_feedback,
 )
-from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, run_guided_retarget
+from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, run_guided_retarget
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
@@ -359,6 +359,17 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
     if guided_queue is None and run_jobs:
         guided_queue = RetargetQueue(runner=_guided_runner, on_change=notify_views)
 
+    def guided_inflight_slugs() -> frozenset[str]:
+        """Parents with an ACTIVE guided re-research. Linear review: a person
+        leaves the queue the moment their re-research is queued and the result
+        applies in the background; only a FAILED job returns them to review."""
+        if guided_queue is None:
+            return frozenset()
+        return frozenset(
+            str(item.get("slug") or "").strip().lower()
+            for item in guided_queue.snapshot()
+            if item.get("state") not in TERMINAL_STATES and item.get("slug"))
+
     # Parsed review.csv rows, loaded once; our own decision writes mutate the
     # dict in place, and refresh_parents_from_disk drops it after a job write.
     cached_rows: dict[str, dict[str, str]] | None = None
@@ -600,12 +611,14 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         enrichment=enrichment, profile_cache_dir=profile_cache_dir,
                         debug=debug, index=index)
                 else:
+                    inflight = guided_inflight_slugs()
                     body = linkedin_card_body(
                         parents, progress,
                         linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
                         parents_dir=parents_dir, dossier_dir=dossier_dir,
                         profile_cache_dir=profile_cache_dir,
-                        exclude=exclude or None)
+                        exclude=frozenset(exclude | inflight) or None,
+                        retargets_in_flight=len(inflight))
                 self.send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/person":
@@ -688,7 +701,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                       profile_cache_dir=profile_cache_dir,
                                       verdicts_path=verdicts_path, facts_dir=facts_dir,
                                       enrichment_state=enrichment_state,
-                                      job_running=_job_lock.locked()))
+                                      job_running=_job_lock.locked(),
+                                      inflight_slugs=guided_inflight_slugs()))
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)

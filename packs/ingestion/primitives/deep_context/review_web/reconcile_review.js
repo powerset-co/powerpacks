@@ -670,9 +670,11 @@ function wireFixForm(form) {
 // Guided retargets from a review card. The directory pane binds its own submit
 // handler (it also refreshes the sidebar queue panel), so directory forms are
 // excluded here; this document-level handler covers the LinkedIn review cards,
-// which are swapped in as fragments after every decision. The card stays put —
-// queueing is not a decision — with an inline note; the state-token observer
-// refreshes the page when the re-research lands a new profile.
+// which are swapped in as fragments after every decision. LINEAR review:
+// queueing removes the person from the queue (the server excludes active
+// re-research), so on success the panel advances straight to the next card —
+// results apply automatically in the background, and only a failed job brings
+// the person back.
 document.addEventListener("submit", async (event) => {
   const form = event.target.closest("[data-retarget-form]");
   if (!form || form.closest("[data-directory-detail]")) return;
@@ -685,12 +687,25 @@ document.addEventListener("submit", async (event) => {
   try {
     await post("/retarget", { pub: form.dataset.pub || "",
                               parent_slug: form.dataset.parent || "", guidance });
+    announce("Queued for re-research — moving on");
+    const card = form.closest(".identity-card");
+    const panel = card?.closest("[data-linkedin-panel]");
+    if (panel) {
+      const slug = card.dataset.parent || form.dataset.parent || "";
+      const next = await fetchText(
+        `/api/linkedin-card?exclude=${encodeURIComponent(slug)}`);
+      if (next !== null) {
+        panel.innerHTML = next;
+        wireDynamicContent(panel);
+        return;
+      }
+    }
+    // Directory-adjacent or non-panel surfaces keep the inline note.
     const note = form.querySelector("[data-retarget-note]");
     if (note) {
-      note.textContent = "Queued — the new profile shows up here when research finishes";
+      note.textContent = "Queued — results apply automatically in the background";
       note.hidden = false;
     }
-    announce("Queued for re-research");
   } catch (error) {
     if (button) button.disabled = false;
     announce(error.message, true);

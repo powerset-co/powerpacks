@@ -6506,5 +6506,39 @@ class HighConfidenceDetachTests(unittest.TestCase):
         self.assertEqual(reconcile.DEFAULT_DETACH, reconcile.JUDGE_DETACH_THRESHOLD)
 
 
+class LinearRetargetFlowTests(unittest.TestCase):
+    """Review is LINEAR: queueing a re-research removes the person from the
+    queue (server excludes active guided jobs), results apply automatically in
+    the background, and the finish screen reports in-flight counts instead of
+    ever re-serving a card. Completion is never blocked."""
+
+    def _pending_parent(self, slug="jordan-bravo-p"):
+        return {"slug": slug, "dossier_slug": slug, "name": "Jordan Bravo",
+                "person_ids": ["pid-1"], "sources": [],
+                "candidates": [{"pub": "jordan-bravo", "action": "", "approved": ""}]}
+
+    def test_queue_excludes_inflight_parents(self):
+        parent = self._pending_parent()
+        self.assertEqual(len(web_rendering.linkedin_review_queue([parent])), 1)
+        self.assertEqual(
+            web_rendering.linkedin_review_queue([parent], frozenset({"jordan-bravo-p"})),
+            [])
+
+    def test_finished_body_reports_inflight_and_never_blocks(self):
+        html = web_rendering.linkedin_finished_body(
+            {"linkedin_done": 42}, linkedin_complete=True, retargets_in_flight=3)
+        self.assertIn("3 re-researches still running", html)
+        self.assertIn("go back to Codex", html)
+        html_one = web_rendering.linkedin_finished_body(
+            {"linkedin_done": 42}, linkedin_complete=False, retargets_in_flight=1)
+        self.assertIn("1 re-research still running", html_one)
+        self.assertIn("data-complete='linkedin'", html_one)  # Finish stays clickable
+
+    def test_retarget_submit_advances_the_card(self):
+        script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
+        self.assertIn("Queued for re-research — moving on", script)
+        self.assertIn("/api/linkedin-card?exclude=", script)
+
+
 if __name__ == "__main__":
     unittest.main()

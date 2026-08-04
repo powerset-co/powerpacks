@@ -1238,6 +1238,7 @@ def _enrichment_note(enrichment: dict[str, Any] | None) -> str:
 
 def linkedin_review_queue(
     parents: list[dict[str, Any]],
+    exclude: frozenset[str] | None = None,
 ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
     """Stable queue of ONE entry per parent that still needs an identity decision,
     carrying ALL of that parent's pending candidates.
@@ -1248,6 +1249,8 @@ def linkedin_review_queue(
     queue: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     ordered = sorted(parents, key=lambda parent: str(parent.get("name") or "").lower())
     for parent in ordered:
+        if exclude and str(parent.get("slug") or "").strip().lower() in exclude:
+            continue
         pending = pending_linkedin_candidates(parent)
         if pending:
             queue.append((parent, pending))
@@ -1263,34 +1266,43 @@ GO_BACK_HTML = (
     "data-toast='Copied'>Copy</button></div>")
 
 
-def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool) -> str:
+def linkedin_finished_body(progress: dict[str, int], *, linkedin_complete: bool,
+                           retargets_in_flight: int = 0) -> str:
     tail = (GO_BACK_HTML if linkedin_complete else
             "<button class='button button-primary' data-complete='linkedin'>Finish</button>")
+    # Linear review: queued re-research never blocks finishing and never brings
+    # a card back — results (found LinkedIn, or the synthetic) apply on their
+    # own in the background. The count is informational only.
+    inflight = ""
+    if retargets_in_flight:
+        plural = "es" if retargets_in_flight != 1 else ""
+        inflight = (f"<p class='retarget-inflight-note'>{retargets_in_flight} "
+                    f"re-research{plural} still running — results apply "
+                    "automatically in the background.</p>")
     return ("<div class='empty-state phase-finish'><div class='empty-mark'>✓</div>"
             "<h2>LinkedIn profiles checked</h2>"
             f"<p>{progress['linkedin_done']} decisions saved</p>"
-            f"{tail}</div>")
+            f"{inflight}{tail}</div>")
 
 
 def linkedin_card_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
                        linkedin_complete: bool, parents_dir: Path, dossier_dir: Path,
                        profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                       exclude: frozenset[str] | None = None) -> str:
+                       exclude: frozenset[str] | None = None,
+                       retargets_in_flight: int = 0) -> str:
     """The LinkedIn queue's current item: the next pending parent's card, or the
     stage-finished state — the linkedin twin of ``worth_review_body``. Shared by
     page_html and /api/linkedin-card so a decision click swaps in the next card
-    client-side. ``exclude`` skips PARENT SLUGS whose decision POST is still in
-    flight (the linkedin queue is parent-keyed), so the client can prefetch the
-    FOLLOWING card without waiting for the save."""
-    queue = linkedin_review_queue(parents)
-    if exclude:
-        queue = [(parent, pending) for parent, pending in queue
-                 if str(parent.get("slug") or "").strip().lower() not in exclude]
+    client-side. ``exclude`` skips PARENT SLUGS — decision POSTs still in
+    flight AND people with an active guided re-research (linear review: they
+    left the queue at submit and only return if the job fails)."""
+    queue = linkedin_review_queue(parents, exclude)
     if queue:
         parent, pending = queue[0]
         return render_linkedin_card(parent, pending, parents_dir, dossier_dir,
                                     profile_cache_dir)
-    return linkedin_finished_body(progress, linkedin_complete=linkedin_complete)
+    return linkedin_finished_body(progress, linkedin_complete=linkedin_complete,
+                                  retargets_in_flight=retargets_in_flight)
 
 
 def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int], *,
@@ -1298,7 +1310,8 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
                          parents_dir: Path, dossier_dir: Path,
                          enrichment: dict[str, Any] | None = None,
                          profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                         debug: bool = False, index: int = 0) -> str:
+                         debug: bool = False, index: int = 0,
+                         inflight_slugs: frozenset[str] = frozenset()) -> str:
     """Render the LinkedIn stage: one pending parent card inside the swap panel
     (the worth pattern), or the debug carousel."""
     note = "" if enrichment_complete else _enrichment_note(enrichment)
@@ -1318,7 +1331,8 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
     card = linkedin_card_body(
         parents, progress, linkedin_complete=linkedin_complete,
         parents_dir=parents_dir, dossier_dir=dossier_dir,
-        profile_cache_dir=profile_cache_dir)
+        profile_cache_dir=profile_cache_dir, exclude=inflight_slugs or None,
+        retargets_in_flight=len(inflight_slugs))
     body = f"<div class='linkedin-panel' data-linkedin-panel>{card}</div>"
     return f"<div class='linkedin-stage'>{note}{body}</div>"
 
@@ -1332,7 +1346,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
               verdicts_path: Path = VERDICTS_JSONL,
               facts_dir: Path = FACTS_DIR,
               enrichment_state: dict[str, Any] | None = None,
-              job_running: bool = False) -> bytes:
+              job_running: bool = False,
+              inflight_slugs: frozenset[str] = frozenset()) -> bytes:
     """Render the complete review page from packaged shell and dynamic fragments."""
     progress = review_progress(parents)
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
@@ -1393,7 +1408,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
             parents, progress, enrichment_complete=bool(enrichment_complete),
             linkedin_complete=bool(linkedin_complete),
             parents_dir=parents_dir, dossier_dir=dossier_dir, enrichment=enrichment,
-            profile_cache_dir=profile_cache_dir, debug=debug)
+            profile_cache_dir=profile_cache_dir, debug=debug,
+            inflight_slugs=inflight_slugs)
     else:
         content = ("<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
                    f"<p>{progress['linkedin_done']} identities checked · {progress['rejected']} rejected</p>"
@@ -1408,7 +1424,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
                + "<i class='step-line'></i>"
                + _step(3, "Check LinkedIn", linkedin_active,
                        enrichment_complete and enrichment_continued and linkedin_complete,
-                       progress["linkedin_pending"], "/?stage=linkedin&preview=1")
+                       max(0, progress["linkedin_pending"] - len(inflight_slugs)),
+                       "/?stage=linkedin&preview=1")
                )
     title = {"worth": "Add People", "enrich": "Enrich Contacts",
              "linkedin": "Check LinkedIn", "done": "All Set"}.get(view, "Add People")

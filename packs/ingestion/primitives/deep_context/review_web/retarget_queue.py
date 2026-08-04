@@ -58,6 +58,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.review_web.decisions import sync_synthetic_gate
+from packs.ingestion.primitives.deep_context.review_web.model import SYNTHETIC_PEOPLE_CSV
 from packs.ingestion.primitives.deep_context import assemble_synthetic_profile
 from packs.ingestion.primitives.deep_context import deep_research_contacts
 from packs.ingestion.primitives.deep_context import reconcile_deep_research
@@ -424,6 +426,12 @@ def run_guided_retarget(request: GuidedRetarget, *,
     stands = (int(getattr(assembly, "built", 0) or 0) > 0
               or int(getattr(assembly, "preserved_user_rows", 0) or 0) > 0)
     if stands:
+        # Deterministic, linear review: the user explicitly asked for this
+        # re-research, so the assembled synthetic APPLIES (gate yes) — the
+        # person never returns to the queue for a second confirmation.
+        for gate_key in (key, *(str(pid) for pid in request.person_ids or ())):
+            if gate_key and sync_synthetic_gate(SYNTHETIC_PEOPLE_CSV, gate_key, "yes"):
+                break
         return {"state": "synthetic",
                 "detail": f"no LinkedIn confirmed — synthetic profile now stands ({reason})"}
     return {"state": "no_match",
