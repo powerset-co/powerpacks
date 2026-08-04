@@ -135,6 +135,8 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.review_store import (
+    DECISIVE_CONFIRM_THRESHOLD,
+    JUDGE_CONFIRM_THRESHOLD,
     JUDGE_DETACH_THRESHOLD,
     OVERRIDE_COLUMNS,
     USER_APPROVED,
@@ -158,7 +160,7 @@ from packs.ingestion.schemas.people_schema import (
     parse_jsonish,
 )
 
-DEFAULT_CONFIRM = 0.70         # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
+DEFAULT_CONFIRM = JUDGE_CONFIRM_THRESHOLD  # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
 DEFAULT_DETACH = JUDGE_DETACH_THRESHOLD  # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error); shared with review display via review_store
 SECTION_ANCHOR = "## LinkedIn identity"
 SAMPLE_PER_DIRECTION = 4
@@ -875,12 +877,9 @@ DETACH = ("detach", "normal")
 CONFLICT_KEEP = ("confirm", "conflict_resolved")
 CONFLICT_DROP = ("detach", "conflict_resolved")
 
-# A DECISIVE confirm ends its conflict group outright: the winner keeps its
-# profile and every other candidate detaches regardless of detach confidence —
-# a 0.97 confirm must never sit hostage to a loser's 0.80. TWO decisive-or-bar
-# confirms in one group is genuine ambiguity (family collisions) and stays
-# with the human.
-DECISIVE_CONFIRM = 0.95
+# A DECISIVE confirm ends its conflict group outright (shared bar in
+# review_store — the stored-row legacy scrub applies the same policy).
+DECISIVE_CONFIRM = DECISIVE_CONFIRM_THRESHOLD
 
 
 class ConfidenceBars:

@@ -46,8 +46,9 @@ from packs.ingestion.primitives.deep_context.enrichment_contract import (
     derive_enrichment_state,
     read_enrichment_manifest,
 )
-from packs.ingestion.primitives.common.legacy import ensure_owner_phones
+from packs.ingestion.primitives.common.legacy import ensure_owner_phones, resolve_stored_identity_policy
 from packs.ingestion.primitives.deep_context.common import (
+    INDEX_JSON,
     DEFAULT_PEOPLE_CSV,
     DOSSIER_DIR,
     ENRICH_MANIFEST,
@@ -1255,9 +1256,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    # Stage-entry legacy scrub: an owner.json predating the phones field gets
-    # the owner's own numbers stamped so the identifier policy can drop them.
+    # Stage-entry legacy scrubs: an owner.json predating the phones field gets
+    # the owner's own numbers stamped so the identifier policy can drop them,
+    # and review rows written under the pre-decisive judge-apply policy get
+    # the 2026-08 promotions/demotions without a re-judge.
     ensure_owner_phones(OWNER_JSON)
+    resolve_stored_identity_policy(Path(args.review), INDEX_JSON)
     review_path = Path(args.review)
     verdicts_path = Path(args.verdicts)
     parents_dir = Path(args.parents_dir)

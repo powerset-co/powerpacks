@@ -28,6 +28,7 @@ from packs.ingestion.primitives.common.legacy import (
     parent_slug_migrations,
 )
 from packs.ingestion.primitives.common.jsonio import write_json
+from packs.ingestion.primitives.common import legacy
 from packs.ingestion.primitives.deep_context import (
     build_parents as parents,
     check_readiness,
@@ -6579,6 +6580,79 @@ class DecisiveConfirmTests(unittest.TestCase):
     def test_two_bar_clearing_confirms_stay_human(self):
         judged = [self._task("confirmed", 0.97), self._task("confirmed", 0.75)]
         self.assertEqual(reconcile.decide_conflict_group(judged, self._bars()), {})
+
+
+class StoredIdentityPolicyScrubTests(unittest.TestCase):
+    """The 2026-08 judge-apply policy re-derived over STORED review.csv rows at
+    review entry (legacy scrub): decisive confirms promote and their siblings
+    drop; punts superseded by an applied identity detach — no re-judge."""
+
+    def _write(self, d, rows_spec, index=None):
+        review = Path(d) / "review.csv"
+        rows = {}
+        for pub, action, approved, conf, pid in rows_spec:
+            rows[pub] = {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                         "public_identifier": pub, "action": action,
+                         "approved": approved, "confidence": str(conf),
+                         "person_id": pid}
+        reconcile.write_override_rows(review, rows)
+        idx = Path(d) / "index.json"
+        idx.write_text(json.dumps(index or {"parents": {}, "slugs": {}}),
+                       encoding="utf-8")
+        return review, idx
+
+    def test_decisive_confirm_promotes_and_sibling_drops(self):
+        # The Langshur shape: two persons under one parent, winner 0.97
+        # pending, loser wrong-person 0.80 pending.
+        index = {"parents": {"jordan-p": {"parent_id": "parent-1",
+                                          "children": ["c1", "c2"]}},
+                 "slugs": {"c1": {"person_id": "pid-a"}, "c2": {"person_id": "pid-b"}}}
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._write(d, [
+                ("jordan-bravo", "verify", "", 0.97, "pid-a"),
+                ("jordan-bravo-2", "detach", "", 0.80, "pid-b")], index)
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out, {"promoted": 1, "demoted": 1})
+        self.assertEqual(rows["jordan-bravo"]["approved"], "auto")
+        self.assertEqual((rows["jordan-bravo-2"]["action"],
+                          rows["jordan-bravo-2"]["approved"]), ("detach", "auto"))
+
+    def test_superseded_punt_detaches(self):
+        # The Petkov shape: applied verify + a 0.62 punt on the same person.
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._write(d, [
+                ("jordan-bravo", "verify", "auto", 0.90, "pid-a"),
+                ("jordan-doppel", "verify", "", 0.62, "pid-a")])
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out, {"promoted": 0, "demoted": 1})
+        self.assertEqual((rows["jordan-doppel"]["action"],
+                          rows["jordan-doppel"]["approved"]), ("detach", "auto"))
+        self.assertEqual(rows["jordan-bravo"]["approved"], "auto")  # untouched
+
+    def test_ambiguity_and_user_rows_untouched(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._write(d, [
+                ("jordan-bravo", "verify", "", 0.97, "pid-a"),   # decisive but…
+                ("jordan-rival", "verify", "", 0.75, "pid-a"),   # …a rival clears the bar
+                ("jordan-user", "detach", "no", 0.99, "pid-b"),  # user said no
+                ("jordan-rt", "retarget", "", 0.99, "pid-c")])   # retargets never touched
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out, {"promoted": 0, "demoted": 0})
+        self.assertEqual(rows["jordan-bravo"]["approved"], "")
+        self.assertEqual(rows["jordan-user"]["approved"], "no")
+        self.assertEqual(rows["jordan-rt"]["action"], "retarget")
+
+    def test_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._write(d, [
+                ("jordan-bravo", "verify", "auto", 0.90, "pid-a"),
+                ("jordan-doppel", "verify", "", 0.62, "pid-a")])
+            legacy.resolve_stored_identity_policy(review, idx)
+            second = legacy.resolve_stored_identity_policy(review, idx)
+        self.assertEqual(second, {"promoted": 0, "demoted": 0})
 
 
 if __name__ == "__main__":
