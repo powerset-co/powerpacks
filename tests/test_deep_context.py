@@ -6294,6 +6294,8 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertIn("No profile data — give re-research guidance", html)
         self.assertNotIn("View LinkedIn", html)          # no dead-link affordance
         self.assertIn("linkedin.com/in/jordan-bravo", html)  # url survives as text
+        self.assertIn("Researched LinkedIn is invalid", html)
+        self.assertNotIn("Is this the right profile?", html)
 
     def test_headline_only_shell_counts_as_blank(self):
         # The Ace Padua shape: cache holds "Student at ..." and nothing else.
