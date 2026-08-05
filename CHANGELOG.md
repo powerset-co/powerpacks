@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.18.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.3...powerpacks-v1.18.0) (2026-08-05)
+
+
+### Features
+
+* **install:** vendored sha256-pinned uv bootstrap so setup survives a cold macOS ([#428](https://github.com/powerset-co/powerpacks/issues/428)) ([15480d3](https://github.com/powerset-co/powerpacks/commit/15480d333f5ddcd5d88fd56d4f2f7cc4d1862270))
+
+
+### Bug Fixes
+
+* **deep-context:** heal is uncapped by default — a silent cap left judge-skips unhealed ([#436](https://github.com/powerset-co/powerpacks/issues/436)) ([94bc20c](https://github.com/powerset-co/powerpacks/commit/94bc20c0c3a5e8573a19164ea377c9c050f11e43))
+
 ## [1.17.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.2...powerpacks-v1.17.3) (2026-08-05)
 
 
