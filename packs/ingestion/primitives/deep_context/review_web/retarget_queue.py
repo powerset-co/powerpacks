@@ -307,6 +307,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
                         synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
                         use_llm: bool = True,
                         on_progress: Callable[[str, str], None] | None = None,
+                        write: Callable[[Path, dict[str, dict[str, str]]], None] = write_override_rows,
                         ) -> dict[str, Any]:
     """Run one guided re-research end to end; returns the item outcome.
 
@@ -362,7 +363,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
                         "llm_reject": "", "llm_reject_confidence": "",
                         "llm_reject_reason": "", "updated_at": now_iso()})
         settle_siblings(rows, key)
-        write_override_rows(review_path, rows)
+        write(review_path, rows)
         return {"state": "applied", "new_url": given_url, "confidence": "1.000",
                 "detail": "user-provided LinkedIn applied directly (no research needed)"}
 
@@ -465,7 +466,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
         prior["approved"] = ""
         prior["llm_judge_fingerprint"] = ""
     if blanked:
-        write_override_rows(review_path, rows)
+        write(review_path, rows)
 
     # Everything from here to the settle writes can still raise (owner load,
     # judge LLM, artifact mirror). A failure must not strand the rows we just
@@ -494,7 +495,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
                 prior["llm_judge_fingerprint"] = prior_fp
                 restored = True
         if restored:
-            write_override_rows(review_path, rows)
+            write(review_path, rows)
         return {"state": "failed", "detail": f"{type(exc).__name__}: {exc}"}
     # Mirroring the paid artifacts into the engine's research home is
     # bookkeeping — it must neither fail the job nor trigger the restore
@@ -517,7 +518,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
             after["approved"] = "yes"
             after["source"] = "user-guidance"
         settle_siblings(rows, key)
-        write_override_rows(review_path, rows)
+        write(review_path, rows)
         return {"state": "applied", "new_url": new_url,
                 "confidence": str(after.get("confidence") or ""),
                 "detail": str(after.get("reason") or "")}
@@ -537,7 +538,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
                           "llm_reject": "", "llm_reject_confidence": "",
                           "llm_reject_reason": "", "updated_at": now_iso()})
             settle_siblings(rows, key)
-            write_override_rows(review_path, rows)
+            write(review_path, rows)
             return {"state": "applied", "new_url": new_url,
                     "confidence": str(after.get("confidence") or ""),
                     "detail": "research returned the profile your guidance references"}
@@ -563,7 +564,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
             row_now.update({"action": "detach", "approved": "yes",
                             "source": "user-guidance", "new_linkedin_url": "",
                             "new_public_identifier": "", "updated_at": now_iso()})
-    write_override_rows(review_path, rows)
+    write(review_path, rows)
 
     if rejected and new_url:
         # Research DID find a profile but the judge could not corroborate it —

@@ -8205,6 +8205,28 @@ class ReviewDbServerReadTests(unittest.TestCase):
             self.assertEqual((rows[self.GHOST]["action"],
                               rows[self.GHOST]["approved"]), ("detach", "yes"))
 
+    def test_decide_commits_to_the_db_and_exports_the_csv(self):
+        # Phase 2: the transaction is the commit — the decision must be a
+        # decisions ROW, and the CSV must equal the db's export of it.
+        from packs.ingestion.primitives.deep_context.review_db import ReviewDb
+        with tempfile.TemporaryDirectory() as d:
+            base, verdicts, review = GhostRowSettleTests._fixture(self, d)
+            with self._serve_db(base, verdicts, review) as port:
+                status, body = GhostRowSettleTests._post(self, port, "/decide", {
+                    "pub": "jordan-bravo", "decision": "keep",
+                    "parent_slug": "jordan-bravo-p"})
+            self.assertEqual(status, 200, body)
+            db = ReviewDb(base / "review.sqlite")
+            decided = {(r["kind"], r["target"]): r
+                       for r in db.query("SELECT * FROM decisions")}
+            self.assertEqual(
+                decided[("identity", "jordan-bravo")]["approved"], "yes")
+            self.assertEqual(
+                decided[("identity", self.GHOST)]["value"], "detach")
+            self.assertEqual(load_rows(review), db.export_review_rows())
+            self.assertEqual(db.query(
+                "SELECT value FROM meta WHERE key='pending_export'")[0]["value"], "0")
+
     def test_external_writer_rows_survive_a_decide_rewrite(self):
         # The disaster review_rows_now guards against: a stale snapshot handed
         # to a whole-file rewrite erases every OTHER writer's rows. Through the

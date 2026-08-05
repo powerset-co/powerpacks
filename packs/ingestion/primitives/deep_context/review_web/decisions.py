@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from packs.ingestion.primitives.deep_context.candidates import (
     NETWORK_WORTH_VALUES,
@@ -201,6 +201,7 @@ def apply_worth_decision(
     llm_worth: str = "",
     llm_worth_reason: str = "",
     user_worth_note: str = "",
+    write: Callable[[Path, dict[str, dict[str, str]]], None] = _write_override_rows,
 ) -> dict[str, str]:
     """Upsert the USER-owned ``network_worth`` on one canonical parent row."""
     pub = (pub or "").strip().lower()
@@ -231,7 +232,7 @@ def apply_worth_decision(
     row["source"] = row.get("source") or "deep-context-parent-worth"
     row["updated_at"] = now_iso()
     rows[pub] = row
-    _write_override_rows(review_path, rows)
+    write(review_path, rows)
     return {"network_worth": worth}
 
 
@@ -259,7 +260,8 @@ def sync_synthetic_gate(path: Path, worth_key: str, worth: str) -> dict[str, str
 
 
 def apply_decision(review_path: Path, verdicts_path: Path, pub: str, decision: str,
-                   new_url: str, confirm_threshold: float, detach_threshold: float | None = None) -> dict[str, str]:
+                   new_url: str, confirm_threshold: float, detach_threshold: float | None = None,
+                   write: Callable[[Path, dict[str, dict[str, str]]], None] = _write_override_rows) -> dict[str, str]:
     """Upsert a single decision into review.csv (keyed by public_identifier)."""
     pub = (pub or "").strip().lower()
     rows = load_override_rows(review_path)
@@ -303,5 +305,5 @@ def apply_decision(review_path: Path, verdicts_path: Path, pub: str, decision: s
     row["source"] = "deep-context-review"
     row["updated_at"] = now_iso()
     rows[pub] = row
-    _write_override_rows(review_path, rows)
+    write(review_path, rows)
     return {"action": row["action"], "approved": row["approved"], "new_url": row.get("new_linkedin_url", "")}

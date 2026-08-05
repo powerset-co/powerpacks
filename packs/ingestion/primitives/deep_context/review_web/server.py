@@ -10,12 +10,16 @@ and the baton pass to the next process. Views subscribe to `/api/events` (SSE)
 and re-snapshot `/api/status` on each nudge — the browser never polls.
 
 Changelog:
-  2026-08-05 (sqlite P1): review.sqlite (next to review.csv) is the server's
-    read source. cmd_serve creates/imports it (strict — an unrepresentable row
-    refuses serve by name); model builds and review_rows_now compose rows from
-    the db, with needs_import (keyed on the CSV stat) as the other-writer
-    check. Decisions still write the CSV; the import absorbs them. Phase 2
-    inverts authority (transactional decision writes, CSV becomes export).
+  2026-08-05 (sqlite P1+P2): review.sqlite (next to review.csv) is the
+    server's store. Reads: cmd_serve creates/imports it (strict — an
+    unrepresentable row refuses serve by name); model builds and
+    review_rows_now compose rows from the db, with needs_import (keyed on the
+    CSV stat) as the other-writer check. Writes: every session mutation
+    (apply_decision, apply_worth_decision, the guided-retarget worker) routes
+    through commit_rows — the db transaction is the commit, the CSVs are
+    exports of it; a crash between commit and export recovers at next boot
+    (recover_pending_export). Without a db wired (tests), both doors fall
+    back to the plain CSV loader/writer unchanged.
   2026-07-30: Bare review launches always land on the read-only directory;
     staged workflow launches opt in with an explicit --stage.
   2026-07-29 (single-writer rewrite): deleted the stat/signature invalidation
@@ -280,13 +284,22 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
     def db_review_rows() -> dict[str, dict[str, str]] | None:
         """Phase-1 sqlite read door: keep review.sqlite current with the CSV
-        (writes still land in the CSV; the import absorbs them) and compose a
-        fresh owned row snapshot from it. None when no db is wired (tests)."""
+        and compose a fresh owned row snapshot from it. None when no db is
+        wired (tests keep the plain CSV path)."""
         if review_db is None:
             return None
         if review_db.needs_import(review_path):
             review_db.import_stores(review_path, synthetic_path)
         return review_db.export_review_rows()
+
+    def commit_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
+        """Phase-2 write door: the db transaction is the commit, the CSV an
+        export of it (crash between the two recovers at next boot). Without a
+        db this IS the plain CSV writer, so decision flows stay one shape."""
+        if review_db is None:
+            _write_override_rows(path, rows)
+            return
+        review_db.apply_rows(rows, path, synthetic_csv=synthetic_path)
 
     def notify_agent() -> None:
         """Best-effort wake after durable UI mutations; file state stays authoritative."""
@@ -361,7 +374,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 request, review_path=review_path, people_csv=people_csv,
                 facts_dir=facts_dir, raw_dir=RAW_DIR,
                 synthetic_path=synthetic_path,
-                use_llm=True, on_progress=report)
+                use_llm=True, on_progress=report, write=commit_rows)
         if result.get("state") == "applied" and result.get("new_url"):
             # An APPLIED retarget is no longer a pending candidate, so the
             # prefetch stage would skip it — fetch the new profile directly
@@ -1076,6 +1089,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             llm_worth=str(machine.get("decision") or ""),
                             llm_worth_reason=str(machine.get("reason") or ""),
                             user_worth_note=worth_note,
+                            write=commit_rows,
                         )
                         notify_views()
                         gate_key = str(
@@ -1250,11 +1264,11 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 raise ValueError(f"synthetic worth key not found: {pub}")
                             result = apply_decision(
                                 review_path, verdicts_path, worth_key, decision, new_url,
-                                confirm_threshold, detach_threshold)
+                                confirm_threshold, detach_threshold, write=commit_rows)
                             rows = load_override_rows(review_path)
                             rows[worth_key.lower()]["person_id"] = (
                                 rows[worth_key.lower()].get("person_id") or worth_key)
-                            _write_override_rows(review_path, rows)
+                            commit_rows(review_path, rows)
                             apply_synthetic_decision(synthetic_path, pub, "detach")
                             keepish = True
                             target_candidate["action"] = "verify"
@@ -1269,7 +1283,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     else:
                         result = apply_decision(
                             review_path, verdicts_path, pub, decision, new_url,
-                            confirm_threshold, detach_threshold)
+                            confirm_threshold, detach_threshold, write=commit_rows)
                         worth_key, keepish = pub, None
                         target_candidate["action"] = result["action"]
                         target_candidate["approved"] = result["approved"]
@@ -1321,7 +1335,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                     continue
                                 apply_decision(
                                     review_path, verdicts_path, sibling_pub, "detach", "",
-                                    confirm_threshold, detach_threshold)
+                                    confirm_threshold, detach_threshold, write=commit_rows)
                                 sibling["action"] = "detach"
                                 sibling["approved"] = "yes"
                                 sibling["new_url"] = ""
@@ -1406,10 +1420,12 @@ def cmd_serve(args: argparse.Namespace) -> None:
     synthetic_path = Path(args.synthetic_people)
     manifest_path = Path(args.manifest)
 
-    # Phase-1 sqlite store: review.sqlite lives next to review.csv and is kept
-    # current from it (strict import — an unrepresentable row refuses serve by
-    # name). Reads compose from the db; writes still land in the CSV.
+    # The sqlite store: review.sqlite lives next to review.csv. Session writes
+    # commit HERE (the transaction is durability, the CSV an export of it), so
+    # first finish any export a crash interrupted, then absorb between-session
+    # CLI writes (strict import — an unrepresentable row refuses serve by name).
     review_db = ReviewDb(review_path.with_suffix(".sqlite"))
+    review_db.recover_pending_export(review_path, synthetic_path)
     if review_db.needs_import(review_path):
         review_db.import_stores(review_path, synthetic_path)
 

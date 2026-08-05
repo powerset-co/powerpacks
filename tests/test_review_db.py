@@ -232,5 +232,72 @@ class ReviewDbRoundTripTests(unittest.TestCase):
         self.assertEqual(rows["synth-casey"]["approved"], "")
 
 
+class ApplyRowsCommitDoorTests(ReviewDbRoundTripTests):
+    """Phase-2 commit door: the transaction is durability, the CSV an export."""
+
+    def _seeded_db(self) -> ReviewDb:
+        write_fixture(self.review_csv, self.fixture_rows())
+        db = ReviewDb(self.dir / "review.sqlite")
+        db.import_stores(self.review_csv)
+        return db
+
+    def test_apply_rows_commits_and_exports(self):
+        db = self._seeded_db()
+        rows = load_override_rows(self.review_csv)
+        rows["jordan-bravo-1"].update(
+            {"approved": "yes", "source": "deep-context-review",
+             "updated_at": "2026-08-05T00:00:00Z"})
+        db.apply_rows(rows, self.review_csv)
+        decided = db.query(
+            "SELECT approved, source FROM decisions WHERE kind='identity' AND target='jordan-bravo-1'")
+        self.assertEqual((decided[0]["approved"], decided[0]["source"]),
+                         ("yes", "deep-context-review"))
+        exported = load_override_rows(self.review_csv)
+        self.assertEqual(exported["jordan-bravo-1"]["approved"], "yes")
+        self.assertFalse(db.needs_import(self.review_csv))
+        self.assertEqual(db.query(
+            "SELECT value FROM meta WHERE key='pending_export'")[0]["value"], "0")
+
+    def test_apply_rows_refuses_bad_state_atomically(self):
+        db = self._seeded_db()
+        before = db.query("SELECT COUNT(*) AS n FROM decisions")[0]["n"]
+        csv_before = self.review_csv.read_bytes()
+        rows = load_override_rows(self.review_csv)
+        rows["jordan-bravo-1"]["source"] = "not-a-writer"
+        with self.assertRaises(ReviewDbImportError):
+            db.apply_rows(rows, self.review_csv)
+        self.assertEqual(db.query("SELECT COUNT(*) AS n FROM decisions")[0]["n"], before)
+        self.assertEqual(self.review_csv.read_bytes(), csv_before)
+
+    def test_recover_pending_export_finishes_the_flush(self):
+        db = self._seeded_db()
+        rows = load_override_rows(self.review_csv)
+        rows["jordan-bravo-1"].update(
+            {"approved": "yes", "source": "deep-context-review"})
+        # simulate the crash window: commit happened, export did not
+        links, parents, decisions, _ = db._derive_tables(rows, None)
+        with db.connect() as conn:
+            db._replace_tables(conn, links, parents, decisions)
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('pending_export', '1')")
+        self.assertNotEqual(
+            load_override_rows(self.review_csv)["jordan-bravo-1"]["approved"], "yes")
+        self.assertTrue(db.recover_pending_export(self.review_csv))
+        self.assertEqual(
+            load_override_rows(self.review_csv)["jordan-bravo-1"]["approved"], "yes")
+        self.assertFalse(db.recover_pending_export(self.review_csv))
+
+    def test_recovery_refuses_when_csv_also_changed(self):
+        db = self._seeded_db()
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('pending_export', '1')")
+        rows = load_override_rows(self.review_csv)
+        rows["jordan-bravo-1"]["reason"] = "raced the recovery window"
+        write_override_rows(self.review_csv, rows)
+        with self.assertRaises(ReviewDbImportError):
+            db.recover_pending_export(self.review_csv)
+
+
 if __name__ == "__main__":
     unittest.main()

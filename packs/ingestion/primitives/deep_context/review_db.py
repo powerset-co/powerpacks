@@ -315,6 +315,87 @@ class ReviewDb:
     def import_stores(self, review_csv: Path, synthetic_csv: Path | None = None) -> dict:
         """Rebuild every table from the CSVs in one transaction (idempotent)."""
         rows = load_override_rows(review_csv)
+        links, parents, decisions, gate_count = self._derive_tables(rows, synthetic_csv)
+        with self.connect() as conn:
+            self._replace_tables(conn, links, parents, decisions)
+            stat = review_csv.stat()
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES "
+                "('schema_version', :v), ('imported_at', :t), ('review_csv_stat', :s), "
+                "('pending_export', '0')",
+                {"v": str(SCHEMA_VERSION), "t": now_iso(), "s": f"{stat.st_mtime_ns}:{stat.st_size}"},
+            )
+        return {
+            "links": len(links), "parents": len(parents),
+            "decisions": len(decisions) - gate_count, "synthetic_gates": gate_count,
+        }
+
+    def apply_rows(self, rows: dict[str, dict[str, str]], review_csv: Path,
+                   synthetic_csv: Path | None = None) -> dict:
+        """Phase-2 commit door: commit a full mutated row-set ATOMICALLY, then
+        write the CSVs as exports OF the committed state. The transaction —
+        not the CSV write — is durability: a crash after commit leaves
+        meta.pending_export set and recover_pending_export() finishes the
+        flush at next boot, so a half-written CSV can never be the record."""
+        links, parents, decisions, gate_count = self._derive_tables(rows, synthetic_csv)
+        with self.connect() as conn:
+            self._replace_tables(conn, links, parents, decisions)
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('pending_export', '1')")
+        self.export_review_csv(review_csv)
+        if synthetic_csv is not None:
+            self.export_synthetic_gates(synthetic_csv)
+        with self.connect() as conn:
+            stat = review_csv.stat()
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES "
+                "('pending_export', '0'), ('review_csv_stat', :s)",
+                {"s": f"{stat.st_mtime_ns}:{stat.st_size}"},
+            )
+        return {
+            "links": len(links), "parents": len(parents),
+            "decisions": len(decisions) - gate_count, "synthetic_gates": gate_count,
+        }
+
+    def recover_pending_export(self, review_csv: Path,
+                               synthetic_csv: Path | None = None) -> bool:
+        """Finish a commit whose export was interrupted (crash between the
+        transaction and the CSV write). Refuses when the CSV ALSO changed
+        since the last sync — that means another writer raced the recovery
+        window and silently choosing either side would lose decisions."""
+        flag = self.query("SELECT value FROM meta WHERE key = 'pending_export'")
+        if not flag or flag[0]["value"] != "1":
+            return False
+        if review_csv.exists() and self.needs_import(review_csv):
+            raise ReviewDbImportError(
+                f"{review_csv} changed while a committed decision was awaiting export; "
+                "reconcile manually (the db holds the committed state)"
+            )
+        self.export_review_csv(review_csv)
+        if synthetic_csv is not None:
+            self.export_synthetic_gates(synthetic_csv)
+        with self.connect() as conn:
+            stat = review_csv.stat()
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES "
+                "('pending_export', '0'), ('review_csv_stat', :s)",
+                {"s": f"{stat.st_mtime_ns}:{stat.st_size}"},
+            )
+        return True
+
+    @staticmethod
+    def _replace_tables(conn: sqlite3.Connection, links: list[LinkRow],
+                        parents: list[ParentRow], decisions: list[DecisionRow]) -> None:
+        conn.execute("DELETE FROM links")
+        conn.execute("DELETE FROM parents")
+        conn.execute("DELETE FROM decisions")
+        conn.executemany(_insert_sql("links", LinkRow), [asdict(r) for r in links])
+        conn.executemany(_insert_sql("parents", ParentRow), [asdict(r) for r in parents])
+        conn.executemany(_insert_sql("decisions", DecisionRow), [asdict(r) for r in decisions])
+
+    def _derive_tables(self, rows: dict[str, dict[str, str]],
+                       synthetic_csv: Path | None,
+                       ) -> tuple[list[LinkRow], list[ParentRow], list[DecisionRow], int]:
         errors: list[str] = []
         links: list[LinkRow] = []
         parents: list[ParentRow] = []
@@ -416,24 +497,7 @@ class ReviewDb:
             raise ReviewDbImportError(
                 f"{len(errors)} unrepresentable row(s) — fix or scrub before import: {shown}"
             )
-
-        with self.connect() as conn:
-            conn.execute("DELETE FROM links")
-            conn.execute("DELETE FROM parents")
-            conn.execute("DELETE FROM decisions")
-            conn.executemany(_insert_sql("links", LinkRow), [asdict(r) for r in links])
-            conn.executemany(_insert_sql("parents", ParentRow), [asdict(r) for r in parents])
-            conn.executemany(_insert_sql("decisions", DecisionRow), [asdict(r) for r in decisions])
-            stat = review_csv.stat()
-            conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES "
-                "('schema_version', :v), ('imported_at', :t), ('review_csv_stat', :s)",
-                {"v": str(SCHEMA_VERSION), "t": now_iso(), "s": f"{stat.st_mtime_ns}:{stat.st_size}"},
-            )
-        return {
-            "links": len(links), "parents": len(parents),
-            "decisions": len(decisions) - len(gates), "synthetic_gates": len(gates),
-        }
+        return links, parents, decisions, len(gates)
 
     def _read_synthetic_gates(self, synthetic_csv: Path | None) -> tuple[list[DecisionRow], list[str]]:
         gates: list[DecisionRow] = []
