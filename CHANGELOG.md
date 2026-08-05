@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.0...powerpacks-v1.17.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deep-context:** review order — heal first, restart, URL only, no auto-open; fixture-store cleanup ([#427](https://github.com/powerset-co/powerpacks/issues/427)) ([05dc35d](https://github.com/powerset-co/powerpacks/commit/05dc35df609fcafaf6e6c62a5cc1f061dac68315))
+
 ## [1.17.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.16.0...powerpacks-v1.17.0) (2026-08-05)
 
 
