@@ -653,17 +653,16 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
     return not (candidate.get("experiences") or candidate.get("education"))
 
 
-def _skip_link(pub: Any, parent_slug: Any) -> str:
+def _skip_link() -> str:
     """The inline "Skip" affordance folded into the card's question line.
 
     Opens the card's guidance box in SKIP mode — the same component the "No"
     path uses, re-worded as an optional why-note. The box's own Skip button
     performs the actual detach (the /decide endpoint withdraws every other
     unapplied option, so one Skip still resolves the whole parent), and a
-    typed note rides along as feedback."""
-    return (f"<button type='button' class='skip-link' data-open-skip "
-            f"data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
-            "Skip</button>")
+    typed note rides along as feedback. The submit uses the FORM's pub/parent,
+    so this button carries none."""
+    return "<button type='button' class='skip-link' data-open-skip>Skip</button>"
 
 
 def _person_menu(pub: Any, parent_slug: Any, extra_class: str = "") -> str:
@@ -751,10 +750,14 @@ def render_linkedin_card(parent: dict[str, Any],
 
 
 def _failure_note_html(failure_note: str) -> str:
-    """The one-liner a card leads with after its guided re-research FAILED."""
+    """The one-liner a card leads with after its guided re-research FAILED.
+
+    Class is `reresearch-failed`, NOT `retarget-failed` — the sidebar queue
+    rows already use `retarget-<state>` as state modifiers and a bare
+    `.retarget-failed` box rule would restyle those."""
     if not failure_note.strip():
         return ""
-    return (f"<div class='retarget-failed'>Re-research failed: "
+    return (f"<div class='reresearch-failed'>Re-research failed: "
             f"{esc(failure_note.strip())}</div>")
 
 
@@ -787,9 +790,9 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # confirm, so the ask is guidance (or Skip) — never "is this right?".
     if cache_miss and not synthetic:
         question = ("Invalid LinkedIn. Give re-research guidance, "
-                    f"or {_skip_link(candidate.get('pub'), parent.get('slug'))}.")
+                    f"or {_skip_link()}.")
     else:
-        question = f"Is this the right profile? Or {_skip_link(candidate.get('pub'), parent.get('slug'))}?"
+        question = f"Is this the right profile? Or {_skip_link()}?"
     eyebrow = ""
     if synthetic:
         link = ""
@@ -941,7 +944,7 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
         <ul class='linkedin-options'>{options}</ul>"""
     # "None of these" expands the guidance box (ONE input owns paste-the-URL
     # and re-research); the inline Skip stays folded into the question line.
-    question = f"Pick the right profile. Or {_skip_link(primary.get('pub'), parent.get('slug'))}?"
+    question = f"Pick the right profile. Or {_skip_link()}?"
     return f"""
     <article class='decision-card identity-card identity-card-multi' data-card
              data-parent='{esc(parent.get('slug'))}' data-multi-option>

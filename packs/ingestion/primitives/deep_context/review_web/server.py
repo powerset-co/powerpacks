@@ -84,7 +84,7 @@ from .feedback import (
     post_feedback_quietly,
     submit_directory_feedback,
 )
-from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, linkedin_url_in_guidance, run_guided_retarget
+from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, failed_notes_from_items, linkedin_url_in_guidance, run_guided_retarget
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, linkedin_review_queue, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
@@ -339,8 +339,9 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         with _job_lock:
             result = run_guided_retarget(
                 request, review_path=review_path, people_csv=people_csv,
-                facts_dir=facts_dir, raw_dir=RAW_DIR, use_llm=True,
-                on_progress=report)
+                facts_dir=facts_dir, raw_dir=RAW_DIR,
+                synthetic_path=synthetic_path,
+                use_llm=True, on_progress=report)
         if result.get("state") == "applied" and result.get("new_url"):
             # An APPLIED retarget is no longer a pending candidate, so the
             # prefetch stage would skip it — fetch the new profile directly
@@ -370,9 +371,10 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         if guided_queue is None:
             return frozenset()
         return frozenset(
-            str(item.get("slug") or "").strip().lower()
+            str(item.get("queue_slug") or item.get("slug") or "").strip().lower()
             for item in guided_queue.snapshot()
-            if item.get("state") not in TERMINAL_STATES and item.get("slug"))
+            if item.get("state") not in TERMINAL_STATES
+            and (item.get("queue_slug") or item.get("slug")))
 
     def guided_failed_notes() -> dict[str, str]:
         """slug -> failure detail for parents whose LATEST guided re-research
@@ -380,13 +382,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         say so, or the return reads as an unexplained loop."""
         if guided_queue is None:
             return {}
-        latest: dict[str, dict[str, Any]] = {}
-        for item in guided_queue.snapshot():
-            slug = str(item.get("slug") or "").strip().lower()
-            if slug:
-                latest[slug] = item
-        return {slug: str(item.get("detail") or "the job did not finish")
-                for slug, item in latest.items() if item.get("state") == "failed"}
+        return failed_notes_from_items(guided_queue.snapshot())
 
     # One free-enrichment attempt per worth-selection per process: a job that
     # FAILS must not restart on every page load (each restart rotates the state
@@ -394,14 +390,23 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
     # bounce). A new decision (new selection sha) or a server restart retries.
     _free_attempted: set[str] = set()
 
-    # Parsed review.csv rows, loaded once; our own decision writes mutate the
-    # dict in place, and refresh_parents_from_disk drops it after a job write.
+    # Parsed review.csv rows; our own decision writes mutate the dict in
+    # place, and refresh_parents_from_disk drops it after a job write. The
+    # mtime check catches every OTHER writer (the guided-retarget worker, a
+    # CLI run against the same store): handing a handler a stale snapshot
+    # here would make its whole-file rewrite erase those writers' rows.
     cached_rows: dict[str, dict[str, str]] | None = None
+    cached_rows_mtime: int = -1
 
     def review_rows_now() -> dict[str, dict[str, str]]:
-        nonlocal cached_rows
-        if cached_rows is None:
+        nonlocal cached_rows, cached_rows_mtime
+        try:
+            mtime = review_path.stat().st_mtime_ns
+        except OSError:
+            mtime = 0
+        if cached_rows is None or mtime != cached_rows_mtime:
             cached_rows = load_override_rows(review_path)
+            cached_rows_mtime = mtime
         return cached_rows
 
     def candidate_in_snapshot(pub: str, prefer_slug: str = "",
@@ -952,6 +957,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             str(c.get("pub") or "").strip().lower()
                             for c in target_parent.get("candidates") or []
                             if c.get("pub") and not c.get("synthetic")})),
+                        synthetic_pubs=tuple(sorted({
+                            str(c.get("pub") or "").strip().lower()
+                            for c in target_parent.get("candidates") or []
+                            if c.get("pub") and c.get("synthetic")})),
+                        queue_slug=str(target_parent.get("slug") or parent_slug),
+                        submitted_at=now_iso(),
                         match_emails=tuple(
                             str(value) for value in target_candidate.get("match_emails") or []),
                         match_phones=tuple(
@@ -1316,9 +1327,10 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                 status=400)
                 return
             decide_note = (form.get("note") or [""])[0].strip()[:2000]
-            if decide_note:
+            if decide_note and decision == "detach":
                 # A Skip's optional why-note rides the decision POST (the same
-                # contract as the worth note): auto-file it with the person's
+                # contract as the worth note; only the Skip UI sends one, and
+                # Skip decides `detach`): auto-file it with the person's
                 # context, fire-and-forget — never a UI error if it can't go out.
                 try:
                     feedback_request = build_feedback_request(

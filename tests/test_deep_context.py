@@ -6185,6 +6185,124 @@ class TestGuidedRetargets(unittest.TestCase):
             self.assertEqual(rows["jordan-bravo-other"]["action"], "detach")
             self.assertEqual(rows["jordan-bravo-other"]["approved"], "yes")
 
+    def test_crash_after_research_restores_blanked_rows(self):
+        # The blanking write lands before the judge/mirror steps, which can
+        # still raise (missing OpenAI key, network). A crash there must
+        # restore approved AND the paid-verdict fingerprint, or the person
+        # returns half-reset and the next enrichment pass re-bills the judge.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts = base / "review.csv", base / "facts"
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            write_rows(review, {"jordan-bravo-wrong": {
+                "public_identifier": "jordan-bravo-wrong", "action": "verify",
+                "approved": "auto", "llm_judge_fingerprint": "paid-sha"}})
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.9},
+                       "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                                  "linkedin_status": "found"}}
+            request = web_retargets.GuidedRetarget(
+                slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                name="Jordan Bravo", guidance="the Jordan Bravo at Acme",
+                person_ids=("pid-jordan",),
+                candidate_pubs=("jordan-bravo-wrong",))
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=self._fake_research({}, profile)), \
+                 mock.patch.object(web_retargets.reconcile_deep_research,
+                                   "propose_retargets_from_output",
+                                   side_effect=RuntimeError("judge LLM unreachable")):
+                result = web_retargets.run_guided_retarget(
+                    request, review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=base / "raw", out_dir=base / "out",
+                    engine_dir=base / "engine", use_llm=True)
+            self.assertEqual(result["state"], "failed")
+            self.assertIn("judge LLM unreachable", result["detail"])
+            row = _rows_by_pub(review)["jordan-bravo-wrong"]
+            self.assertEqual(row["approved"], "auto")
+            self.assertEqual(row["llm_judge_fingerprint"], "paid-sha")
+
+    def test_applied_settles_folded_synthetic_sibling_but_user_gate_stands(self):
+        # A mixed parent (real link + folded synthetic option): an applied
+        # identity settles the synthetic through its approve gate, or the
+        # parent bounces back as a synthetic-option card. A gate the user
+        # already set is never overwritten.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review = base / "review.csv"
+            synth = base / "synthetic-people.csv"
+            synth.write_text(
+                "public_identifier,approved\nsynth-email-abc,\nsynth-phone-def,yes\n",
+                encoding="utf-8")
+            request = web_retargets.GuidedRetarget(
+                slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                name="Jordan Bravo",
+                guidance="this is him https://www.linkedin.com/in/jordan-bravo-right",
+                candidate_pubs=("jordan-bravo-wrong",),
+                synthetic_pubs=("synth-email-abc", "synth-phone-def"))
+            result = web_retargets.run_guided_retarget(
+                request, review_path=review,
+                people_csv=base / "missing-people.csv",
+                facts_dir=base / "facts", raw_dir=base / "raw",
+                out_dir=base / "out", synthetic_path=synth, use_llm=False)
+            self.assertEqual(result["state"], "applied")
+            gates = {r["public_identifier"]: r["approved"]
+                     for r in csv.DictReader(synth.open())}
+            self.assertEqual(gates["synth-email-abc"], "no")   # settled
+            self.assertEqual(gates["synth-phone-def"], "yes")  # user word stands
+
+    def test_sibling_human_yes_and_auto_rows_survive_apply(self):
+        # A sibling row's human yes is NEVER blanked or settled (one pub row
+        # can be a DIFFERENT parent's confirmed identity), and a
+        # machine-applied auto row is not detached by a direct apply —
+        # matching /decide's withdrawal guard.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review = base / "review.csv"
+            write_rows(review, {
+                "shared-confirmed": {"public_identifier": "shared-confirmed",
+                                     "action": "verify", "approved": "yes"},
+                "machine-applied": {"public_identifier": "machine-applied",
+                                    "action": "verify", "approved": "auto"}})
+            request = web_retargets.GuidedRetarget(
+                slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                name="Jordan Bravo",
+                guidance="this is him https://www.linkedin.com/in/jordan-bravo-right",
+                candidate_pubs=("jordan-bravo-wrong", "shared-confirmed",
+                                "machine-applied"))
+            result = web_retargets.run_guided_retarget(
+                request, review_path=review,
+                people_csv=base / "missing-people.csv",
+                facts_dir=base / "facts", raw_dir=base / "raw",
+                out_dir=base / "out", use_llm=False)
+            self.assertEqual(result["state"], "applied")
+            rows = _rows_by_pub(review)
+            self.assertEqual(rows["shared-confirmed"]["action"], "verify")
+            self.assertEqual(rows["shared-confirmed"]["approved"], "yes")
+            self.assertEqual(rows["machine-applied"]["action"], "verify")
+            self.assertEqual(rows["machine-applied"]["approved"], "auto")
+
+    def test_failed_notes_reduce_newest_first(self):
+        # snapshot() is newest-first: the FIRST item seen per slug is the
+        # latest, so an old failure never shadows a later success and a later
+        # failure is never shadowed by an old success.
+        old_fail_then_ok = [
+            {"slug": "jordan-bravo-p", "state": "applied", "detail": "done"},
+            {"slug": "jordan-bravo-p", "state": "failed", "detail": "old error"}]
+        self.assertEqual(web_retargets.failed_notes_from_items(old_fail_then_ok), {})
+        ok_then_new_fail = [
+            {"slug": "jordan-bravo-p", "state": "failed", "detail": "new error"},
+            {"slug": "jordan-bravo-p", "state": "applied", "detail": "done"}]
+        self.assertEqual(
+            web_retargets.failed_notes_from_items(ok_then_new_fail),
+            {"jordan-bravo-p": "new error"})
+        # queue_slug (the review queue's parent slug) wins over the dossier slug.
+        synthetic_parent = [
+            {"slug": "real-parent", "queue_slug": "synthetic-synth-x",
+             "state": "failed", "detail": "boom"}]
+        self.assertEqual(
+            web_retargets.failed_notes_from_items(synthetic_parent),
+            {"synthetic-synth-x": "boom"})
+
     def test_queue_drains_serially_and_reports_terminal_states(self):
         order: list[str] = []
 
@@ -6410,11 +6528,11 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
             html = web_rendering.render_linkedin_card(
                 self._parent(), cand, d, d, profile_cache_dir=d,
                 failure_note="research blocked: PARALLEL_API_KEY not set")
-        self.assertIn("class='retarget-failed'", html)
+        self.assertIn("class='reresearch-failed'", html)
         self.assertIn("Re-research failed: research blocked", html)
         without = web_rendering.render_linkedin_card(
             self._parent(), cand, Path("."), Path("."), profile_cache_dir=Path("."))
-        self.assertNotIn("retarget-failed", without)
+        self.assertNotIn("reresearch-failed", without)
 
     def test_blank_profile_card_leads_with_open_reresearch(self):
         # A valid URL whose profile is 404/private/empty renders the WHY and

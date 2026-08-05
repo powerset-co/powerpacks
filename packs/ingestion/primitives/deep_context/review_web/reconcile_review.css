@@ -1406,14 +1406,16 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
   border-radius: 7px;
 }
 
-/* A returned card leads with WHY its re-research failed. */
-.retarget-failed {
+/* A returned card leads with WHY its re-research failed. Named
+   `reresearch-failed` — `.retarget-<state>` is the sidebar rows' state
+   modifier namespace and must stay unstyled as a box. */
+.reresearch-failed {
   margin-bottom: 10px;
   padding: 8px 12px;
-  border: 1px solid #fecaca;
+  border: 1px solid #7f1d1d;
   border-radius: 8px;
-  background: #fef2f2;
-  color: #b91c1c;
+  background: rgba(185, 28, 28, .12);
+  color: #f87171;
   font-size: 13px;
 }
 
