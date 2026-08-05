@@ -780,8 +780,10 @@ document.addEventListener("click", async (event) => {
   }
 
   if (button.hasAttribute("data-open-guidance")) {
-    // "No" / "None of these" expands the card's guidance box — ONE input owns
-    // both paste-the-right-URL (applies directly, no spend) and re-research.
+    // The multi card's "None of these" expands the guidance box — ONE input
+    // owns both paste-the-right-URL (applies directly, no spend) and
+    // re-research. (The single card's "No" decides detach directly through
+    // data-decide below; only the box's own <summary> opens it there.)
     event.preventDefault();
     const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
     if (details instanceof HTMLElement) {

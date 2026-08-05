@@ -4301,9 +4301,11 @@ class TestReviewWeb(unittest.TestCase):
             html = web_rendering.render_linkedin_card(sam, pending[0], d, d)
             self.assertIn("Is this the right profile?", html)
             self.assertIn("data-decide='keep'", html)
-            # "No" expands the guidance box — one input owns paste-the-URL
-            # and re-research; there is no separate fix form.
-            self.assertIn("data-open-guidance", html)
+            # "No" is TERMINAL — it decides detach directly (the same /decide
+            # fan-out Skip performs); the guidance box is the separate
+            # pre-decision re-research path, opened by its own <summary>.
+            self.assertIn("data-decide='detach'", html)
+            self.assertNotIn("data-open-guidance", html)
             self.assertNotIn("data-fix-form", html)
             self.assertNotIn("Use a different LinkedIn", html)
             # Skip is folded INTO the question line as an inline secondary link, not a
@@ -4713,9 +4715,10 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertIn("research gaps: education dates", cand["reason"])
             html = web_rendering.render_linkedin_card(parents[0], cand, Path(tmpdir), Path(tmpdir))
             # A synthetic card renders the SAME decision UI as a real-LinkedIn card:
-            # the "Is this the right profile?" question, a [No] [Use this profile]
-            # binary-actions pair, and a hidden fix form revealed by No. No synthetic-
-            # only affordances ("No LinkedIn found" eyebrow / "Add their LinkedIn").
+            # the "Is this the right profile?" question, a terminal [No]
+            # [Use this profile] binary-actions pair, and a collapsed guidance box.
+            # No synthetic-only affordances ("No LinkedIn found" eyebrow /
+            # "Add their LinkedIn").
             self.assertNotIn("No LinkedIn found", html)
             self.assertNotIn("Add their LinkedIn", html)
             self.assertNotIn("synthetic-correction", html)
@@ -4726,9 +4729,10 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertIn("class='skip-link' data-open-skip", html)
             self.assertIn(">Skip</button>?", html)
             self.assertNotIn("alternate-skip", html)
-            # "No" expands the guidance box (no separate fix form, same as a
-            # real card); a pasted URL in guidance applies directly.
-            self.assertIn("data-open-guidance", html)
+            # "No" decides detach directly (terminal, same as a real card); the
+            # guidance box stays as the separate re-research path.
+            self.assertIn("data-decide='detach'", html)
+            self.assertNotIn("data-open-guidance", html)
             self.assertNotIn("data-fix-form", html)
             # synthetic keep still routes through the synthetic approve gate (/decide
             # treats a keep on a synth- pub as the synthetic-people.csv approval).
@@ -6636,7 +6640,8 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertIn("Invalid LinkedIn.", html)
         self.assertNotIn("Is this the right profile?", html)
         self.assertNotIn("Use this profile", html)  # nothing to confirm
-        self.assertNotIn("data-open-guidance", html)  # no buttons at all on invalid cards
+        self.assertNotIn("data-open-guidance", html)  # no binary actions on invalid cards
+        self.assertNotIn("data-decide='detach'", html)  # no terminal No either
         self.assertIn("data-open-skip", html)  # Skip stays
 
     def test_machine_reason_and_placeholder_junk_never_render(self):
@@ -6683,8 +6688,34 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
                 self._parent(), cand, d, d, profile_cache_dir=d)
         self.assertNotIn("no usable profile content", html)
         self.assertIn("<details class='retarget-guidance'>", html)
-        self.assertIn("No — provide LinkedIn or re-research this person", html)
+        self.assertIn("Wrong person? Provide LinkedIn or re-research", html)
         self.assertIn("View LinkedIn", html)  # real profile keeps its link
+
+    def test_single_card_no_is_terminal_detach_and_guidance_box_survives(self):
+        # The old "No" only opened the guidance box and saved NOTHING — the row
+        # stayed pending and the person kept returning to the queue. "No" now
+        # decides detach directly (the same /decide fan-out as Skip), keyed on
+        # the candidate pub + parent slug, while the guidance box remains the
+        # independent pre-decision re-research path.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "headline": "Founder at Bravo Robotics",
+                    "experiences": ["Founder @ Bravo Robotics"]}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        no_button = html.split(">No</button>")[0].rsplit("<button", 1)[1]
+        self.assertIn("data-decide='detach'", no_button)
+        self.assertIn("data-toast='Not this profile'", no_button)
+        self.assertIn("data-pub='jordan-bravo'", no_button)
+        self.assertIn("data-parent='jordan-bravo-ab12cd34'", no_button)
+        # The box is no longer wired to No — only its own <summary> opens it —
+        # and it still exists with the URL-paste/re-research form intact.
+        self.assertNotIn("data-open-guidance", html)
+        self.assertIn("<details class='retarget-guidance'>", html)
+        self.assertIn("data-retarget-form", html)
+        self.assertIn(">Re-research</button>", html)
 
     def test_multi_card_offers_guided_retarget_keyed_on_primary(self):
         parent = self._parent()

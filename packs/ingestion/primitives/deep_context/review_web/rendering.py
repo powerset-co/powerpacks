@@ -798,8 +798,8 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # which is redundant with the Summary/Relationship/Timeline sections below, so
     # it (and the "Researched profile" / "No LinkedIn found" labels) are dropped.
     # Both a real and a synthetic row present the SAME decision UI ("Is this the
-    # right profile? Or Skip?" + [No] [Use this profile] + a hidden fix form behind
-    # No). The "Skip" is an inline secondary link folded into the question line (same
+    # right profile? Or Skip?" + a terminal [No] [Use this profile] pair + a
+    # collapsed guidance box). The "Skip" is an inline secondary link folded into the question line (same
     # detach behavior as the old standalone button). A synthetic row simply has no
     # genuine LinkedIn header (no View-LinkedIn link, no headline); the SEMANTIC
     # difference lives only in the /decide endpoint, which routes a keep on a
@@ -856,12 +856,17 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # An INVALID card has nothing to confirm and nothing to say No to — the
     # guidance box (whose URL path applies a pasted link directly, no spend)
     # plus the inline Skip is the complete decision surface. On a VALID card,
-    # "No" expands the same guidance box — ONE input owns both paste-the-URL
-    # and re-research; there is no separate fix form.
+    # "No" is TERMINAL: it decides detach directly (the same /decide fan-out
+    # Skip performs), so a No always saves and the person never returns as a
+    # silent pending loop. The collapsed guidance box below stays the separate
+    # PRE-decision path — paste the right URL or ask for re-research instead
+    # of deciding.
     actions = "" if invalid else f"""
         <div class='binary-actions'>
-          <button class='button button-outline' data-open-guidance
-                  aria-expanded='false'>No</button>
+          <button class='button button-outline' data-decide='detach'
+                  data-toast='Not this profile'
+                  data-pub='{esc(candidate.get('pub'))}'
+                  data-parent='{esc(parent.get('slug'))}'>No</button>
           <button class='button button-primary' data-decide='keep'
                   data-pub='{esc(candidate.get('pub'))}'
                   data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
@@ -879,7 +884,7 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
                             parent.get('slug'),
                             label=("No profile data — give re-research guidance"
                                    if invalid
-                                   else "No — provide LinkedIn or re-research this person"),
+                                   else "Wrong person? Provide LinkedIn or re-research"),
                             open_by_default=invalid)}
       </div>
     </article>"""
