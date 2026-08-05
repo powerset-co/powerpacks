@@ -4,7 +4,10 @@ A definitive, first-class step of `bin/deep-context review <stage>`: it always
 runs, always announces itself (a clean store prints one `[heal] ... (nothing
 to do)` line), and stamps its summary into the review stage manifest. No
 approval gate: invoking review/heal IS the consent — the pre-run count lines
-are information, and the batch cap is only a runaway backstop.
+are information. Uncapped by default (2026-08-05: a silent 200-cap left 43 of
+a real store's 243 judge-skips unhealed and read as "heal ran, still
+broken"); --cap is an optional manual bound and a capped run says what it
+left behind.
 
 What this actually does, in order:
   1. LEGACY SCRUBS — `ensure_owner_phones` + `resolve_stored_identity_policy`,
@@ -105,10 +108,12 @@ from packs.ingestion.primitives.enrich.rapidapi_client import (
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 
-# Runaway backstop only — NOT an approval gate. A typical session heals a
-# handful of new judge-skipped cards; the cap exists so a pathological store
-# cannot turn one boot into thousands of paid calls.
-HEAL_BATCH_CAP = 200
+# UNCAPPED by default (owner directive 2026-08-05): the heal is a definitive
+# always-run task and a silent cap reads as "heal ran, still broken" — the
+# first real 243-candidate store proved it. The RapidAPI client's rate limiter
+# is the natural throttle; --cap remains only as a manual bound, and a capped
+# run SAYS what it left behind.
+HEAL_BATCH_CAP: int | None = None
 _FETCH_WORKERS = 8
 
 
@@ -147,7 +152,7 @@ class HealReview:
         deep_research_dir: Path | None = None,
         owner_json: Path | None = None,
         review_manifest: Path | None = None,
-        cap: int = HEAL_BATCH_CAP,
+        cap: int | None = HEAL_BATCH_CAP,
     ) -> None:
         self.review_csv = Path(review_csv or LINKEDIN_OVERRIDES_CSV)
         self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
@@ -162,7 +167,7 @@ class HealReview:
         self.deep_research_dir = Path(deep_research_dir or DEEP_RESEARCH_DIR)
         self.owner_json = Path(owner_json or OWNER_JSON)
         self.review_manifest = Path(review_manifest or REVIEW_MANIFEST)
-        self.cap = max(1, int(cap))
+        self.cap = None if cap is None else max(1, int(cap))
 
     # ---- selection ---------------------------------------------------------
 
@@ -207,7 +212,11 @@ class HealReview:
                 match_phones=tuple(str(p) for p in rec.get("match_phones") or []),
             ))
         out.sort(key=lambda c: (c.parent_slug, c.pub))
-        return out[: self.cap], skipped_retarget, len(out)
+        capped = out if self.cap is None else out[: self.cap]
+        if len(capped) < len(out):
+            _say(f"cap {self.cap}: healing {len(capped)} of {len(out)} — "
+                 f"run review again for the remaining {len(out) - len(capped)}")
+        return capped, skipped_retarget, len(out)
 
     # ---- fetch -------------------------------------------------------------
 
@@ -506,7 +515,8 @@ def main(argv: list[str] | None = None) -> int:
         description="Self-heal pass before review serve: legacy scrubs, fresh-fetch + "
                     "re-judge of judge-skipped links, free dead-link termination.")
     parser.add_argument("--cap", type=int, default=HEAL_BATCH_CAP,
-                        help="Runaway backstop on candidates per run (default %(default)s; not an approval gate)")
+                        help="Optional manual bound on candidates per run (default: uncapped; "
+                             "a capped run reports what it left behind)")
     parser.add_argument("--pre-restart", action="store_true",
                         help="Skip the no-review-session gate: the caller stops and restarts the "
                              "review server immediately after this pass (bin/deep-context review only)")
