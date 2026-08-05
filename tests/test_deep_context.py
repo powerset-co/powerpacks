@@ -7227,7 +7227,8 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
                 ("jordan-bravo-2", "detach", "", 0.80, "pid-b")], index)
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
-        self.assertEqual(out, {"connections": 0, "promoted": 1, "demoted": 1})
+        self.assertEqual(out, {"connections": 0, "promoted": 1, "demoted": 1,
+                               "siblings_settled": 0})
         self.assertEqual(rows["jordan-bravo"]["approved"], "auto")
         self.assertEqual((rows["jordan-bravo-2"]["action"],
                           rows["jordan-bravo-2"]["approved"]), ("detach", "auto"))
@@ -7240,7 +7241,8 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
                 ("jordan-doppel", "verify", "", 0.62, "pid-a")])
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
-        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 1})
+        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 1,
+                               "siblings_settled": 0})
         self.assertEqual((rows["jordan-doppel"]["action"],
                           rows["jordan-doppel"]["approved"]), ("detach", "auto"))
         self.assertEqual(rows["jordan-bravo"]["approved"], "auto")  # untouched
@@ -7254,7 +7256,8 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
                 ("jordan-rt", "retarget", "", 0.99, "pid-c")])   # retargets never touched
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
-        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 0})
+        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 0,
+                               "siblings_settled": 0})
         self.assertEqual(rows["jordan-bravo"]["approved"], "")
         self.assertEqual(rows["jordan-user"]["approved"], "no")
         self.assertEqual(rows["jordan-rt"]["action"], "retarget")
@@ -7278,7 +7281,8 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
             reconcile.write_override_rows(review, rows)
             out = legacy.resolve_stored_identity_policy(review, idx, people)
             rows = reconcile.load_override_rows(review)
-        self.assertEqual(out, {"connections": 1, "promoted": 0, "demoted": 1})
+        self.assertEqual(out, {"connections": 1, "promoted": 0, "demoted": 1,
+                               "siblings_settled": 0})
         self.assertEqual((rows["jordan-bravo"]["action"],
                           rows["jordan-bravo"]["approved"]), ("verify", "auto"))
         self.assertEqual((rows["jordan-doppel"]["action"],
@@ -7291,7 +7295,207 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
                 ("jordan-doppel", "verify", "", 0.62, "pid-a")])
             legacy.resolve_stored_identity_policy(review, idx)
             second = legacy.resolve_stored_identity_policy(review, idx)
-        self.assertEqual(second, {"connections": 0, "promoted": 0, "demoted": 0})
+        self.assertEqual(second, {"connections": 0, "promoted": 0, "demoted": 0,
+                                  "siblings_settled": 0})
+
+
+_SYNTH_COLUMNS = ["id", "public_identifier", "full_name", "headline",
+                  "summary", "location_raw", "work_experiences", "education",
+                  "primary_email", "primary_phone", "source_parent_slug",
+                  "source_person_ids", "approved", "synthetic_metadata"]
+
+
+def _write_synthetic_csv(path, rows_spec):
+    """synthetic-people.csv fixture rows: (pub, source_person_ids, approved, n_exp)."""
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=_SYNTH_COLUMNS)
+        writer.writeheader()
+        for pub, person_ids, approved, exp in rows_spec:
+            writer.writerow({
+                "id": person_ids[0], "public_identifier": pub,
+                "full_name": "Jordan Bravo", "headline": "researcher",
+                "work_experiences": json.dumps(
+                    [{"title": "CTO", "company_name": "StealthCo",
+                      "is_current": True}] * exp),
+                "education": "[]",
+                "source_person_ids": json.dumps(person_ids),
+                "approved": approved,
+                "synthetic_metadata": json.dumps({"completeness": 0.5}),
+            })
+
+
+class HalfDecidedParentSettleTests(unittest.TestCase):
+    """Scrub rule (4): a parent group holding a HUMAN identity decision settles
+    its remaining pending candidate rows exactly like the live /decide fan-out
+    (pre-v1.15.3 stores hold parents a human answered on one row while the
+    sibling links and synthetic gates stayed pending and kept re-queueing)."""
+
+    def _write_review(self, review, rows_spec):
+        rows = {}
+        for pub, action, approved, source, pid in rows_spec:
+            rows[pub] = {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                         "public_identifier": pub, "action": action,
+                         "approved": approved, "source": source,
+                         "person_id": pid,
+                         "linkedin_url": f"https://www.linkedin.com/in/{pub}"}
+        reconcile.write_override_rows(review, rows)
+
+    def _index(self, d):
+        idx = Path(d) / "index.json"
+        idx.write_text(json.dumps({"parents": {}, "slugs": {}}), encoding="utf-8")
+        return idx
+
+    def test_human_decided_group_settles_pending_rows_and_gates(self):
+        # The half-decided shape: the human skipped this person (detach/yes on
+        # one row, a rule the promote/demote pass never touches), while a
+        # judged sibling link, a proposed retarget, and a synthetic gate all
+        # stayed pending — the card kept re-entering the queue.
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = Path(d) / "review.csv", self._index(d)
+            self._write_review(review, [
+                ("jordan-bravo", "detach", "yes", "deep-context-review", "pid-1"),
+                ("jordan-bravo-2", "verify", "", "deep-context-reconcile", "pid-1"),
+                ("jordan-rt", "retarget", "", "deep-research", "pid-1"),
+                ("jordan-auto", "detach", "auto", "deep-context-reconcile", "pid-1"),
+                ("casey-example", "verify", "", "deep-context-reconcile", "pid-2")])
+            rows = reconcile.load_override_rows(review)
+            rows["jordan-rt"]["new_linkedin_url"] = "https://www.linkedin.com/in/other"
+            reconcile.write_override_rows(review, rows)
+            synth = Path(d) / "synthetic-people.csv"
+            _write_synthetic_csv(synth, [
+                ("synth-jordan", ["pid-1"], "", 1),
+                ("synth-casey", ["pid-2"], "", 1)])
+            out = legacy.resolve_stored_identity_policy(review, idx, None, synth)
+            rows = reconcile.load_override_rows(review)
+            with synth.open(newline="", encoding="utf-8") as fh:
+                gates = {r["public_identifier"]: r["approved"]
+                         for r in csv.DictReader(fh)}
+        self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 0,
+                               "siblings_settled": 3})
+        # pending siblings settle as a link-level No, exactly like /decide
+        self.assertEqual((rows["jordan-bravo-2"]["action"],
+                          rows["jordan-bravo-2"]["approved"]), ("detach", "yes"))
+        self.assertEqual((rows["jordan-rt"]["action"], rows["jordan-rt"]["approved"],
+                          rows["jordan-rt"]["new_linkedin_url"]),
+                         ("detach", "yes", ""))
+        # the human row and the machine-applied auto row are never touched
+        self.assertEqual((rows["jordan-bravo"]["action"],
+                          rows["jordan-bravo"]["approved"]), ("detach", "yes"))
+        self.assertEqual((rows["jordan-auto"]["action"],
+                          rows["jordan-auto"]["approved"]), ("detach", "auto"))
+        # a parent with NO human decision is never touched
+        self.assertEqual((rows["casey-example"]["action"],
+                          rows["casey-example"]["approved"]), ("verify", ""))
+        self.assertEqual(gates, {"synth-jordan": "no", "synth-casey": ""})
+
+    def test_machine_yes_never_triggers_a_settle(self):
+        # Old machine appliers wrote approved=yes with source `deep-research`
+        # — machine-grade, not a human answer; the sibling must stay pending.
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = Path(d) / "review.csv", self._index(d)
+            self._write_review(review, [
+                ("pat-machine", "retarget", "yes", "deep-research", "pid-3"),
+                ("pat-2", "verify", "", "deep-context-reconcile", "pid-3")])
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out["siblings_settled"], 0)
+        self.assertEqual(rows["pat-2"]["approved"], "")
+
+    def test_scrub_twice_is_idempotent_byte_for_byte(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = Path(d) / "review.csv", self._index(d)
+            self._write_review(review, [
+                ("jordan-bravo", "detach", "yes", "deep-context-review", "pid-1"),
+                ("jordan-bravo-2", "verify", "", "deep-context-reconcile", "pid-1")])
+            synth = Path(d) / "synthetic-people.csv"
+            _write_synthetic_csv(synth, [("synth-jordan", ["pid-1"], "", 1)])
+            first = legacy.resolve_stored_identity_policy(review, idx, None, synth)
+            review_bytes = review.read_bytes()
+            synth_bytes = synth.read_bytes()
+            second = legacy.resolve_stored_identity_policy(review, idx, None, synth)
+            self.assertEqual(first["siblings_settled"], 2)
+            self.assertEqual(second, {"connections": 0, "promoted": 0,
+                                      "demoted": 0, "siblings_settled": 0})
+            self.assertEqual(review.read_bytes(), review_bytes)
+            self.assertEqual(synth.read_bytes(), synth_bytes)
+
+
+class MixedParentSingleDecisionQueueTests(unittest.TestCase):
+    """A parent with MANY mixed candidates (two judged LinkedIn rows plus
+    synthetic options) leaves the LinkedIn review queue after ONE decision.
+    Driven through the real queue (build_parents + extend_and_annotate +
+    linkedin_review_queue); the decision is the legacy single-row /decide
+    write (pre-v1.15.3 shape) repaired by the boot scrub's sibling settle."""
+
+    def _fixture(self, d):
+        base = Path(d)
+        for sub in ("facts", "parents", "dossiers", "cache", "research"):
+            (base / sub).mkdir()
+        verdicts = base / "verdicts.jsonl"
+        records = [
+            {"parent_slug": "jordan-bravo-p", "name": "Jordan Bravo",
+             "person_ids": ["pid-1"], "candidate_key": pub,
+             "linkedin": {"linkedin_url": f"https://www.linkedin.com/in/{pub}",
+                          "full_name": "Jordan Bravo", "has_profile": True},
+             "verdict": {"verdict": "needs_review", "confidence": 0.5}}
+            for pub in ("jordan-bravo", "jordan-bravo-2")]
+        verdicts.write_text(
+            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+        review = base / "review.csv"
+        rows = {}
+        for pub in ("jordan-bravo", "jordan-bravo-2"):
+            rows[pub] = {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                         "public_identifier": pub, "action": "verify",
+                         "approved": "", "source": "deep-context-reconcile",
+                         "person_id": "pid-1",
+                         "linkedin_url": f"https://www.linkedin.com/in/{pub}"}
+        reconcile.write_override_rows(review, rows)
+        synth = base / "synthetic-people.csv"
+        _write_synthetic_csv(synth, [("synth-jordan-a", ["pid-1"], "", 2),
+                                     ("synth-jordan-b", ["pid-1"], "", 1)])
+        index_json = base / "index.json"
+        index_json.write_text(json.dumps({
+            "parents": {"jordan-bravo-p": {"parent_id": "parent-1",
+                                           "children": ["c1"]}},
+            "slugs": {"c1": {"person_id": "pid-1"}},
+            "by_email": {}, "by_phone": {}}), encoding="utf-8")
+        return base, verdicts, review, synth, index_json
+
+    def _queue(self, base, verdicts, review, synth, index_json):
+        parents_list, overrides = web_model.build_parents(verdicts, review)
+        web_model.extend_and_annotate(
+            parents_list, overrides, synth, base / "facts", set(),
+            parents_dir=base / "parents", dossier_dir=base / "dossiers",
+            profile_cache_dir=base / "cache", research_dir=base / "research",
+            index_json=index_json)
+        return web_rendering.linkedin_review_queue(parents_list)
+
+    def test_one_decision_settles_the_whole_card(self):
+        with tempfile.TemporaryDirectory() as d:
+            fixture = self._fixture(d)
+            base, verdicts, review, synth, index_json = fixture
+            queue = self._queue(*fixture)
+            # ONE card for the parent, offering the links + one synthetic
+            # option (the thinner synthetic sibling is display-pruned).
+            self.assertEqual(len(queue), 1)
+            self.assertEqual(len(queue[0][1]), 3)
+            # The legacy /decide wrote ONLY the clicked row (Skip = detach):
+            # the same single-row write the endpoint still starts from.
+            web_decisions.apply_decision(
+                review, verdicts, "jordan-bravo", "detach", "",
+                reconcile.DEFAULT_CONFIRM)
+            # Pre-v1.15.3 that left the card half-decided — still queued.
+            self.assertEqual(len(self._queue(*fixture)), 1)
+            # The boot scrub settles the group like the live fan-out would.
+            out = legacy.resolve_stored_identity_policy(
+                review, index_json, None, synth)
+            self.assertEqual(out["siblings_settled"], 3)
+            self.assertEqual(self._queue(*fixture), [])
+            with synth.open(newline="", encoding="utf-8") as fh:
+                gates = {r["public_identifier"]: r["approved"]
+                         for r in csv.DictReader(fh)}
+            self.assertEqual(gates, {"synth-jordan-a": "no",
+                                     "synth-jordan-b": "no"})
 
 
 if __name__ == "__main__":
