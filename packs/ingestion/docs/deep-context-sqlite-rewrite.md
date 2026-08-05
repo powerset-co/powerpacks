@@ -1,132 +1,253 @@
-# Deep-context ground-up rewrite: one sqlite store, no additive paths
+# Deep Context SQLite rewrite mandate
 
-Created: 2026-08-05
+Status: canonical implementation contract  
+Updated: 2026-08-05
 
-Changelog:
-- 2026-08-05: initial spec (owner directive: full rewrite, keep only boundary
-  files; "every view, every piece of logic in deep context operates on
-  sqlite"; no incremental dual-path migration).
+This document is the source of truth for the Deep Context rewrite. When code,
+an older migration document, a test, or an agent plan disagrees with it, this
+document wins until the owner changes it.
 
-## Rule zero: this is a single-user local tool
+## Outcome
 
-One user, one local webserver, one command at a time. There are NO concurrent
-writers, no multi-process coordination, no recovery protocols. Consequences:
+Deep Context is a small local pipeline and labeling application backed by one
+SQLite database:
 
-- **The db is the record; the CSVs are re-derivable exports.** Any staleness
-  or truncation question is answered by re-exporting (db → baton) or
-  re-importing (baton → db) — never by flags, pending markers, or refusal
-  ceremonies. The `pending_export` apparatus, `recover_pending_export`, the
-  schema-drop guard, and explicit BEGIN IMMEDIATE choreography do NOT carry
-  into the rewrite; sqlite's default single-writer transaction is already
-  ACID and the built-in busy timeout covers a freak overlap.
-- **No locks anywhere**: no flock, no `ensure_no_review_session`, no session
-  contracts, no mtime sniffing. Atomic temp+rename on file writes is the one
-  crash protection that stays (it is how files are written, not a guard).
-- A guard may be added only for an operation a single local user actually
-  performs. "Two processes racing" is not one of them.
+```text
+.powerpacks/deep-context/deep-context.sqlite
+```
 
-## Non-negotiables
+Keep and improve the existing SQLite foundation. Do not replatform it and do
+not preserve the old file-state architecture inside SQL-shaped wrappers.
 
-1. **The truths stay.** Paid/LLM artifacts keep their formats and paths:
-   Parallel research outputs, `facts/*.jsonl` dossier checkpoints,
-   `dossiers/*.md`, the RapidAPI profile cache. Nothing paid is regenerated,
-   moved, or re-keyed.
-2. **Boundary files stay.** Inputs read from other stages and outputs other
-   stages read keep their formats: `merged/people.csv` (in),
-   `review.csv` + `synthetic-people.csv` (export batons out — written FROM
-   the db, never read as state), directory.csv contributions via
-   persist_review_identities (out), stage `manifest.json`s (out).
-3. **Everything between is ONE sqlite store** —
-   `.powerpacks/deep-context/deep-context.sqlite`. Every view is a query.
-   Every write is a row upsert in a transaction. No file/JSON re-derivation
-   anywhere inside the stage. No CSV loaded as state anywhere inside the
-   stage.
-4. **No additive paths.** Old code is deleted the same commit its replacement
-   lands. No `write=` seams, no fallback branches, no "both worlds" states.
-   A file that survives does so because it IS the new design.
+The initial rewritten runtime targets about 5,000 production Python lines. It
+may temporarily approach 7,000 during cutover, but it is not done until the old
+paths are deleted and the runtime is moving toward the 5,000-line shape.
 
-## The store (all stage state)
+## Rule zero
 
-| Table | Replaces | Notes |
-|---|---|---|
-| `people(person_id PK, parent_id, child_slug, parent_slug)` | index.json parents/slugs | already shipped (v3) |
-| `parents(parent_id PK, public_identifier, worth_person_ids, llm_worth…)` | parent-worth rows | shipped |
-| `links(row_key PK, kind, person_id, url, proposal…, judge fields…)` | identity rows | shipped |
-| `decisions(kind+target PK, value, approved, source, note, decided_at)` | approved/network_worth/gates | shipped; absence = pending |
-| `verdicts(candidate_key PK, parent_slug, verdict, confidence, reason, fingerprint, judged_at)` | verdicts.jsonl | judge writes rows; jsonl becomes export-only if any external reader exists, else dies |
-| `synthetic_profiles(pub PK, …all profile columns…)` | synthetic-people.csv columns | csv becomes export baton |
-| `facts(person_id PK, path, mtime_ns, llm_worth, llm_worth_reason)` | facts-dir globbing + worth re-parse | references the paid files; worth mirrored once at write |
-| `research(handle PK, dir_path, status, fingerprint)` | per-handle research dir scans | references paid outputs |
-| `guidance(handle PK, person_id, guidance, state, submitted_at, applied_url, detail)` | the MEMORY-ONLY retarget queue | durable — kills the "history vanished on restart" class Jake hit |
-| `meta` | — | schema version, baton stats, pending_export |
+This is one user running one local webserver and one pipeline command at a
+time. Design for that product:
 
-Write rules: `upsert_decision` / `upsert_link` / `upsert_verdict` etc. —
-single-row upserts inside one `BEGIN IMMEDIATE` transaction per user action;
-the full derive-and-replace exists ONLY at the import boundary (absorbing an
-externally-produced baton). Typed rows (`ReviewDecision` etc.) at every
-caller boundary; a `dict[str, dict[str, str]]` appearing outside the
-import/export modules is a review-rejection.
+- no file locks, writer fleets, recovery protocols, run IDs, ledgers, or
+  background state machines;
+- ordinary SQLite transactions provide durability;
+- atomic temp-file plus rename is the rule for exported files;
+- one user action is one domain transaction, even when it touches several
+  rows;
+- correctness is measured by product queues and outputs, not by preserving the
+  internal structure of the legacy implementation.
 
-Read rules: named views/queries in one module (`db/views.py`): worth_queue,
-linkedin_queue, siblings_of, parent_state, stage_progress, directory_pane.
-The server renders query results; it holds NO memory-authoritative model, so
-the flock, `refresh_parents_from_disk`, `cached_parents`, and the boot scrubs
-have nothing left to guard and are deleted.
+## One runtime store
 
-## Fate of every current file (deep_context/)
+SQLite is the runtime record after bootstrap. `review.csv`,
+`synthetic-people.csv`, `verdicts.jsonl`, and `index.json` must never compete
+with it through mtime checks, implicit refreshes, or read fallbacks.
 
-| File (LOC) | Fate |
-|---|---|
-| review_db.py (760) | SPLIT → `db/schema.py`, `db/store.py`, `db/views.py`, `db/batons.py` (import/export); gains upsert primitives; loses apply_rows-as-click-path |
-| review_store.py (420) | SHRINKS → enums move to db/schema; CSV loader/writer live in db/batons; thresholds/predicates move to policy |
-| review_web/model.py (1200+) | DELETED → views + a thin render-model adapter |
-| review_web/server.py (1650) | REWRITE → HTTP + jobs only; reads views, writes upserts; no model cache |
-| review_web/decisions.py (310) | REWRITE → ~100: typed upserts |
-| review_web/retarget_queue.py (600) | REWRITE → guidance table states; blank-and-restore deleted (transaction) |
-| review_web/rendering.py | KEEP (pure render) minus queue derivation (moves to views) |
-| reconcile_linkedin.py (2007) | SPLIT → `reconcile/judge.py`, `reconcile/policy.py`, `reconcile/run.py`; store-half becomes upserts (~300 LOC die) |
-| reconcile_deep_research.py | REWRITE store-half onto upserts; engine untouched |
-| worth_view.py (503) | DELETED → one view query + render loop (~120) |
-| heal_review.py (530) | REWRITE → selection/termination as queries+upserts (~250) |
-| common/legacy.py scrubs (280) | DELETED → one dated import-time normalizer in db/batons |
-| flock (common.py, 35) | DELETED |
-| apply_retargets / persist_review_identities / restart_review | REWRITE store-half onto queries/upserts; baton writes unchanged |
-| synthesize_person_context | facts-table upsert after each dossier write; engine untouched |
-| migrate_legacy_resolutions.py | DELETED (its job is the import normalizer) |
-| tests/test_deep_context.py (8257) | DELETED whole; new suite by stage from the invariant catalog, ~150 tests + `review_db audit` invariant queries + snapshot-corpus sweep |
+One explicit legacy importer may read the existing files and populate a fresh
+database. That importer is allowed to be ugly because it is the single
+boundary that absorbs old shapes. It must be isolated in `db/legacy.py` (and
+the narrow CSV helpers it calls), tested, and removable after old installs have
+migrated.
 
-## LOC budget (owner bar: ~5k prod lines for the whole stage)
+After bootstrap:
 
-Built TO the budget, not measured after. Ceilings per area — exceeding one
-means the design is wrong, not that the ceiling moves:
+- runtime reads query SQLite only;
+- runtime decisions and stage writes update SQLite only;
+- compatibility CSV/JSON files are written explicitly at downstream handoff,
+  export, or clean shutdown;
+- touching an exported file never causes an automatic database import;
+- schema mismatch never drops the canonical database. Open it with a supported
+  migration or fail with a clear error.
 
-| Area | Ceiling |
-|---|---|
-| db (schema + store + views + batons) | 800 |
-| review web (HTTP + render, no model layer) | 1,600 |
-| LLM engines + prompts (synthesize, research, judge, dossier, merge) | 4,000 |
-| stage orchestration + CLI (shared emit/manifest/argparse helpers, once) | 600 |
-| **Total** | **~7,000 hard / 5,000 stretch** |
+Paid artifacts remain files. Parallel results, source bundles, facts JSONL,
+dossier Markdown, and profile-cache payloads are not regenerated or moved.
+SQLite stores their stable owner, path, fingerprint/status, and the parsed
+projection or JSON payload required by queries. Web views must not rediscover
+state by globbing those directories.
 
-Today: 22,993. ~15k of it is state machinery + ceremony orbiting the store —
-that is what dies.
+## Product semantics
+
+### Worth
+
+Synthesis currently emits:
+
+- `network_worth.decision`: `yes | maybe | no`;
+- `network_worth.reason`;
+- overall profile `confidence` (this is not a separate worth confidence).
+
+The database stores those values plus an optional human override. Effective
+worth is:
+
+```sql
+COALESCE(human_worth, machine_worth, 'maybe')
+```
+
+The worth review queue is the facts-backed, non-owner, non-ghost population
+whose effective worth is `maybe`, grouped as one canonical parent/person.
+Child machine judgments aggregate `yes > maybe > no`. A synthetic profile that
+already passed through research is not reintroduced as a worth card.
+
+The worth view is a named query plus hydration. It is not a Python model
+rebuild. A worth click writes the human override and note, then the next query
+returns the next card.
+
+### LinkedIn identity
+
+The database must represent the relation among canonical parent, child people,
+and all identity candidates. Candidates include real LinkedIn profiles,
+research retargets, synthetic profiles, candidate-origin people, and ghost/no-
+link rows. A candidate may be related to more than one child identity; this
+relation must be queryable rather than reconstructed from key spelling.
+
+The pending queue preserves current product policy:
+
+- a human identity decision is terminal;
+- an authoritative machine detach is terminal;
+- an accepted candidate-origin retarget stands;
+- a rejected or ambiguous paid profile remains reviewable when current policy
+  says the human should see it;
+- synthetic candidates remain pending until their human gate is yes/no;
+- effective-worth No and raw import candidates do not enter LinkedIn review.
+
+One decision settles the canonical parent in one transaction: apply the clicked
+decision, withdraw undecided sibling candidates, and settle related synthetic
+gates. The database derives the sibling set. Callers must not pass a prebuilt
+list assembled from files or an in-memory model. A retarget decision must store
+the replacement URL/public identifier in that same transaction.
+
+### Workflow and jobs
+
+Stage completion, spend approval, enrichment selection fingerprint, and guided
+retarget status are small typed rows. They are not an untyped meta ledger.
+
+Submitting guided retarget research is a small web endpoint. The paid research
+execution remains a separate in-process job function that writes its artifacts
+and projects the result into SQLite. The HTTP handler does not contain the
+research engine.
+
+## Database concepts
+
+Improve the existing tables where they are useful; do not rename them merely
+for aesthetics. The canonical model must cover these concepts:
+
+- `parents`: canonical person/group, display name/slug, dossier reference,
+  machine worth, optional human worth and note;
+- `people`: child identity, parent membership, display/facts projection and
+  dossier reference;
+- normalized identifiers or an equivalent queryable relation for email/phone;
+- `links`/candidates: candidate-parent/person membership, real/synthetic/ghost
+  kind, profile projection, machine proposal/judgment, replacement target;
+- human identity decisions that cannot be overwritten by machine refreshes;
+- `synthetic_profiles`: complete exportable payload and human gate;
+- artifact projections for facts, research, dossiers, and profile snapshots;
+- durable guided-retarget/job state;
+- typed stage completion and spend approval.
+
+Avoid duplicating one truth across tables. In particular, do not create a
+second verdict table when the queryable verdict projection belongs on the
+candidate row. Preserve the immutable raw payload/path for evidence and cache
+reuse.
+
+Inside SQLite use `NULL`, `REAL`, and JSON payloads where they express the
+domain. Empty strings and pipe-delimited lists are legacy baton representations
+and belong only in the importer/exporter. Foreign keys or domain write methods
+must prevent orphan decisions and mismatched candidate kinds.
+
+## Minimal database API
+
+The database package should expose only what the product uses:
+
+- open/create a supported database;
+- explicit `import_legacy(...)` for a fresh database;
+- machine-stage upserts for facts, people/parents, candidates, synthetic
+  profiles, research projections, and job state;
+- domain transactions: `set_worth`, `settle_identity`, `reset_identity`,
+  `save_guidance`, and stage/spend state updates;
+- named reads: `worth_queue`, `linkedin_queue`, `siblings_of`,
+  `stage_progress`, `directory`, and `person_detail`;
+- explicit compatibility exports.
+
+Do not provide a generic `update_link(**columns)` escape hatch, automatic mtime
+imports, whole-store click commits, or one transaction per row when the domain
+action spans several rows.
+
+## Web boundary and size
+
+The Python webserver is transport, not a second model. Target less than 1,000
+Python lines for HTTP/SSE/job wiring. Static HTML, CSS, and JavaScript remain
+assets; pure render helpers may remain separate.
+
+The required surface is small:
+
+- status/progress;
+- next worth card and set/reset worth;
+- next LinkedIn card and settle/reset identity;
+- directory/person/dossier/avatar reads;
+- guided retarget submit/status;
+- stage complete and spend approval;
+- feedback/auth adapters;
+- static assets and an optional small SSE nudge stream.
+
+The retarget/reconcile/synthesis engines are not HTTP handler code. The server
+calls them and reads their projected status from SQLite.
+
+## Execution order
+
+1. Improve the existing SQLite schema/store and add the explicit legacy
+   importer. Do not touch runtime consumers yet.
+2. Import a copied real store and implement the named worth, LinkedIn, progress,
+   directory, and settle operations.
+3. Prove exact key/count parity against the old runtime. Explain every intended
+   policy change before accepting it.
+4. Rewrite the webserver to use only those queries and transactions; delete the
+   in-memory model, cached parent snapshots, file locks, mtime observers, and
+   CSV decision paths in the same cutover.
+5. Move the remaining stage writers onto SQLite projections/upserts. Keep paid
+   raw artifacts at their current paths.
+6. Export the existing boundary files and prove downstream fan-in, realization,
+   lookup, and directory outputs.
+7. Delete the old 8k-line test file and rebuild roughly 100-200 focused tests by
+   domain, retaining incident invariants rather than implementation trivia.
+8. Run the real-store parity gates, targeted suites, output diffs, and LOC gate.
 
 ## Gates
 
-- Baton fidelity: export(import(baton)) byte-identical on both real stores +
-  the 47-snapshot corpus (already proven machinery, kept).
-- Behavior: golden queries on the jake mirror — queue contents, sibling sets,
-  stage progress — equal between old code and new views before old code is
-  deleted; every diff explained.
-- Click latency: one decision = one transaction, measured < 10ms on the 17k
-  mirror (vs 733ms today).
-- End state: deep-context prod LOC and test count both BELOW main's current
-  numbers. If not, the rewrite failed its own bar.
+The rewrite cannot claim a phase complete merely because a schema round-trips
+CSV or a single row write is fast.
 
-## Language
+Required gates:
 
-Python + stdlib sqlite3. Go would mean rewriting the LLM clients, the
-pipeline contract, the adapters, and the skill surface for zero leverage on
-the actual problem (state management), and losing the uv env every agent
-harness here already speaks. The disease was never Python; it was files
-pretending to be a database.
+- a fresh legacy import contains every facts-backed worth subject and every
+  current identity/synthetic candidate;
+- worth queue keys/counts match the old effective-Maybe view;
+- LinkedIn queue parent/candidate keys and progress match current policy;
+- keep, skip, fix/retarget, reset, synthetic gating, and ghost/sibling settle
+  match pinned incidents;
+- research selection/spend approval and guided retarget state survive restart;
+- explicit exports reproduce the boundary contracts needed downstream;
+- downstream directory and realized people outputs match or have explained
+  deltas;
+- user click latency is measured on the complete domain transaction, not an
+  isolated insert;
+- production Python trends toward 5,000 lines, the webserver is below 1,000,
+  and the focused suite is roughly 100-200 tests.
+
+Reference snapshot from `/Users/arthur/workspace/powerpacks-jake-mirror` on
+2026-08-05 (diagnostic only; parity tests compare keys dynamically when the
+exact mirror is present):
+
+- worth: 5,379 total, 61 pending, 4,169 yes, 1,149 no;
+- LinkedIn: 756 in scope, 191 pending, 565 done;
+- rejected parents: 1,136.
+
+## Explicitly rejected shapes
+
+- two runtime stores synchronized by mtimes;
+- automatic schema drop/rebuild of the canonical DB;
+- CSV-shaped empty strings and pipe lists throughout query code;
+- generic polymorphic targets with no referential/domain validation;
+- caller-supplied sibling/synthetic fan-out;
+- whole-file export on every click;
+- cached in-memory parent models that must be patched after writes;
+- ledgers, run IDs, pending-export flags, writer locks, and recovery ceremonies;
+- keeping old code beside new code after the new path owns the behavior.

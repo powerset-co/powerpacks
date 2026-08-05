@@ -1,4 +1,9 @@
-# Review store: CSV -> SQLite migration
+# Review store: CSV -> SQLite migration (historical)
+
+> Superseded on 2026-08-05 by `deep-context-sqlite-rewrite.md`. This document
+> records the incremental migration that produced the initial SQLite
+> foundation; it is not the implementation contract for the single-store
+> rewrite.
 
 Created: 2026-08-04
 
