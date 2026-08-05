@@ -44,10 +44,12 @@ Use the narrow path when the user names one:
   prints the URL, and launches the browser (skipped gracefully when `open` is
   unavailable; the URL line stays). Before running `review <stage>`, create a
   task list in your harness's todo/task tool with the flow's definitive steps
-  — (1) self-heal (report its counts), (2) restart server, (3) open the
+  — (1) Self-heal, (2) restart server, (3) open the
   staged UI, plus any follow-ups the heal surfaces (e.g. a recovery batch
-  offer) — and check each off as the wrapper's output confirms it, so the
-  user always sees where the flow is and nothing is silently skipped.
+  offer) — and check each off as the wrapper's output confirms it, STRICTLY IN
+  ORDER — the follow-ups item resolves only after the UI is open, even
+  when the heal was a no-op — so the user always sees where the flow is
+  and nothing is silently skipped.
   NEVER open, navigate to, or surface the review URL before the wrapper
   prints its `review UI:` line — the wrapper owns the browser; the harness
   only mirrors checklist state from wrapper output (the heal step completes
@@ -130,7 +132,7 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
-[Heal] Self-heal judge-skipped and dead LinkedIn links (runs inside review)
+[Heal] Self-heal (runs inside review)
 [People] Wait for review to complete
 [People] Review people worth adding to network
 [Match] Confirm imported LinkedIn matches the person

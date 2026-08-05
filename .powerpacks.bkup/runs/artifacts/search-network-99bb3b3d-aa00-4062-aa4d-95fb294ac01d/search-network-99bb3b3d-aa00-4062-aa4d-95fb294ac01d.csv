@@ -1,3 +1,0 @@
-rank,person_id,result_index,final_score,trait_scores,overall_reasoning,matched_position_indexes,pre_rerank_score,tags,vertical_sources,name,headline,location,inferred_birth_year,inferred_age,current_titles,current_companies,source_operator,source_channel,linkedin_url,hydrated,source_run,source_query
-1,00000000-0000-0000-0000-000000000001,,,,,,,,hybrid,,Senior Software Engineer,"San Francisco, CA, United States",,,Senior Software Engineer,,,,,True,search-network-99bb3b3d-aa00-4062-aa4d-95fb294ac01d,software engineers in sf
-2,00000000-0000-0000-0000-000000000002,,,,,,,,hybrid,,Backend Engineer,"San Francisco, CA, United States",,,Backend Engineer,,,,,True,search-network-99bb3b3d-aa00-4062-aa4d-95fb294ac01d,software engineers in sf
