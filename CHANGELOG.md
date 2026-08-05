@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.3...powerpacks-v1.16.0) (2026-08-05)
+
+
+### Features
+
+* **deep-context:** review hardening — terminal No, legacy repair, restart verb, confidence badge ([#423](https://github.com/powerset-co/powerpacks/issues/423)) ([88ac199](https://github.com/powerset-co/powerpacks/commit/88ac19979ba8a925187d54be529e3959bb314099))
+
 ## [1.15.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.2...powerpacks-v1.15.3) (2026-08-05)
 
 
