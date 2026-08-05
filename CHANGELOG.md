@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.16.0...powerpacks-v1.17.0) (2026-08-05)
+
+
+### Features
+
+* **deep-context:** self-healing review — one profile door, pre-serve heal, dead-link recovery, judge auto-apply ([#425](https://github.com/powerset-co/powerpacks/issues/425)) ([81b17e4](https://github.com/powerset-co/powerpacks/commit/81b17e42fd9261548e0dec09eba80ef839c64dcd))
+
 ## [1.16.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.3...powerpacks-v1.16.0) (2026-08-05)
 
 
