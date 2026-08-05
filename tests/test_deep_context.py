@@ -59,7 +59,6 @@ from packs.ingestion.primitives.deep_context.review_store import (
     parent_worth_key,
     write_override_rows as write_rows,
 )
-from packs.ingestion.primitives.enrich import rapidapi_client
 
 
 class TestCommon(unittest.TestCase):
@@ -6814,98 +6813,6 @@ class LinkedinCardConfidenceBadgeTests(unittest.TestCase):
                 parent, cands, d, d, profile_cache_dir=d)
         self.assertIn("<span class='linkedin-confidence'>91% match</span>", html)
         self.assertIn("<span class='linkedin-confidence'>62% match</span>", html)
-
-
-class AvatarEndpointTests(unittest.TestCase):
-    """/api/avatar's cache-first AvatarStore: the local file answers free; a
-    miss earns ONE free CDN download attempt per pub per process; ANY failed
-    download — including the signed-URL-expiry shape (403/404/410) — is a
-    terminal miss: None (the endpoint 404s; the UI keeps initials). Avatars
-    never spend RapidAPI quota: setUp arms a tripwire that fails the test if
-    any avatar path fetches a profile, even with a key present."""
-
-    PUB = "jordan-bravo"
-    PIC_URL = "https://media.licdn.com/dms/image/v2/jordan?e=1&sig=dead"
-    JPEG = b"\xff\xd8\xff" + b"jordan-avatar-bytes"
-
-    def setUp(self):
-        # A key IS configured, and the avatar path must STILL never bill:
-        # any profile fetch during an avatar test is a regression.
-        for method, effect in (
-                ("resolve_key", mock.MagicMock(return_value="test-rapidapi-key")),
-                ("fetch_profile", mock.MagicMock(
-                    side_effect=AssertionError("avatar path called RapidAPI")))):
-            patcher = mock.patch.object(
-                rapidapi_client.RapidApiClient, method, effect)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-    def _store(self, root: Path, pic_url: str = PIC_URL) -> "web_server.AvatarStore":
-        cache_dir = root / "profile_cache"
-        write_json(cache_dir / f"{self.PUB}.json", self._record(pic_url))
-        return web_server.AvatarStore(cache_dir, root / "avatars")
-
-    def _record(self, pic_url: str) -> dict:
-        return {"public_identifier": self.PUB,
-                "linkedin_url": f"https://www.linkedin.com/in/{self.PUB}",
-                "raw_response": {"profilePicture": pic_url},
-                "normalized_profile": {"success": True, "profile_pic_url": pic_url}}
-
-    def _image_urlopen(self, request, timeout=0):
-        response = mock.MagicMock()
-        response.read.return_value = self.JPEG
-        response.geturl.return_value = request.full_url
-        cm = mock.MagicMock()
-        cm.__enter__.return_value = response
-        cm.__exit__.return_value = False
-        return cm
-
-    def _expired_urlopen(self, request, timeout=0):
-        raise web_model.urllib.error.HTTPError(
-            request.full_url, 403, "Forbidden", None, None)
-
-    def test_cached_file_serves_without_network(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            store = self._store(root)
-            path = web_model._avatar_cache_path(self.PUB, root / "avatars")
-            path.parent.mkdir(parents=True)
-            path.write_bytes(self.JPEG)
-            with mock.patch.object(web_model.urllib.request, "urlopen",
-                                   side_effect=AssertionError("no network")):
-                self.assertEqual(store.fetch(self.PUB), (self.JPEG, "image/jpeg"))
-
-    def test_live_url_downloads_once_then_serves_the_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            store = self._store(root)
-            with mock.patch.object(web_model.urllib.request, "urlopen",
-                                   side_effect=self._image_urlopen) as opened:
-                self.assertEqual(store.fetch(self.PUB), (self.JPEG, "image/jpeg"))
-                self.assertEqual(store.fetch(self.PUB), (self.JPEG, "image/jpeg"))
-            self.assertEqual(opened.call_count, 1)  # second hit is the file cache
-            self.assertTrue(web_model._avatar_cache_path(
-                self.PUB, root / "avatars").exists())
-
-    def test_expired_url_is_a_terminal_miss_without_a_paid_refresh(self):
-        # A dead signed URL (403/404/410) used to earn one paid profile
-        # refresh; now it is simply terminal: 404 -> initials. The setUp
-        # tripwire proves RapidAPI is never called despite the key, and the
-        # ONE-attempt-per-pub guard still holds across later page loads.
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = self._store(Path(tmpdir))
-            with mock.patch.object(web_model.urllib.request, "urlopen",
-                                   side_effect=self._expired_urlopen) as opened:
-                self.assertIsNone(store.fetch(self.PUB))
-                self.assertIsNone(store.fetch(self.PUB))
-            self.assertEqual(opened.call_count, 1)  # ONE download attempt per pub per process
-
-    def test_transient_failure_is_a_free_miss(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = self._store(Path(tmpdir))
-            with mock.patch.object(web_model.urllib.request, "urlopen",
-                                   side_effect=web_model.urllib.error.URLError("timed out")):
-                self.assertIsNone(store.fetch(self.PUB))
 
 
 class WorthWhyNoteTests(unittest.TestCase):

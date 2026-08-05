@@ -10,7 +10,6 @@ import threading
 import urllib.parse
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -315,56 +314,26 @@ def _image_content_type(body: bytes) -> str:
     return ""
 
 
-# The signature-expiry answer shape from the LinkedIn CDN: profile-photo URLs
-# are SIGNED and go dead, and a dead signature answers 403 (occasionally
-# 404/410). Everything else — network errors, 5xx — is transient.
-_EXPIRED_IMAGE_STATUSES = frozenset({403, 404, 410})
+def load_avatar(pub: str, *, profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                avatar_dir: Path = AVATAR_DIR) -> tuple[bytes, str] | None:
+    """Serve a locally cached avatar, or cache the first live signed image URL.
 
-
-@dataclass(frozen=True)
-class AvatarDownload:
-    """Outcome of one ``download_avatar`` pass over a profile's photo URLs.
-
-    ``expired`` marks the signature-expiry shape: every URL the cached profile
-    record retains answered 403/404/410, so no retry can succeed until a new
-    profile record exists. The server treats it as a terminal miss and never
-    re-attempts — avatars carry no paid refresh."""
-
-    body: bytes | None = None
-    content_type: str = ""
-    expired: bool = False
-
-
-def load_avatar(pub: str, *, avatar_dir: Path = AVATAR_DIR) -> tuple[bytes, str] | None:
-    """The locally cached avatar bytes for ``pub``, or ``None``. Pure file
-    read — downloads live in ``download_avatar`` so the server can gate them
-    to one attempt per pub per process."""
+    The endpoint never accepts a URL from the browser, so it cannot be used as an
+    arbitrary proxy. Expired legacy URLs simply return ``None`` and the UI keeps its
+    initials fallback visible. No provider lookup or paid work happens here.
+    """
     pub = (pub or "").strip().lower()
     if not pub:
         return None
     cached = _avatar_cache_path(pub, avatar_dir)
-    if not cached.exists():
-        return None
-    try:
-        body = cached.read_bytes()
-    except OSError:
-        return None
-    content_type = _image_content_type(body)
-    return (body, content_type) if content_type else None
-
-
-def download_avatar(pub: str, *, profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                    avatar_dir: Path = AVATAR_DIR) -> AvatarDownload:
-    """Cache the first live signed image URL from the local profile record.
-
-    The endpoint never accepts a URL from the browser, so it cannot be used as
-    an arbitrary proxy. No provider lookup or paid work happens here — an
-    ``expired`` result only reports the shape; the server records it as a
-    terminal miss."""
-    pub = (pub or "").strip().lower()
-    if not pub:
-        return AvatarDownload()
-    expired = False
+    if cached.exists():
+        try:
+            body = cached.read_bytes()
+        except OSError:
+            body = b""
+        content_type = _image_content_type(body)
+        if content_type:
+            return body, content_type
     for url in _profile_picture_urls(pub, profile_cache_dir):
         host = (urllib.parse.urlparse(url).hostname or "").lower()
         if host != "licdn.com" and not host.endswith(".licdn.com"):
@@ -380,10 +349,6 @@ def download_avatar(pub: str, *, profile_cache_dir: Path = PROFILE_CACHE_DIR,
             with urllib.request.urlopen(request, timeout=8) as response:
                 body = response.read(2_000_001)
                 final_url = response.geturl() if hasattr(response, "geturl") else url
-        except urllib.error.HTTPError as exc:
-            if exc.code in _EXPIRED_IMAGE_STATUSES:
-                expired = True
-            continue
         except (OSError, urllib.error.URLError, TimeoutError):
             continue
         final = urllib.parse.urlparse(final_url)
@@ -394,7 +359,6 @@ def download_avatar(pub: str, *, profile_cache_dir: Path = PROFILE_CACHE_DIR,
         content_type = _image_content_type(body)
         if not content_type or len(body) > 2_000_000:
             continue
-        cached = _avatar_cache_path(pub, avatar_dir)
         cached.parent.mkdir(parents=True, exist_ok=True)
         temporary = cached.with_name(f".{cached.name}.{threading.get_ident()}.tmp")
         try:
@@ -402,8 +366,8 @@ def download_avatar(pub: str, *, profile_cache_dir: Path = PROFILE_CACHE_DIR,
             temporary.replace(cached)
         finally:
             temporary.unlink(missing_ok=True)
-        return AvatarDownload(body=body, content_type=content_type)
-    return AvatarDownload(expired=expired)
+        return body, content_type
+    return None
 
 
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"

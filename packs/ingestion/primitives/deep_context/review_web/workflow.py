@@ -392,8 +392,7 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
         "synthetic_people_csv": str(synthetic_path),
         "privacy": {"message_bodies_read": False, "network_called": True,
                     "paid_provider_called": False,
-                    "note": ("avatar cache misses may fetch an existing LinkedIn CDN "
-                             "image")},
+                    "note": "avatar cache misses may fetch an existing LinkedIn CDN image"},
     }
     if launched:
         payload["launched_at"] = now_iso()

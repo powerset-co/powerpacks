@@ -85,7 +85,7 @@ from .feedback import (
     submit_directory_feedback,
 )
 from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, failed_notes_from_items, linkedin_url_in_guidance, run_guided_retarget
-from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, download_avatar, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
+from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, linkedin_review_queue, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
 
@@ -247,38 +247,6 @@ def start_approved_enrichment_job(budget: float) -> None:
     _run_pipeline_job("approved-enrichment", steps)
 
 
-class AvatarStore:
-    """On-demand card avatars for ``/api/avatar``: the local cache file first,
-    then at most ONE free CDN download attempt per pub per process. There is
-    no paid fallback — avatars never spend RapidAPI quota, so any failed
-    download (including the signed-URL-expiry shape) is a terminal miss for
-    this process: the endpoint 404s and the UI keeps its initials fallback.
-    The guard mirrors ``_free_attempted``: a miss must not re-run on every
-    page load; a server restart retries. Faces heal only when a cached CDN
-    URL is still live."""
-
-    def __init__(self, profile_cache_dir: Path, avatar_dir: Path) -> None:
-        self.profile_cache_dir = profile_cache_dir
-        self.avatar_dir = avatar_dir
-        self._download_attempted: set[str] = set()
-
-    def fetch(self, pub: str) -> tuple[bytes, str] | None:
-        key = (pub or "").strip().lower()
-        if not key:
-            return None
-        cached = load_avatar(key, avatar_dir=self.avatar_dir)
-        if cached:
-            return cached
-        if key in self._download_attempted:
-            return None
-        self._download_attempted.add(key)
-        result = download_avatar(key, profile_cache_dir=self.profile_cache_dir,
-                                 avatar_dir=self.avatar_dir)
-        if result.body is not None:
-            return result.body, result.content_type
-        return None
-
-
 def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, dossier_dir: Path,
                  confirm_threshold: float, detach_threshold: float,
                  synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
@@ -300,7 +268,6 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         except OSError:
             run_jobs = False
     avatar_dir = avatar_dir or manifest_path.parent / "avatars"
-    avatars = AvatarStore(profile_cache_dir, avatar_dir)
     mutation_lock = threading.Lock()
 
     def notify_agent() -> None:
@@ -721,7 +688,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             if parsed.path == "/api/avatar":
                 pub = (params.get("pub") or [""])[0]
-                avatar = avatars.fetch(pub)
+                avatar = load_avatar(pub, profile_cache_dir=profile_cache_dir,
+                                     avatar_dir=avatar_dir)
                 if not avatar:
                     self.send_bytes(b"not found", "text/plain", status=404)
                 else:
