@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -291,12 +292,16 @@ def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
 
 
 def write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
+    # Atomic: a crash mid-write must never leave a truncated review.csv (a
+    # truncated file read by the next writer becomes silent data loss).
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
+    tmp = path.with_name(path.name + ".part")
+    with tmp.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=OVERRIDE_COLUMNS)
         writer.writeheader()
         for key in sorted(rows):
             writer.writerow({column: rows[key].get(column, "") for column in OVERRIDE_COLUMNS})
+    os.replace(tmp, path)
 
 
 def row_keys_for_person(rows: dict[str, dict[str, str]], person_id: str) -> list[str]:

@@ -282,8 +282,18 @@ def commit_review_rows(review_csv: Path, rows: dict[str, dict[str, str]]) -> Non
     busy_timeout instead of the session flock."""
     review_csv = Path(review_csv)
     synthetic_csv = review_csv.parent / "synthetic-people.csv"
-    ReviewDb(review_csv.with_suffix(".sqlite")).apply_rows(
-        rows, review_csv, synthetic_csv if synthetic_csv.exists() else None)
+    synthetic = synthetic_csv if synthetic_csv.exists() else None
+    db = ReviewDb(review_csv.with_suffix(".sqlite"))
+    if db.recover_pending_export(review_csv, synthetic):
+        # The store just recovered a commit whose CSV flush a crash cut short.
+        # The caller's row snapshot was loaded from the BAD csv — committing
+        # it would overwrite the recovered decisions. Refuse; a re-run loads
+        # the recovered state.
+        raise ReviewDbImportError(
+            f"{review_csv} held an unflushed commit and has been recovered — "
+            "re-run this operation against the recovered store"
+        )
+    db.apply_rows(rows, review_csv, synthetic)
 
 
 class ReviewDb:
@@ -299,27 +309,49 @@ class ReviewDb:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
+        # Version check on a plain autocommit connection (DDL and the
+        # transactional connect() wrapper don't mix).
+        conn = sqlite3.connect(str(self.db_path), isolation_level=None)
+        try:
+            conn.row_factory = sqlite3.Row
+            has_meta = conn.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'meta'").fetchone()
             row = conn.execute(
-                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone() if has_meta else None
             if row is not None and row["value"] != str(SCHEMA_VERSION):
-                # Derived state on an old schema: drop and let the next import
-                # rebuild (IF NOT EXISTS keeps old CHECKs otherwise).
+                pending = conn.execute(
+                    "SELECT value FROM meta WHERE key = 'pending_export'").fetchone()
+                if pending is not None and pending["value"] == "1":
+                    # An unflushed commit under an old schema: dropping would
+                    # destroy the committed decisions AND the flag that says
+                    # recovery is needed. Refuse loudly instead.
+                    raise ReviewDbImportError(
+                        f"{self.db_path} holds an unflushed commit under schema "
+                        f"v{row['value']} — export it with the previous version "
+                        "before upgrading"
+                    )
                 for table in ("links", "parents", "people", "decisions", "meta"):
                     conn.execute(f"DROP TABLE IF EXISTS {table}")
-                conn.executescript(SCHEMA_DDL)
+        finally:
+            conn.close()
+        with self.connect():
+            pass  # fail early: creates the file and the schema
 
     @contextmanager
     def connect(self):
-        """One connection: pragmas + schema ensured; commit on success,
-        rollback on error, always closed."""
-        conn = sqlite3.connect(str(self.db_path))
+        """One connection, one IMMEDIATE transaction: the write lock is taken
+        up front (busy_timeout queues concurrent writers), commit on success,
+        rollback on error, always closed. isolation_level=None so the explicit
+        BEGIN below is the only transaction control."""
+        conn = sqlite3.connect(str(self.db_path), isolation_level=None)
         try:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA busy_timeout=5000")
             conn.executescript(SCHEMA_DDL)
+            conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except BaseException:
@@ -334,9 +366,13 @@ class ReviewDb:
 
     def checkpoint(self) -> None:
         """Fold the WAL into the main file so review.sqlite is self-contained
-        (clean server exit; before any file-level copy)."""
-        with self.connect() as conn:
+        (clean server exit; before any file-level copy). Plain connection —
+        a checkpoint cannot run inside a transaction."""
+        conn = sqlite3.connect(str(self.db_path), isolation_level=None)
+        try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
 
     def backup_to(self, path: Path) -> None:
         """Snapshot the live db (never rename a WAL db — this is the .bkup door)."""
@@ -588,10 +624,10 @@ class ReviewDb:
         return links, parents, decisions, len(gates)
 
     def _read_synthetic_gates(self, synthetic_csv: Path | None) -> tuple[list[DecisionRow], list[str]]:
-        gates: list[DecisionRow] = []
+        by_pub: dict[str, DecisionRow] = {}
         errors: list[str] = []
         if not synthetic_csv or not synthetic_csv.exists():
-            return gates, errors
+            return [], errors
         with synthetic_csv.open(newline="", encoding="utf-8") as fh:
             for row in csv.DictReader(fh):
                 pub = str(row.get("public_identifier") or "").strip().lower()
@@ -605,18 +641,25 @@ class ReviewDb:
                 # 'auto' is the completeness gate's machine-standing keep
                 # (assemble_synthetic_profile). Split into (value, approved).
                 if approved == "auto":
-                    gates.append(DecisionRow(
+                    gate = DecisionRow(
                         kind=DecisionKind.SYNTHETIC_GATE.value, target=pub,
                         value=HumanWorth.YES.value, approved="auto",
-                    ))
+                    )
                 elif approved in set(HumanWorth):
-                    gates.append(DecisionRow(
+                    gate = DecisionRow(
                         kind=DecisionKind.SYNTHETIC_GATE.value, target=pub,
                         value=approved, approved="yes",
-                    ))
+                    )
                 else:
                     errors.append(f"synthetic:{pub}: unknown approved '{approved}'")
-        return gates, errors
+                    continue
+                previous = by_pub.get(pub)
+                if previous is not None and previous != gate:
+                    errors.append(
+                        f"synthetic:{pub}: duplicate rows with conflicting approved gates")
+                    continue
+                by_pub[pub] = gate
+        return list(by_pub.values()), errors
 
     # -- export ------------------------------------------------------------
 
