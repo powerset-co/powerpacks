@@ -443,9 +443,10 @@ def run_guided_retarget(request: GuidedRetarget, *,
     #     job ran — it always stands;
     #   * the request's OWN key row re-opens regardless of its pre-submit
     #     value (resubmitting guidance is exactly the re-open ask);
-    #   * a sibling row's human yes/no never re-opens — one pub row can be a
-    #     DIFFERENT parent's confirmed identity, and blanking it here would
-    #     let settle_siblings launder that yes into an automatic detach.
+    #   * a sibling row's human yes/no or machine-applied `auto` never
+    #     re-opens — one pub row can be a DIFFERENT parent's confirmed
+    #     identity, and blanking it here would let settle_siblings launder
+    #     that decision into an automatic detach (same set as settle's guard).
     # `blanked` remembers prior values so a crash below restores them.
     submitted_at = str(request.submitted_at or "")
     blanked: dict[str, tuple[str, str]] = {}
@@ -457,7 +458,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
         if submitted_at and str(prior.get("updated_at") or "") > submitted_at:
             continue
         approved = str(prior.get("approved") or "").strip().lower()
-        if row_key != key and approved in {"yes", "no"}:
+        if row_key != key and approved in {"yes", "no", "auto"}:
             continue
         blanked[row_key] = (str(prior.get("approved") or ""),
                             str(prior.get("llm_judge_fingerprint") or ""))
@@ -478,19 +479,30 @@ def run_guided_retarget(request: GuidedRetarget, *,
             facts_dir=facts_dir, raw_dir=raw_dir, use_llm=use_llm,
             owner_block=owner_background_block(owner) if owner else "",
             confirm_threshold=RESEARCH_CONFIRM_THRESHOLD)
-        _mirror_into_engine_home(handle_dir, engine_dir / handle)
     except (Exception, SystemExit) as exc:
         rows = load_override_rows(review_path)
         restored = False
         for row_key, (prior_approved, prior_fp) in blanked.items():
             prior = rows.get(row_key)
-            if prior is not None and not str(prior.get("approved") or "").strip():
+            # Restore ONLY rows the judge never reached: a fresh fingerprint
+            # means the paid verdict already wrote — resurrecting the stale
+            # approval there would auto-attach a judge-rejected profile.
+            if (prior is not None
+                    and not str(prior.get("approved") or "").strip()
+                    and not str(prior.get("llm_judge_fingerprint") or "").strip()):
                 prior["approved"] = prior_approved
                 prior["llm_judge_fingerprint"] = prior_fp
                 restored = True
         if restored:
             write_override_rows(review_path, rows)
         return {"state": "failed", "detail": f"{type(exc).__name__}: {exc}"}
+    # Mirroring the paid artifacts into the engine's research home is
+    # bookkeeping — it must neither fail the job nor trigger the restore
+    # after the judge has already written its verdict.
+    try:
+        _mirror_into_engine_home(handle_dir, engine_dir / handle)
+    except OSError:
+        pass
 
     rows = load_override_rows(review_path)
     after = rows.get(key) or {}
@@ -538,16 +550,19 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # submit outranks the job's automatic detach and is left untouched.
     # Detach the person's row AND every old LinkedIn's own pub-keyed row
     # (they can differ); a human decision made while research ran wins per row.
+    # A human decision made WHILE the job ran (the UI's Skip writes
+    # detach/yes) vetoes the automatic synthetic apply below — read it off
+    # updated_at vs the submit time BEFORE the loop stamps its own detaches.
+    human_decided_mid_job = bool(submitted_at) and any(
+        str((rows.get(k) or {}).get("approved") or "").strip().lower() in {"yes", "no"}
+        and str((rows.get(k) or {}).get("updated_at") or "") > submitted_at
+        for k in {key, *request.candidate_pubs} - {""})
     for row_key in {key, *request.candidate_pubs} - {""}:
         row_now = rows.setdefault(row_key, {"public_identifier": row_key})
         if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no"}:
             row_now.update({"action": "detach", "approved": "yes",
                             "source": "user-guidance", "new_linkedin_url": "",
                             "new_public_identifier": "", "updated_at": now_iso()})
-    # A human "no" on the person's own row survives the loop above — it
-    # also vetoes the automatic synthetic apply below.
-    human_said_no = (str((rows.get(key) or {}).get("approved") or "")
-                     .strip().lower() == "no")
     write_override_rows(review_path, rows)
 
     if rejected and new_url:
@@ -566,7 +581,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
     stands = (int(getattr(assembly, "built", 0) or 0) > 0
               or int(getattr(assembly, "preserved_user_rows", 0) or 0) > 0)
     if stands:
-        if human_said_no:
+        if human_decided_mid_job:
             return {"state": "no_match",
                     "detail": ("synthetic profile built but left pending — you decided "
                                "this person while the research ran, and that stands")}

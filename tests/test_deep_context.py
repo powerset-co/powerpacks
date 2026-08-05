@@ -6303,6 +6303,90 @@ class TestGuidedRetargets(unittest.TestCase):
             web_retargets.failed_notes_from_items(synthetic_parent),
             {"synthetic-synth-x": "boom"})
 
+    def test_auto_sibling_survives_research_apply_with_fingerprint(self):
+        # The research path must not blank a machine-applied `auto` sibling —
+        # one pub row can be ANOTHER parent's machine-confirmed identity, and
+        # blanking it hands settle_siblings a detach plus burns the paid
+        # judge fingerprint.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts = base / "review.csv", base / "facts"
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            write_rows(review, {"shared-machine-confirmed": {
+                "public_identifier": "shared-machine-confirmed",
+                "action": "verify", "approved": "auto",
+                "llm_judge_fingerprint": "paid-sha"}})
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.9},
+                       "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                                  "linkedin_status": "found"}}
+            confirming = _verdict("confirmed", 0.9, reason="employer matches")
+            request = web_retargets.GuidedRetarget(
+                slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                name="Jordan Bravo", guidance="the Jordan Bravo at Acme",
+                person_ids=("pid-jordan",),
+                candidate_pubs=("jordan-bravo-wrong", "shared-machine-confirmed"))
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=self._fake_research({}, profile)), \
+                 mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=confirming):
+                result = web_retargets.run_guided_retarget(
+                    request, review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=base / "raw", out_dir=base / "out",
+                    engine_dir=base / "engine", use_llm=True)
+            self.assertEqual(result["state"], "applied")
+            row = _rows_by_pub(review)["shared-machine-confirmed"]
+            self.assertEqual(row["action"], "verify")
+            self.assertEqual(row["approved"], "auto")
+            self.assertEqual(row["llm_judge_fingerprint"], "paid-sha")
+
+    def test_mid_job_skip_vetoes_automatic_synthetic_gate(self):
+        # The realistic mid-job decision is a Skip (detach/approved=yes with a
+        # fresh updated_at). It must veto the automatic synthetic-stands gate
+        # — otherwise the person the user just skipped gets an approved
+        # synthetic identity they never accepted.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts = base / "review.csv", base / "facts"
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.75},
+                       "social": {"linkedin_status": "not_found"}}
+            fake = self._fake_research({}, profile)
+
+            def research_then_skip(params):
+                outcome = fake(params)
+                rows_now = web_retargets.load_override_rows(review)
+                rows_now["jordan-bravo-wrong"] = {
+                    "public_identifier": "jordan-bravo-wrong",
+                    "action": "detach", "approved": "yes",
+                    "updated_at": "2099-01-01T00:00:00Z"}
+                web_retargets.write_override_rows(review, rows_now)
+                return outcome
+
+            assemble = mock.Mock()
+            assemble.return_value.run.return_value = mock.Mock(built=1, preserved_user_rows=0)
+            request = web_retargets.GuidedRetarget(
+                slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                name="Jordan Bravo", guidance="the Jordan Bravo at Acme",
+                person_ids=("pid-jordan",),
+                candidate_pubs=("jordan-bravo-wrong",),
+                submitted_at="2026-01-01T00:00:00Z")
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=research_then_skip), \
+                 mock.patch.object(web_retargets.assemble_synthetic_profile,
+                                   "AssembleSyntheticProfile", assemble), \
+                 mock.patch.object(web_retargets, "sync_synthetic_gate") as gate:
+                result = web_retargets.run_guided_retarget(
+                    request, review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=base / "raw", out_dir=base / "out",
+                    engine_dir=base / "engine", use_llm=False)
+            self.assertEqual(result["state"], "no_match")
+            self.assertIn("that stands", result["detail"])
+            gate.assert_not_called()
+            row = _rows_by_pub(review)["jordan-bravo-wrong"]
+            self.assertEqual(row["updated_at"], "2099-01-01T00:00:00Z")  # skip untouched
+
     def test_queue_drains_serially_and_reports_terminal_states(self):
         order: list[str] = []
 
