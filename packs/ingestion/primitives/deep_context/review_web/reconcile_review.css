@@ -1393,9 +1393,18 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 .person-menu { position: relative; display: inline-flex; }
 
 /* The same menu pinned to a review card's top-right corner. The card is the
-   feedback popover's positioning host too, hence position: relative here. */
+   feedback popover's positioning host too, hence position: relative here.
+   The toggle sheds the full-size .button pill (48px min-height) — in a card
+   corner it is a quiet fitted affordance, not an action button. */
 .decision-card { position: relative; }
-.card-menu { position: absolute; top: 12px; right: 12px; z-index: 20; }
+.card-menu { position: absolute; top: 10px; right: 10px; z-index: 20; }
+.card-menu .person-menu-toggle {
+  min-height: 26px;
+  min-width: 30px;
+  padding: 0 7px;
+  font-size: 14px;
+  border-radius: 7px;
+}
 
 /* A returned card leads with WHY its re-research failed. */
 .retarget-failed {
