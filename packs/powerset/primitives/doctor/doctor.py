@@ -158,12 +158,14 @@ def check_uv_installed() -> dict[str, Any]:
     path = shutil.which("uv")
     if path:
         return check("uv_installed", "ok", "uv is on PATH", path=path)
-    fix_command = "brew install uv" if sys.platform == "darwin" and shutil.which("brew") else "curl -LsSf https://astral.sh/uv/install.sh | sh"
+    for candidate in (Path.home() / ".powerpacks" / "bin" / "uv", Path.home() / ".local" / "bin" / "uv"):
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return check("uv_installed", "ok", f"uv is installed at {candidate} (not on PATH)", path=str(candidate))
     return check(
         "uv_installed", "missing",
         "uv is not installed; needed to install and run Powerpacks Python dependencies",
         fix_kind="shell_install",
-        fix_command=fix_command,
+        fix_command="bin/ensure-uv",
     )
 
 

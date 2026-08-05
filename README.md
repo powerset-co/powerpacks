@@ -62,8 +62,11 @@ By default it shares the host Codex login safely by mounting
 separate writable container volume. See
 [`docs/codex-heartbeat-docker.md`](docs/codex-heartbeat-docker.md).
 
-The install flow runs `bin/setup-python`, which installs `uv` on macOS when
-Homebrew is available, then installs Python project dependencies from
+The install flow runs `bin/setup-python`, which resolves `uv` through
+`bin/ensure-uv` (an existing install on PATH, `~/.local/bin`, or a Homebrew
+prefix — including profile-managed PATHs invisible to non-login shells — or
+else a pinned, sha256-verified download to `~/.powerpacks/bin`; no Homebrew,
+git, or Xcode CLT required), then installs Python project dependencies from
 `pyproject.toml` / `uv.lock`.
 
 ## Skills
