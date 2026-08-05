@@ -177,7 +177,7 @@ class ReviewDbRoundTripTests(unittest.TestCase):
         db.export_synthetic_gates(self.synthetic_csv)
         self.assertEqual((self.dir / "export.csv").read_bytes(), before)
         self.assertEqual(self.synthetic_csv.read_bytes(), syn_before)
-        self.assertEqual(stats, {"links": 4, "parents": 1, "decisions": 3, "synthetic_gates": 1})
+        self.assertEqual(stats, {"links": 4, "parents": 1, "decisions": 3, "synthetic_gates": 1, "people": 0})
 
     def test_decisions_derived_and_absence_means_pending(self):
         write_fixture(self.review_csv, self.fixture_rows())

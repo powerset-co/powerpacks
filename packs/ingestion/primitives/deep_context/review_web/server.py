@@ -288,12 +288,15 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
     review_db = review_db or ReviewDb(review_path.with_suffix(".sqlite"))
     review_db.recover_pending_export(review_path, synthetic_path)
 
+    index_json_path = parents_dir.parent / "index.json"
+
     def db_review_rows() -> dict[str, dict[str, str]]:
-        """The read door: keep review.sqlite current with the CSV (between-
-        session CLI writers are absorbed by the strict import) and compose a
-        fresh owned row snapshot from it."""
-        if review_db.needs_import(review_path):
-            review_db.import_stores(review_path, synthetic_path)
+        """The read door: keep review.sqlite current with the CSV and the
+        parent/child relation current with index.json (between-session CLI
+        writers are absorbed by the strict import) and compose a fresh owned
+        row snapshot from it."""
+        if review_db.needs_import(review_path, index_json_path):
+            review_db.import_stores(review_path, synthetic_path, index_json_path)
         return review_db.export_review_rows()
 
     def commit_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
@@ -1414,8 +1417,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
     # CLI writes (strict import — an unrepresentable row refuses serve by name).
     review_db = ReviewDb(review_path.with_suffix(".sqlite"))
     review_db.recover_pending_export(review_path, synthetic_path)
-    if review_db.needs_import(review_path):
-        review_db.import_stores(review_path, synthetic_path)
+    if review_db.needs_import(review_path, INDEX_JSON):
+        review_db.import_stores(review_path, synthetic_path, INDEX_JSON)
 
     # "directory" is the read-only browse PATH, not a review stage: bare
     # `review` always lands there and never begins a people-review revision.

@@ -40,6 +40,7 @@ Changelog:
 from __future__ import annotations
 
 import csv
+import json
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -63,7 +64,9 @@ from packs.ingestion.primitives.deep_context.review_store import (
 # v2: ReviewAction.REVIEW (name-match proposals) + synthetic gate 'auto'
 # split into (value, approved). A version-mismatched db is DROPPED and
 # rebuilt — review.sqlite is derived state; the CSV export is the record.
-SCHEMA_VERSION = 2
+# v3: people table — the parent/child relation as DATA (ingested from
+# index.json) instead of a runtime derivation; sibling fan-out is a JOIN.
+SCHEMA_VERSION = 3
 
 # review.csv stores llm_reject as free text; the closed set observed across
 # real stores plus the retired spam-screen value synthesis still scrubs.
@@ -214,6 +217,19 @@ CREATE TABLE IF NOT EXISTS links (
 );
 CREATE INDEX IF NOT EXISTS links_by_person ON links(person_id);
 
+CREATE TABLE IF NOT EXISTS people (
+  -- The parent/child relation as DATA (from index.json at import): who
+  -- belongs to which canonical parent. This is what every settle fan-out
+  -- re-derived at runtime before; now "siblings of X" is one JOIN:
+  --   SELECT l.* FROM links l JOIN people p ON p.person_id = l.person_id
+  --   WHERE p.parent_id = (SELECT parent_id FROM people WHERE person_id = :x)
+  person_id   TEXT PRIMARY KEY,
+  parent_id   TEXT NOT NULL CHECK (parent_id != ''),
+  child_slug  TEXT NOT NULL DEFAULT '',
+  parent_slug TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS people_by_parent ON people(parent_id);
+
 CREATE TABLE IF NOT EXISTS parents (
   parent_id         TEXT PRIMARY KEY CHECK (parent_id != ''),
   public_identifier TEXT NOT NULL,           -- verbatim CSV cell ('{PARENT_WORTH_PREFIX}<parent_id>')
@@ -289,7 +305,7 @@ class ReviewDb:
             if row is not None and row["value"] != str(SCHEMA_VERSION):
                 # Derived state on an old schema: drop and let the next import
                 # rebuild (IF NOT EXISTS keeps old CHECKs otherwise).
-                for table in ("links", "parents", "decisions", "meta"):
+                for table in ("links", "parents", "people", "decisions", "meta"):
                     conn.execute(f"DROP TABLE IF EXISTS {table}")
                 conn.executescript(SCHEMA_DDL)
 
@@ -333,20 +349,62 @@ class ReviewDb:
 
     # -- import ------------------------------------------------------------
 
-    def needs_import(self, review_csv: Path) -> bool:
+    def needs_import(self, review_csv: Path, index_json: Path | None = None) -> bool:
         try:
             stat = review_csv.stat()
         except OSError:
             return False
         rows = self.query("SELECT value FROM meta WHERE key = 'review_csv_stat'")
-        return not rows or rows[0]["value"] != f"{stat.st_mtime_ns}:{stat.st_size}"
+        if not rows or rows[0]["value"] != f"{stat.st_mtime_ns}:{stat.st_size}":
+            return True
+        if index_json is not None and index_json.exists():
+            istat = index_json.stat()
+            irows = self.query("SELECT value FROM meta WHERE key = 'index_json_stat'")
+            return not irows or irows[0]["value"] != f"{istat.st_mtime_ns}:{istat.st_size}"
+        return False
 
-    def import_stores(self, review_csv: Path, synthetic_csv: Path | None = None) -> dict:
-        """Rebuild every table from the CSVs in one transaction (idempotent)."""
+    @staticmethod
+    def _people_from_index(index_json: Path) -> list[dict[str, str]]:
+        """The parent/child relation from index.json: one row per current
+        child person id, pointing at its canonical parent."""
+        try:
+            index = json.loads(index_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        slugs = index.get("slugs") or {}
+        out: dict[str, dict[str, str]] = {}
+        for parent_slug, parent in (index.get("parents") or {}).items():
+            parent_id = str(parent.get("parent_id") or "").strip().lower()
+            if not parent_id:
+                continue
+            for child_slug in parent.get("children") or []:
+                person_id = str((slugs.get(child_slug) or {}).get("person_id") or "").strip().lower()
+                if person_id:
+                    out[person_id] = {
+                        "person_id": person_id, "parent_id": parent_id,
+                        "child_slug": str(child_slug), "parent_slug": str(parent_slug),
+                    }
+        return list(out.values())
+
+    def import_stores(self, review_csv: Path, synthetic_csv: Path | None = None,
+                      index_json: Path | None = None) -> dict:
+        """Rebuild every table from the CSVs (+ the parent/child relation from
+        index.json) in one transaction (idempotent)."""
         rows = load_override_rows(review_csv)
         links, parents, decisions, gate_count = self._derive_tables(rows, synthetic_csv)
+        people = (self._people_from_index(index_json)
+                  if index_json is not None and index_json.exists() else None)
         with self.connect() as conn:
             self._replace_tables(conn, links, parents, decisions)
+            if people is not None:
+                conn.execute("DELETE FROM people")
+                conn.executemany(
+                    "INSERT INTO people (person_id, parent_id, child_slug, parent_slug) "
+                    "VALUES (:person_id, :parent_id, :child_slug, :parent_slug)", people)
+                istat = index_json.stat()
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('index_json_stat', ?)",
+                    (f"{istat.st_mtime_ns}:{istat.st_size}",))
             stat = review_csv.stat()
             conn.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES "
@@ -357,6 +415,7 @@ class ReviewDb:
         return {
             "links": len(links), "parents": len(parents),
             "decisions": len(decisions) - gate_count, "synthetic_gates": gate_count,
+            "people": len(people) if people is not None else 0,
         }
 
     def apply_rows(self, rows: dict[str, dict[str, str]], review_csv: Path,
