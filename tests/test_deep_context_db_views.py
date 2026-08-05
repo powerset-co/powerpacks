@@ -139,8 +139,13 @@ class DeepContextDbViewTests(unittest.TestCase):
         ))
 
         human_people = self.add_parent("human", "yes")
-        self.add_candidate("human", "human-verified", person_ids=human_people)
+        self.add_candidate(
+            "human", "human-verified", person_ids=human_people, paid_profile=1
+        )
         self.db.settle_identity("human-verified", "verify", approved="yes")
+
+        ignored_people = self.add_parent("review-only", "yes")
+        self.add_candidate("review-only", "export-only", person_ids=ignored_people)
 
         raw_people = self.add_parent("raw", "yes")
         self.add_candidate(

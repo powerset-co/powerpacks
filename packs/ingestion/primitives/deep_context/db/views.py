@@ -126,6 +126,7 @@ _PENDING_CANDIDATE = """
   (l.kind='synthetic' AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no'))
   OR
   (l.kind!='synthetic'
+   AND (l.paid_profile=1 OR l.candidate_origin=1)
    AND l.decision_action IS NULL
    AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
    AND l.authoritative_detach=0
@@ -158,6 +159,7 @@ _LINKEDIN_CTE = (
     AND EXISTS (
       SELECT 1 FROM candidate_policy c
       WHERE c.parent_id=w.parent_id
+        AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
         AND (c.candidate_origin=1 OR c.kind='synthetic' OR c.is_pending=1
              OR c.decision_action IS NOT NULL
              OR COALESCE(c.decision_approved, '') IN ('yes', 'no'))
