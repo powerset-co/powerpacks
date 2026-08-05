@@ -32,7 +32,11 @@ Use the narrow path when the user names one:
   (Yes/No tabs, search, full dossier + LinkedIn pane). A stage word opens the
   staged workflow there directly: `$deep-context review linkedin` ->
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
-  the server's `--stage` flag.
+  the server's `--stage` flag. `review <stage>` RESTARTS a running review
+  server so the UI always serves current code (review state is file-driven;
+  nothing is lost). If the live server reports in-flight enrichment or guided
+  re-research jobs it is reused instead (a restart would kill that paid work);
+  pass `--force-restart` to restart anyway.
 - `$deep-context refresh`, "resynthesize and show me the directory" -> run only
   `bin/deep-context refresh`; it re-synthesizes stale dossiers (free when facts
   are on the current synthesis contract; a contract bump re-runs everyone and
