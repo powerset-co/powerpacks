@@ -3881,6 +3881,8 @@ class TestReviewWeb(unittest.TestCase):
             paths["parents_dir"],
             paths["dossier_dir"],
             paths["profile_cache_dir"],
+            # the phase-1 sqlite snapshot; this test pins the artifact PATHS
+            rows=mock.ANY,
         )
         fake_server.serve_forever.assert_called_once_with()
 
@@ -8157,6 +8159,76 @@ class HealReviewTests(unittest.TestCase):
             # the missing OpenAI key without writing anything.
             self.assertTrue(summary["rejudge"]["skipped_no_openai_key"])
             self.assertEqual(summary["rejudge"]["candidates"], 1)
+
+
+class ReviewDbServerReadTests(unittest.TestCase):
+    """Phase-1 sqlite read path: the server composes rows from review.sqlite
+    (kept current from review.csv), decisions still write the CSV, and a
+    concurrent CLI writer's rows survive a whole-file rewrite because the
+    handler's snapshot comes through a fresh db import."""
+
+    GHOST = GhostRowSettleTests.GHOST
+
+    @contextlib.contextmanager
+    def _serve_db(self, base, verdicts, review):
+        from packs.ingestion.primitives.deep_context.review_db import ReviewDb
+        review_db = ReviewDb(base / "review.sqlite")
+        handler = web_server.make_handler(
+            review, verdicts, base / "parents", base / "dossiers", 0.7, 0.85,
+            synthetic_path=base / "synthetic-people.csv",
+            facts_dir=base / "facts", people_csv=base / "people.csv",
+            manifest_path=base / "review" / "manifest.json",
+            enrichment_manifest_path=base / "enrich-manifest.json",
+            profile_cache_dir=base / "cache", run_jobs=False,
+            review_db=review_db)
+        server = web_server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server.server_address[1]
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_decide_flows_through_db_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            base, verdicts, review = GhostRowSettleTests._fixture(self, d)
+            with self._serve_db(base, verdicts, review) as port:
+                status, body = GhostRowSettleTests._post(self, port, "/decide", {
+                    "pub": "jordan-bravo", "decision": "keep",
+                    "parent_slug": "jordan-bravo-p"})
+            self.assertEqual(status, 200, body)
+            rows = load_rows(review)
+            self.assertEqual((rows["jordan-bravo"]["action"],
+                              rows["jordan-bravo"]["approved"]), ("verify", "yes"))
+            self.assertEqual((rows[self.GHOST]["action"],
+                              rows[self.GHOST]["approved"]), ("detach", "yes"))
+
+    def test_external_writer_rows_survive_a_decide_rewrite(self):
+        # The disaster review_rows_now guards against: a stale snapshot handed
+        # to a whole-file rewrite erases every OTHER writer's rows. Through the
+        # db path, the import (keyed on the CSV stat) absorbs the CLI writer's
+        # row before the handler mutates and rewrites.
+        with tempfile.TemporaryDirectory() as d:
+            base, verdicts, review = GhostRowSettleTests._fixture(self, d)
+            with self._serve_db(base, verdicts, review) as port:
+                rows = load_rows(review)
+                rows["candidate:email:casey@example.com"] = {
+                    **{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                    "public_identifier": "candidate:email:casey@example.com",
+                    "person_id": "candidate:email:casey@example.com",
+                    "source": "deep-context-synthesis", "llm_worth": "maybe"}
+                write_rows(review, rows)
+                status, body = GhostRowSettleTests._post(self, port, "/decide", {
+                    "pub": "jordan-bravo", "decision": "keep",
+                    "parent_slug": "jordan-bravo-p"})
+            self.assertEqual(status, 200, body)
+            rows = load_rows(review)
+            self.assertEqual(rows["jordan-bravo"]["approved"], "yes")
+            self.assertIn("candidate:email:casey@example.com", rows)
+            self.assertEqual(
+                rows["candidate:email:casey@example.com"]["llm_worth"], "maybe")
 
 
 if __name__ == "__main__":

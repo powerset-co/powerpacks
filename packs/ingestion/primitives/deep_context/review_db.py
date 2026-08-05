@@ -42,6 +42,7 @@ from __future__ import annotations
 import csv
 import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path
@@ -248,38 +249,56 @@ class ReviewDbImportError(ValueError):
 
 
 class ReviewDb:
-    """The review.sqlite store. Construct-and-use; close() or context-manage."""
+    """The review.sqlite store — a stateless facade over db_path.
+
+    Every operation opens its own short-lived connection (WAL makes that
+    cheap and correct), so one ReviewDb can be shared across the review
+    server's handler threads with no locks and no check_same_thread games;
+    a phase-2 decision transaction is simply `with db.connect() as conn:`
+    on its own connection with BEGIN IMMEDIATE semantics.
+    """
 
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA busy_timeout=5000")
-        with self.conn:
-            self.conn.executescript(SCHEMA_DDL)
+        with self.connect():
+            pass  # fail early: creates the file and the schema
 
-    def __enter__(self) -> "ReviewDb":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-    def close(self) -> None:
+    @contextmanager
+    def connect(self):
+        """One connection: pragmas + schema ensured; commit on success,
+        rollback on error, always closed."""
+        conn = sqlite3.connect(str(self.db_path))
         try:
-            self.conn.rollback()  # a failed statement can leave a txn open
-            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.executescript(SCHEMA_DDL)
+            yield conn
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
         finally:
-            self.conn.close()
+            conn.close()
+
+    def query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return conn.execute(sql, params).fetchall()
+
+    def checkpoint(self) -> None:
+        """Fold the WAL into the main file so review.sqlite is self-contained
+        (clean server exit; before any file-level copy)."""
+        with self.connect() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def backup_to(self, path: Path) -> None:
         """Snapshot the live db (never rename a WAL db — this is the .bkup door)."""
         target = sqlite3.connect(str(path))
         try:
-            with target:
-                self.conn.backup(target)
+            with self.connect() as conn, target:
+                conn.backup(target)
         finally:
             target.close()
 
@@ -290,10 +309,8 @@ class ReviewDb:
             stat = review_csv.stat()
         except OSError:
             return False
-        row = self.conn.execute(
-            "SELECT value FROM meta WHERE key = 'review_csv_stat'"
-        ).fetchone()
-        return row is None or row["value"] != f"{stat.st_mtime_ns}:{stat.st_size}"
+        rows = self.query("SELECT value FROM meta WHERE key = 'review_csv_stat'")
+        return not rows or rows[0]["value"] != f"{stat.st_mtime_ns}:{stat.st_size}"
 
     def import_stores(self, review_csv: Path, synthetic_csv: Path | None = None) -> dict:
         """Rebuild every table from the CSVs in one transaction (idempotent)."""
@@ -400,15 +417,15 @@ class ReviewDb:
                 f"{len(errors)} unrepresentable row(s) — fix or scrub before import: {shown}"
             )
 
-        with self.conn:
-            self.conn.execute("DELETE FROM links")
-            self.conn.execute("DELETE FROM parents")
-            self.conn.execute("DELETE FROM decisions")
-            self.conn.executemany(_insert_sql("links", LinkRow), [asdict(r) for r in links])
-            self.conn.executemany(_insert_sql("parents", ParentRow), [asdict(r) for r in parents])
-            self.conn.executemany(_insert_sql("decisions", DecisionRow), [asdict(r) for r in decisions])
+        with self.connect() as conn:
+            conn.execute("DELETE FROM links")
+            conn.execute("DELETE FROM parents")
+            conn.execute("DELETE FROM decisions")
+            conn.executemany(_insert_sql("links", LinkRow), [asdict(r) for r in links])
+            conn.executemany(_insert_sql("parents", ParentRow), [asdict(r) for r in parents])
+            conn.executemany(_insert_sql("decisions", DecisionRow), [asdict(r) for r in decisions])
             stat = review_csv.stat()
-            self.conn.execute(
+            conn.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES "
                 "('schema_version', :v), ('imported_at', :t), ('review_csv_stat', :s)",
                 {"v": str(SCHEMA_VERSION), "t": now_iso(), "s": f"{stat.st_mtime_ns}:{stat.st_size}"},
@@ -446,10 +463,10 @@ class ReviewDb:
         """Recompose review.csv rows (the inverse of import_stores)."""
         decided = {
             (d["kind"], d["target"]): d
-            for d in self.conn.execute("SELECT * FROM decisions").fetchall()
+            for d in self.query("SELECT * FROM decisions")
         }
         rows: dict[str, dict[str, str]] = {}
-        for link in self.conn.execute("SELECT * FROM links").fetchall():
+        for link in self.query("SELECT * FROM links"):
             row = {column: "" for column in OVERRIDE_COLUMNS}
             for column in ("public_identifier", "person_id", "linkedin_url",
                            "new_linkedin_url", "new_public_identifier", "confidence",
@@ -471,7 +488,7 @@ class ReviewDb:
                 row["network_worth"] = worth["value"]
                 row["user_worth_note"] = worth["note"]
             rows[link["row_key"]] = row
-        for parent in self.conn.execute("SELECT * FROM parents").fetchall():
+        for parent in self.query("SELECT * FROM parents"):
             row = {column: "" for column in OVERRIDE_COLUMNS}
             row["public_identifier"] = parent["public_identifier"]
             row["worth_person_ids"] = parent["worth_person_ids"]
@@ -501,14 +518,17 @@ class ReviewDb:
             rows = list(reader)
         if "approved" not in fieldnames:
             return 0
+        gates = {
+            row["target"]: row["value"]
+            for row in self.query(
+                "SELECT target, value FROM decisions WHERE kind = ?",
+                (DecisionKind.SYNTHETIC_GATE.value,),
+            )
+        }
         changed = 0
         for row in rows:
             pub = str(row.get("public_identifier") or "").strip().lower()
-            gate = self.conn.execute(
-                "SELECT value FROM decisions WHERE kind = ? AND target = ?",
-                (DecisionKind.SYNTHETIC_GATE.value, pub),
-            ).fetchone()
-            value = gate["value"] if gate is not None else ""
+            value = gates.get(pub, "")
             if str(row.get("approved") or "") != value:
                 changed += 1
             row["approved"] = value

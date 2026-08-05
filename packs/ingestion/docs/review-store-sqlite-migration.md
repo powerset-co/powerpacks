@@ -196,7 +196,7 @@ the **jake-srv-new mirror copy** under old and new code, hash the ordered
 (slug, state) list, require equality; any export diff explained line-by-line.
 
 - [x] **P0 schema + import/export** (2026-08-05): `ReviewDb` in `review_db.py`; strict typed import; export through the CSV writer pair. Gate PASSED: byte-identical round-trip on arthur (758 links / 534 parents / 378 decisions / 14 gates) and the jake mirror (10425 / 6466 / 5328 / 10); zero unrepresentable rows — no scrub needed before import on either store.
-- [ ] **P1 read path**: `build_parents`/model read via `ReviewDb`; all writes still CSV. Gate: A/B queue hash identical (CSV read vs sqlite read).
+- [x] **P1 read path** (2026-08-05): cmd_serve creates `review.sqlite` next to review.csv and imports strictly; model builds + `review_rows_now` compose rows from the db (`needs_import` on the CSV stat is the other-writer check); writes still CSV. Gate PASSED: 6465 parents deep-equal + identical queue hash (CSV read vs sqlite read) on the jake mirror; real cmd_serve boot on the mirror healthy with staged pages rendering; other-writer-absorption pinned by test.
 - [ ] **P2 write path**: `/decide`, `/worth`, retarget settle, judge-apply as transactions; export at decision commit + stage exit. Gate: mirror replay of a recorded decision log; final export diff = 0.
 - [ ] **P3 delete workarounds** (table in §4). Gate: full unittest suite + one real staged run against local data, outputs diffed vs previous run.
 - [ ] **P4 — the substrate decision (2026-08-05)**: SQL is the standing

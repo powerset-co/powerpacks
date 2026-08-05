@@ -132,22 +132,22 @@ class ReviewDbRoundTripTests(unittest.TestCase):
         self.write_synthetic()
         before = self.review_csv.read_bytes()
         syn_before = self.synthetic_csv.read_bytes()
-        with ReviewDb(self.dir / "review.sqlite") as db:
-            stats = db.import_stores(self.review_csv, self.synthetic_csv)
-            db.export_review_csv(self.dir / "export.csv")
-            db.export_synthetic_gates(self.synthetic_csv)
+        db = ReviewDb(self.dir / "review.sqlite")
+        stats = db.import_stores(self.review_csv, self.synthetic_csv)
+        db.export_review_csv(self.dir / "export.csv")
+        db.export_synthetic_gates(self.synthetic_csv)
         self.assertEqual((self.dir / "export.csv").read_bytes(), before)
         self.assertEqual(self.synthetic_csv.read_bytes(), syn_before)
         self.assertEqual(stats, {"links": 4, "parents": 1, "decisions": 3, "synthetic_gates": 1})
 
     def test_decisions_derived_and_absence_means_pending(self):
         write_fixture(self.review_csv, self.fixture_rows())
-        with ReviewDb(self.dir / "review.sqlite") as db:
-            db.import_stores(self.review_csv)
-            decided = {
-                (row["kind"], row["target"]): row
-                for row in db.conn.execute("SELECT * FROM decisions").fetchall()
-            }
+        db = ReviewDb(self.dir / "review.sqlite")
+        db.import_stores(self.review_csv)
+        decided = {
+            (row["kind"], row["target"]): row
+            for row in db.query("SELECT * FROM decisions")
+        }
         self.assertEqual(decided[("identity", "jordan-bravo-1")]["approved"], "auto")
         self.assertEqual(decided[("identity", "message-linkedin:0123456789abcdef")]["value"], "retarget")
         worth = decided[("worth", "99999999-8888-7777-6666-555555555555")]
@@ -163,65 +163,67 @@ class ReviewDbRoundTripTests(unittest.TestCase):
         rows["11111111-2222-3333-4444-555555555555"]["worth_person_ids"] = "a|b"
         rows["parent-worth:99999999-8888-7777-6666-555555555555"]["linkedin_url"] = "https://example.com"
         write_fixture(self.review_csv, rows)
-        with ReviewDb(self.dir / "review.sqlite") as db:
-            with self.assertRaises(ReviewDbImportError) as ctx:
-                db.import_stores(self.review_csv)
+        db = ReviewDb(self.dir / "review.sqlite")
+        with self.assertRaises(ReviewDbImportError) as ctx:
+            db.import_stores(self.review_csv)
         message = str(ctx.exception)
         for fragment in ("unknown source", "approved without an action",
                          "worth_person_ids outside", "identity cells"):
             self.assertIn(fragment, message)
 
     def test_schema_checks_hold_without_python_validation(self):
-        with ReviewDb(self.dir / "review.sqlite") as db:
-            with self.assertRaises(sqlite3.IntegrityError):
-                db.conn.execute(
+        db = ReviewDb(self.dir / "review.sqlite")
+        with self.assertRaises(sqlite3.IntegrityError):
+            with db.connect() as conn:
+                conn.execute(
                     "INSERT INTO decisions (kind, target, value, approved) VALUES ('identity', 'x', 'nonsense', 'auto')"
                 )
-            with self.assertRaises(sqlite3.IntegrityError):
-                db.conn.execute(
+        with self.assertRaises(sqlite3.IntegrityError):
+            with db.connect() as conn:
+                conn.execute(
                     "INSERT INTO links (row_key, public_identifier, kind) VALUES ('candidate:email:x', 'candidate:email:x', 'pub')"
                 )
 
     def test_dataclasses_match_schema_columns(self):
         # The row dataclasses are the one home for each table's writable
         # columns; a drift from the DDL is caught here, not at 2am.
-        with ReviewDb(self.dir / "review.sqlite") as db:
-            for table, row_type in (("links", LinkRow), ("parents", ParentRow), ("decisions", DecisionRow)):
-                info = db.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        db = ReviewDb(self.dir / "review.sqlite")
+        for table, row_type in (("links", LinkRow), ("parents", ParentRow), ("decisions", DecisionRow)):
+                info = db.query(f"PRAGMA table_info({table})")
                 writable = {r["name"] for r in info} - {"confidence_num", "llm_reject_confidence_num"}
                 self.assertEqual({f.name for f in fields(row_type)}, writable, table)
 
     def test_generated_confidence_num(self):
         write_fixture(self.review_csv, self.fixture_rows())
-        with ReviewDb(self.dir / "review.sqlite") as db:
-            db.import_stores(self.review_csv)
-            row = db.conn.execute(
-                "SELECT confidence_num FROM links WHERE row_key = 'jordan-bravo-1'"
-            ).fetchone()
-            self.assertAlmostEqual(row["confidence_num"], 0.91)
+        db = ReviewDb(self.dir / "review.sqlite")
+        db.import_stores(self.review_csv)
+        row = db.query(
+            "SELECT confidence_num FROM links WHERE row_key = 'jordan-bravo-1'"
+        )[0]
+        self.assertAlmostEqual(row["confidence_num"], 0.91)
 
     def test_needs_import_tracks_csv_stat(self):
         write_fixture(self.review_csv, self.fixture_rows())
-        with ReviewDb(self.dir / "review.sqlite") as db:
-            self.assertTrue(db.needs_import(self.review_csv))
-            db.import_stores(self.review_csv)
-            self.assertFalse(db.needs_import(self.review_csv))
-            rows = load_override_rows(self.review_csv)
-            rows["jordan-bravo-1"]["reason"] = "changed"
-            write_override_rows(self.review_csv, rows)
-            self.assertTrue(db.needs_import(self.review_csv))
+        db = ReviewDb(self.dir / "review.sqlite")
+        self.assertTrue(db.needs_import(self.review_csv))
+        db.import_stores(self.review_csv)
+        self.assertFalse(db.needs_import(self.review_csv))
+        rows = load_override_rows(self.review_csv)
+        rows["jordan-bravo-1"]["reason"] = "changed"
+        write_override_rows(self.review_csv, rows)
+        self.assertTrue(db.needs_import(self.review_csv))
 
     def test_synthetic_gate_export_touches_only_approved(self):
         write_fixture(self.review_csv, self.fixture_rows())
         self.write_synthetic(approved="yes")
-        with ReviewDb(self.dir / "review.sqlite") as db:
-            db.import_stores(self.review_csv, self.synthetic_csv)
-            db.conn.execute(
+        db = ReviewDb(self.dir / "review.sqlite")
+        db.import_stores(self.review_csv, self.synthetic_csv)
+        with db.connect() as conn:
+            conn.execute(
                 "UPDATE decisions SET value = 'no' WHERE kind = ? AND target = 'synth-jordan-bravo'",
                 (DecisionKind.SYNTHETIC_GATE.value,),
             )
-            db.conn.commit()
-            changed = db.export_synthetic_gates(self.synthetic_csv)
+        changed = db.export_synthetic_gates(self.synthetic_csv)
         self.assertEqual(changed, 1)
         with self.synthetic_csv.open(newline="", encoding="utf-8") as fh:
             rows = {row["public_identifier"]: row for row in csv.DictReader(fh)}

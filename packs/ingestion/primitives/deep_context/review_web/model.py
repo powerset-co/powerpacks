@@ -875,8 +875,12 @@ def synthetic_worth_key(path: Path, pub: str) -> str:
     return ""
 
 
-def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
-    overrides = load_override_rows(review_path)
+def build_parents(verdicts_path: Path, review_path: Path,
+                  rows: dict[str, dict[str, str]] | None = None,
+                  ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+    # `rows` is the phase-1 sqlite seam: the review server passes an owned
+    # snapshot composed from review.sqlite; CLI callers keep the CSV read.
+    overrides = rows if rows is not None else load_override_rows(review_path)
     parents: dict[str, dict[str, Any]] = {}
     for r in read_jsonl(verdicts_path):
         slug = r.get("parent_slug") or ""
@@ -1197,11 +1201,13 @@ def _all_review_parents(verdicts_path: Path, review_path: Path, synthetic_path: 
                         parents_dir: Path = PARENTS_DIR,
                         dossier_dir: Path = DOSSIER_DIR,
                         profile_cache_dir: Path = PROFILE_CACHE_DIR,
-                        index_json: Path | None = None) -> list[dict[str, Any]]:
+                        index_json: Path | None = None,
+                        rows: dict[str, dict[str, str]] | None = None,
+                        ) -> list[dict[str, Any]]:
     # index.json is the sibling of the parents dir (ROOT/index.json vs ROOT/parents);
     # deriving it from parents_dir keeps test fixtures self-contained.
     index_json = index_json if index_json is not None else parents_dir.parent / "index.json"
-    parents, overrides = build_parents(verdicts_path, review_path)
+    parents, overrides = build_parents(verdicts_path, review_path, rows=rows)
     extend_and_annotate(parents, overrides, synthetic_path, facts_dir,
                         load_connection_keys(people_csv), parents_dir=parents_dir,
                         dossier_dir=dossier_dir, profile_cache_dir=profile_cache_dir,

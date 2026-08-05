@@ -10,6 +10,12 @@ and the baton pass to the next process. Views subscribe to `/api/events` (SSE)
 and re-snapshot `/api/status` on each nudge — the browser never polls.
 
 Changelog:
+  2026-08-05 (sqlite P1): review.sqlite (next to review.csv) is the server's
+    read source. cmd_serve creates/imports it (strict — an unrepresentable row
+    refuses serve by name); model builds and review_rows_now compose rows from
+    the db, with needs_import (keyed on the CSV stat) as the other-writer
+    check. Decisions still write the CSV; the import absorbs them. Phase 2
+    inverts authority (transactional decision writes, CSV becomes export).
   2026-07-30: Bare review launches always land on the read-only directory;
     staged workflow launches opt in with an explicit --stage.
   2026-07-29 (single-writer rewrite): deleted the stat/signature invalidation
@@ -72,6 +78,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 )
 
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
+from packs.ingestion.primitives.deep_context.review_db import ReviewDb
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
 from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier
@@ -258,7 +265,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                  initial_parents: list[dict[str, Any]] | None = None,
                  agent_notifier: Callable[[], object] | None = None,
                  run_jobs: bool | None = None,
-                 guided_retargets: RetargetQueue | None = None):
+                 guided_retargets: RetargetQueue | None = None,
+                 review_db: ReviewDb | None = None):
     manifest_path = manifest_path or _manifest_for_review_path(review_path)
     # In-app jobs call the primitives on their CANONICAL default paths, so they
     # only auto-enable for the canonical server (tests use temp paths -> off).
@@ -269,6 +277,16 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             run_jobs = False
     avatar_dir = avatar_dir or manifest_path.parent / "avatars"
     mutation_lock = threading.Lock()
+
+    def db_review_rows() -> dict[str, dict[str, str]] | None:
+        """Phase-1 sqlite read door: keep review.sqlite current with the CSV
+        (writes still land in the CSV; the import absorbs them) and compose a
+        fresh owned row snapshot from it. None when no db is wired (tests)."""
+        if review_db is None:
+            return None
+        if review_db.needs_import(review_path):
+            review_db.import_stores(review_path, synthetic_path)
+        return review_db.export_review_rows()
 
     def notify_agent() -> None:
         """Best-effort wake after durable UI mutations; file state stays authoritative."""
@@ -292,7 +310,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         initial_parents if initial_parents is not None else
         _all_review_parents(
             verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
-            parents_dir, dossier_dir, profile_cache_dir)
+            parents_dir, dossier_dir, profile_cache_dir,
+            rows=db_review_rows())
     )
     connection_keys = load_connection_keys(people_csv)
 
@@ -326,7 +345,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         nonlocal cached_parents, connection_keys, cached_rows
         cached_parents = _all_review_parents(
             verdicts_path, review_path, synthetic_path, facts_dir, people_csv,
-            parents_dir, dossier_dir, profile_cache_dir)
+            parents_dir, dossier_dir, profile_cache_dir,
+            rows=db_review_rows())
         connection_keys = load_connection_keys(people_csv)
         cached_rows = None
         return cached_parents
@@ -400,6 +420,13 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 
     def review_rows_now() -> dict[str, dict[str, str]]:
         nonlocal cached_rows, cached_rows_mtime
+        if review_db is not None:
+            # sqlite path: needs_import IS the other-writer check (keyed on the
+            # CSV's stat, same contract as the mtime cache below). Handlers
+            # keep mutating the returned dict in place and writing through.
+            if cached_rows is None or review_db.needs_import(review_path):
+                cached_rows = db_review_rows()
+            return cached_rows
         try:
             mtime = review_path.stat().st_mtime_ns
         except OSError:
@@ -1379,6 +1406,13 @@ def cmd_serve(args: argparse.Namespace) -> None:
     synthetic_path = Path(args.synthetic_people)
     manifest_path = Path(args.manifest)
 
+    # Phase-1 sqlite store: review.sqlite lives next to review.csv and is kept
+    # current from it (strict import — an unrepresentable row refuses serve by
+    # name). Reads compose from the db; writes still land in the CSV.
+    review_db = ReviewDb(review_path.with_suffix(".sqlite"))
+    if review_db.needs_import(review_path):
+        review_db.import_stores(review_path, synthetic_path)
+
     # "directory" is the read-only browse PATH, not a review stage: bare
     # `review` always lands there and never begins a people-review revision.
     # Workflow callers opt into a staged view explicitly with --stage.
@@ -1387,11 +1421,14 @@ def cmd_serve(args: argparse.Namespace) -> None:
                 else f"?stage={urllib.parse.quote(stage)}")
 
     def build_initial_parents() -> list[dict[str, Any]]:
+        if review_db.needs_import(review_path):
+            review_db.import_stores(review_path, synthetic_path)
         return _all_review_parents(
             verdicts_path, review_path, synthetic_path,
             Path(args.facts_dir), Path(args.people_csv),
             Path(args.parents_dir), Path(args.dossier_dir),
-            Path(args.profile_cache_dir))
+            Path(args.profile_cache_dir),
+            rows=review_db.export_review_rows())
 
     def begin_people_review(progress: dict[str, int]) -> None:
         write_review_manifest("worth", "awaiting_user", progress, path=manifest_path,
@@ -1470,7 +1507,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
                                               enrichment_manifest_path=Path(args.enrichment_manifest),
                                               profile_cache_dir=Path(args.profile_cache_dir),
                                               avatar_dir=Path(args.avatar_dir),
-                                              initial_parents=parents))
+                                              initial_parents=parents,
+                                              review_db=review_db))
     host, port = server.server_address
     url = f"http://{host}:{port}/{query_for(requested_stage)}"
     print(json.dumps({"primitive": "reconcile_review_web", "status": "serving", "url": url,
