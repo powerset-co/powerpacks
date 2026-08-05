@@ -53,7 +53,6 @@ def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Name
         # satisfy the explicit gate so the single `run` proceeds through cache
         # misses without a needs_approval stop.
         approve_spend=True,
-        refresh_cache=False,
         profile_cache_dir=str(cache_dir),
         company_corpus_jsonl=[],
         sleep_seconds=0.0,

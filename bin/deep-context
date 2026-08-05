@@ -110,12 +110,18 @@ usage: bin/deep-context <command> [args]
                the dry estimate prints first and invoking refresh approves it)
   review       open the review UI — restarts a running review server first so
                it always serves current code (in-flight enrichment or guided
-               re-research defers the restart; --force-restart overrides).
+               re-research defers the restart; --force-restart overrides),
+               then ALWAYS runs the self-heal pass (see `heal`) before serving.
                Add a stage word to land there directly
                (review linkedin | worth | enrich; default: the read-only
                people directory, A-Z dossiers + LinkedIn);
                pass --stage worth|enrich|linkedin for the staged workflow
-               (local, free)
+  heal         the pre-serve self-heal pass, runnable on its own: legacy
+               scrubs, a FRESH profile fetch + re-judge for every undecided
+               judge-skipped LinkedIn card (RapidAPI per fetch + OpenAI
+               ~cents; invoking it IS the consent — no approval stop), and
+               free dead-link termination. Idempotent; a clean store prints
+               one "(nothing to do)" line. --cap N is a runaway backstop.
   stop         stop the review UI server, releasing the single-writer review
                session so apply-retargets/realize/restart can write (free)
   review-status  read manifests/CSVs and print the exact next workflow action
@@ -305,14 +311,26 @@ case "$cmd" in
       if (( ! force_restart )) && grep -qE '"status": *"(running|submitted)"' \
           "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null; then
         echo "note: enrichment is running inside the live review server; reusing it (code refresh deferred; --force-restart overrides)" >&2
+        echo "[heal] deferred: the live review server owns the review session; restart later to heal" >&2
       elif (( ! force_restart )) && review_server_has_active_retargets "$review_port"; then
         echo "warning: guided re-research jobs are in flight in the live review server; reusing it — finish them, or rerun with --force-restart to restart anyway" >&2
+        echo "[heal] deferred: the live review server owns the review session; restart later to heal" >&2
       else
         stop_review_server "$review_port"
         wait_for_review_session_release
+        # The self-heal pass is a first-class step of every review boot: legacy
+        # scrubs + fresh-fetch/re-judge of judge-skipped links + free dead-link
+        # termination. Invoking review IS the consent (no approval stop); a
+        # heal failure never blocks the UI.
+        "${PY[@]}" "$PKG.heal_review" >/dev/null \
+          || echo "warning: self-heal pass failed; serving anyway" >&2
       fi
     fi
     "${PY[@]}" "$PKG.reconcile_review_web" serve --open "${review_args[@]}"
+    ;;
+  heal)
+    # The pre-serve self-heal pass on its own (also runs inside `review`).
+    "${PY[@]}" "$PKG.heal_review" "$@"
     ;;
   stop|stop-review)
     # Release the single-writer review session: kill the review server on the

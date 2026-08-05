@@ -403,6 +403,11 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
                 payload[key] = existing[key]
     if status == "completed":
         payload["completed_at"] = now_iso()
+    # The pre-serve self-heal pass stamps its summary here (heal_review);
+    # stage writes carry it forward so review-status keeps showing what the
+    # last heal did.
+    if existing.get("heal"):
+        payload["heal"] = existing["heal"]
     return write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
 
 

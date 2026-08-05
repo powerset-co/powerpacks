@@ -96,7 +96,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.write_people(people)
             cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
+                with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "completed")
@@ -162,7 +162,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.write_people(people)
             cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "r"}, clear=True):
-                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
+                with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
             self.assertFalse(any(name.endswith("_enrich") and name != "rapidapi_profile" for name in dir(enrich_people)))
@@ -199,7 +199,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.write_people(people, rapidapi_response={"success": False, "message": "not found"})
             cache_dir = Path(tmp) / "cache"
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
+                with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}) as mocked:
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "completed")
@@ -254,23 +254,6 @@ class EnrichPeopleTests(unittest.TestCase):
                 output_rows = list(CsvIO.dict_reader(handle))
             self.assertEqual(output_rows[0]["current_company"], "Acme")
 
-    def test_refresh_cache_forces_cache_miss(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            people = Path(tmp) / "people.csv"
-            self.write_people(people)
-            cache_dir = Path(tmp) / "cache"
-            cache_dir.mkdir()
-            (cache_dir / "jane-example.json").write_text(json.dumps(self.cache_entry()), encoding="utf-8")
-            with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
-                    code, payload = self.invoke([
-                        "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
-                        "--profile-cache-dir", str(cache_dir), "--refresh-cache", "--approve-spend",
-                    ])
-            self.assertEqual(code, 0)
-            self.assertEqual(payload["counts"]["cache_hit_count"], 0)
-            self.assertEqual(payload["counts"]["paid_call_count"], 1)
-
     def test_mixed_cache_and_miss_approval_counts_only_miss(self):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
@@ -292,7 +275,7 @@ class EnrichPeopleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
                 john_profile = self.profile(company_id="456")
                 john_profile["full_name"] = "John Example"
-                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": john_profile, "error": "", "from_cache": False}) as mocked:
+                with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": john_profile, "error": "", "from_cache": False}) as mocked:
                     code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--approve-spend"])
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["counts"]["queue_count"], 2)
@@ -348,7 +331,7 @@ class EnrichPeopleTests(unittest.TestCase):
     def test_failed_profile_is_cached_with_last_checked_at(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(rapidapi_client.RapidApiClient, "http_json", return_value=(200, {"success": False, "message": "not found"}, "")):
-                result = rapidapi_client.RapidApiClient("key").fetch_profile("jane-example", "https://www.linkedin.com/in/jane-example", cache_dir=Path(tmp))
+                result = rapidapi_client.RapidApiClient("key").get_profile("jane-example", "https://www.linkedin.com/in/jane-example", cache_dir=Path(tmp))
             cached = json.loads((Path(tmp) / "jane-example.json").read_text(encoding="utf-8"))
             self.assertIn("last_checked_at", cached)
             self.assertEqual(cached["public_identifier"], "jane-example")
@@ -406,7 +389,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 "normalized_profile": {"success": False, "error": "not found"},
             }), encoding="utf-8")
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
+                with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.profile(), "error": "", "from_cache": False}):
                     code, payload = self.invoke([
                         "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
                         "--profile-cache-dir", str(cache_dir), "--approve-spend",
@@ -451,7 +434,7 @@ class EnrichPeopleTests(unittest.TestCase):
                 "attempts": 3,
             }
             with patch.dict(os.environ, {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value=failed):
+                with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value=failed):
                     code, payload = self.invoke([
                         "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
                         "--profile-cache-dir", str(cache_dir), "--approve-spend",
@@ -539,11 +522,11 @@ class EnrichPeopleTests(unittest.TestCase):
 
     # ---- only PERMANENT failures are cached --------------------------------
 
-    def fetch_with_http(self, tmp: Path, response, *, refresh_cache=False):
+    def fetch_with_http(self, tmp: Path, response, *, fresh=False):
         with patch.object(rapidapi_client.RapidApiClient, "http_json", return_value=response):
-            return rapidapi_client.RapidApiClient("key", retry_attempts=1).fetch_profile(
+            return rapidapi_client.RapidApiClient("key", retry_attempts=1).get_profile(
                 "jane-example", "https://www.linkedin.com/in/jane-example",
-                cache_dir=tmp, refresh_cache=refresh_cache,
+                cache_dir=tmp, fresh=fresh,
             )
 
     def test_permanent_http_failure_is_cached(self):
@@ -576,7 +559,7 @@ class EnrichPeopleTests(unittest.TestCase):
             self.fetch_with_http(cache_dir, (429, None, "rate limited"))
             status, reason, _path, _failure = profile_cache.classify_rapidapi_cache_status(
                 {"public_identifier": "jane-example", "linkedin_url": "https://www.linkedin.com/in/jane-example"},
-                cache_dir, False, 24.0, None,
+                cache_dir, 24.0, None,
             )
             self.assertEqual(status, "miss")
             self.assertNotEqual(reason, "recent provider failure")
@@ -587,26 +570,37 @@ class EnrichPeopleTests(unittest.TestCase):
         self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(429, {"success": False}))
         self.assertFalse(rapidapi_client.RapidApiClient.is_permanent_failure(0, {"success": False}))
 
-    def test_failure_never_overwrites_an_existing_good_cache_entry(self):
-        """--refresh-cache skips the cache READ, so without a guard a transient
-        error during a refresh would destroy an already-paid-for profile."""
-        for status in (0, 429, 503, 404):
+    def test_failure_never_destroys_an_existing_good_cache_entry(self):
+        """A fresh fetch skips the cache READ, so without a guard a failure
+        during it would destroy an already-paid-for profile. A TRANSIENT
+        failure leaves the entry byte-identical; a PERMANENT one (404) may
+        bump last_checked_at (the empty verdict is recorded) but keeps the
+        paid body usable."""
+        for status in (0, 429, 503):
             with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
                 cache_path = Path(tmp) / "jane-example.json"
                 cache_path.write_text(json.dumps(self.cache_entry()), encoding="utf-8")
                 before = cache_path.read_text(encoding="utf-8")
-                self.fetch_with_http(Path(tmp), (status, None, "boom"), refresh_cache=True)
+                self.fetch_with_http(Path(tmp), (status, None, "boom"), fresh=True)
                 self.assertEqual(cache_path.read_text(encoding="utf-8"), before,
                                  f"status {status} clobbered a paid-for cache entry")
                 self.assertIsNotNone(profile_cache.read_usable_cached_profile(cache_path))
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "jane-example.json"
+            cache_path.write_text(json.dumps(self.cache_entry()), encoding="utf-8")
+            before = json.loads(cache_path.read_text(encoding="utf-8"))
+            self.fetch_with_http(Path(tmp), (404, None, "gone"), fresh=True)
+            after = json.loads(cache_path.read_text(encoding="utf-8"))
+            self.assertEqual(after["raw_response"], before["raw_response"])
+            self.assertIsNotNone(profile_cache.read_usable_cached_profile(cache_path))
 
-    def test_successful_refresh_still_overwrites_the_cache(self):
+    def test_successful_fresh_fetch_still_overwrites_the_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache_path = Path(tmp) / "jane-example.json"
             cache_path.write_text(json.dumps(self.cache_entry()), encoding="utf-8")
             fresh = self.profile()
             fresh["headline"] = "CTO at Acme"
-            self.fetch_with_http(Path(tmp), (200, fresh, ""), refresh_cache=True)
+            self.fetch_with_http(Path(tmp), (200, fresh, ""), fresh=True)
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             self.assertEqual(cached["raw_response"]["headline"], "CTO at Acme")
 
@@ -638,6 +632,113 @@ class EnrichPeopleTests(unittest.TestCase):
         self.assertEqual(payload["provider"], "rapidapi")
         self.assertEqual(set(payload["keys_present"]), {"RAPIDAPI_KEY", "RAPIDAPI_LINKEDIN_KEY"})
         self.assertTrue(payload["keys_present"]["RAPIDAPI_KEY"])
+
+
+class ProfileDoorContractTests(unittest.TestCase):
+    """The get_profile three-state contract: content | empty | error, the
+    no-rebill-on-repeat-EMPTY promise, and the `fresh` freshness demand."""
+
+    PUB = "jordan-bravo"
+    URL = "https://www.linkedin.com/in/jordan-bravo"
+
+    @staticmethod
+    def content_entry() -> dict:
+        raw = {"public_identifier": "jordan-bravo", "full_name": "Jordan Bravo",
+               "experiences": [{"title": "Founder", "company_name": "Bravo Robotics"}]}
+        return {"fetched_at": "2020-01-01T00:00:00Z", "last_checked_at": "2020-01-01T00:00:00Z",
+                "public_identifier": "jordan-bravo", "raw_response": raw,
+                "normalized_profile": {"success": True, "full_name": "Jordan Bravo",
+                                       "experiences": [{"title": "Founder", "company_name": "Bravo Robotics"}],
+                                       "education": []}}
+
+    @staticmethod
+    def shell_entry(checked_at: str = "2020-01-01T00:00:00Z") -> dict:
+        return {"fetched_at": checked_at, "last_checked_at": checked_at,
+                "public_identifier": "jordan-bravo", "raw_response": {"full_name": "Jordan Bravo"},
+                "normalized_profile": {"success": True, "full_name": "Jordan Bravo",
+                                       "experiences": [], "education": []}}
+
+    def get(self, tmp: Path, response=None, *, fresh=False, api_key="key", side_effect=None):
+        client = rapidapi_client.RapidApiClient(api_key, retry_attempts=1)
+        if response is None and side_effect is None:
+            side_effect = AssertionError("network called")
+        with patch.object(rapidapi_client.RapidApiClient, "http_json",
+                          return_value=response, side_effect=side_effect) as http:
+            result = client.get_profile(self.PUB, self.URL, cache_dir=tmp, fresh=fresh)
+        return result, http
+
+    def test_cached_content_answers_without_fetching(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "jordan-bravo.json").write_text(json.dumps(self.content_entry()))
+            result, http = self.get(Path(tmp))
+        self.assertEqual(result["state"], rapidapi_client.PROFILE_CONTENT)
+        self.assertTrue(result["from_cache"])
+        self.assertFalse(result["fetched"])
+        self.assertEqual(http.call_count, 0)
+
+    def test_fresh_bypasses_staleness_but_normal_callers_stay_cache_first(self):
+        fresh_raw = {"public_identifier": "jordan-bravo", "full_name": "Jordan Bravo",
+                     "experiences": [{"title": "CEO", "company_name": "Bravo Robotics"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "jordan-bravo.json").write_text(json.dumps(self.content_entry()))
+            result, http = self.get(Path(tmp), (200, fresh_raw, ""), fresh=True)
+            self.assertEqual(http.call_count, 1)
+            self.assertEqual(result["state"], rapidapi_client.PROFILE_CONTENT)
+            self.assertTrue(result["fetched"])
+            # A repeat call in the same run serves the recorded answer.
+            repeat, http2 = self.get(Path(tmp), fresh=True)
+            self.assertEqual(http2.call_count, 0)
+            self.assertEqual(repeat["state"], rapidapi_client.PROFILE_CONTENT)
+        # Normal (non-fresh) callers against a DIFFERENT store stay cache-first.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "jordan-bravo.json").write_text(json.dumps(self.content_entry()))
+            _, http3 = self.get(Path(tmp))
+            self.assertEqual(http3.call_count, 0)
+
+    def test_stale_empty_rechecks_once_then_repeats_never_rebill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "jordan-bravo.json").write_text(json.dumps(self.shell_entry()))
+            result, http = self.get(Path(tmp), (404, None, "gone"))
+            self.assertEqual(http.call_count, 1)
+            self.assertEqual(result["state"], rapidapi_client.PROFILE_EMPTY)
+            self.assertTrue(result["fetched"])
+            for _ in range(3):
+                repeat, http2 = self.get(Path(tmp))
+                self.assertEqual(http2.call_count, 0)
+                self.assertEqual(repeat["state"], rapidapi_client.PROFILE_EMPTY)
+                self.assertFalse(repeat["fetched"])
+
+    def test_recently_checked_empty_answers_from_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "jordan-bravo.json").write_text(
+                json.dumps(self.shell_entry(enrich_people.now_iso())))
+            result, http = self.get(Path(tmp))
+        self.assertEqual(result["state"], rapidapi_client.PROFILE_EMPTY)
+        self.assertEqual(http.call_count, 0)
+
+    def test_transient_failure_with_no_record_is_error_not_a_verdict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, http = self.get(Path(tmp), (429, None, "rate limited"))
+            self.assertEqual(result["state"], rapidapi_client.PROFILE_ERROR)
+            self.assertEqual(http.call_count, 1)
+            self.assertFalse((Path(tmp) / "jordan-bravo.json").exists())
+
+    def test_keyless_serves_recorded_truth_or_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "jordan-bravo.json").write_text(json.dumps(self.content_entry()))
+            result, http = self.get(Path(tmp), api_key="")
+            self.assertEqual(result["state"], rapidapi_client.PROFILE_CONTENT)
+            self.assertEqual(http.call_count, 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "jordan-bravo.json").write_text(json.dumps(self.shell_entry()))
+            result, http = self.get(Path(tmp), api_key="")
+            self.assertEqual(result["state"], rapidapi_client.PROFILE_EMPTY)
+            self.assertFalse(result["fetched"])
+            self.assertEqual(http.call_count, 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            result, http = self.get(Path(tmp), api_key="")
+            self.assertEqual(result["state"], rapidapi_client.PROFILE_ERROR)
+            self.assertEqual(http.call_count, 0)
 
 
 if __name__ == "__main__":

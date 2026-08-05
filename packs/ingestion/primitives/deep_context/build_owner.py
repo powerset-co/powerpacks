@@ -42,11 +42,7 @@ from packs.ingestion.primitives.deep_context.common import (
     normalize_phone,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.enrich.profile_cache import (
-    profile_cache_path,
-    read_usable_cached_profile,
-)
-from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
+from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_ERROR, rapidapi_profile
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
@@ -199,18 +195,15 @@ class BuildOwner(Node):
             )
 
         load_env()
-        cached = read_usable_cached_profile(profile_cache_path(self.profile_cache_dir, pub))
-        from_cache = cached is not None
-        if cached:
-            normalized = cached.get("normalized_profile") or {}
-        else:
-            result = rapidapi_profile(pub, url, rapidapi_key(), cache_dir=self.profile_cache_dir)
-            normalized = result.get("normalized_profile") or {}
-            if normalized.get("success") is not True:
-                return BuildOwnerManifest(
-                    status="error",
-                    error=result.get("error") or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
-                )
+        # ONE client call: cache-vs-fetch resolution lives inside get_profile.
+        result = rapidapi_profile(pub, url, cache_dir=self.profile_cache_dir)
+        from_cache = bool(result.get("from_cache"))
+        normalized = result.get("normalized_profile") or {}
+        if result["state"] == PROFILE_ERROR or normalized.get("success") is not True:
+            return BuildOwnerManifest(
+                status="error",
+                error=result.get("detail") or "could not fetch the owner profile (set RAPIDAPI_KEY?)",
+            )
 
         owner = owner_from_profile(normalized, email=self.email)
         # Preserve augmentations a rebuild must not lose (msgvault adds emails;

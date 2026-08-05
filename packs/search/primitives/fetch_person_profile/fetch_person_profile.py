@@ -5,7 +5,8 @@ Lookup order (cheapest first):
 1. Local RapidAPI profile cache (.powerpacks/network-import/profile_cache_v2)
 2. Local DuckDB search index (local_person_profiles + positions)
 3. Postgres persons.hydrated_context (when remote creds are available)
-4. RapidAPI get-profile-data-by-url (runs by default; disable with --no-fetch)
+4. RapidAPI get-profile-data-by-url (one `get_profile` client call; a keyless
+   install simply reports the miss)
 
 Output is a compact, source-agnostic profile summary $search deep mode
 uses to derive traits and build one similar-person candidate search. The
@@ -32,7 +33,7 @@ from packs.ingestion.primitives.enrich.profile_cache import (  # noqa: E402
     profile_cache_path,
     read_usable_cached_profile,
 )
-from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile  # noqa: E402
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_profile  # noqa: E402
 from packs.ingestion.schemas.people_schema import (  # noqa: E402
     extract_public_identifier,
     normalize_linkedin_url,
@@ -255,18 +256,14 @@ def lookup_postgres(public_identifier: str) -> dict[str, Any] | None:
 
 
 def fetch_rapidapi(public_identifier: str, linkedin_url: str, cache_dir: Path) -> tuple[dict[str, Any] | None, str]:
-    api_key = rapidapi_key()
-    if not api_key:
-        return None, "RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set"
     result = rapidapi_profile(
         public_identifier,
         linkedin_url,
-        api_key,
         cache_dir=cache_dir,
     )
     normalized = result.get("normalized_profile") or {}
     if normalized.get("success") is not True:
-        return None, str(result.get("error") or normalized.get("error") or f"status={result.get('status_code')}")
+        return None, str(result.get("detail") or normalized.get("error") or f"status={result.get('status_code')}")
     summary = summary_from_normalized(normalized, source="rapidapi")
     summary["from_cache"] = bool(result.get("from_cache"))
     return summary, ""
@@ -310,17 +307,6 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
                 "profile": summary,
             }
 
-    if args.no_fetch:
-        return {
-            "primitive": "fetch_person_profile",
-            "status": "not_found",
-            "created_at": now_iso(),
-            "linkedin_url": linkedin_url,
-            "public_identifier": public_identifier,
-            "attempted_sources": attempted,
-            "message": "Profile not found in the local cache, local index, or Postgres; RapidAPI fetch disabled by --no-fetch.",
-        }
-
     attempted.append("rapidapi")
     summary, error = fetch_rapidapi(public_identifier, linkedin_url, cache_dir)
     if summary:
@@ -350,7 +336,6 @@ def main() -> None:
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
     parser.add_argument("--local-db", default=str(DEFAULT_LOCAL_DB))
     parser.add_argument("--env-file", default=".env")
-    parser.add_argument("--no-fetch", action="store_true", help="Disable the RapidAPI fallback (local/remote lookups only)")
     parser.add_argument("--allow-fetch", action="store_true", help=argparse.SUPPRESS)  # legacy no-op; RapidAPI runs by default
     parser.add_argument("--out", help="Optional path to also write the result JSON")
     args = parser.parse_args()

@@ -12,6 +12,10 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-08-05: deep-context — `resolve_stored_identity_policy` rule (5): a
+    group with no standing identity and no human touch auto-applies its single
+    judge-confirmed retarget proposal at/above the detach bar (0.85) — batch
+    recovery converges without a human click per obviously-right find.
   2026-08-04: deep-context — `resolve_stored_identity_policy` rule (4): parents
     half-decided by the pre-v1.15.3 /decide (one human answer settled only the
     clicked row) get their remaining pending candidate rows settled the way the
@@ -366,7 +370,11 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
     candidate rows exactly like the live /decide sibling fan-out: real rows
     detach (approved=yes), pending synthetic options gate to `no` in
     synthetic-people.csv, so a legacy half-decided parent stops re-entering
-    the queue.
+    the queue. (5) a group with NO standing identity, no decisive verify, and
+    no human touch auto-applies its SINGLE judge-confirmed retarget proposal
+    at/above the detach bar (0.85 — re-attaching identity deserves the same
+    caution as detaching; the 0.70 import-time bar only KEEPS an existing
+    link).
 
     Rules (1)-(3) never touch: user decisions (approved yes/no), retarget rows
     (accepted ones stand, rejected ones must resurface for review), exclude
@@ -376,12 +384,14 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
     group with no human decision is never touched. Idempotent:
     promoted/demoted rows carry approved=auto, settled rows carry approved=yes
     or a yes/no synthetic gate, and all are skipped on the next pass. Returns
-    {"connections": n, "promoted": n, "demoted": n, "siblings_settled": n}.
+    {"connections": n, "promoted": n, "demoted": n, "siblings_settled": n,
+    "retargets_promoted": n}.
     """
     from packs.ingestion.primitives.common.jsonio import now_iso
     from packs.ingestion.primitives.deep_context.review_store import (
         DECISIVE_CONFIRM_THRESHOLD,
         JUDGE_CONFIRM_THRESHOLD,
+        JUDGE_DETACH_THRESHOLD,
         is_parent_worth_row,
         load_override_rows,
         parent_ids_by_person,
@@ -393,7 +403,7 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
 
     if not review_csv.exists():
         return {"connections": 0, "promoted": 0, "demoted": 0,
-                "siblings_settled": 0}
+                "siblings_settled": 0, "retargets_promoted": 0}
     rows = load_override_rows(review_csv)
     parent_of = parent_ids_by_person(index_json)
 
@@ -421,20 +431,21 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
         except (TypeError, ValueError):
             return 0.0
 
-    # Group identity rows (verify/detach only) by the person they belong to —
-    # the current deep-context parent when the index knows one, else the row's
-    # own person_id.
+    # Group identity rows (verify/detach/retarget) by the person they belong
+    # to — the current deep-context parent when the index knows one, else the
+    # row's own person_id. Retargets joined the grouping for rule (5); rules
+    # (2)/(3) still operate on their original verify/detach subsets.
     groups: dict[str, list[str]] = {}
     for key, row in rows.items():
         if is_parent_worth_row(row, key):
             continue
-        if (row.get("action") or "").strip().lower() not in {"verify", "detach"}:
+        if (row.get("action") or "").strip().lower() not in {"verify", "detach", "retarget"}:
             continue
         person_id = (row.get("person_id") or "").strip().lower()
         group = parent_of.get(person_id) or person_id or key
         groups.setdefault(group, []).append(key)
 
-    promoted = demoted = 0
+    promoted = demoted = retargets_promoted = 0
     for keys in groups.values():
         group_rows = [rows[k] for k in keys]
         applied = [r for r in group_rows
@@ -454,7 +465,10 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
             winner["updated_at"] = now_iso()
             promoted += 1
             for row in pending:
-                if row is winner:
+                # A pending retarget PROPOSAL is not demoted by a decisive
+                # verify (pre-rule-(5) behavior preserved: it stays a visible
+                # option beside the winner).
+                if row is winner or (row.get("action") or "").strip().lower() == "retarget":
                     continue
                 row["action"], row["approved"] = "detach", "auto"
                 row["updated_at"] = now_iso()
@@ -468,6 +482,32 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
                 row["action"], row["approved"] = "detach", "auto"
                 row["updated_at"] = now_iso()
                 demoted += 1
+        else:
+            # (5) Batch-recovery promotion, 2026-08-05: with NO standing
+            # identity and no decisive verify in the group, a judge-confirmed
+            # found-LinkedIn (llm_reject clear) auto-applies at/above the
+            # DETACH bar. The asymmetry with the import-time confirm bar
+            # (0.70) is deliberate: that bar KEEPS an already-attached link,
+            # which is cheap to keep — RE-ATTACHING a replacement identity
+            # deserves the same caution as removing one (0.85). Below the
+            # bar, and for judge-rejected proposals, the human keeps the
+            # decision. Human-touched groups are skipped (rule (4) settles
+            # those), and only a SINGLE bar-clearing proposal promotes — two
+            # would be a genuine conflict for the human. Idempotent:
+            # promoted rows carry approved=auto and drop out of `pending`.
+            human_touched = any(
+                (r.get("approved") or "").strip().lower() in {"yes", "no"}
+                for r in group_rows)
+            promotable = [
+                r for r in pending
+                if (r.get("action") or "").strip().lower() == "retarget"
+                and (r.get("new_linkedin_url") or "").strip()
+                and (r.get("llm_reject") or "").strip().lower() not in {"1", "true", "yes"}
+                and confidence(r) >= JUDGE_DETACH_THRESHOLD]
+            if not human_touched and len(promotable) == 1:
+                promotable[0]["approved"] = "auto"
+                promotable[0]["updated_at"] = now_iso()
+                retargets_promoted += 1
     # Rule (4): settle legacy half-decided parent groups the way the live
     # /decide sibling fan-out does. Runs LAST so it only sweeps what rules
     # (1)-(3) left pending — a v1.15.3+ install has already applied those to
@@ -552,7 +592,8 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
                 apply_synthetic_decision(synthetic_csv, pub, "detach")
                 siblings_settled += 1
 
-    if connections or promoted or demoted or siblings_settled:
+    if connections or promoted or demoted or siblings_settled or retargets_promoted:
         write_override_rows(review_csv, rows)
     return {"connections": connections, "promoted": promoted,
-            "demoted": demoted, "siblings_settled": siblings_settled}
+            "demoted": demoted, "siblings_settled": siblings_settled,
+            "retargets_promoted": retargets_promoted}

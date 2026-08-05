@@ -73,7 +73,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
-from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
+from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
 from .decisions import apply_decision, apply_synthetic_decision, apply_worth_decision, carry_forward_multi_option_contacts, sync_synthetic_gate
@@ -351,7 +351,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 new_url = str(result["new_url"])
                 new_pub = extract_public_identifier(new_url).lower()
                 if new_pub:
-                    rapidapi_profile(new_pub, new_url, rapidapi_key(),
+                    rapidapi_profile(new_pub, new_url,
                                      cache_dir=profile_cache_dir)
             except BaseException as exc:
                 result = {**result,

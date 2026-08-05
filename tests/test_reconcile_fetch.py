@@ -66,11 +66,12 @@ class FetchMissingProfilesTests(unittest.TestCase):
                         "education": [], "city": "SF", "state": "", "country": "",
                     },
                 }))
-                return {"status_code": 200, "normalized_profile": {"success": True}}
+                return {"state": rapid.PROFILE_CONTENT,
+                        "status_code": 200, "normalized_profile": {"success": True}}
 
             with mock.patch.object(rl.RapidApiClient, "resolve_key", return_value="k"), \
                  mock.patch.object(rl.RapidApiClient, "__init__", return_value=None), \
-                 mock.patch.object(rl.RapidApiClient, "fetch_profile", fake_fetch):
+                 mock.patch.object(rl.RapidApiClient, "get_profile", fake_fetch):
                 counts = rl.fetch_missing_profiles([t], people, cache_dir)
 
         self.assertEqual(counts["fetch_ok"], 1)
@@ -83,8 +84,9 @@ class FetchMissingProfilesTests(unittest.TestCase):
         t = task()
         with mock.patch.object(rl.RapidApiClient, "resolve_key", return_value="k"), \
              mock.patch.object(rl.RapidApiClient, "__init__", return_value=None), \
-             mock.patch.object(rl.RapidApiClient, "fetch_profile",
-                               return_value={"status_code": 404, "normalized_profile": None}):
+             mock.patch.object(rl.RapidApiClient, "get_profile",
+                               return_value={"state": rapid.PROFILE_EMPTY,
+                                             "status_code": 404, "normalized_profile": {}}):
             counts = rl.fetch_missing_profiles([t], {}, Path("unused"))
         self.assertEqual(counts["fetch_failed"], 1)
         self.assertFalse(t["linkedin"]["has_profile"])
@@ -107,11 +109,12 @@ class HydrateProfilesTests(unittest.TestCase):
 
         def fake(self, pub, url, *, cache_dir=None, **kw):
             calls.append(pub)
-            return {"normalized_profile": {"success": True} if pub == "good" else None}
+            state = rapid.PROFILE_CONTENT if pub == "good" else rapid.PROFILE_EMPTY
+            return {"state": state, "normalized_profile": {}}
 
         with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value="k"), \
              mock.patch.object(rapid.RapidApiClient, "__init__", return_value=None), \
-             mock.patch.object(rapid.RapidApiClient, "fetch_profile", fake):
+             mock.patch.object(rapid.RapidApiClient, "get_profile", fake):
             counts = rapid.hydrate_profiles(
                 [("good", "https://a"), ("bad", "https://b"), ("", "https://c")], Path("unused"))
         self.assertEqual(counts["wanted"], 2)          # the empty public_identifier is dropped

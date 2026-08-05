@@ -170,6 +170,12 @@ DEFAULT_DR_BUDGET = 25.0
 
 VERDICTS = ["confirmed", "wrong_person", "needs_review"]
 
+# The stored no-spend verdict reason for a task the judge SKIPPED because the
+# attached link had no usable profile (see deterministic_verdict). The heal
+# pass (heal_review) selects exactly these rows for its fetch->judge|terminate
+# sweep, so the string lives once.
+NO_PROFILE_REASON = "no usable LinkedIn profile"
+
 # Backwards-compatible name used by the review UI and tests. The storage
 # implementation lives outside LinkedIn reconciliation so identity is not a
 # second worth writer.
@@ -771,7 +777,7 @@ def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
     if not li or not li.get("has_profile"):
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": True,
-                "recommend_deep_research": False, "reason": "no usable LinkedIn profile"}
+                "recommend_deep_research": False, "reason": NO_PROFILE_REASON}
     return {"verdict": "confirmed", "confidence": 0.9, "supporting_evidence": ["attached link (offline stub)"],
             "contradicting_evidence": [], "linkedin_plausibly_absent": False,
             "recommend_deep_research": False, "reason": "offline stub: trusts attached link"}
@@ -827,11 +833,15 @@ def research_reject_fields(verdict: dict[str, Any], confirm_threshold: float) ->
 
     A judge rejection (wrong_person, or anything not a confident confirm) marks the row
     `llm_reject=yes` + reason so the human still sees WHY — the row is never deleted. A confident
-    `confirmed` leaves the columns clear (the retarget stands for the human to approve)."""
+    `confirmed` leaves the columns clear (the retarget stands) AND carries the JUDGE's confidence
+    as the proposal `confidence` — replacing the research guess through the same
+    `proposal.update(...)` every caller already does — so the stored promotion rule
+    (resolve_stored_identity_policy rule (5)) reads the judge's bar, not the researcher's."""
     v = str(verdict.get("verdict") or "").strip().lower()
     conf = float(verdict.get("confidence") or 0)
     if v == "confirmed" and conf >= confirm_threshold:
-        return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": ""}
+        return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": "",
+                "confidence": f"{conf:.3f}"}
     reason = verdict.get("reason") or "deep-research proposal not corroborated by the dossier"
     return {"llm_reject": "yes", "llm_reject_confidence": f"{conf:.3f}", "llm_reject_reason": reason}
 

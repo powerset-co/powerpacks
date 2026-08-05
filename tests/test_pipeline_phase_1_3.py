@@ -138,9 +138,11 @@ class PipelinePhase13Tests(unittest.TestCase):
             mock.patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (200, payload, "")]) as http_json, \
             mock.patch.object(rapidapi_client.time, "sleep") as sleep:
             wait = mock.Mock()
-            result = rapidapi_client.RapidApiClient("key").fetch_profile("ada", "https://www.linkedin.com/in/ada", cache_dir=tmp, refresh_cache=True, wait_for_attempt=wait)
+            rapidapi_client.RapidApiClient._definitive_this_run.clear()
+            result = rapidapi_client.RapidApiClient("key").get_profile("ada", "https://www.linkedin.com/in/ada", cache_dir=tmp, fresh=True, wait_for_attempt=wait)
             cached = json.loads((Path(tmp) / "ada.json").read_text(encoding="utf-8"))
         self.assertEqual(result["status_code"], 200)
+        self.assertEqual(result["state"], rapidapi_client.PROFILE_CONTENT)
         self.assertEqual(result["attempts"], 2)
         self.assertEqual(http_json.call_count, 2)
         self.assertEqual(wait.call_count, 2)
@@ -157,9 +159,11 @@ class PipelinePhase13Tests(unittest.TestCase):
             mock.patch.object(rapidapi_client, "DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS", 0.5), \
             mock.patch.object(rapidapi_client.RapidApiClient, "http_json", side_effect=[(429, {"message": "Too many requests"}, ""), (429, {"message": "Too many requests"}, "")]) as http_json, \
             mock.patch.object(rapidapi_client.time, "sleep") as sleep:
-            result = rapidapi_client.RapidApiClient("key").fetch_profile("ada", "https://www.linkedin.com/in/ada", cache_dir=tmp, refresh_cache=True)
+            rapidapi_client.RapidApiClient._definitive_this_run.clear()
+            result = rapidapi_client.RapidApiClient("key").get_profile("ada", "https://www.linkedin.com/in/ada", cache_dir=tmp, fresh=True)
             cache_written = (Path(tmp) / "ada.json").exists()
         self.assertEqual(result["status_code"], 429)
+        self.assertEqual(result["state"], rapidapi_client.PROFILE_ERROR)
         self.assertEqual(result["attempts"], 2)
         self.assertEqual(http_json.call_count, 2)
         sleep.assert_called_once_with(0.5)
@@ -173,7 +177,6 @@ class PipelinePhase13Tests(unittest.TestCase):
                 input_csv=root / "people.csv",
                 artifact_dir=artifact_dir,
                 profile_cache_dir=root / "cache",
-                refresh_cache=True,
                 max_workers=1,
                 max_rpm=0,
             )
@@ -189,15 +192,17 @@ class PipelinePhase13Tests(unittest.TestCase):
                 "cache_status": "miss",
             }])
             rapid = {
+                "state": rapidapi_client.PROFILE_CONTENT,
                 "status_code": 200,
                 "data": {"public_identifier": "ada", "full_name": "Ada Lovelace"},
-                "error": "",
+                "detail": "",
                 "from_cache": False,
+                "fetched": True,
                 "normalized_profile": {"success": True},
                 "attempts": 2,
             }
             with mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key", return_value="key"), \
-                mock.patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value=rapid):
+                mock.patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value=rapid):
                 summary = step.run().to_payload()
             rows = CsvIO.read_dict_rows(Path(summary["output_file"]))
         self.assertEqual(summary["retried"], 1)
@@ -218,7 +223,6 @@ class PipelinePhase13Tests(unittest.TestCase):
             status, reason, path, failure = profile_cache.classify_rapidapi_cache_status(
                 {"public_identifier": "ada", "linkedin_url": "https://www.linkedin.com/in/ada"},
                 cache_dir,
-                refresh_cache=False,
                 retry_hours=24,
                 cache_index={"ada"},
             )
