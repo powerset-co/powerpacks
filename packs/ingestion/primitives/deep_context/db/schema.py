@@ -188,6 +188,9 @@ class LinkRow:
     machine_confidence: float | None = None
     machine_reason: str | None = None
     machine_judgment: str | None = None
+    machine_reject: str | None = None
+    machine_reject_confidence: float | None = None
+    machine_reject_reason: str | None = None
     machine_proposed_url: str | None = None
     machine_proposed_public_identifier: str | None = None
     authoritative_detach: int = 0
@@ -358,6 +361,8 @@ CREATE TABLE links (
   machine_action TEXT CHECK (machine_action IS NULL OR machine_action IN {_ACTIONS}),
   machine_approved TEXT CHECK (machine_approved IS NULL OR machine_approved IN {_APPROVALS}),
   machine_confidence REAL, machine_reason TEXT, machine_judgment TEXT,
+  machine_reject TEXT CHECK (machine_reject IS NULL OR machine_reject IN {_values(*LLM_REJECT_VALUES)}),
+  machine_reject_confidence REAL, machine_reject_reason TEXT,
   machine_proposed_url TEXT, machine_proposed_public_identifier TEXT,
   authoritative_detach INTEGER NOT NULL DEFAULT 0 CHECK (authoritative_detach IN (0, 1)),
   candidate_origin INTEGER NOT NULL DEFAULT 0 CHECK (candidate_origin IN (0, 1)),

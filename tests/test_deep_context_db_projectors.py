@@ -61,6 +61,8 @@ class ProjectorTest(unittest.TestCase):
             "parent_id": "parent-1", "candidate_key": "candidate:email:jordan",
             "handle": "subject", "person_ids": ["person-a", "person-b"],
             "public_identifier": "candidate:email:jordan",
+            "machine_reject": "no", "machine_reject_confidence": .72,
+            "machine_reject_reason": "no contradiction",
             "path": "subject/01_research_parallel.json", "sha256": _sha(result),
             "raw_path": "subject/00_parallel_raw.json", "raw_sha256": _sha(raw),
         }
@@ -75,6 +77,8 @@ class ProjectorTest(unittest.TestCase):
         candidate = self.db.query("SELECT * FROM links")[0]
         self.assertEqual(candidate["machine_action"], "retarget")
         self.assertEqual(candidate["machine_proposed_public_identifier"], "jordan-one")
+        self.assertEqual((candidate["machine_reject"], candidate["machine_reject_confidence"]),
+                         ("no", .72))
         self.assertEqual(len(self.db.query("SELECT * FROM candidate_people")), 2)
         self.assertEqual(self.db.query("SELECT status FROM jobs")[0]["status"], "applied")
         self.assertEqual(self.db.query("SELECT status FROM stage_state")[0]["status"], "complete")

@@ -306,8 +306,14 @@ def import_legacy(
             machine_proposed_url=proposed_url if machine_proposal else None,
             machine_proposed_public_identifier=proposed_pub if machine_proposal else None,
             machine_confidence=_number(row.get("confidence")),
-            machine_reason=_text(row.get("reason")), machine_judgment=reject,
-            authoritative_detach=int(reject == "yes" and (_number(row.get("llm_reject_confidence")) or 0) >= .85),
+            machine_reason=_text(row.get("reason")),
+            machine_reject=reject,
+            machine_reject_confidence=_number(row.get("llm_reject_confidence")),
+            machine_reject_reason=_text(row.get("llm_reject_reason")),
+            authoritative_detach=int(
+                action == ReviewAction.DETACH.value
+                and (_number(row.get("confidence")) or 0) >= .85
+            ),
             candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(key.startswith("candidate:") and not (proposed_url or proposed_pub)),
             paid_profile=int(bool(reject)), judgment_fingerprint=_text(row.get("llm_judge_fingerprint")),
@@ -380,6 +386,8 @@ def import_legacy(
                 machine_confidence=_number(verdict.get("confidence")),
                 machine_reason=_text(verdict.get("reason")), paid_profile=1,
                 authoritative_detach=int(
+                    bool(prior and prior.machine_action == ReviewAction.DETACH.value)
+                    and
                     str(verdict.get("verdict") or "") == "wrong_person"
                     and (_number(verdict.get("confidence")) or 0) >= .85
                 ),

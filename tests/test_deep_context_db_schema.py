@@ -155,6 +155,21 @@ class DeepContextSchemaTests(unittest.TestCase):
         self.assertEqual(row["machine_proposed_public_identifier"], "new-proposal")
         self.assertEqual(row["replacement_public_identifier"], "chosen")
 
+    def test_machine_verdict_and_research_reject_are_distinct(self) -> None:
+        self.parent()
+        self.db.project_candidate(LinkRow(
+            "candidate-1", "parent-1", "candidate-1", "candidate_email",
+            machine_action=ReviewAction.RETARGET.value,
+            machine_judgment="needs_review",
+            machine_reject="no",
+            machine_reject_confidence=0.74,
+            machine_reject_reason="no contradiction",
+            machine_proposed_url="https://www.linkedin.com/in/proposed",
+        ))
+        row = self.db.query("SELECT * FROM links WHERE row_key='candidate-1'")[0]
+        self.assertEqual(row["machine_judgment"], "needs_review")
+        self.assertEqual(row["machine_reject"], "no")
+
     def test_synthetic_profile_has_one_candidate_owned_gate(self) -> None:
         self.parent()
         self.candidate("synthetic-1", kind="synthetic")
