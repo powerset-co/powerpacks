@@ -18,8 +18,10 @@ Changelog:
     (apply_decision, apply_worth_decision, the guided-retarget worker) routes
     through commit_rows — the db transaction is the commit, the CSVs are
     exports of it; a crash between commit and export recovers at next boot
-    (recover_pending_export). Without a db wired (tests), both doors fall
-    back to the plain CSV loader/writer unchanged.
+    (recover_pending_export). P3 starts: the db is mandatory — make_handler
+    creates one next to review.csv when not passed (tests included), and the
+    pre-sqlite mtime row cache is deleted (needs_import on the CSV stat is
+    the one other-writer check).
   2026-07-30: Bare review launches always land on the read-only directory;
     staged workflow launches opt in with an explicit --stage.
   2026-07-29 (single-writer rewrite): deleted the stat/signature invalidation
@@ -77,7 +79,6 @@ from packs.ingestion.primitives.deep_context.common import (
     now_iso,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
-    _write_override_rows,
     load_override_rows,
 )
 
@@ -281,24 +282,23 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
             run_jobs = False
     avatar_dir = avatar_dir or manifest_path.parent / "avatars"
     mutation_lock = threading.Lock()
+    # The db is NOT optional (P3): every server session commits through
+    # review.sqlite. Callers that don't pass one (tests) get it created next
+    # to their review.csv — same path cmd_serve uses.
+    review_db = review_db or ReviewDb(review_path.with_suffix(".sqlite"))
+    review_db.recover_pending_export(review_path, synthetic_path)
 
-    def db_review_rows() -> dict[str, dict[str, str]] | None:
-        """Phase-1 sqlite read door: keep review.sqlite current with the CSV
-        and compose a fresh owned row snapshot from it. None when no db is
-        wired (tests keep the plain CSV path)."""
-        if review_db is None:
-            return None
+    def db_review_rows() -> dict[str, dict[str, str]]:
+        """The read door: keep review.sqlite current with the CSV (between-
+        session CLI writers are absorbed by the strict import) and compose a
+        fresh owned row snapshot from it."""
         if review_db.needs_import(review_path):
             review_db.import_stores(review_path, synthetic_path)
         return review_db.export_review_rows()
 
     def commit_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
-        """Phase-2 write door: the db transaction is the commit, the CSV an
-        export of it (crash between the two recovers at next boot). Without a
-        db this IS the plain CSV writer, so decision flows stay one shape."""
-        if review_db is None:
-            _write_override_rows(path, rows)
-            return
+        """The write door: the db transaction is the commit, the CSVs are
+        exports of it (a crash between the two recovers at next boot)."""
         review_db.apply_rows(rows, path, synthetic_csv=synthetic_path)
 
     def notify_agent() -> None:
@@ -423,30 +423,18 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
     # bounce). A new decision (new selection sha) or a server restart retries.
     _free_attempted: set[str] = set()
 
-    # Parsed review.csv rows; our own decision writes mutate the dict in
-    # place, and refresh_parents_from_disk drops it after a job write. The
-    # mtime check catches every OTHER writer (the guided-retarget worker, a
-    # CLI run against the same store): handing a handler a stale snapshot
-    # here would make its whole-file rewrite erase those writers' rows.
+    # Parsed review rows; our own decision writes mutate the dict in place
+    # and commit through commit_rows, and refresh_parents_from_disk drops it
+    # after a job write. needs_import (keyed on the CSV stat) is the
+    # other-writer check: a CLI run against the same store between requests
+    # re-imports before any handler could rewrite over its rows. (This
+    # replaced the pre-sqlite mtime cache — one shape, no sniffing.)
     cached_rows: dict[str, dict[str, str]] | None = None
-    cached_rows_mtime: int = -1
 
     def review_rows_now() -> dict[str, dict[str, str]]:
-        nonlocal cached_rows, cached_rows_mtime
-        if review_db is not None:
-            # sqlite path: needs_import IS the other-writer check (keyed on the
-            # CSV's stat, same contract as the mtime cache below). Handlers
-            # keep mutating the returned dict in place and writing through.
-            if cached_rows is None or review_db.needs_import(review_path):
-                cached_rows = db_review_rows()
-            return cached_rows
-        try:
-            mtime = review_path.stat().st_mtime_ns
-        except OSError:
-            mtime = 0
-        if cached_rows is None or mtime != cached_rows_mtime:
-            cached_rows = load_override_rows(review_path)
-            cached_rows_mtime = mtime
+        nonlocal cached_rows
+        if cached_rows is None or review_db.needs_import(review_path):
+            cached_rows = db_review_rows()
         return cached_rows
 
     def candidate_in_snapshot(pub: str, prefer_slug: str = "",
