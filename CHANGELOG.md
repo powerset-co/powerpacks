@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.2...powerpacks-v1.17.3) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deep-context:** stages complete independently — drop the people-before-linkedin ceremony guard ([#432](https://github.com/powerset-co/powerpacks/issues/432)) ([e07ff2e](https://github.com/powerset-co/powerpacks/commit/e07ff2eb92735def5a141d385633b5ec9b5570ef))
+
 ## [1.17.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.1...powerpacks-v1.17.2) (2026-08-05)
 
 
