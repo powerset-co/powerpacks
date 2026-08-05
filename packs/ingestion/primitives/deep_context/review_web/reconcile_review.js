@@ -921,6 +921,13 @@ document.addEventListener("submit", async (event) => {
         return;
       }
     }
+    // The debug/preview carousel has no swap panel; a reload re-renders the
+    // queue without the now-inflight person, so the next card shows at the
+    // same index — the same linear move, one page paint later.
+    if (form.closest(".linkedin-stage[data-queue-index]")) {
+      leaveAndReload("Queued for re-research — moving on");
+      return;
+    }
     // Directory-adjacent or non-panel surfaces keep the inline note.
     const note = form.querySelector("[data-retarget-note]");
     if (note) {

@@ -1410,12 +1410,17 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
     note = "" if enrichment_complete else _enrichment_note(enrichment)
 
     if debug:
-        queue = linkedin_review_queue(parents)
+        # The browse carousel honors the SAME linear rules as the review flow:
+        # people with an active re-research are out of the queue here too, and
+        # a returned failure leads its card.
+        queue = linkedin_review_queue(parents, inflight_slugs or None)
         if queue:
             index %= len(queue)
             parent, pending = queue[index]
+            slug = str(parent.get("slug") or "").strip().lower()
             body = render_linkedin_card(
-                parent, pending, parents_dir, dossier_dir, profile_cache_dir)
+                parent, pending, parents_dir, dossier_dir, profile_cache_dir,
+                failure_note=(failed_notes or {}).get(slug, ""))
             return (
                 f"<div class='linkedin-stage' data-queue-index='{index}' "
                 f"data-queue-total='{len(queue)}'>{note}{_carousel_nav()}{body}</div>"

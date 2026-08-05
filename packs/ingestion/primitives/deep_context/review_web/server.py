@@ -633,7 +633,9 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
                         parents_dir=parents_dir, dossier_dir=dossier_dir,
                         enrichment=enrichment, profile_cache_dir=profile_cache_dir,
-                        debug=debug, index=index)
+                        debug=debug, index=index,
+                        inflight_slugs=guided_inflight_slugs(),
+                        failed_notes=guided_failed_notes())
                 else:
                     inflight = guided_inflight_slugs()
                     linkedin_done = phase_is_completed("linkedin", progress, manifest_path)
