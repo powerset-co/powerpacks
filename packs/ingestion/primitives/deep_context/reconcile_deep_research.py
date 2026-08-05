@@ -126,6 +126,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     upsert_retargets,
 )
 from packs.ingestion.primitives.deep_context.review_store import (
+    HEAL_DETACH_SOURCE,
     JUDGE_DETACH_THRESHOLD,
     RESEARCH_CONFIRM_THRESHOLD,
 )
@@ -233,6 +234,9 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
     Eligible means a high-confidence `wrong_person` detach the judge flagged
     `recommend_deep_research`, whose parent did not already keep a confirmed link.
     User-touched rows, excluded links, and existing (non-rejected) retargets are skipped.
+    A heal dead-link detach (source deep-context-heal) is NOT treated as decided —
+    it is a re-research invitation, and its plausibly-absent verdict routes it
+    through the synthetic branch below when include_plausibly_absent is set.
     A judge-rejected, un-approved retarget does NOT count as decided (re-research is cheap once
     completed). `linkedin_plausibly_absent` people are skipped by default (no profile exists is a
     valid answer) and included only with include_plausibly_absent=True — the synthetic path.
@@ -255,11 +259,16 @@ def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
     # conflict group had no confirmed winner to auto-apply it (approved stays
     # ''): the review UI hides those rows as detached, so re-queueing them here
     # would silently re-bill research for people the reviewer never sees again.
+    # EXCEPT a heal dead-link detach (source deep-context-heal): that is a
+    # re-research INVITATION, not a decision — the heal leaves those people
+    # VISIBLE as pending re-research cards, so the "never sees them again"
+    # rationale does not apply. A human yes/no on such a row still excludes.
     user_decided = {
         pub for pub, r in overrides.items()
         if (r.get("approved") or "").strip().lower() in {"yes", "no"}
         or ((r.get("action") or "").strip().lower() == "detach"
-            and _safe_float(r.get("confidence")) >= JUDGE_DETACH_THRESHOLD)}
+            and _safe_float(r.get("confidence")) >= JUDGE_DETACH_THRESHOLD
+            and (r.get("source") or "").strip().lower() != HEAL_DETACH_SOURCE)}
     parents_with_kept = {
         r.get("parent_slug") for r in verdicts
         if (r.get("verdict") or {}).get("verdict") == "confirmed"

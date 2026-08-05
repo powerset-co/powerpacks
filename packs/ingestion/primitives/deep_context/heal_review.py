@@ -79,6 +79,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     count_pending,
 )
 from packs.ingestion.primitives.deep_context.review_store import (
+    HEAL_DETACH_SOURCE,
     OVERRIDE_COLUMNS,
     load_override_rows,
     write_override_rows,
@@ -385,7 +386,7 @@ class HealReview:
                 "match_emails": row.get("match_emails") or "|".join(candidate.match_emails),
                 "match_phones": row.get("match_phones") or "|".join(candidate.match_phones),
                 "person_id": row.get("person_id") or (candidate.person_ids[0] if candidate.person_ids else ""),
-                "source": "deep-context-heal", "updated_at": now_iso(),
+                "source": HEAL_DETACH_SOURCE, "updated_at": now_iso(),
             })
             summary["detached"] += 1
             # Free identity ladder: existing synthetic row -> research mint -> pending card.

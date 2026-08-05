@@ -106,6 +106,13 @@ MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}
 USER_APPROVED = {"yes", "no"}
 PARENT_WORTH_PREFIX = "parent-worth:"
 
+# The `source` the heal pass stamps on its dead-link detaches (heal_review).
+# Lives here — the review.csv contract home — because reconcile_deep_research
+# must recognize it too (a heal detach is a re-research INVITATION, not a
+# decision) and importing heal_review there would cycle through
+# assemble_synthetic_profile.
+HEAL_DETACH_SOURCE = "deep-context-heal"
+
 
 def parent_worth_key(parent_id: str) -> str:
     """The one review.csv key for a canonical parent's worth decision."""

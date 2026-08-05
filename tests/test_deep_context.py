@@ -4392,6 +4392,44 @@ class TestDeepResearchEligibility(unittest.TestCase):
         # already has a correct link -> don't research it
         self.assertEqual(self.keys({"wronglink": {"action": "retarget", "approved": "yes"}}), set())
 
+    # --- heal dead-link detaches: re-research invitations, not decisions ----
+
+    HEAL_VERDICT = {
+        "parent_slug": "p9", "candidate_key": "deadlink", "person_ids": ["p-dead"],
+        "verdict": {"verdict": "needs_review", "confidence": 0.0,
+                    "linkedin_plausibly_absent": True, "recommend_deep_research": False,
+                    "reason": reconcile.NO_PROFILE_REASON}}
+
+    def heal_keys(self, overrides):
+        return {r["candidate_key"] for r in dresearch.eligible_subset(
+            [*self.VERDICTS, self.HEAL_VERDICT], 0.85, overrides,
+            include_plausibly_absent=True)}
+
+    def test_heal_detach_is_eligible_for_synthetic_research(self):
+        # The heal's dead-link detach (approved=auto, confidence 1.0, source
+        # deep-context-heal) is an INVITATION: the person stays a visible
+        # pending re-research card, so the >=bar-detach money guard must not
+        # swallow them. They route through the plausibly-absent branch.
+        overrides = {"deadlink": {"action": "detach", "approved": "auto",
+                                  "confidence": "1.000",
+                                  "source": "deep-context-heal"}}
+        self.assertIn("deadlink", self.heal_keys(overrides))
+
+    def test_human_decided_heal_row_stays_excluded(self):
+        overrides = {"deadlink": {"action": "detach", "approved": "no",
+                                  "confidence": "1.000",
+                                  "source": "deep-context-heal"}}
+        self.assertNotIn("deadlink", self.heal_keys(overrides))
+
+    def test_ordinary_at_bar_judge_detach_stays_excluded(self):
+        # The original money-bug protection stays pinned: a reconcile-judge
+        # detach at/above the bar is decided (the review UI hides it) and is
+        # never silently re-billed.
+        overrides = {"deadlink": {"action": "detach", "approved": "",
+                                  "confidence": "0.900",
+                                  "source": "deep-context-reconcile"}}
+        self.assertNotIn("deadlink", self.heal_keys(overrides))
+
 
 class TestOwnerExclusion(unittest.TestCase):
     """The mailbox owner on another email (is_owner) is excluded from the parent layer."""
