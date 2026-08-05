@@ -105,32 +105,30 @@ def read_synthetic_gates(synthetic_csv: Path | None) -> tuple[list[DecisionRow],
     return list(by_pub.values()), errors
 
 
-def write_synthetic_gates(synthetic_csv: Path, gates: dict[str, str]) -> int:
-    """Rewrite ONLY the approved column from {pub: cell_value}; every other
-    column belongs to assemble_synthetic_profile. Returns cells changed."""
-    if not synthetic_csv.exists():
-        return 0
-    with synthetic_csv.open(newline="", encoding="utf-8") as fh:
-        reader = csv.DictReader(fh)
-        fieldnames = list(reader.fieldnames or [])
-        rows = list(reader)
-    if "approved" not in fieldnames:
-        return 0
-    changed = 0
+def load_synthetic_rows(path: Path | None) -> list[dict[str, str]]:
+    """Legacy input parser. Canonical runtime code does not call this."""
+    if path is None or not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
+def write_synthetic_rows(path: Path, rows: list[dict[str, object]]) -> None:
+    """Write the complete canonical synthetic projection, not gate patches."""
+    fieldnames: list[str] = []
     for row in rows:
-        pub = (row.get("public_identifier") or "").strip().lower()
-        value = gates.get(pub, "")
-        if (row.get("approved") or "") != value:
-            changed += 1
-        row["approved"] = value
-    tmp = synthetic_csv.with_name(synthetic_csv.name + ".part")
+        for name in row:
+            if name not in fieldnames:
+                fieldnames.append(name)
+    if not fieldnames:
+        fieldnames = ["public_identifier", "linkedin_url", "approved"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".part")
     with tmp.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
-        for row in rows:
-            writer.writerow({column: row.get(column, "") for column in fieldnames})
-    os.replace(tmp, synthetic_csv)
-    return changed
+        writer.writerows({name: row.get(name, "") for name in fieldnames} for row in rows)
+    os.replace(tmp, path)
 
 
 def people_from_index(index_json: Path) -> list[dict[str, str]]:
