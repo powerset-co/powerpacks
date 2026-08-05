@@ -101,11 +101,9 @@ open_review_ui_when_healthy() {
   fi
   for _ in $(seq 1 50); do
     if curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+      # Print the URL only — the wrapper NEVER launches a browser. The
+      # harness/user opens it (an already-open tab reattaches by itself).
       echo "review UI: $url" >&2
-      if command -v open >/dev/null 2>&1; then
-        open "$url" 2>/dev/null \
-          || echo "note: could not auto-open a browser; use the URL above" >&2
-      fi
       return 0
     fi
     sleep 0.2

@@ -41,8 +41,8 @@ Use the narrow path when the user names one:
   (review state is file-driven; nothing is lost), wait for the session-lock
   release, then serve without auto-opening a browser; (3) OPEN the staged UI
   as an explicit final step — the wrapper polls the fresh server's /healthz,
-  prints the URL, and launches the browser (skipped gracefully when `open` is
-  unavailable; the URL line stays). Before running `review <stage>`, create a
+  and prints the URL — the wrapper never launches a browser; surface the
+  printed URL to the user (open it only if they ask). Before running `review <stage>`, create a
   task list in your harness's todo/task tool with the flow's definitive steps
   — (1) Self-heal, (2) restart server, (3) open the
   staged UI, plus any follow-ups the heal surfaces (e.g. a recovery batch
