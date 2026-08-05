@@ -11,7 +11,7 @@ from the defining module, not through here:
 - `models.py` — EnrichConfig/build_config, EnrichManifest, the stage CSV
   columns + row models, the step payloads, PipelineFailed.
 - `rapidapi_client.py` — the RapidApiClient class: key/env handling, http_json,
-  retry/backoff, the cache-aware `fetch_profile`, DEFAULT_RAPIDAPI_* knobs.
+  retry/backoff, the one `get_profile` door, DEFAULT_RAPIDAPI_* knobs.
 - `profile_cache.py` — profile-cache slugs/paths/reads, failure TTL,
   cache-status classification, and the cache seeding format documentation.
 - `profile_transforms.py` — pure row transforms: route_row, normalize_rapidapi,
@@ -76,9 +76,8 @@ Usage:
     enrich_people.py status | check-keys
 
 Options: `--profile-cache-dir` (default
-`.powerpacks/network-import/profile_cache_v2`), `--refresh-cache` (force
-RapidAPI calls despite cache entries), `--company-corpus-jsonl` (repeatable;
-company metadata by RapidAPI company ID or LinkedIn company slug),
+`.powerpacks/network-import/profile_cache_v2`), `--company-corpus-jsonl`
+(repeatable; company metadata by RapidAPI company ID or LinkedIn company slug),
 `--max-workers`/`--max-rpm` (defaults 64 workers / 300 RPM, env-overridable),
 `--failure-retry-hours` (skip recently failed lookups; default 24h),
 `--approve-spend` (authorize paid RapidAPI fetches for cache misses), `--force`
@@ -323,8 +322,7 @@ class EnrichQueuePrepare(Node):
         unresolved_count = 0
         route_counts: dict[str, int] = {}
         profile_cache_dir = cfg.profile_cache_dir
-        refresh_cache = cfg.refresh_cache
-        cache_index = set() if refresh_cache else profile_cache_index(profile_cache_dir)
+        cache_index = profile_cache_index(profile_cache_dir)
         failure_retry_hours = cfg.failure_retry_hours
         routed: list[tuple[str, dict[str, Any]]] = []
         for row in rows:
@@ -341,7 +339,7 @@ class EnrichQueuePrepare(Node):
         if provider_rows:
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(provider_rows))) as pool:
                 classifications = list(pool.map(
-                    lambda row: classify_rapidapi_cache_status(row, profile_cache_dir, refresh_cache, failure_retry_hours, cache_index),
+                    lambda row: classify_rapidapi_cache_status(row, profile_cache_dir, failure_retry_hours, cache_index),
                     provider_rows,
                 ))
         classification_iter = iter(classifications)
@@ -461,7 +459,6 @@ class EnrichLinkedInProfiles(Node):
             raise PipelineFailed("RAPIDAPI_LINKEDIN_KEY/RAPIDAPI_KEY is not set")
 
         profile_cache_dir = cfg.profile_cache_dir
-        refresh_cache = cfg.refresh_cache
         max_workers = max(1, int(cfg.max_workers or DEFAULT_RAPIDAPI_MAX_WORKERS))
         max_rpm = cfg.max_rpm
         sleep_seconds = cfg.sleep_seconds
@@ -506,13 +503,13 @@ class EnrichLinkedInProfiles(Node):
                             "attempts": 1,
                         }
             else:
-                rapid = client.fetch_profile(
+                rapid = client.get_profile(
                     public_identifier,
                     linkedin_url,
                     cache_dir=profile_cache_dir,
-                    refresh_cache=refresh_cache,
                     wait_for_attempt=rate_limiter.wait,
                 )
+                rapid.setdefault("error", str(rapid.get("detail") or ""))
             attempts = max(1, int(rapid.get("attempts") or 1))
             status_code = int(rapid.get("status_code") or 0)
             retry_outcome = "none"
@@ -844,7 +841,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--approve-spend", action="store_true", help="Authorize paid RapidAPI fetches for cache misses (otherwise a run with misses stops at needs_approval)")
     run.add_argument("--force", action="store_true", help="Re-enrich rows even if they appear complete")
     run.add_argument("--profile-cache-dir", default=str(DEFAULT_BASE_DIR / "profile_cache_v2"))
-    run.add_argument("--refresh-cache", action="store_true", help="Force RapidAPI calls even when a successful local cache entry exists")
     run.add_argument("--company-corpus-jsonl", action="append", default=[])
     run.add_argument("--sleep-seconds", type=float, default=0.0)
     run.add_argument("--max-workers", type=int, default=DEFAULT_RAPIDAPI_MAX_WORKERS)
@@ -884,7 +880,6 @@ def main(argv: list[str] | None = None) -> int:
             profile_cache_dir=args.profile_cache_dir,
             limit=args.limit,
             force=args.force,
-            refresh_cache=args.refresh_cache,
             company_corpus_jsonl=args.company_corpus_jsonl,
             sleep_seconds=args.sleep_seconds,
             max_workers=args.max_workers,

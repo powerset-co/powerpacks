@@ -535,11 +535,11 @@ class _RpmGate:
             time.sleep(max(0.0, wait))
 
 
-def prefetch(misses: list[dict[str, str]], cache_dir: Path, api_key: str,
+def prefetch(misses: list[dict[str, str]], cache_dir: Path,
              *, limit: int = 0, concurrency: int = DEFAULT_FETCH_CONCURRENCY,
              rpm: int = RAPIDAPI_RPM_DEFAULT) -> dict[str, int]:
-    """Fetch each miss once via the cache-first primitive (which writes the
-    cache); counts only — the cache files are the durable output. Fan-out is wide
+    """One `get_profile` call per miss (the client writes the cache); counts
+    only — the cache files are the durable output. Fan-out is wide
     (``concurrency``); the sole pace guard is the ``rpm`` budget (default 300 =
     the RapidAPI plan cap), which only bites for a cohort large enough to exceed it."""
     targets = misses[:limit] if limit else misses
@@ -551,7 +551,7 @@ def prefetch(misses: list[dict[str, str]], cache_dir: Path, api_key: str,
     def fetch_one(link: dict[str, str]) -> dict[str, Any]:
         gate.acquire()
         return rapidapi_profile(link["public_identifier"], link["linkedin_url"],
-                                api_key, cache_dir=cache_dir)
+                                cache_dir=cache_dir)
 
     workers = max(1, min(concurrency, len(targets)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -807,7 +807,7 @@ class PrefetchProfiles(Node):
             payload.privacy.paid_provider_called = False
             payload.note = "RAPIDAPI_LINKEDIN_KEY / RAPIDAPI_KEY not configured; nothing fetched"
         else:
-            counts = prefetch(fetch_misses, cache_dir, rapidapi_key(),
+            counts = prefetch(fetch_misses, cache_dir,
                               limit=self.limit, concurrency=max(1, self.fetch_concurrency),
                               rpm=self.rapidapi_rpm)
             counts["already_cached"] = already_cached

@@ -18,6 +18,7 @@ only after the TTL (`recent_cached_failure`).
   don't stat a (possibly network) filesystem file-by-file.
 - `read_usable_cached_profile` — a successful entry, re-normalizing legacy
   raw-payload files on the fly.
+- `profile_has_content` — the DECIDABLE-content bar (experiences or education).
 - `recent_cached_failure` — a failed entry still inside its retry TTL.
 - `cached_profile_from_row` — a successful payload embedded in a people row's
   `rapidapi_response*` columns.
@@ -145,6 +146,19 @@ def read_usable_cached_profile(cache_path: Path | None) -> dict[str, Any] | None
     return None
 
 
+def profile_has_content(record: dict[str, Any] | None) -> bool:
+    """True when a profile record carries DECIDABLE content: at least one
+    experience or education entry on its `normalized_profile`.
+
+    The ONE definition of the judge bar, shared by the client's CONTENT/EMPTY
+    split and the heal pass. Same bar as the review card's render-time
+    hydration and the retarget judge: a headline-only profile is a SHELL —
+    renderable, never enough to decide identity on. Accepts any dict carrying
+    a `normalized_profile` key (a cache record or a client result)."""
+    normalized = (record or {}).get("normalized_profile") or {}
+    return bool(normalized.get("experiences") or normalized.get("education"))
+
+
 def recent_cached_failure(cache_path: Path | None, retry_hours: float) -> dict[str, Any] | None:
     if not cache_path or not cache_path.exists() or retry_hours <= 0:
         return None
@@ -176,14 +190,11 @@ def cached_profile_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
 def classify_rapidapi_cache_status(
     row: dict[str, str],
     profile_cache_dir: Path,
-    refresh_cache: bool,
     retry_hours: float,
     cache_index: set[str] | None = None,
 ) -> tuple[str, str, Path | None, dict[str, Any] | None]:
     public_identifier = row.get("public_identifier") or extract_public_identifier(row.get("linkedin_url") or "")
     cache_path = indexed_profile_cache_path(profile_cache_dir, public_identifier, cache_index)
-    if refresh_cache:
-        return "miss", "refresh requested", cache_path, None
     if cached_profile_from_row(row) is not None:
         return "hit", "input rapidapi_response", cache_path, None
     cached_file_exists = bool(cache_path and cache_path.exists())

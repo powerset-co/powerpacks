@@ -147,7 +147,6 @@ class EnrichConfig:
     profile_cache_dir: Path
     limit: int | None = None
     force: bool = False
-    refresh_cache: bool = False
     company_corpus_jsonl: tuple[str, ...] = ()
     sleep_seconds: float = 0.0
     max_workers: int = DEFAULT_RAPIDAPI_MAX_WORKERS
@@ -162,7 +161,6 @@ class EnrichConfig:
             "limit": self.limit,
             "force": self.force,
             "profile_cache_dir": str(self.profile_cache_dir),
-            "refresh_cache": self.refresh_cache,
             "company_corpus_jsonl": [str(p) for p in self.company_corpus_jsonl],
             "sleep_seconds": self.sleep_seconds,
             "max_workers": self.max_workers,
@@ -179,7 +177,6 @@ def build_config(
     profile_cache_dir: str | Path,
     limit: int | None = None,
     force: bool = False,
-    refresh_cache: bool = False,
     company_corpus_jsonl: list[str] | tuple[str, ...] | None = None,
     sleep_seconds: float | None = None,
     max_workers: int | None = None,
@@ -196,7 +193,6 @@ def build_config(
         profile_cache_dir=Path(profile_cache_dir),
         limit=limit,
         force=force,
-        refresh_cache=refresh_cache,
         company_corpus_jsonl=tuple(str(p) for p in (company_corpus_jsonl or [])),
         sleep_seconds=float(sleep_seconds) if sleep_seconds else 0.0,
         max_workers=int(max_workers) if max_workers else DEFAULT_RAPIDAPI_MAX_WORKERS,

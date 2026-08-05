@@ -73,7 +73,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
             self.write_connections(csv_path)
             cache_dir = Path(tmp) / "profile_cache"
             with patch.dict("os.environ", {"RAPIDAPI_KEY": "r"}, clear=True):
-                with patch.object(rapidapi_client.RapidApiClient, "fetch_profile", return_value={"status_code": 200, "data": self.cache_entry()["raw_response"], "error": "", "from_cache": False}):
+                with patch.object(rapidapi_client.RapidApiClient, "get_profile", return_value={"status_code": 200, "data": self.cache_entry()["raw_response"], "error": "", "from_cache": False}):
                     code, payload = self.invoke([
                         "run",
                         "--csv", str(csv_path),
