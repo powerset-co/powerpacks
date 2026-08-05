@@ -170,6 +170,12 @@ DEFAULT_DR_BUDGET = 25.0
 
 VERDICTS = ["confirmed", "wrong_person", "needs_review"]
 
+# The stored no-spend verdict reason for a task the judge SKIPPED because the
+# attached link had no usable profile (see deterministic_verdict). The heal
+# pass (heal_review) selects exactly these rows for its fetch->judge|terminate
+# sweep, so the string lives once.
+NO_PROFILE_REASON = "no usable LinkedIn profile"
+
 # Backwards-compatible name used by the review UI and tests. The storage
 # implementation lives outside LinkedIn reconciliation so identity is not a
 # second worth writer.
@@ -771,7 +777,7 @@ def deterministic_verdict(task: dict[str, Any]) -> dict[str, Any]:
     if not li or not li.get("has_profile"):
         return {"verdict": "needs_review", "confidence": 0.0, "supporting_evidence": [],
                 "contradicting_evidence": [], "linkedin_plausibly_absent": True,
-                "recommend_deep_research": False, "reason": "no usable LinkedIn profile"}
+                "recommend_deep_research": False, "reason": NO_PROFILE_REASON}
     return {"verdict": "confirmed", "confidence": 0.9, "supporting_evidence": ["attached link (offline stub)"],
             "contradicting_evidence": [], "linkedin_plausibly_absent": False,
             "recommend_deep_research": False, "reason": "offline stub: trusts attached link"}

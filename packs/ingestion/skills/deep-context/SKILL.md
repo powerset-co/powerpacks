@@ -34,9 +34,15 @@ Use the narrow path when the user names one:
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
   the server's `--stage` flag. `review <stage>` RESTARTS a running review
   server so the UI always serves current code (review state is file-driven;
-  nothing is lost). If the live server reports in-flight enrichment or guided
-  re-research jobs it is reused instead (a restart would kill that paid work);
+  nothing is lost), then ALWAYS runs the self-heal pass before serving (legacy
+  scrubs + fresh-fetch re-judge of judge-skipped LinkedIn cards + free
+  dead-link termination; a RapidAPI fetch per healed candidate plus ~cents of
+  OpenAI judging, no approval stop — invoking review is the consent). If the
+  live server reports in-flight enrichment or guided re-research jobs it is
+  reused instead (a restart would kill that paid work) and the heal defers;
   pass `--force-restart` to restart anyway.
+- `$deep-context heal` -> run only `bin/deep-context heal`: the same
+  self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
 - `$deep-context refresh`, "resynthesize and show me the directory" -> run only
   `bin/deep-context refresh`; it re-synthesizes stale dossiers (free when facts
   are on the current synthesis contract; a contract bump re-runs everyone and
@@ -108,6 +114,7 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
+[Heal] Self-heal judge-skipped and dead LinkedIn links (runs inside review)
 [People] Wait for review to complete
 [People] Review people worth adding to network
 [Match] Confirm imported LinkedIn matches the person
@@ -307,6 +314,23 @@ bin/deep-context review --stage worth --fresh
 always serves the current code (state is file-driven; nothing is lost). Never
 skip the launch because "a server is already up" — a leftover server keeps
 serving the stale Python it loaded at startup.
+
+Every `review <stage>` boot then runs the SELF-HEAL pass (`bin/deep-context
+heal`) as a definitive named step before serving, so boot never looks hung and
+stale cards fix themselves: (1) the legacy stored-decision scrubs, (2) a FRESH
+profile fetch plus re-judge for every undecided LinkedIn card the judge
+previously skipped as "no usable profile" (the normal judge and write path, so
+confirm/detach bars auto-apply), and (3) free termination of confirmed-dead
+links — detach plus a free identity stand from an existing synthetic row or
+research output, else the person stays a pending re-research card. This spends
+real money without pausing: a fresh RapidAPI call per healed candidate plus
+OpenAI judge calls (~cents for tens of people). Invoking `review`/`heal` IS the
+consent — there is no approval stop; the pre-run count lines are information,
+and `--cap` (default 200) is only a runaway backstop. Typical sessions heal a
+handful of new cards (the first run after this ships is the big one); a clean
+store prints one `[heal] ... (nothing to do)` line and spends nothing. The
+summary lands under `"heal"` in the review manifest, where `review-status`
+reads it.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
 wait on the durable files (no daemons, no sockets, no thread ids; it always

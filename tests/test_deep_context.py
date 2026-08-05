@@ -36,6 +36,7 @@ from packs.ingestion.primitives.deep_context import (
     collect_person_context as collect,
     common,
     compose_dossier as compose,
+    heal_review as heal,
     lookup_person as lookup,
     apply_retargets as retargets,
     reconcile_deep_research as dresearch,
@@ -45,6 +46,7 @@ from packs.ingestion.primitives.deep_context import (
     synthesize_person_context as synth,
     worth_view,
 )
+from packs.ingestion.primitives.enrich import rapidapi_client
 from packs.ingestion.primitives.deep_context.review_web import (
     REVIEW_CSS,
     decisions as web_decisions,
@@ -7403,6 +7405,292 @@ class MixedParentSingleDecisionQueueTests(unittest.TestCase):
                          for r in csv.DictReader(fh)}
             self.assertEqual(gates, {"synth-jordan-a": "no",
                                      "synth-jordan-b": "no"})
+
+
+class HealReviewTests(unittest.TestCase):
+    """The pre-serve self-heal pass: selection predicate, fresh-fetch routing
+    (CONTENT -> judge, fetched EMPTY -> terminate, ERROR -> untouched), the
+    free-identity ladder (case a synthetic gate / b research mint / c pending
+    card), idempotency, cap, and keyless skips."""
+
+    PROFILE_STATES = {
+        "hydra-jones": "content",
+        "casey-dead-a": "empty",
+        "bravo-dead-b": "empty",
+        "dana-dead-c": "empty",
+        "errol-err": "error",
+    }
+
+    @staticmethod
+    def _rec(parent_slug, pub, pid, *, verdict=None, no_link=False, match_emails=None):
+        url = f"https://www.linkedin.com/in/{pub}" if pub else ""
+        return {
+            "parent_slug": parent_slug, "name": parent_slug.replace("-", " ").title(),
+            "candidate_key": pub, "person_ids": [pid], "conflict": False,
+            "no_link": no_link, "name_matched": False,
+            "linkedin": {"public_identifier": pub, "linkedin_url": url,
+                         "has_profile": False, "source": "people_csv"},
+            "match_emails": match_emails or [], "match_phones": [],
+            "verdict": verdict or {
+                "verdict": "needs_review", "confidence": 0.0,
+                "supporting_evidence": [], "contradicting_evidence": [],
+                "linkedin_plausibly_absent": True, "recommend_deep_research": False,
+                "reason": reconcile.NO_PROFILE_REASON},
+            "error": "",
+        }
+
+    def build_store(self, root: Path) -> "heal.HealReview":
+        (root / "cache").mkdir()
+        (root / "facts").mkdir()
+        (root / "raw").mkdir()
+        (root / "parents").mkdir()
+        recs = [
+            self._rec("hydra-jones-ab12", "hydra-jones", "p-hydra"),
+            self._rec("casey-dead-a", "casey-dead-a", "p-deada"),
+            self._rec("bravo-dead-b", "bravo-dead-b", "p-deadb",
+                      match_emails=["bravo@example.com"]),
+            self._rec("dana-dead-c", "dana-dead-c", "p-deadc"),
+            self._rec("errol-err", "errol-err", "p-err"),
+            self._rec("already-decided", "already-decided", "p-decided"),
+            self._rec("retarget-away", "retarget-away", "p-retarget"),
+            self._rec("confirmed-fine", "confirmed-fine", "p-fine", verdict={
+                "verdict": "confirmed", "confidence": 0.9, "supporting_evidence": [],
+                "contradicting_evidence": [], "linkedin_plausibly_absent": False,
+                "recommend_deep_research": False, "reason": "fine"}),
+            self._rec("nolink-nan", "", "p-nolink", no_link=True),
+        ]
+        with (root / "verdicts.jsonl").open("w", encoding="utf-8") as fh:
+            for rec in recs:
+                fh.write(json.dumps(rec) + "\n")
+        # Review rows: one human-decided, one pending retarget to a DIFFERENT pub.
+        rows = {
+            "already-decided": {"public_identifier": "already-decided", "action": "verify",
+                                "approved": "yes", "person_id": "p-decided",
+                                "source": "deep-context-review"},
+            "retarget-away": {"public_identifier": "retarget-away", "action": "retarget",
+                              "approved": "", "person_id": "p-retarget",
+                              "new_linkedin_url": "https://www.linkedin.com/in/someone-else",
+                              "new_public_identifier": "someone-else",
+                              "source": "deep-research"},
+        }
+        write_rows(root / "review.csv", rows)
+        with (root / "people.csv").open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=[
+                "id", "full_name", "public_identifier", "linkedin_url", "source_channels",
+                "primary_email", "all_emails", "primary_phone", "all_phones",
+                "interaction_counts"])
+            writer.writeheader()
+            writer.writerow({"id": "p-hydra", "full_name": "Hydra Jones",
+                             "public_identifier": "hydra-jones",
+                             "linkedin_url": "https://www.linkedin.com/in/hydra-jones",
+                             "source_channels": "gmail_msgvault"})
+        write_json(root / "index.json", {
+            "parents": {"hydra-jones-ab12": {"name": "Hydra Jones", "parent_id": "p-hydra",
+                                             "children": ["hydra-jones-child"]}},
+            "slugs": {"hydra-jones-child": {"person_id": "p-hydra"}},
+        })
+        # Hydrated cache content for the judged candidate.
+        write_json(root / "cache" / "hydra-jones.json", {
+            "fetched_at": "2026-08-01T00:00:00Z", "last_checked_at": "2026-08-01T00:00:00Z",
+            "public_identifier": "hydra-jones",
+            "raw_response": {"full_name": "Hydra Jones"},
+            "normalized_profile": {"success": True, "full_name": "Hydra Jones",
+                                   "experiences": [{"title": "Founder",
+                                                    "company_name": "Hydra Robotics"}],
+                                   "education": []}})
+        # Case a: an existing synthetic row for casey-dead-a's person.
+        with (root / "synthetic-people.csv").open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=[
+                "id", "public_identifier", "approved", "source_person_ids"])
+            writer.writeheader()
+            writer.writerow({"id": "p-deada", "public_identifier": "synth-email-caseydead",
+                             "approved": "", "source_person_ids": json.dumps(["p-deada"])})
+        # Case b: an engine research output proposing exactly the dead link.
+        research_dir = root / "deep-research" / "bravo-dead-b"
+        research_dir.mkdir(parents=True)
+        write_json(research_dir / "01_research_parallel.json", {
+            "person": {"full_name": "Bravo Deadlink", "first_name": "Bravo",
+                       "last_name": "Deadlink", "confidence": 0.9},
+            "headline": {"text": "Founder"},
+            "positions": [{"title": "Founder", "company_name": "Deadlink Labs",
+                           "is_current": True}],
+            "education": [], "location": {"city": "SF", "country": "US"},
+            "social": {"linkedin_url": "https://www.linkedin.com/in/bravo-dead-b"},
+            "metadata": {"estimated_completeness": 0.9},
+        })
+        return heal.HealReview(
+            review_csv=root / "review.csv",
+            verdicts_jsonl=root / "verdicts.jsonl",
+            verdicts_csv=root / "verdicts.csv",
+            people_csv=root / "people.csv",
+            profile_cache_dir=root / "cache",
+            synthetic_csv=root / "synthetic-people.csv",
+            index_json=root / "index.json",
+            facts_dir=root / "facts",
+            raw_dir=root / "raw",
+            parents_dir=root / "parents",
+            deep_research_dir=root / "deep-research",
+            owner_json=root / "owner.json",
+            review_manifest=root / "review" / "manifest.json",
+        )
+
+    @contextlib.contextmanager
+    def heal_mocks(self, states=None, *, openai_key="test-key"):
+        states = states if states is not None else self.PROFILE_STATES
+        calls: list[str] = []
+
+        def fake_get_profile(client_self, pub, url, *, cache_dir=None, fresh=False, **kw):
+            calls.append(pub)
+            state = states.get(pub, "error")
+            return {"state": state, "normalized_profile": {}, "data": None,
+                    "from_cache": False, "fetched": state != "error",
+                    "status_code": 200 if state == "content" else 404,
+                    "detail": "", "attempts": 1}
+
+        async def fake_judge(client, task, owner_block, **kw):
+            return {"verdict": {"verdict": "confirmed", "confidence": 0.95,
+                                "supporting_evidence": ["fixture"],
+                                "contradicting_evidence": [],
+                                "linkedin_plausibly_absent": False,
+                                "recommend_deep_research": False,
+                                "reason": "fixture confirm"},
+                    "usage": {"input_tokens": 1, "output_tokens": 1,
+                              "reasoning_tokens": 0}, "error": ""}
+
+        env = {"OPENAI_API_KEY": openai_key} if openai_key else {}
+        with mock.patch.object(rapidapi_client.RapidApiClient, "get_profile",
+                               fake_get_profile), \
+                mock.patch.object(reconcile, "judge_task", fake_judge), \
+                mock.patch.object(heal, "load_env", lambda: None), \
+                mock.patch.dict(os.environ, env, clear=True):
+            yield calls
+
+    def test_selection_predicate_and_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pass_obj = self.build_store(Path(tmp))
+            candidates, skipped_retarget, uncapped = pass_obj.select_candidates()
+            self.assertEqual(sorted(c.pub for c in candidates),
+                             ["bravo-dead-b", "casey-dead-a", "dana-dead-c",
+                              "errol-err", "hydra-jones"])
+            self.assertEqual(skipped_retarget, 1)   # retarget-away: live proposal
+            self.assertEqual(uncapped, 5)
+            pass_obj.cap = 2
+            capped, _, uncapped = pass_obj.select_candidates()
+            self.assertEqual(len(capped), 2)
+            self.assertEqual(uncapped, 5)
+
+    def test_full_heal_routes_content_empty_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pass_obj = self.build_store(root)
+            with self.heal_mocks() as fetch_calls, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                summary = pass_obj.run()
+
+            self.assertEqual(summary["candidates"], 5)
+            self.assertEqual(len(fetch_calls), 5)
+            self.assertEqual(summary["profiles"],
+                             {"content": 1, "empty_fetched": 3, "empty_unfetched": 0,
+                              "error": 1, "fetched": 4, "from_cache": 0})
+            rows = load_rows(root / "review.csv")
+            # CONTENT -> judged through the normal write path: verify/auto.
+            self.assertEqual((rows["hydra-jones"]["action"],
+                              rows["hydra-jones"]["approved"]), ("verify", "auto"))
+            self.assertEqual(summary["rejudge"]["verified"], 1)
+            # EMPTY -> machine detach, never a human row.
+            for pub in ("casey-dead-a", "bravo-dead-b", "dana-dead-c"):
+                self.assertEqual((rows[pub]["action"], rows[pub]["approved"]),
+                                 ("detach", "auto"), pub)
+                self.assertEqual(rows[pub]["source"], "deep-context-heal")
+            # Case a: the existing synthetic row's gate stood to yes.
+            with (root / "synthetic-people.csv").open(newline="", encoding="utf-8") as fh:
+                synth = {r["public_identifier"]: r for r in csv.DictReader(fh)}
+            self.assertEqual(synth["synth-email-caseydead"]["approved"], "yes")
+            self.assertEqual(summary["terminated"]["stood_synthetic"], 1)
+            # Case b: a synthetic minted from the research output (URL cleared).
+            self.assertEqual(summary["terminated"]["minted_synthetic"], 1)
+            minted = [pub for pub in synth if pub != "synth-email-caseydead"]
+            self.assertEqual(len(minted), 1)
+            self.assertEqual(synth[minted[0]].get("linkedin_url", ""), "")
+            # Case c: nothing free — a pending re-research card.
+            self.assertEqual(summary["terminated"]["pending_reresearch"], 1)
+            # ERROR terminates nobody.
+            self.assertNotEqual((rows["errol-err"].get("action"),
+                                 rows["errol-err"].get("approved")), ("detach", "auto"))
+            # Human yes/no untouched; the pending retarget proposal survives.
+            self.assertEqual(rows["already-decided"]["approved"], "yes")
+            self.assertEqual(rows["retarget-away"]["action"], "retarget")
+            self.assertEqual(rows["retarget-away"]["new_public_identifier"], "someone-else")
+            # Counts land in the review stage manifest.
+            manifest = json.loads((root / "review" / "manifest.json").read_text())
+            self.assertEqual(manifest["heal"]["candidates"], 5)
+
+    def test_second_run_is_a_provably_free_no_op(self):
+        # Every candidate gets a definitive answer in run 1 (an ERROR stays
+        # retryable by design, so it would legitimately reappear in run 2).
+        states = {**self.PROFILE_STATES, "errol-err": "empty"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pass_obj = self.build_store(root)
+            with self.heal_mocks(states), contextlib.redirect_stderr(io.StringIO()):
+                pass_obj.run()
+            review_before = (root / "review.csv").read_text()
+            synth_before = (root / "synthetic-people.csv").read_text()
+            with self.heal_mocks() as fetch_calls, \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                summary = pass_obj.run()
+            self.assertEqual(summary["candidates"], 0)
+            self.assertEqual(len(fetch_calls), 0)
+            self.assertEqual(summary["profiles"]["fetched"], 0)
+            self.assertEqual(summary["rejudge"]["candidates"], 0)
+            self.assertEqual(summary["terminated"]["detached"], 0)
+            self.assertIn("scrubs 0 · fetched 0 · judged 0 · dead-links 0 "
+                          "(nothing to do)", err.getvalue())
+            self.assertEqual((root / "review.csv").read_text(), review_before)
+            self.assertEqual((root / "synthetic-people.csv").read_text(), synth_before)
+
+    def test_error_everywhere_terminates_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pass_obj = self.build_store(root)
+            states = {pub: "error" for pub in self.PROFILE_STATES}
+            with self.heal_mocks(states), contextlib.redirect_stderr(io.StringIO()):
+                summary = pass_obj.run()
+            self.assertEqual(summary["terminated"]["detached"], 0)
+            self.assertEqual(summary["rejudge"]["candidates"], 0)
+            rows = load_rows(root / "review.csv")
+            for pub in ("casey-dead-a", "bravo-dead-b", "dana-dead-c", "errol-err"):
+                self.assertNotEqual((rows.get(pub, {}).get("action"),
+                                     rows.get(pub, {}).get("approved")),
+                                    ("detach", "auto"), pub)
+
+    def test_keyless_openai_skips_judging_and_unfetched_empty_never_terminates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pass_obj = self.build_store(root)
+            # A keyless RapidAPI install serves recorded EMPTY without a fetch:
+            # that is NOT a fresh confirmation, so nobody terminates.
+            states = dict(self.PROFILE_STATES)
+
+            def keyless_get_profile(client_self, pub, url, *, cache_dir=None,
+                                    fresh=False, **kw):
+                state = states.get(pub, "error")
+                return {"state": state, "normalized_profile": {}, "data": None,
+                        "from_cache": state != "error", "fetched": False,
+                        "status_code": 0, "detail": "no rapidapi key", "attempts": 0}
+
+            with mock.patch.object(rapidapi_client.RapidApiClient, "get_profile",
+                                   keyless_get_profile), \
+                    mock.patch.object(heal, "load_env", lambda: None), \
+                    mock.patch.dict(os.environ, {}, clear=True), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                summary = pass_obj.run()
+            self.assertEqual(summary["terminated"]["detached"], 0)
+            self.assertEqual(summary["profiles"]["empty_unfetched"], 3)
+            # The hydrated candidate still routed to judging, which skipped on
+            # the missing OpenAI key without writing anything.
+            self.assertTrue(summary["rejudge"]["skipped_no_openai_key"])
+            self.assertEqual(summary["rejudge"]["candidates"], 1)
 
 
 if __name__ == "__main__":
