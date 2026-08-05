@@ -32,15 +32,17 @@ Use the narrow path when the user names one:
   (Yes/No tabs, search, full dossier + LinkedIn pane). A stage word opens the
   staged workflow there directly: `$deep-context review linkedin` ->
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
-  the server's `--stage` flag. `review <stage>` RESTARTS a running review
-  server so the UI always serves current code (review state is file-driven;
-  nothing is lost), then ALWAYS runs the self-heal pass before serving (legacy
-  scrubs + fresh-fetch re-judge of judge-skipped LinkedIn cards + free
-  dead-link termination; a RapidAPI fetch per healed candidate plus ~cents of
-  OpenAI judging, no approval stop — invoking review is the consent). If the
-  live server reports in-flight enrichment or guided re-research jobs it is
-  reused instead (a restart would kill that paid work) and the heal defers;
-  pass `--force-restart` to restart anyway.
+  the server's `--stage` flag. `review <stage>` ALWAYS restarts: it stops any
+  running review server (review state is file-driven; nothing is lost), waits
+  for the session lock, ALWAYS runs the self-heal pass with its progress
+  visible (legacy scrubs + fresh-fetch re-judge of judge-skipped LinkedIn
+  cards + free dead-link termination; a RapidAPI fetch per healed candidate
+  plus ~cents of OpenAI judging, no approval stop — invoking review is the
+  consent), and only THEN opens the UI. Nothing is deferred: in-flight
+  enrichment or guided re-research only prints a warning before the restart —
+  both are durable (identical guided resubmits reuse research free;
+  enrichment resumes from its manifest). `--force-restart` is accepted for
+  compatibility but is a no-op — restart is always unconditional.
 - `$deep-context heal` -> run only `bin/deep-context heal`: the same
   self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
 - `$deep-context refresh`, "resynthesize and show me the directory" -> run only

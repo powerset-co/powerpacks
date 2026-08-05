@@ -108,10 +108,13 @@ usage: bin/deep-context <command> [args]
   refresh      re-synthesize stale dossiers, rebuild parents, open the directory
                (free when facts are current; a contract bump re-runs everyone —
                the dry estimate prints first and invoking refresh approves it)
-  review       open the review UI — restarts a running review server first so
-               it always serves current code (in-flight enrichment or guided
-               re-research defers the restart; --force-restart overrides),
-               then ALWAYS runs the self-heal pass (see `heal`) before serving.
+  review       open the review UI — ALWAYS stops any running review server,
+               waits for the session lock, runs the self-heal pass visibly
+               (see `heal`), then serves with --open. Active enrichment or
+               guided re-research only prints a warning (both are durable:
+               identical resubmits reuse research free; enrichment resumes
+               from its manifest). --force-restart is accepted for compat
+               but is a no-op — restart is always unconditional.
                Add a stage word to land there directly
                (review linkedin | worth | enrich; default: the read-only
                people directory, A-Z dossiers + LinkedIn);
@@ -287,44 +290,41 @@ case "$cmd" in
     ;;
   review)
     # A reused live server keeps serving the Python it loaded at startup, so a
-    # repo update would leave the UI stale. RESTART any running review server on
-    # the target port (state is file-driven; nothing is lost), wait for the
-    # session flock to release, then serve — always current code. Only
-    # reconcile_review_web listeners are killed — EXCEPT while the app's
-    # in-process enrichment run is active or the live server reports guided
-    # re-research jobs in flight (/api/retargets): killing it then would kill
-    # paid work with it. Then the live server is reused (code refresh
-    # deferred) unless --force-restart insists.
+    # repo update would leave the UI stale. Review therefore ALWAYS restarts:
+    # stop any running review server on the target port (only
+    # reconcile_review_web listeners are killed; state is file-driven, nothing
+    # is lost), wait for the session flock to release, run the self-heal pass
+    # VISIBLY, THEN serve — always current code, always healed, in that order.
+    # Active enrichment or guided re-research jobs only print a warning: both
+    # are durable (identical guided resubmits reuse research free; enrichment
+    # resumes from its manifest). --force-restart is accepted for backwards
+    # compatibility but is a no-op — restart is unconditional now.
     # `review linkedin` / `review worth` / `review enrich` / `review directory`
     # is sugar for the server's --stage flag: open the UI at that stage.
-    force_restart=0
     review_args=()
     for arg in "$@"; do
       case "$arg" in
         worth|enrich|linkedin|directory) review_args+=(--stage "$arg") ;;
-        --force-restart) force_restart=1 ;;
+        --force-restart) ;;  # compat no-op: restart is always unconditional
         *) review_args+=("$arg") ;;
       esac
     done
     if (( ! wants_help )); then
       review_port="$(review_port_from_args "$@")"
-      if (( ! force_restart )) && grep -qE '"status": *"(running|submitted)"' \
-          "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null; then
-        echo "note: enrichment is running inside the live review server; reusing it (code refresh deferred; --force-restart overrides)" >&2
-        echo "[heal] deferred: the live review server owns the review session; restart later to heal" >&2
-      elif (( ! force_restart )) && review_server_has_active_retargets "$review_port"; then
-        echo "warning: guided re-research jobs are in flight in the live review server; reusing it — finish them, or rerun with --force-restart to restart anyway" >&2
-        echo "[heal] deferred: the live review server owns the review session; restart later to heal" >&2
-      else
-        stop_review_server "$review_port"
-        wait_for_review_session_release
-        # The self-heal pass is a first-class step of every review boot: legacy
-        # scrubs + fresh-fetch/re-judge of judge-skipped links + free dead-link
-        # termination. Invoking review IS the consent (no approval stop); a
-        # heal failure never blocks the UI.
-        "${PY[@]}" "$PKG.heal_review" >/dev/null \
-          || echo "warning: self-heal pass failed; serving anyway" >&2
+      if grep -qE '"status": *"(running|submitted)"' \
+          "$ROOT/.powerpacks/deep-context/reconcile/deep-research/manifest.json" 2>/dev/null \
+          || review_server_has_active_retargets "$review_port"; then
+        echo "warning: active enrichment/guided re-research detected; restarting anyway; guided guidance is durable — identical resubmits reuse research free; enrichment resumes from its manifest" >&2
       fi
+      stop_review_server "$review_port"
+      wait_for_review_session_release
+      # The self-heal pass is a first-class step of every review boot: legacy
+      # scrubs + fresh-fetch/re-judge of judge-skipped links + free dead-link
+      # termination. Invoking review IS the consent (no approval stop). Its
+      # [heal] progress lines stream to stderr and its summary to stdout —
+      # never swallowed — and a heal failure never blocks the UI.
+      "${PY[@]}" "$PKG.heal_review" \
+        || echo "warning: self-heal pass failed; serving anyway" >&2
     fi
     "${PY[@]}" "$PKG.reconcile_review_web" serve --open "${review_args[@]}"
     ;;
