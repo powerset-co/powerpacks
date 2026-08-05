@@ -43,6 +43,25 @@ artifacts under `retarget-guidance/`. The guidance itself is durable
 IDENTICAL re-submit (e.g. retrying after a crash) reuses the existing research
 for free, while changed guidance sidelines the old output to `.bkup` (paid
 artifacts are never deleted) and re-researches.
+
+Changelog:
+  2026-08-04: fail-closed loop fixes — the re-judge row blanking moved to
+    after run_research succeeds, so ANY failed job (missing key, network,
+    blocked queue) returns the person to review unchanged; every applied
+    outcome settles the parent's other candidate rows so an answered person
+    never bounces back into the linear queue.
+  2026-08-04 (review batch, 4-model review): blanking keys on updated_at vs
+    the request's submitted_at (mid-job human decisions stand even when they
+    write the same value) and never re-opens a sibling's human yes/no (a
+    shared pub row can be another parent's confirmed identity); a crash after
+    the blanking write restores approved AND the paid-verdict fingerprint;
+    settle_siblings skips machine-applied `auto` rows (matching /decide's
+    withdrawal guard) and settles folded synthetic options through their
+    approve gate; a mid-job human "no" vetoes the automatic synthetic-stands
+    gate; queue items carry queue_slug (the review queue's parent slug —
+    synthetic parents' dossier_slug differs) for inflight exclusion and
+    failure notes; failed_notes_from_items reduces the newest-first snapshot
+    correctly (an old failure never shadows a later outcome).
 """
 from __future__ import annotations
 
@@ -58,7 +77,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.review_web.decisions import sync_synthetic_gate
+from packs.ingestion.primitives.deep_context.review_web.decisions import apply_synthetic_decision, sync_synthetic_gate
 from packs.ingestion.primitives.deep_context.review_web.model import SYNTHETIC_PEOPLE_CSV
 from packs.ingestion.primitives.deep_context import assemble_synthetic_profile
 from packs.ingestion.primitives.deep_context import deep_research_contacts
@@ -237,8 +256,45 @@ class GuidedRetarget:
     # EVERY real candidate row key on the parent, from the endpoint that can
     # see them all. Settlement iterates these — no deriving row keys from URLs.
     candidate_pubs: tuple[str, ...] = ()
+    # Folded synthetic options on the parent (synth- pubs). An applied identity
+    # settles these through their approve gate in synthetic-people.csv, or a
+    # mixed parent bounces back into the queue as a synthetic-option card.
+    synthetic_pubs: tuple[str, ...] = ()
+    # The parent slug AS THE REVIEW QUEUE KEYS IT (parent["slug"]). `slug` is
+    # the dossier slug (research handle, directory pane) — for a synthetic
+    # parent the two differ, and inflight exclusion / failure notes must use
+    # this one or the wrong parent gets excluded/annotated.
+    queue_slug: str = ""
+    # Endpoint click time (now_iso). Rows touched AFTER this are human
+    # decisions made while the job ran — they always stand.
+    submitted_at: str = ""
     match_emails: tuple[str, ...] = ()
     match_phones: tuple[str, ...] = ()
+
+
+def failed_notes_from_items(items: list[dict[str, Any]]) -> dict[str, str]:
+    """slug -> failure detail for people whose NEWEST guided re-research
+    FAILED. ``items`` is a queue snapshot, NEWEST FIRST — the first item seen
+    per slug is the latest, so an old failure never shadows a later success
+    (and a later failure is never shadowed by an old success)."""
+    latest: dict[str, dict[str, Any]] = {}
+    for item in items:
+        slug = str(item.get("queue_slug") or item.get("slug") or "").strip().lower()
+        if slug and slug not in latest:
+            latest[slug] = item
+    return {slug: str(item.get("detail") or "the job did not finish")
+            for slug, item in latest.items() if item.get("state") == "failed"}
+
+
+def _synthetic_gate(path: Path, pub: str) -> str:
+    """Current approve-gate value for one synthetic row ('' when absent)."""
+    if not path.exists():
+        return ""
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if (row.get("public_identifier") or "").strip().lower() == pub:
+                return (row.get("approved") or "").strip().lower()
+    return ""
 
 
 def run_guided_retarget(request: GuidedRetarget, *,
@@ -248,6 +304,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
                         raw_dir: Path = RAW_DIR,
                         out_dir: Path = GUIDED_RETARGET_DIR,
                         engine_dir: Path = DEEP_RESEARCH_DIR,
+                        synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
                         use_llm: bool = True,
                         on_progress: Callable[[str, str], None] | None = None,
                         ) -> dict[str, Any]:
@@ -261,6 +318,32 @@ def run_guided_retarget(request: GuidedRetarget, *,
     key = request.pub.strip().lower()
     if not key:
         return {"state": "failed", "detail": "person has no review key"}
+
+    def settle_siblings(rows: dict[str, dict[str, str]], winner_key: str) -> None:
+        """An applied identity answers the WHOLE parent: every other pending
+        candidate row settles as detached, or the parent bounces straight back
+        into the linear queue showing its leftover wrong links. The guard
+        matches /decide's sibling withdrawal: a human yes/no always stands,
+        and a machine-applied `auto` row (already non-pending, possibly a
+        shared row confirmed for a DIFFERENT parent) is never touched. A
+        folded synthetic option settles through its approve gate in
+        synthetic-people.csv, exactly like /decide's withdrawal."""
+        for row_key in {k for k in request.candidate_pubs if k} - {winner_key}:
+            row_now = rows.setdefault(row_key, {"public_identifier": row_key})
+            if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no", "auto"}:
+                row_now.update({"action": "detach", "approved": "yes",
+                                "source": "user-guidance", "new_linkedin_url": "",
+                                "new_public_identifier": "", "updated_at": now_iso()})
+        for synth_pub in request.synthetic_pubs:
+            pub_now = str(synth_pub or "").strip().lower()
+            if not pub_now or pub_now == winner_key:
+                continue
+            if _synthetic_gate(synthetic_path, pub_now) in {"yes", "no"}:
+                continue  # the user already gated it — their word stands
+            try:
+                apply_synthetic_decision(synthetic_path, pub_now, "detach")
+            except ValueError:
+                pass  # row pruned between render and apply — nothing to settle
 
     # The user handed us the answer: a URL they ASSERT is the right profile IS
     # the decision — the same trust as the review-stage fix form. No research,
@@ -278,6 +361,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
                         "source": "user-guidance",
                         "llm_reject": "", "llm_reject_confidence": "",
                         "llm_reject_reason": "", "updated_at": now_iso()})
+        settle_siblings(rows, key)
         write_override_rows(review_path, rows)
         return {"state": "applied", "new_url": given_url, "confidence": "1.000",
                 "detail": "user-provided LinkedIn applied directly (no research needed)"}
@@ -304,23 +388,6 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # known_info exactly as build_queue wrote it.
     row["retarget_hint"] = request.guidance.strip()
 
-    # A re-guided person must actually re-research and re-judge: blank the
-    # sticky `approved` and the judge fingerprint on their existing row, and
-    # sideline (never delete — paid artifacts) any prior research output that
-    # would make run_research skip the handle as already done.
-    # The person's row can be keyed by a person/candidate id while each OLD
-    # LinkedIn lives on its own pub-keyed row — blank them all, or a wrong
-    # link survives the whole re-research untouched.
-    rows = load_override_rows(review_path)
-    touched = False
-    for row_key in {key, *request.candidate_pubs} - {""}:
-        prior = rows.get(row_key)
-        if prior is not None:
-            prior["approved"] = ""
-            prior["llm_judge_fingerprint"] = ""
-            touched = True
-    if touched:
-        write_override_rows(review_path, rows)
     handle = str(row.get("handle") or request.slug)
     handle_dir = out_dir / handle
     # The guidance is durable (it survives crashes and restarts), and it is the
@@ -365,14 +432,77 @@ def run_guided_retarget(request: GuidedRetarget, *,
         detail = str(research.get("error") or f"research ended {status}")
         return {"state": "failed", "detail": detail}
 
-    report("judging", "identity judge reviewing the proposed profile")
-    owner = load_owner()
-    reconcile_deep_research.propose_retargets_from_output(
-        out_dir, [subset_row], review_path,
-        facts_dir=facts_dir, raw_dir=raw_dir, use_llm=use_llm,
-        owner_block=owner_background_block(owner) if owner else "",
-        confirm_threshold=RESEARCH_CONFIRM_THRESHOLD)
-    _mirror_into_engine_home(handle_dir, engine_dir / handle)
+    # Research succeeded — NOW the person must actually re-judge: blank the
+    # sticky `approved` and the judge fingerprint on their existing rows.
+    # (Deliberately after run_research: a failed job leaves review.csv exactly
+    # as it was, so the person returns to the queue in their original state.)
+    # The person's row can be keyed by a person/candidate id while each OLD
+    # LinkedIn lives on its own pub-keyed row — blank them all, or a wrong
+    # link survives the whole re-research untouched. Rules:
+    #   * a row touched AFTER the submit is a human decision made while the
+    #     job ran — it always stands;
+    #   * the request's OWN key row re-opens regardless of its pre-submit
+    #     value (resubmitting guidance is exactly the re-open ask);
+    #   * a sibling row's human yes/no or machine-applied `auto` never
+    #     re-opens — one pub row can be a DIFFERENT parent's confirmed
+    #     identity, and blanking it here would let settle_siblings launder
+    #     that decision into an automatic detach (same set as settle's guard).
+    # `blanked` remembers prior values so a crash below restores them.
+    submitted_at = str(request.submitted_at or "")
+    blanked: dict[str, tuple[str, str]] = {}
+    rows = load_override_rows(review_path)
+    for row_key in {key, *request.candidate_pubs} - {""}:
+        prior = rows.get(row_key)
+        if prior is None:
+            continue
+        if submitted_at and str(prior.get("updated_at") or "") > submitted_at:
+            continue
+        approved = str(prior.get("approved") or "").strip().lower()
+        if row_key != key and approved in {"yes", "no", "auto"}:
+            continue
+        blanked[row_key] = (str(prior.get("approved") or ""),
+                            str(prior.get("llm_judge_fingerprint") or ""))
+        prior["approved"] = ""
+        prior["llm_judge_fingerprint"] = ""
+    if blanked:
+        write_override_rows(review_path, rows)
+
+    # Everything from here to the settle writes can still raise (owner load,
+    # judge LLM, artifact mirror). A failure must not strand the rows we just
+    # blanked — restore them (approved AND the paid-verdict fingerprint) and
+    # fail the job honestly.
+    try:
+        report("judging", "identity judge reviewing the proposed profile")
+        owner = load_owner()
+        reconcile_deep_research.propose_retargets_from_output(
+            out_dir, [subset_row], review_path,
+            facts_dir=facts_dir, raw_dir=raw_dir, use_llm=use_llm,
+            owner_block=owner_background_block(owner) if owner else "",
+            confirm_threshold=RESEARCH_CONFIRM_THRESHOLD)
+    except (Exception, SystemExit) as exc:
+        rows = load_override_rows(review_path)
+        restored = False
+        for row_key, (prior_approved, prior_fp) in blanked.items():
+            prior = rows.get(row_key)
+            # Restore ONLY rows the judge never reached: a fresh fingerprint
+            # means the paid verdict already wrote — resurrecting the stale
+            # approval there would auto-attach a judge-rejected profile.
+            if (prior is not None
+                    and not str(prior.get("approved") or "").strip()
+                    and not str(prior.get("llm_judge_fingerprint") or "").strip()):
+                prior["approved"] = prior_approved
+                prior["llm_judge_fingerprint"] = prior_fp
+                restored = True
+        if restored:
+            write_override_rows(review_path, rows)
+        return {"state": "failed", "detail": f"{type(exc).__name__}: {exc}"}
+    # Mirroring the paid artifacts into the engine's research home is
+    # bookkeeping — it must neither fail the job nor trigger the restore
+    # after the judge has already written its verdict.
+    try:
+        _mirror_into_engine_home(handle_dir, engine_dir / handle)
+    except OSError:
+        pass
 
     rows = load_override_rows(review_path)
     after = rows.get(key) or {}
@@ -381,9 +511,12 @@ def run_guided_retarget(request: GuidedRetarget, *,
     rejected = str(after.get("llm_reject") or "").strip().lower() in _REJECT_TRUTHY
     if action == "retarget" and new_url and not rejected:
         # Judge confirmed at/above the bar — the guidance submit was the
-        # human's word, so the retarget stands without a second review pass.
-        after["approved"] = "yes"
-        after["source"] = "user-guidance"
+        # human's word, so the retarget stands without a second review
+        # pass. A human decision that landed mid-job stays untouched.
+        if str(after.get("approved") or "").strip().lower() not in {"yes", "no"}:
+            after["approved"] = "yes"
+            after["source"] = "user-guidance"
+        settle_siblings(rows, key)
         write_override_rows(review_path, rows)
         return {"state": "applied", "new_url": new_url,
                 "confidence": str(after.get("confidence") or ""),
@@ -403,6 +536,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
             after.update({"approved": "yes", "source": "user-guidance",
                           "llm_reject": "", "llm_reject_confidence": "",
                           "llm_reject_reason": "", "updated_at": now_iso()})
+            settle_siblings(rows, key)
             write_override_rows(review_path, rows)
             return {"state": "applied", "new_url": new_url,
                     "confidence": str(after.get("confidence") or ""),
@@ -416,6 +550,13 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # submit outranks the job's automatic detach and is left untouched.
     # Detach the person's row AND every old LinkedIn's own pub-keyed row
     # (they can differ); a human decision made while research ran wins per row.
+    # A human decision made WHILE the job ran (the UI's Skip writes
+    # detach/yes) vetoes the automatic synthetic apply below — read it off
+    # updated_at vs the submit time BEFORE the loop stamps its own detaches.
+    human_decided_mid_job = bool(submitted_at) and any(
+        str((rows.get(k) or {}).get("approved") or "").strip().lower() in {"yes", "no"}
+        and str((rows.get(k) or {}).get("updated_at") or "") > submitted_at
+        for k in {key, *request.candidate_pubs} - {""})
     for row_key in {key, *request.candidate_pubs} - {""}:
         row_now = rows.setdefault(row_key, {"public_identifier": row_key})
         if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no"}:
@@ -423,6 +564,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
                             "source": "user-guidance", "new_linkedin_url": "",
                             "new_public_identifier": "", "updated_at": now_iso()})
     write_override_rows(review_path, rows)
+
     if rejected and new_url:
         # Research DID find a profile but the judge could not corroborate it —
         # assemble deliberately skips outputs that carry a LinkedIn (the
@@ -439,11 +581,15 @@ def run_guided_retarget(request: GuidedRetarget, *,
     stands = (int(getattr(assembly, "built", 0) or 0) > 0
               or int(getattr(assembly, "preserved_user_rows", 0) or 0) > 0)
     if stands:
+        if human_decided_mid_job:
+            return {"state": "no_match",
+                    "detail": ("synthetic profile built but left pending — you decided "
+                               "this person while the research ran, and that stands")}
         # Deterministic, linear review: the user explicitly asked for this
         # re-research, so the assembled synthetic APPLIES (gate yes) — the
         # person never returns to the queue for a second confirmation.
         for gate_key in (key, *(str(pid) for pid in request.person_ids or ())):
-            if gate_key and sync_synthetic_gate(SYNTHETIC_PEOPLE_CSV, gate_key, "yes"):
+            if gate_key and sync_synthetic_gate(synthetic_path, gate_key, "yes"):
                 break
         return {"state": "synthetic",
                 "detail": f"no LinkedIn confirmed — synthetic profile now stands ({reason})"}
@@ -475,6 +621,7 @@ class RetargetQueue:
                    for item in self._items):
                 raise ValueError(f"{request.name or request.pub} is already being retargeted")
             item = {"slug": request.slug, "pub": key,
+                    "queue_slug": request.queue_slug or request.slug,
                     "name": request.name or request.slug,
                     "guidance": request.guidance,
                     "state": "queued", "detail": "",

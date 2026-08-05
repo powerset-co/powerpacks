@@ -30,9 +30,10 @@ from packs.powerset.primitives.send_feedback.send_feedback import (
 # The repo .env (canonical installs); os.environ still wins for worktree runs.
 ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
 
-# Popover actions (worth decisions) plus the automatic one: a guided-retarget
-# submit files its guidance as feedback with no extra input.
-FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget", "general"}
+# Popover actions (worth decisions, the "…" menu, a LinkedIn-card Skip's
+# optional why-note) plus the automatic one: a guided-retarget submit files
+# its guidance as feedback with no extra input.
+FEEDBACK_ACTIONS = {"worth_yes", "worth_no", "retarget", "general", "skip"}
 
 
 def _clean(value: Any) -> str:

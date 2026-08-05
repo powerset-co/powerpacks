@@ -48,6 +48,142 @@ async function post(path, values) {
   return response.json();
 }
 
+// Optional-feedback popover, mirrored off the network-search-app
+// FeedbackForm: context label, auto-grow textarea, ⌘+Enter, send icon,
+// then a "Got it, thanks!" beat before it closes. Posts to /feedback where
+// the server folds in everything it knows (incl. retarget guidance).
+// Module scope: the directory person pane AND the review cards both open it.
+const SEND_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
+  + " stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+  + "<path d='m22 2-7 20-4-9-9-4Z'/><path d='M22 2 11 13'/></svg>";
+const CHECK_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
+  + " stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>"
+  + "<path d='M20 6 9 17l-5-5'/></svg>";
+
+function closeFeedbackPopover() {
+  document.querySelector(".feedback-popover")?.remove();
+}
+
+// needs_auth recovery: one click starts auth.py's browser sign-in flow on
+// this machine (used by the feedback popover and the retarget panel alert).
+function signInButton(doneHint) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "feedback-login";
+  button.textContent = "Sign in to Powerset";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Waiting for sign-in…";
+    try {
+      await post("/auth/login", {});
+      announce(`Sign-in opened in your browser — finish there${doneHint}.`);
+    } catch (error) {
+      announce(error.message, true);
+      button.disabled = false;
+      button.textContent = "Sign in to Powerset";
+    }
+  });
+  return button;
+}
+
+function offerSignIn(pop) {
+  if (pop.querySelector(".feedback-login")) return;
+  pop.append(signInButton(", then Send again"));
+}
+
+function feedbackPopover({ anchor, contextLabel, pub, slug, action, onDone }) {
+  closeFeedbackPopover();
+  const host = anchor.closest(".person-detail, .identity-card") || document.body;
+  const pop = document.createElement("div");
+  pop.className = "feedback-popover";
+  if (contextLabel) {
+    const label = document.createElement("p");
+    label.className = "feedback-context";
+    label.textContent = contextLabel;
+    pop.append(label);
+  }
+  const textarea = document.createElement("textarea");
+  textarea.rows = 2;
+  textarea.maxLength = 4000;
+  textarea.placeholder = 'e.g. "Wrong person — this is actually Jane Smith"';
+  const footer = document.createElement("div");
+  footer.className = "feedback-footer";
+  footer.innerHTML = `<span class='feedback-hint'>&#8629; &#8984;+Enter</span>`
+    + `<span class='feedback-actions'>`
+    + `<button type='button' class='feedback-skip'>Skip</button>`
+    + `<button type='button' class='feedback-send' aria-label='Send feedback' disabled>${SEND_ICON}</button>`
+    + `</span>`;
+  pop.append(textarea, footer);
+  const send = footer.querySelector(".feedback-send");
+  const skip = footer.querySelector(".feedback-skip");
+
+  // Every way out lands here exactly once: send (after the thanks beat),
+  // Skip, Escape, or clicking away. The caller's onDone applies the move.
+  let settled = false;
+  function finish() {
+    if (settled) return;
+    settled = true;
+    document.removeEventListener("click", away);
+    pop.remove();
+    onDone?.();
+  }
+
+  async function submit() {
+    const comment = textarea.value.trim();
+    if (!comment || settled) return;
+    send.disabled = true;
+    skip.disabled = true;
+    try {
+      await post("/feedback", { pub, parent_slug: slug, comment, action });
+    } catch (error) {
+      announce(error.message, true);
+      if (error.status === "needs_auth") offerSignIn(pop);
+      send.disabled = false;
+      skip.disabled = false;
+      return;
+    }
+    settled = true;
+    document.removeEventListener("click", away);
+    pop.replaceChildren();
+    pop.className = "feedback-popover feedback-done";
+    pop.innerHTML = `<span class='feedback-done-badge'>${CHECK_ICON}</span>`
+      + "<p>Got it, thanks! \u{1F64F}</p>";
+    setTimeout(() => { pop.remove(); onDone?.(); }, 900);
+  }
+
+  textarea.addEventListener("input", () => {
+    send.disabled = !textarea.value.trim();
+    textarea.style.height = "auto";
+    textarea.style.height = Math.min(textarea.scrollHeight, 140) + "px";
+  });
+  textarea.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void submit();
+    }
+    if (event.key === "Escape") finish();
+  });
+  send.addEventListener("click", () => void submit());
+  skip.addEventListener("click", finish);
+  pop.addEventListener("click", (event) => event.stopPropagation());
+
+  host.append(pop);
+  const hostRect = host.getBoundingClientRect();
+  const anchorRect = anchor.getBoundingClientRect();
+  pop.style.top = `${anchorRect.bottom - hostRect.top + host.scrollTop + 8}px`;
+  pop.style.right = `${Math.max(8, hostRect.right - anchorRect.right)}px`;
+  setTimeout(() => textarea.focus(), 80);
+  function away(event) {
+    if (!document.body.contains(pop)) {
+      document.removeEventListener("click", away);
+      return;
+    }
+    if (!pop.contains(event.target) && event.target !== anchor) finish();
+  }
+  setTimeout(() => document.addEventListener("click", away), 0);
+}
+
 async function fetchText(path) {
   try {
     const response = await fetch(path, { cache: "no-store" });
@@ -422,6 +558,80 @@ function prefetchLinkedinCard(currentParent) {
   };
 }
 
+// ONE guidance box, two vocabularies: "guidance" (No — provide LinkedIn or
+// re-research) and "skip" (an optional why-note whose submit button IS the
+// skip). The server renders the guidance wording per card; the first morph
+// stashes it on the form so switching back restores the card's own copy.
+const SKIP_MODE_COPY = {
+  label: "Skip — anything we should know? (optional)",
+  placeholder: "e.g. 'don't recognize this person' or 'can't tell which is right'",
+  button: "Skip",
+};
+
+function setGuidanceMode(details, mode, { keepClosed = false } = {}) {
+  const form = details.querySelector("[data-retarget-form]");
+  const summary = details.querySelector("summary");
+  const textarea = form?.querySelector("textarea[name='guidance']");
+  const button = form?.querySelector("button[type='submit']");
+  if (!form || !summary || !textarea || !button) return;
+  if (!form.dataset.guidanceLabel) {
+    form.dataset.guidanceLabel = summary.textContent;
+    form.dataset.guidancePlaceholder = textarea.placeholder;
+    form.dataset.guidanceButton = button.textContent;
+  }
+  const skip = mode === "skip";
+  form.dataset.mode = skip ? "skip" : "";
+  summary.textContent = skip ? SKIP_MODE_COPY.label : form.dataset.guidanceLabel;
+  textarea.placeholder = skip ? SKIP_MODE_COPY.placeholder : form.dataset.guidancePlaceholder;
+  textarea.required = !skip;
+  button.textContent = skip ? SKIP_MODE_COPY.button : form.dataset.guidanceButton;
+  if (keepClosed) return;
+  details.open = true;
+  textarea.focus({ preventScroll: true });
+}
+
+// Collapsing a skip-morphed box reverts it, so the next open shows the card's
+// own guidance wording again ("toggle" does not bubble — capture phase).
+document.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLElement)
+      || !details.classList.contains("retarget-guidance") || details.open) return;
+  const form = details.querySelector("[data-retarget-form]");
+  if (form?.dataset.mode === "skip") setGuidanceMode(details, "guidance", { keepClosed: true });
+}, true);
+
+// The review cards' "…" menu (general feedback). The directory pane binds its
+// own delegation scoped to the detail pane, so directory clicks are excluded
+// here — one popover, never opened twice.
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-directory-detail]")) return;
+  const toggle = event.target.closest("[data-menu-toggle]");
+  if (toggle) {
+    event.preventDefault();
+    const items = toggle.parentElement.querySelector(".person-menu-items");
+    if (items) items.hidden = !items.hidden;
+    return;
+  }
+  const general = event.target.closest("[data-feedback-general]");
+  if (general) {
+    event.preventDefault();
+    const menu = general.closest("[data-person-menu]");
+    menu?.querySelector(".person-menu-items")?.setAttribute("hidden", "");
+    const card = general.closest(".identity-card");
+    const name = card?.querySelector(".profile-copy h2")?.textContent?.trim() || "this person";
+    feedbackPopover({
+      anchor: menu || general,
+      contextLabel: `Feedback on ${name} — wrong or missing info?`,
+      pub: general.dataset.pub || "",
+      slug: general.dataset.parent || "",
+      action: "general",
+    });
+    return;
+  }
+  document.querySelectorAll(".identity-card .person-menu-items:not([hidden])")
+    .forEach((el) => { el.hidden = true; });
+});
+
 async function decideLinkedinCard(card, values, message) {
   const panel = card.closest("[data-linkedin-panel]");
   const parentSlug = values.parent_slug || card.dataset.parent || "";
@@ -575,10 +785,18 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
     if (details instanceof HTMLElement) {
-      details.open = true;
+      setGuidanceMode(details, "guidance");
       button.setAttribute("aria-expanded", "true");
-      details.querySelector("textarea[name='guidance']")?.focus({ preventScroll: true });
     }
+    return;
+  }
+
+  if (button.hasAttribute("data-open-skip")) {
+    // "Skip" opens the SAME guidance box re-worded as an optional why-note;
+    // its submit performs the actual skip (detach + sibling withdrawal).
+    event.preventDefault();
+    const details = button.closest(".identity-decision")?.querySelector(".retarget-guidance");
+    if (details instanceof HTMLElement) setGuidanceMode(details, "skip");
     return;
   }
 
@@ -661,6 +879,29 @@ document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const textarea = form.querySelector("textarea[name='guidance']");
   const guidance = (textarea?.value || "").trim();
+  if (form.dataset.mode === "skip") {
+    // Skip mode: the submit IS the skip (the same detach + sibling withdrawal
+    // the old inline Skip performed); a typed note rides the /decide POST as
+    // feedback — one request, nothing to race.
+    const values = { pub: form.dataset.pub || "", decision: "detach",
+                     parent_slug: form.dataset.parent || "" };
+    if (guidance) values.note = guidance;
+    const card = form.closest(".identity-card");
+    if (card) {
+      void decideLinkedinCard(card, values, "Skipped");
+      return;
+    }
+    const button = form.querySelector("button[type='submit']");
+    lock(button);
+    try {
+      await post("/decide", values);
+      leaveAndReload("Skipped");
+    } catch (error) {
+      unlock(button);
+      announce(error.message, true);
+    }
+    return;
+  }
   if (!guidance) return;
   const button = form.querySelector("button[type='submit']");
   if (button) button.disabled = true;
@@ -679,6 +920,13 @@ document.addEventListener("submit", async (event) => {
         wireDynamicContent(panel);
         return;
       }
+    }
+    // The debug/preview carousel has no swap panel; a reload re-renders the
+    // queue without the now-inflight person, so the next card shows at the
+    // same index — the same linear move, one page paint later.
+    if (form.closest(".linkedin-stage[data-queue-index]")) {
+      leaveAndReload("Queued for re-research — moving on");
+      return;
     }
     // Directory-adjacent or non-panel surfaces keep the inline note.
     const note = form.querySelector("[data-retarget-note]");
@@ -1339,48 +1587,6 @@ function setupDirectory() {
       .forEach((el) => { el.hidden = true; });
   });
 
-  // Optional-feedback popover, mirrored off the network-search-app
-  // FeedbackForm: context label, auto-grow textarea, ⌘+Enter, send icon,
-  // then a "Got it, thanks!" beat before it closes. Posts to /feedback where
-  // the server folds in everything it knows (incl. retarget guidance).
-  const SEND_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
-    + " stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
-    + "<path d='m22 2-7 20-4-9-9-4Z'/><path d='M22 2 11 13'/></svg>";
-  const CHECK_ICON = "<svg viewBox='0 0 24 24' width='14' height='14' fill='none'"
-    + " stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>"
-    + "<path d='M20 6 9 17l-5-5'/></svg>";
-
-  function closeFeedbackPopover() {
-    document.querySelector(".feedback-popover")?.remove();
-  }
-
-  // needs_auth recovery: one click starts auth.py's browser sign-in flow on
-  // this machine (used by the feedback popover and the retarget panel alert).
-  function signInButton(doneHint) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "feedback-login";
-    button.textContent = "Sign in to Powerset";
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      button.textContent = "Waiting for sign-in…";
-      try {
-        await post("/auth/login", {});
-        announce(`Sign-in opened in your browser — finish there${doneHint}.`);
-      } catch (error) {
-        announce(error.message, true);
-        button.disabled = false;
-        button.textContent = "Sign in to Powerset";
-      }
-    });
-    return button;
-  }
-
-  function offerSignIn(pop) {
-    if (pop.querySelector(".feedback-login")) return;
-    pop.append(signInButton(", then Send again"));
-  }
-
   // Auto-filed feedback (retarget guidance) has no popover; when its
   // fire-and-forget post fails, the panel says so instead of staying silent.
   function renderFeedbackAlert(alert) {
@@ -1408,98 +1614,6 @@ function setupDirectory() {
     return true;
   }
 
-  function feedbackPopover({ anchor, contextLabel, pub, slug, action, onDone }) {
-    closeFeedbackPopover();
-    const host = anchor.closest(".person-detail") || detail;
-    const pop = document.createElement("div");
-    pop.className = "feedback-popover";
-    if (contextLabel) {
-      const label = document.createElement("p");
-      label.className = "feedback-context";
-      label.textContent = contextLabel;
-      pop.append(label);
-    }
-    const textarea = document.createElement("textarea");
-    textarea.rows = 2;
-    textarea.maxLength = 4000;
-    textarea.placeholder = 'e.g. "Wrong person — this is actually Jane Smith"';
-    const footer = document.createElement("div");
-    footer.className = "feedback-footer";
-    footer.innerHTML = `<span class='feedback-hint'>&#8629; &#8984;+Enter</span>`
-      + `<span class='feedback-actions'>`
-      + `<button type='button' class='feedback-skip'>Skip</button>`
-      + `<button type='button' class='feedback-send' aria-label='Send feedback' disabled>${SEND_ICON}</button>`
-      + `</span>`;
-    pop.append(textarea, footer);
-    const send = footer.querySelector(".feedback-send");
-    const skip = footer.querySelector(".feedback-skip");
-
-    // Every way out lands here exactly once: send (after the thanks beat),
-    // Skip, Escape, or clicking away. The caller's onDone applies the move.
-    let settled = false;
-    function finish() {
-      if (settled) return;
-      settled = true;
-      document.removeEventListener("click", away);
-      pop.remove();
-      onDone?.();
-    }
-
-    async function submit() {
-      const comment = textarea.value.trim();
-      if (!comment || settled) return;
-      send.disabled = true;
-      skip.disabled = true;
-      try {
-        await post("/feedback", { pub, parent_slug: slug, comment, action });
-      } catch (error) {
-        announce(error.message, true);
-        if (error.status === "needs_auth") offerSignIn(pop);
-        send.disabled = false;
-        skip.disabled = false;
-        return;
-      }
-      settled = true;
-      document.removeEventListener("click", away);
-      pop.replaceChildren();
-      pop.className = "feedback-popover feedback-done";
-      pop.innerHTML = `<span class='feedback-done-badge'>${CHECK_ICON}</span>`
-        + "<p>Got it, thanks! \u{1F64F}</p>";
-      setTimeout(() => { pop.remove(); onDone?.(); }, 900);
-    }
-
-    textarea.addEventListener("input", () => {
-      send.disabled = !textarea.value.trim();
-      textarea.style.height = "auto";
-      textarea.style.height = Math.min(textarea.scrollHeight, 140) + "px";
-    });
-    textarea.addEventListener("keydown", (event) => {
-      event.stopPropagation();
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        void submit();
-      }
-      if (event.key === "Escape") finish();
-    });
-    send.addEventListener("click", () => void submit());
-    skip.addEventListener("click", finish);
-    pop.addEventListener("click", (event) => event.stopPropagation());
-
-    host.append(pop);
-    const hostRect = host.getBoundingClientRect();
-    const anchorRect = anchor.getBoundingClientRect();
-    pop.style.top = `${anchorRect.bottom - hostRect.top + host.scrollTop + 8}px`;
-    pop.style.right = `${Math.max(8, hostRect.right - anchorRect.right)}px`;
-    setTimeout(() => textarea.focus(), 80);
-    function away(event) {
-      if (!document.body.contains(pop)) {
-        document.removeEventListener("click", away);
-        return;
-      }
-      if (!pop.contains(event.target) && event.target !== anchor) finish();
-    }
-    setTimeout(() => document.addEventListener("click", away), 0);
-  }
 
   // Guided retargets: submit guidance from the person pane, watch the queue in
   // the sidebar panel. This page has no SSE by design, so the panel polls only

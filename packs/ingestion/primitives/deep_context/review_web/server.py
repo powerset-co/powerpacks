@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -62,6 +63,7 @@ from packs.ingestion.primitives.deep_context.common import (
     REVIEW_MANIFEST,
     VERDICTS_JSONL,
     acquire_review_session_lock,
+    load_env,
     now_iso,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
@@ -82,7 +84,7 @@ from .feedback import (
     post_feedback_quietly,
     submit_directory_feedback,
 )
-from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, run_guided_retarget
+from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, failed_notes_from_items, linkedin_url_in_guidance, run_guided_retarget
 from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, linkedin_review_queue, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
@@ -337,8 +339,9 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         with _job_lock:
             result = run_guided_retarget(
                 request, review_path=review_path, people_csv=people_csv,
-                facts_dir=facts_dir, raw_dir=RAW_DIR, use_llm=True,
-                on_progress=report)
+                facts_dir=facts_dir, raw_dir=RAW_DIR,
+                synthetic_path=synthetic_path,
+                use_llm=True, on_progress=report)
         if result.get("state") == "applied" and result.get("new_url"):
             # An APPLIED retarget is no longer a pending candidate, so the
             # prefetch stage would skip it — fetch the new profile directly
@@ -368,9 +371,18 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         if guided_queue is None:
             return frozenset()
         return frozenset(
-            str(item.get("slug") or "").strip().lower()
+            str(item.get("queue_slug") or item.get("slug") or "").strip().lower()
             for item in guided_queue.snapshot()
-            if item.get("state") not in TERMINAL_STATES and item.get("slug"))
+            if item.get("state") not in TERMINAL_STATES
+            and (item.get("queue_slug") or item.get("slug")))
+
+    def guided_failed_notes() -> dict[str, str]:
+        """slug -> failure detail for parents whose LATEST guided re-research
+        FAILED. A failed job returns the person to the queue; their card must
+        say so, or the return reads as an unexplained loop."""
+        if guided_queue is None:
+            return {}
+        return failed_notes_from_items(guided_queue.snapshot())
 
     # One free-enrichment attempt per worth-selection per process: a job that
     # FAILS must not restart on every page load (each restart rotates the state
@@ -378,14 +390,23 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
     # bounce). A new decision (new selection sha) or a server restart retries.
     _free_attempted: set[str] = set()
 
-    # Parsed review.csv rows, loaded once; our own decision writes mutate the
-    # dict in place, and refresh_parents_from_disk drops it after a job write.
+    # Parsed review.csv rows; our own decision writes mutate the dict in
+    # place, and refresh_parents_from_disk drops it after a job write. The
+    # mtime check catches every OTHER writer (the guided-retarget worker, a
+    # CLI run against the same store): handing a handler a stale snapshot
+    # here would make its whole-file rewrite erase those writers' rows.
     cached_rows: dict[str, dict[str, str]] | None = None
+    cached_rows_mtime: int = -1
 
     def review_rows_now() -> dict[str, dict[str, str]]:
-        nonlocal cached_rows
-        if cached_rows is None:
+        nonlocal cached_rows, cached_rows_mtime
+        try:
+            mtime = review_path.stat().st_mtime_ns
+        except OSError:
+            mtime = 0
+        if cached_rows is None or mtime != cached_rows_mtime:
             cached_rows = load_override_rows(review_path)
+            cached_rows_mtime = mtime
         return cached_rows
 
     def candidate_in_snapshot(pub: str, prefer_slug: str = "",
@@ -617,7 +638,9 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         linkedin_complete=phase_is_completed("linkedin", progress, manifest_path),
                         parents_dir=parents_dir, dossier_dir=dossier_dir,
                         enrichment=enrichment, profile_cache_dir=profile_cache_dir,
-                        debug=debug, index=index)
+                        debug=debug, index=index,
+                        inflight_slugs=guided_inflight_slugs(),
+                        failed_notes=guided_failed_notes())
                 else:
                     inflight = guided_inflight_slugs()
                     linkedin_done = phase_is_completed("linkedin", progress, manifest_path)
@@ -628,6 +651,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         profile_cache_dir=profile_cache_dir,
                         exclude=frozenset(exclude | inflight) or None,
                         retargets_in_flight=len(inflight),
+                        failed_notes=guided_failed_notes(),
                         auto_continue=not linkedin_done)
                 self.send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
                 return
@@ -750,7 +774,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                       verdicts_path=verdicts_path, facts_dir=facts_dir,
                                       enrichment_state=enrichment_state,
                                       job_running=_job_lock.locked(),
-                                      inflight_slugs=guided_inflight_slugs()))
+                                      inflight_slugs=guided_inflight_slugs(),
+                                      failed_notes=guided_failed_notes()))
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
@@ -879,6 +904,20 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     self.send_bytes(b"in-app jobs are disabled on this server",
                                     "text/plain", status=503)
                     return
+                # Fail the submit HERE when it can only end in a dead job: a
+                # guidance without a pasted URL needs Parallel research, and a
+                # missing key means every such job fails after the card has
+                # already advanced — the person silently loops back instead.
+                url_hint, _ = linkedin_url_in_guidance(guidance)
+                if not url_hint:
+                    load_env()
+                    if not (os.environ.get("PARALLEL_API_KEY") or "").strip():
+                        self.send_bytes(
+                            b"Re-research is unavailable on this install (no "
+                            b"PARALLEL_API_KEY). Paste the right LinkedIn URL "
+                            b"instead \xe2\x80\x94 that applies directly.",
+                            "text/plain", status=503)
+                        return
                 with mutation_lock:
                     hit = candidate_in_snapshot(pub, prefer_slug=parent_slug) if pub else None
                     if hit is not None:
@@ -918,6 +957,12 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                             str(c.get("pub") or "").strip().lower()
                             for c in target_parent.get("candidates") or []
                             if c.get("pub") and not c.get("synthetic")})),
+                        synthetic_pubs=tuple(sorted({
+                            str(c.get("pub") or "").strip().lower()
+                            for c in target_parent.get("candidates") or []
+                            if c.get("pub") and c.get("synthetic")})),
+                        queue_slug=str(target_parent.get("slug") or parent_slug),
+                        submitted_at=now_iso(),
                         match_emails=tuple(
                             str(value) for value in target_candidate.get("match_emails") or []),
                         match_phones=tuple(
@@ -1239,6 +1284,8 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                     confirm_threshold, detach_threshold)
                                 sibling["action"] = "detach"
                                 sibling["approved"] = "yes"
+                                sibling["new_url"] = ""
+                            resolved_pubs.append(sibling_pub)
                         # Thinner synthetic duplicates pruned from the display model
                         # still hold pending gates in synthetic-people.csv — settle
                         # them with the parent so no row stays undecided forever.
@@ -1248,8 +1295,6 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                                     synthetic_path, str(pruned_pub).strip().lower(), "detach")
                             except ValueError:
                                 pass
-                                sibling["new_url"] = ""
-                            resolved_pubs.append(sibling_pub)
                         # Carry the UNION of every candidate's contacts (kept + withdrawn
                         # siblings) onto the KEPT identity, so a withdrawn sibling's real
                         # email/phone is never lost. No-op for a single-candidate parent.
@@ -1281,6 +1326,21 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 self.send_bytes(str(exc).encode("utf-8"), "text/plain; charset=utf-8",
                                 status=400)
                 return
+            decide_note = (form.get("note") or [""])[0].strip()[:2000]
+            if decide_note and decision == "detach":
+                # A Skip's optional why-note rides the decision POST (the same
+                # contract as the worth note; only the Skip UI sends one, and
+                # Skip decides `detach`): auto-file it with the person's
+                # context, fire-and-forget — never a UI error if it can't go out.
+                try:
+                    feedback_request = build_feedback_request(
+                        target_parent, dict(target_candidate),
+                        action="skip", comment=decide_note)
+                    threading.Thread(
+                        target=post_feedback_quietly, args=(feedback_request,),
+                        name="skip-feedback", daemon=True).start()
+                except SystemExit as exc:
+                    print(f"[feedback] skipped: {exc}", file=sys.stderr, flush=True)
             notify_agent()
             self.send_json(payload)
 
