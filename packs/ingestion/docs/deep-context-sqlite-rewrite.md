@@ -23,6 +23,13 @@ The initial rewritten runtime targets about 5,000 production Python lines. It
 may temporarily approach 7,000 during cutover, but it is not done until the old
 paths are deleted and the runtime is moving toward the 5,000-line shape.
 
+Long LLM prompts are assets, not implementation LOC. Move them into named
+`prompts/*.txt` files, one prompt/template per concern, and keep Python limited
+to small loaders, interpolation, schemas, and policy. Prompt text is excluded
+from the 5,000-line Python budget; prompt-loading and prompt-selection code is
+included. Use YAML only when a prompt genuinely needs structured metadata or a
+literal rule table—do not add a YAML dependency merely to hold prose.
+
 ## Rule zero
 
 This is one user running one local webserver and one pipeline command at a
@@ -230,7 +237,8 @@ Required gates:
 - user click latency is measured on the complete domain transaction, not an
   isolated insert;
 - production Python trends toward 5,000 lines, the webserver is below 1,000,
-  and the focused suite is roughly 100-200 tests.
+  and the focused suite is roughly 100-200 tests. Prompt `.txt` assets are
+  reported separately from Python LOC.
 
 Reference snapshot from `/Users/arthur/workspace/powerpacks-jake-mirror` on
 2026-08-05 (diagnostic only; parity tests compare keys dynamically when the
@@ -251,3 +259,4 @@ exact mirror is present):
 - cached in-memory parent models that must be patched after writes;
 - ledgers, run IDs, pending-export flags, writer locks, and recovery ceremonies;
 - keeping old code beside new code after the new path owns the behavior.
+- embedding hundreds of lines of prompt prose inside Python modules.
