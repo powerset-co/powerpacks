@@ -187,6 +187,8 @@ class LinkRow:
     machine_confidence: float | None = None
     machine_reason: str | None = None
     machine_judgment: str | None = None
+    machine_proposed_url: str | None = None
+    machine_proposed_public_identifier: str | None = None
     authoritative_detach: int = 0
     candidate_origin: int = 0
     raw_import: int = 0
@@ -355,6 +357,7 @@ CREATE TABLE links (
   machine_action TEXT CHECK (machine_action IS NULL OR machine_action IN {_ACTIONS}),
   machine_approved TEXT CHECK (machine_approved IS NULL OR machine_approved IN {_APPROVALS}),
   machine_confidence REAL, machine_reason TEXT, machine_judgment TEXT,
+  machine_proposed_url TEXT, machine_proposed_public_identifier TEXT,
   authoritative_detach INTEGER NOT NULL DEFAULT 0 CHECK (authoritative_detach IN (0, 1)),
   candidate_origin INTEGER NOT NULL DEFAULT 0 CHECK (candidate_origin IN (0, 1)),
   raw_import INTEGER NOT NULL DEFAULT 0 CHECK (raw_import IN (0, 1)),
@@ -368,6 +371,8 @@ CREATE TABLE links (
   source TEXT, updated_at TEXT,
   UNIQUE (row_key, parent_id),
   FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE,
+  CHECK ((machine_action = 'retarget') OR
+         (machine_proposed_url IS NULL AND machine_proposed_public_identifier IS NULL)),
   CHECK ((decision_action = 'retarget') OR
          (replacement_url IS NULL AND replacement_public_identifier IS NULL))
 );

@@ -270,17 +270,25 @@ class Db:
     def save_guidance(self, row: GuidanceRow) -> None:
         self._write("guidance", row)
 
-    def save_job(self, row: JobRow) -> None:
-        self._write("jobs", row)
+    def save_job(self, row: JobRow, *, conn: sqlite3.Connection | None = None) -> None:
+        self._write("jobs", row, conn)
 
-    def save_stage(self, row: StageStateRow) -> None:
-        with self.connect() as conn:
-            current = conn.execute(
+    def save_stage(
+        self, row: StageStateRow, *, conn: sqlite3.Connection | None = None,
+    ) -> None:
+        def save(target: sqlite3.Connection) -> None:
+            current = target.execute(
                 "SELECT selection_fingerprint FROM stage_state WHERE stage=?", (row.stage,)
             ).fetchone()
-            conn.execute(_UPSERTS["stage_state"], asdict(row))
+            target.execute(_UPSERTS["stage_state"], asdict(row))
             if current and current[0] != row.selection_fingerprint:
-                conn.execute("DELETE FROM spend_approvals WHERE stage=?", (row.stage,))
+                target.execute("DELETE FROM spend_approvals WHERE stage=?", (row.stage,))
+
+        if conn is not None:
+            save(conn)
+        else:
+            with self.connect() as owned:
+                save(owned)
 
     def approve_spend(self, row: SpendApprovalRow) -> None:
         with self.connect() as conn:
@@ -405,6 +413,9 @@ class Db:
                 "source": link["decision_source"] or link["source"],
                 "updated_at": link["decided_at"] or link["updated_at"],
             }
+            if link["decision_action"] is None and link["machine_action"] == "retarget":
+                values["new_linkedin_url"] = link["machine_proposed_url"]
+                values["new_public_identifier"] = link["machine_proposed_public_identifier"]
             row.update({key: "" if value is None else str(value) for key, value in values.items()})
             out[link["row_key"]] = row
         for parent in self.query("SELECT * FROM parents"):

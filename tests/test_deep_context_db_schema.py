@@ -131,6 +131,29 @@ class DeepContextSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(StoreError, "already has a human decision"):
             self.db.settle_identity("candidate-1", ReviewAction.DETACH.value)
 
+    def test_machine_retarget_proposal_is_separate_from_human_replacement(self) -> None:
+        self.parent()
+        self.db.project_candidate(LinkRow(
+            "candidate-1", "parent-1", "candidate-1", "pub",
+            machine_action=ReviewAction.RETARGET.value,
+            machine_proposed_url="https://www.linkedin.com/in/proposed",
+            machine_proposed_public_identifier="proposed",
+        ))
+        self.db.settle_identity(
+            "candidate-1", ReviewAction.RETARGET.value,
+            replacement_url="https://www.linkedin.com/in/chosen",
+            replacement_public_identifier="chosen",
+        )
+        self.db.project_candidate(LinkRow(
+            "candidate-1", "parent-1", "candidate-1", "pub",
+            machine_action=ReviewAction.RETARGET.value,
+            machine_proposed_url="https://www.linkedin.com/in/new-proposal",
+            machine_proposed_public_identifier="new-proposal",
+        ))
+        row = self.db.query("SELECT * FROM links WHERE row_key='candidate-1'")[0]
+        self.assertEqual(row["machine_proposed_public_identifier"], "new-proposal")
+        self.assertEqual(row["replacement_public_identifier"], "chosen")
+
     def test_synthetic_profile_has_one_candidate_owned_gate(self) -> None:
         self.parent()
         self.candidate("synthetic-1", kind="synthetic")
@@ -196,6 +219,18 @@ class DeepContextSchemaTests(unittest.TestCase):
                 "bad", JobKind.ENRICHMENT.value, JobStatus.RUNNING.value,
                 completed_count=2, total_count=1,
             ))
+
+    def test_job_and_stage_can_join_one_projector_transaction(self) -> None:
+        with self.db.connect() as conn:
+            self.db.save_stage(StageStateRow(
+                "enrichment", StageStatus.RUNNING.value, "selection:v1"
+            ), conn=conn)
+            self.db.save_job(JobRow(
+                "enrichment", JobKind.ENRICHMENT.value, JobStatus.RUNNING.value,
+                selection_fingerprint="selection:v1", total_count=2,
+            ), conn=conn)
+        self.assertEqual(self.db.query("SELECT status FROM stage_state")[0][0], "running")
+        self.assertEqual(self.db.query("SELECT total_count FROM jobs")[0][0], 2)
 
     def test_settlement_derives_all_parent_siblings(self) -> None:
         self.parent()
