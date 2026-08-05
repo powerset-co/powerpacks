@@ -116,6 +116,11 @@ class ReviewAction(StrEnum):
     DETACH = "detach"
     RETARGET = "retarget"
     EXCLUDE = "exclude"
+    # The name-match pass's proposal (reconcile_linkedin conflict tasks): a
+    # same-name first-degree candidate awaiting the human, always approved=''.
+    # Absent from the two stores the 2026-08-05 census measured — caught by
+    # the all-snapshots ingestion sweep the same day.
+    REVIEW = "review"
 
 
 class ApprovedState(StrEnum):

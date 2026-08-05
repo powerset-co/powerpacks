@@ -60,7 +60,10 @@ from packs.ingestion.primitives.deep_context.review_store import (
     write_override_rows,
 )
 
-SCHEMA_VERSION = 1
+# v2: ReviewAction.REVIEW (name-match proposals) + synthetic gate 'auto'
+# split into (value, approved). A version-mismatched db is DROPPED and
+# rebuilt — review.sqlite is derived state; the CSV export is the record.
+SCHEMA_VERSION = 2
 
 # review.csv stores llm_reject as free text; the closed set observed across
 # real stores plus the retired spam-screen value synthesis still scrubs.
@@ -233,7 +236,10 @@ CREATE TABLE IF NOT EXISTS decisions (
   CHECK ((kind = 'identity' AND value IN {_sql_in(ReviewAction)})
          OR (kind != 'identity' AND value IN {_sql_in(HumanWorth)})),
   CHECK ((kind = 'identity' AND approved IN {_sql_in(ApprovedState)})
-         OR (kind != 'identity' AND approved = ''))
+         OR (kind = 'worth' AND approved = '')
+         -- synthetic gate: the CSV cell conflates outcome and actor
+         -- ('auto' == machine-standing yes); the split lives here
+         OR (kind = 'synthetic_gate' AND approved IN ('auto', 'yes')))
 );
 """
 
@@ -261,8 +267,15 @@ class ReviewDb:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.connect():
-            pass  # fail early: creates the file and the schema
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            if row is not None and row["value"] != str(SCHEMA_VERSION):
+                # Derived state on an old schema: drop and let the next import
+                # rebuild (IF NOT EXISTS keeps old CHECKs otherwise).
+                for table in ("links", "parents", "decisions", "meta"):
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")
+                conn.executescript(SCHEMA_DDL)
 
     @contextmanager
     def connect(self):
@@ -513,12 +526,21 @@ class ReviewDb:
                 if not pub:
                     errors.append("synthetic-people.csv: approved gate on a row without public_identifier")
                     continue
-                if approved not in set(HumanWorth):
+                # The CSV cell conflates outcome and actor: yes/no are human,
+                # 'auto' is the completeness gate's machine-standing keep
+                # (assemble_synthetic_profile). Split into (value, approved).
+                if approved == "auto":
+                    gates.append(DecisionRow(
+                        kind=DecisionKind.SYNTHETIC_GATE.value, target=pub,
+                        value=HumanWorth.YES.value, approved="auto",
+                    ))
+                elif approved in set(HumanWorth):
+                    gates.append(DecisionRow(
+                        kind=DecisionKind.SYNTHETIC_GATE.value, target=pub,
+                        value=approved, approved="yes",
+                    ))
+                else:
                     errors.append(f"synthetic:{pub}: unknown approved '{approved}'")
-                    continue
-                gates.append(DecisionRow(
-                    kind=DecisionKind.SYNTHETIC_GATE.value, target=pub, value=approved,
-                ))
         return gates, errors
 
     # -- export ------------------------------------------------------------
@@ -583,9 +605,9 @@ class ReviewDb:
         if "approved" not in fieldnames:
             return 0
         gates = {
-            row["target"]: row["value"]
+            row["target"]: ("auto" if row["approved"] == "auto" else row["value"])
             for row in self.query(
-                "SELECT target, value FROM decisions WHERE kind = ?",
+                "SELECT target, value, approved FROM decisions WHERE kind = ?",
                 (DecisionKind.SYNTHETIC_GATE.value,),
             )
         }

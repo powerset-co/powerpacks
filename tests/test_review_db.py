@@ -127,6 +127,45 @@ class ReviewDbRoundTripTests(unittest.TestCase):
             writer.writerow({"id": "s1", "public_identifier": "synth-jordan-bravo", "full_name": "Jordan Bravo", "approved": approved})
             writer.writerow({"id": "s2", "public_identifier": "synth-casey", "full_name": "Casey Example", "approved": ""})
 
+    def test_live_vocabulary_from_snapshot_sweep_round_trips(self):
+        # The 2026-08-05 all-snapshots sweep caught two LIVE values the
+        # two-store census missed: action='review' (name-match proposals)
+        # and synthetic approved='auto' (completeness gate). Both must
+        # import and round-trip byte-identically.
+        rows = self.fixture_rows()
+        rows["jordan-bravo-2"] = blank_row(
+            public_identifier="jordan-bravo-2", action="review",
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo-2",
+            new_linkedin_url="https://www.linkedin.com/in/jordan-bravo-2",
+            new_public_identifier="jordan-bravo-2", confidence="0.970",
+            reason="unique first-degree name match",
+            person_id="candidate:email:casey@example.com",
+            source="deep-context-name-match", updated_at="2026-07-28T00:00:00Z")
+        write_fixture(self.review_csv, rows)
+        self.write_synthetic(approved="auto")
+        before = self.review_csv.read_bytes()
+        syn_before = self.synthetic_csv.read_bytes()
+        db = ReviewDb(self.dir / "review.sqlite")
+        db.import_stores(self.review_csv, self.synthetic_csv)
+        db.export_review_csv(self.dir / "export.csv")
+        db.export_synthetic_gates(self.synthetic_csv)
+        self.assertEqual((self.dir / "export.csv").read_bytes(), before)
+        self.assertEqual(self.synthetic_csv.read_bytes(), syn_before)
+        gate = db.query(
+            "SELECT value, approved FROM decisions WHERE kind='synthetic_gate' AND target='synth-jordan-bravo'")[0]
+        self.assertEqual((gate["value"], gate["approved"]), ("yes", "auto"))
+
+    def test_schema_version_mismatch_rebuilds(self):
+        write_fixture(self.review_csv, self.fixture_rows())
+        db = ReviewDb(self.dir / "review.sqlite")
+        db.import_stores(self.review_csv)
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE meta SET value = '0' WHERE key = 'schema_version'")
+        db2 = ReviewDb(self.dir / "review.sqlite")
+        self.assertEqual(db2.query("SELECT COUNT(*) AS n FROM links")[0]["n"], 0)
+        self.assertTrue(db2.needs_import(self.review_csv))
+
     def test_round_trip_is_byte_identical(self):
         write_fixture(self.review_csv, self.fixture_rows())
         self.write_synthetic()
