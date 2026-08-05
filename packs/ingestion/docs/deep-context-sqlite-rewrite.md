@@ -66,11 +66,32 @@ After bootstrap:
 - schema mismatch never drops the canonical database. Open it with a supported
   migration or fail with a clear error.
 
-Paid artifacts remain files. Parallel results, source bundles, facts JSONL,
-dossier Markdown, and profile-cache payloads are not regenerated or moved.
-SQLite stores their stable owner, path, fingerprint/status, and the parsed
-projection or JSON payload required by queries. Web views must not rediscover
-state by globbing those directories.
+Paid artifacts remain files. Parallel/enrichment workers finish by atomically
+writing their source bundles, raw results, facts JSONL, dossier Markdown, and
+profile-cache payloads. Those files are the durable evidence/cache and are not
+regenerated, moved, or stuffed wholesale into relational columns.
+
+At the end of each enrichment step, one explicit in-process projector parses
+the completed files and commits their queryable projection to SQLite together
+with the stable owner, artifact kind, path, content fingerprint, and projection
+status. This is a stage handoff, not a second runtime store:
+
+1. the worker atomically writes the artifact file;
+2. the projector parses and validates that completed artifact;
+3. one SQLite transaction upserts its projection and marks the fingerprint
+   projected;
+4. only then is the result visible as ready to the web application.
+
+Projection is idempotent by artifact kind + owner + content fingerprint. A
+retry of the same completed artifact is a no-op; a new fingerprint replaces
+the queryable projection without erasing human decisions. If projection fails,
+the artifact remains reusable and the stage reports the parse/projection error;
+the webserver does not attempt recovery or filesystem reconciliation.
+
+Runtime web views query SQLite only. A dossier/profile response may open the
+single artifact path selected by a SQLite row to return its body or image, but
+it must never glob directories, compare mtimes, parse enrichment outputs to
+decide state, or silently import files while serving a request.
 
 ## Product semantics
 
@@ -166,8 +187,9 @@ The database package should expose only what the product uses:
 
 - open/create a supported database;
 - explicit `import_legacy(...)` for a fresh database;
-- machine-stage upserts for facts, people/parents, candidates, synthetic
-  profiles, research projections, and job state;
+- explicit idempotent artifact projectors for facts, people/parents,
+  candidates, synthetic profiles, research results, dossier/profile snapshots,
+  and job state;
 - domain transactions: `set_worth`, `settle_identity`, `reset_identity`,
   `save_guidance`, and stage/spend state updates;
 - named reads: `worth_queue`, `linkedin_queue`, `siblings_of`,
@@ -209,8 +231,9 @@ calls them and reads their projected status from SQLite.
 4. Rewrite the webserver to use only those queries and transactions; delete the
    in-memory model, cached parent snapshots, file locks, mtime observers, and
    CSV decision paths in the same cutover.
-5. Move the remaining stage writers onto SQLite projections/upserts. Keep paid
-   raw artifacts at their current paths.
+5. Keep enrichment workers file-output-first, then call their explicit SQLite
+   projectors at successful stage handoff. Keep paid raw artifacts at their
+   current paths; do not teach the webserver to import them.
 6. Export the existing boundary files and prove downstream fan-in, realization,
    lookup, and directory outputs.
 7. Delete the old 8k-line test file and rebuild roughly 100-200 focused tests by
@@ -251,6 +274,8 @@ exact mirror is present):
 ## Explicitly rejected shapes
 
 - two runtime stores synchronized by mtimes;
+- enrichment workers writing only SQL and discarding their durable file output;
+- web requests globbing, parsing, or auto-projecting enrichment artifacts;
 - automatic schema drop/rebuild of the canonical DB;
 - CSV-shaped empty strings and pipe lists throughout query code;
 - generic polymorphic targets with no referential/domain validation;
