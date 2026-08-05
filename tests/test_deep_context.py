@@ -7175,7 +7175,7 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
         self.assertEqual(out, {"connections": 0, "promoted": 1, "demoted": 1,
-                               "siblings_settled": 0})
+                               "siblings_settled": 0, "retargets_promoted": 0})
         self.assertEqual(rows["jordan-bravo"]["approved"], "auto")
         self.assertEqual((rows["jordan-bravo-2"]["action"],
                           rows["jordan-bravo-2"]["approved"]), ("detach", "auto"))
@@ -7189,7 +7189,7 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
         self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 1,
-                               "siblings_settled": 0})
+                               "siblings_settled": 0, "retargets_promoted": 0})
         self.assertEqual((rows["jordan-doppel"]["action"],
                           rows["jordan-doppel"]["approved"]), ("detach", "auto"))
         self.assertEqual(rows["jordan-bravo"]["approved"], "auto")  # untouched
@@ -7204,7 +7204,7 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
             out = legacy.resolve_stored_identity_policy(review, idx)
             rows = reconcile.load_override_rows(review)
         self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 0,
-                               "siblings_settled": 0})
+                               "siblings_settled": 0, "retargets_promoted": 0})
         self.assertEqual(rows["jordan-bravo"]["approved"], "")
         self.assertEqual(rows["jordan-user"]["approved"], "no")
         self.assertEqual(rows["jordan-rt"]["action"], "retarget")
@@ -7229,7 +7229,7 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
             out = legacy.resolve_stored_identity_policy(review, idx, people)
             rows = reconcile.load_override_rows(review)
         self.assertEqual(out, {"connections": 1, "promoted": 0, "demoted": 1,
-                               "siblings_settled": 0})
+                               "siblings_settled": 0, "retargets_promoted": 0})
         self.assertEqual((rows["jordan-bravo"]["action"],
                           rows["jordan-bravo"]["approved"]), ("verify", "auto"))
         self.assertEqual((rows["jordan-doppel"]["action"],
@@ -7243,7 +7243,79 @@ class StoredIdentityPolicyScrubTests(unittest.TestCase):
             legacy.resolve_stored_identity_policy(review, idx)
             second = legacy.resolve_stored_identity_policy(review, idx)
         self.assertEqual(second, {"connections": 0, "promoted": 0, "demoted": 0,
-                                  "siblings_settled": 0})
+                                  "siblings_settled": 0, "retargets_promoted": 0})
+
+    # --- rule (5): judge-confirmed retarget proposals auto-apply at the bar ---
+
+    def _retarget_store(self, d, rows_spec):
+        """rows_spec: (pub, approved, confidence, llm_reject, pid). Every row is a
+        retarget with a proposed URL, mirroring what upsert_retargets writes."""
+        review, idx = self._write(
+            d, [(pub, "retarget", approved, conf, pid)
+                for pub, approved, conf, _reject, pid in rows_spec])
+        rows = reconcile.load_override_rows(review)
+        for pub, _approved, _conf, reject, _pid in rows_spec:
+            rows[pub]["new_linkedin_url"] = f"https://www.linkedin.com/in/{pub}-found"
+            rows[pub]["new_public_identifier"] = f"{pub}-found"
+            rows[pub]["llm_reject"] = reject
+        reconcile.write_override_rows(review, rows)
+        return review, idx
+
+    def test_judge_confirmed_retarget_promotes_at_detach_bar(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._retarget_store(d, [
+                ("jordan-found", "", 0.90, "", "pid-a")])
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out["retargets_promoted"], 1)
+        self.assertEqual((rows["jordan-found"]["action"],
+                          rows["jordan-found"]["approved"]), ("retarget", "auto"))
+
+    def test_sub_bar_confirm_stays_pending(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._retarget_store(d, [
+                ("jordan-soft", "", 0.82, "", "pid-a")])
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out["retargets_promoted"], 0)
+        self.assertEqual(rows["jordan-soft"]["approved"], "")
+
+    def test_judge_rejected_never_applies(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._retarget_store(d, [
+                ("jordan-reject", "", 0.99, "yes", "pid-a")])
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out["retargets_promoted"], 0)
+        self.assertEqual(rows["jordan-reject"]["approved"], "")
+
+    def test_human_decisions_untouched_by_promotion(self):
+        with tempfile.TemporaryDirectory() as d:
+            # A human already answered this person on a sibling row: the
+            # pending proposal must NOT auto-apply over their head.
+            review, idx = self._write(d, [
+                ("jordan-said-no", "detach", "no", 0.99, "pid-a")])
+            rows = reconcile.load_override_rows(review)
+            rows["jordan-prop"] = {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                                   "public_identifier": "jordan-prop",
+                                   "action": "retarget", "approved": "",
+                                   "confidence": "0.95", "person_id": "pid-a",
+                                   "new_linkedin_url": "https://www.linkedin.com/in/jordan-prop-found",
+                                   "new_public_identifier": "jordan-prop-found"}
+            reconcile.write_override_rows(review, rows)
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = reconcile.load_override_rows(review)
+        self.assertEqual(out["retargets_promoted"], 0)
+        self.assertEqual(rows["jordan-said-no"]["approved"], "no")
+        self.assertEqual(rows["jordan-prop"]["approved"], "")
+
+    def test_promotion_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            review, idx = self._retarget_store(d, [
+                ("jordan-found", "", 0.90, "", "pid-a")])
+            legacy.resolve_stored_identity_policy(review, idx)
+            second = legacy.resolve_stored_identity_policy(review, idx)
+        self.assertEqual(second["retargets_promoted"], 0)
 
 
 _SYNTH_COLUMNS = ["id", "public_identifier", "full_name", "headline",
@@ -7318,7 +7390,7 @@ class HalfDecidedParentSettleTests(unittest.TestCase):
                 gates = {r["public_identifier"]: r["approved"]
                          for r in csv.DictReader(fh)}
         self.assertEqual(out, {"connections": 0, "promoted": 0, "demoted": 0,
-                               "siblings_settled": 3})
+                               "siblings_settled": 3, "retargets_promoted": 0})
         # pending siblings settle as a link-level No, exactly like /decide
         self.assertEqual((rows["jordan-bravo-2"]["action"],
                           rows["jordan-bravo-2"]["approved"]), ("detach", "yes"))
@@ -7362,7 +7434,7 @@ class HalfDecidedParentSettleTests(unittest.TestCase):
             second = legacy.resolve_stored_identity_policy(review, idx, None, synth)
             self.assertEqual(first["siblings_settled"], 2)
             self.assertEqual(second, {"connections": 0, "promoted": 0,
-                                      "demoted": 0, "siblings_settled": 0})
+                                      "demoted": 0, "siblings_settled": 0, "retargets_promoted": 0})
             self.assertEqual(review.read_bytes(), review_bytes)
             self.assertEqual(synth.read_bytes(), synth_bytes)
 

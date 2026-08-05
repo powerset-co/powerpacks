@@ -833,11 +833,15 @@ def research_reject_fields(verdict: dict[str, Any], confirm_threshold: float) ->
 
     A judge rejection (wrong_person, or anything not a confident confirm) marks the row
     `llm_reject=yes` + reason so the human still sees WHY — the row is never deleted. A confident
-    `confirmed` leaves the columns clear (the retarget stands for the human to approve)."""
+    `confirmed` leaves the columns clear (the retarget stands) AND carries the JUDGE's confidence
+    as the proposal `confidence` — replacing the research guess through the same
+    `proposal.update(...)` every caller already does — so the stored promotion rule
+    (resolve_stored_identity_policy rule (5)) reads the judge's bar, not the researcher's."""
     v = str(verdict.get("verdict") or "").strip().lower()
     conf = float(verdict.get("confidence") or 0)
     if v == "confirmed" and conf >= confirm_threshold:
-        return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": ""}
+        return {"llm_reject": "", "llm_reject_confidence": "", "llm_reject_reason": "",
+                "confidence": f"{conf:.3f}"}
     reason = verdict.get("reason") or "deep-research proposal not corroborated by the dossier"
     return {"llm_reject": "yes", "llm_reject_confidence": f"{conf:.3f}", "llm_reject_reason": reason}
 
