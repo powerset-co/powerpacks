@@ -1,8 +1,0 @@
-{
-  "api_base": null,
-  "default_set": null,
-  "error": "missing required Powerset API config: set one of POWERPACKS_API_URL, POWERSET_API_URL, POWERPACKS_SEARCH_API_URL, POWERPACKS_MCP_URL. Copy packs/powerset/templates/env.powerset.example to .env for Powerset-hosted use.",
-  "generated_at": "2026-07-31T18:10:25Z",
-  "refreshed": false,
-  "sets": []
-}

@@ -32,15 +32,33 @@ Use the narrow path when the user names one:
   (Yes/No tabs, search, full dossier + LinkedIn pane). A stage word opens the
   staged workflow there directly: `$deep-context review linkedin` ->
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
-  the server's `--stage` flag. `review <stage>` RESTARTS a running review
-  server so the UI always serves current code (review state is file-driven;
-  nothing is lost), then ALWAYS runs the self-heal pass before serving (legacy
-  scrubs + fresh-fetch re-judge of judge-skipped LinkedIn cards + free
-  dead-link termination; a RapidAPI fetch per healed candidate plus ~cents of
-  OpenAI judging, no approval stop — invoking review is the consent). If the
-  live server reports in-flight enrichment or guided re-research jobs it is
-  reused instead (a restart would kill that paid work) and the heal defers;
-  pass `--force-restart` to restart anyway.
+  the server's `--stage` flag. `review <stage>` (and bare `review`) always
+  runs one fixed order: (1) SELF-HEAL first, before touching the server, with
+  its progress visible (legacy scrubs + fresh-fetch re-judge of judge-skipped
+  LinkedIn cards + free dead-link termination; a RapidAPI fetch per healed
+  candidate plus ~cents of OpenAI judging, no approval stop — invoking review
+  is the consent); (2) RESTART the review server — stop any running one
+  (review state is file-driven; nothing is lost), wait for the session-lock
+  release, then serve without auto-opening a browser; (3) OPEN the staged UI
+  as an explicit final step — the wrapper polls the fresh server's /healthz,
+  and prints the URL — the wrapper never launches a browser; surface the
+  printed URL to the user (open it only if they ask). Before running `review <stage>`, create a
+  task list in your harness's todo/task tool with the flow's definitive steps
+  — (1) Self-heal, (2) restart server, (3) open the
+  staged UI, plus any follow-ups the heal surfaces (e.g. a recovery batch
+  offer) — and check each off as the wrapper's output confirms it, STRICTLY IN
+  ORDER — the follow-ups item resolves only after the UI is open, even
+  when the heal was a no-op — so the user always sees where the flow is
+  and nothing is silently skipped.
+  NEVER open, navigate to, or surface the review URL before the wrapper
+  prints its `review UI:` line — the wrapper owns the browser; the harness
+  only mirrors checklist state from wrapper output (the heal step completes
+  only when the heal summary JSON line is seen, the open step only when
+  `review UI:` appears). Nothing is deferred: in-flight
+  enrichment or guided re-research only prints a warning before the restart —
+  both are durable (identical guided resubmits reuse research free;
+  enrichment resumes from its manifest). `--force-restart` is accepted for
+  compatibility but is a no-op — restart is always unconditional.
 - `$deep-context heal` -> run only `bin/deep-context heal`: the same
   self-heal pass on its own, idempotent (`--cap N` runaway backstop only).
 - `$deep-context refresh`, "resynthesize and show me the directory" -> run only
@@ -114,7 +132,7 @@ Create a visible plan with these exact phases and keep it current:
 [Learn] Build and validate deep context results
 [Combine] Resolve people with multiple emails and/or phone numbers
 [Combine] Build one record per person
-[Heal] Self-heal judge-skipped and dead LinkedIn links (runs inside review)
+[Heal] Self-heal (runs inside review)
 [People] Wait for review to complete
 [People] Review people worth adding to network
 [Match] Confirm imported LinkedIn matches the person
@@ -310,14 +328,16 @@ Launch the local UI once in a background terminal:
 bin/deep-context review --stage worth --fresh
 ```
 
-`review` first restarts any review server already running on the port so the UI
-always serves the current code (state is file-driven; nothing is lost). Never
-skip the launch because "a server is already up" — a leftover server keeps
-serving the stale Python it loaded at startup.
+Every `review <stage>` boot runs the SELF-HEAL pass (`bin/deep-context heal`)
+FIRST — before touching the server, with its output streaming, so boot never
+looks hung and stale cards fix themselves. It then RESTARTS the review server
+(stops any running one, waits for the session-lock release, serves) so the UI
+always serves the current code (state is file-driven; nothing is lost), and
+finally OPENS the staged UI once the fresh server answers /healthz. Never skip
+the launch because "a server is already up" — a leftover server keeps serving
+the stale Python it loaded at startup.
 
-Every `review <stage>` boot then runs the SELF-HEAL pass (`bin/deep-context
-heal`) as a definitive named step before serving, so boot never looks hung and
-stale cards fix themselves: (1) the legacy stored-decision scrubs, (2) a FRESH
+The self-heal pass: (1) the legacy stored-decision scrubs, (2) a FRESH
 profile fetch plus re-judge for every undecided LinkedIn card the judge
 previously skipped as "no usable profile" (the normal judge and write path, so
 confirm/detach bars auto-apply), and (3) free termination of confirmed-dead

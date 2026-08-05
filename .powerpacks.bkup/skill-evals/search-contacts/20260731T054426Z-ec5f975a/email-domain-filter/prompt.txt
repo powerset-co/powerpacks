@@ -1,8 +1,0 @@
-Use the Powerpacks `search-contacts` skill to handle the following user request.
-
-First READ the skill file at /Users/arthur/.claude/jobs/b4c47207/tmp/wt-directory/packs/contacts/skills/search-contacts/SKILL.md and treat that file as the authoritative version of the skill. If a copy of this skill is installed in your environment, ignore it — the repo file may be newer.
-
-User request:
-Search my contacts for people with powerset.co emails.
-
-Walk through the skill's workflow as it applies to this request. Reference the exact primitive / tool names from the skill body. If a step requires approval, surface the approval prompt instead of executing it.
