@@ -199,7 +199,25 @@ the **jake-srv-new mirror copy** under old and new code, hash the ordered
 - [ ] **P1 read path**: `build_parents`/model read via `ReviewDb`; all writes still CSV. Gate: A/B queue hash identical (CSV read vs sqlite read).
 - [ ] **P2 write path**: `/decide`, `/worth`, retarget settle, judge-apply as transactions; export at decision commit + stage exit. Gate: mirror replay of a recorded decision log; final export diff = 0.
 - [ ] **P3 delete workarounds** (table in §4). Gate: full unittest suite + one real staged run against local data, outputs diffed vs previous run.
-- [ ] **P4 (out of scope here)**: outside writers move onto `ReviewDb`; CSV becomes export-only.
+- [ ] **P4 — the substrate decision (2026-08-05)**: SQL is the standing
+  substrate for pipeline stores, CSV survives only as an export baton where a
+  downstream consumer still reads one. Rationale: agent-development
+  ergonomics — queryable stores (`SELECT ... GROUP BY` replaces ad-hoc
+  csv+Counter scripts), self-describing schema (`PRAGMA table_info` beats
+  reading writer code), joins replace the hand-implemented grouping that
+  produced this month's fan-out bugs, and constraints catch generated-code
+  mistakes at write time. Stage OWNERSHIP is unchanged: each stage keeps its
+  directory + manifest; its durable output becomes tables in a stage-owned
+  sqlite file. No shared cross-stage database. Order: review store first
+  (P1–P3 above), then **deep-context goes 100% sqlite** (owner directive
+  2026-08-05: "just easier conceptually and in terms of maintenance") — the
+  stage's remaining sidecars (`verdicts.jsonl`, `index.json`,
+  synthetic-people profile columns, `facts/*.jsonl`) become tables in the
+  stage db, CSV/JSONL kept only as export batons for downstream consumers —
+  then `merged/people.csv` + `directory.csv` (fan-in gains cross-row
+  constraints, e.g. unique normalized slug — the check that would have
+  caught the percent-decoding fork), then discover/import outputs stage by
+  stage, each consumer ported before its CSV baton is dropped.
 
 ## 6. Risks / open questions
 
