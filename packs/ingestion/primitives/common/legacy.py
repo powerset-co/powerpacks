@@ -12,6 +12,9 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-08-05 (ghost rows): rule (4) also settles pending message-linkedin:*
+    keyed rows with a BLANK action (no-pub "ghost" candidates' rows, invisible
+    to the pub-keyed fan-outs) once their group holds a human decision.
   2026-08-05: deep-context — `resolve_stored_identity_policy` rule (5): a
     group with no standing identity and no human touch auto-applies its single
     judge-confirmed retarget proposal at/above the detach bar (0.85) — batch
@@ -542,7 +545,13 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
     for key, row in rows.items():
         if is_parent_worth_row(row, key):
             continue
-        if (row.get("action") or "").strip().lower() not in identity_actions:
+        # GHOST rows: a no-pub candidate's row is keyed by its retired
+        # message-linkedin:* person id and can sit with a BLANK action
+        # (synthesis wrote the stub, no judge ever acted on it). They are
+        # settle targets too — invisible to the pub fan-outs, they otherwise
+        # keep an already-answered parent pending forever.
+        if ((row.get("action") or "").strip().lower() not in identity_actions
+                and not key.startswith(MESSAGE_LINKEDIN_PREFIX)):
             continue
         person_id = (row.get("person_id") or "").strip().lower()
         group = slug_of_person.get(person_id) or person_id or key

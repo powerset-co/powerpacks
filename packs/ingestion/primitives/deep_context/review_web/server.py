@@ -940,7 +940,10 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     if pub.strip().lower().startswith("synth-"):
                         pub = (synthetic_worth_key(synthetic_path, pub)
                                or str((target_parent.get("person_ids") or [""])[0])).strip()
-                    key = (pub or str((target_parent.get("person_ids") or [""])[0])).strip()
+                    # A ghost candidate (no pub) still has a review row — key the
+                    # retarget on its row_key so the apply settles the actual row.
+                    key = (pub or str(target_candidate.get("row_key") or "")
+                           or str((target_parent.get("person_ids") or [""])[0])).strip()
                     if not key:
                         self.send_bytes(b"person has no review key", "text/plain", status=400)
                         return
@@ -953,14 +956,18 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                         person_ids=tuple(
                             str(value) for value in target_parent.get("person_ids") or []),
                         linkedin_url=str(target_candidate.get("url") or ""),
+                        # Settlement iterates REVIEW ROW KEYS: row_key covers
+                        # ghost candidates (no pub) whose row is person-id-keyed.
                         candidate_pubs=tuple(sorted({
-                            str(c.get("pub") or "").strip().lower()
+                            str(c.get("row_key") or c.get("pub") or "").strip().lower()
                             for c in target_parent.get("candidates") or []
-                            if c.get("pub") and not c.get("synthetic")})),
+                            if (c.get("row_key") or c.get("pub"))
+                            and not c.get("synthetic")})),
                         synthetic_pubs=tuple(sorted({
-                            str(c.get("pub") or "").strip().lower()
+                            str(c.get("row_key") or c.get("pub") or "").strip().lower()
                             for c in target_parent.get("candidates") or []
-                            if c.get("pub") and c.get("synthetic")})),
+                            if (c.get("row_key") or c.get("pub"))
+                            and c.get("synthetic")})),
                         queue_slug=str(target_parent.get("slug") or parent_slug),
                         submitted_at=now_iso(),
                         match_emails=tuple(
@@ -1253,10 +1260,16 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                     # wrong_person >= bar, approved still '') are settled here too —
                     # leaving them unwritten kept them eligible for paid re-research.
                     resolved_pubs = [pub_lower]
+                    target_row_key = str(target_candidate.get("row_key")
+                                         or pub_lower).strip().lower()
                     if decision in {"keep", "fix", "detach"}:
                         for sibling in target_parent.get("candidates") or []:
-                            sibling_pub = str(sibling.get("pub") or "").strip().lower()
-                            if not sibling_pub or sibling_pub == pub_lower:
+                            # Settle by the sibling's REVIEW ROW KEY: a ghost
+                            # candidate has no pub, but its person-id-keyed row
+                            # must settle too or the parent cycles back pending.
+                            sibling_pub = str(sibling.get("row_key")
+                                              or sibling.get("pub") or "").strip().lower()
+                            if not sibling_pub or sibling_pub in {pub_lower, target_row_key}:
                                 continue
                             sibling_approved = str(sibling.get("approved") or "").strip().lower()
                             if sibling.get("synthetic"):

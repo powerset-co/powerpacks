@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 
@@ -7515,6 +7516,217 @@ class MixedParentSingleDecisionQueueTests(unittest.TestCase):
                          for r in csv.DictReader(fh)}
             self.assertEqual(gates, {"synth-jordan-a": "no",
                                      "synth-jordan-b": "no"})
+
+
+class GhostRowSettleTests(unittest.TestCase):
+    """A GHOST candidate — a no-link verdict with an EMPTY candidate_key whose
+    review.csv row is keyed by its person id (message-linkedin:<hash>) — must
+    settle with its parent. The repro: every settle fan-out enumerated sibling
+    PUBS, a ghost has none, so one decision settled only the visible row and
+    the parent cycled back pending once per ghost row."""
+
+    GHOST = "message-linkedin:aaaabbbbccccdddd"
+
+    def _fixture(self, d):
+        base = Path(d)
+        for sub in ("facts", "parents", "dossiers", "cache", "research", "review"):
+            (base / sub).mkdir()
+        verdicts = base / "verdicts.jsonl"
+        records = [
+            {"parent_slug": "jordan-bravo-p", "name": "Jordan Bravo",
+             "person_ids": ["pid-1"], "candidate_key": "jordan-bravo",
+             "linkedin": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                          "full_name": "Jordan Bravo", "has_profile": True},
+             "verdict": {"verdict": "needs_review", "confidence": 0.5}},
+            # The ghost: candidate_key EMPTY, no LinkedIn — its review row is
+            # keyed by its message-linkedin person id, not a pub.
+            {"parent_slug": "jordan-bravo-p", "name": "Jordan Bravo",
+             "person_ids": [self.GHOST], "candidate_key": "", "no_link": True,
+             "linkedin": {}, "verdict": {"verdict": "", "confidence": 0.0}},
+        ]
+        verdicts.write_text(
+            "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+        review = base / "review.csv"
+        write_rows(review, {
+            "jordan-bravo": {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                             "public_identifier": "jordan-bravo",
+                             "action": "verify", "approved": "",
+                             "source": "deep-context-reconcile",
+                             "person_id": "pid-1",
+                             "linkedin_url": "https://www.linkedin.com/in/jordan-bravo"},
+            self.GHOST: {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                         "public_identifier": self.GHOST,
+                         "action": "", "approved": "",
+                         "source": "deep-context-synthesis",
+                         "person_id": self.GHOST},
+        })
+        (base / "index.json").write_text(json.dumps({
+            "parents": {"jordan-bravo-p": {"parent_id": "parent-1",
+                                           "children": ["c1", "c2"]}},
+            "slugs": {"c1": {"person_id": "pid-1"},
+                      "c2": {"person_id": self.GHOST}},
+            "by_email": {}, "by_phone": {}}), encoding="utf-8")
+        return base, verdicts, review
+
+    def _queue(self, base, verdicts, review):
+        parents_list, overrides = web_model.build_parents(verdicts, review)
+        web_model.extend_and_annotate(
+            parents_list, overrides, base / "synthetic-people.csv",
+            base / "facts", set(),
+            parents_dir=base / "parents", dossier_dir=base / "dossiers",
+            profile_cache_dir=base / "cache", research_dir=base / "research",
+            index_json=base / "index.json")
+        return web_rendering.linkedin_review_queue(parents_list)
+
+    @contextlib.contextmanager
+    def _serve(self, base, verdicts, review, guided_retargets=None):
+        handler = web_server.make_handler(
+            review, verdicts, base / "parents", base / "dossiers", 0.7, 0.85,
+            synthetic_path=base / "synthetic-people.csv",
+            facts_dir=base / "facts", people_csv=base / "people.csv",
+            manifest_path=base / "review" / "manifest.json",
+            enrichment_manifest_path=base / "enrich-manifest.json",
+            profile_cache_dir=base / "cache", run_jobs=False,
+            guided_retargets=guided_retargets)
+        server = web_server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server.server_address[1]
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def _post(self, port, path, fields):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            conn.request("POST", path,
+                         body="&".join(f"{k}={urllib.parse.quote(str(v))}"
+                                       for k, v in fields.items()),
+                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+            response = conn.getresponse()
+            return response.status, response.read().decode("utf-8")
+        finally:
+            conn.close()
+
+    def test_model_reads_ghost_decisions_from_its_row_key(self):
+        # The ghost candidate carries row_key = its person id, and its
+        # action/approved come from THAT row — the empty-pub lookup made every
+        # ghost permanently pending regardless of what its row said.
+        with tempfile.TemporaryDirectory() as d:
+            base, verdicts, review = self._fixture(d)
+            parents_list, _ = web_model.build_parents(verdicts, review)
+            cands = {str(c.get("row_key")): c
+                     for c in parents_list[0]["candidates"]}
+            self.assertEqual(set(cands), {"jordan-bravo", self.GHOST})
+            self.assertEqual(cands[self.GHOST]["pub"], "")
+            rows = load_rows(review)
+            rows[self.GHOST].update({"action": "detach", "approved": "yes"})
+            write_rows(review, rows)
+            parents_list, _ = web_model.build_parents(verdicts, review)
+            ghost = next(c for c in parents_list[0]["candidates"]
+                         if c["row_key"] == self.GHOST)
+            self.assertEqual(web_model.candidate_state(ghost), "detached")
+
+    def test_decide_keep_settles_ghost_sibling_and_parent_leaves_queue(self):
+        with tempfile.TemporaryDirectory() as d:
+            fixture = self._fixture(d)
+            base, verdicts, review = fixture
+            self.assertEqual(len(self._queue(*fixture)), 1)
+            with self._serve(base, verdicts, review) as port:
+                status, body = self._post(port, "/decide", {
+                    "pub": "jordan-bravo", "decision": "keep",
+                    "parent_slug": "jordan-bravo-p"})
+            self.assertEqual(status, 200, body)
+            self.assertIn(self.GHOST, json.loads(body)["resolved_pubs"])
+            rows = load_rows(review)
+            self.assertEqual((rows["jordan-bravo"]["action"],
+                              rows["jordan-bravo"]["approved"]), ("verify", "yes"))
+            self.assertEqual((rows[self.GHOST]["action"],
+                              rows[self.GHOST]["approved"]), ("detach", "yes"))
+            self.assertEqual(self._queue(*fixture), [])
+
+    def test_retarget_url_apply_settles_ghost_row_and_parent_leaves_queue(self):
+        # The /retarget endpoint must hand the queue REVIEW ROW KEYS (row_key
+        # covers the pub-less ghost), and the direct URL apply settles them.
+        with tempfile.TemporaryDirectory() as d:
+            fixture = self._fixture(d)
+            base, verdicts, review = fixture
+            captured: list[web_retargets.GuidedRetarget] = []
+            queue = web_retargets.RetargetQueue(
+                runner=lambda request, report:
+                    captured.append(request) or {"state": "applied", "detail": ""})
+            with mock.patch.object(web_server, "build_feedback_request",
+                                   side_effect=SystemExit("no feedback in tests")), \
+                 self._serve(base, verdicts, review,
+                             guided_retargets=queue) as port:
+                status, body = self._post(port, "/retarget", {
+                    "pub": "jordan-bravo", "parent_slug": "jordan-bravo-p",
+                    "guidance":
+                        "this is him https://www.linkedin.com/in/jordan-bravo-right"})
+                self.assertEqual(status, 200, body)
+                deadline = threading.Event()
+                for _ in range(500):
+                    if captured:
+                        break
+                    deadline.wait(0.01)
+            self.assertTrue(captured)
+            request = captured[0]
+            self.assertIn(self.GHOST, request.candidate_pubs)
+            result = web_retargets.run_guided_retarget(
+                request, review_path=review, people_csv=base / "people.csv",
+                facts_dir=base / "facts", raw_dir=base / "raw",
+                out_dir=base / "out", synthetic_path=base / "synthetic-people.csv",
+                use_llm=False)
+            self.assertEqual(result["state"], "applied")
+            rows = load_rows(review)
+            self.assertEqual((rows["jordan-bravo"]["action"],
+                              rows["jordan-bravo"]["approved"]), ("retarget", "yes"))
+            self.assertEqual((rows[self.GHOST]["action"],
+                              rows[self.GHOST]["approved"]), ("detach", "yes"))
+            self.assertEqual(self._queue(*fixture), [])
+
+    def test_scrub_reaches_stranded_ghost_row(self):
+        # A ghost row left pending (blank action) in a group the human already
+        # answered settles like the live fan-out; an undecided group's ghost
+        # is never touched.
+        stranded, control = self.GHOST, "message-linkedin:ffff000011112222"
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review = base / "review.csv"
+            idx = base / "index.json"
+            idx.write_text(json.dumps({"parents": {}, "slugs": {}}),
+                           encoding="utf-8")
+            write_rows(review, {
+                "jordan-bravo": {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                                 "public_identifier": "jordan-bravo",
+                                 "action": "verify", "approved": "yes",
+                                 "source": "deep-context-review",
+                                 "person_id": stranded},
+                stranded: {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                           "public_identifier": stranded,
+                           "action": "", "approved": "",
+                           "source": "deep-context-synthesis",
+                           "person_id": stranded},
+                control: {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                          "public_identifier": control,
+                          "action": "", "approved": "",
+                          "source": "deep-context-synthesis",
+                          "person_id": control},
+            })
+            out = legacy.resolve_stored_identity_policy(review, idx)
+            rows = load_rows(review)
+            self.assertEqual(out["siblings_settled"], 1)
+            self.assertEqual((rows[stranded]["action"], rows[stranded]["approved"],
+                              rows[stranded]["source"]),
+                             ("detach", "yes", "legacy-sibling-settle"))
+            self.assertEqual((rows[control]["action"],
+                              rows[control]["approved"]), ("", ""))
+            review_bytes = review.read_bytes()
+            second = legacy.resolve_stored_identity_policy(review, idx)
+            self.assertEqual(second["siblings_settled"], 0)
+            self.assertEqual(review.read_bytes(), review_bytes)
 
 
 class HealReviewTests(unittest.TestCase):

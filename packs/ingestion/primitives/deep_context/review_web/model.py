@@ -460,7 +460,7 @@ def load_synthetic_parents(path: Path, parents_dir: Path = PARENTS_DIR,
                 "person_ids": source_ids or [row.get("id") or pub],
                 "sources": _sources_of((row.get("source_channels") or "").split(",")),
                 "candidates": [{
-                    "pub": pub, "url": "", "full_name": name,
+                    "pub": pub, "row_key": pub, "url": "", "full_name": name,
                     "headline": row.get("headline") or "",
                     "profile_pic_url": "",
                     "experiences": _fmt_experiences(row.get("work_experiences") or ""),
@@ -642,6 +642,7 @@ def load_candidate_parents(facts_dir: Path, overrides: dict[str, dict[str, str]]
             "sources": _sources_of(source_channels),
             "candidates": [{
                 "pub": pid,  # candidates key review.csv on their person_id
+                "row_key": pid,
                 "profile_pub": proposed_pub,
                 "url": new_url if proposed else "", "full_name": name,
                 "headline": "",
@@ -893,9 +894,17 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
         ]
         raw_import_candidate = bool(r.get("no_link") and candidate_person_ids)
         worth_pub = candidate_person_ids[0].lower() if raw_import_candidate else pub
+        # The review.csv ROW KEY this candidate reads and settles under.
+        # Normally its pub, but a GHOST candidate (a no-link verdict with an
+        # EMPTY candidate_key) has none — its row is keyed by its person id
+        # (e.g. message-linkedin:<hash>). Reading decisions from the empty key
+        # made ghosts permanently pending and invisible to every settle fan-out.
+        row_key = worth_pub or next(
+            (str(pid or "").strip().lower() for pid in r.get("person_ids") or []
+             if str(pid or "").strip()), "")
         v = r.get("verdict") or {}
         li = r.get("linkedin") or {}
-        dec = overrides.get(worth_pub, {})
+        dec = overrides.get(row_key, {})
         action = str(dec.get("action") or "").strip().lower()
         approved = str(dec.get("approved") or "").strip().lower()
         new_url = str(dec.get("new_linkedin_url") or "").strip()
@@ -909,6 +918,7 @@ def build_parents(verdicts_path: Path, review_path: Path) -> tuple[list[dict[str
         import_candidate = raw_import_candidate and not proposed_retarget
         p["candidates"].append({
             "pub": worth_pub,
+            "row_key": row_key,
             "profile_pub": new_pub if proposed_retarget else pub,
             "url": new_url if proposed_retarget else li.get("linkedin_url", ""),
             # Never show the old/wrong profile's biography as if it described a
