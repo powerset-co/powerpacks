@@ -31,6 +31,13 @@ What this actually does, in order:
 Idempotent: judged rows carry a real verdict, terminated rows carry
 approved=auto, so the next run selects nothing, fetches nothing, and spends
 nothing.
+
+Session gate: standalone `bin/deep-context heal` refuses while a review server
+owns the review session (single-writer contract). `--pre-restart` — passed ONLY
+by the `review` verb — skips that gate: review heals FIRST (the old UI keeps
+serving while the pass runs), then immediately stops the server and boots a
+fresh one that re-reads disk, so the live server's in-memory model never
+outlives these writes.
 """
 from __future__ import annotations
 
@@ -495,13 +502,17 @@ class HealReview:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ensure_no_review_session("heal_review")
     parser = argparse.ArgumentParser(
         description="Self-heal pass before review serve: legacy scrubs, fresh-fetch + "
                     "re-judge of judge-skipped links, free dead-link termination.")
     parser.add_argument("--cap", type=int, default=HEAL_BATCH_CAP,
                         help="Runaway backstop on candidates per run (default %(default)s; not an approval gate)")
+    parser.add_argument("--pre-restart", action="store_true",
+                        help="Skip the no-review-session gate: the caller stops and restarts the "
+                             "review server immediately after this pass (bin/deep-context review only)")
     args = parser.parse_args(argv)
+    if not args.pre_restart:
+        ensure_no_review_session("heal_review")
     emit(HealReview(cap=args.cap).run())
     return 0
 
