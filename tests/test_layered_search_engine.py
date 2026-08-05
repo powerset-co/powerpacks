@@ -306,6 +306,335 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(candidate.hard_filter_evidence["validated"])
             self.assertEqual(result.hard_filter_validation["violation_count"], 0)
 
+    def test_shared_current_role_family_gate_protects_gtm_ranking(self):
+        engineering = CandidateRecord(
+            "engineering",
+            0.8,
+            hydrated_profile={
+                "positions": [{"is_current": True, "role_track": "Engineering", "seniority_band": "senior"}]
+            },
+        )
+        investor = CandidateRecord(
+            "investor",
+            0.9,
+            hydrated_profile={
+                "positions": [
+                    {"is_current": True, "role_track": "investing", "seniority_band": "senior"},
+                    {"is_current": False, "role_track": "Engineering", "seniority_band": "senior"},
+                ]
+            },
+        )
+        run_spec = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(seniority_bands=("senior",), is_current_role=True),
+        )
+        result = run_with_runner(
+            run_spec,
+            FakeRunner(records=(investor, engineering), supported=("seniority_bands", "is_current_role")),
+        )
+
+        self.assertEqual([row.person_id for row in result.frontier.candidates], ["engineering"])
+        self.assertEqual(result.hard_filter_validation["violation_count"], 1)
+        self.assertEqual(
+            result.hard_filter_validation["violations"][0]["reason_code"],
+            "current_role_family_mismatch",
+        )
+
+    def test_current_role_family_gate_is_conservative_and_branch_aware(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        concurrent = {
+            "positions": [
+                {"is_current": True, "role_track": "Finance"},
+                {"is_current": True, "role_track": "Engineering"},
+            ]
+        }
+        unknown = {"positions": [{"is_current": True, "role_track": "Unmapped Hybrid"}]}
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(concurrent, target, ResolvedSources())["violations"],
+        )
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(unknown, target, ResolvedSources())["violations"],
+        )
+        semantic_only = replace(target, role=RoleIntent(bm25_queries=("backend infrastructure AI",)))
+        finance = {"positions": [{"is_current": True, "role_track": "Finance"}]}
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(finance, semantic_only, ResolvedSources())["violations"],
+        )
+        historical = replace(target, person_filters=PersonFilters(is_current_role=False))
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(finance, historical, ResolvedSources())["violations"],
+        )
+        company_union = replace(target, role=replace(target.role, search_mode="COMPANY_UNION"))
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(finance, company_union, ResolvedSources(), ("company_union",))["violations"],
+        )
+
+    def test_current_role_family_gate_preserves_target_hybrids_and_ambiguous_target_titles(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        partial = {
+            "positions": [
+                {"is_current": True, "role_track": "investing"},
+                {"is_current": True, "position_title": "Founding Engineer"},
+            ]
+        }
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(partial, target, ResolvedSources())["violations"],
+        )
+        for title in (
+            "Marketing Operations Manager",
+            "People Operations Manager",
+            "Financial Advisor",
+            "Air Traffic Controller",
+        ):
+            ambiguous = replace(target, role=RoleIntent(titles=(title,)))
+            self.assertNotIn(
+                "current_role_family_mismatch",
+                validation_findings(
+                    {"positions": [{"is_current": True, "role_track": "Engineering"}]},
+                    ambiguous,
+                    ResolvedSources(),
+                )["violations"],
+            )
+
+    def test_unmapped_concurrent_role_does_not_override_positive_mismatch_evidence(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        profile = {
+            "positions": [
+                {"is_current": True, "role_track": "investing"},
+                {"is_current": True, "position_title": "Sr Principal"},
+            ]
+        }
+        self.assertIn(
+            "current_role_family_mismatch",
+            validation_findings(profile, target, ResolvedSources())["violations"],
+        )
+
+    def test_current_role_family_gate_ignores_malformed_position_rows(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        profile = {
+            "positions": [
+                "malformed-row",
+                {"is_current": True, "role_track": "investing"},
+            ]
+        }
+
+        findings = validation_findings(profile, target, ResolvedSources())
+
+        self.assertEqual(findings["violations"], ("current_role_family_mismatch",))
+
+    def test_matching_structured_current_role_completes_missing_position_family(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        profile = {
+            "positions": [
+                {
+                    "is_current": True,
+                    "position_title": "Lead Technical Recruiter",
+                    "role_track": "",
+                },
+                {"is_current": True, "position_title": "Board Member", "role_track": "Education"},
+            ]
+        }
+        structured = {
+            "is_current": True,
+            "position_title": "Lead Technical Recruiter",
+            "role_track": "people_hr",
+            "role_ids": ["recruiter"],
+        }
+        self.assertIn(
+            "current_role_family_mismatch",
+            validation_findings(
+                profile, target, ResolvedSources(), structured=structured
+            )["violations"],
+        )
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(
+                {"positions": [profile["positions"][0]]},
+                target,
+                ResolvedSources(),
+                structured={**structured, "position_title": "Different Current Role"},
+            )["violations"],
+        )
+
+    def test_frontier_merge_preserves_role_evidence_across_summary_overlap(self):
+        role = CandidateRecord(
+            "same-person",
+            matched_position_ids=("role-position",),
+            source_lanes=("role",),
+            structured={
+                "position_id": "role-position",
+                "position_title": "Lead Technical Recruiter",
+                "company_id": "company-a",
+                "is_current": True,
+                "role_track": "people_hr",
+                "role_ids": ["recruiter"],
+            },
+        )
+        summary = CandidateRecord(
+            "same-person",
+            source_lanes=("summary",),
+            structured={
+                "position_title": None,
+                "role_track": None,
+                "role_ids": None,
+                "is_current": None,
+            },
+        )
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        profile = {
+            "positions": [{
+                "position_id": "role-position",
+                "position_title": "Lead Technical Recruiter",
+                "company_id": "company-a",
+                "is_current": True,
+            }]
+        }
+        for records in ((role, summary), (summary, role)):
+            merged = CandidateFrontier.merge(records).candidates[0]
+            self.assertIn(
+                "current_role_family_mismatch",
+                validation_findings(
+                    profile, target, ResolvedSources(), structured=merged.structured
+                )["violations"],
+            )
+
+    def test_frontier_merge_preserves_concurrent_target_role_in_any_order(self):
+        target_role = CandidateRecord(
+            "same-person",
+            matched_position_ids=("engineering-position",),
+            structured={
+                "position_id": "engineering-position",
+                "position_title": "Founding Engineer",
+                "company_id": "company-a",
+                "is_current": True,
+                "role_track": "engineering",
+                "role_ids": ["software_engineer"],
+            },
+        )
+        investor_role = CandidateRecord(
+            "same-person",
+            matched_position_ids=("investor-position",),
+            structured={
+                "position_id": "investor-position",
+                "position_title": "Investor",
+                "company_id": "company-b",
+                "is_current": True,
+                "role_track": "investing",
+                "role_ids": ["angel_investor"],
+            },
+        )
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        profile = {
+            "positions": [
+                {
+                    "position_id": "engineering-position",
+                    "position_title": "Founding Engineer",
+                    "company_id": "company-a",
+                    "is_current": True,
+                },
+                {
+                    "position_id": "investor-position",
+                    "position_title": "Investor",
+                    "company_id": "company-b",
+                    "is_current": True,
+                },
+            ]
+        }
+        for records in ((target_role, investor_role), (investor_role, target_role)):
+            merged = CandidateFrontier.merge(records).candidates[0]
+            self.assertNotIn(
+                "current_role_family_mismatch",
+                validation_findings(
+                    profile, target, ResolvedSources(), structured=merged.structured
+                )["violations"],
+            )
+
+    def test_associated_target_contribution_overrides_coarse_non_target_track(self):
+        target = spec(
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        profile = {
+            "positions": [{
+                "position_id": "hybrid-position",
+                "position_title": "Investor and Technical Builder",
+                "company_id": "company-a",
+                "is_current": True,
+                "role_track": "investing",
+            }]
+        }
+        structured = {
+            "position_id": "hybrid-position",
+            "position_title": "Investor and Technical Builder",
+            "company_id": "company-a",
+            "is_current": True,
+            "role_track": "investing",
+            "role_ids": ["angel_investor", "software_engineer"],
+        }
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(
+                profile, target, ResolvedSources(), structured=structured
+            )["violations"],
+        )
+
+    def test_duplicate_taxonomy_role_preserves_all_target_families(self):
+        target = spec(
+            role=RoleIntent(role_ids=("developer_advocate",)),
+            person_filters=PersonFilters(is_current_role=True),
+        )
+        engineering = {
+            "positions": [{"is_current": True, "role_track": "Engineering", "role_ids": ["developer_advocate"]}]
+        }
+        self.assertNotIn(
+            "current_role_family_mismatch",
+            validation_findings(engineering, target, ResolvedSources())["violations"],
+        )
+
+    def test_exact_taxonomy_titles_resolve_before_seniority_stripping(self):
+        finance = {"positions": [{"is_current": True, "role_track": "Finance"}]}
+        for title in (
+            "Account Manager",
+            "Creative Director",
+            "Chief Technology Officer",
+            "Senior Engineering Manager",
+        ):
+            target = spec(
+                role=RoleIntent(titles=(title,)),
+                person_filters=PersonFilters(is_current_role=True),
+            )
+            self.assertIn(
+                "current_role_family_mismatch",
+                validation_findings(finance, target, ResolvedSources())["violations"],
+            )
+
     def test_local_hydration_restores_profile_only_position_fallbacks(self):
         from packs.search.backends.local.runner import LocalSearchRunner
 

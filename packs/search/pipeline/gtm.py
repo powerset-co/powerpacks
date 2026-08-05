@@ -120,7 +120,9 @@ def run_with_runner(
     reviewed: list[CandidateRecord] = []
     violations = unknowns = 0
     for row in hydrated.candidates:
-        findings = validation_findings(row.hydrated_profile, spec, sources, row.source_lanes)
+        findings = validation_findings(
+            row.hydrated_profile, spec, sources, row.source_lanes, row.structured
+        )
         violations += len(findings["violations"])
         unknowns += len(findings["unknowns"])
         disposition = "accepted" if not findings["violations"] and not findings["unknowns"] else "quarantined"

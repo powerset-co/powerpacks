@@ -517,7 +517,9 @@ def _validate_hydrated(
         if row.hydration_disposition != "hydrated":
             reviewed.append(row)
             continue
-        findings = validation_findings(row.hydrated_profile, spec, sources, row.source_lanes)
+        findings = validation_findings(
+            row.hydrated_profile, spec, sources, row.source_lanes, row.structured
+        )
         disposition = "accepted" if not findings["violations"] and not findings["unknowns"] else "quarantined"
         validated = replace(
             row,

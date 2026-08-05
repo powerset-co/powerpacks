@@ -13,6 +13,30 @@ def _union(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*left, *right)))
 
 
+def _structured_contributions(value: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    nested = value.get("_contributions")
+    if isinstance(nested, (list, tuple)):
+        return tuple(dict(row) for row in nested if isinstance(row, Mapping))
+    visible = {key: item for key, item in value.items() if key != "_contributions"}
+    return (visible,) if visible else ()
+
+
+def _merge_structured(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, Any]:
+    contributions: list[dict[str, Any]] = []
+    for row in (*_structured_contributions(left), *_structured_contributions(right)):
+        if row not in contributions:
+            contributions.append(row)
+    merged = {key: value for key, value in left.items() if key != "_contributions"}
+    merged.update(
+        (key, value)
+        for key, value in right.items()
+        if key != "_contributions" and value is not None
+    )
+    if contributions:
+        merged["_contributions"] = contributions
+    return merged
+
+
 @dataclass(frozen=True)
 class ProbeMatch:
     lane: str
@@ -121,7 +145,7 @@ def merge_candidate(left: CandidateRecord, right: CandidateRecord) -> CandidateR
         source_lanes=_union(left.source_lanes, right.source_lanes),
         found_by=found,
         hard_filter_evidence={**left.hard_filter_evidence, **right.hard_filter_evidence},
-        structured={**left.structured, **right.structured},
+        structured=_merge_structured(left.structured, right.structured),
         tech_skills=_union(left.tech_skills, right.tech_skills),
         hydrated_profile=right.hydrated_profile or left.hydrated_profile,
         hydration_disposition=right.hydration_disposition

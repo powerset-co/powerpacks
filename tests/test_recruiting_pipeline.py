@@ -1198,6 +1198,129 @@ class RecruitingPipelineTests(unittest.TestCase):
             self.assertEqual(audit["reviewed_count"], 2)
             self.assertEqual(audit["violation_count"], 1)
 
+    def test_wrong_current_role_families_do_not_consume_judge_slots(self):
+        class RoleFamilyRunner(FakeRunner):
+            def capabilities(self, spec):
+                capabilities = super().capabilities(spec)
+                return replace(
+                    capabilities,
+                    supported_hard_filters=(*capabilities.supported_hard_filters, "is_current_role"),
+                )
+
+            def hydrate(self, frontier):
+                hydrated = super().hydrate(frontier)
+                families = {"p0": "Engineering", "p1": "investing", "p2": "Human Resources"}
+                return replace(
+                    hydrated,
+                    candidates=tuple(
+                        replace(
+                            row,
+                            hydrated_profile={
+                                **row.hydrated_profile,
+                                "positions": [{
+                                    "is_current": True,
+                                    "role_track": families[row.person_id],
+                                    "seniority_band": "senior",
+                                    "city": "San Francisco",
+                                }],
+                            },
+                        )
+                        for row in hydrated.candidates
+                    ),
+                )
+
+        run_spec = replace(
+            recruiting_spec(),
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(
+                cities=("San Francisco",), seniority_bands=("senior",), is_current_role=True
+            ),
+        )
+        judged = []
+        with self.run_dir() as root:
+            approved = self.prepare(run_spec, RoleFamilyRunner(3), root)
+
+            def judge(candidate, plan):
+                judged.append(candidate.person_id)
+                return good_judge(candidate, plan)
+
+            result = run_recruiting(
+                approved, RoleFamilyRunner(3), artifact_root=root, judge_adapter=judge
+            )
+
+        self.assertEqual(judged, ["p0"])
+        self.assertEqual(result.counts["judge_calls"], 1)
+        self.assertEqual(result.hard_filter_validation["reviewed_count"], 3)
+        self.assertEqual(result.hard_filter_validation["violation_count"], 2)
+        self.assertEqual(
+            {row["reason_code"] for row in result.hard_filter_validation["violations"]},
+            {"current_role_family_mismatch"},
+        )
+
+    def test_wrong_current_role_family_expansion_is_not_judged(self):
+        class ExpansionRoleFamilyRunner(FakeRunner):
+            def capabilities(self, spec):
+                capabilities = super().capabilities(spec)
+                return replace(
+                    capabilities,
+                    supported_hard_filters=(*capabilities.supported_hard_filters, "is_current_role"),
+                )
+
+            def hydrate(self, frontier):
+                hydrated = super().hydrate(frontier)
+                return replace(
+                    hydrated,
+                    candidates=tuple(
+                        replace(
+                            row,
+                            hydrated_profile={
+                                **row.hydrated_profile,
+                                "positions": [{
+                                    "is_current": True,
+                                    "role_track": "investing" if row.person_id.startswith("new-") else "Engineering",
+                                    "seniority_band": "senior",
+                                    "city": "San Francisco",
+                                }],
+                            },
+                        )
+                        for row in hydrated.candidates
+                    ),
+                )
+
+        base = recruiting_spec()
+        run_spec = replace(
+            base,
+            role=RoleIntent(titles=("Senior Backend Engineer",)),
+            person_filters=PersonFilters(
+                cities=("San Francisco",), seniority_bands=("senior",), is_current_role=True
+            ),
+            bounds=replace(base.bounds, judge_candidate_limit=20),
+        )
+        judged = []
+        with self.run_dir() as root:
+            approved = self.prepare(run_spec, ExpansionRoleFamilyRunner(10), root)
+
+            def judge(candidate, plan):
+                judged.append(candidate.person_id)
+                return good_judge(candidate, plan)
+
+            result = run_recruiting(
+                approved,
+                ExpansionRoleFamilyRunner(10, expansion_new=True),
+                artifact_root=root,
+                judge_adapter=judge,
+            )
+
+        self.assertEqual(set(judged), {f"p{index}" for index in range(10)})
+        self.assertEqual(result.counts["judge_calls"], 10)
+        self.assertGreater(result.hard_filter_validation["violation_count"], 0)
+        self.assertTrue(
+            all(
+                row["reason_code"] == "current_role_family_mismatch"
+                for row in result.hard_filter_validation["violations"]
+            )
+        )
+
     def test_injected_usage_is_not_falsely_priced(self):
         with self.run_dir() as root:
             approved = self.prepare(recruiting_spec(), FakeRunner(1), root)
