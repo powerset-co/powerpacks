@@ -1,0 +1,186 @@
+#!/bin/sh
+# Resolve the uv binary Powerpacks should use, vendoring a pinned copy when
+# nothing else is available.
+#
+# Ported from the wacli binary lifecycle (discover/messages/wacli/binary.py):
+# own the binary at ~/.powerpacks/bin, pin the version, sha256-verify the
+# download against an in-repo pin BEFORE it is made executable or run,
+# self-test it, then stamp the installed version. From msgvault: probe a login
+# shell so profile-managed PATHs (Homebrew on Apple Silicon, ~/.local/bin) are
+# visible from non-login contexts, and always print the exact fix instead of a
+# bare failure.
+#
+# Resolution order (first hit wins; only the last step downloads):
+#   1. $POWERPACKS_UV                          explicit override, used as-is
+#   2. ~/.powerpacks/bin/uv                    vendored copy at the pinned version
+#   3. `command -v uv`                         whatever the current PATH has
+#   4. ~/.local/bin/uv                         the official curl installer target
+#   5. /opt/homebrew/bin/uv, /usr/local/bin/uv both Homebrew prefixes
+#   6. login-shell `command -v uv`             profile-managed PATHs
+#   7. download the pinned release asset using base-OS tools only (curl + tar +
+#      shasum/sha256sum — no Homebrew, no git, no python, no Xcode CLT),
+#      verify, self-test, promote atomically, stamp.
+#
+# Any working uv on the system is preferred over a download; a vendored copy
+# older than the pin is refreshed only when nothing else resolves. Overriding
+# POWERPACKS_UV_VERSION installs UNVERIFIED (no pin exists for it) — a dev
+# escape hatch, never the shipped default. POWERPACKS_UV_RELEASE_BASE mirrors
+# the download; the sha256 pins still apply.
+#
+# Output: the resolved uv path on stdout; terse diagnostics on stderr.
+# Flags: --no-install   probe only — resolve what exists, never download.
+# Exit:  0 with a path on stdout, 1 with the fix on stderr.
+set -eu
+
+UV_PINNED_VERSION="${POWERPACKS_UV_VERSION:-0.12.1}"
+UV_RELEASE_BASE="${POWERPACKS_UV_RELEASE_BASE:-https://github.com/astral-sh/uv/releases/download}"
+UV_BIN_DIR="${POWERPACKS_UV_BIN_DIR:-$HOME/.powerpacks/bin}"
+UV_STAMP="$UV_BIN_DIR/.uv-version"
+
+INSTALL=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-install) INSTALL=0 ;;
+    *) echo "ensure-uv: unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
+
+# sha256 of every published release asset for the pinned version, verified
+# after download and BEFORE the binary is made executable or run. Computed
+# from the public GitHub release assets (each ships a .sha256 sidecar).
+pinned_sha256() {
+  case "$1" in
+    uv-aarch64-apple-darwin)      echo "77d2906988e8074fd43f2f329ec452ebbf9b0c257ba1c66451c71de70a6baf42" ;;
+    uv-x86_64-apple-darwin)       echo "69d9f9a00337f25a50dcb13882052da08b8469bac11091c98c5694c3c6721467" ;;
+    uv-aarch64-unknown-linux-gnu) echo "769d373e146692c639b5fbaae33b331c297a32e03d30448772051902df52bbf4" ;;
+    uv-x86_64-unknown-linux-gnu)  echo "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb" ;;
+    *) echo "" ;;
+  esac
+}
+
+asset_name() {
+  case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64|Darwin-arm64e)  echo "uv-aarch64-apple-darwin" ;;
+    Darwin-x86_64)               echo "uv-x86_64-apple-darwin" ;;
+    Linux-aarch64|Linux-arm64)   echo "uv-aarch64-unknown-linux-gnu" ;;
+    Linux-x86_64|Linux-amd64)    echo "uv-x86_64-unknown-linux-gnu" ;;
+    *) echo "" ;;
+  esac
+}
+
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    echo ""
+  fi
+}
+
+vendored_current() {
+  [ -x "$UV_BIN_DIR/uv" ] && [ "$(cat "$UV_STAMP" 2>/dev/null || true)" = "$UV_PINNED_VERSION" ]
+}
+
+resolve_existing() {
+  if [ -n "${POWERPACKS_UV:-}" ]; then
+    if [ -x "$POWERPACKS_UV" ]; then
+      echo "$POWERPACKS_UV"; return 0
+    fi
+    echo "ensure-uv: POWERPACKS_UV=$POWERPACKS_UV is not executable; ignoring" >&2
+  fi
+  if vendored_current; then
+    echo "$UV_BIN_DIR/uv"; return 0
+  fi
+  path="$(command -v uv 2>/dev/null || true)"
+  if [ -n "$path" ] && [ -x "$path" ]; then
+    echo "$path"; return 0
+  fi
+  for candidate in "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+    if [ -x "$candidate" ]; then
+      echo "$candidate"; return 0
+    fi
+  done
+  # Profile-managed PATHs (brew shellenv in .zprofile/.zshrc, the curl
+  # installer's PATH line) are invisible to non-login shells; ask a login
+  # shell. Profiles may echo, so keep only the last line and re-verify.
+  for login_shell in /bin/zsh /bin/bash; do
+    [ -x "$login_shell" ] || continue
+    path="$("$login_shell" -lc 'command -v uv' 2>/dev/null | tail -n 1 || true)"
+    if [ -n "$path" ] && [ -x "$path" ]; then
+      echo "$path"; return 0
+    fi
+  done
+  # Last resort before downloading: a stale vendored copy still works.
+  if [ -x "$UV_BIN_DIR/uv" ] && [ "$INSTALL" = "0" ]; then
+    echo "$UV_BIN_DIR/uv"; return 0
+  fi
+  return 1
+}
+
+if path="$(resolve_existing)"; then
+  echo "$path"
+  exit 0
+fi
+
+asset="$(asset_name)"
+manual_hint="install uv manually (https://docs.astral.sh/uv/) and rerun, or set POWERPACKS_UV=/path/to/uv"
+if [ "$INSTALL" = "0" ]; then
+  echo "ensure-uv: uv is not installed (probe mode; not downloading)." >&2
+  echo "ensure-uv: fix: run bin/ensure-uv (downloads the pinned uv $UV_PINNED_VERSION to $UV_BIN_DIR), or $manual_hint" >&2
+  exit 1
+fi
+if [ -z "$asset" ]; then
+  echo "ensure-uv: no prebuilt uv for $(uname -s)/$(uname -m); $manual_hint" >&2
+  exit 1
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "ensure-uv: curl is required to download uv; install curl or $manual_hint" >&2
+  exit 1
+fi
+
+url="$UV_RELEASE_BASE/$UV_PINNED_VERSION/$asset.tar.gz"
+tmp="$UV_BIN_DIR/uv.tar.gz.download"
+echo "ensure-uv: installing pinned uv $UV_PINNED_VERSION to $UV_BIN_DIR" >&2
+mkdir -p "$UV_BIN_DIR"
+if ! curl -fsSL "$url" -o "$tmp"; then
+  rm -f "$tmp"
+  echo "ensure-uv: failed to download $url — check network access, then rerun." >&2
+  echo "ensure-uv: manual fallback: curl -fsSL $url -o /tmp/uv.tar.gz && tar -xzf /tmp/uv.tar.gz -C /tmp && mv /tmp/$asset/uv $UV_BIN_DIR/uv" >&2
+  exit 1
+fi
+
+# Integrity gate between download and trust (chmod +x / running it). A version
+# with no pinned hash (env-overridden POWERPACKS_UV_VERSION) installs
+# unverified — the documented dev escape hatch.
+expected="$(pinned_sha256 "$asset")"
+if [ "$UV_PINNED_VERSION" != "0.12.1" ]; then
+  expected=""
+fi
+if [ -n "$expected" ]; then
+  actual="$(sha256_of "$tmp")"
+  if [ -z "$actual" ]; then
+    rm -f "$tmp"
+    echo "ensure-uv: no sha256 tool (shasum/sha256sum) available to verify the download; refusing to install unverified." >&2
+    exit 1
+  fi
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$tmp"
+    echo "ensure-uv: downloaded $asset @ $UV_PINNED_VERSION failed sha256 verification (got $actual, pinned $expected)." >&2
+    echo "ensure-uv: the file was deleted — corrupted download or tampered asset. Retry; if it persists, investigate before installing." >&2
+    exit 1
+  fi
+else
+  echo "ensure-uv: WARNING: no sha256 pin for uv $UV_PINNED_VERSION ($asset); installing unverified (dev escape hatch)." >&2
+fi
+
+rm -rf "$UV_BIN_DIR/$asset"
+tar -xzf "$tmp" -C "$UV_BIN_DIR"
+mv "$UV_BIN_DIR/$asset/uv" "$UV_BIN_DIR/uv.new"
+rm -rf "$UV_BIN_DIR/$asset" "$tmp"
+chmod 0755 "$UV_BIN_DIR/uv.new"
+"$UV_BIN_DIR/uv.new" --version >/dev/null   # verify it actually runs before trusting it
+mv "$UV_BIN_DIR/uv.new" "$UV_BIN_DIR/uv"
+printf '%s\n' "$UV_PINNED_VERSION" > "$UV_STAMP"
+echo "ensure-uv: installed $("$UV_BIN_DIR/uv" --version)" >&2
+echo "$UV_BIN_DIR/uv"

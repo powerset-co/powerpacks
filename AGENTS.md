@@ -319,11 +319,13 @@ bin/setup-python
 ```
 
 On first real work in this repo, if `.venv/` is missing or Python dependencies
-are not ready, run `bin/setup-python` before running primitives. On macOS it may
-install missing `uv` through Homebrew automatically. If Python, Homebrew,
-Command Line Tools, or another OS-level prerequisite is missing, run the exact
-command printed by setup/doctor and continue unless the command needs a password
-or visible human action.
+are not ready, run `bin/setup-python` before running primitives. If `uv` is
+missing it is resolved by `bin/ensure-uv`: an existing install anywhere sane is
+preferred, otherwise a pinned, sha256-verified binary is downloaded to
+`~/.powerpacks/bin` (no Homebrew, git, or Xcode CLT required, mirroring the
+wacli binary lifecycle). If another OS-level prerequisite is missing, run the
+exact command printed by setup/doctor and continue unless the command needs a
+password or visible human action.
 
 If a primitive reports missing Python packages, treat that as a setup problem:
 run `bin/setup-python` or rerun the harness install script. Do not add runtime
