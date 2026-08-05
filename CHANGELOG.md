@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.1...powerpacks-v1.17.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deep-context:** settle reaches row-keyed ghost candidates — no-pub rows ([#430](https://github.com/powerset-co/powerpacks/issues/430)) ([e88fb7c](https://github.com/powerset-co/powerpacks/commit/e88fb7c137ea0fd9511367d41a308924a26cd1e1))
+
 ## [1.17.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.17.0...powerpacks-v1.17.1) (2026-08-05)
 
 
