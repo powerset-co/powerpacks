@@ -202,6 +202,8 @@ class DeepContextSchemaTests(unittest.TestCase):
                 ProjectionStatus.PROJECTED.value, person_id="missing",
             ))
 
+        self.assertEqual(ArtifactKind.SYNTHETIC.value, "synthetic")
+
     def test_stage_spend_and_job_state_are_typed(self) -> None:
         self.db.save_stage(StageStateRow(
             "enrichment", StageStatus.NEEDS_APPROVAL.value, "selection:v1"

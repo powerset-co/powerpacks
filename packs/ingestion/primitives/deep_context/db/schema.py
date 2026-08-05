@@ -74,6 +74,7 @@ class ArtifactKind(StrEnum):
     DOSSIER = "dossier"
     PROFILE = "profile"
     RESEARCH = "research"
+    SYNTHETIC = "synthetic"
     SOURCE_BUNDLE = "source_bundle"
     RAW_RESULT = "raw_result"
 
