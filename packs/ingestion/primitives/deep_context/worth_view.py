@@ -72,6 +72,7 @@ from packs.ingestion.primitives.deep_context.common import (
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
 )
+from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 
 # Paths come from common.py, the one home for the deep-context layout (and, for
 # the network-import side, from primitives/common/paths.py behind it).
@@ -466,7 +467,7 @@ def sync_parent_worth_rows(
             override_rows.pop(key)
     override_rows.update(next_parent_rows)
     override_rows.update(residual_parent_rows)
-    write_override_rows(review_csv, override_rows)
+    commit_review_rows(review_csv, override_rows)
     return {
         "parent_rows": len(view_rows),
         "human_migrated": human_migrated,

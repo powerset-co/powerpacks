@@ -135,6 +135,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
+from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 from packs.ingestion.primitives.deep_context.review_store import (
     ReviewRow,
     has_human_worth,
@@ -998,6 +999,7 @@ class SynthesizePersonContext(Node):
             self.review_csv,
             self.facts_dir,
             include_human_rows=bool(self.rejudge),
+            write=commit_review_rows,
         )
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(

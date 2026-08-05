@@ -351,6 +351,7 @@ def mirror_facts_worth(
     facts_dir: Path,
     *,
     include_human_rows: bool = False,
+    write: Any = write_override_rows,
 ) -> dict[str, Any]:
     """Mirror every facts worth verdict into review.csv.
 
@@ -400,7 +401,7 @@ def mirror_facts_worth(
             synced_rows += 1
         synced_people += 1
 
-    write_override_rows(review_path, rows)
+    write(review_path, rows)
     return {
         "path": str(review_path),
         "synced_people": synced_people,

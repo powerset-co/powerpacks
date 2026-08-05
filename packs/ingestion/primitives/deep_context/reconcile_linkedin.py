@@ -134,6 +134,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
+from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 from packs.ingestion.primitives.deep_context.review_store import (
     DECISIVE_CONFIRM_THRESHOLD,
     JUDGE_CONFIRM_THRESHOLD,
@@ -1089,7 +1090,7 @@ def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]]) -> dict[s
                 f"{review.get('connection_name') or 'a connection'})")
         if note.strip() not in (row.get("reason") or ""):
             row["reason"] = (row.get("reason") or "") + note
-    _write_override_rows(path, existing)
+    commit_review_rows(path, existing)
     return {"path": str(path), "name_match_reviews": written, "preserved_user_rows": preserved}
 
 
@@ -1160,7 +1161,7 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             pending += 1
 
-    _write_override_rows(path, existing)
+    commit_review_rows(path, existing)
     return {"path": str(path), "detached": detach, "verified": verify, "pending": pending,
             "preserved_user_rows": preserved, "total_rows": len(existing)}
 
@@ -1219,7 +1220,7 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
         # columns so a found LinkedIn cannot silently change the People decision.
         existing[old_pub] = row
         proposed += 1
-    _write_override_rows(path, existing)
+    commit_review_rows(path, existing)
     return {"path": str(path), "proposed": proposed, "preserved_user_rows": preserved, "total_rows": len(existing)}
 
 

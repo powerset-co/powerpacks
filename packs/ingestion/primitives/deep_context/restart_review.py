@@ -48,6 +48,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     load_override_rows,
     write_override_rows,
 )
+from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 
 SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
 HUMAN_WORTH_VALUES = {"yes", "no", "maybe"}
@@ -167,7 +168,7 @@ def main() -> int:
     if args.apply:
         if args.review.exists() and (would_clear or identity_cleared):
             payload["review_backup"] = str(_backup(args.review))
-            write_override_rows(args.review, rows)
+            commit_review_rows(args.review, rows)
         payload["synthetic"] = clear_synthetic_approvals(
             args.synthetic_people, apply=True)
         payload["manifest"] = reset_review_manifest(args.manifest, apply=True)

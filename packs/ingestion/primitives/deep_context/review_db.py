@@ -254,6 +254,22 @@ class ReviewDbImportError(ValueError):
     """The CSV holds a state the schema refuses; offenders are named."""
 
 
+def commit_review_rows(review_csv: Path, rows: dict[str, dict[str, str]]) -> None:
+    """The ONE write door for review rows outside the server session (P4).
+
+    Drop-in replacement for `write_override_rows(review_csv, rows)` finales:
+    commits the full row set to review.sqlite atomically (creating it next to
+    the CSV if needed), then exports the CSVs from the committed state. The
+    sibling synthetic-people.csv is resolved by the fixed store layout so the
+    gate decisions stay current. Callers gain atomicity, strict validation,
+    and crash recovery for free; writer serialization is BEGIN IMMEDIATE +
+    busy_timeout instead of the session flock."""
+    review_csv = Path(review_csv)
+    synthetic_csv = review_csv.parent / "synthetic-people.csv"
+    ReviewDb(review_csv.with_suffix(".sqlite")).apply_rows(
+        rows, review_csv, synthetic_csv if synthetic_csv.exists() else None)
+
+
 class ReviewDb:
     """The review.sqlite store — a stateless facade over db_path.
 

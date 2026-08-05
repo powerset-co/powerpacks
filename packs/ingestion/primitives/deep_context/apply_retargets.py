@@ -70,6 +70,7 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
 )
+from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 
 # Contact identity carried from the original (detached) person onto the re-attached row,
 # so the merge groups the re-enriched person with their real messages/contacts.
@@ -237,7 +238,7 @@ class ApplyRetargets(Node):
             if not resolvable:
                 stranded.append({"old": old_pub, "new": new_pub})
         if finalized:
-            write_override_rows(self.overrides_csv, overrides)
+            commit_review_rows(self.overrides_csv, overrides)
 
         # Appliable: humanly/auto approved, plus judge-accepted candidate-origin
         # found profiles (their acceptance stands; see review_store's predicate).

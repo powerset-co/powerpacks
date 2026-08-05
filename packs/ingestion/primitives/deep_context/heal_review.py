@@ -107,6 +107,7 @@ from packs.ingestion.primitives.enrich.rapidapi_client import (
 )
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier
+from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 
 # UNCAPPED by default (owner directive 2026-08-05): the heal is a definitive
 # always-run task and a silent cap reads as "heal ran, still broken" — the
@@ -298,7 +299,7 @@ class HealReview:
                 rows[pub] = saved
                 restored += 1
         if restored:
-            write_override_rows(self.review_csv, rows)
+            commit_review_rows(self.review_csv, rows)
         summary["restored_pending_retargets"] = restored
         for candidate in candidates:
             row = rows.get(candidate.pub) or {}
@@ -420,7 +421,7 @@ class HealReview:
                 mintable.append(candidate)
             else:
                 summary["pending_reresearch"] += 1
-        write_override_rows(self.review_csv, rows)
+        commit_review_rows(self.review_csv, rows)
         if mintable:
             summary["assemble"] = self._mint_from_research(mintable)
             summary["minted_synthetic"] = len(mintable)
