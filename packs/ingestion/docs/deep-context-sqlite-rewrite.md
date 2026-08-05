@@ -206,6 +206,29 @@ The Python webserver is transport, not a second model. Target less than 1,000
 Python lines for HTTP/SSE/job wiring. Static HTML, CSS, and JavaScript remain
 assets; pure render helpers may remain separate.
 
+### Frozen HTTP compatibility contract
+
+The current Deep Context HTTP interface is already the product contract. The
+SQLite rewrite is an implementation replacement behind it, not an API redesign.
+Preserve every existing route, accepted query/form field, response content type
+and shape, status code, and browser-visible behavior. In particular, do not
+rename, consolidate, REST-ify, or delete routes merely to make the new server
+smaller.
+
+The frozen route inventory is:
+
+- GET `/`, `/directory`, `/healthz`, `/api/events`, `/api/status`,
+  `/api/enrichment`, `/api/retargets`, `/api/dossier`,
+  `/api/decision-rows`, `/api/worth-card`, `/api/linkedin-card`,
+  `/api/person`, `/api/avatar`, and the two existing asset paths;
+- POST `/decide`, `/worth`, `/complete`, `/approve-enrichment`, `/retarget`,
+  `/feedback`, and `/auth/login`.
+
+Before replacing a handler, pin its current success and error responses with
+contract tests. Internal DB/domain method names are not public API and may be
+made smaller, but the existing JavaScript and any external caller must continue
+to work unchanged.
+
 The required surface is small:
 
 - status/progress;
