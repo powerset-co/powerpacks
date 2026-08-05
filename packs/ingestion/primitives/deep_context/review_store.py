@@ -12,6 +12,13 @@ Keeping the tiny CSV contract here prevents either LLM stage from becoming the
 other stage's fallback writer.
 
 Changelog:
+  2026-08-05 (sqlite P0): the review value vocabulary becomes StrEnums —
+    `ReviewAction`, `ApprovedState`, `MachineWorth`, `HumanWorth`,
+    `ReviewSource` — measured from both real stores (arthur 1292 rows, jake
+    16891 rows) plus every literal a writer stamps. The legacy sets
+    (HUMAN_WORTH_VALUES etc.) are now derived FROM the enums so the vocabulary
+    keeps one home; review_db.py generates its SQL CHECK constraints from the
+    same enums. Values are unchanged.
   2026-07-30 (style): `llm_network_worth` is imported at module top instead of inside
     `mirror_facts_worth`. The old note claimed the deferral kept "the basic CSV
     contract" independent of dossier parsing, but `candidates` imports only
@@ -29,6 +36,7 @@ from __future__ import annotations
 
 import csv
 import json
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -101,9 +109,70 @@ JUDGE_DETACH_THRESHOLD = 0.85
 # with the human.
 DECISIVE_CONFIRM_THRESHOLD = 0.95
 
-HUMAN_WORTH_VALUES = {"yes", "no"}
-MACHINE_WORTH_VALUES = {"yes", "maybe", "no"}
-USER_APPROVED = {"yes", "no"}
+class ReviewAction(StrEnum):
+    """Identity outcomes an `action` cell can carry (empty = no proposal)."""
+
+    VERIFY = "verify"
+    DETACH = "detach"
+    RETARGET = "retarget"
+    EXCLUDE = "exclude"
+
+
+class ApprovedState(StrEnum):
+    """Who settled an identity decision. Empty `approved` = still pending.
+
+    `auto` and `source` are NOT redundant: real stores carry approved=auto
+    rows with a human source (jake: 95 x deep-context-review) and
+    approved=yes rows only from human sources — the approved class records
+    WHO the settlement counts as, the source records WHICH writer stamped it.
+    """
+
+    AUTO = "auto"  # machine-standing (judge auto-applied / promoted)
+    YES = "yes"    # human confirmation
+    NO = "no"      # human rejection
+
+
+class MachineWorth(StrEnum):
+    """llm_worth values synthesis mirrors from facts/<id>.jsonl."""
+
+    YES = "yes"
+    MAYBE = "maybe"
+    NO = "no"
+
+
+class HumanWorth(StrEnum):
+    """network_worth values a human can set (never written by machines)."""
+
+    YES = "yes"
+    NO = "no"
+
+
+class ReviewSource(StrEnum):
+    """Every writer that stamps a review.csv `source` cell, one member per
+    stamp site. Adding a writer means adding a member HERE — review_db.py
+    generates its SQL CHECK from this enum, so an unlisted source fails
+    loudly at import instead of silently accreting a new vocabulary."""
+
+    REVIEW = "deep-context-review"                # review_web/decisions.py (human card decision)
+    USER_GUIDANCE = "user-guidance"               # review_web/retarget_queue.py (paste/guided retarget)
+    RECONCILE = "deep-context-reconcile"          # reconcile_linkedin apply pass
+    DEEP_RESEARCH = "deep-research"               # reconcile_deep_research proposals
+    SYNTHESIS = "deep-context-synthesis"          # mirror_facts_worth (this module)
+    PARENT_WORTH = "deep-context-parent-worth"    # worth_view / decisions.py parent rows
+    HEAL = "deep-context-heal"                    # heal_review dead-link detaches
+    NAME_MATCH = "deep-context-name-match"        # reconcile_linkedin name-match pass
+    SELF_REPORTED = "dossier-self-reported"       # reconcile_linkedin self-reported links
+    SIBLING_SETTLE = "legacy-sibling-settle"      # common/legacy.py rule 4
+    LEGACY_MIGRATION = "legacy-migration"         # migrate_legacy_resolutions
+
+
+# Sources that count as a HUMAN having decided (terminal for machine writers).
+HUMAN_DECISION_SOURCES = frozenset({ReviewSource.REVIEW.value, ReviewSource.USER_GUIDANCE.value})
+
+# Legacy set spellings, derived from the enums so the vocabulary keeps one home.
+HUMAN_WORTH_VALUES = frozenset(member.value for member in HumanWorth)
+MACHINE_WORTH_VALUES = frozenset(member.value for member in MachineWorth)
+USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
 PARENT_WORTH_PREFIX = "parent-worth:"
 
 # The `source` the heal pass stamps on its dead-link detaches (heal_review).
@@ -111,7 +180,7 @@ PARENT_WORTH_PREFIX = "parent-worth:"
 # must recognize it too (a heal detach is a re-research INVITATION, not a
 # decision) and importing heal_review there would cycle through
 # assemble_synthetic_profile.
-HEAL_DETACH_SOURCE = "deep-context-heal"
+HEAL_DETACH_SOURCE = ReviewSource.HEAL.value
 
 
 def parent_worth_key(parent_id: str) -> str:
