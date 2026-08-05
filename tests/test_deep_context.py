@@ -7729,6 +7729,150 @@ class GhostRowSettleTests(unittest.TestCase):
             self.assertEqual(review.read_bytes(), review_bytes)
 
 
+class StageOrderIndependenceTests(unittest.TestCase):
+    """Stages complete independently — the crash combo regression.
+
+    Worth re-opened (the restart reset clears completed_stages) while the
+    LinkedIn queue is empty/settled: the last /decide and the linkedin GET's
+    empty-queue self-complete must both succeed and mark linkedin completed
+    with worth still pending. The old people-before-LinkedIn ceremony guard
+    raised out of write_review_manifest here — unhandled in do_GET, killing
+    the request (reproduced on a real store)."""
+
+    MAYBES = [f"candidate:email:casey{i}@example.com" for i in range(3)]
+
+    def _fixture(self, d):
+        base = Path(d)
+        for sub in ("facts", "parents", "dossiers", "cache", "research", "review"):
+            (base / sub).mkdir()
+        verdicts = base / "verdicts.jsonl"
+        verdicts.write_text(json.dumps({
+            "parent_slug": "jordan-bravo-p", "name": "Jordan Bravo",
+            "person_ids": ["pid-1"], "candidate_key": "jordan-bravo",
+            "linkedin": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                         "full_name": "Jordan Bravo", "has_profile": True},
+            "verdict": {"verdict": "needs_review", "confidence": 0.5},
+        }) + "\n", encoding="utf-8")
+        review = base / "review.csv"
+        write_rows(review, {
+            "jordan-bravo": {**{c: "" for c in reconcile.OVERRIDE_COLUMNS},
+                             "public_identifier": "jordan-bravo",
+                             "action": "verify", "approved": "",
+                             "source": "deep-context-reconcile",
+                             "person_id": "pid-1",
+                             "linkedin_url": "https://www.linkedin.com/in/jordan-bravo"},
+        })
+        slugs = {"c1": {"person_id": "pid-1"}}
+        parents_map = {"jordan-bravo-p": {"parent_id": "parent-1", "children": ["c1"]}}
+        for offset, pid in enumerate(self.MAYBES):
+            (base / "facts" / f"{pid}.jsonl").write_text(json.dumps({"facts": {
+                "canonical_name": f"Casey Delta{offset}",
+                "network_worth": {"decision": "maybe", "reason": "fixture"},
+            }}) + "\n", encoding="utf-8")
+            slugs[f"casey-{offset}"] = {"person_id": pid}
+            parents_map[f"casey-delta{offset}-p"] = {
+                "parent_id": f"parent-c{offset}", "children": [f"casey-{offset}"]}
+        (base / "index.json").write_text(json.dumps({
+            "parents": parents_map, "slugs": slugs,
+            "by_email": {}, "by_phone": {}}), encoding="utf-8")
+        # The post-restart manifest shape: ladder cleared, worth re-opened.
+        (base / "review" / "manifest.json").write_text(json.dumps({
+            "stage": "worth", "status": "awaiting_user",
+            "completed_stages": []}), encoding="utf-8")
+        return base, verdicts, review
+
+    @contextlib.contextmanager
+    def _serve(self, base, verdicts, review):
+        handler = web_server.make_handler(
+            review, verdicts, base / "parents", base / "dossiers", 0.7, 0.85,
+            synthetic_path=base / "synthetic-people.csv",
+            facts_dir=base / "facts", people_csv=base / "people.csv",
+            manifest_path=base / "review" / "manifest.json",
+            enrichment_manifest_path=base / "enrich-manifest.json",
+            profile_cache_dir=base / "cache", run_jobs=False)
+        server = web_server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server.server_address[1]
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def _post(self, port, path, fields):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            conn.request("POST", path,
+                         body="&".join(f"{k}={urllib.parse.quote(str(v))}"
+                                       for k, v in fields.items()),
+                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+            response = conn.getresponse()
+            return response.status, response.read().decode("utf-8")
+        finally:
+            conn.close()
+
+    def _get(self, port, path):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            conn.request("GET", path)
+            response = conn.getresponse()
+            return response.status, response.read().decode("utf-8")
+        finally:
+            conn.close()
+
+    def test_linkedin_completes_while_worth_pending(self):
+        with tempfile.TemporaryDirectory() as d:
+            base, verdicts, review = self._fixture(d)
+            manifest = base / "review" / "manifest.json"
+            with self._serve(base, verdicts, review) as port:
+                status, body = self._post(port, "/decide", {
+                    "pub": "jordan-bravo", "decision": "keep",
+                    "parent_slug": "jordan-bravo-p"})
+                self.assertEqual(status, 200, body)
+                progress = json.loads(body)["progress"]
+                self.assertEqual(progress["linkedin_pending"], 0)
+                self.assertEqual(progress["worth_pending"], 3)
+                # The GET's empty-queue self-complete: pre-fix this raised
+                # the ceremony guard out of do_GET and the request died with
+                # no response at all.
+                status, page = self._get(port, "/?stage=linkedin")
+                self.assertEqual(status, 200)
+                self.assertIn("go back to Codex", page)
+                status, card = self._get(port, "/api/linkedin-card")
+                self.assertEqual(status, 200, card)
+                self.assertIn("go back to Codex", card)
+            stored = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(stored["stage"], "linkedin")
+            self.assertEqual(stored["status"], "completed")
+            self.assertIn("linkedin", stored["completed_stages"])
+            self.assertNotIn("worth", stored["completed_stages"])
+
+    def test_enrich_handoff_needs_no_worth_ladder_entry(self):
+        # The enrich handoff keeps its REAL dependency (enrichment completed
+        # for the current selection) but no longer requires the worth ladder
+        # entry — the sibling ceremony guard is gone too.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            (base / "review").mkdir()
+            (base / "review" / "manifest.json").write_text(json.dumps({
+                "stage": "worth", "status": "awaiting_user",
+                "completed_stages": []}), encoding="utf-8")
+            result = web_workflow.write_enrichment_handoff(
+                {"status": "completed", "current": True,
+                 "counts": {"total": 0, "completed": 0, "pending": 0, "failed": 0}},
+                path=base / "review" / "manifest.json",
+                review_path=base / "review.csv",
+                synthetic_path=base / "synthetic-people.csv")
+            self.assertEqual(result["completed_stages"], ["enrich"])
+            with self.assertRaises(ValueError):
+                web_workflow.write_enrichment_handoff(
+                    {"status": "completed", "current": False},
+                    path=base / "review" / "manifest.json",
+                    review_path=base / "review.csv",
+                    synthetic_path=base / "synthetic-people.csv")
+
+
 class HealReviewTests(unittest.TestCase):
     """The pre-serve self-heal pass: selection predicate, fresh-fetch routing
     (CONTENT -> judge, fetched EMPTY -> terminate, ERROR -> untouched), the

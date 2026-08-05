@@ -371,11 +371,11 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
         # ladder is the restart primitive's explicit job.
         pass
     else:
-        # Worth must precede LinkedIn, but enrichment does NOT block it: the
-        # LinkedIn stage is reviewable (and completable) even when enrichment is
-        # still running or failed, so a broken enrichment never strands the flow.
-        if stage == "linkedin" and "worth" not in completed:
-            raise ValueError("People decisions must be completed before LinkedIn")
+        # Stages complete INDEPENDENTLY — no stage-order guard. LinkedIn is
+        # completable while worth is re-opened (the restart reset clears the
+        # ladder while the heal pass machine-settles the LinkedIn queue) and
+        # while enrichment is running or failed, so nothing ever strands the
+        # flow; the stepper's pending counts are the only ordering signal.
         completed.add(stage)
     people_revision = str(existing.get("people_revision") or "")
     if stage == "worth" and launched:
@@ -417,13 +417,15 @@ def write_enrichment_handoff(
     synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
 ) -> dict[str, Any]:
     """Record only the user's Continue handoff after current enrichment finished."""
+    # The one REAL dependency stays: the handoff is only recordable over
+    # enrichment output that matches the live worth Yes-selection (``current``
+    # binds it by selection sha). Whether the worth STAGE is marked completed
+    # in the ladder is not checked — stages complete independently.
     if enrichment.get("status") != STATUS_COMPLETED or not enrichment.get("current"):
         raise ValueError("Enrichment is not complete for the current People decisions")
     existing = read_review_manifest(path)
     completed = {str(value) for value in existing.get("completed_stages") or []
                  if value in {"worth", "enrich", "linkedin"}}
-    if "worth" not in completed:
-        raise ValueError("People decisions must be completed before enrichment")
     completed.add("enrich")
     completed.discard("linkedin")
     payload = {
