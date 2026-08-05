@@ -7,6 +7,24 @@ Changelog:
   files; "every view, every piece of logic in deep context operates on
   sqlite"; no incremental dual-path migration).
 
+## Rule zero: this is a single-user local tool
+
+One user, one local webserver, one command at a time. There are NO concurrent
+writers, no multi-process coordination, no recovery protocols. Consequences:
+
+- **The db is the record; the CSVs are re-derivable exports.** Any staleness
+  or truncation question is answered by re-exporting (db → baton) or
+  re-importing (baton → db) — never by flags, pending markers, or refusal
+  ceremonies. The `pending_export` apparatus, `recover_pending_export`, the
+  schema-drop guard, and explicit BEGIN IMMEDIATE choreography do NOT carry
+  into the rewrite; sqlite's default single-writer transaction is already
+  ACID and the built-in busy timeout covers a freak overlap.
+- **No locks anywhere**: no flock, no `ensure_no_review_session`, no session
+  contracts, no mtime sniffing. Atomic temp+rename on file writes is the one
+  crash protection that stays (it is how files are written, not a guard).
+- A guard may be added only for an operation a single local user actually
+  performs. "Two processes racing" is not one of them.
+
 ## Non-negotiables
 
 1. **The truths stay.** Paid/LLM artifacts keep their formats and paths:
