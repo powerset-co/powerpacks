@@ -1,101 +1,473 @@
-"""Queries and the settle transaction — every read is a query, every user
-action is one transaction.
+"""Named SQLite reads for the Deep Context review product.
 
-The settle rule, stated once: a click on one candidate settles the PARENT.
-Siblings that already carry a decision row keep it (a decision row is
-terminal — human or machine); siblings with NO identity decision row get a
-sibling-withdrawal detach; synthetic siblings withdraw through their gate
-unless a human already gated them ('auto' is machine-standing and yields).
-Ghost rows need nothing special: they are links rows like any other — the
-old per-namespace fan-out ceremony is replaced by the people JOIN.
+The web application hydrates these query results.  It never scans the legacy
+CSV or enrichment directories to decide what is pending.
 """
 from __future__ import annotations
 
-from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.schema import (
-    DecisionKind,
-    DecisionRow,
-    ReviewAction,
-    ReviewSource,
-)
+import json
+from typing import Any
+
+from packs.ingestion.primitives.deep_context.db.schema import PARENT_WORTH_PREFIX
 from packs.ingestion.primitives.deep_context.db.store import Db
 
-_SIBLING_LINKS = """
-    SELECT l.row_key FROM links l
-    WHERE l.row_key != :clicked
-      AND (l.person_id IN (SELECT p2.person_id FROM people p1
-                           JOIN people p2 ON p2.parent_id = p1.parent_id
-                           WHERE p1.person_id = :person_id)
-           OR l.person_id = :person_id)
-      AND NOT EXISTS (SELECT 1 FROM decisions d
-                      WHERE d.kind = 'identity' AND d.target = l.row_key)
+
+_WORTH_CTE = """
+WITH ranked_facts AS (
+  SELECT f.*,
+         row_number() OVER (
+           PARTITION BY f.parent_id
+           ORDER BY CASE f.machine_worth WHEN 'yes' THEN 2 WHEN 'no' THEN 0 ELSE 1 END DESC,
+                    COALESCE(f.person_id, f.subject_key)
+         ) AS worth_rank
+  FROM facts f
+), worth AS (
+  SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
+         p.human_worth, p.human_worth_note, p.human_worth_source, p.human_worth_at,
+         COALESCE(r.machine_worth, 'maybe') AS machine_worth,
+         COALESCE(r.machine_worth_reason, '') AS machine_worth_reason,
+         CASE WHEN r.machine_worth IS NULL THEN 'default' ELSE 'llm' END AS machine_source,
+         COALESCE(p.human_worth, r.machine_worth, 'maybe') AS effective_worth,
+         (SELECT json_group_array(person_id) FROM (
+            SELECT person_id FROM people WHERE parent_id=p.parent_id ORDER BY person_id
+          )) AS person_ids_json,
+         EXISTS(SELECT 1 FROM links l WHERE l.parent_id=p.parent_id AND l.kind='synthetic')
+           AS has_synthetic
+  FROM parents p
+  JOIN ranked_facts r ON r.parent_id=p.parent_id AND r.worth_rank=1
+  WHERE NOT EXISTS (
+          SELECT 1 FROM facts f WHERE f.parent_id=p.parent_id AND f.is_owner=1
+        )
+    AND NOT EXISTS (
+          SELECT 1 FROM people pe WHERE pe.parent_id=p.parent_id AND pe.is_owner=1
+        )
+    AND EXISTS (
+          SELECT 1 FROM people pe WHERE pe.parent_id=p.parent_id AND pe.is_ghost=0
+        )
+)
 """
 
 
-def siblings_of(db: Db, person_id: str) -> list[str]:
-    """Every links row_key belonging to the same canonical parent."""
-    return [r["row_key"] for r in db.query(
-        "SELECT l.row_key FROM links l JOIN people p ON p.person_id = l.person_id "
-        "WHERE p.parent_id = (SELECT parent_id FROM people WHERE person_id = ?)",
-        (person_id,))]
+_WORTH_SELECT = """
+SELECT * FROM worth
+{where}
+ORDER BY lower(COALESCE(display_name, public_identifier)), parent_id
+"""
 
 
-def settle_parent(db: Db, *, clicked_row_key: str, person_id: str,
-                  decision: DecisionRow,
-                  synthetic_withdraw_pubs: tuple[str, ...] = (),
-                  decided_at: str = "") -> list[str]:
-    """One transaction: the clicked decision plus the sibling withdrawals.
-    Returns every row_key/pub the transaction settled."""
-    decided_at = decided_at or now_iso()
-    settled = [clicked_row_key]
-    with db.connect() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO decisions (kind, target, value, approved, source, note, decided_at) "
-            "VALUES (:kind, :target, :value, :approved, :source, :note, :decided_at)",
-            {**decision.__dict__, "decided_at": decided_at})
-        siblings = [r["row_key"] for r in conn.execute(
-            _SIBLING_LINKS, {"clicked": clicked_row_key, "person_id": person_id})]
-        conn.executemany(
-            "INSERT OR IGNORE INTO decisions (kind, target, value, approved, source, decided_at) "
-            "VALUES ('identity', ?, 'detach', 'yes', ?, ?)",
-            [(row_key, ReviewSource.REVIEW.value, decided_at) for row_key in siblings])
-        settled.extend(siblings)
-        for pub in synthetic_withdraw_pubs:
-            # A machine-standing 'auto' gate yields to the settle; a human
-            # yes/no gate stands (INSERT OR IGNORE after clearing only auto).
-            conn.execute(
-                "DELETE FROM decisions WHERE kind = 'synthetic_gate' AND target = ? "
-                "AND approved = 'auto'", (pub,))
-            changed = conn.execute(
-                "INSERT OR IGNORE INTO decisions (kind, target, value, approved, source, decided_at) "
-                "VALUES ('synthetic_gate', ?, 'no', 'yes', ?, ?)",
-                (pub, ReviewSource.REVIEW.value, decided_at)).rowcount
-            if changed:
-                settled.append(pub)
-    return settled
+def _json(value: object, fallback: Any) -> Any:
+    if not value:
+        return fallback
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return fallback
+    return parsed
 
 
-def identity_decision(*, target: str, decision: str, new_url: str = "",
-                      new_pub: str = "", source: str = ReviewSource.REVIEW.value,
-                      ) -> DecisionRow:
-    """The clicked outcome as a typed row (keep/detach/exclude/fix mapping)."""
-    value = {"keep": ReviewAction.VERIFY.value, "detach": ReviewAction.DETACH.value,
-             "exclude": ReviewAction.EXCLUDE.value, "fix": ReviewAction.RETARGET.value,
-             }.get(decision)
-    if value is None:
-        raise ValueError(f"unknown decision: {decision}")
-    return DecisionRow(kind=DecisionKind.IDENTITY.value, target=target,
-                       value=value, approved="yes", source=source)
+def _worth_dict(row: Any) -> dict[str, Any]:
+    human = None
+    if row["human_worth"]:
+        human = {
+            "decision": row["human_worth"],
+            "updated_at": row["human_worth_at"] or "",
+            "note": row["human_worth_note"] or "",
+        }
+    return {
+        "key": f"{PARENT_WORTH_PREFIX}{row['parent_id']}",
+        "parent_id": row["parent_id"],
+        "parent_slug": row["display_slug"] or row["public_identifier"],
+        "person_ids": _json(row["person_ids_json"], []),
+        "name": row["display_name"] or row["public_identifier"],
+        "machine": {
+            "decision": row["machine_worth"],
+            "reason": row["machine_worth_reason"],
+            "source": row["machine_source"],
+        },
+        "human": human,
+        "effective": row["effective_worth"],
+        "source": "user" if human else row["machine_source"],
+    }
+
+
+def worth_rows(db: Db) -> list[dict[str, Any]]:
+    """All facts-backed, non-owner, non-ghost canonical people."""
+    rows = db.query(_WORTH_CTE + _WORTH_SELECT.format(where=""))
+    return [_worth_dict(row) for row in rows]
+
+
+def worth_queue(db: Db) -> list[dict[str, Any]]:
+    """The effective-Maybe queue; researched synthetic people do not re-enter."""
+    rows = db.query(
+        _WORTH_CTE + _WORTH_SELECT.format(
+            where="WHERE effective_worth='maybe' AND has_synthetic=0"
+        )
+    )
+    return [_worth_dict(row) for row in rows]
+
+
+def worth_counts(db: Db) -> dict[str, int]:
+    """Worth-stage counts from the same relation and queue predicate as the cards."""
+    row = db.query(
+        _WORTH_CTE
+        + """
+SELECT count(*) AS total,
+       sum(effective_worth='maybe' AND has_synthetic=0) AS pending,
+       sum(effective_worth='yes') AS yes,
+       sum(effective_worth='no') AS no
+FROM worth
+"""
+    )[0]
+    return {key: int(row[key] or 0) for key in ("total", "pending", "yes", "no")}
+
+
+_PENDING_CANDIDATE = """
+(
+  (l.kind='synthetic' AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no'))
+  OR
+  (l.kind!='synthetic'
+   AND l.decision_action IS NULL
+   AND COALESCE(l.machine_approved, '') NOT IN ('auto', 'yes', 'no')
+   AND l.authoritative_detach=0
+   AND NOT (
+     l.candidate_origin=1
+     AND l.machine_action='retarget'
+     AND l.machine_proposed_url IS NOT NULL
+     AND lower(COALESCE(l.machine_judgment, '')) NOT IN
+       ('1', 'true', 'yes', 'spam', 'wrong_person', 'needs_review', 'rejected', 'ambiguous')
+   ))
+)
+"""
+
+
+_LINKEDIN_CTE = (
+    _WORTH_CTE
+    + """, candidate_policy AS (
+  SELECT l.*,
+         """
+    + _PENDING_CANDIDATE
+    + """ AS is_pending
+  FROM links l
+), identity_scope AS (
+  SELECT w.parent_id
+  FROM worth w
+  WHERE w.effective_worth!='no'
+    AND NOT EXISTS (
+      SELECT 1 FROM links raw WHERE raw.parent_id=w.parent_id AND raw.raw_import=1
+    )
+    AND EXISTS (
+      SELECT 1 FROM candidate_policy c
+      WHERE c.parent_id=w.parent_id
+        AND (c.candidate_origin=1 OR c.kind='synthetic' OR c.is_pending=1
+             OR c.decision_action IS NOT NULL
+             OR COALESCE(c.decision_approved, '') IN ('yes', 'no'))
+    )
+), pending_parents AS (
+  SELECT DISTINCT c.parent_id
+  FROM candidate_policy c JOIN identity_scope s USING(parent_id)
+  WHERE c.is_pending=1
+)
+"""
+)
+
+
+_PARENT_SELECT = """
+SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
+       w.machine_worth, w.machine_worth_reason, w.machine_source,
+       w.effective_worth, w.human_worth, w.human_worth_note,
+       w.human_worth_at, w.person_ids_json,
+       a.path AS dossier_path
+FROM parents p
+JOIN worth w USING(parent_id)
+LEFT JOIN artifacts a ON a.artifact_key=(
+  SELECT a2.artifact_key FROM artifacts a2
+  WHERE a2.parent_id=p.parent_id AND a2.kind='dossier' AND a2.status='projected'
+  ORDER BY a2.projected_at DESC, a2.artifact_key LIMIT 1
+)
+{where}
+ORDER BY lower(COALESCE(p.display_name, p.public_identifier)), p.parent_id
+"""
+
+
+_CANDIDATE_SELECT = """
+SELECT c.*,
+       sp.profile_json AS synthetic_profile_json,
+       r.result_json AS research_json,
+       (SELECT json_group_array(value) FROM (
+          SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
+          FROM candidate_people cp JOIN person_identifiers pi USING(person_id)
+          WHERE cp.row_key=c.row_key AND pi.kind='email' ORDER BY value
+        )) AS emails_json,
+       (SELECT json_group_array(value) FROM (
+          SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
+          FROM candidate_people cp JOIN person_identifiers pi USING(person_id)
+          WHERE cp.row_key=c.row_key AND pi.kind='phone' ORDER BY value
+        )) AS phones_json
+FROM candidate_policy c
+LEFT JOIN synthetic_profiles sp ON sp.candidate_key=c.row_key
+LEFT JOIN research r ON r.candidate_key=c.row_key AND r.handle=(
+  SELECT r2.handle FROM research r2 WHERE r2.candidate_key=c.row_key
+  ORDER BY r2.updated_at DESC, r2.handle LIMIT 1
+)
+WHERE c.parent_id IN ({parent_placeholders})
+{pending}
+ORDER BY c.parent_id, c.is_pending DESC, c.row_key
+"""
+
+
+def _profile_view(*payloads: object) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for candidate in payloads:
+        parsed = _json(candidate, {})
+        if isinstance(parsed, dict) and parsed:
+            payload = parsed
+            break
+    linkedin = payload.get("linkedin") if isinstance(payload.get("linkedin"), dict) else {}
+    person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
+    social = payload.get("social") if isinstance(payload.get("social"), dict) else {}
+    verdict = payload.get("verdict") if isinstance(payload.get("verdict"), dict) else {}
+    full_name = (
+        payload.get("full_name")
+        or linkedin.get("full_name")
+        or person.get("full_name")
+        or " ".join(filter(None, (payload.get("first_name"), payload.get("last_name"))))
+    )
+    return {
+        "full_name": str(full_name or ""),
+        "headline": str(payload.get("headline") or linkedin.get("headline") or ""),
+        "profile_pic_url": str(
+            payload.get("profile_pic_url") or linkedin.get("profile_pic_url") or ""
+        ),
+        "experiences": payload.get("experiences") or linkedin.get("experiences") or [],
+        "education": payload.get("education") or linkedin.get("education") or [],
+        "location": payload.get("location") or linkedin.get("location") or "",
+        "supporting": verdict.get("supporting_evidence") or [],
+        "contradicting": verdict.get("contradicting_evidence") or [],
+        "plausibly_absent": bool(verdict.get("linkedin_plausibly_absent")),
+        "recommend_dr": bool(verdict.get("recommend_deep_research")),
+        "linkedin_url": str(
+            payload.get("linkedin_url") or linkedin.get("linkedin_url")
+            or social.get("linkedin_url") or ""
+        ),
+    }
+
+
+def _candidate_dict(row: Any) -> dict[str, Any]:
+    profile = _profile_view(
+        row["synthetic_profile_json"], row["research_json"], row["judgment_payload_json"]
+    )
+    proposed = row["machine_action"] == "retarget" and row["machine_proposed_url"]
+    decided_retarget = row["decision_action"] == "retarget" and row["replacement_url"]
+    url = row["replacement_url"] if decided_retarget else (
+        row["machine_proposed_url"] if proposed else row["linkedin_url"]
+    )
+    pub = row["replacement_public_identifier"] if decided_retarget else (
+        row["machine_proposed_public_identifier"] if proposed else row["public_identifier"]
+    )
+    action = row["decision_action"] or row["machine_action"] or ""
+    approved = row["decision_approved"] or row["machine_approved"] or ""
+    return {
+        "pub": row["public_identifier"],
+        "row_key": row["row_key"],
+        "profile_pub": pub or row["public_identifier"],
+        "url": url or profile["linkedin_url"],
+        "full_name": row["display_name"] or profile["full_name"],
+        "headline": profile["headline"],
+        "profile_pic_url": profile["profile_pic_url"],
+        "experiences": profile["experiences"],
+        "education": profile["education"],
+        "location": profile["location"],
+        "has_profile": bool(url or profile["linkedin_url"]),
+        "verdict": row["machine_judgment"] or "",
+        "confidence": float(row["machine_confidence"] or 0.0),
+        "supporting": profile["supporting"],
+        "contradicting": profile["contradicting"],
+        "reason": row["machine_reason"] or "",
+        "plausibly_absent": profile["plausibly_absent"],
+        "recommend_dr": profile["recommend_dr"],
+        "match_emails": _json(row["emails_json"], []),
+        "match_phones": _json(row["phones_json"], []),
+        "conflict": False,
+        "import_candidate": bool(row["raw_import"]),
+        "candidate_origin": bool(row["candidate_origin"]),
+        "synthetic": row["kind"] == "synthetic",
+        "action": action,
+        "approved": approved,
+        "new_url": row["replacement_url"] or row["machine_proposed_url"] or "",
+        "new_public_identifier": (
+            row["replacement_public_identifier"]
+            or row["machine_proposed_public_identifier"]
+            or ""
+        ),
+        "llm_reject": row["machine_judgment"] or "",
+        "llm_reject_confidence": row["machine_confidence"],
+        "llm_reject_reason": row["machine_reason"] or "",
+        "pending": bool(row["is_pending"]),
+    }
+
+
+def _parent_dict(row: Any) -> dict[str, Any]:
+    worth = {
+        "key": f"{PARENT_WORTH_PREFIX}{row['parent_id']}",
+        "parent_id": row["parent_id"],
+        "parent_slug": row["display_slug"] or row["public_identifier"],
+        "person_ids": _json(row["person_ids_json"], []),
+        "name": row["display_name"] or row["public_identifier"],
+        "machine": {
+            "decision": row["machine_worth"],
+            "reason": row["machine_worth_reason"],
+            "source": row["machine_source"],
+        },
+        "human": ({"decision": row["human_worth"], "updated_at": row["human_worth_at"] or ""}
+                  if row["human_worth"] else None),
+        "effective": row["effective_worth"],
+        "source": "user" if row["human_worth"] else row["machine_source"],
+    }
+    slug = row["display_slug"] or row["public_identifier"]
+    return {
+        "parent_id": row["parent_id"],
+        "slug": slug,
+        "dossier_slug": slug,
+        "dossier_path": row["dossier_path"],
+        "name": row["display_name"] or row["public_identifier"],
+        "person_ids": worth["person_ids"],
+        "sources": [],
+        "worth_row": worth,
+        "worth": {"decision": worth["effective"], "source": worth["source"]},
+        "machine_worth": worth["machine"],
+        "candidates": [],
+    }
+
+
+def _hydrate_parents(db: Db, parent_rows: list[Any], *, pending_only: bool) -> list[dict[str, Any]]:
+    parents = [_parent_dict(row) for row in parent_rows]
+    if not parents:
+        return []
+    by_id = {parent["parent_id"]: parent for parent in parents}
+    placeholders = ",".join("?" for _ in parents)
+    sql = _LINKEDIN_CTE + _CANDIDATE_SELECT.format(
+        parent_placeholders=placeholders,
+        pending="AND c.is_pending=1" if pending_only else "",
+    )
+    for row in db.query(sql, tuple(by_id)):
+        by_id[row["parent_id"]]["candidates"].append(_candidate_dict(row))
+    return parents
+
+
+def linkedin_parents(db: Db) -> list[dict[str, Any]]:
+    """Every parent in the identity-review progress scope, including completed ones."""
+    rows = db.query(
+        _LINKEDIN_CTE
+        + _PARENT_SELECT.format(where="WHERE p.parent_id IN (SELECT parent_id FROM identity_scope)")
+    )
+    return _hydrate_parents(db, rows, pending_only=False)
+
+
+def linkedin_queue(db: Db) -> list[dict[str, Any]]:
+    """One stable card per pending parent, carrying all of its pending candidates."""
+    rows = db.query(
+        _LINKEDIN_CTE
+        + _PARENT_SELECT.format(where="WHERE p.parent_id IN (SELECT parent_id FROM pending_parents)")
+    )
+    return _hydrate_parents(db, rows, pending_only=True)
+
+
+def linkedin_progress(db: Db) -> dict[str, int]:
+    row = db.query(
+        _LINKEDIN_CTE
+        + """
+SELECT (SELECT count(*) FROM identity_scope) AS total,
+       (SELECT count(*) FROM pending_parents) AS pending
+"""
+    )[0]
+    total, pending = int(row["total"]), int(row["pending"])
+    return {"total": total, "pending": pending, "done": total - pending}
 
 
 def stage_progress(db: Db) -> dict[str, int]:
-    """Pending counts straight from the store."""
-    pending_links = db.query(
-        "SELECT COUNT(*) AS n FROM links l WHERE NOT EXISTS "
-        "(SELECT 1 FROM decisions d WHERE d.kind = 'identity' AND d.target = l.row_key)"
+    worth = worth_counts(db)
+    linkedin = linkedin_progress(db)
+    lookup_ready = db.query(
+        _WORTH_CTE
+        + """
+SELECT count(*) AS n FROM worth w
+WHERE w.effective_worth='yes'
+  AND EXISTS(SELECT 1 FROM links l WHERE l.parent_id=w.parent_id AND l.raw_import=1)
+"""
     )[0]["n"]
-    pending_worth = db.query(
-        "SELECT COUNT(*) AS n FROM parents p WHERE NOT EXISTS "
-        "(SELECT 1 FROM decisions d WHERE d.kind = 'worth' AND d.target = p.parent_id)"
+    total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
+    rejected = db.query(
+        _WORTH_CTE
+        + """
+SELECT count(DISTINCT parent_id) AS n FROM (
+  SELECT parent_id FROM worth WHERE effective_worth='no'
+  UNION ALL
+  SELECT parent_id FROM links
+  WHERE decision_action='exclude' AND decision_approved IN ('auto', 'yes')
+)
+"""
     )[0]["n"]
-    return {"linkedin_pending": pending_links, "worth_pending": pending_worth}
+    return {
+        "total": int(total),
+        "worth_total": worth["total"],
+        "worth_pending": worth["pending"],
+        "worth_yes": worth["yes"],
+        "worth_no": worth["no"],
+        "lookup_ready": int(lookup_ready),
+        "linkedin_total": linkedin["total"],
+        "linkedin_pending": linkedin["pending"],
+        "linkedin_done": linkedin["done"],
+        "rejected": int(rejected),
+    }
+
+
+def siblings_of(db: Db, candidate_key: str) -> list[str]:
+    """All real, synthetic, and ghost candidate keys for the clicked parent."""
+    rows = db.query(
+        "SELECT row_key FROM links WHERE parent_id=("
+        "SELECT parent_id FROM links WHERE row_key=?"
+        ") ORDER BY row_key",
+        (candidate_key,),
+    )
+    return [row["row_key"] for row in rows]
+
+
+def directory(db: Db) -> list[dict[str, str]]:
+    """The directory sidebar projection, sorted A-Z with effective worth."""
+    return [
+        {
+            "slug": row["parent_slug"],
+            "name": row["name"],
+            "worth": row["effective"],
+        }
+        for row in worth_rows(db)
+    ]
+
+
+def person_detail(db: Db, slug_or_parent_id: str) -> dict[str, Any] | None:
+    """One SQL-hydrated parent; artifact paths may be opened by the response adapter."""
+    rows = db.query(
+        _WORTH_CTE
+        + _PARENT_SELECT.format(
+            where="WHERE p.parent_id=? OR p.display_slug=? OR p.public_identifier=?"
+        ),
+        (slug_or_parent_id, slug_or_parent_id, slug_or_parent_id),
+    )
+    hydrated = _hydrate_parents(db, rows[:1], pending_only=False)
+    return hydrated[0] if hydrated else None
+
+
+def set_worth(db: Db, parent_or_key: str, value: str, *, note: str | None = None) -> None:
+    db.set_worth(parent_or_key.removeprefix(PARENT_WORTH_PREFIX), value, note=note)
+
+
+def reset_worth(db: Db, parent_or_key: str) -> None:
+    db.reset_worth(parent_or_key.removeprefix(PARENT_WORTH_PREFIX))
+
+
+def settle_identity(db: Db, candidate_key: str, action: str, **replacement: Any) -> list[str]:
+    return db.settle_identity(candidate_key, action, **replacement)
+
+
+def reset_identity(db: Db, candidate_key: str) -> list[str]:
+    return db.reset_identity(candidate_key)
