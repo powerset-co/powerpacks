@@ -12,6 +12,10 @@ scrubs are idempotent and cheap — a no-op on a current install, safe to run
 every time.
 
 Changelog:
+  2026-08-04: deep-context — `resolve_stored_identity_policy` rule (4): parents
+    half-decided by the pre-v1.15.3 /decide (one human answer settled only the
+    clicked row) get their remaining pending candidate rows settled the way the
+    live sibling fan-out does (detach + synthetic approve gates to no).
   2026-08-04: deep-context — `resolve_stored_identity_policy`: review.csv
     rows written under the pre-decisive judge-apply policy get the 2026-08
     promotions/demotions (decisive confirm wins its group; a punt on an
@@ -331,26 +335,48 @@ def ensure_owner_phones(owner_json: Path) -> bool:
 # at review entry — no re-judge, no spend.
 # REMOVAL CONDITION: delete once no supported install predates the release
 # carrying PR #413.
+#
+# Rule (4), 2026-08-04: HALF-DECIDED parents. Before v1.15.3, a /decide settled
+# only the clicked row, so a parent with several candidate rows (LinkedIn links
+# plus folded synthetic options) kept its other rows pending and re-entered the
+# review queue already answered. v1.15.3's /decide fans a human answer out to
+# every pending sibling; this rule applies the same fan-out once to rows a
+# human decided on OLD code. Pure function of stored fields (action/approved/
+# source) — no re-judge, no spend.
+# REMOVAL CONDITION for rule (4): delete once no supported install carries
+# review rows decided before powerpacks v1.15.3 (post-1.15.3 /decide can no
+# longer create the shape, so the population only shrinks).
 # -----------------------------------------------------------------------------
 
 
 def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
-                                   people_csv: Path | None = None) -> dict[str, int]:
+                                   people_csv: Path | None = None,
+                                   synthetic_csv: Path | None = None) -> dict[str, int]:
     """Promote/demote pending identity rows to the current apply policy.
 
-    Runs three deterministic rules, in order: (1) a ground-truth LinkedIn
+    Runs four deterministic rules, in order: (1) a ground-truth LinkedIn
     CONNECTION row auto-verifies — the user is literally connected, identity
     is not a question (a restart-review reset used to blank these to a bare
     pending row); (2) a decisive pending confirm promotes and its pending
     siblings drop; (3) a sub-decisive pending punt on a person who already
     carries an applied identity detaches. Connections run first so a freshly
     applied connection supersedes its doppelganger punts in the same pass.
+    (4) a parent group holding a HUMAN identity decision (approved yes/no with
+    a user-grade source — never a machine `auto`) settles its remaining pending
+    candidate rows exactly like the live /decide sibling fan-out: real rows
+    detach (approved=yes), pending synthetic options gate to `no` in
+    synthetic-people.csv, so a legacy half-decided parent stops re-entering
+    the queue.
 
-    Never touches: user decisions (approved yes/no), retarget rows (accepted
-    ones stand, rejected ones must resurface for review), exclude rows, or
-    parent-worth rows. Idempotent: promoted/demoted rows carry approved=auto
-    and are skipped on the next pass. Returns
-    {"connections": n, "promoted": n, "demoted": n}.
+    Rules (1)-(3) never touch: user decisions (approved yes/no), retarget rows
+    (accepted ones stand, rejected ones must resurface for review), exclude
+    rows, or parent-worth rows. Rule (4) additionally settles pending
+    verify/detach/retarget rows — but ONLY inside a group the human already
+    answered; human yes/no and machine `auto` rows are never touched, and a
+    group with no human decision is never touched. Idempotent:
+    promoted/demoted rows carry approved=auto, settled rows carry approved=yes
+    or a yes/no synthetic gate, and all are skipped on the next pass. Returns
+    {"connections": n, "promoted": n, "demoted": n, "siblings_settled": n}.
     """
     from packs.ingestion.primitives.common.jsonio import now_iso
     from packs.ingestion.primitives.deep_context.review_store import (
@@ -366,7 +392,8 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
     )
 
     if not review_csv.exists():
-        return {"connections": 0, "promoted": 0, "demoted": 0}
+        return {"connections": 0, "promoted": 0, "demoted": 0,
+                "siblings_settled": 0}
     rows = load_override_rows(review_csv)
     parent_of = parent_ids_by_person(index_json)
 
@@ -441,6 +468,91 @@ def resolve_stored_identity_policy(review_csv: Path, index_json: Path,
                 row["action"], row["approved"] = "detach", "auto"
                 row["updated_at"] = now_iso()
                 demoted += 1
-    if connections or promoted or demoted:
+    # Rule (4): settle legacy half-decided parent groups the way the live
+    # /decide sibling fan-out does. Runs LAST so it only sweeps what rules
+    # (1)-(3) left pending — a v1.15.3+ install has already applied those to
+    # this store, and re-ordering would silently change their outcomes.
+    from packs.ingestion.primitives.deep_context.candidates import (
+        candidate_identifier_key,
+        current_parent_by_person_id,
+        is_candidate_id,
+        parent_by_candidate_identifier,
+    )
+    from packs.ingestion.primitives.deep_context.review_web.decisions import (
+        apply_synthetic_decision,
+    )
+    from packs.ingestion.primitives.deep_context.review_web.model import (
+        _synthetic_source_ids,
+    )
+
+    # A human identity decision is approved yes/no from a user-grade writer:
+    # the review UI's /decide (`deep-context-review`) or a guided-retarget
+    # submit (`user-guidance`). Old machine appliers wrote approved=yes with
+    # source `deep-research` — those must NOT trigger a settle (the same
+    # human-vs-machine line the shipped settle guards draw at `auto`).
+    user_sources = {"deep-context-review", "user-guidance"}
+    # Candidate rows only: verify/detach (judged links) and retarget (proposed
+    # links). Worth-mirror rows (action='') and exclude rows are neither
+    # triggers nor settle targets.
+    identity_actions = {"verify", "detach", "retarget"}
+    slug_of_person = current_parent_by_person_id(index_json)
+
+    human_groups: set[str] = set()
+    pending_by_group: dict[str, list[dict[str, str]]] = {}
+    for key, row in rows.items():
+        if is_parent_worth_row(row, key):
+            continue
+        if (row.get("action") or "").strip().lower() not in identity_actions:
+            continue
+        person_id = (row.get("person_id") or "").strip().lower()
+        group = slug_of_person.get(person_id) or person_id or key
+        approved = (row.get("approved") or "").strip().lower()
+        if approved in {"yes", "no"}:
+            if (row.get("source") or "").strip().lower() in user_sources:
+                human_groups.add(group)
+        elif approved != "auto":
+            pending_by_group.setdefault(group, []).append(row)
+
+    siblings_settled = 0
+    for group in human_groups:
+        for row in pending_by_group.get(group, []):
+            # Same write as the live fan-out's sibling withdrawal (a
+            # link-level No, never a person reject), with a scrub-owned
+            # source so the repair stays auditable.
+            row.update({"action": "detach", "approved": "yes",
+                        "new_linkedin_url": "", "new_public_identifier": "",
+                        "source": "legacy-sibling-settle",
+                        "updated_at": now_iso()})
+            siblings_settled += 1
+
+    if synthetic_csv is not None and synthetic_csv.exists() and human_groups:
+        # A folded synthetic option's gate lives in synthetic-people.csv. Its
+        # owning group mirrors the review UI's fold: the row's source person
+        # ids via the index's child->parent membership, and — for candidate:*
+        # ids — the real parent that already owns the candidate's identifier.
+        ident_owner = parent_by_candidate_identifier(index_json)
+        with synthetic_csv.open(newline="", encoding="utf-8") as fh:
+            synth_rows = list(csv.DictReader(fh))
+        for synth in synth_rows:
+            pub = (synth.get("public_identifier") or "").strip().lower()
+            if not pub.startswith("synth-"):
+                continue
+            if (synth.get("approved") or "").strip().lower() in {"yes", "no"}:
+                continue  # the user already gated it — their word stands
+            source_ids = (_synthetic_source_ids(synth.get("source_person_ids") or "")
+                          or [str(synth.get("id") or "") or pub])
+            synth_groups: set[str] = set()
+            for pid in source_ids:
+                pid = pid.strip().lower()
+                slug = slug_of_person.get(pid)
+                if not slug and is_candidate_id(pid):
+                    slug = ident_owner.get(candidate_identifier_key(pid))
+                synth_groups.add(slug or pid)
+            if synth_groups & human_groups:
+                apply_synthetic_decision(synthetic_csv, pub, "detach")
+                siblings_settled += 1
+
+    if connections or promoted or demoted or siblings_settled:
         write_override_rows(review_csv, rows)
-    return {"connections": connections, "promoted": promoted, "demoted": demoted}
+    return {"connections": connections, "promoted": promoted,
+            "demoted": demoted, "siblings_settled": siblings_settled}

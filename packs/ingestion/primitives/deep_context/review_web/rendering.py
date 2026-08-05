@@ -665,6 +665,24 @@ def _skip_link() -> str:
     return "<button type='button' class='skip-link' data-open-skip>Skip</button>"
 
 
+def _judge_confidence_badge(candidate: dict[str, Any]) -> str:
+    """The identity judge's confidence as a quiet pill beside the LinkedIn
+    link ("87% match"). Real profiles only — a synthetic row's confidence is
+    research completeness, not identity confidence — and only when the judge
+    actually scored one (confidence > 0). ONE muted style for every verdict:
+    the number informs; a color would pre-judge the reviewer's own call."""
+    if candidate.get("synthetic") or not str(candidate.get("url") or ""):
+        return ""
+    try:
+        confidence = float(candidate.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if confidence <= 0:
+        return ""
+    percent = round(min(confidence, 1.0) * 100)
+    return f"<span class='linkedin-confidence'>{esc(f'{percent}% match')}</span>"
+
+
 def _person_menu(pub: Any, parent_slug: Any, extra_class: str = "") -> str:
     """The "…" overflow menu (general feedback that isn't a decision or a
     retarget) — ONE markup for the directory person pane and the review cards."""
@@ -780,8 +798,8 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # which is redundant with the Summary/Relationship/Timeline sections below, so
     # it (and the "Researched profile" / "No LinkedIn found" labels) are dropped.
     # Both a real and a synthetic row present the SAME decision UI ("Is this the
-    # right profile? Or Skip?" + [No] [Use this profile] + a hidden fix form behind
-    # No). The "Skip" is an inline secondary link folded into the question line (same
+    # right profile? Or Skip?" + a terminal [No] [Use this profile] pair + a
+    # collapsed guidance box). The "Skip" is an inline secondary link folded into the question line (same
     # detach behavior as the old standalone button). A synthetic row simply has no
     # genuine LinkedIn header (no View-LinkedIn link, no headline); the SEMANTIC
     # difference lives only in the /decide endpoint, which routes a keep on a
@@ -804,6 +822,10 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         # URL survives as plain text in the why-note below.
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
                 "<span aria-hidden='true'>↗</span></a>") if url and not cache_miss else ""
+        if link:
+            # Judge-confidence pill: real link, judged, and a valid profile
+            # (``link`` is already empty on a cache_miss card).
+            link += _judge_confidence_badge(candidate)
         header_headline = _displayable(str(candidate.get("headline") or ""))
     # Attached LinkedIn with nothing renderable (404 / private / empty /
     # local cache miss): say WHY the card is blank and lead with the
@@ -834,12 +856,17 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
     # An INVALID card has nothing to confirm and nothing to say No to — the
     # guidance box (whose URL path applies a pasted link directly, no spend)
     # plus the inline Skip is the complete decision surface. On a VALID card,
-    # "No" expands the same guidance box — ONE input owns both paste-the-URL
-    # and re-research; there is no separate fix form.
+    # "No" is TERMINAL: it decides detach directly (the same /decide fan-out
+    # Skip performs), so a No always saves and the person never returns as a
+    # silent pending loop. The collapsed guidance box below stays the separate
+    # PRE-decision path — paste the right URL or ask for re-research instead
+    # of deciding.
     actions = "" if invalid else f"""
         <div class='binary-actions'>
-          <button class='button button-outline' data-open-guidance
-                  aria-expanded='false'>No</button>
+          <button class='button button-outline' data-decide='detach'
+                  data-toast='Not this profile'
+                  data-pub='{esc(candidate.get('pub'))}'
+                  data-parent='{esc(parent.get('slug'))}'>No</button>
           <button class='button button-primary' data-decide='keep'
                   data-pub='{esc(candidate.get('pub'))}'
                   data-parent='{esc(parent.get('slug'))}'>Use this profile</button>
@@ -857,7 +884,7 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
                             parent.get('slug'),
                             label=("No profile data — give re-research guidance"
                                    if invalid
-                                   else "No — provide LinkedIn or re-research this person"),
+                                   else "Wrong person? Provide LinkedIn or re-research"),
                             open_by_default=invalid)}
       </div>
     </article>"""
@@ -883,6 +910,7 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
     # which option is the real LinkedIn and which is the researched identity.
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer' "
             "aria-label='View LinkedIn profile'>View profile<span aria-hidden='true'>↗</span></a>"
+            f"{_judge_confidence_badge(candidate)}"
             if url and has_content else "<span class='linkedin-label-na'>"
             + ("N/A — research-derived profile" if synthetic
                else ("N/A" if not url else "no profile")) + "</span>")

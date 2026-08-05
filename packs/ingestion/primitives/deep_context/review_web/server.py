@@ -1353,10 +1353,13 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
 def cmd_serve(args: argparse.Namespace) -> None:
     # Stage-entry legacy scrubs: an owner.json predating the phones field gets
     # the owner's own numbers stamped so the identifier policy can drop them,
-    # and review rows written under the pre-decisive judge-apply policy get
-    # the 2026-08 promotions/demotions without a re-judge.
+    # review rows written under the pre-decisive judge-apply policy get the
+    # 2026-08 promotions/demotions without a re-judge, and parents left
+    # half-decided by the pre-v1.15.3 single-row /decide get their pending
+    # sibling rows (and synthetic gates) settled once.
     ensure_owner_phones(OWNER_JSON)
-    resolve_stored_identity_policy(Path(args.review), INDEX_JSON, DEFAULT_PEOPLE_CSV)
+    resolve_stored_identity_policy(Path(args.review), INDEX_JSON, DEFAULT_PEOPLE_CSV,
+                                   Path(args.synthetic_people))
     review_path = Path(args.review)
     verdicts_path = Path(args.verdicts)
     parents_dir = Path(args.parents_dir)
