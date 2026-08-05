@@ -11,13 +11,8 @@ from __future__ import annotations
 import csv
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
-
-from packs.ingestion.primitives.deep_context.db.schema import (
-    DecisionKind,
-    DecisionRow,
-    HumanWorth,
-)
 
 OVERRIDE_COLUMNS = [
     "public_identifier",
@@ -45,6 +40,12 @@ OVERRIDE_COLUMNS = [
 ]
 
 
+@dataclass(frozen=True)
+class SyntheticGate:
+    public_identifier: str
+    approved: str
+
+
 def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
     """review.csv rows keyed by normalized public_identifier."""
     rows: dict[str, dict[str, str]] = {}
@@ -69,13 +70,9 @@ def write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
     os.replace(tmp, path)
 
 
-def read_synthetic_gates(synthetic_csv: Path | None) -> tuple[list[DecisionRow], list[str]]:
-    """The approved gate column of synthetic-people.csv as decision rows.
-
-    The CSV cell conflates outcome and actor: yes/no are human, 'auto' is the
-    completeness gate's machine-standing keep — split into (value, approved).
-    """
-    by_pub: dict[str, DecisionRow] = {}
+def read_synthetic_gates(synthetic_csv: Path | None) -> tuple[list[SyntheticGate], list[str]]:
+    """Parse the legacy approved gate; the importer maps it onto candidate state."""
+    by_pub: dict[str, SyntheticGate] = {}
     errors: list[str] = []
     if not synthetic_csv or not synthetic_csv.exists():
         return [], errors
@@ -88,15 +85,10 @@ def read_synthetic_gates(synthetic_csv: Path | None) -> tuple[list[DecisionRow],
             if not pub:
                 errors.append("synthetic-people.csv: approved gate on a row without public_identifier")
                 continue
-            if approved == "auto":
-                gate = DecisionRow(kind=DecisionKind.SYNTHETIC_GATE.value, target=pub,
-                                   value=HumanWorth.YES.value, approved="auto")
-            elif approved in set(HumanWorth):
-                gate = DecisionRow(kind=DecisionKind.SYNTHETIC_GATE.value, target=pub,
-                                   value=approved, approved="yes")
-            else:
+            if approved not in {"auto", "yes", "no"}:
                 errors.append(f"synthetic:{pub}: unknown approved '{approved}'")
                 continue
+            gate = SyntheticGate(pub, approved)
             previous = by_pub.get(pub)
             if previous is not None and previous != gate:
                 errors.append(f"synthetic:{pub}: duplicate rows with conflicting approved gates")

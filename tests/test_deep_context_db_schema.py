@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+import csv
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context.db.schema import (
@@ -170,6 +171,11 @@ class DeepContextSchemaTests(unittest.TestCase):
         self.candidate("real-1")
         with self.assertRaisesRegex(sqlite3.IntegrityError, "synthetic kind"):
             self.db.project_synthetic_profile(SyntheticProfileRow("bad", "real-1", "{}"))
+
+        exported = Path(self.temp.name) / "synthetic.csv"
+        self.db.export_batons(Path(self.temp.name) / "review.csv", exported)
+        with exported.open(newline="", encoding="utf-8") as handle:
+            self.assertEqual(next(csv.DictReader(handle))["approved"], "no")
 
     def test_artifact_projection_is_idempotent_and_owner_checked(self) -> None:
         self.parent()

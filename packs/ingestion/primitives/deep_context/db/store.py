@@ -444,7 +444,13 @@ class Db:
             "FROM synthetic_profiles s JOIN links l ON l.row_key=s.candidate_key "
             "ORDER BY s.public_identifier"
         ):
-            gate = profile["decision_approved"] or profile["machine_approved"] or ""
+            action = profile["decision_action"]
+            if action in {ReviewAction.DETACH.value, ReviewAction.EXCLUDE.value}:
+                gate = "no"
+            elif action == ReviewAction.VERIFY.value and profile["decision_approved"] == "yes":
+                gate = "yes"
+            else:
+                gate = profile["machine_approved"] or ""
             rows.append(json.loads(profile["profile_json"]) | {
                 "public_identifier": profile["public_identifier"],
                 "linkedin_url": profile["linkedin_url"] or "",
