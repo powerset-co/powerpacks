@@ -59,6 +59,7 @@ from packs.ingestion.primitives.deep_context.review_store import (
     parent_worth_key,
     write_override_rows as write_rows,
 )
+from packs.ingestion.primitives.enrich import rapidapi_client
 
 
 class TestCommon(unittest.TestCase):
@@ -6701,6 +6702,223 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         # panel); the document-level one must skip its forms or submits double.
         script = web_rendering.REVIEW_JS.read_text(encoding="utf-8")
         self.assertIn('form.closest("[data-directory-detail]")', script)
+
+
+class LinkedinCardConfidenceBadgeTests(unittest.TestCase):
+    """Judge-confidence pill on the LinkedIn review cards: a real, judged,
+    renderable profile shows "NN% match" beside the View-LinkedIn link — one
+    muted style regardless of verdict. Synthetic rows (their confidence is
+    research completeness), unjudged rows (confidence 0/missing), and invalid
+    cache-miss profiles never show it."""
+
+    def _parent(self):
+        return {"name": "Jordan Bravo", "slug": "jordan-bravo-ab12cd34",
+                "dossier_slug": "jordan-bravo-ab12cd34",
+                "person_ids": ["pid-1"], "candidates": []}
+
+    def test_single_card_shows_percent_badge(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "headline": "Founder at Bravo Robotics",
+                    "experiences": ["Founder @ Bravo Robotics"],
+                    "verdict": "confirmed", "confidence": "0.87"}  # float-ish string
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertIn("<span class='linkedin-confidence'>87% match</span>", html)
+        self.assertIn("View LinkedIn", html)
+
+    def test_zero_or_missing_confidence_has_no_badge(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            for cand in ({"pub": "jordan-bravo",
+                          "url": "https://www.linkedin.com/in/jordan-bravo",
+                          "experiences": ["Founder @ Bravo Robotics"],
+                          "verdict": "confirmed", "confidence": "0.0"},
+                         {"pub": "jordan-bravo",
+                          "url": "https://www.linkedin.com/in/jordan-bravo",
+                          "experiences": ["Founder @ Bravo Robotics"]}):
+                html = web_rendering.render_linkedin_card(
+                    self._parent(), cand, d, d, profile_cache_dir=d)
+                self.assertNotIn("linkedin-confidence", html)
+                self.assertIn("View LinkedIn", html)  # the link itself stays
+
+    def test_invalid_cache_miss_profile_has_no_badge(self):
+        # No experiences/education and an empty cache dir: the card is the
+        # "Invalid LinkedIn" shape — nothing to confirm, so no confidence pill.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo",
+                    "verdict": "confirmed", "confidence": 0.9}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertIn("Invalid LinkedIn.", html)
+        self.assertNotIn("linkedin-confidence", html)
+
+    def test_synthetic_candidate_has_no_badge(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "synth-pid-1", "synthetic": True,
+                    "verdict": "synthetic", "confidence": 0.95}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertNotIn("linkedin-confidence", html)
+
+    def test_multi_card_options_each_carry_their_badge(self):
+        parent = self._parent()
+        cands = [{"pub": "jordan-bravo",
+                  "url": "https://www.linkedin.com/in/jordan-bravo",
+                  "experiences": ["Founder @ Bravo Robotics"],
+                  "verdict": "confirmed", "confidence": 0.91},
+                 {"pub": "jordan-bravo-b2",
+                  "url": "https://www.linkedin.com/in/jordan-bravo-b2",
+                  "experiences": ["Analyst @ Example Corp"],
+                  "verdict": "wrong_person", "confidence": 0.62}]
+        parent["candidates"] = cands
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            html = web_rendering.render_linkedin_card(
+                parent, cands, d, d, profile_cache_dir=d)
+        self.assertIn("<span class='linkedin-confidence'>91% match</span>", html)
+        self.assertIn("<span class='linkedin-confidence'>62% match</span>", html)
+
+
+class AvatarEndpointTests(unittest.TestCase):
+    """/api/avatar's cache-first AvatarStore: the local file answers free; a
+    miss earns ONE CDN download attempt per pub per process; only the
+    signed-URL-expiry shape (403/404/410) earns ONE quota-bearing profile
+    refresh plus ONE retry download — silently skipped without a RapidAPI key.
+    A terminal miss stays None (the endpoint 404s; the UI keeps initials)."""
+
+    PUB = "jordan-bravo"
+    PIC_URL = "https://media.licdn.com/dms/image/v2/jordan?e=1&sig=dead"
+    FRESH_URL = "https://media.licdn.com/dms/image/v2/jordan?e=2&sig=live"
+    JPEG = b"\xff\xd8\xff" + b"jordan-avatar-bytes"
+
+    def _store(self, root: Path, pic_url: str = PIC_URL) -> "web_server.AvatarStore":
+        cache_dir = root / "profile_cache"
+        write_json(cache_dir / f"{self.PUB}.json", self._record(pic_url))
+        return web_server.AvatarStore(cache_dir, root / "avatars")
+
+    def _record(self, pic_url: str) -> dict:
+        return {"public_identifier": self.PUB,
+                "linkedin_url": f"https://www.linkedin.com/in/{self.PUB}",
+                "raw_response": {"profilePicture": pic_url},
+                "normalized_profile": {"success": True, "profile_pic_url": pic_url}}
+
+    def _image_urlopen(self, request, timeout=0):
+        response = mock.MagicMock()
+        response.read.return_value = self.JPEG
+        response.geturl.return_value = request.full_url
+        cm = mock.MagicMock()
+        cm.__enter__.return_value = response
+        cm.__exit__.return_value = False
+        return cm
+
+    def _expired_urlopen(self, request, timeout=0):
+        raise web_model.urllib.error.HTTPError(
+            request.full_url, 403, "Forbidden", None, None)
+
+    def test_cached_file_serves_without_network(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            store = self._store(root)
+            path = web_model._avatar_cache_path(self.PUB, root / "avatars")
+            path.parent.mkdir(parents=True)
+            path.write_bytes(self.JPEG)
+            with mock.patch.object(web_model.urllib.request, "urlopen",
+                                   side_effect=AssertionError("no network")):
+                self.assertEqual(store.fetch(self.PUB), (self.JPEG, "image/jpeg"))
+
+    def test_live_url_downloads_once_then_serves_the_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            store = self._store(root)
+            with mock.patch.object(web_model.urllib.request, "urlopen",
+                                   side_effect=self._image_urlopen) as opened:
+                self.assertEqual(store.fetch(self.PUB), (self.JPEG, "image/jpeg"))
+                self.assertEqual(store.fetch(self.PUB), (self.JPEG, "image/jpeg"))
+            self.assertEqual(opened.call_count, 1)  # second hit is the file cache
+            self.assertTrue(web_model._avatar_cache_path(
+                self.PUB, root / "avatars").exists())
+
+    def test_expired_url_refreshes_profile_once_and_retries_once(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            store = self._store(root)
+
+            def urlopen(request, timeout=0):
+                if request.full_url == self.PIC_URL:  # the stale signed URL
+                    return self._expired_urlopen(request, timeout)
+                return self._image_urlopen(request, timeout)
+
+            calls: list[tuple] = []
+
+            def fetch_profile(pub, url, *, cache_dir=None, refresh_cache=False,
+                              wait_for_attempt=None):
+                calls.append((pub, url, refresh_cache))
+                write_json(Path(cache_dir) / f"{pub}.json",
+                           self._record(self.FRESH_URL))
+                return {"status_code": 200, "data": {}, "error": "",
+                        "from_cache": False,
+                        "normalized_profile": {"success": True}}
+
+            with mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key",
+                                   return_value="test-rapidapi-key"), \
+                 mock.patch.object(rapidapi_client.RapidApiClient, "fetch_profile",
+                                   side_effect=fetch_profile), \
+                 mock.patch.object(web_model.urllib.request, "urlopen",
+                                   side_effect=urlopen) as opened:
+                self.assertEqual(store.fetch(self.PUB), (self.JPEG, "image/jpeg"))
+            self.assertEqual(opened.call_count, 2)  # dead URL once, fresh URL once
+            self.assertEqual(calls, [(self.PUB,
+                                      f"https://www.linkedin.com/in/{self.PUB}",
+                                      True)])  # refresh_cache, from the cached record's URL
+
+    def test_keyless_expiry_skips_refresh_and_never_reattempts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = self._store(Path(tmpdir))
+            with mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key",
+                                   return_value=""), \
+                 mock.patch.object(rapidapi_client.RapidApiClient, "fetch_profile",
+                                   side_effect=AssertionError("quota call on keyless install")), \
+                 mock.patch.object(web_model.urllib.request, "urlopen",
+                                   side_effect=self._expired_urlopen) as opened:
+                self.assertIsNone(store.fetch(self.PUB))
+                self.assertIsNone(store.fetch(self.PUB))
+            self.assertEqual(opened.call_count, 1)  # ONE download attempt per pub per process
+
+    def test_transient_failure_never_spends_a_refresh(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = self._store(Path(tmpdir))
+            with mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key",
+                                   return_value="test-rapidapi-key"), \
+                 mock.patch.object(rapidapi_client.RapidApiClient, "fetch_profile",
+                                   side_effect=AssertionError("refresh on a transient error")), \
+                 mock.patch.object(web_model.urllib.request, "urlopen",
+                                   side_effect=web_model.urllib.error.URLError("timed out")):
+                self.assertIsNone(store.fetch(self.PUB))
+
+    def test_refresh_spends_at_most_once_per_pub(self):
+        # The provider answers, but the profile has no live picture either —
+        # the store settles at a terminal miss and never bills again.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = self._store(Path(tmpdir))
+            fetch_profile = mock.MagicMock(return_value={
+                "status_code": 200, "data": {}, "error": "", "from_cache": False,
+                "normalized_profile": {"success": True}})
+            with mock.patch.object(rapidapi_client.RapidApiClient, "resolve_key",
+                                   return_value="test-rapidapi-key"), \
+                 mock.patch.object(rapidapi_client.RapidApiClient, "fetch_profile",
+                                   fetch_profile), \
+                 mock.patch.object(web_model.urllib.request, "urlopen",
+                                   side_effect=self._expired_urlopen) as opened:
+                self.assertIsNone(store.fetch(self.PUB))
+                self.assertIsNone(store.fetch(self.PUB))
+            self.assertEqual(fetch_profile.call_count, 1)
+            self.assertEqual(opened.call_count, 2)  # first attempt + one retry, never more
 
 
 class WorthWhyNoteTests(unittest.TestCase):

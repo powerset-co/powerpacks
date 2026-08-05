@@ -73,6 +73,7 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
 
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import AssembleSyntheticProfile
 from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchProfiles
+from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, read_usable_cached_profile
 from packs.ingestion.primitives.enrich.rapidapi_client import rapidapi_key, rapidapi_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import ReconcileDeepResearch
@@ -85,7 +86,7 @@ from .feedback import (
     submit_directory_feedback,
 )
 from .retarget_queue import ESTIMATED_COST_USD, GuidedRetarget, RetargetQueue, TERMINAL_STATES, failed_notes_from_items, linkedin_url_in_guidance, run_guided_retarget
-from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
+from .model import SYNTHETIC_PEOPLE_CSV, USER_WORTH_VALUES, _all_review_parents, _primary_candidate, _worth_key, candidate_state, download_avatar, effective_no_for_key, load_avatar, load_connection_keys, summarize, synthetic_worth_key
 from .rendering import DECISION_CHUNK_SIZE, REVIEW_CSS, REVIEW_JS, _phase_view, _primary_candidate, decision_rows_payload, directory_page_html, linkedin_card_body, linkedin_review_body, linkedin_review_queue, page_html, render_dossier_markdown, render_person_detail, render_worth_card, worth_review_body
 from .workflow import approve_enrichment_manifest, browser_stage_for_next_action, current_worth_selection, enrichment_handoff_completed, needs_worth_review, phase_is_completed, read_review_manifest, review_progress, review_state_token, worth_selection_from_parents, write_enrichment_handoff, write_review_manifest
 
@@ -247,6 +248,66 @@ def start_approved_enrichment_job(budget: float) -> None:
     _run_pipeline_job("approved-enrichment", steps)
 
 
+class AvatarStore:
+    """On-demand card avatars for ``/api/avatar``: the local cache file first,
+    then at most ONE CDN download attempt per pub per process, and — only when
+    the download failed with the signed-URL-expiry shape — at most ONE
+    quota-bearing profile refresh followed by ONE retry download. The guards
+    mirror ``_free_attempted``: a miss must not re-run on every page load; a
+    server restart retries. A terminal miss stays a 404 and the UI keeps its
+    initials fallback. The refresh only ever runs because a card actually
+    requested this avatar — there is no sweep — and a keyless install skips it
+    silently."""
+
+    def __init__(self, profile_cache_dir: Path, avatar_dir: Path) -> None:
+        self.profile_cache_dir = profile_cache_dir
+        self.avatar_dir = avatar_dir
+        self._download_attempted: set[str] = set()
+        self._refresh_attempted: set[str] = set()
+
+    def fetch(self, pub: str) -> tuple[bytes, str] | None:
+        key = (pub or "").strip().lower()
+        if not key:
+            return None
+        cached = load_avatar(key, avatar_dir=self.avatar_dir)
+        if cached:
+            return cached
+        if key in self._download_attempted:
+            return None
+        self._download_attempted.add(key)
+        result = download_avatar(key, profile_cache_dir=self.profile_cache_dir,
+                                 avatar_dir=self.avatar_dir)
+        if result.body is not None:
+            return result.body, result.content_type
+        if result.expired and self._refresh_profile_once(key):
+            retry = download_avatar(key, profile_cache_dir=self.profile_cache_dir,
+                                    avatar_dir=self.avatar_dir)
+            if retry.body is not None:
+                return retry.body, retry.content_type
+        return None
+
+    def _refresh_profile_once(self, key: str) -> bool:
+        """ONE paid profile re-fetch for a pub whose cached image URLs are all
+        dead, so the retry download has a freshly signed URL to pull. True only
+        when the cache record was actually rewritten (a failed fetch leaves the
+        same dead URLs — retrying the download would buy nothing)."""
+        if key in self._refresh_attempted:
+            return False
+        self._refresh_attempted.add(key)
+        api_key = rapidapi_key()
+        if not api_key:
+            return False  # keyless install: keep the initials fallback
+        record = read_usable_cached_profile(
+            profile_cache_path(self.profile_cache_dir, key)) or {}
+        try:
+            result = rapidapi_profile(key, str(record.get("linkedin_url") or ""),
+                                      api_key, cache_dir=self.profile_cache_dir,
+                                      refresh_cache=True)
+        except Exception:
+            return False
+        return (result.get("normalized_profile") or {}).get("success") is True
+
+
 def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, dossier_dir: Path,
                  confirm_threshold: float, detach_threshold: float,
                  synthetic_path: Path = SYNTHETIC_PEOPLE_CSV,
@@ -268,6 +329,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
         except OSError:
             run_jobs = False
     avatar_dir = avatar_dir or manifest_path.parent / "avatars"
+    avatars = AvatarStore(profile_cache_dir, avatar_dir)
     mutation_lock = threading.Lock()
 
     def notify_agent() -> None:
@@ -688,8 +750,7 @@ def make_handler(review_path: Path, verdicts_path: Path, parents_dir: Path, doss
                 return
             if parsed.path == "/api/avatar":
                 pub = (params.get("pub") or [""])[0]
-                avatar = load_avatar(pub, profile_cache_dir=profile_cache_dir,
-                                     avatar_dir=avatar_dir)
+                avatar = avatars.fetch(pub)
                 if not avatar:
                     self.send_bytes(b"not found", "text/plain", status=404)
                 else:

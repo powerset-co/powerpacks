@@ -665,6 +665,24 @@ def _skip_link() -> str:
     return "<button type='button' class='skip-link' data-open-skip>Skip</button>"
 
 
+def _judge_confidence_badge(candidate: dict[str, Any]) -> str:
+    """The identity judge's confidence as a quiet pill beside the LinkedIn
+    link ("87% match"). Real profiles only — a synthetic row's confidence is
+    research completeness, not identity confidence — and only when the judge
+    actually scored one (confidence > 0). ONE muted style for every verdict:
+    the number informs; a color would pre-judge the reviewer's own call."""
+    if candidate.get("synthetic") or not str(candidate.get("url") or ""):
+        return ""
+    try:
+        confidence = float(candidate.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if confidence <= 0:
+        return ""
+    percent = round(min(confidence, 1.0) * 100)
+    return f"<span class='linkedin-confidence'>{esc(f'{percent}% match')}</span>"
+
+
 def _person_menu(pub: Any, parent_slug: Any, extra_class: str = "") -> str:
     """The "…" overflow menu (general feedback that isn't a decision or a
     retarget) — ONE markup for the directory person pane and the review cards."""
@@ -804,6 +822,10 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         # URL survives as plain text in the why-note below.
         link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer'>View LinkedIn"
                 "<span aria-hidden='true'>↗</span></a>") if url and not cache_miss else ""
+        if link:
+            # Judge-confidence pill: real link, judged, and a valid profile
+            # (``link`` is already empty on a cache_miss card).
+            link += _judge_confidence_badge(candidate)
         header_headline = _displayable(str(candidate.get("headline") or ""))
     # Attached LinkedIn with nothing renderable (404 / private / empty /
     # local cache miss): say WHY the card is blank and lead with the
@@ -883,6 +905,7 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
     # which option is the real LinkedIn and which is the researched identity.
     link = (f"<a class='linkedin-label' href='{esc(url)}' target='_blank' rel='noreferrer' "
             "aria-label='View LinkedIn profile'>View profile<span aria-hidden='true'>↗</span></a>"
+            f"{_judge_confidence_badge(candidate)}"
             if url and has_content else "<span class='linkedin-label-na'>"
             + ("N/A — research-derived profile" if synthetic
                else ("N/A" if not url else "no profile")) + "</span>")
