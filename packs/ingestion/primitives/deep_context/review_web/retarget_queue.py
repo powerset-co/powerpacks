@@ -43,6 +43,13 @@ artifacts under `retarget-guidance/`. The guidance itself is durable
 IDENTICAL re-submit (e.g. retrying after a crash) reuses the existing research
 for free, while changed guidance sidelines the old output to `.bkup` (paid
 artifacts are never deleted) and re-researches.
+
+Changelog:
+  2026-08-04: fail-closed loop fixes — the re-judge row blanking moved to
+    after run_research succeeds, so ANY failed job (missing key, network,
+    blocked queue) returns the person to review unchanged; every applied
+    outcome settles the parent's other candidate rows so an answered person
+    never bounces back into the linear queue.
 """
 from __future__ import annotations
 
@@ -262,6 +269,18 @@ def run_guided_retarget(request: GuidedRetarget, *,
     if not key:
         return {"state": "failed", "detail": "person has no review key"}
 
+    def settle_siblings(rows: dict[str, dict[str, str]], winner_key: str) -> None:
+        """An applied identity answers the WHOLE parent: every other real
+        candidate row settles as detached, or the parent bounces straight back
+        into the linear queue showing its leftover wrong links. A human yes/no
+        made while the job ran wins per row."""
+        for row_key in {k for k in request.candidate_pubs if k} - {winner_key}:
+            row_now = rows.setdefault(row_key, {"public_identifier": row_key})
+            if str(row_now.get("approved") or "").strip().lower() not in {"yes", "no"}:
+                row_now.update({"action": "detach", "approved": "yes",
+                                "source": "user-guidance", "new_linkedin_url": "",
+                                "new_public_identifier": "", "updated_at": now_iso()})
+
     # The user handed us the answer: a URL they ASSERT is the right profile IS
     # the decision — the same trust as the review-stage fix form. No research,
     # no judge, no spend; the retarget applies directly. Intent is read by a
@@ -278,9 +297,20 @@ def run_guided_retarget(request: GuidedRetarget, *,
                         "source": "user-guidance",
                         "llm_reject": "", "llm_reject_confidence": "",
                         "llm_reject_reason": "", "updated_at": now_iso()})
+        settle_siblings(rows, key)
         write_override_rows(review_path, rows)
         return {"state": "applied", "new_url": given_url, "confidence": "1.000",
                 "detail": "user-provided LinkedIn applied directly (no research needed)"}
+
+    # Read-only snapshot of the person's rows AS OF the submit. The re-judge
+    # blanking below runs only after research succeeds (a failed job must
+    # return the person unchanged), so this is how it tells a pre-submit
+    # sticky decision (re-opened by the re-research ask) from a decision the
+    # human made WHILE the job ran (which always stands).
+    presubmit_rows = load_override_rows(review_path)
+    presubmit_approved = {
+        row_key: str((presubmit_rows.get(row_key) or {}).get("approved") or "")
+        for row_key in {key, *request.candidate_pubs} - {""}}
 
     subset_row = {
         "parent_slug": request.slug,
@@ -304,23 +334,6 @@ def run_guided_retarget(request: GuidedRetarget, *,
     # known_info exactly as build_queue wrote it.
     row["retarget_hint"] = request.guidance.strip()
 
-    # A re-guided person must actually re-research and re-judge: blank the
-    # sticky `approved` and the judge fingerprint on their existing row, and
-    # sideline (never delete — paid artifacts) any prior research output that
-    # would make run_research skip the handle as already done.
-    # The person's row can be keyed by a person/candidate id while each OLD
-    # LinkedIn lives on its own pub-keyed row — blank them all, or a wrong
-    # link survives the whole re-research untouched.
-    rows = load_override_rows(review_path)
-    touched = False
-    for row_key in {key, *request.candidate_pubs} - {""}:
-        prior = rows.get(row_key)
-        if prior is not None:
-            prior["approved"] = ""
-            prior["llm_judge_fingerprint"] = ""
-            touched = True
-    if touched:
-        write_override_rows(review_path, rows)
     handle = str(row.get("handle") or request.slug)
     handle_dir = out_dir / handle
     # The guidance is durable (it survives crashes and restarts), and it is the
@@ -365,6 +378,26 @@ def run_guided_retarget(request: GuidedRetarget, *,
         detail = str(research.get("error") or f"research ended {status}")
         return {"state": "failed", "detail": detail}
 
+    # Research succeeded — NOW the person must actually re-judge: blank the
+    # sticky `approved` and the judge fingerprint on their existing rows.
+    # (Deliberately after run_research: a failed job leaves review.csv exactly
+    # as it was, so the person returns to the queue in their original state.)
+    # The person's row can be keyed by a person/candidate id while each OLD
+    # LinkedIn lives on its own pub-keyed row — blank them all, or a wrong
+    # link survives the whole re-research untouched. A row whose `approved`
+    # CHANGED since the submit is a human decision made while the job ran —
+    # that word stands, only pre-submit sticky values re-open.
+    rows = load_override_rows(review_path)
+    touched = False
+    for row_key, approved_at_submit in presubmit_approved.items():
+        prior = rows.get(row_key)
+        if prior is not None and str(prior.get("approved") or "") == approved_at_submit:
+            prior["approved"] = ""
+            prior["llm_judge_fingerprint"] = ""
+            touched = True
+    if touched:
+        write_override_rows(review_path, rows)
+
     report("judging", "identity judge reviewing the proposed profile")
     owner = load_owner()
     reconcile_deep_research.propose_retargets_from_output(
@@ -384,6 +417,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
         # human's word, so the retarget stands without a second review pass.
         after["approved"] = "yes"
         after["source"] = "user-guidance"
+        settle_siblings(rows, key)
         write_override_rows(review_path, rows)
         return {"state": "applied", "new_url": new_url,
                 "confidence": str(after.get("confidence") or ""),
@@ -403,6 +437,7 @@ def run_guided_retarget(request: GuidedRetarget, *,
             after.update({"approved": "yes", "source": "user-guidance",
                           "llm_reject": "", "llm_reject_confidence": "",
                           "llm_reject_reason": "", "updated_at": now_iso()})
+            settle_siblings(rows, key)
             write_override_rows(review_path, rows)
             return {"state": "applied", "new_url": new_url,
                     "confidence": str(after.get("confidence") or ""),

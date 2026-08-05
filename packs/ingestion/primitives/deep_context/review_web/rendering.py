@@ -656,14 +656,28 @@ def _hydrate_card_profile(candidate: dict[str, Any], profile_cache_dir: Path) ->
 def _skip_link(pub: Any, parent_slug: Any) -> str:
     """The inline "Skip" affordance folded into the card's question line.
 
-    A real ``<button>`` (keyboard-activatable, proper hit area, wired by the SAME
-    ``data-decide`` click delegation as before) styled as a subtle secondary link.
-    Emits ``data-decide='detach'`` keyed on the CANDIDATE's pub; on a
-    multi-option card the /decide endpoint withdraws every other unapplied
-    option too, so one Skip resolves the whole parent."""
-    return (f"<button type='button' class='skip-link' data-decide='detach' "
-            f"data-toast='Skipped' data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
+    Opens the card's guidance box in SKIP mode — the same component the "No"
+    path uses, re-worded as an optional why-note. The box's own Skip button
+    performs the actual detach (the /decide endpoint withdraws every other
+    unapplied option, so one Skip still resolves the whole parent), and a
+    typed note rides along as feedback."""
+    return (f"<button type='button' class='skip-link' data-open-skip "
+            f"data-pub='{esc(pub)}' data-parent='{esc(parent_slug)}'>"
             "Skip</button>")
+
+
+def _person_menu(pub: Any, parent_slug: Any, extra_class: str = "") -> str:
+    """The "…" overflow menu (general feedback that isn't a decision or a
+    retarget) — ONE markup for the directory person pane and the review cards."""
+    classes = f"person-menu {extra_class}".strip()
+    return (
+        f"<div class='{classes}' data-person-menu>"
+        "<button type='button' class='button button-outline person-menu-toggle' "
+        "aria-label='More actions' data-menu-toggle>&#8943;</button>"
+        "<div class='person-menu-items' hidden>"
+        f"<button type='button' data-feedback-general data-pub='{esc(pub)}' "
+        f"data-parent='{esc(parent_slug)}'>Leave feedback</button>"
+        "</div></div>")
 
 
 def _retarget_guidance(pub: Any, slug: Any, *, label: str = "Wrong person?",
@@ -697,7 +711,8 @@ def _retarget_guidance(pub: Any, slug: Any, *, label: str = "Wrong person?",
 def render_linkedin_card(parent: dict[str, Any],
                          candidates: dict[str, Any] | list[dict[str, Any]],
                          parents_dir: Path, dossier_dir: Path,
-                         profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+                         profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                         failure_note: str = "") -> str:
     """One review card for a parent's pending LinkedIn candidate(s).
 
     A single candidate (the overwhelming common case — every normal person) renders
@@ -710,6 +725,8 @@ def render_linkedin_card(parent: dict[str, Any],
     cand_list = [candidates] if isinstance(candidates, dict) else list(candidates)
     # Cards render from COPIES: render-time hydration must never mutate the
     # server's shared cached model (this path runs lock-free on card swaps).
+    # ``failure_note``: the person's latest guided re-research FAILED — say so
+    # on the card, or their return to the queue reads as a silent loop.
     # The /decide endpoint's sibling withdrawal still sees every original row.
     cand_list = [dict(c) for c in cand_list]
     # Two candidate rows retargeted to the SAME profile render byte-identical
@@ -726,14 +743,25 @@ def render_linkedin_card(parent: dict[str, Any],
     if len(display) <= 1:
         candidate = display[0] if display else {}
         return _render_single_linkedin_card(
-            parent, candidate, parents_dir, dossier_dir, profile_cache_dir)
+            parent, candidate, parents_dir, dossier_dir, profile_cache_dir,
+            failure_note=failure_note)
     return _render_multi_linkedin_card(
-        parent, display, parents_dir, dossier_dir, profile_cache_dir)
+        parent, display, parents_dir, dossier_dir, profile_cache_dir,
+        failure_note=failure_note)
+
+
+def _failure_note_html(failure_note: str) -> str:
+    """The one-liner a card leads with after its guided re-research FAILED."""
+    if not failure_note.strip():
+        return ""
+    return (f"<div class='retarget-failed'>Re-research failed: "
+            f"{esc(failure_note.strip())}</div>")
 
 
 def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, Any],
                                  parents_dir: Path, dossier_dir: Path,
-                                 profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+                                 profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                                 failure_note: str = "") -> str:
     name = str(parent.get("name") or candidate.get("full_name") or "this person")
     synthetic = bool(candidate.get("synthetic"))
     cache_miss = _hydrate_card_profile(candidate, profile_cache_dir)
@@ -815,8 +843,11 @@ def _render_single_linkedin_card(parent: dict[str, Any], candidate: dict[str, An
         </div>"""
     return f"""
     <article class='decision-card identity-card' data-card data-parent='{esc(parent.get('slug'))}'>
+      {_person_menu(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
+                    parent.get('slug'), extra_class='card-menu')}
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
+        {_failure_note_html(failure_note)}
         <div class='question'>{question}</div>
         {actions}
         {_retarget_guidance(candidate.get('pub') or (parent.get('person_ids') or [''])[0],
@@ -868,14 +899,16 @@ def _linkedin_option(parent: dict[str, Any], candidate: dict[str, Any],
 
 def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[str, Any]],
                                 parents_dir: Path, dossier_dir: Path,
-                                profile_cache_dir: Path = PROFILE_CACHE_DIR) -> str:
+                                profile_cache_dir: Path = PROFILE_CACHE_DIR,
+                                failure_note: str = "") -> str:
     """ONE card for a merged parent offering N candidate profiles as options.
 
     The person is shown ONCE (name/avatar/merged Summary/Relationship/Timeline), then the
     candidate profiles as a selectable option list. A shared "None of these" opens the
-    add-LinkedIn fix form and "Skip" detaches; either is keyed on the parent's primary
-    candidate so the existing single-pub /decide semantics still apply. Picking any one
-    option resolves the whole parent (siblings are withdrawn server-side)."""
+    guidance box and "Skip" opens the same box in skip mode; either is keyed on the
+    parent's primary candidate so the existing single-pub /decide semantics still apply.
+    Picking any one option resolves the whole parent (siblings are withdrawn
+    server-side)."""
     name = str(parent.get("name") or "this person")
     primary = candidates[0]
     # The Contact row unions EVERY option's ground-truth emails/phones — the
@@ -912,8 +945,11 @@ def _render_multi_linkedin_card(parent: dict[str, Any], candidates: list[dict[st
     return f"""
     <article class='decision-card identity-card identity-card-multi' data-card
              data-parent='{esc(parent.get('slug'))}' data-multi-option>
+      {_person_menu(primary.get('pub') or (parent.get('person_ids') or [''])[0],
+                    parent.get('slug'), extra_class='card-menu')}
       {_scroll_region(scroll_content)}
       <div class='identity-decision'>
+        {_failure_note_html(failure_note)}
         <div class='question'>{question}</div>
         <div class='binary-actions'>
           <button class='button button-outline' data-open-guidance
@@ -1338,18 +1374,23 @@ def linkedin_card_body(parents: list[dict[str, Any]], progress: dict[str, int], 
                        profile_cache_dir: Path = PROFILE_CACHE_DIR,
                        exclude: frozenset[str] | None = None,
                        retargets_in_flight: int = 0,
+                       failed_notes: dict[str, str] | None = None,
                        auto_continue: bool = False) -> str:
     """The LinkedIn queue's current item: the next pending parent's card, or the
     stage-finished state — the linkedin twin of ``worth_review_body``. Shared by
     page_html and /api/linkedin-card so a decision click swaps in the next card
     client-side. ``exclude`` skips PARENT SLUGS — decision POSTs still in
     flight AND people with an active guided re-research (linear review: they
-    left the queue at submit and only return if the job fails)."""
+    left the queue at submit and only return if the job fails; ``failed_notes``
+    puts that failure on the returned card so the return never reads as a
+    silent loop)."""
     queue = linkedin_review_queue(parents, exclude)
     if queue:
         parent, pending = queue[0]
+        slug = str(parent.get("slug") or "").strip().lower()
         return render_linkedin_card(parent, pending, parents_dir, dossier_dir,
-                                    profile_cache_dir)
+                                    profile_cache_dir,
+                                    failure_note=(failed_notes or {}).get(slug, ""))
     return linkedin_finished_body(progress, linkedin_complete=linkedin_complete,
                                   retargets_in_flight=retargets_in_flight,
                                   auto_continue=auto_continue)
@@ -1362,6 +1403,7 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
                          profile_cache_dir: Path = PROFILE_CACHE_DIR,
                          debug: bool = False, index: int = 0,
                          inflight_slugs: frozenset[str] = frozenset(),
+                         failed_notes: dict[str, str] | None = None,
                          auto_continue: bool = False) -> str:
     """Render the LinkedIn stage: one pending parent card inside the swap panel
     (the worth pattern), or the debug carousel."""
@@ -1383,7 +1425,8 @@ def linkedin_review_body(parents: list[dict[str, Any]], progress: dict[str, int]
         parents, progress, linkedin_complete=linkedin_complete,
         parents_dir=parents_dir, dossier_dir=dossier_dir,
         profile_cache_dir=profile_cache_dir, exclude=inflight_slugs or None,
-        retargets_in_flight=len(inflight_slugs), auto_continue=auto_continue)
+        retargets_in_flight=len(inflight_slugs), failed_notes=failed_notes,
+        auto_continue=auto_continue)
     body = f"<div class='linkedin-panel' data-linkedin-panel>{card}</div>"
     return f"<div class='linkedin-stage'>{note}{body}</div>"
 
@@ -1398,7 +1441,8 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
               facts_dir: Path = FACTS_DIR,
               enrichment_state: dict[str, Any] | None = None,
               job_running: bool = False,
-              inflight_slugs: frozenset[str] = frozenset()) -> bytes:
+              inflight_slugs: frozenset[str] = frozenset(),
+              failed_notes: dict[str, str] | None = None) -> bytes:
     """Render the complete review page from packaged shell and dynamic fragments."""
     progress = review_progress(parents)
     selection = worth_selection_from_parents(parents, manifest_path=manifest_path)
@@ -1460,7 +1504,7 @@ def page_html(parents: list[dict[str, Any]], params: dict[str, list[str]],
             linkedin_complete=bool(linkedin_complete),
             parents_dir=parents_dir, dossier_dir=dossier_dir, enrichment=enrichment,
             profile_cache_dir=profile_cache_dir, debug=debug,
-            inflight_slugs=inflight_slugs,
+            inflight_slugs=inflight_slugs, failed_notes=failed_notes,
             auto_continue=(not preview and not linkedin_complete))
     else:
         content = ("<div class='empty-state done'><div class='empty-mark'>✓</div><h2>All set</h2>"
@@ -1620,16 +1664,7 @@ def _worth_action_buttons(parent: dict[str, Any], slug: str) -> str:
     # "…" overflow: general feedback that isn't a worth decision or a retarget
     # (wrong/missing info, anything else). Opens the same popover, action
     # "general", no move attached.
-    menu = (
-        "<div class='person-menu' data-person-menu>"
-        "<button type='button' class='button button-outline person-menu-toggle' "
-        "aria-label='More actions' data-menu-toggle>&#8943;</button>"
-        "<div class='person-menu-items' hidden>"
-        f"<button type='button' data-feedback-general data-pub='{esc(key)}' "
-        f"data-parent='{esc(slug)}'>Leave feedback</button>"
-        "</div></div>"
-    )
-    return f"<div class='person-detail-actions'>{buttons}{menu}</div>"
+    return f"<div class='person-detail-actions'>{buttons}{_person_menu(key, slug)}</div>"
 
 
 def render_person_detail(parent: dict[str, Any], parents_dir: Path, dossier_dir: Path,

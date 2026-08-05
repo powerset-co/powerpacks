@@ -4306,12 +4306,12 @@ class TestReviewWeb(unittest.TestCase):
             self.assertNotIn("data-fix-form", html)
             self.assertNotIn("Use a different LinkedIn", html)
             # Skip is folded INTO the question line as an inline secondary link, not a
-            # standalone button; its detach behavior is unchanged.
+            # standalone button; it opens the guidance box in skip mode, whose
+            # submit performs the detach.
             self.assertIn("Is this the right profile? Or <button", html)
-            self.assertIn("class='skip-link' data-decide='detach'", html)
+            self.assertIn("class='skip-link' data-open-skip", html)
             self.assertIn(">Skip</button>?", html)
             self.assertNotIn("alternate-skip", html)      # the old standalone Skip is gone
-            self.assertIn("data-decide='detach'", html)
             self.assertNotIn("Exclude", html)
             self.assertNotIn("Maybe", html)
 
@@ -4722,7 +4722,7 @@ class TestSyntheticReviewUI(unittest.TestCase):
             self.assertIn("<div class='binary-actions'>", html)
             self.assertNotIn("Use a different LinkedIn", html)
             # Skip is the inline secondary link folded into the question line.
-            self.assertIn("class='skip-link' data-decide='detach'", html)
+            self.assertIn("class='skip-link' data-open-skip", html)
             self.assertIn(">Skip</button>?", html)
             self.assertNotIn("alternate-skip", html)
             # "No" expands the guidance box (no separate fix form, same as a
@@ -6080,6 +6080,111 @@ class TestGuidedRetargets(unittest.TestCase):
             self.assertEqual(result["state"], "failed")
             self.assertIn("PARALLEL_API_KEY", result["detail"])
 
+    def test_failed_research_leaves_review_rows_untouched(self):
+        # The silent-loop fix: a job that dies (missing key, network, blocked
+        # queue) returns the person to review EXACTLY as they were — the
+        # re-judge blanking only runs after research succeeds.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review = base / "review.csv"
+            write_rows(review, {"jordan-bravo-wrong": {
+                "public_identifier": "jordan-bravo-wrong", "action": "verify",
+                "approved": "auto", "llm_judge_fingerprint": "sha-1"}})
+            before = review.read_text(encoding="utf-8")
+            request = web_retargets.GuidedRetarget(
+                slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                name="Jordan Bravo", guidance="the Jordan Bravo at Acme",
+                candidate_pubs=("jordan-bravo-wrong",))
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=SystemExit("PARALLEL_API_KEY not set")):
+                result = web_retargets.run_guided_retarget(
+                    request, review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=base / "facts", raw_dir=base / "raw",
+                    out_dir=base / "out", use_llm=False)
+            self.assertEqual(result["state"], "failed")
+            self.assertEqual(review.read_text(encoding="utf-8"), before)
+
+    def test_applied_outcome_settles_sibling_rows_but_mid_job_decision_stands(self):
+        # An applied identity answers the WHOLE parent: pending sibling links
+        # settle as detached (no bounce back into the linear queue), while a
+        # human decision made WHILE the job ran wins its row.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review, facts, raw, out = (base / "review.csv", base / "facts",
+                                       base / "raw", base / "out")
+            self._facts(facts, "pid-jordan", "Jordan Bravo")
+            write_rows(review, {
+                "jordan-bravo-other": {"public_identifier": "jordan-bravo-other",
+                                       "action": "verify", "approved": ""},
+                "jordan-bravo-decided": {"public_identifier": "jordan-bravo-decided",
+                                         "action": "verify", "approved": ""}})
+            profile = {"person": {"full_name": "Jordan Bravo", "confidence": 0.9,
+                                  "notes": "DevRel lead at Acme."},
+                       "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-right",
+                                  "linkedin_status": "found"}}
+            fake = self._fake_research({}, profile)
+
+            def research_then_human_click(params):
+                outcome = fake(params)
+                # Simulate the card staying interactive: the human decides one
+                # sibling while Parallel is still running.
+                rows_now = web_retargets.load_override_rows(review)
+                rows_now["jordan-bravo-decided"].update(
+                    {"action": "verify", "approved": "no"})
+                web_retargets.write_override_rows(review, rows_now)
+                return outcome
+
+            confirming = _verdict("confirmed", 0.9, reason="employer matches")
+            request = web_retargets.GuidedRetarget(
+                slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                name="Jordan Bravo", guidance="the Jordan Bravo who ran DevRel at Acme",
+                person_ids=("pid-jordan",),
+                linkedin_url="https://www.linkedin.com/in/jordan-bravo-wrong",
+                candidate_pubs=("jordan-bravo-wrong", "jordan-bravo-other",
+                                "jordan-bravo-decided"))
+            with mock.patch.object(web_retargets.deep_research_contacts, "run_research",
+                                   side_effect=research_then_human_click), \
+                 mock.patch.object(dresearch, "judge_research_proposal",
+                                   return_value=confirming):
+                result = web_retargets.run_guided_retarget(
+                    request, review_path=review,
+                    people_csv=base / "missing-people.csv",
+                    facts_dir=facts, raw_dir=raw, out_dir=out,
+                    engine_dir=base / "engine", use_llm=True)
+            self.assertEqual(result["state"], "applied")
+            rows = _rows_by_pub(review)
+            self.assertEqual(rows["jordan-bravo-other"]["action"], "detach")
+            self.assertEqual(rows["jordan-bravo-other"]["approved"], "yes")
+            self.assertEqual(rows["jordan-bravo-other"]["source"], "user-guidance")
+            self.assertEqual(rows["jordan-bravo-decided"]["action"], "verify")
+            self.assertEqual(rows["jordan-bravo-decided"]["approved"], "no")
+
+    def test_direct_url_apply_settles_sibling_rows(self):
+        # Pasting the right URL on a multi-option card resolves the whole
+        # parent: the other pending links settle as detached immediately.
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            review = base / "review.csv"
+            write_rows(review, {"jordan-bravo-other": {
+                "public_identifier": "jordan-bravo-other",
+                "action": "verify", "approved": ""}})
+            request = web_retargets.GuidedRetarget(
+                slug="jordan-bravo-p", pub="jordan-bravo-wrong",
+                name="Jordan Bravo",
+                guidance="this is him https://www.linkedin.com/in/jordan-bravo-right",
+                candidate_pubs=("jordan-bravo-wrong", "jordan-bravo-other"))
+            result = web_retargets.run_guided_retarget(
+                request, review_path=review,
+                people_csv=base / "missing-people.csv",
+                facts_dir=base / "facts", raw_dir=base / "raw",
+                out_dir=base / "out", use_llm=False)
+            self.assertEqual(result["state"], "applied")
+            rows = _rows_by_pub(review)
+            self.assertIn("jordan-bravo-right", rows["jordan-bravo-wrong"]["new_linkedin_url"])
+            self.assertEqual(rows["jordan-bravo-other"]["action"], "detach")
+            self.assertEqual(rows["jordan-bravo-other"]["approved"], "yes")
+
     def test_queue_drains_serially_and_reports_terminal_states(self):
         order: list[str] = []
 
@@ -6280,6 +6385,37 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertIn("data-parent='jordan-bravo-ab12cd34'", html)
         self.assertIn(">Re-research</button>", html)
 
+    def test_card_has_overflow_menu_and_skip_opens_the_box(self):
+        # The "…" menu (general feedback, same markup as the directory pane)
+        # sits on every card; Skip opens the guidance box in skip mode instead
+        # of deciding directly, so a why-note can ride along.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d)
+        self.assertIn("data-person-menu", html)
+        self.assertIn("data-feedback-general", html)
+        self.assertIn("class='skip-link' data-open-skip", html)
+        self.assertNotIn("data-toast='Skipped'", html)  # no direct-decide skip
+
+    def test_failed_reresearch_note_leads_the_returned_card(self):
+        # A person whose guided re-research FAILED returns to the queue; the
+        # card must say why, or the return reads as an unexplained loop.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir)
+            cand = {"pub": "jordan-bravo",
+                    "url": "https://www.linkedin.com/in/jordan-bravo"}
+            html = web_rendering.render_linkedin_card(
+                self._parent(), cand, d, d, profile_cache_dir=d,
+                failure_note="research blocked: PARALLEL_API_KEY not set")
+        self.assertIn("class='retarget-failed'", html)
+        self.assertIn("Re-research failed: research blocked", html)
+        without = web_rendering.render_linkedin_card(
+            self._parent(), cand, Path("."), Path("."), profile_cache_dir=Path("."))
+        self.assertNotIn("retarget-failed", without)
+
     def test_blank_profile_card_leads_with_open_reresearch(self):
         # A valid URL whose profile is 404/private/empty renders the WHY and
         # the re-research box OPEN — "Is this the right profile?" is
@@ -6298,7 +6434,7 @@ class LinkedinCardRetargetBoxTests(unittest.TestCase):
         self.assertNotIn("Is this the right profile?", html)
         self.assertNotIn("Use this profile", html)  # nothing to confirm
         self.assertNotIn("data-open-guidance", html)  # no buttons at all on invalid cards
-        self.assertIn("data-decide='detach'", html)  # Skip stays
+        self.assertIn("data-open-skip", html)  # Skip stays
 
     def test_machine_reason_and_placeholder_junk_never_render(self):
         # 'no usable LinkedIn profile' is judge state, not a summary; '--' is

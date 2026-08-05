@@ -1392,6 +1392,22 @@ body[data-stage="directory"] main:has(.directory-handoff) .directory-layout {
 /* "…" overflow menu on the person pane */
 .person-menu { position: relative; display: inline-flex; }
 
+/* The same menu pinned to a review card's top-right corner. The card is the
+   feedback popover's positioning host too, hence position: relative here. */
+.decision-card { position: relative; }
+.card-menu { position: absolute; top: 12px; right: 12px; z-index: 20; }
+
+/* A returned card leads with WHY its re-research failed. */
+.retarget-failed {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
 .person-menu-toggle { min-width: 36px; padding: 6px 8px; font-size: 15px; line-height: 1; }
 
 .person-menu-items {
