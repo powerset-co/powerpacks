@@ -38,7 +38,13 @@ Use the narrow path when the user names one:
   visible (legacy scrubs + fresh-fetch re-judge of judge-skipped LinkedIn
   cards + free dead-link termination; a RapidAPI fetch per healed candidate
   plus ~cents of OpenAI judging, no approval stop — invoking review is the
-  consent), and only THEN opens the UI. Nothing is deferred: in-flight
+  consent), and only THEN opens the UI. Before running `review <stage>`,
+  create a task list in your harness's todo/task tool with the flow's
+  definitive steps — (1) restart server, (2) self-heal (report its counts),
+  (3) open the staged UI, plus any follow-ups the heal surfaces (e.g. a
+  recovery batch offer) — and check each off as the wrapper's output confirms
+  it, so the user always sees where the flow is and nothing is silently
+  skipped. Nothing is deferred: in-flight
   enrichment or guided re-research only prints a warning before the restart —
   both are durable (identical guided resubmits reuse research free;
   enrichment resumes from its manifest). `--force-restart` is accepted for
