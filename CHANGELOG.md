@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.2...powerpacks-v1.15.3) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deep-context:** re-research never cycles back; Skip why-note + card feedback menu ([#421](https://github.com/powerset-co/powerpacks/issues/421)) ([95716da](https://github.com/powerset-co/powerpacks/commit/95716da82f6d2331a96153736740f0cde270d213))
+
 ## [1.15.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v1.15.1...powerpacks-v1.15.2) (2026-08-04)
 
 
