@@ -68,14 +68,36 @@ review_server_has_active_retargets() {
 }
 
 open_review_ui_when_healthy() {
-  # Step 3 of `review`: poll the fresh server's /healthz (bounded, ~10s), then
-  # open the staged UI as an explicit final step. The URL line always prints;
-  # when macOS `open` is unavailable the URL is the graceful fallback.
-  local port="$1" stage="$2" url _
+  # The ONLY place a browser is ever launched (`review` and `refresh`): poll
+  # the fresh server's /healthz (bounded, ~10s), print the URL, then open.
+  # LAUNCH ORDER CONTRACT: callers background this helper strictly AFTER
+  # stop_review_server + wait_for_review_session_release have completed (old
+  # server provably dead, port unbound) and immediately before spawning serve
+  # in the foreground — so the first /healthz 200 can only come from the
+  # freshly spawned server. Guard anyway: if something already answers on the
+  # very first probe (a stale or foreign server the stop did not own), wait
+  # for the port to go down and come back rather than opening it; if it never
+  # goes down, print the URL but never auto-open a server we did not start.
+  # The URL line always prints; a missing `open` (non-macOS) degrades to it.
+  local port="$1" stage="$2" url _ stale=0
   if [[ -n "$stage" && "$stage" != "directory" ]]; then
     url="http://127.0.0.1:$port/?stage=$stage"
   else
     url="http://127.0.0.1:$port/directory"
+  fi
+  if curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+    stale=1
+    for _ in $(seq 1 25); do
+      if ! curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+        stale=0
+        break
+      fi
+      sleep 0.2
+    done
+  fi
+  if (( stale )); then
+    echo "review UI: $url (a server was already answering before serve launched; not auto-opening)" >&2
+    return 0
   fi
   for _ in $(seq 1 50); do
     if curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
@@ -308,13 +330,18 @@ case "$cmd" in
       exit 0
     fi
     # Synthesis writes review-session files: release the single-writer lock first.
-    stop_review_server "$(review_port_from_args "$@")"
+    refresh_port="$(review_port_from_args "$@")"
+    stop_review_server "$refresh_port"
+    wait_for_review_session_release
     echo "refresh: operating on $ROOT/.powerpacks" >&2
     "${PY[@]}" "$PKG.synthesize_person_context" --dry-run
     echo "refresh: synthesizing stale dossiers (the estimate above is this run's spend)…" >&2
     "${PY[@]}" "$PKG.synthesize_person_context"
     "${PY[@]}" "$PKG.build_parents"
-    "${PY[@]}" "$PKG.reconcile_review_web" serve --open --stage directory "$@"
+    # Serve never auto-opens a browser; the explicit open step fires only once
+    # the fresh server answers /healthz (started after stop + lock release).
+    open_review_ui_when_healthy "$refresh_port" "directory" &
+    "${PY[@]}" "$PKG.reconcile_review_web" serve --stage directory "$@"
     ;;
   review)
     # Review boots in one fixed, visible order (bare `review` included):
@@ -333,8 +360,13 @@ case "$cmd" in
     #      resumes from its manifest). --force-restart is a compat no-op.
     #   3. OPEN the staged UI — an explicit final step: poll the fresh
     #      server's /healthz (bounded, ~10s), print the URL, then macOS
-    #      `open` (skipped gracefully when unavailable). Backgrounded so
-    #      serve keeps its normal blocking foreground role.
+    #      `open` (skipped gracefully when unavailable). CHOSEN STRUCTURE:
+    #      serve stays foreground (its normal blocking role); the watcher is
+    #      backgrounded immediately before it, but ONLY after the stop +
+    #      lock-wait above completed — the port is provably unbound at watcher
+    #      start, so the first /healthz 200 can only be the new server, and
+    #      the helper's stale-server guard refuses to open anything that was
+    #      already answering at its first probe.
     # `review linkedin` / `review worth` / `review enrich` / `review directory`
     # is sugar for the server's --stage flag: open the UI at that stage.
     review_args=()

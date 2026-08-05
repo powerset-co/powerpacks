@@ -48,7 +48,11 @@ Use the narrow path when the user names one:
   staged UI, plus any follow-ups the heal surfaces (e.g. a recovery batch
   offer) — and check each off as the wrapper's output confirms it, so the
   user always sees where the flow is and nothing is silently skipped.
-  Nothing is deferred: in-flight
+  NEVER open, navigate to, or surface the review URL before the wrapper
+  prints its `review UI:` line — the wrapper owns the browser; the harness
+  only mirrors checklist state from wrapper output (the heal step completes
+  only when the heal summary JSON line is seen, the open step only when
+  `review UI:` appears). Nothing is deferred: in-flight
   enrichment or guided re-research only prints a warning before the restart —
   both are durable (identical guided resubmits reuse research free;
   enrichment resumes from its manifest). `--force-restart` is accepted for
