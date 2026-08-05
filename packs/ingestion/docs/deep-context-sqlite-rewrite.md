@@ -95,6 +95,22 @@ have nothing left to guard and are deleted.
 | migrate_legacy_resolutions.py | DELETED (its job is the import normalizer) |
 | tests/test_deep_context.py (8257) | DELETED whole; new suite by stage from the invariant catalog, ~150 tests + `review_db audit` invariant queries + snapshot-corpus sweep |
 
+## LOC budget (owner bar: ~5k prod lines for the whole stage)
+
+Built TO the budget, not measured after. Ceilings per area — exceeding one
+means the design is wrong, not that the ceiling moves:
+
+| Area | Ceiling |
+|---|---|
+| db (schema + store + views + batons) | 800 |
+| review web (HTTP + render, no model layer) | 1,600 |
+| LLM engines + prompts (synthesize, research, judge, dossier, merge) | 4,000 |
+| stage orchestration + CLI (shared emit/manifest/argparse helpers, once) | 600 |
+| **Total** | **~7,000 hard / 5,000 stretch** |
+
+Today: 22,993. ~15k of it is state machinery + ceremony orbiting the store —
+that is what dies.
+
 ## Gates
 
 - Baton fidelity: export(import(baton)) byte-identical on both real stores +
