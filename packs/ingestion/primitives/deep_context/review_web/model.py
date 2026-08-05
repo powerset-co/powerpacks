@@ -326,8 +326,9 @@ class AvatarDownload:
     """Outcome of one ``download_avatar`` pass over a profile's photo URLs.
 
     ``expired`` marks the signature-expiry shape: every URL the cached profile
-    record retains answered 403/404/410, so only a profile refresh can mint a
-    live one. The caller decides whether that refresh is worth paying for."""
+    record retains answered 403/404/410, so no retry can succeed until a new
+    profile record exists. The server treats it as a terminal miss and never
+    re-attempts — avatars carry no paid refresh."""
 
     body: bytes | None = None
     content_type: str = ""
@@ -358,7 +359,8 @@ def download_avatar(pub: str, *, profile_cache_dir: Path = PROFILE_CACHE_DIR,
 
     The endpoint never accepts a URL from the browser, so it cannot be used as
     an arbitrary proxy. No provider lookup or paid work happens here — an
-    ``expired`` result only reports the shape; the server owns the decision."""
+    ``expired`` result only reports the shape; the server records it as a
+    terminal miss."""
     pub = (pub or "").strip().lower()
     if not pub:
         return AvatarDownload()

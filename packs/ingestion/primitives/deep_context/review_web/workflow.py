@@ -393,8 +393,7 @@ def write_review_manifest(stage: str, status: str, progress: dict[str, int], *,
         "privacy": {"message_bodies_read": False, "network_called": True,
                     "paid_provider_called": False,
                     "note": ("avatar cache misses may fetch an existing LinkedIn CDN "
-                             "image; a dead signed image URL may trigger one RapidAPI "
-                             "profile refresh per contact per server session")},
+                             "image")},
     }
     if launched:
         payload["launched_at"] = now_iso()
