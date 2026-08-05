@@ -134,6 +134,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
+from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 from packs.ingestion.primitives.deep_context.review_store import (
     DECISIVE_CONFIRM_THRESHOLD,
@@ -182,68 +183,7 @@ NO_PROFILE_REASON = "no usable LinkedIn profile"
 # second worth writer.
 _write_override_rows = write_override_rows
 
-SYSTEM_PROMPT = (
-    "You verify whether a LinkedIn profile is the SAME PERSON as a contact I know from my "
-    "own messages. You are given (A) a dossier of that contact synthesized from how we "
-    "actually interact — my relationship to them, what we discuss, their employer/school/"
-    "location as it shows up in our messages, and sample messages — and (B) the LinkedIn "
-    "profile currently attached to them (name, headline, company, education, location).\n\n"
-    "DEFAULT TO CONFIRMING. This link was attached because the names already matched — your "
-    "job is to catch the GENUINE mismatches (a different human who happens to share the name), "
-    "NOT to demand extra proof. A matching name PLUS any ONE corroborating signal — employer "
-    "(current OR past), school, city/region, era/timeline, or shared social context — and NO "
-    "hard contradiction means it is the same person: confirmed.\n\n"
-    "MOST of my contacts are PERSONAL / SOCIAL, where we almost never discuss work, titles, or "
-    "employers. Do NOT lower confidence or withhold a confirm just because the messages don't "
-    "name their company/role or some 'unique identifier' — that absence is EXPECTED and is not "
-    "evidence against a match. For these, geography, school, mutual-friend / social context, or "
-    "a plausible timeline IS sufficient corroboration.\n\n"
-    "For WORK contacts: a contact EMAIL whose DOMAIN matches the LinkedIn employer — current OR "
-    "past — (e.g. casey@acme.com against an Acme Corp profile) is NEAR-DECISIVE identity "
-    "proof: confirmed, high confidence (0.9+). A work email at a company means they work/worked "
-    "there. And do NOT withhold a confirm or lower confidence because a GRANULAR sub-detail from "
-    "my messages (a specific internal team, project, product line, or exact title) isn't on the "
-    "profile — people don't list every team and titles roll up; a missing sub-detail is NOT a "
-    "contradiction. Only an actual conflict (different company/city/era/career that can't be the "
-    "same human) is.\n\n"
-    "REASON FROM BASE RATES. Two DIFFERENT people who share an EXACT full name AND the same "
-    "employer (or the same school, or the same small region + era) is RARE — on the order of "
-    "1-in-100. So a name + one such anchor, with no hard contradiction, is already STRONG "
-    "evidence of the same person — confirmed at 0.85+. Start from 'this is them' and only back "
-    "off for a genuine contradiction, not for small mismatches. The cost of losing a real match "
-    "(recall) is high; do NOT nickel-and-dime confidence for trivia.\n\n"
-    "These do NOT count as contradictions and must NOT lower confidence:\n"
-    "  • a different/missing internal TEAM, project, or product line (people don't list every team)\n"
-    "  • a TITLE that differs in wording or seniority at the same org (Founder vs CEO vs Exec "
-    "Chairman vs Manager — same person, different hat)\n"
-    "  • imprecise, rounded, or non-overlapping LinkedIn DATE RANGES (LinkedIn dates are routinely "
-    "wrong/missing; a date gap at a MATCHING employer is not a contradiction)\n"
-    "  • the messages not naming their employer/role (expected, esp. for personal contacts)\n"
-    "  • extra impressive CREDENTIALS on the profile (awards, prior roles, prof/PhD/fellowships) "
-    "not visible in casual messages — accomplished people simply have more on LinkedIn than shows "
-    "up in logistics texts; this is NOT grounds for doubt.\n\n"
-    "- confirmed: the name matches and at least one of {employer, school, location, era, shared "
-    "context} lines up, with no real contradiction. THIS IS THE COMMON CASE. (people change "
-    "jobs — a PAST employer or school still counts.)\n"
-    "- wrong_person: there is an ACTIVE, HARD CONTRADICTION making them a different human — e.g. "
-    "the dossier is a local friend / tradesperson but the profile is a big-company exec of the "
-    "same name, or a clearly different city + industry + era that cannot reconcile. This is "
-    "name-shared-WITH-a-contradicting-profile, not merely name-without-extra-proof, and NOT the "
-    "small-stuff list above.\n"
-    "- needs_review: ONLY when the name matches but there is genuinely ZERO corroboration AND "
-    "something is mildly off, so you truly cannot tell. Use this SPARINGLY — if there is any "
-    "reasonable corroboration and no contradiction, choose confirmed.\n\n"
-    "CONFIDENCE CALIBRATION: name + a strong anchor (same employer, matching email domain, same "
-    "school, or same city + plausible role) → 0.85–0.95, even if small details differ. "
-    "Softer-but-consistent signals (location + social context, no contradiction) → 0.75–0.85. Go "
-    "below 0.70 only when you are ACTUALLY unsure (zero corroboration) — never deflate a real "
-    "match for lack of a 'unique identifier' or for the small-stuff above.\n\n"
-    "Some people legitimately have NO LinkedIn. If the dossier suggests this person plausibly "
-    "would not have a (matching) profile, set linkedin_plausibly_absent=true rather than "
-    "forcing a verdict. Set recommend_deep_research=true only when EXTERNAL research could "
-    "realistically resolve the identity (i.e. not when they plausibly have no profile at all). "
-    "Cite concrete supporting and contradicting evidence."
-)
+SYSTEM_PROMPT = load_prompt("linkedin_reconcile_system")
 
 RECONCILE_SCHEMA: dict[str, Any] = {
     "type": "object",

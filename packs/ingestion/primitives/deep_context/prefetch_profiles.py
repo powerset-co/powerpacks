@@ -99,6 +99,7 @@ from packs.ingestion.primitives.deep_context.common import (
 )
 from packs.ingestion.primitives.common.jsonio import now_iso, read_json, write_json
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import linkedin_view
+from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.deep_context.review_web.model import (
     SYNTHETIC_PEOPLE_CSV,
     _all_review_parents,
@@ -136,16 +137,7 @@ DEFAULT_SUMMARY_CONCURRENCY = 200
 RAPIDAPI_RPM_DEFAULT = 300
 DEFAULT_FETCH_CONCURRENCY = 40
 
-SUMMARY_SYSTEM = (
-    "You write a neutral, factual 2-sentence description of a professional from their "
-    "LinkedIn-style profile fields. State who they are: current role and company, then "
-    "what they do or a notable part of their background (past roles, education, focus). "
-    "Use ONLY the provided fields — never invent employers, titles, or dates. No hype, no "
-    "second person, no greeting. If the provided fields are empty or too thin to say "
-    "anything concrete about this specific person, return an EMPTY summary string — NEVER "
-    "write generic filler like 'is a professional at a company in an unspecified role'. "
-    "Return JSON: {\"summary\": \"<=2 sentences, or empty string if nothing concrete\"}."
-)
+SUMMARY_SYSTEM = load_prompt("profile_summary_system")
 
 SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",

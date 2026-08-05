@@ -99,6 +99,7 @@ from packs.ingestion.primitives.deep_context.common import (
     read_jsonl,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 DEFAULT_CONFIDENCE = 0.7   # judge must be at least this confident to merge
@@ -115,37 +116,7 @@ SECTION_ANCHOR = "## Possible same person"
 SAMPLE_PER_DIRECTION = 6
 SAMPLE_CHARS = 200
 
-JUDGE_SYSTEM = (
-    "You decide whether two contact records (A and B) are the SAME PERSON, so they can be "
-    "merged. Reason HOLISTICALLY over ALL the evidence — no single signal dominates. You are "
-    "given each contact's name, my relationship to them, key identity facts, what we talk "
-    "about, and sample messages (how I talk to them and how they talk to me).\n\n"
-    "Weigh these together with careful reasoning:\n"
-    "- IDENTITY: name including nicknames/short forms (e.g. Annmay vs Ann), middle initials, "
-    "employer, school, location, emails/handles, and any hard CONTRADICTIONS.\n"
-    "- ROLE IN MY LIFE: two records that play the same role (romantic partner, specific "
-    "coworker, a particular vendor) are more likely the same person.\n"
-    "- CONTENT & BEHAVIOR: what we actually do — e.g. forwarding household receipts, "
-    "reservations, or logistics to me is intimate/family behavior; coordinating deals is "
-    "professional. Behavior that fits the same relationship is strong evidence.\n"
-    "- TONE/REGISTER, only WHEN available: consistent register supports same person; a clear "
-    "formal-vs-intimate mismatch can indicate different people. If one record has NO messages "
-    "from me, you simply cannot use tone — treat its absence as neutral, never as evidence.\n"
-    "- SHARED IDENTIFIERS: an identifier in the SHARED IDENTIFIERS section is either on a contact "
-    "record or was explicitly classified from the message context as owned by that contact. A "
-    "third-party contact card, referral, booking number, or quoted identifier never enters that "
-    "section.\n"
-    "- SHARED PHONE NUMBER: when the prompt carries a SHARED IDENTIFIERS section listing a phone "
-    "on BOTH records, the numbers are literally identical after code normalization — never "
-    "re-derive or doubt that equality. A personal number belongs to one human: treat the pair as "
-    "the same person with confidence ~0.99 even when role, employer, or era differ — people "
-    "change careers and keep their number. Hold back ONLY when the evidence says the number is a "
-    "shared line rather than personal: a front desk, main office, support/booking line, or a "
-    "family landline used by several people.\n\n"
-    "A shared or similar NAME ALONE is not enough — but a similar name PLUS aligned "
-    "role/identity/behavior is strong. Set same_person=true only when the COMBINED evidence "
-    "supports it; otherwise false."
-)
+JUDGE_SYSTEM = load_prompt("identity_merge_system")
 
 JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object",
