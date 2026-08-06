@@ -84,8 +84,8 @@ Use the narrow path when the user names one:
   only, keep all derived state, review re-takeable immediately (no re-walk).
   Run `bin/deep-context restart` (dry run), show what would clear (worth
   marks, Check-LinkedIn clicks incl. pasted URLs, synthetic approvals),
-  confirm, then `bin/deep-context restart --apply` (backs files up to
-  `.bkup-*` first). Every machine verdict, facts file, deep-research artifact
+  confirm, then `bin/deep-context restart --apply` (one SQLite transaction).
+  Every machine verdict, facts file, deep-research artifact
   and profile cache survives. Then STOP — no review launch, no workflow plan.
   End by telling the user: run `$deep-context` whenever you're ready.
 - `$deep-context clean`, "clean slate", "pipeclean", "start over from
@@ -202,11 +202,11 @@ cost floor/ceiling as `Building deep context will cost $<floor>–$<ceiling>.
 Approve?` and wait for a yes before running. Either way, run the exact command
 printed by `dry` — do not invent a different scope. Synthesis also produces an
 initial `network_worth` recommendation and reason in each
-`facts/<person_id>.jsonl`, then mirrors that child machine verdict into
-`review.csv.llm_worth` / `llm_worth_reason`. After canonicalization, `parents`
-aggregates child verdicts in priority order (`Yes > Maybe > No`) into one
-parent-keyed worth row in the same `review.csv`. Human review writes only that
-row's authoritative `network_worth`. Normal repeated synthesis rejudges only
+`facts/<person_id>.jsonl`, then explicitly projects the completed facts manifest
+into SQLite. After canonicalization, the SQLite `parents` projection aggregates
+child verdicts in priority order (`Yes > Maybe > No`) into one parent-owned
+worth value. Human review writes only that parent's authoritative override.
+Normal repeated synthesis rejudges only
 missing/Maybe machine verdicts; machine Yes/No and human Yes/No are stable.
 
 Worth uses message context and contact identifiers only — never LinkedIn:
@@ -279,7 +279,7 @@ folds its email/phone/channel metadata onto the kept LinkedIn instead.
 ### 4.6 Migrate stored legacy resolutions (free scan; judged adoption)
 
 Older imports attached web-researched LinkedIn links with no judge and no
-review. Adopt them into the central decisions table (`overrides/review.csv`) so
+review. Adopt them into canonical SQLite identity state so
 this flow finally audits them — the scan is free and a no-op once migrated:
 
 ```bash
@@ -349,8 +349,7 @@ consent — there is no approval stop; the pre-run count lines are information,
 and `--cap` (default 200) is only a runaway backstop. Typical sessions heal a
 handful of new cards (the first run after this ships is the big one); a clean
 store prints one `[heal] ... (nothing to do)` line and spends nothing. The
-summary lands under `"heal"` in the review manifest, where `review-status`
-reads it.
+summary is recorded in SQLite stage state, where `review-status` reads it.
 
 Then watch for your turn with the ONE agent-handoff mechanism — a blocking
 read of canonical SQLite (no daemons, no sockets, no thread ids; it always
@@ -360,7 +359,7 @@ works in any harness):
 bin/deep-context review-status --wait --timeout 900
 ```
 
-It stats the fixed CSVs/manifests once a second and returns the moment
+It queries canonical SQLite once a second and returns the moment
 `next_action` is an AGENT action — only `retry_enrichment` (something the app
 ran failed; inspect the enrichment manifest error) or `realize` (the whole
 review is done; finish setup). The app itself runs everything in between:
@@ -399,7 +398,7 @@ When the final Maybe is answered, the server writes People completion
 automatically. The completion endpoint does not reject unresolved Maybes, but
 the UI adds no separate skip control. The browser then opens Enrich Contacts,
 where an indeterminate "Preparing enrichment" bar remains visible until the
-next manifest state arrives.
+next projected SQLite state arrives.
 
 The wait command is the read-only deterministic primitive — it queries SQLite
 and emits one `next_action`; it does not mutate files, open a
@@ -435,18 +434,18 @@ The review app runs the whole mid-flow itself, in-process, when the user acts:
   `assemble-synthetic` (no-LinkedIn cards) and `profile-prefetch --fetch`
   (cached profiles + nano summaries; pennies).
 
-The agent runs NONE of these steps and must not run them manually while a
-review server is up — the app owns them, progress streams through the fixed
-enrichment manifest the Enrich page already polls, and a crash surfaces as
+The agent runs NONE of these steps while the app owns them. Progress is written
+file-first to the fixed enrichment manifest, projected explicitly into SQLite,
+and served from SQLite; a crash surfaces as
 `status: failed` (your wait then returns `retry_enrichment`; inspect the
 manifest error). The manual commands remain available for headless/broken-UI
 recovery only.
 
 The lookup wrapper and its provider child continuously overwrite the fixed
 enrichment manifest with `needs_approval`, `running`, `research_complete`,
-`failed`, or `completed` plus total/completed/pending/failed counts. The UI reads
-that file and may add only its inert approval block. The assembler marks it
-`completed`. The current queue CSV is
+`failed`, or `completed` plus total/completed/pending/failed counts. The
+projector validates that file and commits the queryable state; the UI never
+parses it. The assembler marks it `completed`. The current queue CSV is
 always overwritten, including header-only no-work runs, and assembly scans only
 handles in that current queue so stale No results cannot reappear.
 
@@ -458,7 +457,7 @@ approval already happened, so the number is noise.
 ### 7. LinkedIn decision gate
 
 When enrichment is complete, Enrich Contacts shows a checkmark and Continue.
-That click writes only the enrichment handoff into the review manifest and opens
+That click writes only the enrichment handoff into SQLite and opens
 Check LinkedIn; it does not start work. The first review server stays alive.
 
 For a found/existing LinkedIn the question is simply whether it is the right
@@ -527,12 +526,11 @@ still-unresolved Yes people explicitly.
 .powerpacks/deep-context/reconcile/              verdicts + reconcile manifest
 .powerpacks/deep-context/reconcile/deep-research/research_queue.csv
 .powerpacks/deep-context/reconcile/deep-research/manifest.json  fixed enrichment progress
-.powerpacks/deep-context/review/manifest.json     current human stage completion
 .powerpacks/deep-context/deep-context.sqlite      canonical runtime state
 .powerpacks/deep-context/review/avatars/          locally cached live profile images
-.powerpacks/network-import/overrides/review.csv   durable worth/link decisions
+.powerpacks/network-import/overrides/review.csv   explicit compatibility export baton
 .powerpacks/network-import/overrides/retarget-people.csv
-.powerpacks/network-import/overrides/synthetic-people.csv
+.powerpacks/network-import/overrides/synthetic-people.csv  explicit compatibility export baton
 .powerpacks/network-import/merged/people.csv
 ```
 
