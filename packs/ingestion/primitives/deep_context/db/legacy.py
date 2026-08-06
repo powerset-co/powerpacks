@@ -27,7 +27,7 @@ from packs.ingestion.primitives.common.legacy import (
     MESSAGE_LINKEDIN_PREFIX,
     message_linkedin_aliases,
 )
-from packs.ingestion.primitives.deep_context.build_parents import parent_id_for
+from packs.ingestion.primitives.deep_context.parents.graph import parent_id_for
 from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,

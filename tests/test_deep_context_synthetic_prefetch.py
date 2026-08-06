@@ -10,7 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import deep_research_contacts as research
-from packs.ingestion.primitives.deep_context import reconcile_deep_research as reconcile
+from packs.ingestion.primitives.deep_context.parallel_research import driver
+from packs.ingestion.primitives.deep_context.research_reconcile.selection import QUEUE_FIELDS
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import (
     AssembleSyntheticProfile,
     ResearchContact,
@@ -63,7 +64,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             "retarget_hint": "Find the correct profile",
         }
         with self.queue.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=reconcile.QUEUE_FIELDS)
+            writer = csv.DictWriter(handle, fieldnames=QUEUE_FIELDS)
             writer.writeheader()
             writer.writerow(self.queue_row)
         with self.people.open("w", newline="", encoding="utf-8") as handle:
@@ -99,7 +100,7 @@ class SyntheticPrefetchTest(unittest.TestCase):
             manifest=str(self.manifest),
             db=self.db,
         )
-        research._report_progress(
+        driver.report_progress(
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
@@ -151,7 +152,6 @@ class SyntheticPrefetchTest(unittest.TestCase):
                 profile_cache_dir=self.cache,
                 enrichment_manifest=self.manifest,
                 fetch=True,
-                no_llm=True,
             ).execute()
 
         self.assertEqual(prefetched.status, "completed")

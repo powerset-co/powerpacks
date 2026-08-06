@@ -19,7 +19,7 @@ module owns the run.
 
 Changelog:
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`.
-    The store queries it selects with moved to `store_db.py`, the wacli batch
+    The store queries it selects with moved to `depth_db.py`, the wacli batch
     command to `backfill.py`, and the results/summary/manifest artifacts to
     `depth_results.py`; the previous manifest is read through the typed
     `payloads.PriorDepthManifest` instead of four inline isinstance guards.
@@ -43,9 +43,9 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli import (  # noqa: E402
     backfill,
+    depth_db,
     depth_results,
     runtime,
-    store_db,
 )
 from packs.ingestion.primitives.discover.messages.wacli.backfill import (  # noqa: E402
     DEFAULT_HISTORY_DEPTH_ATTEMPT_TIMEOUT,
@@ -70,7 +70,7 @@ from packs.ingestion.primitives.discover.messages.wacli.payloads import (  # noq
     HistoryDepthTarget,
 )
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveFailed  # noqa: E402
-from packs.ingestion.primitives.discover.messages.wacli.store_db import (  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.depth_db import (  # noqa: E402
     DEFAULT_HISTORY_DEPTH_MAX_COUNT,
 )
 from packs.ingestion.primitives.discover.messages.wacli.util import (  # noqa: E402
@@ -115,7 +115,7 @@ def run_history_depth_stage(
     manifest_path = out_dir / "manifest.json"
     initialized = results_path.exists()
     rows: dict[str, dict[str, Any]] = depth_results.read_history_depth_results(results_path)
-    current_states = store_db.history_depth_chat_states(store)
+    current_states = depth_db.history_depth_chat_states(store)
     current_by_ref = {
         history_chat_ref(chat_jid): state
         for chat_jid, state in current_states.items()
@@ -175,14 +175,14 @@ def run_history_depth_stage(
     # chats are about to be durably seeded. Keep it fixed during targeted
     # backfill: if WhatsApp returns rows for another chat, the next invocation
     # sees the mismatch and performs one catch-up bootstrap.
-    source_total_messages = store_db.history_depth_total_count(store)
+    source_total_messages = depth_db.history_depth_total_count(store)
     source_dm_state_sha256 = history_depth_state_digest(current_states)
     resume_refs = {
         chat_ref
         for chat_ref, row in rows.items()
         if row.get("outcome") not in HISTORY_DEPTH_TERMINAL_OUTCOMES
     }
-    targets = store_db.history_depth_targets(
+    targets = depth_db.history_depth_targets(
         store,
         active_since_ts=active_since_ts,
         max_count=max_count,

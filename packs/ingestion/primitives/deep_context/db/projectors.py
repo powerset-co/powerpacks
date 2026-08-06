@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
@@ -34,6 +35,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     SyntheticProfileRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
@@ -139,6 +141,63 @@ def _facts(data: bytes, relative: str) -> dict[str, Any]:
     if not merged:
         raise ProjectionError(f"facts artifact is empty: {relative}")
     return merged
+
+
+def project_facts(db: Db, facts_dir: Path) -> dict[str, Any]:
+    """Project the fixed synthesis fact artifacts through public Db APIs."""
+    people = {row.person_id: row.parent_id for row in canonical_snapshot(db).people}
+    without_worth = facts_count = 0
+    rows: list[ArtifactRow | FactRow] = []
+    for path in sorted(facts_dir.glob("*.jsonl")):
+        facts_count += 1
+        person_id = path.stem
+        parent_id = people.get(person_id)
+        if parent_id is None:
+            raise StoreError(f"facts person is absent from canonical graph: {person_id}")
+        data = path.read_bytes()
+        records = [
+            json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()
+        ]
+        record = records[-1] if records else {}
+        facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
+        worth = llm_network_worth(person_id, facts_dir)
+        decision = (worth.get("decision") or "").strip().lower() or None
+        without_worth += int(decision is None)
+        artifact_key = f"facts:{person_id}"
+        rows.extend((
+            ArtifactRow(
+                artifact_key=artifact_key,
+                kind=ArtifactKind.FACTS.value,
+                parent_id=parent_id,
+                person_id=person_id,
+                path=str(path.resolve()),
+                content_fingerprint=_sha256(data),
+                status=ProjectionStatus.PROJECTED.value,
+                payload_json=json.dumps(record, separators=(",", ":")),
+                projected_at=now_iso(),
+            ),
+            FactRow(
+                subject_key=person_id,
+                parent_id=parent_id,
+                artifact_key=artifact_key,
+                person_id=person_id,
+                machine_worth=decision,
+                machine_worth_reason=worth.get("reason") or None,
+                confidence=float(record.get("final_confidence") or 0),
+                facts_json=json.dumps(facts, separators=(",", ":")),
+                projected_at=now_iso(),
+            ),
+        ))
+    projected = db.project_rows(tuple(rows))
+    return {
+        "path": str(db.db_path),
+        "synced_people": facts_count,
+        "synced_rows": projected,
+        "skipped_human": 0,
+        "without_worth": without_worth,
+        "cleared_legacy_spam": 0,
+        "total_rows": facts_count,
+    }
 
 
 def _linkedin(profile: dict[str, Any]) -> str | None:

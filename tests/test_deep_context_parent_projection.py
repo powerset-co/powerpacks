@@ -8,6 +8,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.deep_context.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -17,10 +18,77 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.parents.graph import parent_id_for
 from deep_context_sqlite_test_helpers import query
 
 
 class ParentProjectionTest(unittest.TestCase):
+    def test_parent_id_contract_lives_in_graph_policy(self) -> None:
+        self.assertEqual(parent_id_for(["person-b", "person-a"]), "parent-65856992ac99")
+
+    def test_singleton_markdown_and_index_bytes_stay_pinned(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            facts, raw = root / "facts", root / "raw"
+            dossiers, parents = root / "dossiers", root / "parents"
+            for path in (facts, raw, dossiers, parents):
+                path.mkdir()
+            child = {
+                "person_id": "person-a", "name": "Jordan Bravo",
+                "emails": ["jordan@example.com"], "phones": ["+15550100"],
+                "headline": "Synthetic fixture headline.",
+            }
+            index = root / "index.json"
+            index.write_text(json.dumps({"slugs": {"jordan-a": child}, "parents": {}}))
+            (dossiers / "jordan-a.md").write_text("# Jordan Bravo\n\nBody\n")
+            with mock.patch(
+                "packs.ingestion.primitives.deep_context.parents.rendering.now_iso",
+                return_value="2026-01-02T03:04:05Z",
+            ):
+                BuildParents(
+                    db=Db(root / "deep-context.sqlite"),
+                    merge_csv=root / "missing-merge.csv",
+                    people_csv=root / "missing-people.csv",
+                    index_json=index,
+                    dossier_dir=dossiers,
+                    facts_dir=facts,
+                    raw_dir=raw,
+                    parents_dir=parents,
+                ).execute()
+
+            parent_id = parent_id_for(["person-a"])
+            parent_slug = f"jordan-bravo-{parent_id.removeprefix('parent-')[:8]}"
+            self.assertEqual((parents / f"{parent_slug}.md").read_text(), (
+                "---\n"
+                f"parent_id: {parent_id}\n"
+                'name: "Jordan Bravo"\n'
+                f"slug: {parent_slug}\n"
+                "kind: parent\n"
+                "singleton: true\n"
+                'children: ["jordan-a"]\n'
+                'emails: ["jordan@example.com"]\n'
+                'phones: ["+15550100"]\n'
+                "generated_at: 2026-01-02T03:04:05Z\n"
+                "---\n\n# Jordan Bravo\n\n"
+                "Single identity — no duplicates detected. Full context in [[jordan-a]].\n\n"
+                "Synthetic fixture headline.\n"
+            ))
+            expected_index = {
+                "by_email": {"jordan@example.com": ["jordan-a", parent_slug]},
+                "by_name": {"jordan bravo": ["jordan-a", parent_slug]},
+                "by_phone": {"15550100": ["jordan-a", parent_slug]},
+                "parents": {parent_slug: {
+                    "children": ["jordan-a"], "name": "Jordan Bravo",
+                    "needs_review": [], "parent_id": parent_id,
+                    "path": f"parents/{parent_slug}.md", "singleton": True,
+                }},
+                "slugs": {"jordan-a": child},
+            }
+            self.assertEqual(
+                index.read_bytes(),
+                (json.dumps(expected_index, indent=2, sort_keys=True) + "\n").encode(),
+            )
+
     def test_merge_rekeys_facts_and_preserves_human_worth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

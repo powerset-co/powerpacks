@@ -20,7 +20,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.heal_review import HealCandidate, HealReview
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import NO_PROFILE_REASON
+from packs.ingestion.primitives.deep_context.identity_evidence import NO_PROFILE_REASON
 from packs.ingestion.primitives.enrich.rapidapi_client import (
     PROFILE_CONTENT,
     PROFILE_EMPTY,

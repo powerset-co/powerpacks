@@ -26,7 +26,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.deep_research_contacts import build_input
+from packs.ingestion.primitives.deep_context.parallel_research.queue import build_input
+from packs.ingestion.primitives.deep_context.identity_evidence import ResearchEvaluation
 from packs.ingestion.primitives.deep_context.review_web.guided_retarget import (
     GuidanceRequest,
     GuidedRetargetWorker,
@@ -67,6 +68,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.db,
             runner=lambda _: {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
             out_dir=self.root / "guided",
+            use_llm=False,
         )
         handler = review_server.make_handler(
             self.review,
@@ -395,6 +397,106 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         )
         self.assertFalse((queue_dir / "manifest.json").exists())
 
+    def test_guided_provider_result_below_threshold_is_not_applied(self) -> None:
+        worker = GuidedRetargetWorker(
+            self.db,
+            facts_dir=self.root,
+            raw_dir=self.root,
+            profile_cache_dir=self.root / "profile-cache",
+            use_llm=False,
+        )
+        request = GuidanceRequest(
+            "jordan-bravo",
+            "jordan-bravo",
+            "Jordan Bravo",
+            "Find the operator I met through Casey.",
+            person_ids=("linkedin-person",),
+            queue_slug="jordan-bravo",
+        )
+        result = {
+            "new_url": "https://www.linkedin.com/in/jordan-bravo-wrong",
+            "research_profile": {
+                "person": {"full_name": "Jordan Bravo", "confidence": 0.2},
+                "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-wrong"},
+                "metadata": {"research_notes": "best guess only"},
+            },
+        }
+        with mock.patch(
+            "packs.ingestion.primitives.deep_context.review_web.guided_retarget.hydrate_profiles",
+            return_value={"wanted": 1, "ok": 0, "failed": 0, "skipped_no_key": 1},
+        ):
+            item = worker._apply_provider_result(
+                "linkedin-parent", {"name": "Jordan Bravo"}, request, result
+            )
+
+        self.assertEqual(item["state"], "no_match")
+        link = query(
+            self.db,
+            "SELECT decision_action, replacement_url, machine_action, machine_reject, "
+            "machine_proposed_url FROM links WHERE row_key='jordan-bravo'",
+        )[0]
+        self.assertEqual((link["decision_action"], link["replacement_url"]), (None, None))
+        self.assertEqual((link["machine_action"], link["machine_reject"]), ("retarget", "yes"))
+        self.assertEqual(
+            link["machine_proposed_url"],
+            "https://www.linkedin.com/in/jordan-bravo-wrong",
+        )
+
+    def test_guided_provider_result_clearing_judge_is_machine_projected(self) -> None:
+        worker = GuidedRetargetWorker(
+            self.db,
+            facts_dir=self.root,
+            raw_dir=self.root,
+            profile_cache_dir=self.root / "profile-cache",
+        )
+        request = GuidanceRequest(
+            "jordan-bravo",
+            "jordan-bravo",
+            "Jordan Bravo",
+            "Find the operator I met through Casey.",
+            person_ids=("linkedin-person",),
+            queue_slug="jordan-bravo",
+        )
+        result = {
+            "new_url": "https://www.linkedin.com/in/jordan-bravo-correct",
+            "research_profile": {
+                "person": {"full_name": "Jordan Bravo", "confidence": 0.9},
+                "positions": [{"title": "Founder", "company_name": "Bravo Robotics"}],
+                "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
+                "metadata": {"research_notes": "employer and relationship corroborated"},
+            },
+        }
+        verdict = {
+            "verdict": "confirmed",
+            "confidence": 0.91,
+            "reason": "employer and relationship corroborated",
+        }
+        with mock.patch(
+            "packs.ingestion.primitives.deep_context.review_web.guided_retarget.hydrate_profiles",
+            return_value={"wanted": 1, "ok": 0, "failed": 0, "skipped_no_key": 1},
+        ), mock.patch(
+            "packs.ingestion.primitives.deep_context.identity_evidence.judge_research_proposal",
+            return_value=verdict,
+        ):
+            item = worker._apply_provider_result(
+                "linkedin-parent", {"name": "Jordan Bravo"}, request, result
+            )
+
+        self.assertEqual(item["state"], "applied")
+        link = query(
+            self.db,
+            "SELECT decision_action, machine_action, machine_reject, machine_confidence, "
+            "machine_proposed_url FROM links WHERE row_key='jordan-bravo'",
+        )[0]
+        self.assertIsNone(link["decision_action"])
+        self.assertEqual(link["machine_action"], "retarget")
+        self.assertIsNone(link["machine_reject"])
+        self.assertEqual(link["machine_confidence"], 0.91)
+        self.assertEqual(
+            link["machine_proposed_url"],
+            "https://www.linkedin.com/in/jordan-bravo-correct",
+        )
+
     def test_pending_guided_job_resumes_from_sqlite(self) -> None:
         release = threading.Event()
         request = GuidanceRequest(
@@ -406,35 +508,56 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             queue_slug="jordan-bravo",
             submitted_at="2026-08-05T00:00:00Z",
         )
-        first = GuidedRetargetWorker(
-            self.db,
-            runner=lambda _: (
-                (release.wait(5) and {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"}) or {}
-            ),
-            out_dir=self.root / "guided",
-        )
-        self.assertEqual(first.submit(request)["state"], "queued")
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            if query(self.db, "SELECT state FROM guidance")[0]["state"] == "running":
-                break
-            time.sleep(0.01)
-        resumed = GuidedRetargetWorker(
-            self.db,
-            runner=lambda _: {
-                "new_url": "https://www.linkedin.com/in/jordan-bravo-correct",
-                "detail": "resumed result",
+        accepted = ResearchEvaluation(
+            True,
+            {"verdict": "confirmed", "confidence": 0.9, "reason": "corroborated"},
+            {
+                "llm_reject": "",
+                "llm_reject_confidence": "",
+                "llm_reject_reason": "",
+                "confidence": "0.900",
             },
-            out_dir=self.root / "guided",
         )
-        self.assertEqual(resumed.resume(), 1)
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            state = query(self.db, "SELECT state FROM guidance")[0]["state"]
-            if state == "applied":
-                break
-            time.sleep(0.01)
-        release.set()
+        with mock.patch(
+            "packs.ingestion.primitives.deep_context.review_web.guided_retarget.hydrate_profiles",
+            return_value={"wanted": 1, "ok": 0, "failed": 0, "skipped_no_key": 1},
+        ), mock.patch(
+            "packs.ingestion.primitives.deep_context.review_web.guided_retarget.evaluate_research_candidate",
+            return_value=accepted,
+        ):
+            first = GuidedRetargetWorker(
+                self.db,
+                runner=lambda _: (
+                    (release.wait(5) and {"new_url": "https://www.linkedin.com/in/jordan-bravo-correct"}) or {}
+                ),
+                out_dir=self.root / "guided",
+            )
+            self.assertEqual(first.submit(request)["state"], "queued")
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if query(self.db, "SELECT state FROM guidance")[0]["state"] == "running":
+                    break
+                time.sleep(0.01)
+            resumed = GuidedRetargetWorker(
+                self.db,
+                runner=lambda _: {
+                    "new_url": "https://www.linkedin.com/in/jordan-bravo-correct",
+                    "detail": "resumed result",
+                },
+                out_dir=self.root / "guided",
+            )
+            self.assertEqual(resumed.resume(), 1)
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                state = query(self.db, "SELECT state FROM guidance")[0]["state"]
+                if state == "applied":
+                    break
+                time.sleep(0.01)
+            release.set()
+            if first._thread:
+                first._thread.join(timeout=2)
+            if resumed._thread:
+                resumed._thread.join(timeout=2)
         self.assertEqual(state, "applied")
         self.assertEqual(query(self.db, "SELECT * FROM jobs WHERE kind='guided_retarget'"), [])
 

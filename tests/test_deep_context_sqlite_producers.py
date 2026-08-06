@@ -22,11 +22,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
+import packs.ingestion.primitives.deep_context.identity_reconcile.results as identity_results
+from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
     upsert_retargets,
     write_overrides,
 )
-from packs.ingestion.primitives.deep_context.synthesize_person_context import project_facts
+from packs.ingestion.primitives.deep_context.db.projectors import project_facts
 from deep_context_sqlite_test_helpers import query, replace_candidate_people
 
 
@@ -74,6 +75,20 @@ class SqliteProducerTests(unittest.TestCase):
         row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
         self.assertEqual(row["decision_action"], "verify")
         self.assertEqual(row["machine_action"], "verify")
+
+    def test_reconcile_snapshots_identity_once_per_projection_batch(self) -> None:
+        task = {
+            "candidate_key": "alice",
+            "verdict": {"verdict": "confirmed", "confidence": 0.99, "reason": "matches"},
+            "action": "confirm",
+        }
+        with mock.patch.object(
+            identity_results,
+            "identity_snapshot",
+            wraps=identity_results.identity_snapshot,
+        ) as snapshot:
+            write_overrides(self.db, [task, dict(task)])
+        snapshot.assert_called_once_with(self.db)
 
     def test_retarget_and_downstream_baton_are_sqlite_derived(self) -> None:
         upsert_retargets(

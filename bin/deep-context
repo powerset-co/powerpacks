@@ -137,9 +137,6 @@ usage: bin/deep-context <command> [args]
   validate     completeness report (free)
   reconcile    verify each attached LinkedIn (spends OpenAI; try --dry-run first)
   migrate-sqlite  import existing Deep Context artifacts into canonical SQLite once
-  migrate-legacy  turn stored legacy Parallel resolutions into pending retarget
-               proposals for the normal judge/review loop (default dry run;
-               --apply writes; --apply --judge also judges from cache, spends OpenAI)
   refresh      re-synthesize stale dossiers, rebuild parents, open the directory
                (free when facts are current; a contract bump re-runs everyone —
                the dry estimate prints first and invoking refresh approves it)
@@ -157,8 +154,8 @@ usage: bin/deep-context <command> [args]
                (review linkedin | worth | enrich; default: the read-only
                people directory, A-Z dossiers + LinkedIn);
                pass --stage worth|enrich|linkedin for the staged workflow
-  heal         the pre-serve self-heal pass, runnable on its own: legacy
-               scrubs, a FRESH profile fetch + re-judge for every undecided
+  heal         the pre-serve self-heal pass, runnable on its own: a FRESH
+               profile fetch + re-judge for every undecided
                judge-skipped LinkedIn card (RapidAPI per fetch + OpenAI
                ~cents; invoking it IS the consent — no approval stop), and
                free dead-link termination. Idempotent; a clean store prints
@@ -274,16 +271,10 @@ case "$cmd" in
     # It refuses a populated database; normal commands never import implicitly.
     "${PY[@]}" "$PKG.migrate_sqlite" "$@"
     ;;
-  migrate-legacy)
-    # Adopt stored legacy Parallel resolutions as PENDING retarget proposals so the
-    # normal judge / auto-stand / Check-LinkedIn loop finally audits them.
-    # Default dry run; --apply writes; --apply --judge spends OpenAI (cache profiles only).
-    "${PY[@]}" "$PKG.migrate_legacy_resolutions" "$@"
-    ;;
   assemble-synthetic)
     # Free, local: build synthetic people-rows from EXISTING deep-research artifacts
     # for people with no real LinkedIn (see packs/ingestion/docs/synthetic-profiles-plan.md).
-    # A legacy approved=auto value is only machine advice in the staged flow; every
+    # An approved=auto value is only machine advice in the staged flow; every
     # candidate-origin row still waits for explicit Yes/No in the LinkedIn UI.
     "${PY[@]}" "$PKG.assemble_synthetic_profile" "$@"
     ;;
@@ -335,8 +326,8 @@ case "$cmd" in
     ;;
   review)
     # Review boots in one fixed, visible order (bare `review` included):
-    #   1. SELF-HEAL — before touching the server: legacy scrubs + fresh-fetch/
-    #      re-judge of judge-skipped links + free dead-link termination, output
+    #   1. SELF-HEAL — before touching the server: fresh-fetch/re-judge of
+    #      judge-skipped links + free dead-link termination, output
     #      streaming ([heal] progress on stderr, summary JSON on stdout).
     #      A heal failure never blocks the UI.
     #      Invoking review IS the consent (no approval stop).

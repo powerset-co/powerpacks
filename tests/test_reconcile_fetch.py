@@ -10,11 +10,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context import reconcile_linkedin as rl
-from packs.ingestion.primitives.deep_context import reconcile_deep_research as dresearch
+from packs.ingestion.primitives.deep_context.research_reconcile import judging
 from packs.ingestion.primitives.deep_context.db.models import LinkRow, ParentRow, PersonRow, RowKind
 from packs.ingestion.primitives.deep_context.db.store import Db
+import packs.ingestion.primitives.deep_context.identity_reconcile.queue as queue
+import packs.ingestion.primitives.deep_context.reconcile_linkedin as reconcile
+from packs.ingestion.primitives.deep_context.reconcile_linkedin import ReconcileLinkedin
 from packs.ingestion.primitives.enrich import rapidapi_client as rapid
+from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
 
 
 def task(pub="jordan-bravo", url="https://www.linkedin.com/in/jordan-bravo",
@@ -37,15 +40,15 @@ class FetchCandidateTests(unittest.TestCase):
             task(from_connections=True),               # ground truth, never judged
             {**task(), "linkedin": {"linkedin_url": "", "has_profile": False}},  # no URL
         ]
-        wanted = rl.profile_fetch_candidates(rows)
+        wanted = queue.profile_fetch_candidates(rows)
         self.assertEqual(len(wanted), 1)
         self.assertIs(wanted[0], rows[0])
 
 
 class FetchMissingProfilesTests(unittest.TestCase):
     def test_keyless_install_skips_cleanly(self):
-        with mock.patch.object(rl.RapidApiClient, "resolve_key", return_value=""):
-            counts = rl.fetch_missing_profiles([task()], {}, Path("unused"))
+        with mock.patch.object(queue.RapidApiClient, "resolve_key", return_value=""):
+            counts = queue.fetch_missing_profiles([task()], Path("unused"))
         self.assertEqual(counts["fetch_skipped_no_key"], 1)
         self.assertEqual(counts["fetch_ok"], 0)
 
@@ -53,11 +56,9 @@ class FetchMissingProfilesTests(unittest.TestCase):
         with TemporaryDirectory() as d:
             cache_dir = Path(d)
             t = task()
-            people = {"pid-1": {"linkedin_url": t["linkedin"]["linkedin_url"],
-                                "full_name": "Jordan Bravo"}}
 
             def fake_fetch(self, pub, url, *, cache_dir=None, **kw):
-                path = rl.profile_cache_path(cache_dir, pub)
+                path = profile_cache_path(cache_dir, pub)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(json.dumps({
                     "raw_response": {},
@@ -71,10 +72,10 @@ class FetchMissingProfilesTests(unittest.TestCase):
                 return {"state": rapid.PROFILE_CONTENT,
                         "status_code": 200, "normalized_profile": {"success": True}}
 
-            with mock.patch.object(rl.RapidApiClient, "resolve_key", return_value="k"), \
-                 mock.patch.object(rl.RapidApiClient, "__init__", return_value=None), \
-                 mock.patch.object(rl.RapidApiClient, "get_profile", fake_fetch):
-                counts = rl.fetch_missing_profiles([t], people, cache_dir)
+            with mock.patch.object(queue.RapidApiClient, "resolve_key", return_value="k"), \
+                 mock.patch.object(queue.RapidApiClient, "__init__", return_value=None), \
+                 mock.patch.object(queue.RapidApiClient, "get_profile", fake_fetch):
+                counts = queue.fetch_missing_profiles([t], cache_dir)
 
         self.assertEqual(counts["fetch_ok"], 1)
         self.assertEqual(counts["fetch_failed"], 0)
@@ -84,17 +85,31 @@ class FetchMissingProfilesTests(unittest.TestCase):
 
     def test_failed_fetch_counts_and_leaves_task_unjudgeable(self):
         t = task()
-        with mock.patch.object(rl.RapidApiClient, "resolve_key", return_value="k"), \
-             mock.patch.object(rl.RapidApiClient, "__init__", return_value=None), \
-             mock.patch.object(rl.RapidApiClient, "get_profile",
+        with mock.patch.object(queue.RapidApiClient, "resolve_key", return_value="k"), \
+             mock.patch.object(queue.RapidApiClient, "__init__", return_value=None), \
+             mock.patch.object(queue.RapidApiClient, "get_profile",
                                return_value={"state": rapid.PROFILE_EMPTY,
                                              "status_code": 404, "normalized_profile": {}}):
-            counts = rl.fetch_missing_profiles([t], {}, Path("unused"))
+            counts = queue.fetch_missing_profiles([t], Path("unused"))
         self.assertEqual(counts["fetch_failed"], 1)
         self.assertFalse(t["linkedin"]["has_profile"])
 
 
 class SqliteReconcileTests(unittest.TestCase):
+    def test_cli_dry_run_estimates_without_running_the_stage(self):
+        with TemporaryDirectory() as directory:
+            db_path = Path(directory) / "deep-context.sqlite"
+            Db(db_path)
+            with (
+                mock.patch.object(reconcile, "dry_run_estimate", return_value={"status": "dry_run"}) as estimate,
+                mock.patch.object(reconcile, "ReconcileLinkedin") as node,
+                mock.patch.object(reconcile, "emit") as emit,
+            ):
+                self.assertEqual(reconcile.main(["--db", str(db_path), "--dry-run"]), 0)
+            estimate.assert_called_once()
+            node.assert_not_called()
+            emit.assert_called_once_with({"status": "dry_run"})
+
     def test_attached_link_judgment_is_file_first_and_sqlite_projected(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -112,7 +127,7 @@ class SqliteReconcileTests(unittest.TestCase):
             )
             for path in (facts, raw, cache):
                 path.mkdir()
-            rl.profile_cache_path(cache, "jordan-bravo").write_text(json.dumps({
+            profile_cache_path(cache, "jordan-bravo").write_text(json.dumps({
                 "raw_response": {},
                 "normalized_profile": {
                     "success": True,
@@ -123,7 +138,7 @@ class SqliteReconcileTests(unittest.TestCase):
                 },
             }), encoding="utf-8")
             verdicts = output / "verdicts.jsonl"
-            payload = rl.ReconcileLinkedin(
+            payload = ReconcileLinkedin(
                 db=db,
                 people_csv=root / "must-not-be-read.csv",
                 facts_dir=facts,
@@ -141,6 +156,40 @@ class SqliteReconcileTests(unittest.TestCase):
             self.assertEqual((link["machine_action"], link["machine_approved"]), ("verify", "auto"))
             self.assertEqual(link["judgment_artifact_path"], str(verdicts))
             self.assertTrue(verdicts.exists())
+            expected = {
+                "parent_slug": "jordan-bravo-p",
+                "parent_id": "parent-1",
+                "name": "Jordan Bravo",
+                "candidate_key": "jordan-bravo",
+                "person_ids": ["person-1"],
+                "conflict": False,
+                "linkedin": {
+                    "public_identifier": "jordan-bravo",
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                    "full_name": "Jordan Bravo",
+                    "headline": "Founder at Bravo Robotics",
+                    "profile_pic_url": "",
+                    "experiences": [],
+                    "education": [],
+                    "location": "",
+                    "source": "cache",
+                    "has_profile": True,
+                },
+                "verdict": {
+                    "verdict": "confirmed",
+                    "confidence": 0.9,
+                    "supporting_evidence": ["attached profile (offline stub)"],
+                    "contradicting_evidence": [],
+                    "linkedin_plausibly_absent": False,
+                    "recommend_deep_research": False,
+                    "reason": "offline stub trusts the attached profile",
+                },
+                "error": "",
+            }
+            self.assertEqual(
+                verdicts.read_bytes(),
+                (json.dumps(expected, ensure_ascii=False, separators=(",", ":")) + "\n").encode(),
+            )
             self.assertEqual(payload.tasks, 1)
             self.assertFalse((output / "verdicts.csv").exists())
             self.assertFalse((output / "summary.md").exists())
@@ -197,7 +246,7 @@ class RetargetProposalHydrationTests(unittest.TestCase):
             (facts/"pid-1.jsonl").write_text(json.dumps(
                 {"chunk_index": 0, "usage": {}, "facts": {"canonical_name": "Jordan Bravo"}}) + "\n")
             # The real profile IS in the shared cache.
-            rl.profile_cache_path(cache, "jordan-bravo").write_text(json.dumps({
+            profile_cache_path(cache, "jordan-bravo").write_text(json.dumps({
                 "raw_response": {}, "normalized_profile": {
                     "success": True, "full_name": "Jordan Bravo",
                     "headline": "Founder at Bravo Robotics",
@@ -224,8 +273,8 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                 return {"verdict": "confirmed", "confidence": 0.9, "reason": "ok"}
 
             with mock.patch.object(rapid.RapidApiClient, "resolve_key", return_value=""), \
-                 mock.patch.object(dresearch, "judge_research_proposal", capture):
-                dresearch.propose_retargets_from_output(
+                 mock.patch.object(judging, "judge_research_proposal", capture):
+                judging.propose_retargets_from_output(
                     out, subset, base/"review.csv", db=db, facts_dir=facts, raw_dir=raw,
                     use_llm=True, profile_cache_dir=cache)
 

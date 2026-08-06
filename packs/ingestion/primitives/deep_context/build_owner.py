@@ -25,13 +25,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
-from contextlib import closing
 from pathlib import Path
 from typing import Any
-
-from packs.ingestion.primitives.discover.messages.extract_imessage import open_sqlite_readonly
 
 from packs.ingestion.primitives.deep_context.common import (
     OWNER_JSON,
@@ -42,6 +38,7 @@ from packs.ingestion.primitives.deep_context.common import (
     normalize_phone,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.discover.messages import chatdb
 from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_ERROR, rapidapi_profile
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
@@ -96,23 +93,10 @@ def harvest_owner_phones(chat_db: Path | None = None) -> list[str]:
     if not chat_db.exists():
         return []
     phones: list[str] = []
-    try:
-        with closing(open_sqlite_readonly(chat_db)) as conn:
-            for (login,) in conn.execute("SELECT DISTINCT account_login FROM chat"):
-                value = str(login or "")
-                if value.startswith("P:"):
-                    phone = normalize_phone(value[2:])
-                    if phone and phone not in phones:
-                        phones.append(phone)
-            rows = conn.execute(
-                "SELECT DISTINCT destination_caller_id FROM message "
-                "WHERE is_from_me = 0 AND destination_caller_id LIKE '+%'")
-            for (caller_id,) in rows:
-                phone = normalize_phone(str(caller_id or ""))
-                if phone and phone not in phones:
-                    phones.append(phone)
-    except (sqlite3.Error, OSError):
-        return phones
+    for identifier in chatdb.owner_phone_identifiers(chat_db):
+        phone = normalize_phone(identifier)
+        if phone and phone not in phones:
+            phones.append(phone)
     return phones
 
 

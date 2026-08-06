@@ -19,9 +19,9 @@ from packs.ingestion.primitives.deep_context.common import (
     VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.deep_context.db.store import StoreError
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
-    DEFAULT_CONFIRM,
-    DEFAULT_DETACH,
+from packs.ingestion.primitives.deep_context.db.models import (
+    JUDGE_CONFIRM_THRESHOLD,
+    JUDGE_DETACH_THRESHOLD,
 )
 
 from .server import AGENT_ACTIONS, cmd_serve, workflow_status
@@ -73,8 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--enrichment-manifest", default=str(ENRICH_MANIFEST))
     serve.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
     serve.add_argument("--avatar-dir", default=str(AVATAR_DIR))
-    serve.add_argument("--confirm-threshold", type=float, default=DEFAULT_CONFIRM)
-    serve.add_argument("--detach-threshold", type=float, default=DEFAULT_DETACH)
+    serve.add_argument("--confirm-threshold", type=float, default=JUDGE_CONFIRM_THRESHOLD)
+    serve.add_argument("--detach-threshold", type=float, default=JUDGE_DETACH_THRESHOLD)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--stage",

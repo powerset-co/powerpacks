@@ -11,6 +11,7 @@ DEEP_CONTEXT = Path("packs/ingestion/primitives/deep_context")
 DB_PACKAGE = DEEP_CONTEXT / "db"
 EXPECTED_DB_OPERATIONS = {
     "legacy.import_legacy",
+    "projectors.project_facts",
     "projectors.project_manifest",
     "projectors.stage_status_for",
     "snapshots.canonical_snapshot",
@@ -36,13 +37,6 @@ EXPECTED_DB_OPERATIONS = {
     "views.workflow_state",
     "views.worth_review",
 }
-SQLITE_SOURCE_ADAPTERS = {
-    DEEP_CONTEXT / "build_email_context.py",
-    DEEP_CONTEXT / "build_owner.py",
-    DEEP_CONTEXT / "sources.py",
-}
-
-
 class DeepContextImportHygieneTests(unittest.TestCase):
     def test_deep_context_has_no_nested_imports(self) -> None:
         nested: list[str] = []
@@ -54,7 +48,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
 
         self.assertEqual(nested, [])
 
-    def test_db_public_surface_is_exact_and_at_most_twenty_five_operations(self) -> None:
+    def test_db_public_surface_is_exact_and_at_most_twenty_six_operations(self) -> None:
         operations: set[str] = set()
         for path in sorted(DB_PACKAGE.glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -69,7 +63,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
                             if not member.name.startswith("_"):
                                 operations.add(f"{module}.Db.{member.name}")
 
-        self.assertLessEqual(len(operations), 25)
+        self.assertLessEqual(len(operations), 26)
         self.assertEqual(operations, EXPECTED_DB_OPERATIONS)
 
     def test_canonical_sqlite_access_stays_inside_db_package(self) -> None:
@@ -86,7 +80,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
                     and node.func.attr in {"query", "_query", "transaction"}
                 ):
                     direct_db_calls.append(f"{path}:{node.lineno}:{node.func.attr}")
-                if path not in SQLITE_SOURCE_ADAPTERS and (
+                if (
                     isinstance(node, ast.Import)
                     and any(alias.name == "sqlite3" for alias in node.names)
                     or isinstance(node, ast.ImportFrom)

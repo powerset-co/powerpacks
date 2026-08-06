@@ -34,7 +34,7 @@ Use the narrow path when the user names one:
   `bin/deep-context review linkedin` (likewise `worth` / `enrich`) — sugar for
   the server's `--stage` flag. `review <stage>` (and bare `review`) always
   runs one fixed order: (1) SELF-HEAL first, before touching the server, with
-  its progress visible (legacy scrubs + fresh-fetch re-judge of judge-skipped
+  its progress visible (fresh-fetch re-judge of judge-skipped
   LinkedIn cards + free dead-link termination; a RapidAPI fetch per healed
   candidate plus ~cents of OpenAI judging, no approval stop — invoking review
   is the consent); (2) RESTART the review server — stop any running one
@@ -276,30 +276,6 @@ with message context before any paid identity lookup. A candidate merged into an
 existing person does not reappear in the People queue or paid lookup; reconcile
 folds its email/phone/channel metadata onto the kept LinkedIn instead.
 
-### 4.6 Migrate stored legacy resolutions (free scan; judged adoption)
-
-Older imports attached web-researched LinkedIn links with no judge and no
-review. Adopt them into canonical SQLite identity state so
-this flow finally audits them — the scan is free and a no-op once migrated:
-
-```bash
-bin/deep-context migrate-legacy
-```
-
-If `eligible` is 0, move on. Otherwise apply with judging (the judge reads the
-local profile cache — no profile fetches). The same cost gate as reconcile
-applies: auto-approve under a $25 ceiling using the dry-run's
-`estimated_judge_cost_usd_*`, otherwise ask first:
-
-```bash
-bin/deep-context migrate-legacy --apply --judge
-```
-
-Migrated links behave exactly like deep-research proposals from here on:
-judge-rejected ones surface with reasons, confident verdicts auto-stand, the
-rest queue in Check LinkedIn, and approved rows realize through
-apply-retargets like everything else.
-
 ### 5. People decision gate
 
 Before the UI, preview the attached-LinkedIn judge:
@@ -337,10 +313,9 @@ finally OPENS the staged UI once the fresh server answers /healthz. Never skip
 the launch because "a server is already up" — a leftover server keeps serving
 the stale Python it loaded at startup.
 
-The self-heal pass: (1) the legacy stored-decision scrubs, (2) a FRESH
-profile fetch plus re-judge for every undecided LinkedIn card the judge
+The self-heal pass: (1) a FRESH profile fetch plus re-judge for every undecided LinkedIn card the judge
 previously skipped as "no usable profile" (the normal judge and write path, so
-confirm/detach bars auto-apply), and (3) free termination of confirmed-dead
+confirm/detach bars auto-apply), and (2) free termination of confirmed-dead
 links — detach plus a free identity stand from an existing synthetic row or
 research output, else the person stays a pending re-research card. This spends
 real money without pausing: a fresh RapidAPI call per healed candidate plus

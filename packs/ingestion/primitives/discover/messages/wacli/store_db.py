@@ -1,33 +1,16 @@
-"""Read-only SQLite access to the local wacli store (`<store>/wacli.db`).
+"""Read-only wacli connection, schema, JID, contact, and group metadata helpers.
 
-wacli owns this database; Powerpacks only reads it, and only ever reads
-METADATA. `assert_metadata_query` enforces that at the query level: the
-extractor's ROW reads all go through `select_rows`, which refuses any SQL
-naming a body column (`text`, `display_text`, `media_caption`, attachment
-paths/keys, …); the depth aggregates below select only counts and identifiers.
-The privacy contract is a code path here, not a convention.
-
-Two groups of readers live here:
-
-- generic access the extractor uses — open the read-only connection, probe
-  tables/columns, run a guarded SELECT, list group chat JIDs;
-- the history-depth queries — visible/direct-message predicates plus the four
-  aggregates the depth stage runs on (`chat_states`, `total_count`, `targets`,
-  `counts`). They sit beside the generic helpers because every one of them is a
-  `wacli.db` read; the stage that interprets them is `depth.py`.
-
-Changelog:
-  2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`.
-    All wacli.db SQL now lives in this one module (it used to be interleaved
-    with the binary lifecycle and the stage loop). Queries unchanged.
+wacli owns the database; Powerpacks only reads it. Guarded metadata extraction
+lives here, body reads live in `message_db.py`, and history-depth aggregates
+live in `depth_db.py`.
 """
 
 from __future__ import annotations
 
-import os
 import re
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,9 +20,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.discover.messages.wacli.payloads import HistoryDepthTarget  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveFailed  # noqa: E402
-from packs.ingestion.primitives.discover.messages.wacli.util import history_chat_ref  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.util import (  # noqa: E402
+    canonicalize_phone,
+    jid_to_phone,
+)
 
 BODY_COLUMN_NAMES = {
     "text",
@@ -52,18 +37,19 @@ BODY_COLUMN_NAMES = {
     "file_enc_sha256",
     "local_path",
 }
-# A chat at or below this message count is "shallow" — the depth stage's
-# selection threshold, applied in the target query's HAVING clause.
-DEFAULT_HISTORY_DEPTH_MAX_COUNT = int(os.environ.get("POWERPACKS_WACLI_DEPTH_MAX_COUNT", "20"))
+DatabaseError = sqlite3.Error
 
 
-def open_wacli_db(store: Path) -> sqlite3.Connection:
-    db_path = store / "wacli.db"
+def open_readonly_db(db_path: Path) -> sqlite3.Connection:
     if not db_path.exists():
         raise PrimitiveFailed(f"wacli database not found at {db_path}")
     conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def open_wacli_db(store: Path) -> sqlite3.Connection:
+    return open_readonly_db(store / "wacli.db")
 
 
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -92,176 +78,202 @@ def select_rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()
     return list(conn.execute(sql, params))
 
 
+def whatsapp_epoch_to_iso(value: Any) -> str | None:
+    if value in (None, "", 0):
+        return None
+    try:
+        timestamp = float(value)
+        if timestamp <= 0:
+            return None
+        if timestamp > 1e12:
+            timestamp /= 1000
+        return (
+            datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def whatsapp_phone_digit_forms(phone: str | None) -> tuple[str, ...]:
+    """Full WhatsApp digits plus the comparison form used by older readers.
+
+    WhatsApp stores the country code in a DM JID. For a US number, the full
+    ``1XXXXXXXXXX`` form must therefore remain present even when a comparison
+    key strips the leading ``1``. A bare ten-digit US number gets the inverse
+    treatment: its canonical ``1``-prefixed form is added too.
+    """
+    value = str(phone or "").strip()
+    full_digits = re.sub(r"\D", "", value.split("@", 1)[0])
+    canonical = canonicalize_phone(value)
+    canonical_digits = canonical.removeprefix("+") if canonical else ""
+    if not canonical_digits:
+        return ()
+    forms: list[str] = []
+    for digits in (full_digits, canonical_digits):
+        if digits and digits not in forms:
+            forms.append(digits)
+    if len(canonical_digits) == 11 and canonical_digits.startswith("1"):
+        local_digits = canonical_digits[1:]
+        if local_digits not in forms:
+            forms.append(local_digits)
+    return tuple(forms)
+
+
+def whatsapp_dm_jids(phones: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    jids: list[str] = []
+    for phone in phones:
+        for digits in whatsapp_phone_digit_forms(phone):
+            jid = f"{digits}@s.whatsapp.net"
+            if jid not in jids:
+                jids.append(jid)
+    return tuple(jids)
+
+
+def load_lid_map(store: Path) -> dict[str, str]:
+    db_path = store / "session.db"
+    if not db_path.exists():
+        return {}
+    conn = open_readonly_db(db_path)
+    try:
+        columns = table_columns(conn, "whatsmeow_lid_map")
+        if not {"lid", "pn"}.issubset(columns):
+            return {}
+        mapping: dict[str, str] = {}
+        for row in select_rows(conn, "SELECT lid, pn FROM whatsmeow_lid_map"):
+            lid = str(row["lid"] or "")
+            pn = str(row["pn"] or "")
+            if not lid or not pn:
+                continue
+            mapping[lid] = pn
+            if "@" not in lid:
+                mapping[f"{lid}@lid"] = pn
+        return mapping
+    finally:
+        conn.close()
+
+
+def phone_for_jid(
+    jid: str,
+    contacts_by_jid: dict[str, dict[str, Any]],
+    lid_map: dict[str, str],
+) -> str:
+    contact = contacts_by_jid.get(jid) or {}
+    mapped_jid = lid_map.get(jid) or ""
+    mapped_contact = contacts_by_jid.get(mapped_jid) or {}
+    return (
+        canonicalize_phone(contact.get("phone"))
+        or canonicalize_phone(mapped_contact.get("phone"))
+        or jid_to_phone(mapped_jid)
+        or jid_to_phone(jid)
+        or ""
+    )
+
+
+def contact_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    columns = table_columns(conn, "contacts")
+    if "jid" not in columns:
+        return []
+    projection = [
+        column if column in columns else f"NULL AS {column}"
+        for column in (
+            "jid",
+            "phone",
+            "push_name",
+            "full_name",
+            "first_name",
+            "business_name",
+            "system_name",
+        )
+    ]
+    return [dict(row) for row in select_rows(conn, f"SELECT {', '.join(projection)} FROM contacts")]
+
+
+def contacts_by_jid(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    return {
+        str(row.get("jid") or ""): row
+        for row in contact_rows(conn)
+    }
+
+
+def message_stats(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    columns = table_columns(conn, "messages")
+    if "chat_jid" not in columns:
+        return {}
+    where = []
+    if "revoked" in columns:
+        where.append("revoked = 0")
+    if "deleted_for_me" in columns:
+        where.append("deleted_for_me = 0")
+    where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+    last_ts = "MAX(ts)" if "ts" in columns else "NULL"
+    rows = select_rows(
+        conn,
+        f"SELECT chat_jid, COUNT(*) AS message_count, {last_ts} AS last_ts "
+        f"FROM messages{where_sql} GROUP BY chat_jid",
+    )
+    return {
+        str(row["chat_jid"]): {
+            "message_count": int(row["message_count"] or 0),
+            "last_message": whatsapp_epoch_to_iso(row["last_ts"]),
+        }
+        for row in rows
+    }
+
+
+def group_participant_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    columns = table_columns(conn, "group_participants")
+    if "group_jid" not in columns:
+        return {}
+    rows = select_rows(
+        conn,
+        "SELECT group_jid, COUNT(*) AS participant_count "
+        "FROM group_participants GROUP BY group_jid",
+    )
+    return {
+        str(row["group_jid"]): int(row["participant_count"] or 0)
+        for row in rows
+    }
+
+
+def group_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    columns = table_columns(conn, "groups")
+    if "jid" not in columns:
+        return []
+    name = "name" if "name" in columns else "NULL AS name"
+    left_at = "left_at" if "left_at" in columns else "NULL AS left_at"
+    return select_rows(conn, f"SELECT jid, {name}, {left_at} FROM groups")
+
+
+def chat_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    columns = table_columns(conn, "chats")
+    if "jid" not in columns:
+        return []
+    projection = [
+        column if column in columns else f"NULL AS {column}"
+        for column in ("jid", "kind", "name", "last_message_ts")
+    ]
+    return select_rows(conn, f"SELECT {', '.join(projection)} FROM chats")
+
+
+def group_participant_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    columns = table_columns(conn, "group_participants")
+    if not {"group_jid", "user_jid"}.issubset(columns):
+        return []
+    return select_rows(conn, "SELECT group_jid, user_jid FROM group_participants")
+
+
 def group_chat_jids(store: Path) -> list[str]:
     db_path = store / "wacli.db"
     if not db_path.exists():
         return []
-    conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = open_wacli_db(store)
     try:
         if not table_exists(conn, "chats"):
             return []
         rows = select_rows(conn, "SELECT jid FROM chats WHERE kind = 'group' OR jid LIKE '%@g.us' ORDER BY jid")
         return [str(row["jid"]) for row in rows if row["jid"]]
-    finally:
-        conn.close()
-
-
-def history_depth_visible_predicates(conn: sqlite3.Connection, alias: str = "m") -> list[str]:
-    columns = table_columns(conn, "messages")
-    predicates: list[str] = []
-    if "revoked" in columns:
-        predicates.append(f"COALESCE({alias}.revoked, 0) = 0")
-    if "deleted_for_me" in columns:
-        predicates.append(f"COALESCE({alias}.deleted_for_me, 0) = 0")
-    return predicates
-
-
-def history_depth_direct_predicates(
-    *,
-    chat_alias: str = "c",
-    message_alias: str = "m",
-) -> list[str]:
-    return [
-        f"COALESCE({chat_alias}.kind, 'unknown') <> 'group'",
-        f"{message_alias}.chat_jid NOT LIKE '%@g.us'",
-        f"{message_alias}.chat_jid NOT LIKE '%@newsletter'",
-        (
-            f"({message_alias}.chat_jid LIKE '%@s.whatsapp.net' "
-            f"OR {message_alias}.chat_jid LIKE '%@lid')"
-        ),
-    ]
-
-
-def history_depth_chat_states(store: Path) -> dict[str, tuple[int, int]]:
-    if not (store / "wacli.db").exists():
-        return {}
-    conn = open_wacli_db(store)
-    try:
-        if not table_exists(conn, "messages") or not table_exists(conn, "chats"):
-            return {}
-        visibility = history_depth_visible_predicates(conn)
-        where_sql = " AND ".join([
-            *history_depth_direct_predicates(),
-            *visibility,
-        ])
-        rows = conn.execute(
-            f"""
-            SELECT m.chat_jid, COUNT(*) AS message_count, MAX(m.ts) AS latest_ts
-            FROM messages m
-            JOIN chats c ON c.jid = m.chat_jid
-            WHERE {where_sql}
-            GROUP BY m.chat_jid
-            """,
-        ).fetchall()
-        return {
-            str(row["chat_jid"]): (
-                int(row["message_count"]),
-                int(row["latest_ts"] or 0),
-            )
-            for row in rows
-        }
-    finally:
-        conn.close()
-
-
-def history_depth_total_count(store: Path) -> int:
-    if not (store / "wacli.db").exists():
-        return 0
-    conn = open_wacli_db(store)
-    try:
-        if not table_exists(conn, "messages"):
-            return 0
-        row = conn.execute("SELECT COUNT(*) FROM messages").fetchone()
-        return int(row[0] or 0)
-    finally:
-        conn.close()
-
-
-def history_depth_targets(
-    store: Path,
-    *,
-    active_since_ts: int,
-    max_count: int = DEFAULT_HISTORY_DEPTH_MAX_COUNT,
-    before_states: dict[str, tuple[int, int]] | None = None,
-    bootstrap: bool = False,
-    resume_refs: set[str] | None = None,
-    exclude_jids: set[str] | None = None,
-) -> list[HistoryDepthTarget]:
-    previous = before_states or {}
-    resumable = resume_refs or set()
-    excluded = exclude_jids or set()
-    conn = open_wacli_db(store)
-    try:
-        visibility = history_depth_visible_predicates(conn)
-        where_sql = " AND ".join([
-            *history_depth_direct_predicates(),
-            *visibility,
-        ])
-        rows = conn.execute(
-            f"""
-            SELECT
-                m.chat_jid,
-                c.kind,
-                COUNT(*) AS message_count,
-                MAX(m.ts) AS latest_ts
-            FROM messages m
-            JOIN chats c ON c.jid = m.chat_jid
-            WHERE {where_sql}
-            GROUP BY m.chat_jid, c.kind
-            HAVING COUNT(*) <= ? AND MAX(m.ts) >= ?
-            ORDER BY MAX(m.ts) DESC, m.chat_jid
-            """,
-            (max_count, active_since_ts),
-        ).fetchall()
-        targets: list[HistoryDepthTarget] = []
-        for row in rows:
-            chat_jid = str(row["chat_jid"])
-            if chat_jid in excluded:
-                continue
-            chat_ref = history_chat_ref(chat_jid)
-            current_state = (
-                int(row["message_count"]),
-                int(row["latest_ts"] or 0),
-            )
-            state_changed = (
-                before_states is not None
-                and previous.get(chat_jid) != current_state
-            )
-            if (
-                bootstrap
-                or chat_ref in resumable
-                or state_changed
-            ):
-                targets.append(
-                    HistoryDepthTarget(
-                        chat_jid=chat_jid,
-                        chat_ref=chat_ref,
-                        kind=str(row["kind"]),
-                        current_count=current_state[0],
-                        current_latest_ts=current_state[1],
-                        state_changed=state_changed,
-                    )
-                )
-        return targets
-    finally:
-        conn.close()
-
-
-def history_depth_counts(store: Path, chat_jid: str) -> tuple[int, int, int]:
-    conn = open_wacli_db(store)
-    try:
-        visibility = history_depth_visible_predicates(conn)
-        where_sql = " AND ".join(["m.chat_jid = ?", *visibility])
-        target = conn.execute(
-            f"SELECT COUNT(*), MAX(m.ts) FROM messages m WHERE {where_sql}",
-            (chat_jid,),
-        ).fetchone()
-        total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()
-        return (
-            int(target[0] or 0),
-            int(total[0] or 0),
-            int(target[1] or 0),
-        )
     finally:
         conn.close()

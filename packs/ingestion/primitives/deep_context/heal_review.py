@@ -19,19 +19,24 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.common import PROFILE_CACHE_DIR, REVIEW_MANIFEST, ROOT, emit, load_env
-from packs.ingestion.primitives.deep_context.compose_dossier import merge_facts
-from packs.ingestion.primitives.deep_context.db.models import RowKind
+from packs.ingestion.primitives.deep_context.dossier.facts import merge_facts
+from packs.ingestion.primitives.deep_context.db.models import (
+    JUDGE_CONFIRM_THRESHOLD,
+    JUDGE_DETACH_THRESHOLD,
+    RowKind,
+)
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
-    DEFAULT_CONFIRM,
-    DEFAULT_DETACH,
+from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.identity_evidence import (
     NO_PROFILE_REASON,
-    count_pending_identity_reviews,
     decide_actions,
-    judge_identity_candidate,
-    linkedin_view,
-    project_identity_judgments,
+    judge_research_proposal as judge_identity_candidate,
+)
+from packs.ingestion.primitives.deep_context.identity_reconcile.queue import linkedin_view
+from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
+    count_pending_identity_reviews,
+    write_overrides,
 )
 from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_CONTENT, PROFILE_EMPTY, RapidApiClient
 from packs.ingestion.primitives.imports.common import write_manifest
@@ -133,26 +138,6 @@ class HealReview:
                 grouped.setdefault(row.parent_id, []).append({"facts": facts})
         return {parent_id: merge_facts(rows) for parent_id, rows in grouped.items()}
 
-    @staticmethod
-    def _dossier_view(facts: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "relationship": str(facts.get("relationship_to_owner") or ""),
-            "title": str(facts.get("title") or ""),
-            "employers": [
-                str(row.get("name") or "")
-                for row in facts.get("employers") or []
-                if isinstance(row, dict) and row.get("name")
-            ],
-            "school": str(facts.get("school") or ""),
-            "location": str(facts.get("location") or ""),
-            "topics": list(facts.get("topics") or [])[:10],
-            "shared_context": [
-                f"{row.get('overlap', 'other')}: {row.get('detail', '')}"
-                for row in facts.get("shared_context") or []
-                if isinstance(row, dict) and row.get("detail")
-            ],
-        }
-
     def rejudge(self, candidates: list[HealCandidate]) -> dict[str, Any]:
         summary = {
             "candidates": len(candidates), "parents": len({row.parent_id for row in candidates}),
@@ -175,7 +160,9 @@ class HealReview:
                 "parent_slug": candidate.parent_slug,
                 "candidate_key": candidate.candidate_key,
                 "name": candidate.name,
-                "dossier": self._dossier_view(dossiers.get(candidate.parent_id, {})),
+                "dossier": DossierEvidence.from_facts(
+                    dossiers.get(candidate.parent_id, {})
+                ).as_judge_dict(),
                 "linkedin": linkedin_view(row, self.profile_cache_dir),
                 "from_connections": False,
             }
@@ -184,8 +171,8 @@ class HealReview:
             verdicts = pool.map(lambda task: judge_identity_candidate(task, use_llm=True), tasks)
             for task, verdict in zip(tasks, verdicts):
                 task["verdict"] = verdict
-        decide_actions(tasks, DEFAULT_CONFIRM, DEFAULT_DETACH)
-        projected = project_identity_judgments(self.db, tasks)
+        decide_actions(tasks, JUDGE_CONFIRM_THRESHOLD, JUDGE_DETACH_THRESHOLD)
+        projected = write_overrides(self.db, tasks)
         summary.update(
             verified=projected["verified"],
             detached=projected["detached"],
@@ -226,7 +213,7 @@ class HealReview:
                 })
             else:
                 summary["pending_reresearch"] += 1
-        projected = project_identity_judgments(self.db, tasks)
+        projected = write_overrides(self.db, tasks)
         summary["detached"] = projected["detached"]
         summary["stood_synthetic"] += projected["verified"]
         summary["skipped_human_decided"] = projected["preserved_user_rows"]

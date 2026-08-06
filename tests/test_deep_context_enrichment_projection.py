@@ -12,6 +12,9 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context import deep_research_contacts as research
 from packs.ingestion.primitives.deep_context import reconcile_deep_research as reconcile
+from packs.ingestion.primitives.deep_context.parallel_research import driver
+from packs.ingestion.primitives.deep_context.research_reconcile import provider, selection
+from packs.ingestion.primitives.deep_context.research_reconcile.selection import QUEUE_FIELDS
 from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
 from deep_context_sqlite_test_helpers import query
@@ -53,7 +56,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
     def _write_queue(self, rows: list[dict[str, str]]) -> None:
         with self.queue.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=reconcile.QUEUE_FIELDS)
+            writer = csv.DictWriter(handle, fieldnames=QUEUE_FIELDS)
             writer.writeheader()
             writer.writerows(rows)
 
@@ -82,7 +85,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
     def test_inventory_names_exact_paths_and_hashes(self) -> None:
         raw, result = self._write_result()
-        (entry,) = research.research_artifact_inventory(self._params())
+        (entry,) = driver.research_artifact_inventory(self._params())
         self.assertEqual(entry["path"], "jordan-bravo/01_research_parallel.json")
         self.assertEqual(entry["raw_path"], "jordan-bravo/00_parallel_raw.json")
         self.assertEqual(entry["sha256"], hashlib.sha256(result.read_bytes()).hexdigest())
@@ -92,7 +95,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
     def test_running_terminal_and_changed_projection_preserve_human_decision(self) -> None:
         self._write_result()
         params = self._params()
-        research._report_progress(
+        driver.report_progress(
             params,
             "running",
             {"total": 1, "completed": 0, "pending": 1, "failed": 0},
@@ -101,7 +104,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "running")
         self.db.decide_identity("candidate:email:jordan@example.com", "verify")
 
-        research._report_progress(
+        driver.report_progress(
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
@@ -112,13 +115,13 @@ class EnrichmentProjectionTest(unittest.TestCase):
         self.assertEqual(query(self.db, "SELECT status FROM stage_state")[0][0], "complete")
 
         self._write_result("two")
-        research._report_progress(
+        driver.report_progress(
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
             selection={"fingerprint": "selection-1"},
         )
-        research._report_progress(
+        driver.report_progress(
             params,
             "research_complete",
             {"total": 1, "completed": 1, "pending": 0, "failed": 0},
@@ -134,7 +137,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
     def test_failure_transition_projects_error_without_erasing_artifacts(self) -> None:
         self._write_result()
-        research._report_progress(
+        driver.report_progress(
             self._params(),
             "failed",
             {"total": 1, "completed": 0, "pending": 0, "failed": 1},
@@ -149,7 +152,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
 
     def test_zero_work_terminal_projects_empty_inventory(self) -> None:
         self._write_queue([])
-        research._report_progress(
+        driver.report_progress(
             self._params(),
             "research_complete",
             {"total": 0, "completed": 0, "pending": 0, "failed": 0},
@@ -182,7 +185,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
         ]
         with (
             mock.patch.object(
-                reconcile.views,
+                selection.views,
                 "workflow_state",
                 return_value={
                     "selection": {
@@ -191,9 +194,9 @@ class EnrichmentProjectionTest(unittest.TestCase):
                     }
                 },
             ),
-            mock.patch.object(reconcile.views, "linkedin_review", return_value=subset),
-            mock.patch.object(reconcile, "build_queue", return_value=[self.queue_row]),
-            mock.patch.object(reconcile, "run_research") as paid,
+            mock.patch.object(selection.views, "linkedin_review", return_value=subset),
+            mock.patch.object(selection, "build_queue", return_value=[self.queue_row]),
+            mock.patch.object(provider, "run_research") as paid,
         ):
             node = reconcile.ReconcileDeepResearch(
                 verdicts_jsonl=verdicts,

@@ -1,44 +1,18 @@
-"""[3/4] Compose per-person markdown dossiers + the lookup index (reduce step).
+#!/usr/bin/env python3
+"""Compose synthesized facts into person dossiers, index records, and a catalog.
 
-Merges each person's per-chunk facts (from ``synthesize_person_context``) into one
-markdown dossier and writes the name/phone/email lookup index. This step is
-deterministic and LLM-free: the expensive reasoning already happened in the map
-step, so the reduce is a cheap, testable fact-merge + template — keeping local
-CPU/memory trivial. The orchestrating agent (or a Claude sub-agent) may enrich
-the ``## Summary`` prose afterward; the structured sections below stand on their own.
-
-Outputs:
-  <dossier-dir>/<slug>.md   one dossier per person
-  index.json                `slugs` (this stage OWNS it) + the derived lookup maps
-  index.md                  human-readable catalog
-
-This stage owns exactly ONE index.json key — `slugs` — and never touches
-`parents` (build_parents owns that). The by_email/by_phone/by_name maps are
-re-derived from both record maps on write; see the index contract in `common.py`.
-
-Changelog:
-  2026-07-27 (declared contract): `ComposeDossier` is a `pipeline/contract.py:Node`.
-    The per-person inputs/outputs are declared as `{person_id}`/`{slug}` templates
-    (same mechanism as gmail's `{account_slug}`), `index.json` is declared with
-    `owns_columns=("slugs",)` against build_parents' `("parents",)`, and the
-    manifest goes through the Node template (same keys, plus the declared
-    `fingerprints` block). `run(args)` became `execute()`; same flags, same output.
-  2026-07-24: writes index.json through common.write_index, so `parents` survives a
-    recompose and the lookup maps are derived rather than appended. Each `slugs`
-    entry now carries its own emails/phones/full_name, and `--person` updates that
-    one entry in place instead of replacing the whole document with a single person.
-  2026-07-23 (audit dedup): now_iso, write_json import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
+The stable Node and CLI own the ``slugs`` index slice. Fact reduction and
+byte-stable artifact rendering live in the concrete ``deep_context.dossier``
+modules so other stages import policy from its defining home.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import time
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.candidates import NETWORK_WORTH_VALUES
 from packs.ingestion.primitives.deep_context.common import (
     DOSSIER_DIR,
     DOSSIER_TEMPLATE,
@@ -49,254 +23,18 @@ from packs.ingestion.primitives.deep_context.common import (
     INDEX_MD,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
-    contact_identifiers,
     emit,
     load_index,
-    load_owner,
     read_jsonl,
-    phone_digits,
     slugify,
     write_index,
 )
-from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.dossier.facts import headline, merge_facts
+from packs.ingestion.primitives.deep_context.dossier.rendering import render_dossier, write_catalog
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
-
-MAX_TOPICS = 25
-
-
-def merge_facts(chunks: list[dict[str, Any]]) -> dict[str, Any]:
-    """Combine a person's per-chunk facts into one record (no LLM)."""
-    facts = [c.get("facts") or {} for c in chunks if c.get("facts")]
-    if not facts:
-        return {}
-
-    def best_scalar(field: str) -> str:
-        """Highest-confidence non-empty value (ties -> longest, then first)."""
-        candidates = [
-            (f.get("confidence") or 0.0, len(str(f.get(field) or "")), str(f.get(field) or "").strip())
-            for f in facts if str(f.get(field) or "").strip()
-        ]
-        return max(candidates)[2] if candidates else ""
-
-    names = [str(f.get("canonical_name") or "").strip() for f in facts if f.get("canonical_name")]
-    canonical = Counter(names).most_common(1)[0][0] if names else ""
-
-    employers: dict[str, dict[str, str]] = {}
-    status_rank = {"current": 2, "past": 1, "unknown": 0}
-    for f in facts:
-        for emp in f.get("employers") or []:
-            name = str(emp.get("name") or "").strip()
-            if not name:
-                continue
-            key = name.lower()
-            incumbent = employers.get(key)
-            cand = {"name": name, "role": str(emp.get("role") or "").strip(), "status": str(emp.get("status") or "unknown")}
-            if incumbent is None:
-                employers[key] = cand
-                continue
-            # Keep the strongest status and the most specific role across mentions.
-            if status_rank.get(cand["status"], 0) > status_rank.get(incumbent["status"], 0):
-                incumbent["status"] = cand["status"]
-            if not incumbent["role"] and cand["role"]:
-                incumbent["role"] = cand["role"]
-
-    aliases: list[str] = []
-    topics: list[str] = []
-    identifiers: list[str] = []
-    owned_identifiers = {"emails": [], "phones": [], "urls": []}
-    for f in facts:
-        for value in f.get("aliases") or []:
-            v = str(value).strip()
-            if v and v != canonical and v not in aliases:
-                aliases.append(v)
-        for value in f.get("topics") or []:
-            v = str(value).strip()
-            if v and v.lower() not in {t.lower() for t in topics}:
-                topics.append(v)
-        for value in f.get("identifiers") or []:
-            v = str(value).strip()
-            if v and v.lower() not in {i.lower() for i in identifiers}:
-                identifiers.append(v)
-        for kind in owned_identifiers:
-            for value in (f.get("owned_identifiers") or {}).get(kind) or []:
-                v = str(value).strip()
-                if v and v.lower() not in {i.lower() for i in owned_identifiers[kind]}:
-                    owned_identifiers[kind].append(v)
-
-    events: dict[tuple[str, str], dict[str, str]] = {}
-    for f in facts:
-        for ev in f.get("notable_events") or []:
-            summary = str(ev.get("summary") or "").strip()
-            if not summary:
-                continue
-            date = str(ev.get("date") or "").strip()
-            events[(date, summary.lower())] = {"date": date, "summary": summary}
-
-    relationships = [str(f.get("relationship_to_owner") or "").strip() for f in facts]
-    relationship = max((r for r in relationships if r), key=len, default="")
-
-    # Same rule as candidates.llm_network_worth: the incremental synthesizer refines
-    # ONE running profile, so the last valid judgment wins.
-    worth: dict[str, str] = {}
-    for f in facts:
-        value = f.get("network_worth")
-        if isinstance(value, dict) and str(value.get("decision") or "").lower() in NETWORK_WORTH_VALUES:
-            worth = {"decision": str(value.get("decision")).lower(),
-                     "reason": str(value.get("reason") or "").strip()}
-
-    shared: dict[str, dict[str, str]] = {}
-    for f in facts:
-        for sc in f.get("shared_context") or []:
-            detail = str(sc.get("detail") or "").strip()
-            if detail:
-                shared[detail.lower()] = {
-                    "overlap": str(sc.get("overlap") or "other"),
-                    "detail": detail,
-                    "evidence": str(sc.get("evidence") or "").strip(),
-                }
-
-    return {
-        "canonical_name": canonical,
-        "aliases": aliases,
-        "employers": list(employers.values()),
-        "title": best_scalar("title"),
-        "school": best_scalar("school"),
-        "field_of_study": best_scalar("field_of_study"),
-        "location": best_scalar("location"),
-        "relationship_to_owner": relationship,
-        "topics": topics[:MAX_TOPICS],
-        "notable_events": sorted(events.values(), key=lambda e: e["date"] or "9999"),
-        "identifiers": identifiers,
-        "owned_identifiers": owned_identifiers,
-        "shared_context": list(shared.values()),
-        "network_worth": worth,
-        "confidence": max((f.get("confidence") or 0.0 for f in facts), default=0.0),
-    }
-
-
-def headline(merged: dict[str, Any]) -> str:
-    """One-line role @ employer summary for the index + frontmatter."""
-    title = merged.get("title") or ""
-    employers = merged.get("employers") or []
-    current = next((e for e in employers if e.get("status") == "current"), employers[0] if employers else None)
-    company = current.get("name") if current else ""
-    if title and company:
-        return f"{title} at {company}"
-    if title or company:
-        return title or company
-    # Fall back to the relationship line. Trim to a WORD boundary (never mid-word) and mark it
-    # with an ellipsis; the full text is preserved verbatim in the "## Relationship & cadence"
-    # section, so this is a compact one-liner, not lost content.
-    rel = (merged.get("relationship_to_owner") or "").strip()
-    if len(rel) <= 80:
-        return rel
-    head = rel[:80].rsplit(" ", 1)[0].rstrip(",;:")
-    return f"{head}…"
-
-
-def _yaml_list(values: list[str]) -> str:
-    return "[" + ", ".join(json.dumps(v, ensure_ascii=False) for v in values) + "]"
-
-
-def render_dossier(meta: dict[str, Any], merged: dict[str, Any], depth: dict[str, Any] | None = None) -> str:
-    name = merged.get("canonical_name") or meta.get("full_name") or "(unknown)"
-    depth = depth or {}
-    msgs = meta.get("messages") or []
-    last_at = max((m.get("at") or "" for m in msgs), default="")
-    lines = [
-        "---",
-        f"person_id: {meta.get('person_id')}",
-        f"name: {json.dumps(name, ensure_ascii=False)}",
-        f"slug: {slugify(name, str(meta.get('person_id')))}",
-        f"emails: {_yaml_list(meta.get('emails') or [])}",
-        f"phones: {_yaml_list(meta.get('phones') or [])}",
-        f"source_channels: {_yaml_list(meta.get('source_channels') or [])}",
-        f"message_count: {len(msgs)}",
-        f"last_interaction: {json.dumps(last_at, ensure_ascii=False)}",
-        f"confidence: {round(float(merged.get('confidence') or 0.0), 2)}",
-        f"generated_at: {now_iso()}",
-        "---",
-        "",
-        f"# {name}",
-        "",
-        "## Summary",
-        "",
-        headline(merged) or "_No summary yet._",
-    ]
-    worth = merged.get("network_worth") or {}
-    if worth.get("decision"):
-        reason = f" — {worth['reason']}" if worth.get("reason") else ""
-        lines += ["", f"**Network worth:** {worth['decision']}{reason}"]
-    rel = merged.get("relationship_to_owner")
-    if rel:
-        used = depth.get("messages_used", len(msgs))
-        avail = depth.get("messages_available", len(msgs))
-        chans = ", ".join(meta.get("source_channels") or []) or "unknown channels"
-        note = f"_grokked {used} of {avail} messages"
-        if depth.get("batches_used"):
-            note += f" over {depth['batches_used']} batch(es)"
-        note += f" across {chans}; last on {last_at[:10] or 'n/a'}"
-        note += f" (stopped: {depth['stop_reason']})._" if depth.get("stop_reason") else "._"
-        lines += ["", "## Relationship & cadence", "", rel, "", note]
-
-    shared = merged.get("shared_context") or []
-    if shared:
-        lines += ["", "## Shared context with you", ""]
-        for sc in shared:
-            ev = f" — _{sc['evidence']}_" if sc.get("evidence") else ""
-            lines.append(f"- **{sc.get('overlap', 'other')}:** {sc['detail']}{ev}")
-
-    who: list[str] = []
-    if merged.get("title"):
-        who.append(f"- **Title:** {merged['title']}")
-    for emp in merged.get("employers") or []:
-        status = emp.get("status") or "unknown"
-        role = f" — {emp['role']}" if emp.get("role") else ""
-        who.append(f"- **Employer ({status}):** {emp['name']}{role}")
-    if merged.get("school"):
-        field = f" ({merged['field_of_study']})" if merged.get("field_of_study") else ""
-        who.append(f"- **School:** {merged['school']}{field}")
-    if merged.get("location"):
-        who.append(f"- **Location:** {merged['location']}")
-    if who:
-        lines += ["", "## Who they are", "", *who]
-
-    if merged.get("topics"):
-        lines += ["", "## Topics", "", *(f"- {t}" for t in merged["topics"])]
-
-    if merged.get("notable_events"):
-        lines += ["", "## Timeline", ""]
-        for ev in merged["notable_events"]:
-            date = ev.get("date") or "?"
-            lines.append(f"- **{date}** — {ev['summary']}")
-
-    contact_values = [*(meta.get("emails") or []), *(meta.get("phones") or [])]
-    known = {v.lower() for v in contact_values}
-    known |= {phone_digits(v) for v in contact_values if phone_digits(v)}
-    # Extracted identifiers pass the contact-info policy (emails/phones that
-    # are demonstrably this person's; never URLs) before rendering.
-    owner = load_owner() or {}
-    idents = [
-        i for i in contact_identifiers(
-            merged.get("identifiers"),
-            name=str(merged.get("canonical_name") or meta.get("name") or ""),
-            known=contact_values,
-            owner_emails=owner.get("emails") or [],
-            owner_phones=owner.get("phones") or [])
-        if i.lower() not in known and phone_digits(i) not in known
-    ]
-    contact = [f"- {v}" for v in contact_values]
-    if idents or contact:
-        lines += ["", "## Identifiers", "", *contact, *(f"- {i}" for i in idents)]
-
-    # Filled by cluster_merge_candidates; kept as a stable anchor so re-runs update it.
-    lines += ["", "## Possible same person", "", "_None detected yet._", ""]
-    return "\n".join(lines)
 
 
 class ComposeDossierManifest(StageManifest):
-    """The stage's typed manifest payload — same keys as the raw dict it replaces
-    (`updated_at` is stamped by the manifest writer)."""
     source: str = "compose_dossier"
     dossiers_written: int = 0
     orphans_removed: int = 0
@@ -307,17 +45,13 @@ class ComposeDossierManifest(StageManifest):
 
 
 class ComposeDossier(Node):
-    """Renders facts into markdown dossiers + the lookup index. Deterministic,
-    LLM-free; owns `index.json`'s `slugs` key (build_parents owns `parents`)."""
+    """Render dossiers and replace the owned ``slugs`` index slice."""
 
     name = "deep_compose"
     inputs = (
         Artifact(path=FACTS_TEMPLATE, required=False),
         Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
     )
-    # index.md is deliberately NOT declared: it is a human catalog no node
-    # reads. Declaring report surfaces would pin permanent dead-output findings,
-    # and dead outputs are deleted-or-consumed in this graph, never annotated.
     outputs = (
         Artifact(path=DOSSIER_TEMPLATE, required=False),
         Artifact(path=str(INDEX_JSON), writes="upsert", owns_columns=("slugs",)),
@@ -354,14 +88,10 @@ class ComposeDossier(Node):
     def execute(self) -> ComposeDossierManifest:
         started = time.monotonic()
         self.dossier_dir.mkdir(parents=True, exist_ok=True)
-
-        # Load the whole document so `parents` (build_parents' key) survives, then replace
-        # only `slugs`. A full run rebuilds `slugs` from scratch — it is authoritative for
-        # every composed person; `--person` keeps the other entries and refreshes one.
         index = load_index(self.index_json)
         slugs: dict[str, Any] = dict(index.get("slugs") or {}) if self.person else {}
         index["slugs"] = slugs
-        catalog: list[tuple[str, str, str]] = []  # (name, headline, slug)
+        catalog: list[tuple[str, str, str]] = []
         written_slugs: set[str] = set()
         written = 0
 
@@ -379,83 +109,68 @@ class ComposeDossier(Node):
             merged = merge_facts(chunks)
             if not merged:
                 continue
-            depth = chunks[-1] if chunks else {}  # incremental synth writes one record with depth meta
             name = merged.get("canonical_name") or meta.get("full_name") or "person"
             slug = slugify(name, person_id)
-            (self.dossier_dir / f"{slug}.md").write_text(render_dossier(meta, merged, depth), encoding="utf-8")
+            depth = chunks[-1] if chunks else {}
+            (self.dossier_dir / f"{slug}.md").write_text(
+                render_dossier(meta, merged, depth), encoding="utf-8",
+            )
             written_slugs.add(slug)
             written += 1
-
-            # A renamed person gets a NEW slug; drop the stale entry for the same
-            # person_id so `--person` cannot leave two records for one human.
-            for stale in [s for s, info in slugs.items()
-                          if s != slug and (info or {}).get("person_id") == person_id]:
+            for stale in [
+                prior_slug for prior_slug, info in slugs.items()
+                if prior_slug != slug and (info or {}).get("person_id") == person_id
+            ]:
                 slugs.pop(stale)
-            # The record carries its own identity: the lookup maps are derived from it,
-            # so they stay correct even after the raw bundles are purged.
-            slugs[slug] = {"person_id": person_id, "name": name, "path": f"dossiers/{slug}.md",
-                           "headline": headline(merged),
-                           "full_name": str(meta.get("full_name") or ""),
-                           "emails": list(meta.get("emails") or []),
-                           "phones": list(meta.get("phones") or [])}
-            catalog.append((name, headline(merged), slug))
+            summary = headline(merged)
+            slugs[slug] = {
+                "person_id": person_id, "name": name, "path": f"dossiers/{slug}.md",
+                "headline": summary, "full_name": str(meta.get("full_name") or ""),
+                "emails": list(meta.get("emails") or []),
+                "phones": list(meta.get("phones") or []),
+            }
+            catalog.append((name, summary, slug))
 
-        # Remove orphan dossiers from earlier runs (a changed canonical_name yields a
-        # new slug; the old file would otherwise linger). Skip when scoped to --person.
         orphans = 0
         if not self.person:
-            for md in self.dossier_dir.glob("*.md"):
-                if md.stem not in written_slugs:
-                    md.unlink()
+            for path in self.dossier_dir.glob("*.md"):
+                if path.stem not in written_slugs:
+                    path.unlink()
                     orphans += 1
-
         write_index(self.index_json, index)
-        # Scoped runs only refresh the one person; the catalog stays whole-network.
         if self.person:
-            catalog = [(info.get("name") or slug, info.get("headline") or "", slug)
-                       for slug, info in slugs.items()]
-        _write_catalog(self.index_md, catalog)
-
+            catalog = [
+                (info.get("name") or slug, info.get("headline") or "", slug)
+                for slug, info in slugs.items()
+            ]
+        write_catalog(self.index_md, catalog)
         return ComposeDossierManifest(
-            status="completed",
-            dossiers_written=written,
-            orphans_removed=orphans,
-            dossier_dir=str(self.dossier_dir),
-            index_json=str(self.index_json),
-            index_md=str(self.index_md),
+            status="completed", dossiers_written=written,
+            orphans_removed=orphans, dossier_dir=str(self.dossier_dir),
+            index_json=str(self.index_json), index_md=str(self.index_md),
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
 
 
-def _write_catalog(path: Path, catalog: list[tuple[str, str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"# Deep-context dossiers ({len(catalog)})", "", f"_Generated {now_iso()}._", ""]
-    for name, head, slug in sorted(catalog, key=lambda c: c[0].lower()):
-        suffix = f" — {head}" if head else ""
-        lines.append(f"- [[{slug}]] **{name}**{suffix}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Compose markdown dossiers + lookup index from synthesized facts.")
-    p.add_argument("--raw-dir", default=str(RAW_DIR))
-    p.add_argument("--facts-dir", default=str(FACTS_DIR))
-    p.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
-    p.add_argument("--index-json", default=str(INDEX_JSON))
-    p.add_argument("--index-md", default=str(INDEX_MD))
-    p.add_argument("--person", default="", help="Only this person id")
-    return p
+    parser = argparse.ArgumentParser(
+        description="Compose markdown dossiers + lookup index from synthesized facts.",
+    )
+    parser.add_argument("--raw-dir", default=str(RAW_DIR))
+    parser.add_argument("--facts-dir", default=str(FACTS_DIR))
+    parser.add_argument("--dossier-dir", default=str(DOSSIER_DIR))
+    parser.add_argument("--index-json", default=str(INDEX_JSON))
+    parser.add_argument("--index-md", default=str(INDEX_MD))
+    parser.add_argument("--person", default="", help="Only this person id")
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     payload = ComposeDossier(
-        raw_dir=Path(args.raw_dir),
-        facts_dir=Path(args.facts_dir),
-        dossier_dir=Path(args.dossier_dir),
-        index_json=Path(args.index_json),
-        index_md=Path(args.index_md),
-        person=args.person,
+        raw_dir=Path(args.raw_dir), facts_dir=Path(args.facts_dir),
+        dossier_dir=Path(args.dossier_dir), index_json=Path(args.index_json),
+        index_md=Path(args.index_md), person=args.person,
     ).run()
     emit(payload.to_payload())
     return 0

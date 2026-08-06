@@ -8,6 +8,12 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import deep_research_contacts as research
+from packs.ingestion.primitives.deep_context.parallel_research import (
+    config,
+    driver,
+    queue,
+    sdk_client,
+)
 
 
 FIELDS = [
@@ -81,13 +87,13 @@ class ProviderTests(unittest.TestCase):
             "retarget_hint": "Find the corrected profile.",
             "primary_email": "casey@example.com",
         }
-        payload = research.build_input(row, "jordan-bravo")
+        payload = queue.build_input(row, "jordan-bravo")
         self.assertEqual(set(payload), {"handle", "dossier", "guidance"})
         self.assertEqual(payload["guidance"], "Find the corrected profile.")
         self.assertIn("Owner context: robotics", payload["dossier"])
         self.assertNotIn("Find the corrected profile.", payload["dossier"])
         self.assertEqual(
-            set(research.PERSON_RESEARCH_INPUT_SCHEMA["properties"]),
+            set(config.PERSON_RESEARCH_INPUT_SCHEMA["properties"]),
             {"handle", "dossier", "guidance"},
         )
 
@@ -98,8 +104,8 @@ class ProviderTests(unittest.TestCase):
             output = root / "research"
             write_queue(queue, ["jordan-a", "jordan-b"], guidance="Find the right LinkedIn")
             with (
-                mock.patch.object(research, "ParallelClient", StubParallelClient),
-                mock.patch.object(research, "_api_key", return_value="test-key"),
+                mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 payload = research.run_research(
                     research.ResearchRunParams(
@@ -136,8 +142,8 @@ class ProviderTests(unittest.TestCase):
                 poll_interval=0,
             )
             with (
-                mock.patch.object(research, "ParallelClient", StubParallelClient),
-                mock.patch.object(research, "_api_key", return_value="test-key"),
+                mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 self.assertEqual(research.run_research(params)["status"], "completed")
                 first = output / "jordan-bravo" / "01_research_parallel.json"
@@ -167,14 +173,41 @@ class ProviderTests(unittest.TestCase):
             )
             self.assertEqual(payload["status"], "no_work")
 
+    def test_coordinated_provider_reports_callback_without_writing_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queue = root / "research_queue.csv"
+            output = root / "research"
+            write_queue(queue, ["jordan-bravo"])
+            person = output / "jordan-bravo"
+            person.mkdir(parents=True)
+            (person / "01_research_parallel.json").write_text(
+                json.dumps({"metadata": {"research_notes": "paid result"}}),
+                encoding="utf-8",
+            )
+            events = []
+            payload = research.run_research(research.ResearchRunParams(
+                input_csv=queue,
+                output_dir=output,
+                on_progress=events.append,
+                owns_receipt=False,
+            ))
+
+            self.assertEqual(payload["status"], "no_work")
+            self.assertEqual(events, [{
+                "status": "research_complete",
+                "counts": {"total": 1, "completed": 1, "pending": 0, "failed": 0},
+            }])
+            self.assertFalse((output / "manifest.json").exists())
+
     def test_limit_caps_submitted_dossiers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             queue = root / "research_queue.csv"
             write_queue(queue, ["jordan-a", "jordan-b", "jordan-c"])
             with (
-                mock.patch.object(research, "ParallelClient", StubParallelClient),
-                mock.patch.object(research, "_api_key", return_value="test-key"),
+                mock.patch.object(sdk_client, "ParallelClient", StubParallelClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 payload = research.run_research(
                     research.ResearchRunParams(
@@ -198,8 +231,8 @@ class ProviderTests(unittest.TestCase):
             manifest = root / "enrich" / "manifest.json"
             write_queue(queue, ["jordan-bravo"])
             with (
-                mock.patch.object(research, "ParallelClient", NoRunsClient),
-                mock.patch.object(research, "_api_key", return_value="test-key"),
+                mock.patch.object(sdk_client, "ParallelClient", NoRunsClient),
+                mock.patch.object(driver, "_api_key", return_value="test-key"),
             ):
                 payload = research.run_research(
                     research.ResearchRunParams(

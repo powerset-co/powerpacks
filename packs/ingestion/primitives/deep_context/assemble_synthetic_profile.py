@@ -20,13 +20,16 @@ from packs.ingestion.primitives.deep_context.common import (
     VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.imports.common import write_manifest
-from packs.ingestion.primitives.deep_context.reconcile_deep_research import DR_OUT_DIR, QUEUE_CSV
+from packs.ingestion.primitives.deep_context.research_reconcile.selection import (
+    DR_OUT_DIR,
+    QUEUE_CSV,
+)
+from packs.ingestion.primitives.deep_context.research_result import ResearchResult
 from packs.ingestion.primitives.deep_context.db import views
 from packs.ingestion.primitives.deep_context.db.models import ApprovedState
-from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.enrichment_receipt import EnrichmentReceipt
 from packs.ingestion.schemas.people_schema import CONTACT_CARRY_COLUMNS, PEOPLE_SCHEMA_COLUMNS
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -84,19 +87,6 @@ def synth_public_identifier(email: str, phone: str, handle: str) -> str:
         value = hashlib.sha1(phone.strip().encode()).hexdigest()[:12]
         return f"synth-phone-{value}"
     return f"synth-x-{handle.strip().lower()}"
-
-
-def profile_is_usable(profile: dict[str, Any]) -> bool:
-    person = profile.get("person") or {}
-    location = profile.get("location") or {}
-    return bool(
-        str(person.get("full_name") or "").strip()
-        and (
-            any(p.get("company_name") or p.get("title")
-                for p in profile.get("positions") or [] if isinstance(p, dict))
-            or location.get("city") or location.get("country")
-        )
-    )
 
 
 def build_synthetic_row(
@@ -311,26 +301,22 @@ class AssembleSyntheticProfile:
             if queue_current and directory.name not in queue:
                 continue
             path = directory / "01_research_parallel.json"
-            try:
-                profile = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            research = ResearchResult.load(path)
+            if research is None:
                 continue
             row = queue.get(directory.name, {})
             proposed = links.get(
                 str(row.get("source_candidate_public_identifier") or "").strip().lower()
             )
-            linkedin = str((profile.get("social") or {}).get("linkedin_url") or "").strip()
+            linkedin = research.linkedin_url
             rejected = str((proposed.machine_reject if proposed else "") or "").lower()
             if linkedin and rejected not in {"1", "true", "yes"}:
                 counts["skipped_with_linkedin"] += 1
                 continue
-            if linkedin:
-                profile = {**profile, "social": {
-                    **(profile.get("social") or {}), "linkedin_url": "",
-                }}
-            if not profile_is_usable(profile):
+            if not research.usable:
                 counts["skipped_unusable"] += 1
                 continue
+            profile = research.to_payload(without_linkedin=bool(linkedin))
             person_ids = _json_list(row.get("source_person_ids", ""))
             parent_id = next((people[pid] for pid in person_ids if pid in people), "")
             parent_id = parent_id or by_slug.get(
@@ -398,10 +384,8 @@ class AssembleSyntheticProfile:
                  rows: list[tuple[str, str, list[str], dict[str, str]]]) -> None:
         path = self.manifest_path
         assert path is not None
-        try:
-            current = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            current = {}
+        receipt_writer = EnrichmentReceipt(path, self.db)
+        current = receipt_writer.read() or {}
         synthetic_dir = path.parent / "synthetic"
         synthetic_dir.mkdir(parents=True, exist_ok=True)
         artifacts = [item for item in current.get("artifacts") or []
@@ -417,15 +401,18 @@ class AssembleSyntheticProfile:
                 "candidate_key": pub, "public_identifier": pub, "person_ids": person_ids,
                 "display_name": row.get("full_name") or "", "approved": row.get("approved") or "",
             })
-        receipt = {**current, "stage": "enrich", "status": "research_complete",
-                   "phase": "profiles_pending", "assembly": result.to_payload(),
-                   "outputs": {**(current.get("outputs") or {}),
-                               "synthetic_people_csv": str(self.out)},
-                   "artifacts": artifacts}
-        receipt.pop("updated_at", None)
-        receipt.pop("created_at", None)
-        write_manifest(path.parent.name, receipt, import_dir=path.parent.parent)
-        project_manifest(self.db, path)
+        receipt_writer.write({
+            **current,
+            "stage": "enrich",
+            "status": "research_complete",
+            "phase": "profiles_pending",
+            "assembly": result.to_payload(),
+            "outputs": {
+                **(current.get("outputs") or {}),
+                "synthetic_people_csv": str(self.out),
+            },
+            "artifacts": artifacts,
+        })
 
 
 def main(argv: list[str] | None = None) -> None:

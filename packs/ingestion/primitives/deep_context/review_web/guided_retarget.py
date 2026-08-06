@@ -18,22 +18,43 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.common import DEEP_RESEARCH_DIR, RECONCILE_DIR
+from packs.ingestion.primitives.deep_context.common import (
+    DEEP_RESEARCH_DIR,
+    FACTS_DIR,
+    PROFILE_CACHE_DIR,
+    RAW_DIR,
+    RECONCILE_DIR,
+    load_owner,
+    owner_background_block,
+)
 from packs.ingestion.primitives.deep_context.db import views
 from packs.ingestion.primitives.deep_context.db.models import (
     GuidanceRow,
     GuidanceState,
+    ReviewSource,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.deep_context.deep_research_contacts import (
     ResearchRunParams,
     run_research,
 )
-from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
+from packs.ingestion.primitives.deep_context.research_reconcile.selection import (
     DEFAULT_PROCESSOR,
     QUEUE_FIELDS,
 )
+from packs.ingestion.primitives.deep_context.db.models import RESEARCH_CONFIRM_THRESHOLD
+from packs.ingestion.primitives.deep_context.identity_evidence import (
+    ResearchEvaluation,
+    evaluate_research_candidate,
+    prefer_cached_profile,
+)
+from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
+from packs.ingestion.primitives.deep_context.research_result import ResearchResult
+from packs.ingestion.primitives.deep_context.identity_reconcile.queue import linkedin_view
+from packs.ingestion.primitives.deep_context.identity_reconcile.results import upsert_retargets
+from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 
@@ -84,12 +105,26 @@ class GuidedRetargetWorker:
         on_change: Callable[[], None] | None = None,
         out_dir: Path = GUIDED_DIR,
         research_dir: Path = DEEP_RESEARCH_DIR,
+        facts_dir: Path = FACTS_DIR,
+        raw_dir: Path = RAW_DIR,
+        profile_cache_dir: Path = PROFILE_CACHE_DIR,
+        use_llm: bool = True,
+        model: str = DEFAULT_MODEL,
+        reasoning_effort: str = "medium",
+        confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
     ) -> None:
         self.db = db
         self.runner = runner or self._research
         self.on_change = on_change or (lambda: None)
         self.out_dir = Path(out_dir)
         self.research_dir = Path(research_dir)
+        self.facts_dir = Path(facts_dir)
+        self.raw_dir = Path(raw_dir)
+        self.profile_cache_dir = Path(profile_cache_dir)
+        self.use_llm = use_llm
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.confirm_threshold = confirm_threshold
         self._thread: threading.Thread | None = None
         self._pending: list[GuidanceRequest] = []
 
@@ -172,21 +207,7 @@ class GuidedRetargetWorker:
             self.on_change()
             try:
                 result = self.runner(request)
-                url = normalize_linkedin_url(str(result.get("new_url") or ""))
-                if not url:
-                    item = self._item(request, "no_match", str(result.get("detail") or "no LinkedIn found"))
-                    self._save(parent_id, request, GuidanceState.FAILED.value, item)
-                else:
-                    public_identifier = extract_public_identifier(url).lower()
-                    resolved = self.db.decide_identity(
-                        request.pub,
-                        "retarget",
-                        replacement_url=url,
-                        replacement_public_identifier=public_identifier,
-                    )
-                    item = self._item(request, "applied", str(result.get("detail") or "research result applied"))
-                    item.update({"new_url": url, "resolved_pubs": resolved})
-                    self._save(parent_id, request, GuidanceState.APPLIED.value, item)
+                self._apply_provider_result(parent_id, parent, request, result)
             except BaseException as exc:
                 item = self._item(request, "failed", f"{type(exc).__name__}: {exc}"[:500])
                 self._save(parent_id, request, GuidanceState.FAILED.value, item)
@@ -211,21 +232,95 @@ class GuidedRetargetWorker:
         result = run_research(run_params)
         if str(result.get("status") or "") not in {"completed", "no_work"}:
             raise StoreError(str(result.get("error") or "guided research failed"))
-        profile = self._research_result(self.research_dir / request.slug / RESEARCH_RESULT)
+        research = ResearchResult.load(self.research_dir / request.slug / RESEARCH_RESULT)
+        if research is None:
+            research = ResearchResult.from_payload({})
+        profile = research.to_payload()
         social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
         metadata = profile.get("metadata") if isinstance(profile.get("metadata"), dict) else {}
         return {
             "new_url": social.get("linkedin_url") or profile.get("linkedin_url") or "",
             "detail": metadata.get("research_notes") or "Parallel research result applied",
+            "research_result": research,
         }
 
-    @staticmethod
-    def _research_result(path: Path) -> dict[str, Any]:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return payload if isinstance(payload, dict) else {}
+    def _apply_provider_result(
+        self,
+        parent_id: str,
+        parent: dict[str, Any],
+        request: GuidanceRequest,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Judge and project a provider URL; human-pasted URLs bypass this path."""
+        research = result.get("research_result")
+        if not isinstance(research, ResearchResult):
+            artifact = result.get("research_profile")
+            payload = artifact if isinstance(artifact, dict) else {
+                "person": {
+                    "full_name": request.name,
+                    "confidence": result.get("confidence") or 0,
+                },
+                "social": {"linkedin_url": result.get("new_url") or ""},
+                "metadata": {"research_notes": result.get("detail") or ""},
+            }
+            research = ResearchResult.from_payload(payload)
+        url = normalize_linkedin_url(research.linkedin_url)
+        if not url:
+            item = self._item(request, "no_match", str(result.get("detail") or "no LinkedIn found"))
+            self._save(parent_id, request, GuidanceState.FAILED.value, item)
+            return item
+
+        public_identifier = extract_public_identifier(url).lower()
+        hydrate_profiles([(public_identifier, url)], self.profile_cache_dir)
+        cached = linkedin_view(
+            {"public_identifier": public_identifier, "linkedin_url": url},
+            self.profile_cache_dir,
+        )
+        profile = prefer_cached_profile(research.identity_profile(), cached)
+        dossier = DossierEvidence.load(
+            request.person_ids, self.facts_dir, self.raw_dir
+        ).as_judge_dict()
+        owner = load_owner()
+        evaluation: ResearchEvaluation = evaluate_research_candidate(
+            dossier,
+            profile,
+            name=request.name or str(parent.get("name") or ""),
+            match_emails=list(request.match_emails),
+            match_phones=list(request.match_phones),
+            confidence=research.confidence,
+            unverified=research.unverified,
+            use_llm=self.use_llm,
+            owner_block=owner_background_block(owner) if owner else "",
+            model=self.model,
+            effort=self.reasoning_effort,
+            confirm_threshold=self.confirm_threshold,
+        )
+        proposal = {
+            "old_public_identifier": request.pub,
+            "new_linkedin_url": url,
+            "new_public_identifier": public_identifier,
+            "confidence": research.confidence,
+            "reason": research.reason or result.get("detail") or "guided research",
+            "source": ReviewSource.USER_GUIDANCE.value,
+            **evaluation.projection_fields,
+        }
+        projected = upsert_retargets(self.db, [proposal])
+        if evaluation.accepted and projected.get("proposed"):
+            detail = str(evaluation.verdict.get("reason") or result.get("detail") or "research result applied")
+            item = self._item(request, "applied", detail)
+            item.update({"new_url": url, "resolved_pubs": [request.pub]})
+            self._save(parent_id, request, GuidanceState.APPLIED.value, item)
+            return item
+
+        reason = str(
+            evaluation.verdict.get("reason")
+            or evaluation.projection_fields.get("llm_reject_reason")
+            or "research result did not clear the identity threshold"
+        )
+        item = self._item(request, "no_match", reason)
+        item["candidate_url"] = url
+        self._save(parent_id, request, GuidanceState.FAILED.value, item)
+        return item
 
     @staticmethod
     def _research_row(request: GuidanceRequest, parent: dict[str, Any]) -> dict[str, str]:

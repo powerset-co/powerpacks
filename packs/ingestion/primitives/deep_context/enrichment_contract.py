@@ -124,19 +124,7 @@ def read_enrichment_manifest(path: Path = ENRICH_MANIFEST, *,
     return result
 
 
-def derive_enrichment_state(selection: dict[str, Any], *,
-                            db: Db,
-                            verdicts_path: Path | None = None,
-                            review_path: Path | None = None,
-                            facts_dir: Path | None = None,
-                            manifest_path: Path = ENRICH_MANIFEST,
-                            job_running: bool = False) -> dict[str, Any]:
-    """Hydrate the enrichment page from the canonical projected state.
-
-    The legacy path arguments remain accepted for CLI/API compatibility; they
-    no longer participate in runtime state derivation.  Producers write the
-    fixed manifest and explicitly project it before this read occurs.
-    """
-    del selection, verdicts_path, review_path, facts_dir, manifest_path
+def derive_enrichment_state(*, db: Db, job_running: bool = False) -> dict[str, Any]:
+    """Hydrate the enrichment page from canonical projected state."""
     state = views.workflow_state(db)["enrichment"]
     return {**state, "state": STATE_RUNNING} if job_running else state
