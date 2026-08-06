@@ -1,8 +1,8 @@
 """Typed producer snapshots and export batons from canonical Deep Context SQLite state.
 
-The single home of the effective-decision projection: ``identity_snapshot``
-builds the typed review rows and ``export_batons`` serializes those same rows,
-so the CSV baton other stages read can never drift from what producers see.
+``identity_snapshot`` consumes the shared effective-decision policy to build
+typed review rows, and ``export_batons`` serializes those same rows so producers
+and the compatibility CSV cannot drift.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import TypeVar
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context.db import batons
+from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePersonRow,
@@ -166,6 +167,44 @@ def canonical_snapshot(db: Db) -> CanonicalSnapshot:
     )
 
 
+def _identity_review_row(
+    row: LinkSnapshotRow,
+    people_by_link: dict[str, str],
+) -> ReviewExportRow:
+    decision = IdentityPolicy.effective_decision(
+        decision_action=row.decision_action,
+        decision_approved=row.decision_approved,
+        replacement_url=row.replacement_url,
+        replacement_public_identifier=row.replacement_public_identifier,
+        machine_action=row.machine_action,
+        machine_approved=row.machine_approved,
+        machine_proposed_url=row.machine_proposed_url,
+        machine_proposed_public_identifier=row.machine_proposed_public_identifier,
+        linkedin_url=row.linkedin_url,
+        public_identifier=row.public_identifier,
+    )
+    return ReviewExportRow(
+        key=row.row_key,
+        public_identifier=row.public_identifier,
+        action=decision.action,
+        approved=decision.approved,
+        new_linkedin_url=decision.new_url,
+        new_public_identifier=decision.new_public_identifier,
+        linkedin_url=row.linkedin_url or "",
+        confidence="" if row.machine_confidence is None else str(row.machine_confidence),
+        reason=row.machine_reason or "",
+        person_id=people_by_link.get(row.row_key, ""),
+        source=row.decision_source or row.source or "",
+        updated_at=row.decided_at or row.updated_at or "",
+        llm_reject=row.machine_reject or "",
+        llm_reject_confidence=(
+            "" if row.machine_reject_confidence is None else str(row.machine_reject_confidence)
+        ),
+        llm_reject_reason=row.machine_reject_reason or "",
+        llm_judge_fingerprint=row.judgment_fingerprint or "",
+    )
+
+
 def identity_snapshot(db: Db) -> IdentitySnapshot:
     """Identity candidates, membership, research, and synthetic producer inputs."""
     links = _rows(db, "SELECT * FROM links ORDER BY row_key", LinkSnapshotRow)
@@ -176,37 +215,7 @@ def identity_snapshot(db: Db) -> IdentitySnapshot:
     for row in memberships:
         people_by_link.setdefault(row.row_key, row.person_id)
     parents = _rows(db, "SELECT * FROM parents ORDER BY parent_id", ParentSnapshotRow)
-    review_rows = [
-        ReviewExportRow(
-            key=row.row_key,
-            public_identifier=row.public_identifier,
-            action=row.decision_action or row.machine_action or "",
-            approved=row.decision_approved or row.machine_approved or "",
-            new_linkedin_url=(
-                row.replacement_url
-                or (row.machine_proposed_url if row.decision_action is None else None)
-                or ""
-            ),
-            new_public_identifier=(
-                row.replacement_public_identifier
-                or (row.machine_proposed_public_identifier if row.decision_action is None else None)
-                or ""
-            ),
-            linkedin_url=row.linkedin_url or "",
-            confidence="" if row.machine_confidence is None else str(row.machine_confidence),
-            reason=row.machine_reason or "",
-            person_id=people_by_link.get(row.row_key, ""),
-            source=row.decision_source or row.source or "",
-            updated_at=row.decided_at or row.updated_at or "",
-            llm_reject=row.machine_reject or "",
-            llm_reject_confidence=(
-                "" if row.machine_reject_confidence is None else str(row.machine_reject_confidence)
-            ),
-            llm_reject_reason=row.machine_reject_reason or "",
-            llm_judge_fingerprint=row.judgment_fingerprint or "",
-        )
-        for row in links
-    ]
+    review_rows = [_identity_review_row(row, people_by_link) for row in links]
     review_rows.extend(
         ReviewExportRow(
             key=f"parent-worth:{row.parent_id}",
@@ -225,7 +234,7 @@ def identity_snapshot(db: Db) -> IdentitySnapshot:
         item = dict(row)
         item["detail"] = parse_json_object(item.pop("detail_json"))
         guidance.append(item)
-    link_keys = {row.row_key for row in links}
+    links_by_key = {row.row_key: row for row in links}
     link_decisions = {
         row.key: {
             "action": row.action,
@@ -233,9 +242,12 @@ def identity_snapshot(db: Db) -> IdentitySnapshot:
             "llm_reject": row.llm_reject,
             "llm_judge_fingerprint": row.llm_judge_fingerprint,
             "new_linkedin_url": row.new_linkedin_url,
+            "machine_action": links_by_key[row.key].machine_action or "",
+            "machine_approved": links_by_key[row.key].machine_approved or "",
+            "machine_proposed_url": links_by_key[row.key].machine_proposed_url or "",
         }
         for row in review_rows
-        if row.key in link_keys
+        if row.key in links_by_key
     }
     return IdentitySnapshot(
         links=links,

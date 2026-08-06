@@ -13,16 +13,9 @@ from typing import Any
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
-    CONSOLIDATE_PEOPLE_CSV,
     CANONICAL_DB,
-    DEFAULT_PEOPLE_CSV,
-    FACTS_DIR,
-    LINKEDIN_OVERRIDES_CSV,
-    PARENTS_DIR,
     PROFILE_CACHE_DIR,
-    RAW_DIR,
     RECONCILE_DIR,
-    VERDICTS_CSV,
     VERDICTS_JSONL,
     emit,
 )
@@ -132,12 +125,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Judge attached LinkedIn profiles against Deep Context evidence",
     )
     paths = {
-        "people-csv": DEFAULT_PEOPLE_CSV,
-        "profile-cache-dir": PROFILE_CACHE_DIR, "facts-dir": FACTS_DIR,
-        "raw-dir": RAW_DIR, "parents-dir": PARENTS_DIR,
-        "verdicts-jsonl": VERDICTS_JSONL, "verdicts-csv": VERDICTS_CSV,
-        "overrides-csv": LINKEDIN_OVERRIDES_CSV, "db": CANONICAL_DB,
-        "consolidate-people-csv": CONSOLIDATE_PEOPLE_CSV,
+        "profile-cache-dir": PROFILE_CACHE_DIR,
+        "verdicts-jsonl": VERDICTS_JSONL,
+        "db": CANONICAL_DB,
     }
     for flag, default in paths.items():
         parser.add_argument(f"--{flag}", default=str(default))

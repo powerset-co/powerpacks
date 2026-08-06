@@ -159,9 +159,16 @@ def upsert_retargets(db: Db, proposals: list[dict[str, Any]]) -> dict[str, Any]:
         new_url = normalize_linkedin_url(str(proposal.get("new_linkedin_url") or ""))
         if not old_public_identifier or not new_url:
             continue
+        approved = str(proposal.get("approved") or "").lower() or None
+        if (
+            approved is None
+            and "llm_reject" in proposal
+            and not str(proposal.get("llm_reject") or "").strip()
+        ):
+            approved = ApprovedState.AUTO.value
         updates: dict[str, Any] = {
             "machine_action": "retarget",
-            "machine_approved": str(proposal.get("approved") or "").lower() or None,
+            "machine_approved": approved,
             "machine_confidence": float(proposal.get("confidence") or 0),
             "machine_reason": str(proposal.get("reason") or ""),
             "machine_proposed_url": new_url,

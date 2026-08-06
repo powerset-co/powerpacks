@@ -1,6 +1,7 @@
 """LinkedIn review, enrichment, and identity receipt projections."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from packs.ingestion.primitives.deep_context.db._view_rows import (
@@ -23,6 +24,155 @@ from packs.ingestion.primitives.deep_context.db.snapshots import (
     identity_snapshot,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+
+
+@dataclass(frozen=True)
+class AttachedIdentityQueueRow:
+    """One worth-gated attached identity ready for dossier/profile shaping."""
+
+    parent_id: str
+    parent_slug: str
+    name: str
+    candidate_key: str
+    public_identifier: str
+    linkedin_url: str
+    person_ids: tuple[str, ...]
+    conflict: bool
+    from_connections: bool
+
+
+@dataclass(frozen=True)
+class HealIdentityQueueRow:
+    """One worth-gated stale attached identity selected entirely by SQL."""
+
+    parent_id: str
+    parent_slug: str
+    name: str
+    candidate_key: str
+    public_identifier: str
+    linkedin_url: str
+    selection: Literal["candidate", "pending_retarget"]
+
+
+_ATTACHED_IDENTITY_CTE = (
+    WORTH_CTE
+    + """, attached_identity_queue AS (
+  SELECT l.*,
+         COALESCE(w.display_slug, p.display_slug) AS parent_display_slug,
+         COALESCE(NULLIF(w.display_name, ''), NULLIF(p.display_name, ''),
+                  NULLIF(l.display_name, ''), p.public_identifier) AS parent_name,
+         count(*) OVER (PARTITION BY l.parent_id) AS sibling_count
+  FROM eligible_links l JOIN parents p USING(parent_id)
+  LEFT JOIN worth w USING(parent_id)
+  WHERE COALESCE(w.effective_worth, p.human_worth, p.machine_worth, 'maybe')!='no'
+    AND NULLIF(trim(l.linkedin_url), '') IS NOT NULL
+    AND l.kind NOT IN ('synthetic', 'research')
+    AND EXISTS (
+      SELECT 1 FROM people member
+      WHERE member.parent_id=l.parent_id AND member.is_owner=0 AND member.is_ghost=0
+    )
+)
+"""
+)
+
+
+def _attached_identity_queue(db: Db) -> list[AttachedIdentityQueueRow]:
+    """Return the attached-link judge queue after the single upstream worth gate."""
+    rows = db.query(
+        _ATTACHED_IDENTITY_CTE
+        + """, selected_people AS (
+  SELECT q.row_key, cp.person_id
+  FROM attached_identity_queue q
+  JOIN candidate_people cp ON cp.row_key=q.row_key
+  JOIN people pe ON pe.person_id=cp.person_id
+  WHERE pe.is_owner=0 AND pe.is_ghost=0
+  UNION ALL
+  SELECT q.row_key, pe.person_id
+  FROM attached_identity_queue q
+  JOIN people pe ON pe.parent_id=q.parent_id
+  WHERE pe.is_owner=0 AND pe.is_ghost=0
+    AND NOT EXISTS (
+      SELECT 1 FROM candidate_people cp
+      JOIN people member ON member.person_id=cp.person_id
+      WHERE cp.row_key=q.row_key AND member.is_owner=0 AND member.is_ghost=0
+    )
+)
+SELECT q.parent_id, q.parent_display_slug, q.parent_name, q.row_key,
+       q.public_identifier, q.linkedin_url, q.sibling_count,
+       (SELECT json_group_array(person_id) FROM (
+          SELECT person_id FROM selected_people sp
+          WHERE sp.row_key=q.row_key ORDER BY person_id
+        )) AS person_ids_json,
+       EXISTS (
+         SELECT 1 FROM selected_people sp JOIN person_sources ps USING(person_id)
+         WHERE sp.row_key=q.row_key AND ps.source='linkedin_csv'
+       ) AS from_connections
+FROM attached_identity_queue q
+ORDER BY q.row_key
+"""
+    )
+    return [
+        AttachedIdentityQueueRow(
+            parent_id=row["parent_id"],
+            parent_slug=ResearchHandle.for_parent(
+                row["parent_id"], row["parent_display_slug"],
+            ),
+            name=row["parent_name"],
+            candidate_key=row["row_key"],
+            public_identifier=str(row["public_identifier"] or "").lower(),
+            linkedin_url=row["linkedin_url"],
+            person_ids=tuple(_json(row["person_ids_json"], [])),
+            conflict=int(row["sibling_count"]) > 1,
+            from_connections=bool(row["from_connections"]),
+        )
+        for row in rows
+    ]
+
+
+def _heal_identity_queue(db: Db, no_profile_reason: str) -> list[HealIdentityQueueRow]:
+    """Return stale attached links and retarget skips from the worth-gated SQL queue."""
+    rows = db.query(
+        _ATTACHED_IDENTITY_CTE
+        + """, heal_queue AS (
+  SELECT q.*,
+         CASE
+           WHEN COALESCE(q.decision_action, q.machine_action, '')='retarget'
+             AND NULLIF(COALESCE(q.replacement_public_identifier,
+                                 q.machine_proposed_public_identifier, ''), '') IS NOT NULL
+             AND lower(COALESCE(q.replacement_public_identifier,
+                                q.machine_proposed_public_identifier, ''))
+                 != lower(q.public_identifier)
+           THEN 'pending_retarget'
+           ELSE 'candidate'
+         END AS selection
+  FROM attached_identity_queue q
+  WHERE q.machine_judgment='needs_review'
+    AND COALESCE(q.machine_confidence, 0)=0
+    AND q.machine_reason=?
+    AND lower(COALESCE(q.decision_approved, q.machine_approved, ''))
+        NOT IN ('yes', 'no', 'auto')
+)
+SELECT parent_id, parent_display_slug, parent_name, row_key,
+       public_identifier, linkedin_url, selection
+FROM heal_queue
+ORDER BY COALESCE(NULLIF(parent_display_slug, ''), parent_id), row_key
+""",
+        (no_profile_reason,),
+    )
+    return [
+        HealIdentityQueueRow(
+            parent_id=row["parent_id"],
+            parent_slug=ResearchHandle.for_parent(
+                row["parent_id"], row["parent_display_slug"],
+            ),
+            name=row["parent_name"],
+            candidate_key=row["row_key"],
+            public_identifier=str(row["public_identifier"] or "").lower(),
+            linkedin_url=row["linkedin_url"],
+            selection=row["selection"],
+        )
+        for row in rows
+    ]
 
 
 def _approved_identities(db: Db) -> list[dict[str, Any]]:
@@ -237,14 +387,22 @@ ORDER BY r.parent_id, r.handle, r.candidate_key
 def linkedin_review(
     db: Db,
     scope: Literal[
-        "parents", "queue", "progress", "enrichment", "approved", "synthetic", "latest_job"
+        "parents", "queue", "progress", "enrichment", "approved", "synthetic",
+        "latest_job", "attached", "heal",
     ],
     *,
     include_plausibly_absent: bool = False,
     include_candidates: bool = False,
     confirm_threshold: float = RESEARCH_CONFIRM_THRESHOLD,
     job_kind: str = "",
-) -> list[dict[str, Any]] | dict[str, Any] | None:
+    no_profile_reason: str = "",
+) -> (
+    list[dict[str, Any]]
+    | list[AttachedIdentityQueueRow]
+    | list[HealIdentityQueueRow]
+    | dict[str, Any]
+    | None
+):
     """Read one scope from the single canonical identity-review policy."""
     if scope == "parents":
         return _all_parents(db)
@@ -270,4 +428,8 @@ def linkedin_review(
             (job_kind,),
         )
         return dict(rows[0]) if rows else None
+    if scope == "attached":
+        return _attached_identity_queue(db)
+    if scope == "heal":
+        return _heal_identity_queue(db, no_profile_reason)
     raise StoreError(f"unknown LinkedIn review scope: {scope}")

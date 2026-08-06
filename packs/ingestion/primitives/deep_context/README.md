@@ -159,7 +159,8 @@ flowchart LR
 | `deep_research_contacts.py`, `research_reconcile/` | Parallel.ai research + judge + receipts | SQLite queue | research artifacts, receipts, SQLite |
 | `reconcile_linkedin.py`, `identity_evidence.py`, `dossier_evidence.py`, `research_result.py` | shared evidence packets, LinkedIn judge, single Parallel-result loader | SQLite, profile cache | SQLite machine verdicts |
 | `assemble_synthetic_profile.py` | synthetic identity for no-LinkedIn research | SQLite, research results | synthetic rows, export |
-| `prefetch_profiles.py`, `heal_review.py`, `apply_retargets.py` | profile cache warm, stale-link heal, retarget realization | SQLite, RapidAPI cache | SQLite, exports |
+| `prefetch_profiles.py`, `heal_review.py` | profile cache warm and worth-gated stale-link heal | SQLite, RapidAPI cache | SQLite |
+| `apply_retargets.py` | paid-free projection of recorded identity decisions | SQLite decisions, cached profile when present | exports |
 | `persist_review_identities.py` | approved identities → directory export | SQLite | `directory.csv` |
 | `review_web/` | review UI: worth → enrich → linkedin | `db/views` | decisions via `db/store` |
 | `common.py` | shared paths, Person model, owner helpers | — | — |
@@ -169,9 +170,8 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-  yes["effective-Yes parent"] --> has{"attached LinkedIn?"}
-  has -- yes --> hydrate["one profile hydration policy"]
-  has -- no --> research["Parallel research\nproposal + reasoning"]
+  eligible["effective-Yes/Maybe\nwith attached LinkedIn"] --> hydrate["one profile hydration policy"]
+  yes["effective-Yes\nwithout usable LinkedIn"] --> research["Parallel research\nproposal + reasoning"]
   guided["user guidance"] --> research
   research -- proposal --> hydrate
   research -- no usable link --> synth["synthetic fallback"]
@@ -181,9 +181,12 @@ flowchart TD
   judge -- nothing left --> synth
 ```
 
-Attached, batch-research, heal, and guided entry points share the same evidence
-packet, prompt, thresholds, async judge pool, and strict SQLite settlement. A
-settlement without the exact judge-input fingerprint is rejected.
+Attached and heal queues exclude effective-No parents in SQL before paid work;
+research keeps its stricter effective-Yes gate. Attached, batch-research, heal,
+and guided entry points share the same evidence packet, prompt, thresholds,
+async judge pool, and strict SQLite settlement. Cleared machine decisions are
+recorded and hydrated at judge time; a settlement without the exact judge-input
+fingerprint is rejected.
 
 ## Paid surfaces
 

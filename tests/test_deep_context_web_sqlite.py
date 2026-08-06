@@ -42,6 +42,7 @@ from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import 
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
 from packs.ingestion.primitives.deep_context.review_web import sqlite_adapter as review_adapter
 from packs.ingestion.primitives.deep_context import enrichment_pipeline
+from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.review_web.sqlite_adapter import (
     SqliteReviewAdapter,
 )
@@ -465,22 +466,47 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.db,
             runner=lambda _: self.fail("direct pasted URL must not run paid research"),
         )
-        item = worker.submit(
-            GuidanceRequest(
-                "jordan-bravo",
-                "jordan-bravo",
-                "Jordan Bravo",
-                "Use https://www.linkedin.com/in/jordan-bravo-correct",
-                person_ids=("linkedin-person",),
-                queue_slug="jordan-bravo",
-                submitted_at="2026-08-05T00:00:00Z",
+        with mock.patch.object(
+            profile_projection,
+            "hydrate_profiles",
+            side_effect=AssertionError("a human URL decision must remain paid-free"),
+        ):
+            item = worker.submit(
+                GuidanceRequest(
+                    "jordan-bravo",
+                    "jordan-bravo",
+                    "Jordan Bravo",
+                    "Use https://www.linkedin.com/in/jordan-bravo-correct",
+                    person_ids=("linkedin-person",),
+                    queue_slug="jordan-bravo",
+                    submitted_at="2026-08-05T00:00:00Z",
+                )
             )
-        )
         self.assertEqual(item["state"], "applied")
         row = query(
             self.db, "SELECT decision_action, replacement_public_identifier FROM links WHERE row_key='jordan-bravo'"
         )[0]
         self.assertEqual(tuple(row), ("retarget", "jordan-bravo-correct"))
+
+    def test_review_fix_records_human_retarget_without_paid_hydration(self) -> None:
+        with mock.patch.object(
+            profile_projection,
+            "hydrate_profiles",
+            side_effect=AssertionError("a human URL decision must remain paid-free"),
+        ):
+            result, _ = self.adapter().decide(
+                "jordan-bravo",
+                "fix",
+                "https://www.linkedin.com/in/jordan-bravo-correct",
+            )
+
+        self.assertEqual(result["action"], "retarget")
+        link = query(
+            self.db,
+            "SELECT decision_action, replacement_public_identifier "
+            "FROM links WHERE row_key='jordan-bravo'",
+        )[0]
+        self.assertEqual(tuple(link), ("retarget", "jordan-bravo-correct"))
 
     def test_guided_research_uses_canonical_dossier_and_reuse_home(self) -> None:
         queue_dir = self.root / "guided"

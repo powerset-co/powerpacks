@@ -304,7 +304,9 @@ or more** do you pause: `Checking LinkedIn matches will cost $<floor>–$<ceilin
 Approve?` and wait for a yes. This happens before People review so the UI can
 incorporate current attached-identity judgments. Reconcile is identity-only:
 it compares a message-derived dossier to an attached LinkedIn and may verify,
-detach, or request human review. It never judges, refreshes, or writes worth, and
+detach, or request human review. One SQL queue admits effective Yes and Maybe
+parents but excludes effective No before any hydration or judge call. Reconcile
+never judges, refreshes, or writes worth, and
 it never sends a person with no attached LinkedIn to the judge (there is nothing
 to reconcile) — but those people are still recorded, so a contact-only person
 (email/phone only, no LinkedIn) shows up in the review and can be kept or
@@ -326,8 +328,9 @@ finally OPENS the staged UI once the fresh server answers /healthz. Never skip
 the launch because "a server is already up" — a leftover server keeps serving
 the stale Python it loaded at startup.
 
-The self-heal pass: (1) a FRESH profile fetch plus re-judge for every undecided LinkedIn card the judge
-previously skipped as "no usable profile" (the normal judge and write path, so
+The self-heal pass: (1) a FRESH profile fetch plus re-judge for every
+worth-eligible undecided LinkedIn card the judge previously skipped as "no
+usable profile" (the same SQL worth gate, normal judge, and write path, so
 confirm/detach bars auto-apply), and (2) free termination of confirmed-dead
 links — detach plus a free identity stand from an existing synthetic row or
 research output, else the person stays a pending re-research card. This spends
@@ -462,8 +465,10 @@ Stop the review UI first so realization is not competing with an in-process
 enrichment job. SQLite transactions serialize the writes without auxiliary
 runtime state.
 
-Before applying replacement URLs, disclose that cache misses call RapidAPI and
-get explicit approval. Then:
+Machine-cleared retargets attempt hydration when the judge records them. A
+human-pasted or human-fixed retarget may have no cached profile and projects
+from its SQLite carry instead. Applying and realizing are still local,
+paid-free projections and need no provider approval:
 
 ```bash
 bin/deep-context stop
@@ -471,7 +476,7 @@ bin/deep-context apply-retargets
 bin/deep-context realize
 ```
 
-`realize` is local/free and rebuilds
+`apply-retargets` and `realize` make no network calls. `realize` rebuilds
 `.powerpacks/network-import/merged/people.csv` from the durable Yes/No,
 verify/detach/retarget, consolidation, and synthetic decisions.
 

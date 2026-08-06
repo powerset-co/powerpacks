@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import apply_retargets
+from packs.ingestion.primitives.deep_context import profile_projection
 from packs.ingestion.primitives.deep_context.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.db.models import (
     CandidatePersonRow,
@@ -22,12 +23,15 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.db.identity_views import linkedin_review
+from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 import packs.ingestion.primitives.deep_context.identity_reconcile.results as identity_results
 from packs.ingestion.primitives.deep_context.identity_reconcile.results import (
     upsert_retargets,
     write_overrides,
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_parent_fact
+from packs.shared.csv_io import CsvIO
 from deep_context_sqlite_test_helpers import query, replace_candidate_people
 
 
@@ -108,6 +112,140 @@ class SqliteProducerTests(unittest.TestCase):
         self.assertEqual(row["machine_action"], "retarget")
         self.assertEqual(row["machine_proposed_public_identifier"], "alice-correct")
 
+    def test_effective_identity_decision_precedence(self) -> None:
+        common = {
+            "linkedin_url": "https://www.linkedin.com/in/alice",
+            "public_identifier": "alice",
+            "machine_action": "retarget",
+            "machine_proposed_url": "https://www.linkedin.com/in/alice-machine",
+            "machine_proposed_public_identifier": "alice-machine",
+        }
+
+        human = IdentityPolicy.effective_decision(
+            **common,
+            decision_action="retarget",
+            decision_approved="yes",
+            replacement_url="https://www.linkedin.com/in/alice-human",
+            replacement_public_identifier="alice-human",
+            machine_approved="auto",
+        )
+        self.assertEqual(
+            (human.action, human.approved, human.url),
+            ("retarget", "yes", "https://www.linkedin.com/in/alice-human"),
+        )
+
+        machine = IdentityPolicy.effective_decision(
+            **common,
+            decision_action=None,
+            decision_approved=None,
+            replacement_url=None,
+            replacement_public_identifier=None,
+            machine_approved="auto",
+        )
+        self.assertEqual(
+            (machine.action, machine.approved, machine.url),
+            ("retarget", "auto", "https://www.linkedin.com/in/alice-machine"),
+        )
+
+        pending = IdentityPolicy.effective_decision(
+            **common,
+            decision_action=None,
+            decision_approved=None,
+            replacement_url=None,
+            replacement_public_identifier=None,
+            machine_approved=None,
+        )
+        self.assertEqual(
+            (pending.action, pending.approved, pending.url, pending.new_url),
+            (
+                "",
+                "",
+                "https://www.linkedin.com/in/alice-machine",
+                "https://www.linkedin.com/in/alice-machine",
+            ),
+        )
+
+    def test_cleared_retarget_is_recorded_as_machine_accepted(self) -> None:
+        upsert_retargets(
+            self.db,
+            [
+                {
+                    "old_public_identifier": "alice",
+                    "new_linkedin_url": "https://www.linkedin.com/in/alice-correct",
+                    "llm_reject": "",
+                    "llm_reject_confidence": "0.910",
+                    "judge_fingerprint": "fixture-research-judge-input",
+                }
+            ],
+        )
+        row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
+        self.assertEqual(
+            (row["machine_action"], row["machine_approved"], row["machine_reject"]),
+            ("retarget", "auto", None),
+        )
+        out = self.root / "retarget.csv"
+        with mock.patch.object(
+            profile_projection,
+            "hydrate_profiles",
+            side_effect=AssertionError("realize must not hydrate profiles"),
+        ):
+            result = ApplyRetargets(
+                db=self.db,
+                profile_cache_dir=self.root / "cache",
+                out_csv=out,
+            ).run()
+        self.assertEqual((result["approved_retargets"], result["rows"]), (1, 1))
+        self.assertEqual(
+            CsvIO.read_dict_rows(out)[0]["public_identifier"],
+            "alice-correct",
+        )
+
+    def test_uncleared_retarget_stays_pending_and_is_not_realized(self) -> None:
+        facts_dir = self.root / "facts"
+        facts_dir.mkdir()
+        facts_path = facts_dir / "parent-1.jsonl"
+        facts_path.write_text(
+            json.dumps({
+                "final_confidence": 0.9,
+                "facts": {
+                    "network_worth": {"decision": "yes", "reason": "known"},
+                },
+            }) + "\n",
+            encoding="utf-8",
+        )
+        project_parent_fact(self.db, facts_path, "parent-1")
+        upsert_retargets(
+            self.db,
+            [
+                {
+                    "old_public_identifier": "alice",
+                    "new_linkedin_url": "https://www.linkedin.com/in/alice-uncertain",
+                    "llm_reject": "yes",
+                    "llm_reject_confidence": "0.790",
+                    "judge_fingerprint": "fixture-rejected-research-judge-input",
+                }
+            ],
+        )
+
+        row = query(self.db, "SELECT * FROM links WHERE row_key='alice'")[0]
+        self.assertEqual(
+            (row["machine_action"], row["machine_approved"], row["machine_reject"]),
+            ("retarget", None, "yes"),
+        )
+        (parent,) = linkedin_review(self.db, "queue")
+        self.assertEqual(parent["candidates"][0]["action"], "")
+        self.assertEqual(
+            parent["candidates"][0]["new_url"],
+            "https://www.linkedin.com/in/alice-uncertain",
+        )
+
+        result = ApplyRetargets(
+            db=self.db,
+            profile_cache_dir=self.root / "cache",
+            out_csv=self.root / "retarget.csv",
+        ).run()
+        self.assertEqual((result["approved_retargets"], result["rows"]), (0, 0))
+
     def test_machine_settlement_rejects_a_missing_judge_fingerprint(self) -> None:
         with self.assertRaisesRegex(StoreError, "lacks judge fingerprint"):
             write_overrides(self.db, [{
@@ -146,6 +284,37 @@ class SqliteProducerTests(unittest.TestCase):
             machine_proposed_url="https://www.linkedin.com/in/alice-correct",
             machine_proposed_public_identifier="alice-correct",
         ),))
+        cache_dir = self.root / "cache"
+        raw_profile = {
+            "public_identifier": "alice-correct",
+            "linkedin_url": "https://www.linkedin.com/in/alice-correct",
+            "full_name": "Alice Correct",
+            "experiences": [
+                {"title": "Founder", "company_name": "Correct Robotics"}
+            ],
+        }
+        profile_projection.project_profile_results(
+            self.db,
+            [(
+                {
+                    "public_identifier": "alice-correct",
+                    "linkedin_url": "https://www.linkedin.com/in/alice-correct",
+                    "candidate_key": "alice",
+                    "parent_id": "parent-1",
+                },
+                {
+                    "state": "content",
+                    "normalized_profile": {
+                        "success": True,
+                        "full_name": "Alice Correct",
+                        "experiences": raw_profile["experiences"],
+                    },
+                    "data": raw_profile,
+                    "from_cache": False,
+                },
+            )],
+            cache_dir,
+        )
         captured = {}
 
         def build(url, pub, raw, carry):
@@ -153,23 +322,74 @@ class SqliteProducerTests(unittest.TestCase):
             return {"public_identifier": pub, "linkedin_url": url}
 
         with (
-            mock.patch.object(apply_retargets, "load_env"),
             mock.patch.object(
-                apply_retargets,
-                "enrich_one",
-                return_value={"raw": {}, "from_cache": True, "error": ""},
+                profile_projection,
+                "hydrate_profiles",
+                side_effect=AssertionError("realize must not hydrate profiles"),
             ),
             mock.patch.object(apply_retargets, "build_retarget_row", side_effect=build),
         ):
             result = ApplyRetargets(
                 db=self.db,
-                profile_cache_dir=self.root / "cache",
+                profile_cache_dir=cache_dir,
                 out_csv=self.root / "retarget.csv",
             ).run()
 
         self.assertEqual((result["approved_retargets"], result["enriched"]), (1, 1))
         self.assertEqual(captured["primary_email"], "alice@example.com")
         self.assertEqual(captured["source_channels"], "gmail")
+
+    def test_human_retarget_projects_without_profile_spend(self) -> None:
+        profile_projection.project_profile_results(
+            self.db,
+            [(
+                {
+                    "public_identifier": "alice",
+                    "linkedin_url": "https://www.linkedin.com/in/alice",
+                    "candidate_key": "alice",
+                    "parent_id": "parent-1",
+                },
+                {
+                    "state": "content",
+                    "normalized_profile": {
+                        "success": True,
+                        "public_identifier": "alice",
+                        "full_name": "Wrong Alice",
+                    },
+                    "data": {
+                        "public_identifier": "alice",
+                        "full_name": "Wrong Alice",
+                    },
+                },
+            )],
+            self.root / "cache",
+        )
+        self.db.decide_identity(
+            "alice",
+            "retarget",
+            replacement_url="https://www.linkedin.com/in/alice-human-choice",
+            replacement_public_identifier="alice-human-choice",
+        )
+        out = self.root / "retarget.csv"
+        with mock.patch.object(
+            profile_projection,
+            "hydrate_profiles",
+            side_effect=AssertionError("realize must not hydrate profiles"),
+        ):
+            result = ApplyRetargets(
+                db=self.db,
+                profile_cache_dir=self.root / "cache",
+                out_csv=out,
+            ).run()
+
+        self.assertEqual((result["approved_retargets"], result["rows"]), (1, 1))
+        (row,) = CsvIO.read_dict_rows(out)
+        self.assertEqual(row["public_identifier"], "alice-human-choice")
+        self.assertEqual(
+            row["linkedin_url"],
+            "https://www.linkedin.com/in/alice-human-choice",
+        )
+        self.assertEqual(row["full_name"], "")
 
     def test_synthesis_projects_fixed_facts_artifact(self) -> None:
         facts_dir = self.root / "facts"

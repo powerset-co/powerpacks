@@ -12,12 +12,14 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
+from packs.ingestion.primitives.deep_context.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.research_reconcile import judging
 from packs.ingestion.primitives.deep_context.research_reconcile import selection
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
     FactRow,
+    IdentityMachineProjection,
     LinkRow,
     ParentRow,
     PersonRow,
@@ -28,14 +30,17 @@ from packs.ingestion.primitives.deep_context.db.models import (
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context.db.people_views import person_detail
 from packs.ingestion.primitives.deep_context.db.projectors import project_artifacts
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 import packs.ingestion.primitives.deep_context.identity_reconcile.queue as queue
 import packs.ingestion.primitives.deep_context.reconcile_linkedin as reconcile
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import ReconcileLinkedin
 from packs.ingestion.primitives.deep_context.identity_reconcile.guidance import GuidanceRequest
 from packs.ingestion.primitives.deep_context.identity_reconcile.guided import GuidedResearch
+from packs.ingestion.primitives.deep_context.research_result import ResearchResult
 from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path
+from packs.shared.csv_io import CsvIO
 
 
 def task(pub="jordan-bravo", url="https://www.linkedin.com/in/jordan-bravo",
@@ -329,6 +334,118 @@ class HydrateProfilesTests(unittest.TestCase):
 class RetargetProposalHydrationTests(unittest.TestCase):
     """The retarget judge must see the REAL profile, not Parallel's payload."""
 
+    def test_cleared_retarget_hydrates_settles_then_realizes_offline(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            db = profile_db(root)
+            result = ResearchResult.from_payload({
+                "person": {"full_name": "Jordan Bravo", "confidence": 0.91},
+                "positions": [
+                    {"title": "Founder", "company_name": "Bravo Robotics"},
+                ],
+                "social": {
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-correct",
+                },
+                "metadata": {"research_notes": "matched employer"},
+            })
+            profile_result = {
+                "state": "content",
+                "normalized_profile": {
+                    "success": True,
+                    "full_name": "Jordan Bravo",
+                    "experiences": [
+                        {"title": "Founder", "company_name": "Bravo Robotics"},
+                    ],
+                    "education": [],
+                },
+                "data": {
+                    "full_name": "Jordan Bravo",
+                    "public_identifier": "jordan-correct",
+                    "experiences": [
+                        {"title": "Founder", "company_name": "Bravo Robotics"},
+                    ],
+                },
+                "from_cache": False,
+            }
+            hydrated: list[dict[str, str]] = []
+
+            def hydrate(targets, cache_dir, *, db, **_kwargs):
+                hydrated.extend(targets)
+                profile_projection.project_profile_results(
+                    db,
+                    [(target, profile_result) for target in targets],
+                    cache_dir,
+                )
+                return {"wanted": len(targets), "ok": len(targets)}, {
+                    target["public_identifier"]: profile_result for target in targets
+                }
+
+            subset = [{
+                "parent_slug": "jordan-bravo-p",
+                "parent_id": "parent-1",
+                "name": "Jordan Bravo",
+                "person_ids": ["pid-1"],
+                "candidate_key": "jordan-bravo",
+                "linkedin": {
+                    "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                },
+                "match_emails": [],
+                "match_phones": [],
+            }]
+            verdict = {
+                "verdict": "confirmed",
+                "confidence": 0.91,
+                "reason": "matched employer",
+            }
+            with (
+                mock.patch.object(
+                    profile_projection,
+                    "hydrate_profiles",
+                    side_effect=hydrate,
+                ),
+                mock.patch.object(
+                    identity_evidence,
+                    "judge_batch",
+                    return_value=[{"verdict": verdict, "usage": {}, "error": ""}],
+                ),
+            ):
+                judging.propose_retargets(
+                    subset,
+                    db=db,
+                    use_llm=True,
+                    profile_cache_dir=cache,
+                    provided_results={"jordan-bravo-p": result},
+                )
+
+            self.assertEqual(
+                [target["public_identifier"] for target in hydrated],
+                ["jordan-correct"],
+            )
+            decision = db.query(
+                "SELECT machine_action, machine_approved FROM links "
+                "WHERE row_key='jordan-bravo'"
+            )[0]
+            self.assertEqual(tuple(decision), ("retarget", "auto"))
+
+            out = root / "retarget.csv"
+            with mock.patch.object(
+                profile_projection,
+                "hydrate_profiles",
+                side_effect=AssertionError("realize must not hydrate profiles"),
+            ):
+                realized = ApplyRetargets(
+                    db=db,
+                    profile_cache_dir=cache,
+                    out_csv=out,
+                ).run()
+
+            self.assertEqual((realized["approved_retargets"], realized["rows"]), (1, 1))
+            self.assertEqual(
+                CsvIO.read_dict_rows(out)[0]["public_identifier"],
+                "jordan-correct",
+            )
+
     def test_cached_profile_replaces_the_research_view(self):
         with TemporaryDirectory() as d:
             base = Path(d)
@@ -417,6 +534,132 @@ class RetargetProposalHydrationTests(unittest.TestCase):
         # The judge saw the cached profile's experiences, not Parallel's empty positions.
         self.assertTrue(seen.get("has_profile"))
         self.assertIn("Bravo Robotics", " ".join(seen.get("experiences") or []))
+
+    def test_cached_and_grandfathered_cleared_retargets_are_adopted_without_rejudging(self):
+        for mode in ("cached", "grandfathered"):
+            with self.subTest(mode=mode), TemporaryDirectory() as directory:
+                root = Path(directory)
+                cache = root / "cache"
+                db = profile_db(root)
+                result = ResearchResult.from_payload({
+                    "person": {"full_name": "Jordan Bravo", "confidence": 0.91},
+                    "positions": [
+                        {"title": "Founder", "company_name": "Bravo Robotics"},
+                    ],
+                    "social": {
+                        "linkedin_url": "https://www.linkedin.com/in/jordan-correct",
+                    },
+                    "metadata": {"research_notes": "matched employer"},
+                })
+                profile_result = {
+                    "state": "content",
+                    "normalized_profile": {
+                        "success": True,
+                        "full_name": "Jordan Bravo",
+                        "experiences": [
+                            {"title": "Founder", "company_name": "Bravo Robotics"},
+                        ],
+                        "education": [],
+                    },
+                    "data": {
+                        "full_name": "Jordan Bravo",
+                        "public_identifier": "jordan-correct",
+                        "experiences": [
+                            {"title": "Founder", "company_name": "Bravo Robotics"},
+                        ],
+                    },
+                    "from_cache": True,
+                }
+                fingerprint = None
+                if mode == "cached":
+                    profile_projection.project_profile_results(
+                        db,
+                        [(
+                            {
+                                "public_identifier": "jordan-correct",
+                                "linkedin_url": result.linkedin_url,
+                                "candidate_key": "jordan-bravo",
+                                "parent_id": "parent-1",
+                            },
+                            profile_result,
+                        )],
+                        cache,
+                    )
+                    graph = canonical_snapshot(db)
+                    evidence = DossierEvidence.from_parent("parent-1", graph)
+                    profile = identity_evidence.prefer_cached_profile(
+                        result.identity_profile(),
+                        queue.linkedin_view(
+                            {"linkedin_url": result.linkedin_url},
+                            profile_projection.profile_payloads(graph)["jordan-bravo"],
+                        ),
+                    )
+                    fingerprint = judging.proposal_fingerprint(
+                        "jordan-bravo", result.linkedin_url, evidence, profile,
+                    )
+                db.project_rows((IdentityMachineProjection(
+                    "jordan-bravo",
+                    machine_action="retarget",
+                    machine_proposed_url=result.linkedin_url,
+                    machine_proposed_public_identifier="jordan-correct",
+                    machine_reject=None,
+                    judgment_fingerprint=fingerprint,
+                ),))
+                subset = [{
+                    "parent_slug": "jordan-bravo-p",
+                    "parent_id": "parent-1",
+                    "name": "Jordan Bravo",
+                    "person_ids": ["pid-1"],
+                    "candidate_key": "jordan-bravo",
+                    "linkedin": {
+                        "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                    },
+                    "match_emails": [],
+                    "match_phones": [],
+                }]
+
+                hydrated: list[dict[str, str]] = []
+
+                def hydrate(targets, cache_dir, *, db, **_kwargs):
+                    hydrated.extend(targets)
+                    profile_projection.project_profile_results(
+                        db,
+                        [(target, profile_result) for target in targets],
+                        cache_dir,
+                    )
+                    return {"wanted": len(targets), "ok": len(targets)}, {
+                        target["public_identifier"]: profile_result for target in targets
+                    }
+
+                with (
+                    mock.patch.object(
+                        profile_projection,
+                        "hydrate_profiles",
+                        side_effect=hydrate,
+                    ),
+                    mock.patch.object(
+                        identity_evidence,
+                        "judge_batch",
+                        side_effect=AssertionError("cached adoption must not judge"),
+                    ),
+                ):
+                    judging.propose_retargets(
+                        subset,
+                        db=db,
+                        use_llm=True,
+                        profile_cache_dir=cache,
+                        provided_results={"jordan-bravo-p": result},
+                    )
+
+                self.assertEqual(
+                    [row["public_identifier"] for row in hydrated],
+                    ["jordan-correct"],
+                )
+                row = db.query(
+                    "SELECT machine_action, machine_approved, machine_reject "
+                    "FROM links WHERE row_key='jordan-bravo'"
+                )[0]
+                self.assertEqual(tuple(row), ("retarget", "auto", None))
 
 
 class ResearchProposalPolicyTests(unittest.TestCase):

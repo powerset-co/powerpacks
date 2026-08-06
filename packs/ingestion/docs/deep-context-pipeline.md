@@ -30,8 +30,9 @@ enrichment, review, realization, and indexing behavior now lives in
   lookup indexes for name, email, and phone.
 - **People decision:** the model assigns Yes/Maybe/No. Only genuine uncertainty
   appears in the main review queue; Yes and No remain visible and editable.
-- **Enrichment:** one Parallel.ai pass covers the current effective-Yes people
-  plus eligible wrong-link recoveries. Completed research is reused and only
+- **Enrichment:** attached-link judging and self-heal cover effective-Yes/Maybe
+  parents; effective-No is excluded in SQL before paid work. Parallel research
+  remains restricted to effective-Yes. Completed research is reused and only
   net-new submissions are priced.
 - **LinkedIn decision:** a found LinkedIn can be verified, replaced with a known
   URL, or skipped. A no-LinkedIn research result can only be given a real
@@ -66,8 +67,7 @@ flowchart TD
     P --> Q["LinkedIn UI: verify, replace, or Skip"]
     Q --> R{"LinkedIn review complete"}
     R --> R1["Agent's wait returns realize"]
-    R1 --> S{"Approve RapidAPI cache misses for retargets"}
-    S --> T["Apply retargets + persist reviewed identities to directory.csv + rebuild merged people.csv"]
+    R1 --> T["Project recorded retargets + persist identities to directory.csv + rebuild merged people.csv"]
     T --> U{"Approve Modal upload/build"}
     U --> V["Build and validate search index"]
 
@@ -75,7 +75,7 @@ flowchart TD
     classDef local fill:#eaf5ff,stroke:#2878a8,color:#14364a;
     classDef cloud fill:#fff0ee,stroke:#b54c3d,color:#4a1f19;
     classDef output fill:#eef8ed,stroke:#4f8a49,color:#233f20;
-    class C,E,H,K,M,P,R,S,U gate;
+    class C,E,H,K,M,P,R,U gate;
     class A,B,D,F,G,I,J,K1,L,M1,O,Q,R1,T local;
     class N cloud;
     class V output;
@@ -140,9 +140,11 @@ The browser has a separate, faster observer:
   reload/navigation so the browser does not destroy typed text.
 
 After LinkedIn Finish, the browser shows Done and keeps polling, but there is no
-later browser decision stage. The agent owns retarget hydration, realization,
-Modal indexing, and validation. Those steps do not wait for another browser
-button and cannot be blocked by the Done page.
+later browser decision stage. Machine-cleared retargets attempted hydration at
+judge time; a direct human retarget may instead project from its SQLite carry
+without a cached profile. The agent owns only the paid-free realization
+projection, Modal indexing, and validation. Those steps do not wait for another
+browser button and cannot be blocked by the Done page.
 
 ## Stage walkthrough
 
@@ -153,13 +155,13 @@ button and cannot be blocked by the Done page.
 | Synthesis | Sends bounded parent message samples plus owner context to OpenAI and extracts relationship, work, school, location, identifiers, topics, and worth. Worth uses message context/identifiers only, never LinkedIn. Unchanged fingerprints cost $0. | `facts/<parent_id>.jsonl`, SQLite facts/worth, receipt |
 | Composition | Deterministically renders parent-owned facts into Markdown dossiers and a human catalog. Lookup and membership come from SQLite views. | `dossiers/*.md`, `index.md` |
 | Duplicate resolution | Blocks parents without shared observed identifiers, judges plausible same-person pairs, caches verdicts in SQLite, and merges whole parent families in one transaction while preserving the surviving id. | Display-only merge exports, `parents/*.md`, SQLite graph |
-| Reconcile | Before the browser opens, compares the one `DossierEvidence` packet with attached LinkedIn profiles. It may verify, detach, or request human review; it never reads or writes worth. | `reconcile/verdicts.jsonl` receipt/export, SQLite identity verdicts |
+| Reconcile | Before the browser opens, compares the one `DossierEvidence` packet with attached LinkedIn profiles. Its SQL queue admits effective-Yes/Maybe and excludes effective-No before hydration or judging. It may verify, detach, or request human review; it never writes worth. | `reconcile/verdicts.jsonl` receipt/export, SQLite identity verdicts |
 | People review | Shows model-Maybe parents from the worth query. A human Yes/No writes the same parent row the view reads. The user may continue with unresolved Maybes; only effective-Yes parents enter enrichment. | SQLite parent worth decision; display receipt |
 | Enrichment preview and approval | Builds one queue from current effective-Yes parents, reuses projected provider results, and reports the exact estimate. A positive estimate launches the job with the approved budget flag; no approval row or stage state is persisted. | SQLite job receipt, write-only queue/manifest exports |
 | Identity research | The agent runs the exact approved Parallel command. Research may find a LinkedIn, reuse a prior result, or produce a researched no-LinkedIn profile for review context. | Deep-research artifacts and proposed retargets |
 | Profile prefetch | The review app runs `profile-prefetch --fetch` automatically after research completes (RapidAPI is credits-based, one call per person ever; summaries are nano-priced). The UI stays cache-only. | Shared profile cache and `profile-prefetch/manifest.json` |
 | LinkedIn review | For a found LinkedIn, Yes verifies it. No reveals correction controls but does not save a decision. The user can paste a replacement LinkedIn or Skip. For a no-LinkedIn result, the only outcomes are adding a real LinkedIn URL or Skip. | Verify/detach/retarget decisions |
-| Realization | Approved real-LinkedIn verify, retarget, and consolidation decisions persist to `directory.csv`; fan-in then rebuilds the fixed merged people CSV. Synthetic profiles remain outside the directory because they have no real LinkedIn identity. | `directory.csv`, `.powerpacks/network-import/merged/people.csv` |
+| Realization | Purely projects recorded human/machine identity decisions to `directory.csv`, using a cached profile when present or the SQLite decision carry otherwise; fan-in then rebuilds the fixed merged people CSV. It makes no provider calls. Synthetic profiles remain outside the directory because they have no real LinkedIn identity. | `directory.csv`, `.powerpacks/network-import/merged/people.csv` |
 | Indexing | Uploads the merged CSV to the configured Modal workspace, rebuilds the index, and validates it. | Search index and validation report |
 
 ## Commands and approval boundaries
@@ -222,7 +224,6 @@ Approval rules:
 | Duplicate judging | Always preview. Run automatically when the estimate is at most $100; ask if it exceeds $100. |
 | Reconcile | Show `reconcile --dry-run` estimate and get fresh approval. |
 | Parallel enrichment | The Enrich Contacts page approves the exact current positive net-new estimate. The agent must use the approved `--budget`. Zero net-new work needs no spend approval and advances from cache. |
-| Retarget hydration cache misses | Disclose the RapidAPI calls and get approval. |
 | Modal indexing | Disclose the merged-CSV upload and expected quiet runtime, then get approval. |
 
 Approvals are never reused from memory, an earlier transcript, or an earlier
@@ -425,5 +426,5 @@ Not every request needs the full workflow:
 | Parallel enrichment | [`reconcile_deep_research.py`](../primitives/deep_context/reconcile_deep_research.py) |
 | No-LinkedIn research cards | [`assemble_synthetic_profile.py`](../primitives/deep_context/assemble_synthetic_profile.py) |
 | LinkedIn review profile prefetch | [`prefetch_profiles.py`](../primitives/deep_context/prefetch_profiles.py) |
-| Retarget hydration | [`apply_retargets.py`](../primitives/deep_context/apply_retargets.py) |
+| Retarget projection | [`apply_retargets.py`](../primitives/deep_context/apply_retargets.py) |
 | Fan-in realization | [`index_contacts_pipeline.py`](../../indexing/primitives/index_contacts_pipeline/index_contacts_pipeline.py) |

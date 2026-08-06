@@ -2,6 +2,8 @@
 
 Created: 2026-08-06
 Change log:
+- 2026-08-06: worth-gated attached-link judging and self-heal in one upstream
+  SQL queue; pinned-threshold machine acceptance now records at judge time.
 - 2026-08-06: scaffold drafted by Claude, approved as-is by Arthur. This is
   the acceptance document: audits verify against these lines, not old behavior.
 
@@ -57,14 +59,20 @@ Never: machine touching human_worth*; queue derived from anything but SQLite;
 
 ## 6. enrich  (research + THE judge)
 Purpose: every effective-Yes parent ends with a verified LinkedIn or a
-  synthetic profile.
+  synthetic profile; attached links on effective-Maybe parents are validated.
 Reads: SQLite queues, cached profiles, dossier evidence.
 Writes: research results + judge verdicts into SQLite; receipts.
 Decision: (a) research iff no usable LinkedIn (Parallel → proposed URL +
   reasoning, else synthetic); (b) ONE judge scores any candidate URL against
-  the parent's whole evidence → confidence; one threshold table.
+  the parent's whole evidence → confidence; one threshold table. Attached-link
+  judging and self-heal skip effective_worth = 'no' through one SQL queue
+  predicate upstream of every paid call; research keeps the stricter
+  effective_worth = 'yes' gate. Machine verdicts that clear the pinned
+  threshold table auto-apply into machine decision columns at judge time; a
+  human decision always wins; the review queue is the below-threshold slice.
 Never: a second judge/evidence/bio composition; spend without flag + estimate;
-  re-billing a person already researched (one handle, one cache).
+  re-billing a person already researched (one handle, one cache); paid work on
+  effective_worth = 'no'.
 
 ## 7. linkedin review  (human)
 Purpose: you settle pending candidate families: verify / retarget / skip.

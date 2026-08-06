@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context import identity_evidence, profile_projection
 from packs.ingestion.primitives.deep_context.common import load_env
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    HealIdentityQueueRow,
+    linkedin_review,
+)
 from packs.ingestion.primitives.deep_context.db.models import (
     JUDGE_CONFIRM_THRESHOLD,
     JUDGE_DETACH_THRESHOLD,
     IdentityOrigin,
     ReviewSource,
     RowKind,
-    ResearchHandle,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import (
     canonical_snapshot,
@@ -37,45 +40,27 @@ def select_candidates(
     candidate_factory: Callable[..., Any],
     say: Callable[[str], None],
 ) -> tuple[list[Any], int, int]:
-    graph, identity = canonical_snapshot(db), identity_snapshot(db)
-    parents = {row.parent_id: row for row in graph.parents}
+    rows = cast(
+        list[HealIdentityQueueRow],
+        linkedin_review(
+            db,
+            "heal",
+            no_profile_reason=judgment_policy.NO_PROFILE_REASON,
+        ),
+    )
+    skipped_retarget = sum(row.selection == "pending_retarget" for row in rows)
     selected = []
-    skipped_retarget = 0
-    for link in identity.links:
-        if (
-            link.kind in {RowKind.SYNTHETIC.value, RowKind.RESEARCH.value}
-            or link.machine_judgment != "needs_review"
-            or float(link.machine_confidence or 0) != 0.0
-            or link.machine_reason != judgment_policy.NO_PROFILE_REASON
-            or not link.linkedin_url
-            or (link.decision_approved or link.machine_approved or "").lower()
-            in {"yes", "no", "auto"}
-        ):
-            continue
-        action = link.decision_action or link.machine_action or ""
-        proposed = (
-            link.replacement_public_identifier
-            or link.machine_proposed_public_identifier
-        )
-        if (
-            action == "retarget"
-            and proposed
-            and proposed.lower() != link.public_identifier.lower()
-        ):
-            skipped_retarget += 1
-            continue
-        parent = parents.get(link.parent_id)
-        if parent is None:
+    for row in rows:
+        if row.selection != "candidate":
             continue
         selected.append(candidate_factory(
-            parent_id=link.parent_id,
-            parent_slug=ResearchHandle.for_parent(parent.parent_id, parent.display_slug),
-            name=parent.display_name or link.display_name or parent.public_identifier,
-            candidate_key=link.row_key,
-            pub=link.public_identifier.lower(),
-            url=link.linkedin_url,
+            parent_id=row.parent_id,
+            parent_slug=row.parent_slug,
+            name=row.name,
+            candidate_key=row.candidate_key,
+            pub=row.public_identifier,
+            url=row.linkedin_url,
         ))
-    selected.sort(key=lambda row: (row.parent_slug, row.candidate_key))
     uncapped = len(selected)
     if cap is not None:
         selected = selected[:cap]

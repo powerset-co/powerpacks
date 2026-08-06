@@ -11,6 +11,7 @@ from packs.ingestion.primitives.deep_context.db._view_sql import (
     WORTH_CTE,
     WORTH_SELECT,
 )
+from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
     PARENT_WORTH_PREFIX,
     ResearchHandle,
@@ -111,26 +112,30 @@ def _candidate_dict(row: Any) -> dict[str, Any]:
             or ""
         ),
     }
-    proposed = row["machine_action"] == "retarget" and row["machine_proposed_url"]
-    decided_retarget = row["decision_action"] == "retarget" and row["replacement_url"]
-    url = row["replacement_url"] if decided_retarget else (
-        row["machine_proposed_url"] if proposed else row["linkedin_url"]
-    )
-    pub = row["replacement_public_identifier"] if decided_retarget else (
-        row["machine_proposed_public_identifier"] if proposed else row["public_identifier"]
+    decision = IdentityPolicy.effective_decision(
+        decision_action=row["decision_action"],
+        decision_approved=row["decision_approved"],
+        replacement_url=row["replacement_url"],
+        replacement_public_identifier=row["replacement_public_identifier"],
+        machine_action=row["machine_action"],
+        machine_approved=row["machine_approved"],
+        machine_proposed_url=row["machine_proposed_url"],
+        machine_proposed_public_identifier=row["machine_proposed_public_identifier"],
+        linkedin_url=row["linkedin_url"],
+        public_identifier=row["public_identifier"],
     )
     return {
         "pub": row["public_identifier"],
         "row_key": row["row_key"],
-        "profile_pub": pub or row["public_identifier"],
-        "url": url or profile["linkedin_url"],
+        "profile_pub": decision.public_identifier or row["public_identifier"],
+        "url": decision.url or profile["linkedin_url"],
         "full_name": row["display_name"] or profile["full_name"],
         "headline": profile["headline"],
         "profile_pic_url": profile["profile_pic_url"],
         "experiences": profile["experiences"],
         "education": profile["education"],
         "location": profile["location"],
-        "has_profile": bool(url or profile["linkedin_url"]),
+        "has_profile": bool(decision.url or profile["linkedin_url"]),
         "verdict": row["machine_judgment"] or "",
         "confidence": float(row["machine_confidence"] or 0.0),
         "supporting": profile["supporting"],
@@ -144,14 +149,10 @@ def _candidate_dict(row: Any) -> dict[str, Any]:
         "import_candidate": bool(row["raw_import"]),
         "candidate_origin": bool(row["candidate_origin"]),
         "synthetic": row["kind"] == "synthetic",
-        "action": row["decision_action"] or row["machine_action"] or "",
-        "approved": row["decision_approved"] or row["machine_approved"] or "",
-        "new_url": row["replacement_url"] or row["machine_proposed_url"] or "",
-        "new_public_identifier": (
-            row["replacement_public_identifier"]
-            or row["machine_proposed_public_identifier"]
-            or ""
-        ),
+        "action": decision.action,
+        "approved": decision.approved,
+        "new_url": decision.new_url,
+        "new_public_identifier": decision.new_public_identifier,
         "llm_reject": row["machine_reject"] or "",
         "llm_reject_confidence": row["machine_reject_confidence"],
         "llm_reject_reason": row["machine_reject_reason"] or "",

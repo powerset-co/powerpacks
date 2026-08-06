@@ -98,14 +98,20 @@ def prepare_research_proposal(
         "source": source,
         "judge_fingerprint": fingerprint,
     }
-    prior_retarget = (prior.get("action") or "").strip().lower() == "retarget"
+    prior_retarget = (
+        prior.get("machine_action") or prior.get("action") or ""
+    ).strip().lower() == "retarget"
     prior_fingerprint = (prior.get("llm_judge_fingerprint") or "").strip()
     if prior_retarget and prior_fingerprint == fingerprint:
         return PreparedResearchProposal(proposal, None, "cached")
     if (
         prior_retarget
         and not prior_fingerprint
-        and (prior.get("new_linkedin_url") or "").strip()
+        and (
+            prior.get("machine_proposed_url")
+            or prior.get("new_linkedin_url")
+            or ""
+        ).strip()
         == normalize_linkedin_url(new_url)
     ):
         return PreparedResearchProposal(proposal, None, "grandfathered")
@@ -166,12 +172,12 @@ def propose_retargets(
         and row.get("candidate_key")
         and row.get("parent_id")
     ]
+    existing = identity.link_decisions
     if targets:
         profile_projection.hydrate_profiles(targets, cache_dir, db=db)
     graph = canonical_snapshot(db)
     owner_block = owner_block or owner_background(graph)
     profiles = profile_projection.profile_payloads(graph)
-    existing = identity_snapshot(db).link_decisions
     proposals: list[dict[str, Any]] = []
     pending: list[PreparedResearchProposal] = []
     cached = grandfathered = 0
@@ -218,10 +224,26 @@ def propose_retargets(
         )
         if prepared.disposition == "cached":
             cached += 1
+            if (
+                not prior.get("machine_approved")
+                and not str(prior.get("llm_reject") or "").strip()
+            ):
+                proposals.append({
+                    **prepared.proposal,
+                    "approved": "auto",
+                })
             continue
         if prepared.disposition == "grandfathered":
             grandfathered += 1
-            proposals.append(prepared.proposal)
+            proposals.append({
+                **prepared.proposal,
+                **(
+                    {"approved": "auto"}
+                    if not prior.get("machine_approved")
+                    and not str(prior.get("llm_reject") or "").strip()
+                    else {}
+                ),
+            })
             continue
         pending.append(prepared)
 

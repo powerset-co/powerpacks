@@ -3,15 +3,112 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
     HUMAN_DECISION_SOURCES,
+    ReviewAction,
     ReviewSource,
 )
 
 
+@dataclass(frozen=True)
+class _EffectiveIdentityDecision:
+    """One resolved decision plus the candidate URL presented for review."""
+
+    action: str
+    approved: str
+    url: str
+    public_identifier: str
+    new_url: str
+    new_public_identifier: str
+
+
 class IdentityPolicy:
     """Atomic normalization applied by every canonical identity writer."""
+
+    @staticmethod
+    def effective_decision(
+        *,
+        decision_action: str | None,
+        decision_approved: str | None,
+        replacement_url: str | None,
+        replacement_public_identifier: str | None,
+        machine_action: str | None,
+        machine_approved: str | None,
+        machine_proposed_url: str | None,
+        machine_proposed_public_identifier: str | None,
+        linkedin_url: str | None,
+        public_identifier: str | None,
+    ) -> _EffectiveIdentityDecision:
+        """Resolve human first, then a cleared machine decision, else pending.
+
+        An uncleared machine retarget remains presentation-only: its proposed URL
+        is shown to the reviewer, but it is not an effective decision and cannot be
+        realized. This keeps human ``decision_*`` authoritative while making a
+        recorded ``machine_approved`` value the only machine acceptance signal.
+        """
+        human = bool(decision_action)
+        machine = bool(
+            not human
+            and machine_action
+            and machine_approved
+            in {
+                ApprovedState.AUTO.value,
+                ApprovedState.YES.value,
+                ApprovedState.NO.value,
+            }
+        )
+        action = str(
+            decision_action if human else machine_action if machine else ""
+        )
+        approved = str(
+            decision_approved if human else machine_approved if machine else ""
+        )
+        retarget_url = (
+            replacement_url
+            if human and action == ReviewAction.RETARGET.value
+            else machine_proposed_url
+            if machine and action == ReviewAction.RETARGET.value
+            else None
+        )
+        retarget_public_identifier = (
+            replacement_public_identifier
+            if human and action == ReviewAction.RETARGET.value
+            else machine_proposed_public_identifier
+            if machine and action == ReviewAction.RETARGET.value
+            else None
+        )
+        pending_url = (
+            machine_proposed_url
+            if not human
+            and not machine
+            and machine_action == ReviewAction.RETARGET.value
+            else None
+        )
+        pending_public_identifier = (
+            machine_proposed_public_identifier
+            if not human
+            and not machine
+            and machine_action == ReviewAction.RETARGET.value
+            else None
+        )
+        return _EffectiveIdentityDecision(
+            action=action,
+            approved=approved,
+            url=str(retarget_url or pending_url or linkedin_url or ""),
+            public_identifier=str(
+                retarget_public_identifier
+                or pending_public_identifier
+                or public_identifier
+                or ""
+            ),
+            new_url=str(retarget_url or pending_url or ""),
+            new_public_identifier=str(
+                retarget_public_identifier or pending_public_identifier or ""
+            ),
+        )
 
     @staticmethod
     def clear_machine_winner_conflicts(

@@ -10,14 +10,9 @@ from typing import Any
 
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.ingestion.primitives.deep_context.common import (
-    DEFAULT_PEOPLE_CSV,
     CANONICAL_DB,
     emit,
     ENRICH_MANIFEST,
-    FACTS_DIR,
-    LINKEDIN_OVERRIDES_CSV,
-    RAW_DIR,
-    VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.deep_context.db.models import (
     RESEARCH_CONFIRM_THRESHOLD,
@@ -94,9 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Deep-research the correct identity for wrong_person detaches (cost-gated)."
     )
     paths = {
-        "verdicts-jsonl": VERDICTS_JSONL, "overrides-csv": LINKEDIN_OVERRIDES_CSV,
-        "people-csv": DEFAULT_PEOPLE_CSV, "facts-dir": FACTS_DIR,
-        "raw-dir": RAW_DIR, "db": CANONICAL_DB,
+        "db": CANONICAL_DB,
         "manifest": ENRICH_MANIFEST,
     }
     for flag, default in paths.items():

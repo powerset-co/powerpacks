@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from packs.indexing.lib.openai_responses import reasoning_effort
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.models import ResearchHandle, RowKind
-from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
+from packs.ingestion.primitives.deep_context.db.identity_views import (
+    AttachedIdentityQueueRow,
+    linkedin_review,
+)
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier_evidence import DossierEvidence
 from packs.ingestion.primitives.deep_context import profile_projection
@@ -88,57 +91,32 @@ def linkedin_view(
 
 
 def build_tasks(db: Db) -> list[dict[str, Any]]:
-    graph, identity = canonical_snapshot(db), identity_snapshot(db)
+    graph = canonical_snapshot(db)
     profiles = profile_projection.profile_payloads(graph)
-    parents = {row.parent_id: row for row in graph.parents}
-    parent_people: dict[str, list[str]] = {}
-    for person in graph.people:
-        if not person.is_owner and not person.is_ghost:
-            parent_people.setdefault(person.parent_id, []).append(person.person_id)
-    members: dict[str, list[str]] = {}
-    for membership in identity.memberships:
-        members.setdefault(membership.row_key, []).append(membership.person_id)
-    sources: dict[str, set[str]] = {}
-    for source in graph.sources:
-        sources.setdefault(source.person_id, set()).add(source.source)
-
     tasks: list[dict[str, Any]] = []
-    for link in identity.links:
-        if not link.linkedin_url or link.kind in {RowKind.SYNTHETIC.value, RowKind.RESEARCH.value}:
-            continue
-        parent = parents.get(link.parent_id)
-        if parent is None:
-            continue
-        all_people = sorted(parent_people.get(link.parent_id, []))
-        person_ids = sorted(members.get(link.row_key) or all_people)
+    rows = cast(list[AttachedIdentityQueueRow], linkedin_review(db, "attached"))
+    for row in rows:
         profile_row = {
-            "public_identifier": str(link.public_identifier or "").lower(),
-            "linkedin_url": link.linkedin_url or "",
-            "display_name": link.display_name or "",
-            "candidate_key": link.row_key,
-            "parent_id": link.parent_id,
+            "public_identifier": row.public_identifier,
+            "linkedin_url": row.linkedin_url,
+            "display_name": row.name,
+            "candidate_key": row.candidate_key,
+            "parent_id": row.parent_id,
         }
-        evidence = DossierEvidence.from_parent(link.parent_id, graph)
+        evidence = DossierEvidence.from_parent(row.parent_id, graph)
         tasks.append({
-            "parent_slug": ResearchHandle.for_parent(parent.parent_id, parent.display_slug),
-            "parent_id": parent.parent_id,
-            "name": parent.display_name or link.display_name or parent.public_identifier,
-            "candidate_key": link.row_key,
-            "person_ids": person_ids,
-            "conflict": False,
+            "parent_slug": row.parent_slug,
+            "parent_id": row.parent_id,
+            "name": row.name,
+            "candidate_key": row.candidate_key,
+            "person_ids": list(row.person_ids),
+            "conflict": row.conflict,
             "no_link": False,
             "evidence": evidence,
             "dossier": evidence.as_judge_dict(),
-            "linkedin": linkedin_view(profile_row, profiles.get(link.row_key)),
-            "from_connections": any(
-                "linkedin_csv" in sources.get(person_id, set()) for person_id in person_ids
-            ),
+            "linkedin": linkedin_view(profile_row, profiles.get(row.candidate_key)),
+            "from_connections": row.from_connections,
         })
-    counts: dict[str, int] = {}
-    for task in tasks:
-        counts[task["parent_id"]] = counts.get(task["parent_id"], 0) + 1
-    for task in tasks:
-        task["conflict"] = counts[task["parent_id"]] > 1
     return tasks
 
 
