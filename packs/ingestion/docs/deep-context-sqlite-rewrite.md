@@ -1,6 +1,6 @@
 # Deep Context SQLite rewrite mandate
 
-Status: canonical implementation contract  
+Status: canonical implementation contract
 Updated: 2026-08-06
 
 This document is the source of truth for the Deep Context rewrite. When code,
