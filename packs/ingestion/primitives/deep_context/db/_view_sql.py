@@ -12,6 +12,10 @@ WITH ranked_facts AS (
                     COALESCE(f.person_id, f.subject_key)
          ) AS worth_rank
   FROM facts f
+  WHERE NOT EXISTS (
+      SELECT 1 FROM people fact_person
+      WHERE fact_person.person_id=f.person_id AND fact_person.is_owner=1
+    )
 ), worth AS (
   SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
          p.human_worth, p.human_worth_note, p.human_worth_source, p.human_worth_at,
@@ -20,21 +24,29 @@ WITH ranked_facts AS (
          CASE WHEN r.machine_worth IS NULL THEN 'default' ELSE 'llm' END AS machine_source,
          COALESCE(p.human_worth, r.machine_worth, 'maybe') AS effective_worth,
          (SELECT json_group_array(person_id) FROM (
-            SELECT person_id FROM people WHERE parent_id=p.parent_id ORDER BY person_id
+            SELECT person_id FROM people
+            WHERE parent_id=p.parent_id AND is_owner=0
+            ORDER BY person_id
           )) AS person_ids_json,
-         EXISTS(SELECT 1 FROM links l WHERE l.parent_id=p.parent_id AND l.kind='synthetic')
-           AS has_synthetic
+         EXISTS(
+           SELECT 1 FROM links l
+           WHERE l.parent_id=p.parent_id AND l.kind='synthetic'
+             AND (
+               NOT EXISTS (
+                 SELECT 1 FROM candidate_people cp WHERE cp.row_key=l.row_key
+               )
+               OR EXISTS (
+                 SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
+                 WHERE cp.row_key=l.row_key AND pe.is_owner=0
+               )
+             )
+         ) AS has_synthetic
   FROM parents p
   JOIN ranked_facts r ON r.parent_id=p.parent_id AND r.worth_rank=1
-  WHERE NOT EXISTS (
-          SELECT 1 FROM facts f WHERE f.parent_id=p.parent_id AND f.is_owner=1
-        )
-    AND NOT EXISTS (
-          SELECT 1 FROM people pe WHERE pe.parent_id=p.parent_id AND pe.is_owner=1
-        )
-    AND EXISTS (
-          SELECT 1 FROM people pe WHERE pe.parent_id=p.parent_id AND pe.is_ghost=0
-        )
+  WHERE EXISTS (
+    SELECT 1 FROM people pe
+    WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pe.is_ghost=0
+  )
 )
 """
 
@@ -76,6 +88,13 @@ LINKEDIN_CTE = (
     + PENDING_CANDIDATE
     + """ AS is_pending
   FROM links l
+  WHERE NOT EXISTS (
+          SELECT 1 FROM candidate_people cp WHERE cp.row_key=l.row_key
+        )
+     OR EXISTS (
+          SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
+          WHERE cp.row_key=l.row_key AND pe.is_owner=0
+        )
 ), identity_scope AS (
   SELECT p.parent_id
   FROM parents p
@@ -86,7 +105,7 @@ LINKEDIN_CTE = (
         p.human_worth IS NULL
         AND (
           EXISTS (
-            SELECT 1 FROM links kept
+            SELECT 1 FROM candidate_policy kept
             WHERE kept.parent_id=p.parent_id
               AND kept.decision_approved='yes'
               AND kept.decision_action NOT IN ('detach', 'exclude')
@@ -94,20 +113,24 @@ LINKEDIN_CTE = (
           OR EXISTS (
             SELECT 1 FROM people connected
             JOIN person_sources ps USING(person_id)
-            WHERE connected.parent_id=p.parent_id AND ps.source='linkedin_csv'
+            WHERE connected.parent_id=p.parent_id
+              AND connected.is_owner=0
+              AND ps.source='linkedin_csv'
           )
         )
       )
     )
     AND NOT EXISTS (
-      SELECT 1 FROM links raw WHERE raw.parent_id=p.parent_id AND raw.raw_import=1
+      SELECT 1 FROM candidate_policy raw
+      WHERE raw.parent_id=p.parent_id AND raw.raw_import=1
     )
     AND NOT (
       NOT EXISTS (
-        SELECT 1 FROM links real WHERE real.parent_id=p.parent_id AND real.kind!='synthetic'
+        SELECT 1 FROM candidate_policy real
+        WHERE real.parent_id=p.parent_id AND real.kind!='synthetic'
       )
       AND EXISTS (
-        SELECT 1 FROM links rejected
+        SELECT 1 FROM candidate_policy rejected
         WHERE rejected.parent_id=p.parent_id AND rejected.kind='synthetic'
           AND rejected.decision_action='detach'
           AND rejected.decision_approved IN ('yes', 'no')
@@ -124,8 +147,15 @@ LINKEDIN_CTE = (
              OR EXISTS (
                SELECT 1 FROM people origin
                WHERE origin.parent_id=p.parent_id
+                 AND origin.is_owner=0
                  AND origin.person_id LIKE 'candidate:%'
              ))
+    )
+    AND EXISTS (
+      SELECT 1 FROM people member
+      WHERE member.parent_id=p.parent_id
+        AND member.is_owner=0
+        AND member.is_ghost=0
     )
 ), pending_parents AS (
   SELECT DISTINCT c.parent_id
@@ -145,11 +175,13 @@ SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
        COALESCE(w.effective_worth, p.human_worth, p.machine_worth, 'maybe') AS effective_worth,
        p.human_worth, p.human_worth_note, p.human_worth_at,
        COALESCE(w.person_ids_json, (SELECT json_group_array(person_id) FROM (
-         SELECT person_id FROM people WHERE parent_id=p.parent_id ORDER BY person_id
+         SELECT person_id FROM people
+         WHERE parent_id=p.parent_id AND is_owner=0
+         ORDER BY person_id
        ))) AS person_ids_json,
        (SELECT json_group_array(source) FROM (
          SELECT DISTINCT ps.source FROM people pe JOIN person_sources ps USING(person_id)
-         WHERE pe.parent_id=p.parent_id ORDER BY ps.source
+         WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 ORDER BY ps.source
        )) AS sources_json,
        a.path AS dossier_path,
        COALESCE(json_extract(a.payload_json, '$.body'), '') AS dossier_body
@@ -171,13 +203,15 @@ SELECT c.*,
        r.result_json AS research_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
-          FROM candidate_people cp JOIN person_identifiers pi USING(person_id)
-          WHERE cp.row_key=c.row_key AND pi.kind='email' ORDER BY value
+          FROM candidate_people cp JOIN people pe USING(person_id)
+          JOIN person_identifiers pi USING(person_id)
+          WHERE cp.row_key=c.row_key AND pe.is_owner=0 AND pi.kind='email' ORDER BY value
         )) AS emails_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(pi.display_value, pi.normalized_value) AS value
-          FROM candidate_people cp JOIN person_identifiers pi USING(person_id)
-          WHERE cp.row_key=c.row_key AND pi.kind='phone' ORDER BY value
+          FROM candidate_people cp JOIN people pe USING(person_id)
+          JOIN person_identifiers pi USING(person_id)
+          WHERE cp.row_key=c.row_key AND pe.is_owner=0 AND pi.kind='phone' ORDER BY value
         )) AS phones_json
 FROM candidate_policy c
 LEFT JOIN synthetic_profiles sp ON sp.candidate_key=c.row_key

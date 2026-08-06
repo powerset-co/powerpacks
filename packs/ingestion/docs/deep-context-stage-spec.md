@@ -52,7 +52,8 @@ Never: whole-graph rebuilds; CSV verdict caches; mutating dossiers in place.
 Purpose: you sweep the effective-Maybe queue; Yes/No are visible and editable.
 Reads: SQLite worth queue views.    Writes: parents.human_worth* via decide_worth.
 Decision: yours only. Machine default is the synthesis verdict.
-Never: machine touching human_worth*; queue derived from anything but SQLite.
+Never: machine touching human_worth*; queue derived from anything but SQLite;
+  an owner person never hides its family from review.
 
 ## 6. enrich  (research + THE judge)
 Purpose: every effective-Yes parent ends with a verified LinkedIn or a

@@ -209,6 +209,13 @@ class BuildParents(Node):
                 and row.candidate_key is None
             ):
                 prior_artifacts[row.parent_id].append(row)
+        owners_by_path: dict[str, set[str]] = defaultdict(set)
+        for parent_id, rows in prior_artifacts.items():
+            for row in rows:
+                owners_by_path[row.path].add(parent_id)
+        colliding_paths = {
+            path for path, parent_ids in owners_by_path.items() if len(parent_ids) > 1
+        }
 
         self.parents_dir.mkdir(parents=True, exist_ok=True)
         replacements = []
@@ -219,7 +226,8 @@ class BuildParents(Node):
             body = render_singleton(plan) if singleton else render_parent(plan)
             data = body.encode()
             fingerprint = hashlib.sha256(data).hexdigest()
-            path = self.parents_dir / f"{plan.slug}.md"
+            file_slug = slugify(plan.name, plan.parent_id)
+            path = self.parents_dir / f"{file_slug}.md"
             artifact = ArtifactRow(
                 f"dossier:{plan.parent_id}",
                 ArtifactKind.DOSSIER.value,
@@ -231,7 +239,7 @@ class BuildParents(Node):
                     "parent_id": plan.parent_id,
                     "name": plan.name,
                     "slug": plan.slug,
-                    "path": f"parents/{plan.slug}.md",
+                    "path": f"parents/{file_slug}.md",
                     "needs_review": [],
                     "children": [child.slug for child in plan.confirmed],
                     "person_ids": [child.person_id for child in plan.confirmed],
@@ -253,7 +261,10 @@ class BuildParents(Node):
                 current is None
                 or current.content_fingerprint != fingerprint
                 or current.path != artifact.path
+                or current.path in colliding_paths
                 or not path.is_file()
+                or hashlib.sha256(path.read_bytes()).hexdigest()
+                != current.content_fingerprint
             )
             stale_keys = {row.artifact_key for row in prior} - {artifact.artifact_key}
             if changed:
@@ -269,7 +280,7 @@ class BuildParents(Node):
 
         if replacements:
             self.db.project_rows(tuple(replacements))
-        active_slugs = {plan.slug for plan in plans}
+        active_slugs = {slugify(plan.name, plan.parent_id) for plan in plans}
         orphans = remove_orphans(self.parents_dir, active_slugs)
         return BuildParentsManifest(
             status="completed",

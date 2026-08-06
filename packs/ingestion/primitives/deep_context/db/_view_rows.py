@@ -198,11 +198,12 @@ def _all_parents(db: Db) -> list[dict[str, Any]]:
     rows = db.query(
         LINKEDIN_CTE
         + PARENT_SELECT.format(
-            where="""WHERE NOT EXISTS (
-              SELECT 1 FROM people pe WHERE pe.parent_id=p.parent_id AND pe.is_owner=1
+            where="""WHERE EXISTS (
+              SELECT 1 FROM people pe
+              WHERE pe.parent_id=p.parent_id AND pe.is_owner=0 AND pe.is_ghost=0
             ) AND EXISTS (
-              SELECT 1 FROM links l WHERE l.parent_id=p.parent_id
-                AND (l.paid_profile=1 OR l.candidate_origin=1 OR l.kind='synthetic')
+              SELECT 1 FROM candidate_policy c WHERE c.parent_id=p.parent_id
+                AND (c.paid_profile=1 OR c.candidate_origin=1 OR c.kind='synthetic')
             )"""
         )
     )

@@ -148,6 +148,116 @@ class DeepContextDbViewTests(unittest.TestCase):
             {"total": 4, "pending": 1, "yes": 1, "no": 1},
         )
 
+    def test_owner_person_is_excluded_without_hiding_merged_family(self) -> None:
+        visible_people = self.add_factsless_parent("visible")
+        owner_people = self.add_factsless_parent("owner-member")
+        project_person(
+            self.db,
+            PersonRow(owner_people[0], "owner-member", is_owner=1),
+        )
+        project_artifact(
+            self.db,
+            ArtifactRow(
+                "facts:visible-parent",
+                "facts",
+                "visible",
+                "/facts/visible.jsonl",
+                "sha-visible-parent",
+                "projected",
+            ),
+        )
+        project_fact(
+            self.db,
+            FactRow(
+                "visible-parent-fact",
+                "visible",
+                "facts:visible-parent",
+                machine_worth="maybe",
+                is_owner=1,
+                facts_json="{}",
+            ),
+        )
+        replace_person_identifiers(
+            self.db,
+            visible_people[0],
+            (PersonIdentifierRow(visible_people[0], "email", "visible@example.test"),),
+        )
+        replace_person_identifiers(
+            self.db,
+            owner_people[0],
+            (PersonIdentifierRow(owner_people[0], "email", "owner@example.test"),),
+        )
+        replace_person_sources(
+            self.db,
+            visible_people[0],
+            (PersonSourceRow(visible_people[0], "imessage"),),
+        )
+        replace_person_sources(
+            self.db,
+            owner_people[0],
+            (PersonSourceRow(owner_people[0], "gmail_msgvault"),),
+        )
+        self.db.merge_parents("visible", "owner-member")
+        self.add_candidate(
+            "visible",
+            "visible-link",
+            person_ids=[*visible_people, *owner_people],
+            paid_profile=1,
+        )
+        self.add_candidate(
+            "visible",
+            "synthetic:owner-member",
+            person_ids=owner_people,
+            kind="synthetic",
+        )
+        project_synthetic_profile(
+            self.db,
+            SyntheticProfileRow(
+                "synthetic:owner-member", "synthetic:owner-member", "{}",
+            ),
+        )
+
+        hidden_people = self.add_parent("owner-only", "yes", owner=True)
+        self.add_candidate(
+            "owner-only",
+            "owner-only-link",
+            person_ids=hidden_people,
+            paid_profile=1,
+        )
+        self.db.project_rows((
+            ResearchRow("visible", "visible", "no_match", "visible-link"),
+            ResearchRow(
+                "owner-visible", "visible", "no_match", "synthetic:owner-member",
+            ),
+            ResearchRow("owner-only", "owner-only", "no_match", "owner-only-link"),
+        ))
+
+        worth_rows = worth_review(self.db, "rows")
+        self.assertEqual([row["parent_id"] for row in worth_rows], ["visible"])
+        self.assertEqual(worth_rows[0]["person_ids"], visible_people)
+        self.assertEqual(worth_rows[0]["machine"]["decision"], "maybe")
+        self.assertEqual(
+            [row["parent_id"] for row in worth_review(self.db, "queue")],
+            ["visible"],
+        )
+
+        linkedin_queue = linkedin_review(self.db, "queue")
+        self.assertEqual([row["parent_id"] for row in linkedin_queue], ["visible"])
+        self.assertEqual(linkedin_queue[0]["person_ids"], visible_people)
+        self.assertEqual(linkedin_queue[0]["source_channels"], ["imessage"])
+        self.assertEqual(
+            linkedin_queue[0]["candidates"][0]["match_emails"],
+            ["visible@example.test"],
+        )
+        self.assertEqual(
+            [row["parent_id"] for row in linkedin_review(self.db, "parents")],
+            ["visible"],
+        )
+        synthetic_targets = linkedin_review(self.db, "synthetic")
+        self.assertEqual([row["parent_id"] for row in synthetic_targets], ["visible"])
+        self.assertEqual(synthetic_targets[0]["person_ids"], visible_people)
+        self.assertEqual(synthetic_targets[0]["existing_synthetics"], [])
+
     def test_enrichment_queue_is_one_effective_yes_sql_policy(self):
         wrong_people = self.add_parent("wrong", "yes")
         self.add_candidate(

@@ -58,6 +58,8 @@ def source_parents(
     grouped: dict[str, dict[str, set[str]]] = {}
     message_channels = {GMAIL_CHANNEL, IMESSAGE_CHANNEL, WHATSAPP_CHANNEL}
     for row in snapshot.people:
+        if row.is_owner:
+            continue
         channels = sources.get(row.person_id, [])
         values = identifiers.get(row.person_id, {})
         if not message_channels.intersection(channels) or not (

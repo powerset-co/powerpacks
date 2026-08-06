@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context import collect_person_context
+from packs.ingestion.primitives.deep_context.collection import state
 from packs.ingestion.primitives.deep_context.check_readiness import CheckReadiness
 from packs.ingestion.primitives.deep_context.collect_person_context import CollectPersonContext
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -190,6 +191,32 @@ class SqliteCollectionTest(unittest.TestCase):
             row for row in canonical_snapshot(self.db).artifacts
             if row.kind == "source_bundle"
         ])
+
+    def test_collection_skips_owner_member_without_hiding_family(self) -> None:
+        self.db.project_rows((
+            PersonRow("owner-person", "parent-1", is_owner=1),
+            PersonIdentifiersProjection("owner-person", (
+                PersonIdentifierRow("owner-person", "email", "owner@example.test"),
+            )),
+            PersonSourcesProjection("owner-person", (
+                PersonSourceRow("owner-person", "gmail_msgvault"),
+            )),
+            ParentRow("owner-only", "parent-worth:owner-only", "Owner Only"),
+            PersonRow("owner-only-person", "owner-only", is_owner=1),
+            PersonIdentifiersProjection("owner-only-person", (
+                PersonIdentifierRow("owner-only-person", "phone", "+15550199"),
+            )),
+            PersonSourcesProjection("owner-only-person", (
+                PersonSourceRow("owner-only-person", "imessage"),
+            )),
+        ))
+
+        people = state.source_parents(canonical_snapshot(self.db))
+
+        self.assertEqual([person.person_id for person in people], ["parent-1"])
+        self.assertEqual(people[0].emails, [])
+        self.assertEqual(people[0].phones, ["+15550100"])
+        self.assertEqual(people[0].source_channels, ["imessage"])
 
     def test_readiness_counts_current_people_input_and_sqlite_outputs(self) -> None:
         self.db.project_rows((

@@ -179,6 +179,20 @@ def research_artifact_inventory(result_path: Path) -> object:
         self.assertEqual(allowed, [])
         self.assertEqual([item.rule for item in banned], ["artifact-file-read"])
 
+    def test_parent_writer_may_hash_its_own_output_for_healing(self) -> None:
+        allowed = self.audit_source(
+            "build_parents.py",
+            """import hashlib
+
+class BuildParents:
+    def execute(self, path, db, rows):
+        fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
+        db.project_rows(rows)
+        return fingerprint
+""",
+        )
+        self.assertEqual(allowed, [])
+
     def test_retired_writer_readback_is_not_allowlisted(self) -> None:
         banned = self.audit_source(
             "collect_person_context.py",

@@ -80,24 +80,37 @@ def _enrichment_queue(
 ) -> list[dict[str, Any]]:
     rows = db.query(
         WORTH_CTE
-        + """
+        + """, eligible_links AS (
+  SELECT l.*
+  FROM links l
+  WHERE NOT EXISTS (
+          SELECT 1 FROM candidate_people cp WHERE cp.row_key=l.row_key
+        )
+     OR EXISTS (
+          SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
+          WHERE cp.row_key=l.row_key AND pe.is_owner=0
+        )
+)
 SELECT l.row_key, l.parent_id, w.display_slug, w.display_name, l.linkedin_url,
        l.machine_reason, l.machine_judgment, l.candidate_origin,
        (SELECT json_group_array(person_id) FROM (
-          SELECT person_id FROM people WHERE parent_id=l.parent_id AND is_ghost=0
+          SELECT person_id FROM people
+          WHERE parent_id=l.parent_id AND is_owner=0 AND is_ghost=0
           ORDER BY person_id
         )) AS person_ids_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
           FROM people pe JOIN person_identifiers i USING(person_id)
-          WHERE pe.parent_id=l.parent_id AND i.kind='email' ORDER BY value
+          WHERE pe.parent_id=l.parent_id AND pe.is_owner=0 AND i.kind='email'
+          ORDER BY value
         )) AS emails_json,
        (SELECT json_group_array(value) FROM (
           SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
           FROM people pe JOIN person_identifiers i USING(person_id)
-          WHERE pe.parent_id=l.parent_id AND i.kind='phone' ORDER BY value
+          WHERE pe.parent_id=l.parent_id AND pe.is_owner=0 AND i.kind='phone'
+          ORDER BY value
         )) AS phones_json
-FROM links l JOIN worth w USING(parent_id)
+FROM eligible_links l JOIN worth w USING(parent_id)
 WHERE w.effective_worth='yes'
   AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=l.parent_id)
   AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no')
@@ -108,7 +121,7 @@ WHERE w.effective_worth='yes'
     AND lower(COALESCE(l.machine_reject, '')) NOT IN ('1', 'true', 'yes')
   )
   AND NOT EXISTS (
-    SELECT 1 FROM links kept
+    SELECT 1 FROM eligible_links kept
     WHERE kept.parent_id=l.parent_id AND kept.row_key!=l.row_key
       AND (
         (kept.machine_judgment='confirmed'
@@ -166,10 +179,12 @@ def _synthetic_fallback(db: Db) -> list[dict[str, Any]]:
         + """, research_people AS (
   SELECT r.handle, r.candidate_key, cp.person_id
   FROM research r JOIN candidate_people cp ON cp.row_key=r.candidate_key
+  JOIN people pe ON pe.person_id=cp.person_id
+  WHERE pe.is_owner=0
   UNION ALL
   SELECT r.handle, r.candidate_key, pe.person_id
   FROM research r JOIN people pe ON pe.parent_id=r.parent_id
-  WHERE NOT EXISTS (
+  WHERE pe.is_owner=0 AND NOT EXISTS (
     SELECT 1 FROM candidate_people cp WHERE cp.row_key=r.candidate_key
   )
 )
@@ -202,11 +217,35 @@ SELECT r.handle, r.parent_id, r.candidate_key, r.result_json,
           END
         ))
         FROM synthetic_profiles sp JOIN links sl ON sl.row_key=sp.candidate_key
-        WHERE sl.parent_id=r.parent_id) AS existing_synthetics_json
+        WHERE sl.parent_id=r.parent_id
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM candidate_people cp WHERE cp.row_key=sl.row_key
+            )
+            OR EXISTS (
+              SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
+              WHERE cp.row_key=sl.row_key AND pe.is_owner=0
+            )
+          )) AS existing_synthetics_json
 FROM research r
 JOIN parents p ON p.parent_id=r.parent_id
 LEFT JOIN worth w USING(parent_id)
 LEFT JOIN links l ON l.row_key=r.candidate_key
+WHERE EXISTS (
+  SELECT 1 FROM people member
+  WHERE member.parent_id=r.parent_id
+    AND member.is_owner=0
+    AND member.is_ghost=0
+)
+  AND (
+    NOT EXISTS (
+      SELECT 1 FROM candidate_people cp WHERE cp.row_key=r.candidate_key
+    )
+    OR EXISTS (
+      SELECT 1 FROM candidate_people cp JOIN people pe USING(person_id)
+      WHERE cp.row_key=r.candidate_key AND pe.is_owner=0
+    )
+  )
 ORDER BY r.parent_id, r.handle, r.candidate_key
 """
     )

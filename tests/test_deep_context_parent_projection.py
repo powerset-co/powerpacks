@@ -70,7 +70,8 @@ class ParentProjectionTest(unittest.TestCase):
             # re-minted from membership — the seeded id survives the rebuild.
             parent_id = "old-person-a"
             parent_slug = "jordan-a"
-            self.assertEqual((parents / f"{parent_slug}.md").read_text(), (
+            parent_filename = "jordan-bravo-oldperso.md"
+            self.assertEqual((parents / parent_filename).read_text(), (
                 "---\n"
                 f"parent_id: {parent_id}\n"
                 'name: "Jordan Bravo"\n'
@@ -91,7 +92,7 @@ class ParentProjectionTest(unittest.TestCase):
             )
             self.assertEqual(
                 parent_dossier.path,
-                str((parents / f"{parent_slug}.md").resolve()),
+                str((parents / parent_filename).resolve()),
             )
 
     def test_merge_rekeys_facts_and_preserves_human_worth(self) -> None:
@@ -312,7 +313,7 @@ class ParentProjectionTest(unittest.TestCase):
             parents_dir = root / "parents"
 
             first = BuildParents(db=db, parents_dir=parents_dir).execute()
-            path = parents_dir / "jordan.md"
+            path = parents_dir / "jordan-bravo-a.md"
             first_bytes = path.read_bytes()
             first_mtime = path.stat().st_mtime_ns
             artifact_fingerprint = query(
@@ -347,8 +348,8 @@ class ParentProjectionTest(unittest.TestCase):
             ))
             parents_dir = root / "parents"
             BuildParents(db=db, parents_dir=parents_dir).execute()
-            jordan = parents_dir / "jordan.md"
-            casey = parents_dir / "casey.md"
+            jordan = parents_dir / "jordan-bravo-a.md"
+            casey = parents_dir / "casey-delta-b.md"
             jordan_before = jordan.read_bytes()
             casey_before = casey.read_bytes()
             casey_mtime = casey.stat().st_mtime_ns
@@ -391,8 +392,8 @@ class ParentProjectionTest(unittest.TestCase):
             ))
             parents_dir = root / "parents"
             BuildParents(db=db, parents_dir=parents_dir).execute()
-            jordan = parents_dir / "jordan.md"
-            casey = parents_dir / "casey.md"
+            jordan = parents_dir / "jordan-bravo-a.md"
+            casey = parents_dir / "casey-delta-b.md"
             jordan_before = jordan.read_bytes()
             casey_before = casey.read_bytes()
             casey_mtime = casey.stat().st_mtime_ns
@@ -406,6 +407,73 @@ class ParentProjectionTest(unittest.TestCase):
             self.assertNotEqual(jordan.read_bytes(), jordan_before)
             self.assertEqual(casey.read_bytes(), casey_before)
             self.assertEqual(casey.stat().st_mtime_ns, casey_mtime)
+
+    def test_colliding_display_slugs_heal_to_distinct_parent_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parents_dir = root / "parents"
+            parents_dir.mkdir()
+            collided = parents_dir / "jordan.md"
+            collided.write_text("stale shared dossier\n", encoding="utf-8")
+            stale_fingerprint = hashlib.sha256(collided.read_bytes()).hexdigest()
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-a", "parent-worth:a", "Jordan Bravo", "jordan"),
+                ParentRow("parent-b", "parent-worth:b", "Jordan Bravo", "jordan"),
+                PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
+                PersonRow("person-b", "parent-b", "jordan-b", "jordan", "Jordan Bravo"),
+                ArtifactRow(
+                    "dossier:parent-a", "dossier", "parent-a", str(collided.resolve()),
+                    stale_fingerprint, "projected",
+                ),
+                ArtifactRow(
+                    "dossier:parent-b", "dossier", "parent-b", str(collided.resolve()),
+                    stale_fingerprint, "projected",
+                ),
+            ))
+
+            result = BuildParents(db=db, parents_dir=parents_dir).execute()
+
+            self.assertEqual(result.parents_written, 2)
+            self.assertFalse(collided.exists())
+            paths = {
+                Path(row["path"])
+                for row in query(
+                    db,
+                    "SELECT path FROM artifacts WHERE kind='dossier' ORDER BY parent_id",
+                )
+            }
+            self.assertEqual(paths, {
+                (parents_dir / "jordan-bravo-a.md").resolve(),
+                (parents_dir / "jordan-bravo-b.md").resolve(),
+            })
+            for path in paths:
+                self.assertTrue(path.is_file())
+
+    def test_disk_fingerprint_mismatch_is_healed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parents_dir = root / "parents"
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-a", "parent-worth:a", "Jordan Bravo", "jordan"),
+                PersonRow("person-a", "parent-a", "jordan-a", "jordan", "Jordan Bravo"),
+            ))
+            BuildParents(db=db, parents_dir=parents_dir).execute()
+            path = parents_dir / "jordan-bravo-a.md"
+            expected = path.read_bytes()
+            path.write_text("corrupted dossier\n", encoding="utf-8")
+
+            result = BuildParents(db=db, parents_dir=parents_dir).execute()
+
+            self.assertEqual(result.parents_written, 1)
+            self.assertEqual(path.read_bytes(), expected)
+            row = query(
+                db,
+                "SELECT content_fingerprint FROM artifacts "
+                "WHERE artifact_key='dossier:parent-a'",
+            )[0]
+            self.assertEqual(row["content_fingerprint"], hashlib.sha256(expected).hexdigest())
 
 
 if __name__ == "__main__":

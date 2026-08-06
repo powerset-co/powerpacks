@@ -67,6 +67,10 @@ KNOWN_READER_HELPERS = {"_load_bundle", "load_owner", "read_jsonl"}
 NON_FILE_OPENERS = {"webbrowser.open"}
 WRITER_HASH_BOUNDARIES = {
     (
+        "packs/ingestion/primitives/deep_context/build_parents.py",
+        "execute",
+    ): "project_rows",
+    (
         "packs/ingestion/primitives/deep_context/parallel_research/driver.py",
         "research_artifact_inventory",
     ): "project_artifacts",
