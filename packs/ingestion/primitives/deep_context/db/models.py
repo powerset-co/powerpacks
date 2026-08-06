@@ -123,6 +123,10 @@ class StageStatus(StrEnum):
 HUMAN_DECISION_SOURCES = frozenset({ReviewSource.REVIEW.value, ReviewSource.USER_GUIDANCE.value})
 PARENT_WORTH_PREFIX = "parent-worth:"
 LLM_REJECT_VALUES = ("yes", "no", "spam")
+JUDGE_CONFIRM_THRESHOLD = 0.70
+JUDGE_DETACH_THRESHOLD = 0.85
+DECISIVE_CONFIRM_THRESHOLD = 0.95
+RESEARCH_CONFIRM_THRESHOLD = 0.80
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 
 

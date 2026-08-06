@@ -77,7 +77,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import csv
 import json
 import re
@@ -108,7 +107,6 @@ from packs.ingestion.primitives.deep_context.candidates import (
 from packs.ingestion.primitives.deep_context.common import (
     CONSOLIDATE_PEOPLE_CSV,
     DEFAULT_PEOPLE_CSV,
-    DOSSIER_DIR,
     emit,
     ensure_no_review_session,
     FACTS_DIR,
@@ -128,6 +126,7 @@ from packs.ingestion.primitives.deep_context.common import (
     RAW_DIR,
     read_jsonl,
     RECONCILE_DIR,
+    ROOT,
     SUMMARY_MD,
     VERDICTS_CSV,
     VERDICTS_JSONL,
@@ -135,19 +134,15 @@ from packs.ingestion.primitives.deep_context.common import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.contact_fields import normalize_email
 from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
-from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
-from packs.ingestion.primitives.deep_context.review_store import (
+from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
     DECISIVE_CONFIRM_THRESHOLD,
+    IdentityMachineProjection,
     JUDGE_CONFIRM_THRESHOLD,
     JUDGE_DETACH_THRESHOLD,
-    OVERRIDE_COLUMNS,
-    USER_APPROVED,
-    ReviewRow,
-    is_parent_worth_row,
-    load_override_rows,
-    row_keys_for_person,
-    write_override_rows,
+    ReviewSource,
 )
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 from packs.ingestion.primitives.enrich.rapidapi_client import hydrate_profiles, RapidApiClient
 from packs.ingestion.primitives.enrich.profile_cache import (
@@ -163,7 +158,9 @@ from packs.ingestion.schemas.people_schema import (
 )
 
 DEFAULT_CONFIRM = JUDGE_CONFIRM_THRESHOLD  # auto-VERIFY a `confirmed` link at/above this (keep-biased — the user fixes the rare mismatch)
-DEFAULT_DETACH = JUDGE_DETACH_THRESHOLD  # auto-DETACH a `wrong_person` link only at/above this (dropping a real person is the costly error); shared with review display via review_store
+DEFAULT_DETACH = JUDGE_DETACH_THRESHOLD
+USER_APPROVED = {ApprovedState.YES.value, ApprovedState.NO.value}
+CANONICAL_DB = ROOT / "deep-context.sqlite"
 SECTION_ANCHOR = "## LinkedIn identity"
 SAMPLE_PER_DIRECTION = 4
 SAMPLE_CHARS = 200
@@ -177,11 +174,6 @@ VERDICTS = ["confirmed", "wrong_person", "needs_review"]
 # pass (heal_review) selects exactly these rows for its fetch->judge|terminate
 # sweep, so the string lives once.
 NO_PROFILE_REASON = "no usable LinkedIn profile"
-
-# Backwards-compatible name used by the review UI and tests. The storage
-# implementation lives outside LinkedIn reconciliation so identity is not a
-# second worth writer.
-_write_override_rows = write_override_rows
 
 SYSTEM_PROMPT = load_prompt("linkedin_reconcile_system")
 
@@ -776,8 +768,7 @@ def research_reject_fields(verdict: dict[str, Any], confirm_threshold: float) ->
     `llm_reject=yes` + reason so the human still sees WHY — the row is never deleted. A confident
     `confirmed` leaves the columns clear (the retarget stands) AND carries the JUDGE's confidence
     as the proposal `confidence` — replacing the research guess through the same
-    `proposal.update(...)` every caller already does — so the stored promotion rule
-    (resolve_stored_identity_policy rule (5)) reads the judge's bar, not the researcher's."""
+    `proposal.update(...)` every caller already does."""
     v = str(verdict.get("verdict") or "").strip().lower()
     conf = float(verdict.get("confidence") or 0)
     if v == "confirmed" and conf >= confirm_threshold:
@@ -829,7 +820,7 @@ CONFLICT_KEEP = ("confirm", "conflict_resolved")
 CONFLICT_DROP = ("detach", "conflict_resolved")
 
 # A DECISIVE confirm ends its conflict group outright (shared bar in
-# review_store — the stored-row legacy scrub applies the same policy).
+# The same thresholds drive both stored machine state and current decisions.
 DECISIVE_CONFIRM = DECISIVE_CONFIRM_THRESHOLD
 
 
@@ -963,7 +954,40 @@ def _name_match_review_reason(review: dict[str, Any], competing_url: str = "") -
     return reason
 
 
-def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+def _identity_projection(db: Db, key: str, **updates: Any) -> IdentityMachineProjection:
+    rows = db.query(
+        "SELECT * FROM links WHERE row_key=? OR lower(public_identifier)=? "
+        "ORDER BY CASE WHEN row_key=? THEN 0 ELSE 1 END LIMIT 1",
+        (key, key.lower(), key),
+    )
+    if not rows:
+        raise StoreError(f"unknown identity candidate: {key}")
+    row = rows[0]
+    values = {
+        "row_key": row["row_key"],
+        "machine_action": row["machine_action"],
+        "machine_approved": row["machine_approved"],
+        "machine_confidence": row["machine_confidence"],
+        "machine_reason": row["machine_reason"],
+        "machine_judgment": row["machine_judgment"],
+        "machine_reject": row["machine_reject"],
+        "machine_reject_confidence": row["machine_reject_confidence"],
+        "machine_reject_reason": row["machine_reject_reason"],
+        "machine_proposed_url": row["machine_proposed_url"],
+        "machine_proposed_public_identifier": row["machine_proposed_public_identifier"],
+        "authoritative_detach": row["authoritative_detach"],
+        "paid_profile": row["paid_profile"],
+        "judgment_fingerprint": row["judgment_fingerprint"],
+        "judgment_artifact_path": row["judgment_artifact_path"],
+        "judgment_payload_json": row["judgment_payload_json"],
+        "source": row["source"],
+        "updated_at": now_iso(),
+    }
+    values.update(updates)
+    return IdentityMachineProjection(**values)
+
+
+def upsert_name_match_reviews(db: Db, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Persist a VISIBLE needs_review row for each unconfirmed unique name match (see
     revert_unconfirmed_name_matches). Keyed on the connection's public_identifier like every other
     review row, action=review, approved= pending, with a reason naming the connection so the human
@@ -972,8 +996,8 @@ def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]]) -> dict[s
     mentions that competing proposal so both options sit side by side."""
     reviews = [t["name_match_review"] for t in tasks if t.get("name_match_review")]
     if not reviews:
-        return {"path": str(path), "name_match_reviews": 0, "preserved_user_rows": 0}
-    existing = load_override_rows(path)
+        return {"path": str(db.db_path), "name_match_reviews": 0, "preserved_user_rows": 0}
+    existing = db.rows()
     # Map a parent's person_ids to any pending research retarget URL, so competing options cross-link.
     competing_by_pid: dict[str, str] = {}
     for pub, row in existing.items():
@@ -996,21 +1020,14 @@ def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]]) -> dict[s
         competing_url = ""
         for pid in review.get("person_ids") or []:
             competing_url = competing_by_pid.get(str(pid).strip().lower()) or competing_url
-        prior = existing.get(pub, {})
-        row = {column: prior.get(column, "") for column in OVERRIDE_COLUMNS}
-        row.update({
-            "public_identifier": pub, "action": "review", "approved": "",
-            "new_linkedin_url": review.get("connection_url", ""),
-            "new_public_identifier": pub,
-            "linkedin_url": review.get("connection_url", ""),
-            "match_emails": "|".join(review.get("match_emails") or []),
-            "match_phones": "|".join(review.get("match_phones") or []),
+        existing[pub] = {
+            **existing.get(pub, {}), "public_identifier": pub, "action": "review",
+            "approved": "", "new_linkedin_url": review.get("connection_url", ""),
+            "new_public_identifier": pub, "linkedin_url": review.get("connection_url", ""),
             "confidence": f"{float(review.get('confidence') or 0):.3f}",
             "reason": _name_match_review_reason(review, competing_url),
             "person_id": (review.get("person_ids") or [""])[0],
-            "source": "deep-context-name-match", "updated_at": now_iso(),
-        })
-        existing[pub] = row
+        }
         written += 1
     # Cross-link the other direction: a pending research retarget competing with a surfaced name
     # match mentions it too, so the human sees both options from either row.
@@ -1030,8 +1047,18 @@ def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]]) -> dict[s
                 f"{review.get('connection_name') or 'a connection'})")
         if note.strip() not in (row.get("reason") or ""):
             row["reason"] = (row.get("reason") or "") + note
-    commit_review_rows(path, existing)
-    return {"path": str(path), "name_match_reviews": written, "preserved_user_rows": preserved}
+    projections = tuple(
+        _identity_projection(
+            db, pub, machine_action="review", machine_approved=None,
+            machine_confidence=float(row.get("confidence") or 0),
+            machine_reason=row.get("reason") or "", source=ReviewSource.NAME_MATCH.value,
+        )
+        for pub, row in existing.items()
+        if pub in {(review.get("connection_pub") or "").strip().lower() for review in reviews}
+        and (row.get("approved") or "").strip().lower() not in USER_APPROVED
+    )
+    db.project_identity(projections)
+    return {"path": str(db.db_path), "name_match_reviews": written, "preserved_user_rows": preserved}
 
 
 # --- durable override (consumed by the fan-in merge) ------------------------
@@ -1041,7 +1068,7 @@ def upsert_name_match_reviews(path: Path, tasks: list[dict[str, Any]]) -> dict[s
 _VERDICT_TO_ACTION = {"wrong_person": "detach", "confirmed": "verify", "needs_review": "verify"}
 
 
-def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+def write_overrides(db: Db, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Upsert LinkedIn identity decisions without judging or rewriting worth.
 
     High-confidence (action confirm/detach) -> `approved=auto` (applied at merge).
@@ -1052,7 +1079,8 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     USER has touched (approved ∈ {yes,no}) is NEVER overwritten — sticky across re-runs.
     Synthesis is the sole machine writer for llm_worth; this identity writer merely carries
     any existing worth fields forward when a person-id row acquires a LinkedIn-keyed row."""
-    existing = load_override_rows(path)
+    existing = db.rows()
+    projections: list[IdentityMachineProjection] = []
     detach = verify = pending = preserved = 0
     for t in tasks:
         if t.get("no_link"):
@@ -1071,54 +1099,38 @@ def write_overrides(path: Path, tasks: list[dict[str, Any]]) -> dict[str, Any]:
             ov_action, approved = "detach", "auto"
         else:  # review -> pending, suggest an action from the verdict
             ov_action, approved = _VERDICT_TO_ACTION.get(v.get("verdict", ""), "verify"), ""
-        person_id = (t.get("person_ids") or [""])[0]
-        prior = existing.get(pub, {})
-        if not prior and person_id:
-            person_keys = row_keys_for_person(existing, person_id)
-            prior = existing.get(person_keys[0], {}) if person_keys else {}
-        carried = {column: prior.get(column, "") for column in (
-            "llm_reject", "llm_reject_confidence", "llm_reject_reason",
-            "llm_worth", "llm_worth_reason", "network_worth",
-            # Human-owned worth metadata rides with network_worth: membership
-            # keeps decisions surviving reclustering, and the reviewer's typed
-            # "why" note must never be wiped by a machine rerun.
-            "worth_person_ids", "user_worth_note",
-        )}
-        existing[pub] = {
-            "public_identifier": pub, "action": ov_action, "approved": approved,
-            "new_linkedin_url": "", "new_public_identifier": "",
-            "linkedin_url": (t.get("linkedin") or {}).get("linkedin_url", ""),
-            "match_emails": "|".join(t.get("match_emails") or []),
-            "match_phones": "|".join(t.get("match_phones") or []),
-            "confidence": f"{float(v.get('confidence') or 0):.3f}",
-            "reason": v.get("reason", ""), "person_id": person_id,
-            "source": "deep-context-reconcile", "updated_at": now_iso(),
-            **carried,
-        }
+        projections.append(_identity_projection(
+            db, pub, machine_action=ov_action, machine_approved=approved or None,
+            machine_confidence=float(v.get("confidence") or 0),
+            machine_reason=v.get("reason") or "", machine_judgment=v.get("verdict") or None,
+            authoritative_detach=int(ov_action == "detach" and approved == "auto"),
+            judgment_payload_json=json.dumps(v, sort_keys=True),
+            source=ReviewSource.RECONCILE.value,
+        ))
         if approved == "auto":
             detach += ov_action == "detach"
             verify += ov_action == "verify"
         else:
             pending += 1
 
-    commit_review_rows(path, existing)
-    return {"path": str(path), "detached": detach, "verified": verify, "pending": pending,
+    db.project_identity(tuple(projections))
+    return {"path": str(db.db_path), "detached": detach, "verified": verify, "pending": pending,
             "preserved_user_rows": preserved, "total_rows": len(existing)}
 
 
-def count_pending(path: Path) -> int:
+def count_pending(db: Db) -> int:
     """Rows awaiting the user's decision (pending or rejected-but-revisitable)."""
-    return sum(1 for key, r in load_override_rows(path).items()
-               if not is_parent_worth_row(r, key)
+    return sum(1 for r in db.rows().values()
                if (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no"))
 
 
-def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, Any]:
+def upsert_retargets(db: Db, proposals: list[dict[str, Any]]) -> dict[str, Any]:
     """Add/refresh `retarget` rows (the CORRECT LinkedIn for a detached person) into the same
     decisions table. Default `approved=` pending (re-attaching a wrong identity is worse than
     dropping, so it needs a `yes`) unless a proposal sets it. Same sticky upsert: a row the user
     already decided (approved in {yes,no}) is preserved. Used by deep research + manual edits."""
-    existing = load_override_rows(path)
+    existing = db.rows()
+    projections: list[IdentityMachineProjection] = []
     proposed = preserved = 0
     for p in proposals:
         old_pub = (p.get("old_public_identifier") or "").strip().lower()
@@ -1128,40 +1140,30 @@ def upsert_retargets(path: Path, proposals: list[dict[str, Any]]) -> dict[str, A
         if (existing.get(old_pub, {}).get("approved") or "").strip().lower() in USER_APPROVED:
             preserved += 1
             continue
-        prior = existing.get(old_pub, {})
-        row = {column: prior.get(column, "") for column in OVERRIDE_COLUMNS}
-        row.update({
-            "public_identifier": old_pub, "action": "retarget",
-            "approved": (p.get("approved") or "").strip().lower(),
-            "new_linkedin_url": new_url,
-            "new_public_identifier": (p.get("new_public_identifier") or extract_public_identifier(new_url)).lower(),
-            "linkedin_url": p.get("linkedin_url") or prior.get("linkedin_url", ""),
-            "match_emails": "|".join(p.get("match_emails") or []) or prior.get("match_emails", ""),
-            "match_phones": "|".join(p.get("match_phones") or []) or prior.get("match_phones", ""),
-            "confidence": f"{float(p.get('confidence') or 0):.3f}",
-            "reason": p.get("reason", ""), "person_id": p.get("person_id", prior.get("person_id", "")),
-            "source": p.get("source", "deep-research"), "updated_at": now_iso(),
-        })
-        # A judged proposal carries the machine-owned llm_reject* verdict so a rejected guess
-        # renders in the UI as "rejected + why" instead of silently vanishing. Only overwrite
-        # these columns when the proposal actually judged (keys present); otherwise keep prior.
+        updates: dict[str, Any] = {
+            "machine_action": "retarget",
+            "machine_approved": (p.get("approved") or "").strip().lower() or None,
+            "machine_confidence": float(p.get("confidence") or 0),
+            "machine_reason": p.get("reason") or "",
+            "machine_proposed_url": new_url,
+            "machine_proposed_public_identifier": (
+                p.get("new_public_identifier") or extract_public_identifier(new_url)
+            ).lower(),
+            "paid_profile": 1,
+            "source": p.get("source") or ReviewSource.DEEP_RESEARCH.value,
+        }
         if "llm_reject" in p:
-            row.update({
-                "llm_reject": p.get("llm_reject", ""),
-                "llm_reject_confidence": p.get("llm_reject_confidence", ""),
-                "llm_reject_reason": p.get("llm_reject_reason", ""),
+            updates.update({
+                "machine_reject": p.get("llm_reject") or None,
+                "machine_reject_confidence": float(p.get("llm_reject_confidence") or 0),
+                "machine_reject_reason": p.get("llm_reject_reason") or None,
             })
-        # The evidence sha the judge saw (or a grandfather stamp for rows judged
-        # before the cache existed). Absent key -> prior fingerprint carries over.
         if "judge_fingerprint" in p:
-            row["llm_judge_fingerprint"] = str(p.get("judge_fingerprint") or "")
-        # Retarget research changes only identity fields. Preserve both the
-        # human-owned network_worth mark and the latest synthesis-owned worth
-        # columns so a found LinkedIn cannot silently change the People decision.
-        existing[old_pub] = row
+            updates["judgment_fingerprint"] = str(p.get("judge_fingerprint") or "")
+        projections.append(_identity_projection(db, old_pub, **updates))
         proposed += 1
-    commit_review_rows(path, existing)
-    return {"path": str(path), "proposed": proposed, "preserved_user_rows": preserved, "total_rows": len(existing)}
+    db.project_identity(tuple(projections))
+    return {"path": str(db.db_path), "proposed": proposed, "preserved_user_rows": preserved, "total_rows": len(existing)}
 
 
 def union_child_contacts(
@@ -1291,14 +1293,14 @@ def decided_report(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def write_summary(path: Path, tasks: list[dict[str, Any]], override_path: Path,
+def write_summary(path: Path, tasks: list[dict[str, Any]], db: Db,
                   consolidation: dict[str, Any]) -> None:
     """ONE human-readable report — what changed + what needs review. The user reads this and
     edits ONE file (the decisions table) to approve/reject."""
     detached = [t for t in tasks if t.get("action") == "detach"]
     verified = sum(1 for t in tasks if t.get("action") == "confirm")
     no_link = sum(1 for t in tasks if t.get("no_link"))
-    ov = load_override_rows(override_path)
+    ov = db.rows()
 
     def _is_pending(r: dict[str, Any]) -> bool:
         return (r.get("approved") or "").strip().lower() not in ("auto", "yes", "no")
@@ -1342,9 +1344,8 @@ def write_summary(path: Path, tasks: list[dict[str, Any]], override_path: Path,
     if not total_review:
         lines.append("_Nothing — every decision was high-confidence._")
 
-    lines += ["", "---", "_The one file to edit: "
-              "`.powerpacks/network-import/overrides/review.csv` (`approved` column, sticky). "
-              "Drill-down: `reconcile/applied.csv`._"]
+    lines += ["", "---", "_Review decisions in `bin/deep-context review linkedin`; "
+              "drill-down: `reconcile/applied.csv`._"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1598,26 +1599,6 @@ class ReconcileLinkedin(Node):
         # Contact-only fold rows for kept parents; persist_review_identities
         # reads them into the directory at realization.
         Artifact(path=str(CONSOLIDATE_PEOPLE_CSV), writes="full_rewrite", required=False),
-        # The identity slice of the shared review table: exactly the columns this
-        # module AUTHORS (write_overrides / upsert_retargets /
-        # upsert_name_match_reviews; upsert_retargets is also the sole
-        # llm_judge_fingerprint writer anywhere). The llm_worth family is
-        # synthesize's, network_worth is the human's, and the row-bookkeeping
-        # columns every writer stamps when minting a row (public_identifier,
-        # person_id, source, updated_at) are deliberately UNCLAIMED by all
-        # writers — shared bookkeeping, not ownership.
-        Artifact(
-            path=str(LINKEDIN_OVERRIDES_CSV),
-            row_model=ReviewRow,
-            writes="upsert",
-            owns_columns=(
-                "action", "approved", "new_linkedin_url",
-                "new_public_identifier", "linkedin_url", "match_emails",
-                "match_phones", "confidence", "reason",
-                "llm_judge_fingerprint",
-            ),
-            required=False,  # --no-overrides completes without writing it
-        ),
     )
     payload = ReconcileLinkedinManifest
     manifest = str(RECONCILE_DIR / "manifest.json")
@@ -1625,6 +1606,7 @@ class ReconcileLinkedin(Node):
     def __init__(
         self,
         *,
+        db: Db,
         index_json: Path | None = None,
         people_csv: Path | None = None,
         profile_cache_dir: Path | None = None,
@@ -1648,6 +1630,7 @@ class ReconcileLinkedin(Node):
         no_llm: bool = False,
         reapply: bool = False,
     ) -> None:
+        self.db = db
         self.index_json = Path(index_json or INDEX_JSON)
         self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
@@ -1682,7 +1665,6 @@ class ReconcileLinkedin(Node):
             str(VERDICTS_JSONL): str(self.verdicts_jsonl),
             str(VERDICTS_CSV): str(self.verdicts_csv),
             str(SUMMARY_MD): str(out_dir / "summary.md"),
-            str(LINKEDIN_OVERRIDES_CSV): str(self.overrides_csv),
             self.manifest: str(out_dir / "manifest.json"),
         }
 
@@ -1812,22 +1794,26 @@ class ReconcileLinkedin(Node):
             if task.get("verdict") and not task.get("no_link"):
                 inject_section(self.parents_dir / f"{task['parent_slug']}.md", render_section(task["verdict"], task["linkedin"]))
 
-        override_stats = {"path": str(self.overrides_csv), "detached": 0, "verified": 0, "pending": 0, "total_rows": 0}
+        override_stats = {"path": str(self.db.db_path), "detached": 0, "verified": 0, "pending": 0, "total_rows": 0}
         consolidation = {"consolidated_parents": 0}
         self_retargets = {"proposed": 0}
         name_match_reviews = {"name_match_reviews": 0}
         if not self.no_overrides:
-            override_stats = write_overrides(self.overrides_csv, tasks)
+            write_tasks = ([task for task in tasks if task.get("parent_slug") in set(self.slug)]
+                           if self.slug else tasks)
+            override_stats = write_overrides(self.db, write_tasks)
             # Free recovery: retarget to a LinkedIn the contact shared themselves (overrides any
             # detach/verify on the wrong attached link). Sticky — won't clobber a user decision.
-            self_retargets = upsert_retargets(self.overrides_csv, self_reported_retargets(tasks))
+            self_retargets = upsert_retargets(self.db, self_reported_retargets(write_tasks))
             # Surface (don't vanish) each unique first-degree name match the judge couldn't corroborate:
             # a visible needs_review row naming the connection so the human confirms or rejects it.
-            name_match_reviews = upsert_name_match_reviews(self.overrides_csv, tasks)
+            name_match_reviews = upsert_name_match_reviews(self.db, write_tasks)
             # Fold each parent's children's contacts onto its kept LinkedIn (trust Phase 2).
-            consolidation = write_consolidations(self.consolidate_people_csv, tasks, self.people_csv)
+            consolidation = write_consolidations(
+                self.consolidate_people_csv, write_tasks, self.people_csv
+            )
         write_applied(out_dir / "applied.csv", decided_report(tasks))
-        write_summary(out_dir / "summary.md", tasks, self.overrides_csv, consolidation)
+        write_summary(out_dir / "summary.md", tasks, self.db, consolidation)
 
         counts = {v: 0 for v in VERDICTS}
         for task in tasks:
@@ -1888,6 +1874,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-retries", type=int, default=6)
     p.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV),
                    help="Durable override the fan-in merge re-applies (detach/verify per public_identifier)")
+    p.add_argument("--db", default=str(CANONICAL_DB), help="Canonical Deep Context SQLite store")
     p.add_argument("--consolidate-people-csv", default=str(CONSOLIDATE_PEOPLE_CSV),
                    help="Contact-only rows folding each parent's children onto its kept LinkedIn")
     p.add_argument("--slug", action="append", default=None,
@@ -1916,6 +1903,7 @@ def main(argv: list[str] | None = None) -> int:
         ))
         return 0
     payload = ReconcileLinkedin(
+        db=Db(Path(args.db)),
         index_json=Path(args.index_json),
         people_csv=Path(args.people_csv),
         profile_cache_dir=Path(args.profile_cache_dir),

@@ -16,9 +16,6 @@ Only rows with action=retarget AND approved ∈ {auto, yes} are applied (a user 
 retarget is skipped). Enrichment is automatic (RapidAPI is cache-first + effectively free).
 
 Changelog:
-  2026-07-30 (style): `USER_APPROVED` / `load_override_rows` are imported from their
-    definition home (`review_store`) instead of through `reconcile_linkedin`, which
-    only re-exported them. Same objects — no behavior change.
   2026-07-27 (declared contract): `ApplyRetargets` is a `pipeline/contract.py:Node`.
     It DECLARES the review decisions, merged people.csv, and profile cache it reads
     and `overrides/retarget-people.csv` (row model `PeopleRow`, the header it has
@@ -51,14 +48,15 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_DIR,
     PROFILE_CACHE_TEMPLATE,
     RETARGET_PEOPLE_CSV,
+    ROOT,
 )
+from packs.ingestion.primitives.deep_context.db import batons
+from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
+    IdentityMachineProjection,
+)
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.review_store import (
-    USER_APPROVED,
-    judge_accepted_candidate_retarget,
-    load_override_rows,
-    write_override_rows,
-)
 from packs.ingestion.primitives.enrich.profile_transforms import (
     merge_provider_profile,
     normalize_rapidapi,
@@ -70,13 +68,43 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
 )
-from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 
 # Contact identity carried from the original (detached) person onto the re-attached row,
 # so the merge groups the re-enriched person with their real messages/contacts.
 CARRY_COLUMNS = ["primary_email", "all_emails", "primary_phone", "all_phones",
                  "interaction_counts", "last_interaction", "source_channels"]
-APPLY_APPROVED = {"auto"} | USER_APPROVED  # auto or yes (never pending / no)
+USER_APPROVED = {ApprovedState.YES.value, ApprovedState.NO.value}
+APPLY_APPROVED = {ApprovedState.AUTO.value, ApprovedState.YES.value}
+CANONICAL_DB = ROOT / "deep-context.sqlite"
+
+
+def judge_accepted_candidate_retarget(row: dict[str, Any]) -> bool:
+    """Candidate-origin accepted match; a human yes/no remains terminal."""
+    return (
+        str(row.get("action") or "").strip().lower() == "retarget"
+        and str(row.get("approved") or "").strip().lower() not in USER_APPROVED
+        and str(row.get("person_id") or "").strip().lower().startswith("candidate:")
+        and str(row.get("llm_reject") or "").strip().lower() not in {"yes", "true", "1", "spam"}
+    )
+
+
+def _projection_with_approval(db_row: Any, approved: str) -> IdentityMachineProjection:
+    """Preserve the machine projection and update only its realization marker."""
+    return IdentityMachineProjection(
+        row_key=db_row["row_key"], machine_action=db_row["machine_action"],
+        machine_approved=approved, machine_confidence=db_row["machine_confidence"],
+        machine_reason=db_row["machine_reason"], machine_judgment=db_row["machine_judgment"],
+        machine_reject=db_row["machine_reject"],
+        machine_reject_confidence=db_row["machine_reject_confidence"],
+        machine_reject_reason=db_row["machine_reject_reason"],
+        machine_proposed_url=db_row["machine_proposed_url"],
+        machine_proposed_public_identifier=db_row["machine_proposed_public_identifier"],
+        authoritative_detach=db_row["authoritative_detach"], paid_profile=db_row["paid_profile"],
+        judgment_fingerprint=db_row["judgment_fingerprint"],
+        judgment_artifact_path=db_row["judgment_artifact_path"],
+        judgment_payload_json=db_row["judgment_payload_json"], source=db_row["source"],
+        updated_at=now_iso(),
+    )
 
 
 def load_people_index(people_csv: Path) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
@@ -155,10 +183,8 @@ class ApplyRetargets(Node):
     # All optional: an absent review table or people.csv simply yields no
     # appliable retargets (the pre-review pipeline state, not an error), and an
     # absent profile-cache entry is the miss this stage hydrates.
-    # NOT declared as outputs, both documented annotate-writes: (1) this stage
-    # stamps `approved=yes` finalization markers back onto realized retarget
-    # rows in review.csv (`write_override_rows`) — reconcile owns that column
-    # slice and a second claimant would pin a permanent conflict; (2) a profile
+    # NOT declared as outputs: the SQLite machine projection records realized
+    # retargets, while a profile
     # cache miss hydrates the EXTERNAL RapidAPI cache in place
     # (`rapidapi_profile`), which no single node owns.
     inputs = (
@@ -179,11 +205,13 @@ class ApplyRetargets(Node):
     def __init__(
         self,
         *,
+        db: Db,
         overrides_csv: Path | None = None,
         people_csv: Path | None = None,
         profile_cache_dir: Path | None = None,
         out_csv: Path | None = None,
     ) -> None:
+        self.db = db
         self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
         self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
@@ -199,7 +227,9 @@ class ApplyRetargets(Node):
 
     def execute(self) -> ApplyRetargetsManifest:
         started = time.monotonic()
-        overrides = load_override_rows(self.overrides_csv)
+        # This CSV is an explicit downstream baton, not the runtime record.
+        self.db.export_batons(self.overrides_csv)
+        overrides = batons.load_override_rows(self.overrides_csv)
         by_pub, by_id = load_people_index(self.people_csv)
 
         # Marker lifecycle: retarget-people.csv is overwritten each run and the
@@ -238,10 +268,21 @@ class ApplyRetargets(Node):
             if not resolvable:
                 stranded.append({"old": old_pub, "new": new_pub})
         if finalized:
-            commit_review_rows(self.overrides_csv, overrides)
+            realized_keys = {
+                key for key, row in overrides.items()
+                if (row.get("public_identifier") or "").strip().lower() in realized_pubs
+            }
+            current = self.db.query(
+                "SELECT * FROM links WHERE row_key IN ("
+                + ",".join("?" for _ in realized_keys) + ")",
+                tuple(realized_keys),
+            ) if realized_keys else []
+            self.db.project_identity(tuple(
+                _projection_with_approval(row, ApprovedState.YES.value) for row in current
+            ))
 
         # Appliable: humanly/auto approved, plus judge-accepted candidate-origin
-        # found profiles (their acceptance stands; see review_store's predicate).
+        # found profiles whose accepted machine verdict stands.
         # Real-network retargets still require the human/auto approval.
         retargets = [r for r in all_markers
                      if (r.get("public_identifier") or "").strip().lower() not in realized_pubs
@@ -302,6 +343,7 @@ class ApplyRetargets(Node):
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Enrich + build re-attach rows for approved retargets.")
     p.add_argument("--overrides-csv", default=str(LINKEDIN_OVERRIDES_CSV))
+    p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     p.add_argument("--profile-cache-dir", default=str(PROFILE_CACHE_DIR))
     p.add_argument("--out-csv", default=str(RETARGET_PEOPLE_CSV))
@@ -312,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_no_review_session("apply_retargets")
     args = build_parser().parse_args(argv)
     payload = ApplyRetargets(
+        db=Db(Path(args.db)),
         overrides_csv=Path(args.overrides_csv),
         people_csv=Path(args.people_csv),
         profile_cache_dir=Path(args.profile_cache_dir),

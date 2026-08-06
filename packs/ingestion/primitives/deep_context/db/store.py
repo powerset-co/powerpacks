@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import now_iso
+from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePersonRow,
@@ -472,8 +473,6 @@ class Db:
 
     def rows(self) -> dict[str, dict[str, str]]:
         """Explicit review.csv projection; runtime never reads this export."""
-        from packs.ingestion.primitives.deep_context.db import batons
-
         out: dict[str, dict[str, str]] = {}
         for link in self.query(
             "SELECT l.*, (SELECT person_id FROM candidate_people cp "
@@ -514,8 +513,6 @@ class Db:
         return out
 
     def export_batons(self, review_csv: Path, synthetic_csv: Path | None = None) -> None:
-        from packs.ingestion.primitives.deep_context.db import batons
-
         batons.write_override_rows(review_csv, self.rows())
         if synthetic_csv is None:
             return

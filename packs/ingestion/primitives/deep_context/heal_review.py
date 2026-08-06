@@ -10,8 +10,7 @@ broken"); --cap is an optional manual bound and a capped run says what it
 left behind.
 
 What this actually does, in order:
-  1. LEGACY SCRUBS — `ensure_owner_phones` + `resolve_stored_identity_policy`,
-     exactly as the review server runs them at boot (idempotent; kept there too).
+  1. OWNER BACKFILL — preserve the one supported owner-phone compatibility fix.
   2. FETCH — select every UNDECIDED candidate whose stored verdict is the
      judge-skip ("needs_review", confidence 0.0, no usable LinkedIn profile)
      with an attached URL, and ask the RapidAPI client for FRESH truth: one
@@ -45,7 +44,6 @@ outlives these writes.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import sys
@@ -56,10 +54,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.common.legacy import (
-    ensure_owner_phones,
-    resolve_stored_identity_policy,
-)
+from packs.ingestion.primitives.common.legacy import ensure_owner_phones
 from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import (
     AssembleSyntheticProfile,
     profile_is_usable,
@@ -75,31 +70,22 @@ from packs.ingestion.primitives.deep_context.common import (
     PROFILE_CACHE_DIR,
     RAW_DIR,
     REVIEW_MANIFEST,
+    ROOT,
     VERDICTS_CSV,
     VERDICTS_JSONL,
     emit,
     ensure_no_review_session,
     load_env,
-    now_iso,
     read_jsonl,
 )
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     NO_PROFILE_REASON,
     ReconcileLinkedin,
+    _identity_projection,
     count_pending,
 )
-from packs.ingestion.primitives.deep_context.review_store import (
-    HEAL_DETACH_SOURCE,
-    OVERRIDE_COLUMNS,
-    load_override_rows,
-    write_override_rows,
-)
-from packs.ingestion.primitives.deep_context.review_web.decisions import (
-    apply_synthetic_decision,
-)
-from packs.ingestion.primitives.deep_context.review_web.model import (
-    SYNTHETIC_PEOPLE_CSV,
-)
+from packs.ingestion.primitives.deep_context.db.models import ApprovedState, ReviewSource
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.enrich.rapidapi_client import (
     PROFILE_CONTENT,
     PROFILE_EMPTY,
@@ -107,7 +93,6 @@ from packs.ingestion.primitives.enrich.rapidapi_client import (
 )
 from packs.ingestion.primitives.imports.common import write_manifest
 from packs.ingestion.schemas.people_schema import extract_public_identifier
-from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 
 # UNCAPPED by default (owner directive 2026-08-05): the heal is a definitive
 # always-run task and a silent cap reads as "heal ran, still broken" — the
@@ -116,6 +101,8 @@ from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
 # run SAYS what it left behind.
 HEAL_BATCH_CAP: int | None = None
 _FETCH_WORKERS = 8
+CANONICAL_DB = ROOT / "deep-context.sqlite"
+SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
 
 
 @dataclass(frozen=True)
@@ -140,6 +127,7 @@ class HealReview:
     def __init__(
         self,
         *,
+        db: Db,
         review_csv: Path | None = None,
         verdicts_jsonl: Path | None = None,
         verdicts_csv: Path | None = None,
@@ -155,6 +143,7 @@ class HealReview:
         review_manifest: Path | None = None,
         cap: int | None = HEAL_BATCH_CAP,
     ) -> None:
+        self.db = db
         self.review_csv = Path(review_csv or LINKEDIN_OVERRIDES_CSV)
         self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
         self.verdicts_csv = Path(verdicts_csv or VERDICTS_CSV)
@@ -180,7 +169,7 @@ class HealReview:
         undecided (approved not in yes/no/auto). A pending retarget proposing
         a DIFFERENT profile is already a live review card and is left to that
         flow. Human yes/no rows are never candidates."""
-        rows = load_override_rows(self.review_csv)
+        rows = self.db.rows()
         seen: set[str] = set()
         out: list[HealCandidate] = []
         skipped_retarget = 0
@@ -264,20 +253,8 @@ class HealReview:
             return summary
         _say(f"re-judging {len(candidates)} candidates across {len(parents)} people "
              "(OpenAI, ~cents)")
-        # The subset pass's write_overrides restamps EVERY machine row from the
-        # stored verdicts, which would erase pending deep-research retarget
-        # proposals on rows OUTSIDE the healed scope. Snapshot them and restore
-        # any collateral loss after the run — a freshly judged pub keeps its
-        # new verdict (the proposal was made against the old, profile-less
-        # evidence), and a row the pass decided (auto/yes/no) stands.
-        healed_pubs = {c.pub for c in candidates}
-        saved_retargets = {
-            pub: dict(row) for pub, row in load_override_rows(self.review_csv).items()
-            if pub not in healed_pubs
-            and (row.get("action") or "").strip().lower() == "retarget"
-            and (row.get("approved") or "").strip().lower() not in {"yes", "no"}
-            and (row.get("new_linkedin_url") or "").strip()}
         ReconcileLinkedin(
+            db=self.db,
             index_json=self.index_json,
             people_csv=self.people_csv,
             profile_cache_dir=self.profile_cache_dir,
@@ -290,17 +267,7 @@ class HealReview:
             consolidate_people_csv=self.review_csv.parent / "consolidate-people.csv",
             slug=parents,
         ).run()
-        rows = load_override_rows(self.review_csv)
-        restored = 0
-        for pub, saved in saved_retargets.items():
-            now = rows.get(pub) or {}
-            if ((now.get("action") or "").strip().lower() != "retarget"
-                    and not (now.get("approved") or "").strip()):
-                rows[pub] = saved
-                restored += 1
-        if restored:
-            commit_review_rows(self.review_csv, rows)
-        summary["restored_pending_retargets"] = restored
+        rows = self.db.rows()
         for candidate in candidates:
             row = rows.get(candidate.pub) or {}
             action = (row.get("action") or "").strip().lower()
@@ -318,16 +285,16 @@ class HealReview:
     def _synthetic_gates(self) -> dict[str, tuple[str, str]]:
         """review-key -> (synthetic pub, current approved gate)."""
         gates: dict[str, tuple[str, str]] = {}
-        if not self.synthetic_csv.exists():
-            return gates
-        with self.synthetic_csv.open(newline="", encoding="utf-8") as fh:
-            for row in csv.DictReader(fh):
-                pub = (row.get("public_identifier") or "").strip().lower()
-                if not pub.startswith("synth-"):
-                    continue
-                approved = (row.get("approved") or "").strip().lower()
-                for key in {pub, (row.get("id") or "").strip().lower()} - {""}:
-                    gates[key] = (pub, approved)
+        for row in self.db.query(
+            "SELECT sp.public_identifier, sp.candidate_key, l.decision_approved, "
+            "l.machine_approved, cp.person_id FROM synthetic_profiles sp "
+            "JOIN links l ON l.row_key=sp.candidate_key "
+            "LEFT JOIN candidate_people cp ON cp.row_key=sp.candidate_key"
+        ):
+            pub = row["public_identifier"].lower()
+            approved = (row["decision_approved"] or row["machine_approved"] or "").lower()
+            for key in {pub, row["candidate_key"].lower(), (row["person_id"] or "").lower()} - {""}:
+                gates[key] = (row["candidate_key"], approved)
         return gates
 
     def _research_mintable(self, candidate: HealCandidate) -> bool:
@@ -362,7 +329,9 @@ class HealReview:
                 dst.mkdir(parents=True, exist_ok=True)
                 (dst / "01_research_parallel.json").write_text(
                     json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.db.export_batons(self.review_csv, self.synthetic_csv)
             payload = AssembleSyntheticProfile(
+                db=self.db,
                 research_dir=scratch_dir,
                 queue_csv=scratch_dir / "research_queue.csv",  # absent: scope = scratch dirs
                 people_csv=self.people_csv,
@@ -382,46 +351,42 @@ class HealReview:
                                    "assemble": None}
         if not candidates:
             return summary
-        rows = load_override_rows(self.review_csv)
+        rows = self.db.rows()
         gates = self._synthetic_gates()
         mintable: list[HealCandidate] = []
+        projections = []
         for candidate in candidates:
-            row = rows.get(candidate.pub)
-            if row is None:
-                row = {column: "" for column in OVERRIDE_COLUMNS}
-                rows[candidate.pub] = row
+            row = rows.get(candidate.pub) or {}
             if (row.get("approved") or "").strip().lower() in {"yes", "no"}:
                 summary["skipped_human_decided"] += 1  # a human raced us — their word stands
                 continue
-            row.update({
-                "public_identifier": candidate.pub,
-                "action": "detach", "approved": "auto",
-                "new_linkedin_url": "", "new_public_identifier": "",
-                "linkedin_url": row.get("linkedin_url") or candidate.url,
-                "confidence": "1.000",
-                "reason": "attached LinkedIn returned no profile content on a fresh fetch (dead link)",
-                "match_emails": row.get("match_emails") or "|".join(candidate.match_emails),
-                "match_phones": row.get("match_phones") or "|".join(candidate.match_phones),
-                "person_id": row.get("person_id") or (candidate.person_ids[0] if candidate.person_ids else ""),
-                "source": HEAL_DETACH_SOURCE, "updated_at": now_iso(),
-            })
+            projections.append(_identity_projection(
+                self.db, candidate.pub, machine_action="detach", machine_approved="auto",
+                machine_confidence=1.0,
+                machine_reason="attached LinkedIn returned no profile content on a fresh fetch (dead link)",
+                authoritative_detach=1, source=ReviewSource.HEAL.value,
+            ))
             summary["detached"] += 1
             # Free identity ladder: existing synthetic row -> research mint -> pending card.
             gate = next((gates[key] for key in
                          (candidate.pub, *(pid.strip().lower() for pid in candidate.person_ids))
                          if key in gates), None)
             if gate is not None:
-                synth_pub, approved = gate
+                synth_key, approved = gate
                 if approved in {"yes", "no"}:
                     summary["stood_synthetic"] += approved == "yes"  # user-gated: their word stands
                 else:
-                    apply_synthetic_decision(self.synthetic_csv, synth_pub, "keep")
+                    projections.append(_identity_projection(
+                        self.db, synth_key, machine_action="verify",
+                        machine_approved=ApprovedState.AUTO.value,
+                        source=ReviewSource.HEAL.value,
+                    ))
                     summary["stood_synthetic"] += 1
             elif self._research_mintable(candidate):
                 mintable.append(candidate)
             else:
                 summary["pending_reresearch"] += 1
-        commit_review_rows(self.review_csv, rows)
+        self.db.project_identity(tuple(projections))
         if mintable:
             summary["assemble"] = self._mint_from_research(mintable)
             summary["minted_synthetic"] = len(mintable)
@@ -432,9 +397,8 @@ class HealReview:
     def run(self) -> dict[str, Any]:
         started = time.monotonic()
         owner_backfilled = ensure_owner_phones(self.owner_json)
-        scrubs = resolve_stored_identity_policy(
-            self.review_csv, self.index_json, self.people_csv, self.synthetic_csv)
-        queue_before = count_pending(self.review_csv)
+        scrubs: dict[str, int] = {}
+        queue_before = count_pending(self.db)
 
         candidates, skipped_retarget, uncapped = self.select_candidates()
         states = self.fetch_states(candidates)
@@ -450,18 +414,8 @@ class HealReview:
                      {PROFILE_CONTENT, PROFILE_EMPTY})
 
         rejudge = self.rejudge(content)
-        if rejudge["candidates"] and not rejudge["skipped_no_openai_key"]:
-            # The subset judge pass restamps every machine row from stored
-            # verdicts, undoing stored-policy promotions (connection
-            # auto-verifies, superseded punts) on rows OUTSIDE the healed
-            # scope. Re-apply the idempotent policy so one heal leaves the
-            # store fully settled instead of waiting for the next boot scrub.
-            for key, value in resolve_stored_identity_policy(
-                    self.review_csv, self.index_json, self.people_csv,
-                    self.synthetic_csv).items():
-                scrubs[key] = scrubs.get(key, 0) + value
         terminated = self.terminate(empty_fetched)
-        queue_after = count_pending(self.review_csv)
+        queue_after = count_pending(self.db)
 
         scrub_total = sum(int(v) for v in scrubs.values()) + int(bool(owner_backfilled))
         summary = {
@@ -513,8 +467,9 @@ class HealReview:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Self-heal pass before review serve: legacy scrubs, fresh-fetch + "
+        description="Self-heal pass before review serve: fresh-fetch + "
                     "re-judge of judge-skipped links, free dead-link termination.")
+    parser.add_argument("--db", default=str(CANONICAL_DB))
     parser.add_argument("--cap", type=int, default=HEAL_BATCH_CAP,
                         help="Optional manual bound on candidates per run (default: uncapped; "
                              "a capped run reports what it left behind)")
@@ -524,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.pre_restart:
         ensure_no_review_session("heal_review")
-    emit(HealReview(cap=args.cap).run())
+    emit(HealReview(db=Db(Path(args.db)), cap=args.cap).run())
     return 0
 
 

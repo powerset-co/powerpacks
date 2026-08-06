@@ -132,18 +132,18 @@ from packs.ingestion.primitives.deep_context.common import (
     OWNER_JSON,
     RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
+    ROOT,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.candidates import llm_network_worth
-from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
-from packs.ingestion.primitives.deep_context.review_db import commit_review_rows
-from packs.ingestion.primitives.deep_context.review_store import (
-    ReviewRow,
-    has_human_worth,
-    load_override_rows,
-    mirror_facts_worth,
-    parent_ids_by_person,
+from packs.ingestion.primitives.deep_context.db.models import (
+    ArtifactKind,
+    ArtifactRow,
+    FactRow,
+    ProjectionStatus,
 )
+from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
 
 DEFAULT_CHUNK_CHARS = 9000
@@ -157,6 +157,7 @@ SYNTHESIS_CONTRACT_VERSION = "relationship-category-v6"
 # on flex tier to 11.7 on default tier). Used only for the --dry-run ETA; actual
 # rate scales with --concurrency and your OpenAI usage tier.
 CHUNKS_PER_SEC = 10.0
+CANONICAL_DB = ROOT / "deep-context.sqlite"
 
 SYSTEM_PROMPT = load_prompt("person_synthesis_system")
 
@@ -373,9 +374,9 @@ def fact_keys(facts: dict[str, Any]) -> set[str]:
     for emp in facts.get("employers") or []:
         if emp.get("name"):
             keys.add(f"emp:{emp['name'].lower()}")
-    for field in ("title", "school", "location", "field_of_study"):
-        if facts.get(field):
-            keys.add(f"{field}:{str(facts[field]).lower()}")
+    for fact_field in ("title", "school", "location", "field_of_study"):
+        if facts.get(fact_field):
+            keys.add(f"{fact_field}:{str(facts[fact_field]).lower()}")
     for topic in facts.get("topics") or []:
         keys.add(f"topic:{str(topic).lower()}")
     for ident in facts.get("identifiers") or []:
@@ -529,7 +530,7 @@ def pending_target_paths(
     force: bool,
     person_id: str,
     rejudge: bool = False,
-    review_rows: dict[str, dict[str, str]] | None = None,
+    human_worth_person_ids: set[str] | None = None,
 ) -> list[Path]:
     """Bundle paths needing synthesis — WITHOUT loading message bodies into memory.
 
@@ -542,8 +543,7 @@ def pending_target_paths(
     contract bump automatically rebuilds it. ``rejudge`` deliberately ignores
     both caches; the review writer still preserves the human-owned column."""
     paths: list[Path] = []
-    rows = review_rows or {}
-    parent_ids = parent_ids_by_person(facts_dir.parent / "index.json")
+    human_worth = human_worth_person_ids or set()
     for path in sorted(raw_dir.glob("*.json")):
         if path.name == "manifest.json":
             continue
@@ -555,7 +555,7 @@ def pending_target_paths(
             if _facts_version(facts_path) != SYNTHESIS_VERSION:
                 paths.append(path)
                 continue
-            if has_human_worth(rows, pid, parent_ids):
+            if pid in human_worth:
                 continue
             existing = llm_network_worth(pid, facts_dir).get("decision", "")
             if existing in {"yes", "no"}:
@@ -571,6 +571,49 @@ def _facts_version(path: Path) -> str:
     except (OSError, json.JSONDecodeError):
         return ""
     return str(records[-1].get("synthesis_version") or "") if records else ""
+
+
+def project_facts(db: Db, facts_dir: Path) -> dict[str, Any]:
+    """Project the fixed facts artifacts after their file writes complete."""
+    people = {row["person_id"]: row["parent_id"]
+              for row in db.query("SELECT person_id, parent_id FROM people")}
+    projected = without_worth = facts_count = 0
+    with db.connect() as conn:
+        for path in sorted(facts_dir.glob("*.jsonl")):
+            facts_count += 1
+            person_id = path.stem
+            parent_id = people.get(person_id)
+            if parent_id is None:
+                raise StoreError(f"facts person is absent from canonical graph: {person_id}")
+            data = path.read_bytes()
+            records = [json.loads(line) for line in data.decode("utf-8").splitlines() if line.strip()]
+            record = records[-1] if records else {}
+            facts = record.get("facts") if isinstance(record.get("facts"), dict) else record
+            worth = llm_network_worth(person_id, facts_dir)
+            decision = (worth.get("decision") or "").strip().lower() or None
+            without_worth += int(decision is None)
+            artifact_key = f"facts:{person_id}"
+            changed = db.project_artifact(ArtifactRow(
+                artifact_key=artifact_key, kind=ArtifactKind.FACTS.value,
+                parent_id=parent_id, person_id=person_id, path=str(path.resolve()),
+                content_fingerprint=hashlib.sha256(data).hexdigest(),
+                status=ProjectionStatus.PROJECTED.value,
+                payload_json=json.dumps(record, separators=(",", ":")), projected_at=now_iso(),
+            ), conn=conn)
+            db.project_fact(FactRow(
+                subject_key=person_id, parent_id=parent_id, artifact_key=artifact_key,
+                person_id=person_id, machine_worth=decision,
+                machine_worth_reason=worth.get("reason") or None,
+                confidence=float(record.get("final_confidence") or 0),
+                facts_json=json.dumps(facts, separators=(",", ":")), projected_at=now_iso(),
+            ), conn=conn)
+            projected += int(changed)
+    return {
+        "path": str(db.db_path), "synced_people": facts_count,
+        "synced_rows": projected, "skipped_human": 0,
+        "without_worth": without_worth, "cleared_legacy_spam": 0,
+        "total_rows": facts_count,
+    }
 
 
 def _load_bundle(path: Path) -> dict[str, Any]:
@@ -693,25 +736,8 @@ class SynthesizePersonContext(Node):
         Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
         Artifact(path=str(OWNER_JSON), required=False),
     )
-    # review.csv has three writers with disjoint column slices (see
-    # review_store.OVERRIDE_COLUMNS): synthesis owns the mirrored machine worth
-    # plus the legacy llm_reject spam values it retires; reconciliation owns the
-    # action/link columns; the human alone owns network_worth.
     outputs = (
         Artifact(path=FACTS_TEMPLATE, required=False),
-        Artifact(
-            path=str(LINKEDIN_OVERRIDES_CSV),
-            row_model=ReviewRow,
-            writes="upsert",
-            owns_columns=(
-                "llm_worth",
-                "llm_worth_reason",
-                "llm_reject",
-                "llm_reject_confidence",
-                "llm_reject_reason",
-            ),
-            required=False,
-        ),
     )
     payload = SynthesizePersonContextManifest
     manifest = str(FACTS_MANIFEST)
@@ -719,6 +745,7 @@ class SynthesizePersonContext(Node):
     def __init__(
         self,
         *,
+        db: Db,
         raw_dir: Path | None = None,
         out_dir: Path | None = None,
         review_csv: Path | None = None,
@@ -737,6 +764,7 @@ class SynthesizePersonContext(Node):
         force: bool = False,
         rejudge: bool = False,
     ) -> None:
+        self.db = db
         self.raw_dir = Path(raw_dir or RAW_DIR)
         self.facts_dir = Path(out_dir or FACTS_DIR)
         self.review_csv = Path(review_csv or LINKEDIN_OVERRIDES_CSV)
@@ -759,7 +787,6 @@ class SynthesizePersonContext(Node):
         return {
             RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
             FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
-            str(LINKEDIN_OVERRIDES_CSV): str(self.review_csv),
             self.manifest: str(self.facts_dir / "manifest.json"),
         }
 
@@ -768,7 +795,12 @@ class SynthesizePersonContext(Node):
         owner = load_owner() if not self.no_owner else None
         system_prompt = SYSTEM_PROMPT + (
             owner_identity_block(owner) + OWNER_PROMPT_SUFFIX + owner_background_block(owner) if owner else "")
-        review_rows = load_override_rows(self.review_csv)
+        human_worth_person_ids = {
+            row["person_id"] for row in self.db.query(
+                "SELECT pe.person_id FROM people pe JOIN parents pa "
+                "ON pa.parent_id=pe.parent_id WHERE pa.human_worth IS NOT NULL"
+            )
+        }
         # Only the path list is held in memory; bundle bodies are loaded one chunk at a
         # time, so peak RAM is bounded by --chunk-people, not the network size.
         paths = pending_target_paths(
@@ -777,7 +809,7 @@ class SynthesizePersonContext(Node):
             force=self.force,
             rejudge=self.rejudge,
             person_id=self.person,
-            review_rows=review_rows,
+            human_worth_person_ids=human_worth_person_ids,
         )
         return SynthesisPlan(owner=owner, system_prompt=system_prompt, paths=paths)
 
@@ -905,15 +937,8 @@ class SynthesizePersonContext(Node):
 
             asyncio.run(driver())
 
-        # ---- MIRROR the machine worth onto review.csv, then report. ----------
-        # Runs on every path, including the no-work one: facts written by an
-        # earlier interrupted run still need their worth column mirrored.
-        worth_sync = mirror_facts_worth(
-            self.review_csv,
-            self.facts_dir,
-            include_human_rows=bool(self.rejudge),
-            write=commit_review_rows,
-        )
+        # ---- PROJECT the durable facts artifacts, then report. ---------------
+        worth_sync = project_facts(self.db, self.facts_dir)
         billed_output = tally.tokens["output_tokens"] + tally.tokens["reasoning_tokens"]
         return SynthesizePersonContextManifest(
             status="completed",
@@ -947,6 +972,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--raw-dir", default=str(RAW_DIR))
     p.add_argument("--out-dir", default=str(FACTS_DIR))
     p.add_argument("--review-csv", default=str(LINKEDIN_OVERRIDES_CSV))
+    p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--reasoning-effort", default="medium", choices=["minimal", "low", "medium", "high"])
     p.add_argument("--chunk-chars", type=int, default=DEFAULT_CHUNK_CHARS, help="Per-batch char budget")
@@ -973,6 +999,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_no_review_session("synthesize_person_context")
     args = build_parser().parse_args(argv)
     node = SynthesizePersonContext(
+        db=Db(Path(args.db)),
         raw_dir=Path(args.raw_dir),
         out_dir=Path(args.out_dir),
         review_csv=Path(args.review_csv),

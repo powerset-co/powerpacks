@@ -67,7 +67,13 @@ from packs.ingestion.primitives.deep_context.common import (
     LINKEDIN_OVERRIDES_CSV,
     PROFILE_CACHE_DIR,
     RAW_DIR,
+    ROOT,
 )
+from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
+    RESEARCH_CONFIRM_THRESHOLD,
+)
+from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV, source_import_dir
 from packs.ingestion.primitives.deep_context.reconcile_deep_research import (
@@ -81,16 +87,13 @@ from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     research_reject_fields,
     upsert_retargets,
 )
-from packs.ingestion.primitives.deep_context.review_store import (
-    RESEARCH_CONFIRM_THRESHOLD,
-    USER_APPROVED,
-    load_override_rows,
-)
 
 LEGACY_PROVIDER = "parallel_linkedin_resolution"
 # Built from the shared path helpers rather than re-spelled (primitives/common/paths.py).
 GMAIL_PEOPLE_CSV = source_import_dir("gmail") / "people.csv"
 DIRECTORY_CSV = DEFAULT_DIRECTORY_CSV
+USER_APPROVED = {ApprovedState.YES.value, ApprovedState.NO.value}
+CANONICAL_DB = ROOT / "deep-context.sqlite"
 
 
 def _read_rows(path: Path) -> list[dict[str, str]]:
@@ -243,6 +246,7 @@ class MigrateLegacyResolutions:
     def __init__(
         self,
         *,
+        db: Db,
         gmail_people: Path | None = None,
         merged_people: Path | None = None,
         directory_csv: Path | None = None,
@@ -260,6 +264,7 @@ class MigrateLegacyResolutions:
         timeout: int = 120,
         max_retries: int = 6,
     ) -> None:
+        self.db = db
         self.gmail_people = Path(gmail_people or GMAIL_PEOPLE_CSV)
         self.merged_people = Path(merged_people or DEFAULT_PEOPLE_CSV)
         self.directory_csv = Path(directory_csv or DIRECTORY_CSV)
@@ -281,7 +286,7 @@ class MigrateLegacyResolutions:
         started = time.monotonic()
         merged_ids = {(r.get("id") or "").strip().lower()
                       for r in _read_rows(self.merged_people)} - {""}
-        overrides = load_override_rows(self.overrides_csv)
+        overrides = self.db.rows()
         provenance = legacy_provenance(self.directory_csv)
 
         counts = {
@@ -337,7 +342,7 @@ class MigrateLegacyResolutions:
                 manifest["estimated_judge_cost_usd_low"] = round(would * per_lo, 2)
                 manifest["estimated_judge_cost_usd_high"] = round(would * per_hi, 2)
             return manifest
-        manifest.update(upsert_retargets(self.overrides_csv, proposals))
+        manifest.update(upsert_retargets(self.db, proposals))
         # Re-stamp: the writer's counts merge in, but the run's status is ours.
         manifest["status"] = "completed"
         return manifest
@@ -400,6 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--merged-people", default=str(DEFAULT_PEOPLE_CSV))
     p.add_argument("--directory-csv", default=str(DIRECTORY_CSV))
     p.add_argument("--overrides", default=str(LINKEDIN_OVERRIDES_CSV))
+    p.add_argument("--db", default=str(CANONICAL_DB))
     p.add_argument("--facts-dir", default=str(FACTS_DIR))
     p.add_argument("--raw-dir", default=str(RAW_DIR))
     p.add_argument("--cache-dir", default=str(PROFILE_CACHE_DIR))
@@ -420,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_no_review_session("migrate_legacy_resolutions")
     args = build_parser().parse_args(argv)
     emit(MigrateLegacyResolutions(
+        db=Db(Path(args.db)),
         gmail_people=Path(args.gmail_people),
         merged_people=Path(args.merged_people),
         directory_csv=Path(args.directory_csv),
