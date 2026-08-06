@@ -146,7 +146,7 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
     snapshot = canonical_snapshot(db)
     existing_people = {row.person_id: row for row in snapshot.people}
     parent_by_person = {row.person_id: row.parent_id for row in snapshot.people}
-    existing_parents = {row.parent_id: row for row in snapshot.parents}
+    parent_slugs = {row.parent_id: row.display_slug for row in snapshot.parents}
     assignment = load_assignment(snapshot)
     target_by_input: dict[str, str] = {}
 
@@ -163,7 +163,7 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             for value in aliases if value in existing_people
         )
         target = assignment.resolve(child_slugs, tuple(person.person_id for person in component))
-        if target not in existing_parents:
+        if target not in parent_slugs:
             representative = component[0]
             parent = ParentRow(
                 target,
@@ -174,7 +174,7 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
                 updated_at=now_iso(),
             )
             db.project_rows((parent,))
-            existing_parents[target] = parent
+            parent_slugs[target] = parent.display_slug
         for old_parent in touched_parents:
             if old_parent != target:
                 db.merge_parents(target, old_parent)
@@ -189,14 +189,16 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
     sources_by_person: dict[str, dict[str, PersonSourceRow]] = {}
     for row in snapshot.sources:
         sources_by_person.setdefault(row.person_id, {})[row.source] = row
-    projection_rows: list[object] = []
+    projection_rows: list[
+        PersonRow | PersonIdentifiersProjection | PersonSourcesProjection
+    ] = []
     for person in imported:
         prior = existing_people.get(person.person_id)
         parent_id = target_by_input[person.person_id]
         child_slug = prior.child_slug if prior and prior.child_slug else slugify(
             person.display_name, person.person_id,
         )
-        parent_slug = existing_parents[parent_id].display_slug
+        parent_slug = parent_slugs[parent_id]
         projection_rows.append(PersonRow(
             person.person_id,
             parent_id,

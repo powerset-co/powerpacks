@@ -194,7 +194,8 @@ class Db:
             raise StoreError("cannot merge a parent into itself")
         with self.transaction() as conn:
             conn.execute("PRAGMA defer_foreign_keys=ON")
-            conn.execute("BEGIN DEFERRED")
+            if not conn.in_transaction:
+                conn.execute("BEGIN DEFERRED")
             parents = {
                 row["parent_id"]: row
                 for row in conn.execute(
@@ -239,6 +240,9 @@ class Db:
             IdentityPolicy.settle_human_families(conn, (survivor_parent_id,))
             IdentityPolicy.clear_machine_winner_conflicts(conn, (survivor_parent_id,))
             conn.execute("DELETE FROM parents WHERE parent_id=?", (absorbed_parent_id,))
+            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise StoreError(f"parent merge violates foreign keys: {violations[0]}")
 
     def _project_candidate(self, row: LinkRow, *, conn: sqlite3.Connection) -> None:
         current = conn.execute(
@@ -263,11 +267,16 @@ class Db:
             )
 
     def _project_artifact(self, row: ArtifactRow, *, conn: sqlite3.Connection) -> bool:
+        columns = (
+            "kind", "parent_id", "person_id", "candidate_key", "path",
+            "content_fingerprint", "input_fingerprint", "status", "error", "payload_json",
+        )
         current = conn.execute(
-            "SELECT content_fingerprint, status FROM artifacts WHERE artifact_key=?",
+            f"SELECT {', '.join(columns)} FROM artifacts WHERE artifact_key=?",
             (row.artifact_key,),
         ).fetchone()
-        if current and tuple(current) == (row.content_fingerprint, "projected"):
+        values = asdict(row)
+        if current and all(current[column] == values[column] for column in columns):
             return False
         conn.execute(UPSERTS["artifacts"], asdict(row))
         return True

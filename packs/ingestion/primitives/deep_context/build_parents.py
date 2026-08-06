@@ -7,6 +7,7 @@ import hashlib
 import json
 import time
 from collections import defaultdict
+from dataclasses import asdict
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso, parse_json_object
@@ -24,28 +25,27 @@ from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CanonicalSnapshot,
     IdentifierKind,
+    PersonRow,
     ProjectionStatus,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.dossier.facts import headline, merge_facts
 from packs.ingestion.primitives.deep_context.merge_candidates.blocking import connected_components
+from packs.ingestion.primitives.deep_context.parents import rendering as parent_rendering
 from packs.ingestion.primitives.deep_context.parents.assignment import load_assignment
 from packs.ingestion.primitives.deep_context.parents.models import ChildEntry, ParentPlan
-from packs.ingestion.primitives.deep_context.parents.rendering import (
-    remove_orphans,
-    render_parent,
-    render_singleton,
-)
 from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
+
+PARENT_RENDER_CONTRACT = "parent-dossier-v1"
 
 
 class BuildParentsManifest(StageManifest):
     source: str = "build_parents"
-    clusters: int = 0
-    parents_written: int = 0
-    merged_parents: int = 0
-    singleton_parents: int = 0
+    merge_components: int = 0
+    parents_changed: int = 0
+    parents_merged: int = 0
+    singletons_written: int = 0
     owner_excluded: int = 0
     orphans_removed: int = 0
     parents_dir: str = ""
@@ -83,7 +83,7 @@ def _parent_plans(snapshot: CanonicalSnapshot) -> tuple[tuple[ParentPlan, ...], 
     for row in snapshot.sources:
         if row.source not in sources[row.person_id]:
             sources[row.person_id].append(row.source)
-    people_by_parent: dict[str, list] = defaultdict(list)
+    people_by_parent: dict[str, list[PersonRow]] = defaultdict(list)
     for row in snapshot.people:
         people_by_parent[row.parent_id].append(row)
     facts_by_parent: dict[str, list[dict[str, object]]] = defaultdict(list)
@@ -91,14 +91,7 @@ def _parent_plans(snapshot: CanonicalSnapshot) -> tuple[tuple[ParentPlan, ...], 
         facts = parse_json_object(row.facts_json)
         if facts:
             facts_by_parent[row.parent_id].append({"facts": facts})
-    dossier_by_person = {
-        row.person_id: row for row in snapshot.dossiers if row.person_id is not None
-    }
-    dossier_by_parent = {
-        row.parent_id: row for row in snapshot.dossiers if row.person_id is None
-    }
-
-    plans = []
+    plans: list[ParentPlan] = []
     owner_excluded = 0
     for parent in snapshot.parents:
         members = sorted(
@@ -110,32 +103,14 @@ def _parent_plans(snapshot: CanonicalSnapshot) -> tuple[tuple[ParentPlan, ...], 
         if not visible:
             continue
         merged = merge_facts(facts_by_parent.get(parent.parent_id, []))
-        prior_dossier = dossier_by_parent.get(parent.parent_id)
-        prior_headline = (
-            prior_dossier.headline
-            if prior_dossier
-            else next(
-                (
-                    dossier_by_person[row.person_id].headline
-                    for row in visible
-                    if row.person_id in dossier_by_person
-                    and dossier_by_person[row.person_id].headline
-                ),
-                "",
-            )
-        )
-        if not merged and prior_headline:
-            merged = {"headline": prior_headline}
         name = str(merged.get("canonical_name") or parent.display_name or visible[0].display_name or "person")
         slug = parent.display_slug or slugify(name, parent.parent_id)
-        emails = []
-        phones = []
-        children = []
+        emails: list[str] = []
+        phones: list[str] = []
+        children: list[ChildEntry] = []
         for person in visible:
-            child_dossier = dossier_by_person.get(person.person_id)
             child_name = str(
-                (child_dossier.name if child_dossier else "")
-                or person.display_name
+                person.display_name
                 or person.child_slug
                 or person.person_id
             )
@@ -166,6 +141,16 @@ def _parent_plans(snapshot: CanonicalSnapshot) -> tuple[tuple[ParentPlan, ...], 
     return tuple(plans), owner_excluded
 
 
+def _render_input_fingerprint(plan: ParentPlan) -> str:
+    payload = json.dumps(
+        {"contract": PARENT_RENDER_CONTRACT, "plan": asdict(plan)},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 class BuildParents(Node):
     """Incrementally merge parent families and write changed parent dossiers."""
 
@@ -190,14 +175,14 @@ class BuildParents(Node):
         initial = canonical_snapshot(self.db)
         components = _accepted_components(initial)
         assignment = load_assignment(initial)
-        merged_parents = 0
+        parents_merged = 0
         for component in components:
             survivor = assignment.elect(list(component))
             for absorbed in component:
                 if absorbed == survivor:
                     continue
                 self.db.merge_parents(survivor, absorbed)
-                merged_parents += 1
+                parents_merged += 1
 
         snapshot = canonical_snapshot(self.db)
         plans, owner_excluded = _parent_plans(snapshot)
@@ -219,22 +204,51 @@ class BuildParents(Node):
 
         self.parents_dir.mkdir(parents=True, exist_ok=True)
         replacements = []
-        parents_written = 0
+        parents_changed = 0
         singleton_written = 0
         for plan in plans:
             singleton = len(plan.confirmed) == 1
-            body = render_singleton(plan) if singleton else render_parent(plan)
-            data = body.encode()
-            fingerprint = hashlib.sha256(data).hexdigest()
             file_slug = slugify(plan.name, plan.parent_id)
             path = self.parents_dir / f"{file_slug}.md"
+            artifact_key = f"dossier:{plan.parent_id}"
+            input_fingerprint = _render_input_fingerprint(plan)
+            prior = prior_artifacts.get(plan.parent_id, [])
+            current = next((row for row in prior if row.artifact_key == artifact_key), None)
+            disk_fingerprint = (
+                hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+            )
+            changed = (
+                current is None
+                or current.input_fingerprint != input_fingerprint
+                or current.path != str(path.resolve())
+                or current.path in colliding_paths
+                or disk_fingerprint != current.content_fingerprint
+            )
+            stale_keys = {row.artifact_key for row in prior} - {artifact_key}
+            if not changed:
+                if stale_keys:
+                    replacements.append(ArtifactReplacement(
+                        ArtifactKind.DOSSIER.value,
+                        (current,),
+                        parent_id=plan.parent_id,
+                    ))
+                continue
+
+            body = (
+                parent_rendering.render_singleton(plan)
+                if singleton
+                else parent_rendering.render_parent(plan)
+            )
+            data = body.encode()
+            fingerprint = hashlib.sha256(data).hexdigest()
             artifact = ArtifactRow(
-                f"dossier:{plan.parent_id}",
+                artifact_key,
                 ArtifactKind.DOSSIER.value,
                 plan.parent_id,
                 str(path.resolve()),
                 fingerprint,
                 ProjectionStatus.PROJECTED.value,
+                input_fingerprint=input_fingerprint,
                 payload_json=json.dumps({
                     "parent_id": plan.parent_id,
                     "name": plan.name,
@@ -242,7 +256,6 @@ class BuildParents(Node):
                     "path": f"parents/{file_slug}.md",
                     "needs_review": [],
                     "children": [child.slug for child in plan.confirmed],
-                    "person_ids": [child.person_id for child in plan.confirmed],
                     "emails": list(plan.emails),
                     "phones": list(plan.phones),
                     "headline": headline(plan.merged) or str(plan.merged.get("headline") or ""),
@@ -255,39 +268,25 @@ class BuildParents(Node):
                 }, separators=(",", ":")),
                 projected_at=now_iso(),
             )
-            prior = prior_artifacts.get(plan.parent_id, [])
-            current = next((row for row in prior if row.artifact_key == artifact.artifact_key), None)
-            changed = (
-                current is None
-                or current.content_fingerprint != fingerprint
-                or current.path != artifact.path
-                or current.path in colliding_paths
-                or not path.is_file()
-                or hashlib.sha256(path.read_bytes()).hexdigest()
-                != current.content_fingerprint
-            )
-            stale_keys = {row.artifact_key for row in prior} - {artifact.artifact_key}
-            if changed:
-                path.write_bytes(data)
-                parents_written += 1
-                singleton_written += int(singleton)
-            if changed or stale_keys:
-                replacements.append(ArtifactReplacement(
-                    ArtifactKind.DOSSIER.value,
-                    (artifact,),
-                    parent_id=plan.parent_id,
-                ))
+            path.write_bytes(data)
+            parents_changed += 1
+            singleton_written += int(singleton)
+            replacements.append(ArtifactReplacement(
+                ArtifactKind.DOSSIER.value,
+                (artifact,),
+                parent_id=plan.parent_id,
+            ))
 
         if replacements:
             self.db.project_rows(tuple(replacements))
         active_slugs = {slugify(plan.name, plan.parent_id) for plan in plans}
-        orphans = remove_orphans(self.parents_dir, active_slugs)
+        orphans = parent_rendering.remove_orphans(self.parents_dir, active_slugs)
         return BuildParentsManifest(
             status="completed",
-            clusters=len(components),
-            parents_written=parents_written,
-            merged_parents=merged_parents,
-            singleton_parents=singleton_written,
+            merge_components=len(components),
+            parents_changed=parents_changed,
+            parents_merged=parents_merged,
+            singletons_written=singleton_written,
             owner_excluded=owner_excluded,
             orphans_removed=orphans,
             parents_dir=str(self.parents_dir),

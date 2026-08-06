@@ -306,7 +306,7 @@ class IncrementalParentMaintenanceTest(unittest.TestCase):
                     parents_dir=root / "parents",
                 ).execute()
 
-            self.assertEqual(result.merged_parents, 1)
+            self.assertEqual(result.parents_merged, 1)
             self.assertEqual(_state(incremental), _state(legacy))
 
     def test_whole_graph_calls_are_confined_to_migration_code(self) -> None:

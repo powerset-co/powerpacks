@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -179,6 +180,37 @@ class IncrementalParentMergeTests(unittest.TestCase):
             "SELECT row_key, machine_approved FROM links WHERE row_key LIKE 'machine-%'",
         )
         self.assertEqual({row["machine_approved"] for row in machine}, {None})
+
+    def test_merge_accepts_an_already_owned_transaction_boundary(self) -> None:
+        transaction = self.db.transaction
+
+        @contextmanager
+        def active_transaction():
+            with transaction() as conn:
+                conn.execute("BEGIN DEFERRED")
+                yield conn
+
+        with patch.object(self.db, "transaction", active_transaction):
+            self.db.merge_parents("survivor", "absorbed")
+        self.assertEqual(query(self.db, "SELECT count(*) FROM parents")[0][0], 1)
+
+    def test_merge_checks_foreign_keys_before_commit(self) -> None:
+        def leave_orphan(conn, _parent_ids) -> None:
+            conn.execute(
+                "INSERT INTO artifacts "
+                "(artifact_key, kind, parent_id, path, content_fingerprint, status) "
+                "VALUES ('orphan', 'facts', 'missing-parent', '/tmp/orphan', 'sha', 'projected')"
+            )
+
+        with patch.object(
+            IdentityPolicy,
+            "clear_machine_winner_conflicts",
+            side_effect=leave_orphan,
+        ):
+            with self.assertRaisesRegex(StoreError, "parent merge violates foreign keys"):
+                self.db.merge_parents("survivor", "absorbed")
+        self.assertEqual(query(self.db, "SELECT count(*) FROM parents")[0][0], 2)
+        self.assertEqual(query(self.db, "SELECT count(*) FROM artifacts WHERE artifact_key='orphan'")[0][0], 0)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from packs.ingestion.primitives.deep_context.build_parents import BuildParents
 from packs.ingestion.primitives.deep_context.db.models import (
@@ -82,8 +83,7 @@ class ParentProjectionTest(unittest.TestCase):
                 'emails: ["jordan@example.com"]\n'
                 'phones: ["+15550100"]\n'
                 "---\n\n# Jordan Bravo\n\n"
-                "Single identity — no duplicates detected. Full context in [[jordan-a]].\n\n"
-                "Synthetic fixture headline.\n"
+                "Single identity — no duplicates detected. Full context in [[jordan-a]].\n"
             ))
             parent_dossier = next(
                 row
@@ -201,7 +201,7 @@ class ParentProjectionTest(unittest.TestCase):
                 parents_dir=parents_dir,
             ).execute()
 
-            self.assertEqual((result.parents_written, result.merged_parents), (1, 1))
+            self.assertEqual((result.parents_changed, result.parents_merged), (1, 1))
             parents = query(db, "SELECT parent_id, human_worth FROM parents")
             self.assertEqual(len(parents), 1)
             self.assertEqual(parents[0]["human_worth"], "yes")
@@ -321,10 +321,17 @@ class ParentProjectionTest(unittest.TestCase):
                 "SELECT content_fingerprint FROM artifacts WHERE artifact_key='dossier:parent-a'",
             )[0][0]
 
-            second = BuildParents(db=db, parents_dir=parents_dir).execute()
+            with mock.patch(
+                "packs.ingestion.primitives.deep_context.parents.rendering.render_singleton",
+                side_effect=AssertionError("unchanged parent must not render"),
+            ):
+                second = BuildParents(db=db, parents_dir=parents_dir).execute()
 
-            self.assertEqual(first.parents_written, 1)
-            self.assertEqual(second.parents_written, 0)
+            self.assertEqual(first.parents_changed, 1)
+            self.assertEqual(second.parents_changed, 0)
+            self.assertEqual(first.singletons_written, 1)
+            self.assertNotIn("parents_written", first.to_payload())
+            self.assertNotIn("singleton_parents", first.to_payload())
             self.assertEqual(path.read_bytes(), first_bytes)
             self.assertEqual(path.stat().st_mtime_ns, first_mtime)
             self.assertEqual(
@@ -335,6 +342,13 @@ class ParentProjectionTest(unittest.TestCase):
                 )[0][0],
                 artifact_fingerprint,
             )
+            artifact = query(
+                db,
+                "SELECT input_fingerprint, payload_json FROM artifacts "
+                "WHERE artifact_key='dossier:parent-a'",
+            )[0]
+            self.assertTrue(artifact["input_fingerprint"])
+            self.assertNotIn("person_ids", json.loads(artifact["payload_json"]))
 
     def test_fact_change_rewrites_only_its_parent_dossier(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -353,6 +367,11 @@ class ParentProjectionTest(unittest.TestCase):
             jordan_before = jordan.read_bytes()
             casey_before = casey.read_bytes()
             casey_mtime = casey.stat().st_mtime_ns
+            prior_input = query(
+                db,
+                "SELECT input_fingerprint FROM artifacts "
+                "WHERE artifact_key='dossier:parent-a'",
+            )[0][0]
 
             facts = {"canonical_name": "Jordan Bravo", "title": "Engineer"}
             facts_json = json.dumps(facts)
@@ -375,10 +394,26 @@ class ParentProjectionTest(unittest.TestCase):
 
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
 
-            self.assertEqual(result.parents_written, 1)
-            self.assertNotEqual(jordan.read_bytes(), jordan_before)
+            self.assertEqual(result.parents_changed, 1)
+            # The old singleton contract intentionally does not derive a summary
+            # from structured facts, but the input signal still advances.
+            self.assertEqual(jordan.read_bytes(), jordan_before)
+            self.assertNotEqual(
+                query(
+                    db,
+                    "SELECT input_fingerprint FROM artifacts "
+                    "WHERE artifact_key='dossier:parent-a'",
+                )[0][0],
+                prior_input,
+            )
             self.assertEqual(casey.read_bytes(), casey_before)
             self.assertEqual(casey.stat().st_mtime_ns, casey_mtime)
+            with mock.patch(
+                "packs.ingestion.primitives.deep_context.parents.rendering.render_singleton",
+                side_effect=AssertionError("advanced input signal must converge"),
+            ):
+                converged = BuildParents(db=db, parents_dir=parents_dir).execute()
+            self.assertEqual(converged.parents_changed, 0)
 
     def test_membership_change_rewrites_only_its_parent_dossier(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -403,7 +438,7 @@ class ParentProjectionTest(unittest.TestCase):
 
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
 
-            self.assertEqual(result.parents_written, 1)
+            self.assertEqual(result.parents_changed, 1)
             self.assertNotEqual(jordan.read_bytes(), jordan_before)
             self.assertEqual(casey.read_bytes(), casey_before)
             self.assertEqual(casey.stat().st_mtime_ns, casey_mtime)
@@ -434,7 +469,7 @@ class ParentProjectionTest(unittest.TestCase):
 
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
 
-            self.assertEqual(result.parents_written, 2)
+            self.assertEqual(result.parents_changed, 2)
             self.assertFalse(collided.exists())
             paths = {
                 Path(row["path"])
@@ -466,7 +501,7 @@ class ParentProjectionTest(unittest.TestCase):
 
             result = BuildParents(db=db, parents_dir=parents_dir).execute()
 
-            self.assertEqual(result.parents_written, 1)
+            self.assertEqual(result.parents_changed, 1)
             self.assertEqual(path.read_bytes(), expected)
             row = query(
                 db,
