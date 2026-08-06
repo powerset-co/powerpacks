@@ -339,7 +339,11 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
         raise ProjectionError("manifest requires stage")
     stage_status, job_status = _manifest_status(status)
     inventory = manifest.get("artifacts")
-    if status in _TERMINAL and (not isinstance(inventory, list) or not inventory):
+    counts = manifest.get("counts") if isinstance(manifest.get("counts"), dict) else None
+    zero_work = counts is not None and counts.get("total") == 0
+    if status in _TERMINAL and (
+        not isinstance(inventory, list) or (not inventory and not zero_work)
+    ):
         raise ProjectionError("terminal manifest requires an artifacts inventory")
     if inventory is None:
         inventory = []
@@ -362,7 +366,7 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
     keys += [item.raw_artifact.artifact_key for item in parsed if item.raw_artifact]
     if len(keys) != len(set(keys)):
         raise ProjectionError("manifest contains duplicate artifact keys")
-    counts = manifest.get("counts") if isinstance(manifest.get("counts"), dict) else {}
+    counts = counts or {}
     total = int(counts.get("total") or len(parsed))
     completed = min(total, int(counts.get("completed") or 0))
     manifest_hash = _sha256(manifest_bytes)

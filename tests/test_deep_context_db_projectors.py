@@ -167,6 +167,13 @@ class ProjectorTest(unittest.TestCase):
         with self.assertRaisesRegex(ProjectionError, "artifacts inventory"):
             project_manifest(self.db, path)
 
+    def test_zero_work_terminal_manifest_projects_without_dummy_artifact(self) -> None:
+        manifest = self._write_manifest([])
+        result = project_manifest(self.db, manifest)
+        self.assertEqual((result.artifacts, result.projected), (0, 0))
+        self.assertEqual(self.db.query("SELECT status FROM jobs")[0]["status"], "applied")
+        self.assertEqual(self.db.query("SELECT status FROM stage_state")[0]["status"], "complete")
+
 
 class LegacyProjectorTest(unittest.TestCase):
     def test_direct_enveloped_alias_owner_and_latest_child_human(self) -> None:
