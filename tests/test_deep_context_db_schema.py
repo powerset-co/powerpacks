@@ -28,6 +28,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     StageStatus,
     SyntheticProfileRow,
 )
+from packs.ingestion.primitives.deep_context.db import snapshots
 from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION
 from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
 from deep_context_sqlite_test_helpers import (
@@ -230,7 +231,7 @@ class DeepContextSchemaTests(unittest.TestCase):
             project_synthetic_profile(self.db, SyntheticProfileRow("bad", "real-1", "{}"))
 
         exported = Path(self.temp.name) / "synthetic.csv"
-        self.db.export_batons(Path(self.temp.name) / "review.csv", exported)
+        snapshots.export_batons(self.db, Path(self.temp.name) / "review.csv", exported)
         with exported.open(newline="", encoding="utf-8") as handle:
             self.assertEqual(next(csv.DictReader(handle))["approved"], "no")
 

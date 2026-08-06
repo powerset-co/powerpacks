@@ -12,7 +12,6 @@ import hashlib
 import json
 import math
 import os
-import sqlite3
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -116,21 +115,6 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def _decision_rows(db: Db) -> dict[str, dict[str, str]]:
-    return {
-        row["row_key"]: {
-            "action": row["decision_action"] or row["machine_action"] or "",
-            "approved": row["decision_approved"] or row["machine_approved"] or "",
-            "llm_reject": row["machine_reject"] or "",
-            "llm_judge_fingerprint": row["judgment_fingerprint"] or "",
-            "new_linkedin_url": row["replacement_url"] or row["machine_proposed_url"] or "",
-        }
-        for row in db._query(
-            "SELECT row_key, decision_action, machine_action, decision_approved, "
-            "machine_approved, machine_reject, judgment_fingerprint, replacement_url, "
-            "machine_proposed_url FROM links"
-        )
-    }
 def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
     records: list[dict[str, Any]] = []
     for pid in child_pids:
@@ -351,7 +335,7 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     if proposed:
         hydrate_profiles(proposed, cache_dir)
     del overrides_csv
-    existing = _decision_rows(db)
+    existing = views.link_decision_state(db)
     proposals: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     cached = grandfathered = 0
@@ -874,7 +858,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     try:
         db = Db(db_path)
-    except (StoreError, sqlite3.Error) as exc:
+    except StoreError as exc:
         raise SystemExit(f"Deep Context database is unsupported: {db_path}: {exc}") from exc
     node = ReconcileDeepResearch(
         verdicts_jsonl=Path(args.verdicts_jsonl),

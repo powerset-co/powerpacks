@@ -245,7 +245,7 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
             sources=(),
         )
 
-        with patch.object(self.db, "_connect", wraps=self.db._connect) as connect:
+        with patch.object(self.db, "transaction", wraps=self.db.transaction) as connect:
             self.db.replace_canonical_graph(projection)
 
         self.assertEqual(connect.call_count, 1)

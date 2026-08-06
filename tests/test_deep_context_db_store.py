@@ -108,6 +108,13 @@ class DeepContextStoreTransactionsTest(unittest.TestCase):
         self.assertEqual(query(self.db, "SELECT count(*) FROM spend_approvals")[0][0], 0)
         self.assertEqual(query(self.db, "SELECT status FROM jobs")[0][0], "applied")
 
+    def test_open_normalizes_sqlite_errors_to_store_error(self) -> None:
+        broken = Path(self.temp.name) / "broken.sqlite"
+        broken.write_text("not a sqlite database", encoding="utf-8")
+
+        with self.assertRaisesRegex(StoreError, "cannot open Deep Context database"):
+            Db(broken)
+
 
 if __name__ == "__main__":
     unittest.main()

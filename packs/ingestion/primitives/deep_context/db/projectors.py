@@ -147,20 +147,36 @@ def _linkedin(profile: dict[str, Any]) -> str | None:
     return normalize_linkedin_url(value) if value else None
 
 
+def stage_status_for(value: str) -> str:
+    """First-rule-wins raw-status classification, shared with the legacy importer."""
+    if value == "needs_approval":
+        return StageStatus.NEEDS_APPROVAL.value
+    if value == "failed":
+        return StageStatus.FAILED.value
+    if value in _TERMINAL or value in {"no_match", "noop"}:
+        return StageStatus.COMPLETE.value
+    if value in {"running", "submitted"}:
+        return StageStatus.RUNNING.value
+    return StageStatus.PENDING.value
+
+
+_JOB_FOR_STAGE = {
+    StageStatus.NEEDS_APPROVAL.value: JobStatus.QUEUED.value,
+    StageStatus.FAILED.value: JobStatus.FAILED.value,
+    StageStatus.RUNNING.value: JobStatus.RUNNING.value,
+    StageStatus.PENDING.value: JobStatus.QUEUED.value,
+}
+
+
 def _manifest_status(value: str) -> tuple[str, str]:
     if value not in _KNOWN_STATUS:
         raise ProjectionError(f"unsupported manifest status: {value!r}")
-    if value == "needs_approval":
-        return StageStatus.NEEDS_APPROVAL.value, JobStatus.QUEUED.value
-    if value in {"failed"}:
-        return StageStatus.FAILED.value, JobStatus.FAILED.value
-    if value in _TERMINAL:
-        return StageStatus.COMPLETE.value, JobStatus.APPLIED.value
-    if value in {"no_match", "noop"}:
-        return StageStatus.COMPLETE.value, JobStatus.NO_MATCH.value
-    if value in {"not_started", "stale"}:
-        return StageStatus.PENDING.value, JobStatus.QUEUED.value
-    return StageStatus.RUNNING.value, JobStatus.RUNNING.value
+    stage_status = stage_status_for(value)
+    if stage_status == StageStatus.COMPLETE.value:
+        job = (JobStatus.NO_MATCH.value if value in {"no_match", "noop"}
+               else JobStatus.APPLIED.value)
+        return stage_status, job
+    return stage_status, _JOB_FOR_STAGE[stage_status]
 
 
 def _parse_entry(
@@ -353,11 +369,11 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
     selection_obj = manifest.get("selection")
     selection = (_text(selection_obj.get("fingerprint")) if isinstance(selection_obj, dict)
                  else _text(selection_obj))
-    parents = {row["parent_id"] for row in db._query("SELECT parent_id FROM parents")}
+    parents = {row["parent_id"] for row in db.query("SELECT parent_id FROM parents")}
     people = {row["person_id"]: row["parent_id"]
-              for row in db._query("SELECT person_id, parent_id FROM people")}
+              for row in db.query("SELECT person_id, parent_id FROM people")}
     candidates = {row["row_key"]: (row["parent_id"], row["kind"])
-                  for row in db._query("SELECT row_key, parent_id, kind FROM links")}
+                  for row in db.query("SELECT row_key, parent_id, kind FROM links")}
     parsed = tuple(_parse_entry(
         manifest_path.parent, item, parents=parents, people=people,
         candidates=candidates, selection=selection,
@@ -372,7 +388,7 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
     manifest_hash = _sha256(manifest_bytes)
     projected = 0
 
-    with db._connect() as conn:
+    with db.transaction() as conn:
         for item in parsed:
             current = conn.execute(
                 "SELECT content_fingerprint, status FROM artifacts WHERE artifact_key=?",
@@ -389,13 +405,15 @@ def project_manifest(db: Db, manifest_path: Path) -> ProjectionResult:
             if not changed:
                 continue
             if item.candidate:
-                db._replace_candidate_people(item.candidate.row_key, item.members, conn=conn)
+                db._replace_children(
+                    "candidate_people", item.candidate.row_key, item.members, conn=conn,
+                )
             if item.fact:
-                db._project_fact(item.fact, conn=conn)
+                db._write("facts", item.fact, conn)
             if item.research:
-                db._project_research(item.research, conn=conn)
+                db._write("research", item.research, conn)
             if item.synthetic:
-                db._project_synthetic_profile(item.synthetic, conn=conn)
+                db._write("synthetic_profiles", item.synthetic, conn)
         db._write("jobs", JobRow(
             stage, JobKind.ENRICHMENT.value, job_status,
             selection_fingerprint=selection, completed_count=completed, total_count=total,

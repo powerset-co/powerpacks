@@ -1,5 +1,7 @@
-"""Versioned relational DDL and row-to-table registry for Deep Context SQLite."""
+"""Versioned relational DDL, row-to-table registry, and generated upserts."""
 from __future__ import annotations
+
+from dataclasses import fields
 
 from packs.ingestion.primitives.deep_context.db import models
 
@@ -203,3 +205,28 @@ ROW_TYPES = {
     "stage_state": models.StageStateRow,
     "spend_approvals": models.SpendApprovalRow,
 }
+
+KEYS = {
+    "parents": ("parent_id",), "people": ("person_id",),
+    "person_identifiers": ("person_id", "kind", "normalized_value"),
+    "person_sources": ("person_id", "source"),
+    "links": ("row_key",), "candidate_people": ("row_key", "person_id"),
+    "artifacts": ("artifact_key",), "facts": ("subject_key",),
+    "synthetic_profiles": ("public_identifier",), "research": ("handle",),
+    "guidance": ("handle",), "jobs": ("name",), "stage_state": ("stage",),
+    "spend_approvals": ("stage",),
+}
+
+
+def _upsert_sql(table: str) -> str:
+    names = [field.name for field in fields(ROW_TYPES[table])]
+    updates = [name for name in names if name not in KEYS[table]]
+    return (
+        f"INSERT INTO {table} ({', '.join(names)}) VALUES "
+        f"({', '.join(':' + name for name in names)}) ON CONFLICT "
+        f"({', '.join(KEYS[table])}) DO UPDATE SET "
+        + ", ".join(f"{name}=excluded.{name}" for name in updates)
+    )
+
+
+UPSERTS = {table: _upsert_sql(table) for table in ROW_TYPES}

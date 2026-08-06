@@ -3,15 +3,14 @@ from __future__ import annotations
 
 import sqlite3
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, replace
 
 from packs.ingestion.primitives.deep_context.db.models import (
     CanonicalGraphCounts,
     CanonicalGraphProjection,
-    ParentRow,
-    PersonRow,
     PersonSourceRow,
 )
+from packs.ingestion.primitives.deep_context.db.schema import UPSERTS
 
 
 class _GraphError(ValueError):
@@ -30,20 +29,6 @@ class _GraphPlan:
     dependent_targets: dict[str, dict[str, str]]
     sources: tuple[PersonSourceRow, ...]
     parents_removed: int
-
-
-def _upsert_sql(row_type: type, table: str, key: str) -> str:
-    names = [field.name for field in fields(row_type)]
-    updates = [name for name in names if name != key]
-    return (
-        f"INSERT INTO {table} ({', '.join(names)}) VALUES "
-        f"({', '.join(':' + name for name in names)}) ON CONFLICT ({key}) DO UPDATE SET "
-        + ", ".join(f"{name}=excluded.{name}" for name in updates)
-    )
-
-
-_PARENT_UPSERT = _upsert_sql(ParentRow, "parents", "parent_id")
-_PERSON_UPSERT = _upsert_sql(PersonRow, "people", "person_id")
 
 
 def _validate(projection: CanonicalGraphProjection) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -209,7 +194,7 @@ def _apply(
     plan: _GraphPlan,
 ) -> CanonicalGraphCounts:
     for row in projection.parents:
-        conn.execute(_PARENT_UPSERT, asdict(row))
+        conn.execute(UPSERTS["parents"], asdict(row))
         owner = plan.human_owners.get(row.parent_id)
         conn.execute(
             "UPDATE parents SET human_worth=?, human_worth_note=?, "
@@ -224,19 +209,12 @@ def _apply(
         )
     for row in projection.people:
         old = plan.old_people.get(row.person_id)
-        effective = PersonRow(
-            row.person_id,
-            row.parent_id,
-            row.child_slug,
-            row.parent_slug,
-            row.display_name,
-            row.is_owner,
-            row.is_ghost,
-            row.facts_json if row.facts_json is not None else old["facts_json"] if old else None,
-            row.confidence if row.confidence is not None else old["confidence"] if old else None,
-            row.updated_at,
+        effective = replace(
+            row,
+            facts_json=row.facts_json if row.facts_json is not None else old["facts_json"] if old else None,
+            confidence=row.confidence if row.confidence is not None else old["confidence"] if old else None,
         )
-        conn.execute(_PERSON_UPSERT, asdict(effective))
+        conn.execute(UPSERTS["people"], asdict(effective))
 
     for table, key, targets in (
         ("links", "row_key", plan.candidate_targets),

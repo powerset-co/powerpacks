@@ -26,7 +26,7 @@ from packs.ingestion.primitives.deep_context.prefetch_profiles import PrefetchPr
 
 
 def query(db: Db, sql: str):
-    return db._query(sql)
+    return db.query(sql)
 
 
 class SyntheticPrefetchTest(unittest.TestCase):

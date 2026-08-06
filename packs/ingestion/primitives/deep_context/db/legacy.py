@@ -5,6 +5,9 @@ builds and validates the complete relational graph before one SQLite commit;
 normal stage projectors in ``projectors.py`` accept only the current manifest.
 
 Changelog:
+  2026-08-05: value/status helpers now come from ``projectors`` (one
+    policy home); legacy manifests with status ``no_match``/``noop`` import as
+    complete stages, matching the current projector classification.
   2026-08-05: v5 import preserves the exact facts-backed worth population,
     resolves retired aliases and slug owners, and rejects orphan relations.
 """
@@ -52,6 +55,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     StageStatus,
     SyntheticProfileRow,
 )
+from packs.ingestion.primitives.deep_context.db.projectors import (
+    _number,
+    _sha256,
+    _text,
+    stage_status_for,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 
 
@@ -91,20 +100,8 @@ class _Facts:
     fingerprint: str
 
 
-def _text(value: object) -> str | None:
-    text = str(value or "").strip()
-    return text or None
-
-
-def _number(value: object) -> float | None:
-    try:
-        return float(str(value)) if str(value or "").strip() else None
-    except ValueError:
-        return None
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _file_sha256(path: Path) -> str:
+    return _sha256(path.read_bytes())
 
 
 def _read_merged_people(path: Path | None) -> tuple[dict[str, set[str]], set[str]]:
@@ -156,7 +153,7 @@ def _read_facts(path: Path) -> _Facts | None:
     if not merged:
         return None
     return _Facts(path.stem.lower(), merged, name, worth, reason, confidence, is_owner,
-                  path, _sha256(path))
+                  path, _file_sha256(path))
 
 
 def _read_index(path: Path | None) -> tuple[
@@ -446,7 +443,7 @@ def import_legacy(
     synthetic_artifacts: list[ArtifactRow] = []
     stale_synthetic_memberships = 0
     synthetic_source_memberships: set[str] = set()
-    synthetic_fingerprint = _sha256(synthetic_csv) if synthetic_csv and synthetic_csv.exists() else None
+    synthetic_fingerprint = _file_sha256(synthetic_csv) if synthetic_csv and synthetic_csv.exists() else None
     for row in batons._load_synthetic_rows(synthetic_csv):
         pub = str(row.get("public_identifier") or "").strip().lower()
         person_ids = [str(value).strip().lower() for value in json.loads(row.get("source_person_ids") or "[]")]
@@ -653,7 +650,7 @@ def import_legacy(
                     continue
                 artifacts.append(ArtifactRow(
                     f"avatar:{key}", ArtifactKind.AVATAR.value, link.parent_id,
-                    str(path.resolve()), _sha256(path), ProjectionStatus.PROJECTED.value,
+                    str(path.resolve()), _file_sha256(path), ProjectionStatus.PROJECTED.value,
                     candidate_key=key, projected_at=now_iso(),
                 ))
                 break
@@ -673,7 +670,7 @@ def import_legacy(
                 raise LegacyImportError(f"cannot parse research {directory.name}: {exc}") from exc
             artifact_key = f"research:{directory.name}"
             artifacts.append(ArtifactRow(
-                artifact_key, ArtifactKind.RESEARCH.value, owner, str(path), _sha256(path),
+                artifact_key, ArtifactKind.RESEARCH.value, owner, str(path), _file_sha256(path),
                 ProjectionStatus.PROJECTED.value,
                 payload_json=json.dumps(payload, separators=(",", ":")), projected_at=now_iso(),
             ))
@@ -692,22 +689,13 @@ def import_legacy(
         if not isinstance(payload, dict):
             continue
         stage = str(payload.get("stage") or path.parent.name).strip()
-        raw_status = str(payload.get("status") or "pending").strip().lower()
-        status = (
-            StageStatus.NEEDS_APPROVAL.value if raw_status == "needs_approval"
-            else StageStatus.FAILED.value if raw_status == "failed"
-            else StageStatus.COMPLETE.value if raw_status in {
-                "complete", "completed", "completed_with_errors", "research_complete"
-            }
-            else StageStatus.RUNNING.value if raw_status in {"running", "submitted"}
-            else StageStatus.PENDING.value
-        )
+        status = stage_status_for(str(payload.get("status") or "pending").strip().lower())
         selection = payload.get("selection")
         selection_fingerprint = (
             _text(selection.get("fingerprint")) if isinstance(selection, dict) else _text(selection)
         )
         stages.append(StageStateRow(
-            stage, status, selection_fingerprint, _sha256(path),
+            stage, status, selection_fingerprint, _file_sha256(path),
             _text(payload.get("completed_at")) if status == StageStatus.COMPLETE.value else None,
             _text(payload.get("error")), _text(payload.get("updated_at")),
         ))
@@ -722,40 +710,40 @@ def import_legacy(
               "links", "candidate_people",
               "artifacts", "facts", "synthetic_profiles", "research", "guidance", "jobs",
               "stage_state", "spend_approvals")
-    with db._connect() as conn:
+    with db.transaction() as conn:
         occupied = [name for name in tables if conn.execute(f"SELECT 1 FROM {name} LIMIT 1").fetchone()]
         if occupied:
             raise LegacyImportError(f"canonical DB is not empty: {', '.join(occupied)}")
         for row in parents.values():
-            db._project_parent(row, conn=conn)
+            db._write("parents", row, conn)
         for row in people.values():
-            db._project_person(row, conn=conn)
+            db._write("people", row, conn)
         for person_id, values in identifiers.items():
-            db._replace_person_identifiers(person_id, tuple(
+            db._replace_children("person_identifiers", person_id, tuple(
                 PersonIdentifierRow(person_id, kind, normalized, display)
                 for kind, normalized, display in sorted(values)
             ), conn=conn)
         for person_id, values in person_sources.items():
             if person_id not in people:
                 continue
-            db._replace_person_sources(person_id, tuple(
+            db._replace_children("person_sources", person_id, tuple(
                 PersonSourceRow(person_id, source) for source in sorted(values)
             ), conn=conn)
         for row in links.values():
             db._project_candidate(row, conn=conn)
         for key, person_ids in memberships.items():
             parent_id = links[key].parent_id
-            db._replace_candidate_people(key, tuple(
+            db._replace_children("candidate_people", key, tuple(
                 CandidatePersonRow(key, person_id, parent_id) for person_id in sorted(person_ids)
             ), conn=conn)
         for row in artifacts:
             db._project_artifact(row, conn=conn)
         for row in facts:
-            db._project_fact(row, conn=conn)
+            db._write("facts", row, conn)
         for row in synthetics:
-            db._project_synthetic_profile(row, conn=conn)
+            db._write("synthetic_profiles", row, conn)
         for row in research:
-            db._project_research(row, conn=conn)
+            db._write("research", row, conn)
         for row in stages:
             db._save_stage(row, conn=conn)
         for row in approvals:

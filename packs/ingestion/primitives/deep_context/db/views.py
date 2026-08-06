@@ -7,14 +7,46 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
-from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
+from packs.ingestion.primitives.deep_context.db.models import (
+    ApprovedState,
+    IdentifierKind,
+    PARENT_WORTH_PREFIX,
+    ReviewAction,
+    RowKind,
+)
+from packs.ingestion.primitives.deep_context.db.snapshots import (
+    canonical_snapshot,
+    identity_snapshot,
+)
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 
 
 _EMPTY_COUNTS = {"total": 0, "completed": 0, "pending": 0, "failed": 0}
 _STAGES = ("worth", "enrich", "linkedin")
+
+
+class ApprovedReviewIdentity(TypedDict):
+    """One approved real identity, normalized for directory projection."""
+
+    row_key: str
+    name: str
+    action: str
+    linkedin_url: str
+    person_id: str
+    emails: list[str]
+    phones: list[str]
+
+
+class LinkDecisionState(TypedDict):
+    """Effective decision fields needed to reuse a research judgment."""
+
+    action: str
+    approved: str
+    llm_reject: str
+    llm_judge_fingerprint: str
+    new_linkedin_url: str
 
 
 _WORTH_CTE = """
@@ -97,13 +129,13 @@ def _worth_dict(row: Any) -> dict[str, Any]:
 
 def _worth_rows(db: Db) -> list[dict[str, Any]]:
     """All facts-backed, non-owner, non-ghost canonical people."""
-    rows = db._query(_WORTH_CTE + _WORTH_SELECT.format(where=""))
+    rows = db.query(_WORTH_CTE + _WORTH_SELECT.format(where=""))
     return [_worth_dict(row) for row in rows]
 
 
 def _worth_queue(db: Db) -> list[dict[str, Any]]:
     """The effective-Maybe queue; researched synthetic people do not re-enter."""
-    rows = db._query(
+    rows = db.query(
         _WORTH_CTE + _WORTH_SELECT.format(
             where="WHERE effective_worth='maybe' AND has_synthetic=0"
         )
@@ -113,7 +145,7 @@ def _worth_queue(db: Db) -> list[dict[str, Any]]:
 
 def _worth_counts(db: Db) -> dict[str, int]:
     """Worth-stage counts from the same relation and queue predicate as the cards."""
-    row = db._query(
+    row = db.query(
         _WORTH_CTE
         + """
 SELECT count(*) AS total,
@@ -344,22 +376,7 @@ def _candidate_dict(row: Any) -> dict[str, Any]:
 
 
 def _parent_dict(row: Any) -> dict[str, Any]:
-    worth = {
-        "key": f"{PARENT_WORTH_PREFIX}{row['parent_id']}",
-        "parent_id": row["parent_id"],
-        "parent_slug": row["display_slug"] or row["public_identifier"],
-        "person_ids": _json(row["person_ids_json"], []),
-        "name": row["display_name"] or row["public_identifier"],
-        "machine": {
-            "decision": row["machine_worth"],
-            "reason": row["machine_worth_reason"],
-            "source": row["machine_source"],
-        },
-        "human": ({"decision": row["human_worth"], "updated_at": row["human_worth_at"] or ""}
-                  if row["human_worth"] else None),
-        "effective": row["effective_worth"],
-        "source": "user" if row["human_worth"] else row["machine_source"],
-    }
+    worth = _worth_dict(row)
     slug = row["display_slug"] or row["public_identifier"]
     source_channels = _json(row["sources_json"], [])
     labels = {"gmail_msgvault": "gmail", "imessage": "imessage", "whatsapp": "whatsapp"}
@@ -390,14 +407,14 @@ def _hydrate_parents(db: Db, parent_rows: list[Any], *, pending_only: bool) -> l
         parent_placeholders=placeholders,
         pending="AND c.is_pending=1" if pending_only else "",
     )
-    for row in db._query(sql, tuple(by_id)):
+    for row in db.query(sql, tuple(by_id)):
         by_id[row["parent_id"]]["candidates"].append(_candidate_dict(row))
     return parents
 
 
 def _all_parents(db: Db) -> list[dict[str, Any]]:
     """Web-ready review/directory model, including completed and rejected parents."""
-    rows = db._query(
+    rows = db.query(
         _LINKEDIN_CTE
         + _PARENT_SELECT.format(
             where="""WHERE NOT EXISTS (
@@ -413,7 +430,7 @@ def _all_parents(db: Db) -> list[dict[str, Any]]:
 
 def _linkedin_queue(db: Db) -> list[dict[str, Any]]:
     """One stable card per pending parent, carrying all of its pending candidates."""
-    rows = db._query(
+    rows = db.query(
         _LINKEDIN_CTE
         + _PARENT_SELECT.format(where="WHERE p.parent_id IN (SELECT parent_id FROM pending_parents)")
     )
@@ -421,7 +438,7 @@ def _linkedin_queue(db: Db) -> list[dict[str, Any]]:
 
 
 def _linkedin_progress(db: Db) -> dict[str, int]:
-    row = db._query(
+    row = db.query(
         _LINKEDIN_CTE
         + """
 SELECT (SELECT count(*) FROM identity_scope) AS total,
@@ -438,7 +455,7 @@ def _stage_progress(db: Db) -> dict[str, int]:
     # A stale child mentioned by a synthetic can belong to a second canonical
     # parent. Its fact-only fallback is not another lookup; a materialized link
     # or research result is the durable subject marker.
-    lookup_ready = db._query(
+    lookup_ready = db.query(
         _WORTH_CTE
         + """
 SELECT count(*) AS n FROM worth w
@@ -461,10 +478,16 @@ WHERE w.effective_worth='yes'
   )
 """
     )[0]["n"]
-    total = db._query("SELECT count(*) AS n FROM parents")[0]["n"]
-    rejected = db._query(
+    total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
+    rejected = db.query(
         _WORTH_CTE
-        + """
+        + """, linkedin_csv_parents AS (
+  SELECT DISTINCT pe.parent_id FROM people pe JOIN person_sources ps USING(person_id)
+  WHERE ps.source='linkedin_csv'
+), kept_parents AS (
+  SELECT DISTINCT parent_id FROM links
+  WHERE decision_approved='yes' AND decision_action NOT IN ('detach', 'exclude')
+)
 SELECT count(DISTINCT parent_id) AS n FROM (
   SELECT w.parent_id FROM worth w
   WHERE w.effective_worth='no'
@@ -472,15 +495,8 @@ SELECT count(DISTINCT parent_id) AS n FROM (
       w.human_worth='no'
       OR (
         w.human_worth IS NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM people pe JOIN person_sources ps USING(person_id)
-          WHERE pe.parent_id=w.parent_id AND ps.source='linkedin_csv'
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM links kept
-          WHERE kept.parent_id=w.parent_id AND kept.decision_approved='yes'
-            AND kept.decision_action NOT IN ('detach', 'exclude')
-        )
+        AND w.parent_id NOT IN (SELECT parent_id FROM linkedin_csv_parents)
+        AND w.parent_id NOT IN (SELECT parent_id FROM kept_parents)
       )
     )
   UNION ALL
@@ -490,15 +506,8 @@ SELECT count(DISTINCT parent_id) AS n FROM (
   SELECT p.parent_id FROM parents p
   WHERE p.machine_worth='no'
     AND NOT EXISTS(SELECT 1 FROM worth w WHERE w.parent_id=p.parent_id)
-    AND NOT EXISTS (
-      SELECT 1 FROM people pe JOIN person_sources ps USING(person_id)
-      WHERE pe.parent_id=p.parent_id AND ps.source='linkedin_csv'
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM links kept
-      WHERE kept.parent_id=p.parent_id AND kept.decision_approved='yes'
-        AND kept.decision_action NOT IN ('detach', 'exclude')
-    )
+    AND p.parent_id NOT IN (SELECT parent_id FROM linkedin_csv_parents)
+    AND p.parent_id NOT IN (SELECT parent_id FROM kept_parents)
   UNION ALL
   SELECT p.parent_id FROM parents p
   WHERE EXISTS (
@@ -528,7 +537,7 @@ SELECT count(DISTINCT parent_id) AS n FROM (
 
 
 def _stage_states(db: Db) -> dict[str, dict[str, Any]]:
-    return {row["stage"]: dict(row) for row in db._query(
+    return {row["stage"]: dict(row) for row in db.query(
         "SELECT * FROM stage_state ORDER BY stage"
     )}
 
@@ -603,11 +612,11 @@ def _enrichment_state(db: Db) -> dict[str, Any]:
     """Compatibility-ready enrichment state with one freshness policy."""
     stages = _stage_states(db)
     stage = stages.get("enrich") or stages.get("enrichment")
-    jobs = db._query(
+    jobs = db.query(
         "SELECT * FROM jobs WHERE kind='enrichment' ORDER BY finished_at DESC, name LIMIT 1"
     )
     job = dict(jobs[0]) if jobs else None
-    approval_rows = db._query(
+    approval_rows = db.query(
         "SELECT * FROM spend_approvals WHERE stage IN ('enrich', 'enrichment') "
         "ORDER BY approved_at DESC LIMIT 1"
     )
@@ -743,12 +752,12 @@ def workflow_state(
 def retarget_snapshot(db: Db) -> dict[str, list[dict[str, Any]]]:
     """Guided-retarget requests and their durable job rows."""
     guidance = []
-    for row in db._query("SELECT * FROM guidance ORDER BY submitted_at, handle"):
+    for row in db.query("SELECT * FROM guidance ORDER BY submitted_at, handle"):
         item = dict(row)
         item["detail"] = _json(item.pop("detail_json"), {})
         guidance.append(item)
     jobs = []
-    for row in db._query(
+    for row in db.query(
         "SELECT * FROM jobs WHERE kind='guided_retarget' ORDER BY started_at, name"
     ):
         item = dict(row)
@@ -769,7 +778,7 @@ def _artifact_path(
         if value is not None:
             clauses.append(f"{column}=?")
             params.append(value)
-    rows = db._query(
+    rows = db.query(
         f"SELECT path FROM artifacts WHERE {' AND '.join(clauses)} "
         "ORDER BY projected_at DESC, artifact_key LIMIT 1",
         tuple(params),
@@ -778,7 +787,7 @@ def _artifact_path(
 
 
 def dossier_path(db: Db, slug_or_parent_id: str) -> str | None:
-    rows = db._query(
+    rows = db.query(
         "SELECT parent_id FROM parents WHERE parent_id=? OR display_slug=? "
         "OR public_identifier=? LIMIT 1",
         (slug_or_parent_id, slug_or_parent_id, slug_or_parent_id),
@@ -788,7 +797,7 @@ def dossier_path(db: Db, slug_or_parent_id: str) -> str | None:
 
 def avatar_path(db: Db, public_identifier: str) -> str | None:
     """The explicitly projected cached image; transport sniffs its content type."""
-    rows = db._query(
+    rows = db.query(
         "SELECT row_key FROM links WHERE public_identifier=? "
         "OR machine_proposed_public_identifier=? OR replacement_public_identifier=? LIMIT 1",
         (public_identifier, public_identifier, public_identifier),
@@ -800,7 +809,7 @@ def avatar_path(db: Db, public_identifier: str) -> str | None:
 
 def _siblings_of(db: Db, candidate_key: str) -> list[str]:
     """All real, synthetic, and ghost candidate keys for the clicked parent."""
-    rows = db._query(
+    rows = db.query(
         "SELECT row_key FROM links WHERE parent_id=("
         "SELECT parent_id FROM links WHERE row_key=?"
         ") ORDER BY row_key",
@@ -823,7 +832,7 @@ def directory(db: Db) -> list[dict[str, str]]:
 
 def person_detail(db: Db, slug_or_parent_id: str) -> dict[str, Any] | None:
     """One SQL-hydrated parent; artifact paths may be opened by the response adapter."""
-    rows = db._query(
+    rows = db.query(
         _WORTH_CTE
         + _PARENT_SELECT.format(
             where="WHERE p.parent_id=? OR p.display_slug=? OR p.public_identifier=?"
@@ -847,12 +856,78 @@ def worth_review(
     raise StoreError(f"unknown worth review scope: {scope}")
 
 
+def approved_review_identities(db: Db) -> list[ApprovedReviewIdentity]:
+    """Approved real LinkedIn identities with every current parent anchor."""
+    canonical, identity = canonical_snapshot(db), identity_snapshot(db)
+    links = {row.row_key: row for row in identity.links}
+    parents = {row.parent_id: row for row in canonical.parents}
+    people: dict[str, list[Any]] = {}
+    for person in canonical.people:
+        people.setdefault(person.parent_id, []).append(person)
+    identifiers: dict[str, list[Any]] = {}
+    for identifier in canonical.identifiers:
+        identifiers.setdefault(identifier.person_id, []).append(identifier)
+
+    result: list[ApprovedReviewIdentity] = []
+    for review in identity.review_rows:
+        link = links.get(review.key)
+        if (
+            link is None
+            or link.kind == RowKind.SYNTHETIC.value
+            or review.action not in {ReviewAction.VERIFY.value, ReviewAction.RETARGET.value}
+            or review.approved not in {ApprovedState.AUTO.value, ApprovedState.YES.value}
+        ):
+            continue
+        members = sorted(people.get(link.parent_id, []), key=lambda row: row.person_id)
+        real_members = [row for row in members if not row.is_ghost]
+        by_kind = {
+            kind: sorted({
+                identifier.display_value or identifier.normalized_value
+                for person in members
+                for identifier in identifiers.get(person.person_id, [])
+                if identifier.kind == kind
+            })
+            for kind in (IdentifierKind.EMAIL.value, IdentifierKind.PHONE.value)
+        }
+        result.append({
+            "row_key": review.key,
+            "name": parents[link.parent_id].display_name or "",
+            "action": review.action,
+            "linkedin_url": (
+                review.new_linkedin_url
+                if review.action == ReviewAction.RETARGET.value
+                else review.linkedin_url
+            ),
+            "person_id": real_members[0].person_id if real_members else "",
+            "emails": by_kind[IdentifierKind.EMAIL.value],
+            "phones": by_kind[IdentifierKind.PHONE.value],
+        })
+    return result
+
+
+def link_decision_state(db: Db) -> dict[str, LinkDecisionState]:
+    """Effective link decisions keyed by candidate, with nullable SQL normalized."""
+    snapshot = identity_snapshot(db)
+    link_keys = {row.row_key for row in snapshot.links}
+    return {
+        row.key: {
+            "action": row.action,
+            "approved": row.approved,
+            "llm_reject": row.llm_reject,
+            "llm_judge_fingerprint": row.llm_judge_fingerprint,
+            "new_linkedin_url": row.new_linkedin_url,
+        }
+        for row in snapshot.review_rows
+        if row.key in link_keys
+    }
+
+
 def _enrichment_queue(
     db: Db, *, include_plausibly_absent: bool = False,
     include_candidates: bool = False, confirm_threshold: float = 0.8,
 ) -> list[dict[str, Any]]:
     """Effective-Yes parents whose identity still needs one paid lookup."""
-    rows = db._query(
+    rows = db.query(
         _WORTH_CTE
         + """
 SELECT l.row_key, l.parent_id, w.display_slug, w.display_name, l.linkedin_url,

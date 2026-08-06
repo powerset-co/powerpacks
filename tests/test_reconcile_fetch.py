@@ -137,7 +137,7 @@ class SqliteReconcileTests(unittest.TestCase):
                 no_llm=True,
             ).run()
 
-            link = db._query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0]
+            link = db.query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0]
             self.assertEqual((link["machine_action"], link["machine_approved"]), ("verify", "auto"))
             self.assertEqual(link["judgment_artifact_path"], str(verdicts))
             self.assertTrue(verdicts.exists())

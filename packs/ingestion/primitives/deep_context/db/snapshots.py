@@ -1,8 +1,17 @@
-"""Typed producer snapshots from canonical Deep Context SQLite state."""
+"""Typed producer snapshots and export batons from canonical Deep Context SQLite state.
+
+The single home of the effective-decision projection: ``identity_snapshot``
+builds the typed review rows and ``export_batons`` serializes those same rows,
+so the CSV baton other stages read can never drift from what producers see.
+"""
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
+from pathlib import Path
 from typing import TypeVar
 
+from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePersonRow,
@@ -15,6 +24,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     PersonRow,
     PersonSourceRow,
     ResearchRow,
+    ReviewAction,
     ReviewExportRow,
     SyntheticProfileRow,
 )
@@ -25,7 +35,7 @@ RowT = TypeVar("RowT")
 
 
 def _rows(db: Db, sql: str, row_type: type[RowT]) -> tuple[RowT, ...]:
-    return tuple(row_type(**dict(row)) for row in db._query(sql))
+    return tuple(row_type(**dict(row)) for row in db.query(sql))
 
 
 def canonical_snapshot(db: Db) -> CanonicalSnapshot:
@@ -109,3 +119,31 @@ def identity_snapshot(db: Db) -> IdentitySnapshot:
         research=_rows(db, "SELECT * FROM research ORDER BY handle", ResearchRow),
         review_rows=tuple(review_rows),
     )
+
+
+def _synthetic_gate(link: LinkSnapshotRow) -> str:
+    """A human detach/exclude wins, a human verify approves, else the machine gate."""
+    if link.decision_action in {ReviewAction.DETACH.value, ReviewAction.EXCLUDE.value}:
+        return "no"
+    if link.decision_action == ReviewAction.VERIFY.value and link.decision_approved == "yes":
+        return "yes"
+    return link.machine_approved or ""
+
+
+def export_batons(db: Db, review_csv: Path, synthetic_csv: Path | None = None) -> None:
+    """Write the review.csv baton (and synthetic projection) other stages read."""
+    snapshot = identity_snapshot(db)
+    batons._write_override_rows(
+        review_csv, {row.key: asdict(row) for row in snapshot.review_rows},
+    )
+    if synthetic_csv is None:
+        return
+    links = {row.row_key: row for row in snapshot.links}
+    batons._write_synthetic_rows(synthetic_csv, [
+        json.loads(profile.profile_json) | {
+            "public_identifier": profile.public_identifier,
+            "linkedin_url": profile.linkedin_url or "",
+            "approved": _synthetic_gate(links[profile.candidate_key]),
+        }
+        for profile in snapshot.synthetic_profiles
+    ])

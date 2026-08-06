@@ -17,6 +17,7 @@ from packs.ingestion.primitives.deep_context.common import (
     ROOT,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.db.views import approved_review_identities
 from packs.ingestion.primitives.imports.directory import commit_directory_rows, directory_identity_key
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
@@ -91,38 +92,14 @@ def rows_from_db(db: Db) -> tuple[list[dict[str, str]], dict[str, int]]:
     """Approved real identities with every current parent email and phone."""
     rows: list[dict[str, str]] = []
     stats = {"review_considered": 0, "review_persisted": 0, "review_unanchored": 0}
-    decisions = db._query("""
-SELECT l.row_key, p.display_name,
-       COALESCE(l.decision_action, l.machine_action) AS action,
-       CASE COALESCE(l.decision_action, l.machine_action)
-         WHEN 'retarget' THEN COALESCE(l.replacement_url, l.machine_proposed_url)
-         ELSE l.linkedin_url END AS linkedin_url,
-       (SELECT person_id FROM people WHERE parent_id=l.parent_id AND is_ghost=0
-        ORDER BY person_id LIMIT 1) AS person_id,
-       (SELECT json_group_array(value) FROM (
-          SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
-          FROM people pe JOIN person_identifiers i USING(person_id)
-          WHERE pe.parent_id=l.parent_id AND i.kind='email' ORDER BY value
-        )) AS emails_json,
-       (SELECT json_group_array(value) FROM (
-          SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
-          FROM people pe JOIN person_identifiers i USING(person_id)
-          WHERE pe.parent_id=l.parent_id AND i.kind='phone' ORDER BY value
-        )) AS phones_json
-FROM links l JOIN parents p USING(parent_id)
-WHERE l.kind!='synthetic'
-  AND COALESCE(l.decision_action, l.machine_action) IN ('verify', 'retarget')
-  AND COALESCE(l.decision_approved, l.machine_approved) IN ('auto', 'yes')
-ORDER BY l.parent_id, l.row_key
-""")
-    for decision in decisions:
+    for decision in approved_review_identities(db):
         stats["review_considered"] += 1
         materialized = _identity_rows(
-            emails=json.loads(decision["emails_json"] or "[]"),
-            phones=json.loads(decision["phones_json"] or "[]"),
-            name=str(decision["display_name"] or ""),
-            linkedin_url=str(decision["linkedin_url"] or ""),
-            person_id=str(decision["person_id"] or ""),
+            emails=decision["emails"],
+            phones=decision["phones"],
+            name=decision["name"],
+            linkedin_url=decision["linkedin_url"],
+            person_id=decision["person_id"],
             reason="Approved Deep Context identity review",
             source_artifact=str(CANONICAL_DB),
         )

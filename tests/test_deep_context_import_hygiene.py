@@ -12,24 +12,34 @@ DB_PACKAGE = DEEP_CONTEXT / "db"
 EXPECTED_DB_OPERATIONS = {
     "legacy.import_legacy",
     "projectors.project_manifest",
+    "projectors.stage_status_for",
     "snapshots.canonical_snapshot",
+    "snapshots.export_batons",
     "snapshots.identity_snapshot",
     "store.Db.decide_identity",
     "store.Db.decide_worth",
-    "store.Db.export_batons",
     "store.Db.project_identity",
     "store.Db.project_rows",
+    "store.Db.query",
     "store.Db.replace_canonical_graph",
     "store.Db.reset_review",
     "store.Db.save_state",
+    "store.Db.transaction",
+    "views.approved_review_identities",
     "views.avatar_path",
     "views.directory",
     "views.dossier_path",
     "views.linkedin_review",
+    "views.link_decision_state",
     "views.person_detail",
     "views.retarget_snapshot",
     "views.workflow_state",
     "views.worth_review",
+}
+SQLITE_SOURCE_ADAPTERS = {
+    DEEP_CONTEXT / "build_email_context.py",
+    DEEP_CONTEXT / "build_owner.py",
+    DEEP_CONTEXT / "sources.py",
 }
 
 
@@ -44,7 +54,7 @@ class DeepContextImportHygieneTests(unittest.TestCase):
 
         self.assertEqual(nested, [])
 
-    def test_db_public_surface_is_exact_and_at_most_twenty_operations(self) -> None:
+    def test_db_public_surface_is_exact_and_at_most_twenty_five_operations(self) -> None:
         operations: set[str] = set()
         for path in sorted(DB_PACKAGE.glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -59,8 +69,33 @@ class DeepContextImportHygieneTests(unittest.TestCase):
                             if not member.name.startswith("_"):
                                 operations.add(f"{module}.Db.{member.name}")
 
-        self.assertLessEqual(len(operations), 20)
+        self.assertLessEqual(len(operations), 25)
         self.assertEqual(operations, EXPECTED_DB_OPERATIONS)
+
+    def test_canonical_sqlite_access_stays_inside_db_package(self) -> None:
+        direct_db_calls: list[str] = []
+        sqlite_imports: list[str] = []
+        for path in sorted(DEEP_CONTEXT.rglob("*.py")):
+            if DB_PACKAGE in path.parents:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"query", "_query", "transaction"}
+                ):
+                    direct_db_calls.append(f"{path}:{node.lineno}:{node.func.attr}")
+                if path not in SQLITE_SOURCE_ADAPTERS and (
+                    isinstance(node, ast.Import)
+                    and any(alias.name == "sqlite3" for alias in node.names)
+                    or isinstance(node, ast.ImportFrom)
+                    and node.module == "sqlite3"
+                ):
+                    sqlite_imports.append(f"{path}:{node.lineno}")
+
+        self.assertEqual(direct_db_calls, [])
+        self.assertEqual(sqlite_imports, [])
 
 
 if __name__ == "__main__":

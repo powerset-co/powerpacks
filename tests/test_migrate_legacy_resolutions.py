@@ -101,7 +101,7 @@ class MigrateLegacyResolutionsTests(unittest.TestCase):
         return json.loads(buf.getvalue())
 
     def decision(self) -> dict[str, object]:
-        return dict(self.db._query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0])
+        return dict(self.db.query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0])
 
     def test_dry_run_counts_and_writes_nothing(self):
         out = self.invoke()

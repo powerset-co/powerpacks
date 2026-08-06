@@ -1,7 +1,6 @@
 """Narrow projector and domain-transaction API for Deep Context SQLite."""
 from __future__ import annotations
 
-import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, fields
@@ -9,13 +8,12 @@ from pathlib import Path
 from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db import batons, graph
+from packs.ingestion.primitives.deep_context.db import graph
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePeopleProjection,
     CanonicalGraphCounts,
     CanonicalGraphProjection,
-    CandidatePersonRow,
     FactRow,
     GuidanceRow,
     HUMAN_DECISION_SOURCES,
@@ -24,10 +22,8 @@ from packs.ingestion.primitives.deep_context.db.models import (
     JobRow,
     LinkRow,
     ParentRow,
-    PersonIdentifierRow,
     PersonIdentifiersProjection,
     PersonRow,
-    PersonSourceRow,
     PersonSourcesProjection,
     ResearchRow,
     ResetReviewCounts,
@@ -37,7 +33,12 @@ from packs.ingestion.primitives.deep_context.db.models import (
     StageStateRow,
     SyntheticProfileRow,
 )
-from packs.ingestion.primitives.deep_context.db.schema import DDL, ROW_TYPES, SCHEMA_VERSION
+from packs.ingestion.primitives.deep_context.db.schema import (
+    DDL,
+    ROW_TYPES,
+    SCHEMA_VERSION,
+    UPSERTS,
+)
 
 
 class StoreError(ValueError):
@@ -67,30 +68,11 @@ def _expected_signature() -> tuple[tuple[str, str, str, str], ...]:
 EXPECTED_SCHEMA_SIGNATURE = _expected_signature()
 
 
-_KEYS = {
-    "parents": ("parent_id",), "people": ("person_id",),
-    "person_identifiers": ("person_id", "kind", "normalized_value"),
-    "person_sources": ("person_id", "source"),
-    "links": ("row_key",), "candidate_people": ("row_key", "person_id"),
-    "artifacts": ("artifact_key",), "facts": ("subject_key",),
-    "synthetic_profiles": ("public_identifier",), "research": ("handle",),
-    "guidance": ("handle",), "jobs": ("name",), "stage_state": ("stage",),
-    "spend_approvals": ("stage",),
+_CHILD_KEYS = {
+    "person_identifiers": "person_id",
+    "person_sources": "person_id",
+    "candidate_people": "row_key",
 }
-
-
-def _upsert_sql(table: str) -> str:
-    names = [field.name for field in fields(ROW_TYPES[table])]
-    updates = [name for name in names if name not in _KEYS[table]]
-    return (
-        f"INSERT INTO {table} ({', '.join(names)}) VALUES "
-        f"({', '.join(':' + name for name in names)}) ON CONFLICT "
-        f"({', '.join(_KEYS[table])}) DO UPDATE SET "
-        + ", ".join(f"{name}=excluded.{name}" for name in updates)
-    )
-
-
-_UPSERTS = {table: _upsert_sql(table) for table in ROW_TYPES}
 
 
 class Db:
@@ -99,10 +81,15 @@ class Db:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.db_path.exists():
-            self._validate_existing()
-        else:
-            self._create()
+        try:
+            if self.db_path.exists():
+                self._validate_existing()
+            else:
+                self._create()
+        except StoreError:
+            raise
+        except sqlite3.Error as exc:
+            raise StoreError(f"cannot open Deep Context database: {exc}") from exc
 
     def _create(self) -> None:
         conn = sqlite3.connect(self.db_path)
@@ -116,9 +103,7 @@ class Db:
             conn.close()
             self.db_path.unlink(missing_ok=True)
             raise
-        finally:
-            if self.db_path.exists():
-                conn.close()
+        conn.close()
 
     def _validate_existing(self) -> None:
         conn = sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)
@@ -147,7 +132,8 @@ class Db:
             conn.close()
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """One owned connection: commit on success, rollback on any error."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -161,69 +147,44 @@ class Db:
         finally:
             conn.close()
 
-    def _query(self, sql: str, params: tuple | dict = ()) -> list[sqlite3.Row]:
-        with self._connect() as conn:
+    @contextmanager
+    def _tx(self, conn: sqlite3.Connection | None) -> Iterator[sqlite3.Connection]:
+        """Run inside the caller's open transaction, or own a fresh one."""
+        if conn is not None:
+            yield conn
+            return
+        with self.transaction() as owned:
+            yield owned
+
+    def query(self, sql: str, params: tuple | dict = ()) -> list[sqlite3.Row]:
+        with self.transaction() as conn:
             return conn.execute(sql, params).fetchall()
 
     def _write(self, table: str, row: object, conn: sqlite3.Connection | None = None) -> None:
-        if conn is not None:
-            conn.execute(_UPSERTS[table], asdict(row))
-            return
-        with self._connect() as owned:
-            owned.execute(_UPSERTS[table], asdict(row))
+        with self._tx(conn) as target:
+            target.execute(UPSERTS[table], asdict(row))
 
-    def _project_parent(self, row: ParentRow, *, conn: sqlite3.Connection | None = None) -> None:
-        self._write("parents", row, conn)
-
-    def _project_person(self, row: PersonRow, *, conn: sqlite3.Connection | None = None) -> None:
-        self._write("people", row, conn)
-
-    def _replace_person_identifiers(
-        self, person_id: str, rows: tuple[PersonIdentifierRow, ...],
+    def _replace_children(
+        self, table: str, key: str, rows: tuple,
         *, conn: sqlite3.Connection | None = None,
     ) -> None:
-        if any(row.person_id != person_id for row in rows):
-            raise StoreError("identifier owner does not match person")
-
-        def replace(target: sqlite3.Connection) -> None:
-            target.execute("DELETE FROM person_identifiers WHERE person_id=?", (person_id,))
+        key_column = _CHILD_KEYS[table]
+        if any(getattr(row, key_column) != key for row in rows):
+            raise StoreError(f"{table} owner does not match {key_column}")
+        names = [field.name for field in fields(ROW_TYPES[table])]
+        with self._tx(conn) as target:
+            target.execute(f"DELETE FROM {table} WHERE {key_column}=?", (key,))
             target.executemany(
-                "INSERT INTO person_identifiers VALUES "
-                "(:person_id, :kind, :normalized_value, :display_value)",
+                f"INSERT INTO {table} ({', '.join(names)}) VALUES "
+                f"({', '.join(':' + name for name in names)})",
                 [asdict(row) for row in rows],
             )
-
-        if conn is not None:
-            replace(conn)
-        else:
-            with self._connect() as owned:
-                replace(owned)
-
-    def _replace_person_sources(
-        self, person_id: str, rows: tuple[PersonSourceRow, ...],
-        *, conn: sqlite3.Connection | None = None,
-    ) -> None:
-        if any(row.person_id != person_id for row in rows):
-            raise StoreError("source owner does not match person")
-
-        def replace(target: sqlite3.Connection) -> None:
-            target.execute("DELETE FROM person_sources WHERE person_id=?", (person_id,))
-            target.executemany(
-                "INSERT INTO person_sources VALUES (:person_id, :source)",
-                [asdict(row) for row in rows],
-            )
-
-        if conn is not None:
-            replace(conn)
-        else:
-            with self._connect() as owned:
-                replace(owned)
 
     def replace_canonical_graph(
         self, projection: CanonicalGraphProjection,
     ) -> CanonicalGraphCounts:
         """Atomically replace parent membership while preserving owned dependents."""
-        with self._connect() as conn:
+        with self.transaction() as conn:
             conn.execute("PRAGMA defer_foreign_keys=ON")
             conn.execute("BEGIN DEFERRED")
             try:
@@ -232,19 +193,13 @@ class Db:
                 raise StoreError(str(exc)) from exc
 
     def _project_candidate(self, row: LinkRow, *, conn: sqlite3.Connection | None = None) -> None:
-        def project(target: sqlite3.Connection) -> None:
+        with self._tx(conn) as target:
             current = target.execute(
                 "SELECT parent_id, kind FROM links WHERE row_key=?", (row.row_key,)
             ).fetchone()
             if current and tuple(current) != (row.parent_id, row.kind):
                 raise StoreError(f"candidate owner/kind changed: {row.row_key}")
-            target.execute(_UPSERTS["links"], asdict(row))
-
-        if conn is not None:
-            project(conn)
-        else:
-            with self._connect() as owned:
-                project(owned)
+            target.execute(UPSERTS["links"], asdict(row))
 
     def project_identity(
         self, rows: tuple[IdentityMachineProjection, ...],
@@ -266,76 +221,21 @@ class Db:
             "judgment_payload_json=:judgment_payload_json, source=:source, "
             "updated_at=:updated_at WHERE row_key=:row_key"
         )
-
-        def project(target: sqlite3.Connection) -> None:
+        with self._tx(conn) as target:
             for row in rows:
                 if target.execute(sql, asdict(row)).rowcount != 1:
                     raise StoreError(f"unknown candidate: {row.row_key}")
 
-        if conn is not None:
-            project(conn)
-        else:
-            with self._connect() as owned:
-                project(owned)
-
-    def _replace_candidate_people(
-        self, row_key: str, rows: tuple[CandidatePersonRow, ...],
-        *, conn: sqlite3.Connection | None = None,
-    ) -> None:
-        if any(row.row_key != row_key for row in rows):
-            raise StoreError("candidate membership key mismatch")
-
-        def replace(target: sqlite3.Connection) -> None:
-            target.execute("DELETE FROM candidate_people WHERE row_key=?", (row_key,))
-            target.executemany(
-                "INSERT INTO candidate_people VALUES (:row_key, :person_id, :parent_id)",
-                [asdict(row) for row in rows],
-            )
-
-        if conn is not None:
-            replace(conn)
-        else:
-            with self._connect() as owned:
-                replace(owned)
-
     def _project_artifact(self, row: ArtifactRow, *, conn: sqlite3.Connection | None = None) -> bool:
-        def project(target: sqlite3.Connection) -> bool:
+        with self._tx(conn) as target:
             current = target.execute(
                 "SELECT content_fingerprint, status FROM artifacts WHERE artifact_key=?",
                 (row.artifact_key,),
             ).fetchone()
             if current and tuple(current) == (row.content_fingerprint, "projected"):
                 return False
-            target.execute(
-                "INSERT INTO artifacts VALUES ("
-                ":artifact_key, :kind, :parent_id, :person_id, :candidate_key, :path, "
-                ":content_fingerprint, :input_fingerprint, :status, :error, :payload_json, "
-                ":projected_at) ON CONFLICT(artifact_key) DO UPDATE SET "
-                "kind=excluded.kind, parent_id=excluded.parent_id, person_id=excluded.person_id, "
-                "candidate_key=excluded.candidate_key, path=excluded.path, "
-                "content_fingerprint=excluded.content_fingerprint, "
-                "input_fingerprint=excluded.input_fingerprint, status=excluded.status, "
-                "error=excluded.error, payload_json=excluded.payload_json, "
-                "projected_at=excluded.projected_at",
-                asdict(row),
-            )
+            target.execute(UPSERTS["artifacts"], asdict(row))
             return True
-
-        if conn is not None:
-            return project(conn)
-        with self._connect() as owned:
-            return project(owned)
-
-    def _project_fact(self, row: FactRow, *, conn: sqlite3.Connection | None = None) -> None:
-        self._write("facts", row, conn)
-
-    def _project_synthetic_profile(
-        self, row: SyntheticProfileRow, *, conn: sqlite3.Connection | None = None,
-    ) -> None:
-        self._write("synthetic_profiles", row, conn)
-
-    def _project_research(self, row: ResearchRow, *, conn: sqlite3.Connection | None = None) -> None:
-        self._write("research", row, conn)
 
     def project_rows(
         self,
@@ -355,98 +255,74 @@ class Db:
     ) -> int:
         """Atomically project a closed union of frozen domain row models."""
         changed = 0
-        with self._connect() as conn:
+        with self.transaction() as conn:
             for row in rows:
-                if isinstance(row, ParentRow):
-                    self._project_parent(row, conn=conn)
-                elif isinstance(row, PersonRow):
-                    self._project_person(row, conn=conn)
-                elif isinstance(row, PersonIdentifiersProjection):
-                    self._replace_person_identifiers(row.person_id, row.rows, conn=conn)
-                elif isinstance(row, PersonSourcesProjection):
-                    self._replace_person_sources(row.person_id, row.rows, conn=conn)
-                elif isinstance(row, LinkRow):
-                    self._project_candidate(row, conn=conn)
-                elif isinstance(row, CandidatePeopleProjection):
-                    self._replace_candidate_people(row.row_key, row.rows, conn=conn)
-                elif isinstance(row, ArtifactRow):
-                    changed += int(self._project_artifact(row, conn=conn))
-                    continue
-                elif isinstance(row, FactRow):
-                    self._project_fact(row, conn=conn)
-                elif isinstance(row, SyntheticProfileRow):
-                    self._project_synthetic_profile(row, conn=conn)
-                elif isinstance(row, ResearchRow):
-                    self._project_research(row, conn=conn)
-                else:
-                    raise TypeError(f"unsupported projection row: {type(row).__name__}")
+                match row:
+                    case ParentRow():
+                        self._write("parents", row, conn)
+                    case PersonRow():
+                        self._write("people", row, conn)
+                    case PersonIdentifiersProjection():
+                        self._replace_children(
+                            "person_identifiers", row.person_id, row.rows, conn=conn,
+                        )
+                    case PersonSourcesProjection():
+                        self._replace_children(
+                            "person_sources", row.person_id, row.rows, conn=conn,
+                        )
+                    case LinkRow():
+                        self._project_candidate(row, conn=conn)
+                    case CandidatePeopleProjection():
+                        self._replace_children(
+                            "candidate_people", row.row_key, row.rows, conn=conn,
+                        )
+                    case ArtifactRow():
+                        changed += int(self._project_artifact(row, conn=conn))
+                    case FactRow():
+                        self._write("facts", row, conn)
+                    case SyntheticProfileRow():
+                        self._write("synthetic_profiles", row, conn)
+                    case ResearchRow():
+                        self._write("research", row, conn)
+                    case _:
+                        raise TypeError(f"unsupported projection row: {type(row).__name__}")
         return changed
 
     def _save_stage(
         self, row: StageStateRow, *, conn: sqlite3.Connection | None = None,
     ) -> None:
-        def save(target: sqlite3.Connection) -> None:
+        with self._tx(conn) as target:
             current = target.execute(
                 "SELECT selection_fingerprint FROM stage_state WHERE stage=?", (row.stage,)
             ).fetchone()
-            target.execute(_UPSERTS["stage_state"], asdict(row))
+            target.execute(UPSERTS["stage_state"], asdict(row))
             if current and current[0] != row.selection_fingerprint:
                 target.execute("DELETE FROM spend_approvals WHERE stage=?", (row.stage,))
 
-        if conn is not None:
-            save(conn)
-        else:
-            with self._connect() as owned:
-                save(owned)
-
     def _approve_spend(self, row: SpendApprovalRow) -> None:
-        with self._connect() as conn:
+        with self.transaction() as conn:
             stage = conn.execute(
                 "SELECT selection_fingerprint FROM stage_state WHERE stage=?", (row.stage,)
             ).fetchone()
             if stage is None or stage[0] != row.selection_fingerprint:
                 raise StoreError("spend approval does not match the current selection")
-            conn.execute(_UPSERTS["spend_approvals"], asdict(row))
+            conn.execute(UPSERTS["spend_approvals"], asdict(row))
 
     def save_state(
         self, row: GuidanceRow | JobRow | StageStateRow | SpendApprovalRow,
     ) -> None:
         """Persist one frozen workflow-state row through its domain validation."""
-        if isinstance(row, GuidanceRow):
-            self._write("guidance", row)
-        elif isinstance(row, JobRow):
-            self._write("jobs", row)
-        elif isinstance(row, StageStateRow):
-            self._save_stage(row)
-        elif isinstance(row, SpendApprovalRow):
-            self._approve_spend(row)
-        else:
-            raise TypeError(f"unsupported state row: {type(row).__name__}")
-
-    def _set_worth(self, parent_id: str, value: str, *, note: str | None = None,
-                  source: str = ReviewSource.REVIEW.value, decided_at: str | None = None) -> None:
-        if value not in {item.value for item in HumanWorth}:
-            raise StoreError(f"invalid human worth: {value}")
-        if source not in HUMAN_DECISION_SOURCES:
-            raise StoreError(f"invalid human decision source: {source}")
-        with self._connect() as conn:
-            changed = conn.execute(
-                "UPDATE parents SET human_worth=?, human_worth_note=?, "
-                "human_worth_source=?, human_worth_at=? WHERE parent_id=?",
-                (value, note, source, decided_at or now_iso(), parent_id),
-            ).rowcount
-            if changed != 1:
-                raise StoreError(f"unknown parent: {parent_id}")
-
-    def _reset_worth(self, parent_id: str) -> None:
-        with self._connect() as conn:
-            changed = conn.execute(
-                "UPDATE parents SET human_worth=NULL, human_worth_note=NULL, "
-                "human_worth_source=NULL, human_worth_at=NULL WHERE parent_id=?",
-                (parent_id,),
-            ).rowcount
-            if changed != 1:
-                raise StoreError(f"unknown parent: {parent_id}")
+        match row:
+            case GuidanceRow():
+                self._write("guidance", row)
+            case JobRow():
+                self._write("jobs", row)
+            case StageStateRow():
+                self._save_stage(row)
+            case SpendApprovalRow():
+                self._approve_spend(row)
+            case _:
+                raise TypeError(f"unsupported state row: {type(row).__name__}")
 
     def decide_worth(
         self, parent_id: str, value: str | None, *, note: str | None = None,
@@ -454,11 +330,21 @@ class Db:
     ) -> None:
         """Set or reset one human worth decision."""
         if value is None:
-            self._reset_worth(parent_id)
-            return
-        self._set_worth(
-            parent_id, value, note=note, source=source, decided_at=decided_at,
-        )
+            values = (None, None, None, None)
+        else:
+            if value not in {item.value for item in HumanWorth}:
+                raise StoreError(f"invalid human worth: {value}")
+            if source not in HUMAN_DECISION_SOURCES:
+                raise StoreError(f"invalid human decision source: {source}")
+            values = (value, note, source, decided_at or now_iso())
+        with self.transaction() as conn:
+            changed = conn.execute(
+                "UPDATE parents SET human_worth=?, human_worth_note=?, "
+                "human_worth_source=?, human_worth_at=? WHERE parent_id=?",
+                (*values, parent_id),
+            ).rowcount
+            if changed != 1:
+                raise StoreError(f"unknown parent: {parent_id}")
 
     def _settle_identity(
         self, clicked_key: str, action: str, *, approved: str = "yes",
@@ -477,7 +363,7 @@ class Db:
         if action != ReviewAction.RETARGET.value and (replacement_url or replacement_public_identifier):
             raise StoreError("replacement is valid only for retarget")
         at = decided_at or now_iso()
-        with self._connect() as conn:
+        with self.transaction() as conn:
             clicked = conn.execute("SELECT * FROM links WHERE row_key=?", (clicked_key,)).fetchone()
             if clicked is None:
                 raise StoreError(f"unknown candidate: {clicked_key}")
@@ -508,7 +394,7 @@ class Db:
         return [clicked_key, *siblings]
 
     def _reset_identity(self, candidate_key: str) -> list[str]:
-        with self._connect() as conn:
+        with self.transaction() as conn:
             row = conn.execute("SELECT parent_id FROM links WHERE row_key=?", (candidate_key,)).fetchone()
             if row is None:
                 raise StoreError(f"unknown candidate: {candidate_key}")
@@ -550,7 +436,7 @@ class Db:
         """Clear human review state atomically while preserving every machine artifact."""
         stages = ("worth", "enrich", "enrichment", "linkedin", "review")
         sources = (*HUMAN_DECISION_SOURCES, ReviewSource.SIBLING_SETTLE.value)
-        with self._connect() as conn:
+        with self.transaction() as conn:
             if not apply:
                 worth = conn.execute(
                     "SELECT count(*) FROM parents WHERE human_worth IS NOT NULL "
@@ -588,68 +474,3 @@ class Db:
                 "DELETE FROM spend_approvals WHERE stage IN (?, ?, ?, ?, ?)", stages,
             ).rowcount
         return ResetReviewCounts(worth, identity, stage_count, approvals)
-
-    def _baton_rows(self) -> dict[str, dict[str, str]]:
-        """Explicit review.csv projection; runtime never reads this export."""
-        out: dict[str, dict[str, str]] = {}
-        for link in self._query(
-            "SELECT l.*, (SELECT person_id FROM candidate_people cp "
-            "WHERE cp.row_key=l.row_key ORDER BY person_id LIMIT 1) person_id FROM links l"
-        ):
-            row = {column: "" for column in batons.OVERRIDE_COLUMNS}
-            values = {
-                "public_identifier": link["public_identifier"], "person_id": link["person_id"],
-                "linkedin_url": link["linkedin_url"], "action": link["decision_action"] or link["machine_action"],
-                "approved": link["decision_approved"] or link["machine_approved"],
-                "new_linkedin_url": link["replacement_url"],
-                "new_public_identifier": link["replacement_public_identifier"],
-                "confidence": link["machine_confidence"], "reason": link["machine_reason"],
-                "llm_reject": link["machine_reject"],
-                "llm_reject_confidence": link["machine_reject_confidence"],
-                "llm_reject_reason": link["machine_reject_reason"],
-                "llm_judge_fingerprint": link["judgment_fingerprint"],
-                "source": link["decision_source"] or link["source"],
-                "updated_at": link["decided_at"] or link["updated_at"],
-            }
-            if link["decision_action"] is None and link["machine_action"] == "retarget":
-                values["new_linkedin_url"] = link["machine_proposed_url"]
-                values["new_public_identifier"] = link["machine_proposed_public_identifier"]
-            row.update({key: "" if value is None else str(value) for key, value in values.items()})
-            out[link["row_key"]] = row
-        for parent in self._query("SELECT * FROM parents"):
-            row = {column: "" for column in batons.OVERRIDE_COLUMNS}
-            row.update({
-                "public_identifier": parent["public_identifier"],
-                "llm_worth": parent["machine_worth"] or "",
-                "llm_worth_reason": parent["machine_worth_reason"] or "",
-                "network_worth": parent["human_worth"] or "",
-                "user_worth_note": parent["human_worth_note"] or "",
-                "source": parent["human_worth_source"] or parent["source"] or "",
-                "updated_at": parent["human_worth_at"] or parent["updated_at"] or "",
-            })
-            out[f"parent-worth:{parent['parent_id']}"] = row
-        return out
-
-    def export_batons(self, review_csv: Path, synthetic_csv: Path | None = None) -> None:
-        batons._write_override_rows(review_csv, self._baton_rows())
-        if synthetic_csv is None:
-            return
-        rows = []
-        for profile in self._query(
-            "SELECT s.*, l.decision_action, l.decision_approved, l.machine_approved "
-            "FROM synthetic_profiles s JOIN links l ON l.row_key=s.candidate_key "
-            "ORDER BY s.public_identifier"
-        ):
-            action = profile["decision_action"]
-            if action in {ReviewAction.DETACH.value, ReviewAction.EXCLUDE.value}:
-                gate = "no"
-            elif action == ReviewAction.VERIFY.value and profile["decision_approved"] == "yes":
-                gate = "yes"
-            else:
-                gate = profile["machine_approved"] or ""
-            rows.append(json.loads(profile["profile_json"]) | {
-                "public_identifier": profile["public_identifier"],
-                "linkedin_url": profile["linkedin_url"] or "",
-                "approved": gate,
-            })
-        batons._write_synthetic_rows(synthetic_csv, rows)
