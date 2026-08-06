@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from packs.ingestion.primitives.deep_context.db.schema import (
+from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
     CandidatePersonRow,

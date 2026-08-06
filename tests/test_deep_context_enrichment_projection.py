@@ -11,7 +11,7 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context import deep_research_contacts as research
 from packs.ingestion.primitives.deep_context import reconcile_deep_research as reconcile
-from packs.ingestion.primitives.deep_context.db.schema import ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.schema import (
+from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
     CandidatePersonRow,

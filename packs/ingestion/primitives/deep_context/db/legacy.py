@@ -25,7 +25,7 @@ from packs.ingestion.primitives.common.legacy import (
 )
 from packs.ingestion.primitives.deep_context.build_parents import parent_id_for
 from packs.ingestion.primitives.deep_context.db import batons
-from packs.ingestion.primitives.deep_context.db.schema import (
+from packs.ingestion.primitives.deep_context.db.models import (
     ApprovedState,
     ArtifactKind,
     ArtifactRow,

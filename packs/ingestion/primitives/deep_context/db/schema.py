@@ -1,332 +1,19 @@
-"""Relational schema and typed projection rows for Deep Context SQLite.
-
-Files remain the durable enrichment evidence.  These rows are the queryable
-projection and human decisions; every owner relation is enforced by SQLite.
-"""
+"""Versioned relational DDL and row-to-table registry for Deep Context SQLite."""
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-from enum import StrEnum
+from packs.ingestion.primitives.deep_context.db import models
 
 SCHEMA_VERSION = 6
-
-
-class ReviewAction(StrEnum):
-    VERIFY = "verify"
-    DETACH = "detach"
-    RETARGET = "retarget"
-    EXCLUDE = "exclude"
-    REVIEW = "review"
-
-
-class ApprovedState(StrEnum):
-    AUTO = "auto"
-    YES = "yes"
-    NO = "no"
-
-
-class MachineWorth(StrEnum):
-    YES = "yes"
-    MAYBE = "maybe"
-    NO = "no"
-
-
-class HumanWorth(StrEnum):
-    YES = "yes"
-    NO = "no"
-
-
-class ReviewSource(StrEnum):
-    REVIEW = "deep-context-review"
-    USER_GUIDANCE = "user-guidance"
-    RECONCILE = "deep-context-reconcile"
-    DEEP_RESEARCH = "deep-research"
-    SYNTHESIS = "deep-context-synthesis"
-    PARENT_WORTH = "deep-context-parent-worth"
-    HEAL = "deep-context-heal"
-    NAME_MATCH = "deep-context-name-match"
-    SELF_REPORTED = "dossier-self-reported"
-    SIBLING_SETTLE = "legacy-sibling-settle"
-    LEGACY_MIGRATION = "legacy-migration"
-
-
-class RowKind(StrEnum):
-    PUB = "pub"
-    PERSON_UUID = "person_uuid"
-    CANDIDATE_EMAIL = "candidate_email"
-    CANDIDATE_PHONE = "candidate_phone"
-    MESSAGE_LINKEDIN = "message_linkedin"
-    SYNTHETIC = "synthetic"
-    GHOST = "ghost"
-    RESEARCH = "research"
-    PARENT = "parent"
-
-
-class IdentifierKind(StrEnum):
-    EMAIL = "email"
-    PHONE = "phone"
-    LINKEDIN = "linkedin"
-
-
-class ArtifactKind(StrEnum):
-    FACTS = "facts"
-    DOSSIER = "dossier"
-    PROFILE = "profile"
-    AVATAR = "avatar"
-    RESEARCH = "research"
-    SYNTHETIC = "synthetic"
-    SOURCE_BUNDLE = "source_bundle"
-    RAW_RESULT = "raw_result"
-
-
-class ProjectionStatus(StrEnum):
-    PROJECTED = "projected"
-    FAILED = "failed"
-
-
-class ResearchStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETE = "complete"
-    NO_MATCH = "no_match"
-    FAILED = "failed"
-
-
-class GuidanceState(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    APPLIED = "applied"
-    FAILED = "failed"
-
-
-class JobKind(StrEnum):
-    GUIDED_RETARGET = "guided_retarget"
-    ENRICHMENT = "enrichment"
-
-
-class JobStatus(StrEnum):
-    QUEUED = "queued"
-    RUNNING = "running"
-    APPLIED = "applied"
-    SYNTHETIC = "synthetic"
-    NO_MATCH = "no_match"
-    FAILED = "failed"
-
-
-class StageStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    NEEDS_APPROVAL = "needs_approval"
-    COMPLETE = "complete"
-    FAILED = "failed"
-
-
-HUMAN_DECISION_SOURCES = frozenset({ReviewSource.REVIEW.value, ReviewSource.USER_GUIDANCE.value})
-PARENT_WORTH_PREFIX = "parent-worth:"
-LLM_REJECT_VALUES = ("yes", "no", "spam")
-_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
-
-
-def classify_review_key(key: str) -> RowKind:
-    if key.startswith(PARENT_WORTH_PREFIX):
-        return RowKind.PARENT
-    if key.startswith("candidate:email:"):
-        return RowKind.CANDIDATE_EMAIL
-    if key.startswith("candidate:phone:"):
-        return RowKind.CANDIDATE_PHONE
-    if key.startswith("message-linkedin:"):
-        return RowKind.MESSAGE_LINKEDIN
-    if _UUID_RE.match(key):
-        return RowKind.PERSON_UUID
-    return RowKind.PUB
-
-
-@dataclass(frozen=True)
-class ParentRow:
-    parent_id: str
-    public_identifier: str
-    display_name: str | None = None
-    display_slug: str | None = None
-    machine_worth: str | None = None
-    machine_worth_reason: str | None = None
-    source: str | None = None
-    updated_at: str | None = None
-
-
-@dataclass(frozen=True)
-class PersonRow:
-    person_id: str
-    parent_id: str
-    child_slug: str | None = None
-    parent_slug: str | None = None
-    display_name: str | None = None
-    is_owner: int = 0
-    is_ghost: int = 0
-    facts_json: str | None = None
-    confidence: float | None = None
-    updated_at: str | None = None
-
-
-@dataclass(frozen=True)
-class PersonIdentifierRow:
-    person_id: str
-    kind: str
-    normalized_value: str
-    display_value: str | None = None
-
-
-@dataclass(frozen=True)
-class PersonSourceRow:
-    person_id: str
-    source: str
-
-
-@dataclass(frozen=True)
-class LinkRow:
-    row_key: str
-    parent_id: str
-    public_identifier: str
-    kind: str
-    linkedin_url: str | None = None
-    display_name: str | None = None
-    machine_action: str | None = None
-    machine_approved: str | None = None
-    machine_confidence: float | None = None
-    machine_reason: str | None = None
-    machine_judgment: str | None = None
-    machine_reject: str | None = None
-    machine_reject_confidence: float | None = None
-    machine_reject_reason: str | None = None
-    machine_proposed_url: str | None = None
-    machine_proposed_public_identifier: str | None = None
-    authoritative_detach: int = 0
-    candidate_origin: int = 0
-    raw_import: int = 0
-    paid_profile: int = 0
-    judgment_fingerprint: str | None = None
-    judgment_artifact_path: str | None = None
-    judgment_payload_json: str | None = None
-    source: str | None = None
-    updated_at: str | None = None
-
-
-@dataclass(frozen=True)
-class CandidatePersonRow:
-    row_key: str
-    person_id: str
-    parent_id: str
-
-
-@dataclass(frozen=True)
-class ArtifactRow:
-    artifact_key: str
-    kind: str
-    parent_id: str
-    path: str
-    content_fingerprint: str
-    status: str
-    person_id: str | None = None
-    candidate_key: str | None = None
-    input_fingerprint: str | None = None
-    error: str | None = None
-    payload_json: str | None = None
-    projected_at: str | None = None
-
-
-@dataclass(frozen=True)
-class FactRow:
-    subject_key: str
-    parent_id: str
-    artifact_key: str
-    person_id: str | None = None
-    machine_worth: str | None = None
-    machine_worth_reason: str | None = None
-    confidence: float | None = None
-    is_owner: int = 0
-    facts_json: str | None = None
-    projected_at: str | None = None
-
-
-@dataclass(frozen=True)
-class SyntheticProfileRow:
-    public_identifier: str
-    candidate_key: str
-    profile_json: str
-    source_artifact_key: str | None = None
-    linkedin_url: str | None = None
-    name: str | None = None
-    updated_at: str | None = None
-
-
-@dataclass(frozen=True)
-class ResearchRow:
-    handle: str
-    parent_id: str
-    status: str
-    candidate_key: str | None = None
-    artifact_key: str | None = None
-    selection_fingerprint: str | None = None
-    result_json: str | None = None
-    updated_at: str | None = None
-
-
-@dataclass(frozen=True)
-class GuidanceRow:
-    handle: str
-    parent_id: str
-    guidance: str
-    state: str = GuidanceState.PENDING.value
-    candidate_key: str | None = None
-    submitted_at: str | None = None
-    applied_url: str | None = None
-    detail_json: str | None = None
-
-
-@dataclass(frozen=True)
-class JobRow:
-    name: str
-    kind: str
-    status: str
-    parent_id: str | None = None
-    candidate_key: str | None = None
-    selection_fingerprint: str | None = None
-    completed_count: int = 0
-    total_count: int = 0
-    error: str | None = None
-    result_json: str | None = None
-    started_at: str | None = None
-    finished_at: str | None = None
-
-
-@dataclass(frozen=True)
-class StageStateRow:
-    stage: str
-    status: str
-    selection_fingerprint: str | None = None
-    artifact_fingerprint: str | None = None
-    completed_at: str | None = None
-    error: str | None = None
-    updated_at: str | None = None
-
-
-@dataclass(frozen=True)
-class SpendApprovalRow:
-    stage: str
-    selection_fingerprint: str
-    approved_count: int
-    approved_amount: float | None = None
-    approved_at: str | None = None
 
 
 def _values(*items: object) -> str:
     return "({})".format(", ".join(f"'{getattr(v, 'value', v)}'" for v in items))
 
 
-_ACTIONS = _values(*ReviewAction)
-_APPROVALS = _values(*ApprovedState)
-_KINDS = _values(*(kind for kind in RowKind if kind is not RowKind.PARENT))
-_WORTH = _values(*MachineWorth)
+_ACTIONS = _values(*models.ReviewAction)
+_APPROVALS = _values(*models.ApprovedState)
+_KINDS = _values(*(kind for kind in models.RowKind if kind is not models.RowKind.PARENT))
+_WORTH = _values(*models.MachineWorth)
 
 DDL = f"""
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -336,7 +23,7 @@ CREATE TABLE parents (
   display_name TEXT, display_slug TEXT,
   machine_worth TEXT CHECK (machine_worth IS NULL OR machine_worth IN {_WORTH}),
   machine_worth_reason TEXT,
-  human_worth TEXT CHECK (human_worth IS NULL OR human_worth IN {_values(*HumanWorth)}),
+  human_worth TEXT CHECK (human_worth IS NULL OR human_worth IN {_values(*models.HumanWorth)}),
   human_worth_note TEXT, human_worth_source TEXT, human_worth_at TEXT,
   source TEXT, updated_at TEXT
 );
@@ -355,7 +42,7 @@ CREATE INDEX people_by_parent ON people(parent_id);
 
 CREATE TABLE person_identifiers (
   person_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN {_values(*IdentifierKind)}),
+  kind TEXT NOT NULL CHECK (kind IN {_values(*models.IdentifierKind)}),
   normalized_value TEXT NOT NULL, display_value TEXT,
   PRIMARY KEY (person_id, kind, normalized_value),
   FOREIGN KEY (person_id) REFERENCES people(person_id) ON DELETE CASCADE
@@ -375,7 +62,7 @@ CREATE TABLE links (
   machine_action TEXT CHECK (machine_action IS NULL OR machine_action IN {_ACTIONS}),
   machine_approved TEXT CHECK (machine_approved IS NULL OR machine_approved IN {_APPROVALS}),
   machine_confidence REAL, machine_reason TEXT, machine_judgment TEXT,
-  machine_reject TEXT CHECK (machine_reject IS NULL OR machine_reject IN {_values(*LLM_REJECT_VALUES)}),
+  machine_reject TEXT CHECK (machine_reject IS NULL OR machine_reject IN {_values(*models.LLM_REJECT_VALUES)}),
   machine_reject_confidence REAL, machine_reject_reason TEXT,
   machine_proposed_url TEXT, machine_proposed_public_identifier TEXT,
   authoritative_detach INTEGER NOT NULL DEFAULT 0 CHECK (authoritative_detach IN (0, 1)),
@@ -408,10 +95,10 @@ CREATE INDEX candidate_people_by_person ON candidate_people(person_id);
 
 CREATE TABLE artifacts (
   artifact_key TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN {_values(*ArtifactKind)}),
+  kind TEXT NOT NULL CHECK (kind IN {_values(*models.ArtifactKind)}),
   parent_id TEXT NOT NULL, person_id TEXT, candidate_key TEXT,
   path TEXT NOT NULL, content_fingerprint TEXT NOT NULL, input_fingerprint TEXT,
-  status TEXT NOT NULL CHECK (status IN {_values(*ProjectionStatus)}), error TEXT,
+  status TEXT NOT NULL CHECK (status IN {_values(*models.ProjectionStatus)}), error TEXT,
   payload_json TEXT CHECK (payload_json IS NULL OR json_valid(payload_json)), projected_at TEXT,
   UNIQUE (artifact_key, parent_id),
   FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE,
@@ -455,7 +142,7 @@ BEGIN SELECT RAISE(ABORT, 'synthetic profile owns candidate kind'); END;
 
 CREATE TABLE research (
   handle TEXT PRIMARY KEY, parent_id TEXT NOT NULL, candidate_key TEXT, artifact_key TEXT,
-  status TEXT NOT NULL CHECK (status IN {_values(*ResearchStatus)}), selection_fingerprint TEXT,
+  status TEXT NOT NULL CHECK (status IN {_values(*models.ResearchStatus)}), selection_fingerprint TEXT,
   result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)), updated_at TEXT,
   FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE,
   FOREIGN KEY (candidate_key, parent_id) REFERENCES links(row_key, parent_id) ON DELETE CASCADE,
@@ -464,7 +151,7 @@ CREATE TABLE research (
 
 CREATE TABLE guidance (
   handle TEXT PRIMARY KEY, parent_id TEXT NOT NULL, candidate_key TEXT,
-  guidance TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN {_values(*GuidanceState)}),
+  guidance TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN {_values(*models.GuidanceState)}),
   submitted_at TEXT, applied_url TEXT,
   detail_json TEXT CHECK (detail_json IS NULL OR json_valid(detail_json)),
   FOREIGN KEY (parent_id) REFERENCES parents(parent_id) ON DELETE CASCADE,
@@ -472,8 +159,8 @@ CREATE TABLE guidance (
 );
 
 CREATE TABLE jobs (
-  name TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN {_values(*JobKind)}),
-  status TEXT NOT NULL CHECK (status IN {_values(*JobStatus)}), parent_id TEXT, candidate_key TEXT,
+  name TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN {_values(*models.JobKind)}),
+  status TEXT NOT NULL CHECK (status IN {_values(*models.JobStatus)}), parent_id TEXT, candidate_key TEXT,
   selection_fingerprint TEXT, completed_count INTEGER NOT NULL DEFAULT 0,
   total_count INTEGER NOT NULL DEFAULT 0, error TEXT,
   result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
@@ -485,7 +172,7 @@ CREATE TABLE jobs (
 );
 
 CREATE TABLE stage_state (
-  stage TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status IN {_values(*StageStatus)}),
+  stage TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status IN {_values(*models.StageStatus)}),
   selection_fingerprint TEXT, artifact_fingerprint TEXT,
   completed_at TEXT, error TEXT, updated_at TEXT
 );
@@ -501,18 +188,18 @@ CREATE TABLE spend_approvals (
 
 
 ROW_TYPES = {
-    "parents": ParentRow,
-    "people": PersonRow,
-    "person_identifiers": PersonIdentifierRow,
-    "person_sources": PersonSourceRow,
-    "links": LinkRow,
-    "candidate_people": CandidatePersonRow,
-    "artifacts": ArtifactRow,
-    "facts": FactRow,
-    "synthetic_profiles": SyntheticProfileRow,
-    "research": ResearchRow,
-    "guidance": GuidanceRow,
-    "jobs": JobRow,
-    "stage_state": StageStateRow,
-    "spend_approvals": SpendApprovalRow,
+    "parents": models.ParentRow,
+    "people": models.PersonRow,
+    "person_identifiers": models.PersonIdentifierRow,
+    "person_sources": models.PersonSourceRow,
+    "links": models.LinkRow,
+    "candidate_people": models.CandidatePersonRow,
+    "artifacts": models.ArtifactRow,
+    "facts": models.FactRow,
+    "synthetic_profiles": models.SyntheticProfileRow,
+    "research": models.ResearchRow,
+    "guidance": models.GuidanceRow,
+    "jobs": models.JobRow,
+    "stage_state": models.StageStateRow,
+    "spend_approvals": models.SpendApprovalRow,
 }

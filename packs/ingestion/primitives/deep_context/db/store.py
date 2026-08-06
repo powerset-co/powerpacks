@@ -9,10 +9,7 @@ from pathlib import Path
 from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db.schema import (
-    DDL,
-    ROW_TYPES,
-    SCHEMA_VERSION,
+from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactRow,
     CandidatePersonRow,
     FactRow,
@@ -32,6 +29,7 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     StageStateRow,
     SyntheticProfileRow,
 )
+from packs.ingestion.primitives.deep_context.db.schema import DDL, ROW_TYPES, SCHEMA_VERSION
 
 
 class StoreError(ValueError):

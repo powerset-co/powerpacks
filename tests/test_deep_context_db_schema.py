@@ -6,7 +6,7 @@ import unittest
 import csv
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context.db.schema import (
+from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
     ArtifactRow,
     CandidatePersonRow,

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from packs.ingestion.primitives.deep_context.db.schema import PARENT_WORTH_PREFIX
+from packs.ingestion.primitives.deep_context.db.models import PARENT_WORTH_PREFIX
 from packs.ingestion.primitives.deep_context.db.store import Db
 
 

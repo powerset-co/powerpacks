@@ -10,7 +10,7 @@ from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX
 from packs.ingestion.primitives.deep_context.db import batons
 from packs.ingestion.primitives.deep_context.db.legacy import LegacyImportError, import_legacy
 from packs.ingestion.primitives.deep_context.db.projectors import ProjectionError, project_manifest
-from packs.ingestion.primitives.deep_context.db.schema import ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db.models import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.deep_context.db.views import (
     avatar_path,
