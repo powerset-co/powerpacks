@@ -6,7 +6,6 @@ CSV or enrichment directories to decide what is pending.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.deep_context.db.schema import PARENT_WORTH_PREFIX
@@ -205,6 +204,10 @@ SELECT p.parent_id, p.public_identifier, p.display_name, p.display_slug,
        COALESCE(w.person_ids_json, (SELECT json_group_array(person_id) FROM (
          SELECT person_id FROM people WHERE parent_id=p.parent_id ORDER BY person_id
        ))) AS person_ids_json,
+       (SELECT json_group_array(source) FROM (
+         SELECT DISTINCT ps.source FROM people pe JOIN person_sources ps USING(person_id)
+         WHERE pe.parent_id=p.parent_id ORDER BY ps.source
+       )) AS sources_json,
        a.path AS dossier_path
 FROM parents p
 LEFT JOIN worth w USING(parent_id)
@@ -353,6 +356,9 @@ def _parent_dict(row: Any) -> dict[str, Any]:
         "source": "user" if row["human_worth"] else row["machine_source"],
     }
     slug = row["display_slug"] or row["public_identifier"]
+    source_channels = _json(row["sources_json"], [])
+    labels = {"gmail_msgvault": "gmail", "imessage": "imessage", "whatsapp": "whatsapp"}
+    sources = [labels[value] for value in source_channels if value in labels]
     return {
         "parent_id": row["parent_id"],
         "slug": slug,
@@ -360,7 +366,8 @@ def _parent_dict(row: Any) -> dict[str, Any]:
         "dossier_path": row["dossier_path"],
         "name": row["display_name"] or row["public_identifier"],
         "person_ids": worth["person_ids"],
-        "sources": [],
+        "sources": sources,
+        "source_channels": source_channels,
         "worth_row": worth,
         "worth": {"decision": worth["effective"], "source": worth["source"]},
         "machine_worth": worth["machine"],
@@ -432,12 +439,30 @@ SELECT (SELECT count(*) FROM identity_scope) AS total,
 def stage_progress(db: Db) -> dict[str, int]:
     worth = worth_counts(db)
     linkedin = linkedin_progress(db)
+    # A stale child mentioned by a synthetic can belong to a second canonical
+    # parent. Its fact-only fallback is not another lookup; a materialized link
+    # or research result is the durable subject marker.
     lookup_ready = db.query(
         _WORTH_CTE
         + """
 SELECT count(*) AS n FROM worth w
 WHERE w.effective_worth='yes'
-  AND EXISTS(SELECT 1 FROM links l WHERE l.parent_id=w.parent_id AND l.raw_import=1)
+  AND (
+    EXISTS(SELECT 1 FROM links l WHERE l.parent_id=w.parent_id AND l.raw_import=1)
+    OR (
+      (
+        EXISTS(SELECT 1 FROM links l WHERE l.parent_id=w.parent_id)
+        OR EXISTS(
+          SELECT 1 FROM artifacts a
+          WHERE a.parent_id=w.parent_id AND a.kind='research'
+        )
+      )
+      AND NOT EXISTS(
+        SELECT 1 FROM people pe
+        WHERE pe.parent_id=w.parent_id AND pe.person_id NOT LIKE 'candidate:%'
+      )
+    )
+  )
 """
     )[0]["n"]
     total = db.query("SELECT count(*) AS n FROM parents")[0]["n"]
@@ -445,10 +470,50 @@ WHERE w.effective_worth='yes'
         _WORTH_CTE
         + """
 SELECT count(DISTINCT parent_id) AS n FROM (
-  SELECT parent_id FROM worth WHERE effective_worth='no'
+  SELECT w.parent_id FROM worth w
+  WHERE w.effective_worth='no'
+    AND (
+      w.human_worth='no'
+      OR (
+        w.human_worth IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM people pe JOIN person_sources ps USING(person_id)
+          WHERE pe.parent_id=w.parent_id AND ps.source='linkedin_csv'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM links kept
+          WHERE kept.parent_id=w.parent_id AND kept.decision_approved='yes'
+            AND kept.decision_action NOT IN ('detach', 'exclude')
+        )
+      )
+    )
   UNION ALL
   SELECT parent_id FROM links
   WHERE decision_action='exclude' AND decision_approved IN ('auto', 'yes')
+  UNION ALL
+  SELECT p.parent_id FROM parents p
+  WHERE p.machine_worth='no'
+    AND NOT EXISTS(SELECT 1 FROM worth w WHERE w.parent_id=p.parent_id)
+    AND NOT EXISTS (
+      SELECT 1 FROM people pe JOIN person_sources ps USING(person_id)
+      WHERE pe.parent_id=p.parent_id AND ps.source='linkedin_csv'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM links kept
+      WHERE kept.parent_id=p.parent_id AND kept.decision_approved='yes'
+        AND kept.decision_action NOT IN ('detach', 'exclude')
+    )
+  UNION ALL
+  SELECT p.parent_id FROM parents p
+  WHERE EXISTS (
+      SELECT 1 FROM links rejected
+      WHERE rejected.parent_id=p.parent_id AND rejected.kind='synthetic'
+        AND rejected.decision_action='detach' AND rejected.decision_approved='yes'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM links real
+      WHERE real.parent_id=p.parent_id AND real.kind!='synthetic'
+    )
 )
 """
     )[0]["n"]
@@ -568,7 +633,7 @@ def dossier_path(db: Db, slug_or_parent_id: str) -> str | None:
 
 
 def avatar_path(db: Db, public_identifier: str) -> str | None:
-    """A projected local image only; profile JSON is never served as an avatar."""
+    """The explicitly projected cached image; transport sniffs its content type."""
     rows = db.query(
         "SELECT row_key FROM links WHERE public_identifier=? "
         "OR machine_proposed_public_identifier=? OR replacement_public_identifier=? LIMIT 1",
@@ -576,10 +641,7 @@ def avatar_path(db: Db, public_identifier: str) -> str | None:
     )
     if not rows:
         return None
-    path = artifact_path(db, "profile", candidate_key=rows[0]["row_key"])
-    return path if path and Path(path).suffix.lower() in {
-        ".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp",
-    } else None
+    return artifact_path(db, "avatar", candidate_key=rows[0]["row_key"])
 
 
 def siblings_of(db: Db, candidate_key: str) -> list[str]:

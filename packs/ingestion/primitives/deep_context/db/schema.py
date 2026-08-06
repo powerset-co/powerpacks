@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class ReviewAction(StrEnum):
@@ -73,6 +73,7 @@ class ArtifactKind(StrEnum):
     FACTS = "facts"
     DOSSIER = "dossier"
     PROFILE = "profile"
+    AVATAR = "avatar"
     RESEARCH = "research"
     SYNTHETIC = "synthetic"
     SOURCE_BUNDLE = "source_bundle"
@@ -173,6 +174,12 @@ class PersonIdentifierRow:
     kind: str
     normalized_value: str
     display_value: str | None = None
+
+
+@dataclass(frozen=True)
+class PersonSourceRow:
+    person_id: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -355,6 +362,13 @@ CREATE TABLE person_identifiers (
 );
 CREATE INDEX identifiers_by_value ON person_identifiers(kind, normalized_value);
 
+CREATE TABLE person_sources (
+  person_id TEXT NOT NULL, source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+  PRIMARY KEY (person_id, source),
+  FOREIGN KEY (person_id) REFERENCES people(person_id) ON DELETE CASCADE
+);
+CREATE INDEX person_sources_by_source ON person_sources(source, person_id);
+
 CREATE TABLE links (
   row_key TEXT PRIMARY KEY, parent_id TEXT NOT NULL, public_identifier TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN {_KINDS}), linkedin_url TEXT, display_name TEXT,
@@ -490,6 +504,7 @@ ROW_TYPES = {
     "parents": ParentRow,
     "people": PersonRow,
     "person_identifiers": PersonIdentifierRow,
+    "person_sources": PersonSourceRow,
     "links": LinkRow,
     "candidate_people": CandidatePersonRow,
     "artifacts": ArtifactRow,

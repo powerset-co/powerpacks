@@ -12,7 +12,12 @@ from packs.ingestion.primitives.deep_context.db.legacy import LegacyImportError,
 from packs.ingestion.primitives.deep_context.db.projectors import ProjectionError, project_manifest
 from packs.ingestion.primitives.deep_context.db.schema import ParentRow, PersonRow
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.views import worth_counts
+from packs.ingestion.primitives.deep_context.db.views import (
+    avatar_path,
+    linkedin_progress,
+    stage_progress,
+    worth_counts,
+)
 from packs.ingestion.schemas.people_schema import generate_person_id, legacy_message_linkedin_id
 
 
@@ -228,6 +233,69 @@ class LegacyProjectorTest(unittest.TestCase):
                 import_legacy(db, review_csv=review, index_json=root / "index.json",
                               facts_dir=facts_dir)
 
+    def test_sources_unresolved_membership_and_proposed_avatar_are_absorbed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            facts_dir = root / "facts"
+            avatar_dir = root / "avatars"
+            facts_dir.mkdir()
+            avatar_dir.mkdir()
+            pub = "jordan-bravo"
+            proposed_pub = "jordan-bravo-new"
+            person_id = "candidate:email:jordan@example.test"
+            parent_id = "parent-jordan"
+            (root / "index.json").write_text(json.dumps({
+                "slugs": {"jordan": {"person_id": person_id}},
+                "parents": {"jordan": {
+                    "parent_id": parent_id, "name": "Jordan Bravo", "children": ["jordan"]}},
+            }), encoding="utf-8")
+            (facts_dir / f"{person_id}.jsonl").write_text(json.dumps({
+                "canonical_name": "Jordan Bravo",
+                "network_worth": {"decision": "yes", "reason": "Known collaborator"},
+            }), encoding="utf-8")
+            merged = root / "people.csv"
+            merged.write_text(
+                "id,source_channels\n"
+                f'{person_id},"gmail_msgvault,linkedin_csv"\n',
+                encoding="utf-8",
+            )
+            review = root / "review.csv"
+            row = {column: "" for column in batons.OVERRIDE_COLUMNS}
+            row.update({
+                "public_identifier": pub,
+                "person_id": person_id,
+                "action": "retarget",
+                "approved": "auto",
+                "new_linkedin_url": f"https://www.linkedin.com/in/{proposed_pub}",
+                "new_public_identifier": proposed_pub,
+            })
+            batons.write_override_rows(review, {pub: row})
+            avatar = avatar_dir / (
+                hashlib.sha256(proposed_pub.encode()).hexdigest()[:24] + ".image"
+            )
+            avatar.write_bytes(b"synthetic-image")
+
+            db = Db(root / "canonical.sqlite")
+            import_legacy(
+                db, review_csv=review, index_json=root / "index.json",
+                facts_dir=facts_dir, merged_people_csv=merged, avatar_dir=avatar_dir,
+            )
+
+            link = db.query("SELECT * FROM links WHERE row_key=?", (pub,))[0]
+            self.assertEqual(link["parent_id"], parent_id)
+            self.assertEqual(link["machine_proposed_public_identifier"], proposed_pub)
+            self.assertEqual(db.query(
+                "SELECT parent_id FROM candidate_people WHERE row_key=?", (pub,)
+            )[0][0], parent_id)
+            self.assertEqual(
+                [item["source"] for item in db.query(
+                    "SELECT source FROM person_sources ORDER BY source"
+                )],
+                ["gmail_msgvault", "linkedin_csv"],
+            )
+            self.assertEqual(avatar_path(db, proposed_pub), str(avatar.resolve()))
+            self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 0)
+
     def test_real_mirror_worth_and_foreign_keys_when_present(self) -> None:
         root = Path("/Users/arthur/workspace/powerpacks-jake-mirror/.powerpacks")
         if not root.exists():
@@ -241,11 +309,18 @@ class LegacyProjectorTest(unittest.TestCase):
                 index_json=dc / "index.json", facts_dir=dc / "facts",
                 verdicts_jsonl=dc / "reconcile/verdicts.jsonl",
                 research_dir=dc / "reconcile/deep-research",
+                merged_people_csv=root / "network-import/merged/people.csv",
+                avatar_dir=dc / "review/avatars",
             )
             self.assertEqual(len(db.query("PRAGMA foreign_key_check")), 0)
             self.assertEqual(worth_counts(db), {
                 "total": 5379, "pending": 61, "yes": 4169, "no": 1149,
             })
+            self.assertEqual(linkedin_progress(db), {
+                "total": 756, "pending": 191, "done": 565,
+            })
+            self.assertEqual(stage_progress(db)["lookup_ready"], 4124)
+            self.assertEqual(stage_progress(db)["rejected"], 1136)
 
 
 if __name__ == "__main__":

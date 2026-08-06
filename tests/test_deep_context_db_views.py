@@ -15,6 +15,7 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     ParentRow,
     PersonIdentifierRow,
     PersonRow,
+    PersonSourceRow,
     SpendApprovalRow,
     StageStateRow,
     SyntheticProfileRow,
@@ -233,7 +234,8 @@ class DeepContextDbViewTests(unittest.TestCase):
         progress = stage_progress(self.db)
         self.assertEqual(progress["linkedin_pending"], 4)
         self.assertEqual(progress["linkedin_done"], 3)
-        self.assertEqual(progress["lookup_ready"], 1)
+        self.assertEqual(progress["lookup_ready"], 2)
+        self.assertEqual(progress["rejected"], 2)
 
     def test_settle_derives_every_sibling_and_preserves_existing_human(self):
         people = self.add_parent("family", "yes", "maybe")
@@ -271,6 +273,10 @@ class DeepContextDbViewTests(unittest.TestCase):
             PersonIdentifierRow(people[0], "email", "casey@example.com"),
             PersonIdentifierRow(people[0], "phone", "+15550100"),
         ))
+        self.db.replace_person_sources(people[0], (
+            PersonSourceRow(people[0], "gmail_msgvault"),
+            PersonSourceRow(people[0], "linkedin_csv"),
+        ))
         self.add_candidate(
             "detail", "jordan-detail", person_ids=people,
             linkedin_url="https://www.linkedin.com/in/jordan-detail",
@@ -293,6 +299,8 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertEqual(detail["candidates"][0]["headline"], "Product leader")
         self.assertEqual(detail["candidates"][0]["match_emails"], ["casey@example.com"])
         self.assertEqual(detail["candidates"][0]["match_phones"], ["+15550100"])
+        self.assertEqual(detail["sources"], ["gmail"])
+        self.assertEqual(detail["source_channels"], ["gmail_msgvault", "linkedin_csv"])
 
     def test_web_snapshots_are_named_sql_reads(self):
         people = self.add_parent("state", "yes")
@@ -320,7 +328,7 @@ class DeepContextDbViewTests(unittest.TestCase):
             candidate_key="jordan-state", total_count=1, result_json="{}",
         ))
         self.db.project_artifact(ArtifactRow(
-            "avatar:state", "profile", "state", "/avatars/jordan-state.jpg",
+            "avatar:state", "avatar", "state", "/avatars/jordan-state.image",
             "sha-avatar", "projected", candidate_key="jordan-state",
         ))
         self.db.project_artifact(ArtifactRow(
@@ -333,7 +341,7 @@ class DeepContextDbViewTests(unittest.TestCase):
         self.assertTrue(state["approval_current"])
         self.assertEqual(state["result"]["would_submit"], 1)
         self.assertEqual(len(retarget_snapshot(self.db)["guidance"]), 1)
-        self.assertEqual(avatar_path(self.db, "jordan-state"), "/avatars/jordan-state.jpg")
+        self.assertEqual(avatar_path(self.db, "jordan-state"), "/avatars/jordan-state.image")
         self.assertEqual(dossier_path(self.db, "jordan-state"), "/dossiers/jordan-state.md")
         self.assertEqual(all_parents(self.db)[0]["parent_id"], "state")
 

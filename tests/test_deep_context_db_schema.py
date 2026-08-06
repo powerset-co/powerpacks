@@ -20,6 +20,7 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     ParentRow,
     PersonIdentifierRow,
     PersonRow,
+    PersonSourceRow,
     ProjectionStatus,
     ReviewAction,
     SpendApprovalRow,
@@ -58,14 +59,14 @@ class DeepContextSchemaTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM parents").fetchone()[0], 1)
             self.assertIn("rogue", {row[1] for row in conn.execute("PRAGMA table_info(links)")})
 
-    def test_old_version_fails_without_running_v5_ddl(self) -> None:
+    def test_old_version_fails_without_running_v6_ddl(self) -> None:
         old = Path(self.temp.name) / "old.sqlite"
         with sqlite3.connect(old) as conn:
             conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             conn.execute("INSERT INTO meta VALUES ('schema_version', '4')")
             conn.execute("CREATE TABLE legacy_only (value TEXT)")
             conn.execute("INSERT INTO legacy_only VALUES ('kept')")
-        with self.assertRaisesRegex(SchemaVersionError, "expected 5"):
+        with self.assertRaisesRegex(SchemaVersionError, "expected 6"):
             Db(old)
         with sqlite3.connect(old) as conn:
             self.assertEqual(conn.execute("SELECT value FROM legacy_only").fetchone()[0], "kept")
@@ -106,6 +107,24 @@ class DeepContextSchemaTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             self.db.replace_person_identifiers(
                 "person-1", (PersonIdentifierRow("person-1", "nickname", "casey"),)
+            )
+
+    def test_sources_are_normalized_and_foreign_keyed(self) -> None:
+        self.parent()
+        self.person("person-1")
+        self.db.replace_person_sources("person-1", (
+            PersonSourceRow("person-1", "gmail_msgvault"),
+            PersonSourceRow("person-1", "linkedin_csv"),
+        ))
+        self.assertEqual(
+            [row["source"] for row in self.db.query(
+                "SELECT source FROM person_sources ORDER BY source"
+            )],
+            ["gmail_msgvault", "linkedin_csv"],
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.replace_person_sources(
+                "missing", (PersonSourceRow("missing", "gmail_msgvault"),)
             )
 
     def test_machine_projection_cannot_overwrite_human_worth_or_identity(self) -> None:

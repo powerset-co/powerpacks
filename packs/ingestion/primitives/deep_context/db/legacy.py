@@ -10,6 +10,7 @@ Changelog:
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from dataclasses import dataclass, replace
@@ -37,6 +38,7 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     ParentRow,
     PersonIdentifierRow,
     PersonRow,
+    PersonSourceRow,
     ProjectionStatus,
     ResearchRow,
     ResearchStatus,
@@ -83,6 +85,25 @@ def _number(value: object) -> float | None:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _read_merged_people(path: Path | None) -> tuple[dict[str, set[str]], set[str]]:
+    sources: dict[str, set[str]] = {}
+    candidates: set[str] = set()
+    if path is None or not path.exists():
+        return sources, candidates
+    with path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            person_id = str(row.get("id") or "").strip().lower()
+            if not person_id:
+                continue
+            sources.setdefault(person_id, set()).update(
+                value.strip() for value in str(row.get("source_channels") or "").split(",")
+                if value.strip()
+            )
+            if person_id.startswith("candidate:"):
+                candidates.add(person_id)
+    return sources, candidates
 
 
 def _read_facts(path: Path) -> _Facts | None:
@@ -202,12 +223,15 @@ def import_legacy(
     db: Db, *, review_csv: Path, synthetic_csv: Path | None = None,
     index_json: Path | None = None, facts_dir: Path | None = None,
     verdicts_jsonl: Path | None = None, research_dir: Path | None = None,
+    merged_people_csv: Path | None = None,
+    avatar_dir: Path | None = None,
     manifests: tuple[Path, ...] = (),
 ) -> dict[str, int]:
     """Absorb old artifacts once; any unresolved owner aborts the whole import."""
     review_rows = batons.load_override_rows(review_csv)
     aliases = message_linkedin_aliases(list(review_rows.values()))
     parents, people, slug_parent, identifiers = _read_index(index_json)
+    person_sources, merged_candidate_ids = _read_merged_people(merged_people_csv)
     indexed_person_ids = set(people)
     parsed_facts = [item for item in (
         _read_facts(path) for path in sorted(facts_dir.glob("*.jsonl"))
@@ -401,10 +425,12 @@ def import_legacy(
     synthetics: list[SyntheticProfileRow] = []
     synthetic_artifacts: list[ArtifactRow] = []
     stale_synthetic_memberships = 0
+    synthetic_source_memberships: set[str] = set()
     synthetic_fingerprint = _sha256(synthetic_csv) if synthetic_csv and synthetic_csv.exists() else None
     for row in batons.load_synthetic_rows(synthetic_csv):
         pub = str(row.get("public_identifier") or "").strip().lower()
         person_ids = [str(value).strip().lower() for value in json.loads(row.get("source_person_ids") or "[]")]
+        synthetic_source_memberships.update(person_ids)
         indexed_owners = {person_parent.get(value) for value in person_ids
                           if value in indexed_person_ids} - {None}
         parent_ids = indexed_owners or ({person_parent.get(value) for value in person_ids} - {None})
@@ -446,6 +472,11 @@ def import_legacy(
                 person_parent[person_id] = parent_id
             current_person_ids.append(person_id)
         person_ids = current_person_ids
+        for person_id in person_ids:
+            person_sources.setdefault(person_id, set()).update(
+                value.strip() for value in str(row.get("source_channels") or "").split(",")
+                if value.strip()
+            )
         candidate_key = pub
         artifact_key = f"synthetic:{pub}"
         approved = str(row.get("approved") or "").strip().lower()
@@ -478,12 +509,12 @@ def import_legacy(
             payload_json=json.dumps(row, separators=(",", ":")), projected_at=now_iso(),
         ))
 
-    # The legacy product model is verdict/facts/synthetic driven. review.csv
-    # contains thousands of baton/history rows that were never review
-    # candidates; importing those as links would invent a new queue.
+    # The legacy loader emitted one import shell for every undisplayed
+    # worth-bearing facts subject, including UUID subjects. review.csv still
+    # contains thousands of unrelated baton/history rows; those remain out.
     candidate_fact_keys = {
         fact.subject for fact in parsed_facts
-        if fact.subject.startswith(("candidate:", MESSAGE_LINKEDIN_PREFIX))
+        if fact.worth is not None or fact.subject in merged_candidate_ids
     }
     displayed_memberships = {
         person_id
@@ -491,7 +522,7 @@ def import_legacy(
             key for key, row in links.items() if row.kind == RowKind.SYNTHETIC.value
         }
         for person_id in memberships.get(displayed_key, set())
-    }
+    } | synthetic_source_memberships
     covered_fact_keys = {
         key for key in candidate_fact_keys
         if key in displayed_memberships and key not in verdict_keys and key not in human_links
@@ -523,7 +554,7 @@ def import_legacy(
         ) or key in human_links
         links[key] = replace(
             row,
-            candidate_origin=1,
+            candidate_origin=int(key.startswith("candidate:")),
             raw_import=int(not identity_result),
         )
 
@@ -585,6 +616,28 @@ def import_legacy(
             fact.confidence, int(fact.is_owner), json.dumps(fact.payload, separators=(",", ":")), now_iso(),
         ))
 
+    if avatar_dir and avatar_dir.exists():
+        for key, link in links.items():
+            human = human_links.get(key)
+            profile_pubs = (
+                human[5] if human else None,
+                link.machine_proposed_public_identifier,
+                link.public_identifier,
+            )
+            for profile_pub in dict.fromkeys(profile_pubs):
+                if not profile_pub:
+                    continue
+                digest = hashlib.sha256(profile_pub.strip().lower().encode()).hexdigest()[:24]
+                path = avatar_dir / f"{digest}.image"
+                if not path.is_file():
+                    continue
+                artifacts.append(ArtifactRow(
+                    f"avatar:{key}", ArtifactKind.AVATAR.value, link.parent_id,
+                    str(path.resolve()), _sha256(path), ProjectionStatus.PROJECTED.value,
+                    candidate_key=key, projected_at=now_iso(),
+                ))
+                break
+
     research: list[ResearchRow] = []
     if research_dir and research_dir.exists():
         for directory in sorted(path for path in research_dir.iterdir() if path.is_dir()):
@@ -645,7 +698,8 @@ def import_legacy(
                 _number(approval.get("approved_amount")), _text(approval.get("approved_at")),
             ))
 
-    tables = ("parents", "people", "person_identifiers", "links", "candidate_people",
+    tables = ("parents", "people", "person_identifiers", "person_sources",
+              "links", "candidate_people",
               "artifacts", "facts", "synthetic_profiles", "research", "guidance", "jobs",
               "stage_state", "spend_approvals")
     with db.connect() as conn:
@@ -660,6 +714,12 @@ def import_legacy(
             db.replace_person_identifiers(person_id, tuple(
                 PersonIdentifierRow(person_id, kind, normalized, display)
                 for kind, normalized, display in sorted(values)
+            ), conn=conn)
+        for person_id, values in person_sources.items():
+            if person_id not in people:
+                continue
+            db.replace_person_sources(person_id, tuple(
+                PersonSourceRow(person_id, source) for source in sorted(values)
             ), conn=conn)
         for row in links.values():
             db.project_candidate(row, conn=conn)
@@ -703,6 +763,7 @@ def import_legacy(
 
     return {
         "people": len(people), "parents": len(parents), "links": len(links),
+        "person_sources": sum(len(values) for key, values in person_sources.items() if key in people),
         "candidate_people": sum(map(len, memberships.values())), "artifacts": len(artifacts),
         "facts": len(facts), "synthetic_profiles": len(synthetics), "research": len(research),
         "human_worth": len(parent_signals), "human_identity": len(human_links),

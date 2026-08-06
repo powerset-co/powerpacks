@@ -24,6 +24,7 @@ from packs.ingestion.primitives.deep_context.db.schema import (
     ParentRow,
     PersonIdentifierRow,
     PersonRow,
+    PersonSourceRow,
     ResearchRow,
     ReviewAction,
     ReviewSource,
@@ -63,6 +64,7 @@ EXPECTED_SCHEMA_SIGNATURE = _expected_signature()
 _KEYS = {
     "parents": ("parent_id",), "people": ("person_id",),
     "person_identifiers": ("person_id", "kind", "normalized_value"),
+    "person_sources": ("person_id", "source"),
     "links": ("row_key",), "candidate_people": ("row_key", "person_id"),
     "artifacts": ("artifact_key",), "facts": ("subject_key",),
     "synthetic_profiles": ("public_identifier",), "research": ("handle",),
@@ -86,7 +88,7 @@ _UPSERTS = {table: _upsert_sql(table) for table in ROW_TYPES}
 
 
 class Db:
-    """Open an exact v5 store or create one; existing files are never changed on failure."""
+    """Open an exact v6 store or create one; existing files are never changed on failure."""
 
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
@@ -184,6 +186,26 @@ class Db:
             target.executemany(
                 "INSERT INTO person_identifiers VALUES "
                 "(:person_id, :kind, :normalized_value, :display_value)",
+                [asdict(row) for row in rows],
+            )
+
+        if conn is not None:
+            replace(conn)
+        else:
+            with self.connect() as owned:
+                replace(owned)
+
+    def replace_person_sources(
+        self, person_id: str, rows: tuple[PersonSourceRow, ...],
+        *, conn: sqlite3.Connection | None = None,
+    ) -> None:
+        if any(row.person_id != person_id for row in rows):
+            raise StoreError("source owner does not match person")
+
+        def replace(target: sqlite3.Connection) -> None:
+            target.execute("DELETE FROM person_sources WHERE person_id=?", (person_id,))
+            target.executemany(
+                "INSERT INTO person_sources VALUES (:person_id, :source)",
                 [asdict(row) for row in rows],
             )
 
