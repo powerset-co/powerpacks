@@ -64,13 +64,6 @@ def _failed_notes(items: list[dict[str, Any]]) -> dict[str, str]:
     return {slug: str(item.get("detail") or "the job did not finish") for slug, item in latest.items() if item.get("state") == "failed"}
 
 
-def _needs_worth_review(parent: dict[str, Any]) -> bool:
-    row = parent.get("worth_row") or {}
-    return row.get("effective") == "maybe" and not any(
-        candidate.get("synthetic") for candidate in parent.get("candidates") or []
-    )
-
-
 def _primary_candidate(parent: dict[str, Any]) -> dict[str, Any]:
     candidates = parent.get("candidates") or []
     return next((row for row in candidates if row.get("primary")), candidates[0] if candidates else {})
@@ -198,14 +191,14 @@ def make_handler(
         return parent_dir, child_dir, copy
 
     def worth_body(params: dict[str, list[str]]) -> str | None:
-        queue = [p for p in api.parents() if _needs_worth_review(p)]
+        queue = views.worth_review(db, "queue")
         pick = str((params.get("pick") or [""])[0]).strip().lower()
         excluded = {v.strip().lower() for v in str((params.get("exclude") or [""])[0]).split(",") if v.strip()}
         if pick:
-            queue = [p for p in queue if str((p.get("worth_row") or {}).get("key") or "").lower() == pick]
+            queue = [p for p in queue if str(p.get("key") or "").lower() == pick]
             if not queue:
                 return None
-        queue = [p for p in queue if str((p.get("worth_row") or {}).get("key") or "").lower() not in excluded]
+        queue = [p for p in queue if str(p.get("key") or "").lower() not in excluded]
         queue.sort(key=lambda p: str(p.get("name") or "").lower())
         if not queue:
             return worth_review_body(
@@ -215,7 +208,11 @@ def make_handler(
             index = max(0, int(str((params.get("index") or ["0"])[0]))) % len(queue)
         except ValueError:
             index = 0
-        parent_dir, child_dir, parent = dirs(queue[index], hide_raw=True)
+        selected = queue[index]
+        parent = views.person_detail(db, str(selected.get("parent_id") or ""))
+        if parent is None:
+            return None
+        parent_dir, child_dir, parent = dirs(parent, hide_raw=True)
         card = render_worth_card(parent, parent_dir, child_dir, Path("/__none__"))
         if str((params.get("debug") or [""])[0]) == "1":
             return (
