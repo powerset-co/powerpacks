@@ -5,7 +5,6 @@ from their concrete home so the domain model can be read without the SQL text.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -127,23 +126,6 @@ JUDGE_CONFIRM_THRESHOLD = 0.70
 JUDGE_DETACH_THRESHOLD = 0.85
 DECISIVE_CONFIRM_THRESHOLD = 0.95
 RESEARCH_CONFIRM_THRESHOLD = 0.80
-_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
-
-
-def classify_review_key(key: str) -> RowKind:
-    if key.startswith(PARENT_WORTH_PREFIX):
-        return RowKind.PARENT
-    if key.startswith("candidate:email:"):
-        return RowKind.CANDIDATE_EMAIL
-    if key.startswith("candidate:phone:"):
-        return RowKind.CANDIDATE_PHONE
-    if key.startswith("message-linkedin:"):
-        return RowKind.MESSAGE_LINKEDIN
-    if _UUID_RE.match(key):
-        return RowKind.PERSON_UUID
-    return RowKind.PUB
-
-
 @dataclass(frozen=True)
 class ParentRow:
     parent_id: str

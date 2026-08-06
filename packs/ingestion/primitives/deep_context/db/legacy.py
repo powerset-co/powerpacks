@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     LLM_REJECT_VALUES,
     LinkRow,
     MachineWorth,
+    PARENT_WORTH_PREFIX,
     ParentRow,
     PersonIdentifierRow,
     PersonRow,
@@ -49,13 +51,31 @@ from packs.ingestion.primitives.deep_context.db.models import (
     StageStateRow,
     StageStatus,
     SyntheticProfileRow,
-    classify_review_key,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
 
 
 class LegacyImportError(StoreError):
     pass
+
+
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z"
+)
+
+
+def _classify_review_key(key: str) -> RowKind:
+    if key.startswith(PARENT_WORTH_PREFIX):
+        return RowKind.PARENT
+    if key.startswith("candidate:email:"):
+        return RowKind.CANDIDATE_EMAIL
+    if key.startswith("candidate:phone:"):
+        return RowKind.CANDIDATE_PHONE
+    if key.startswith("message-linkedin:"):
+        return RowKind.MESSAGE_LINKEDIN
+    if _UUID_RE.match(key):
+        return RowKind.PERSON_UUID
+    return RowKind.PUB
 
 
 @dataclass(frozen=True)
@@ -315,7 +335,7 @@ def import_legacy(
                     is_ghost=int(person_id.startswith(MESSAGE_LINKEDIN_PREFIX)),
                 )
                 person_parent[person_id] = parent_id
-        kind = classify_review_key(key)
+        kind = _classify_review_key(key)
         proposed_url = _text(row.get("new_linkedin_url"))
         proposed_pub = _text(row.get("new_public_identifier"))
         machine_proposal = (
@@ -404,7 +424,7 @@ def import_legacy(
             verdict = payload.get("verdict") if isinstance(payload.get("verdict"), dict) else {}
             prior = links.get(key)
             links[key] = replace(
-                prior or LinkRow(key, parent_id, key, classify_review_key(key).value),
+                prior or LinkRow(key, parent_id, key, _classify_review_key(key).value),
                 parent_id=parent_id,
                 machine_judgment=_text(verdict.get("verdict")),
                 machine_confidence=_number(verdict.get("confidence")),
@@ -534,7 +554,7 @@ def import_legacy(
     for key in candidate_fact_keys - set(links):
         parent_id = person_parent[key]
         links[key] = LinkRow(
-            key, parent_id, key, classify_review_key(key).value,
+            key, parent_id, key, _classify_review_key(key).value,
             candidate_origin=int(key.startswith("candidate:")), raw_import=1,
             source=ReviewSource.LEGACY_MIGRATION.value,
         )
@@ -595,7 +615,7 @@ def import_legacy(
             errors.append("legacy verdict has no current candidate membership")
         if mismatched:
             errors.append(
-                f"{classify_review_key(key).value} candidate has {len(mismatched)} cross-parent "
+                f"{_classify_review_key(key).value} candidate has {len(mismatched)} cross-parent "
                 f"members (indexed={sum(value in indexed_person_ids for value in mismatched)}, "
                 f"members={len(person_ids)}, source={links[key].source or 'none'})"
             )

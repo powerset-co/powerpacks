@@ -9,9 +9,7 @@ everything past these functions is typed rows and queries.
 from __future__ import annotations
 
 import csv
-import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
 OVERRIDE_COLUMNS = [
@@ -40,12 +38,6 @@ OVERRIDE_COLUMNS = [
 ]
 
 
-@dataclass(frozen=True)
-class SyntheticGate:
-    public_identifier: str
-    approved: str
-
-
 def load_override_rows(path: Path) -> dict[str, dict[str, str]]:
     """review.csv rows keyed by normalized public_identifier."""
     rows: dict[str, dict[str, str]] = {}
@@ -68,33 +60,6 @@ def write_override_rows(path: Path, rows: dict[str, dict[str, str]]) -> None:
         for key in sorted(rows):
             writer.writerow({column: rows[key].get(column, "") for column in OVERRIDE_COLUMNS})
     os.replace(tmp, path)
-
-
-def read_synthetic_gates(synthetic_csv: Path | None) -> tuple[list[SyntheticGate], list[str]]:
-    """Parse the legacy approved gate; the importer maps it onto candidate state."""
-    by_pub: dict[str, SyntheticGate] = {}
-    errors: list[str] = []
-    if not synthetic_csv or not synthetic_csv.exists():
-        return [], errors
-    with synthetic_csv.open(newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            pub = (row.get("public_identifier") or "").strip().lower()
-            approved = (row.get("approved") or "").strip().lower()
-            if not approved:
-                continue
-            if not pub:
-                errors.append("synthetic-people.csv: approved gate on a row without public_identifier")
-                continue
-            if approved not in {"auto", "yes", "no"}:
-                errors.append(f"synthetic:{pub}: unknown approved '{approved}'")
-                continue
-            gate = SyntheticGate(pub, approved)
-            previous = by_pub.get(pub)
-            if previous is not None and previous != gate:
-                errors.append(f"synthetic:{pub}: duplicate rows with conflicting approved gates")
-                continue
-            by_pub[pub] = gate
-    return list(by_pub.values()), errors
 
 
 def load_synthetic_rows(path: Path | None) -> list[dict[str, str]]:
@@ -121,26 +86,3 @@ def write_synthetic_rows(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writeheader()
         writer.writerows({name: row.get(name, "") for name in fieldnames} for row in rows)
     os.replace(tmp, path)
-
-
-def people_from_index(index_json: Path) -> list[dict[str, str]]:
-    """The parent/child relation from index.json: one row per current child
-    person id, pointing at its canonical parent."""
-    try:
-        index = json.loads(index_json.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    slugs = index.get("slugs") or {}
-    out: dict[str, dict[str, str]] = {}
-    for parent_slug, parent in (index.get("parents") or {}).items():
-        parent_id = str(parent.get("parent_id") or "").strip().lower()
-        if not parent_id:
-            continue
-        for child_slug in parent.get("children") or []:
-            person_id = str((slugs.get(child_slug) or {}).get("person_id") or "").strip().lower()
-            if person_id:
-                out[person_id] = {
-                    "person_id": person_id, "parent_id": parent_id,
-                    "child_slug": str(child_slug), "parent_slug": str(parent_slug),
-                }
-    return list(out.values())

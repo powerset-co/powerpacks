@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactKind,
@@ -162,6 +164,43 @@ class CanonicalGraphTransactionTest(unittest.TestCase):
             self.db.replace_canonical_graph(projection)
         artifact = self.db.query("SELECT parent_id FROM artifacts")[0]
         self.assertEqual(artifact["parent_id"], "parent-old")
+
+    def test_planning_and_apply_share_one_connection(self) -> None:
+        self.db.project_parent(ParentRow("parent-old", "parent-old"))
+        self.db.project_person(PersonRow("person-a", "parent-old"))
+        projection = CanonicalGraphProjection(
+            parents=(ParentRow("parent-new", "parent-new"),),
+            people=(PersonRow("person-a", "parent-new"),),
+            identifiers=(),
+            sources=(),
+        )
+
+        with patch.object(self.db, "connect", wraps=self.db.connect) as connect:
+            self.db.replace_canonical_graph(projection)
+
+        self.assertEqual(connect.call_count, 1)
+
+    def test_apply_failure_rolls_back_complete_snapshot(self) -> None:
+        self.db.project_parent(ParentRow("parent-old", "parent-old"))
+        self.db.project_person(PersonRow("person-a", "parent-old"))
+        projection = CanonicalGraphProjection(
+            parents=(ParentRow("parent-new", "parent-new"),),
+            people=(PersonRow("person-a", "parent-new"),),
+            identifiers=(PersonIdentifierRow("person-a", "nickname", "casey"),),
+            sources=(),
+        )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.replace_canonical_graph(projection)
+
+        self.assertEqual(
+            [tuple(row) for row in self.db.query("SELECT parent_id FROM parents")],
+            [("parent-old",)],
+        )
+        self.assertEqual(
+            [tuple(row) for row in self.db.query("SELECT person_id, parent_id FROM people")],
+            [("person-a", "parent-old")],
+        )
 
 
 if __name__ == "__main__":

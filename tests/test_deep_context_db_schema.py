@@ -28,6 +28,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     StageStatus,
     SyntheticProfileRow,
 )
+from packs.ingestion.primitives.deep_context.db.schema import SCHEMA_VERSION
 from packs.ingestion.primitives.deep_context.db.store import Db, SchemaVersionError, StoreError
 
 
@@ -53,7 +54,9 @@ class DeepContextSchemaTests(unittest.TestCase):
         self.parent()
         with sqlite3.connect(self.path) as conn:
             conn.execute("ALTER TABLE links ADD COLUMN rogue TEXT")
-        with self.assertRaisesRegex(SchemaVersionError, "layout does not match"):
+        with self.assertRaisesRegex(
+            SchemaVersionError, rf"layout does not match schema version {SCHEMA_VERSION}"
+        ):
             Db(self.path)
         with sqlite3.connect(self.path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM parents").fetchone()[0], 1)

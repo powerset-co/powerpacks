@@ -1,0 +1,296 @@
+"""Validate, plan, and atomically apply the canonical parent graph."""
+from __future__ import annotations
+
+import sqlite3
+from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass, fields
+
+from packs.ingestion.primitives.deep_context.db.models import (
+    CanonicalGraphCounts,
+    CanonicalGraphProjection,
+    ParentRow,
+    PersonRow,
+    PersonSourceRow,
+)
+
+
+class _GraphError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class _GraphPlan:
+    parent_ids: tuple[str, ...]
+    person_ids: tuple[str, ...]
+    old_people: dict[str, sqlite3.Row]
+    human_owners: dict[str, sqlite3.Row]
+    candidate_targets: dict[str, str]
+    artifact_targets: dict[str, str]
+    fact_targets: dict[str, str]
+    dependent_targets: dict[str, dict[str, str]]
+    sources: tuple[PersonSourceRow, ...]
+    parents_removed: int
+
+
+def _upsert_sql(row_type: type, table: str, key: str) -> str:
+    names = [field.name for field in fields(row_type)]
+    updates = [name for name in names if name != key]
+    return (
+        f"INSERT INTO {table} ({', '.join(names)}) VALUES "
+        f"({', '.join(':' + name for name in names)}) ON CONFLICT ({key}) DO UPDATE SET "
+        + ", ".join(f"{name}=excluded.{name}" for name in updates)
+    )
+
+
+_PARENT_UPSERT = _upsert_sql(ParentRow, "parents", "parent_id")
+_PERSON_UPSERT = _upsert_sql(PersonRow, "people", "person_id")
+
+
+def _validate(projection: CanonicalGraphProjection) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    parent_ids = tuple(row.parent_id for row in projection.parents)
+    person_ids = tuple(row.person_id for row in projection.people)
+    parent_set = set(parent_ids)
+    person_set = set(person_ids)
+    identifier_keys = tuple(
+        (row.person_id, row.kind, row.normalized_value) for row in projection.identifiers
+    )
+    source_keys = tuple((row.person_id, row.source) for row in projection.sources)
+    if len(parent_ids) != len(parent_set):
+        raise _GraphError("canonical graph contains duplicate parents")
+    if len(person_ids) != len(person_set):
+        raise _GraphError("canonical graph contains duplicate people")
+    if any(row.parent_id not in parent_set for row in projection.people):
+        raise _GraphError("canonical person references an unknown parent")
+    if len(identifier_keys) != len(set(identifier_keys)):
+        raise _GraphError("canonical graph contains duplicate identifiers")
+    if len(source_keys) != len(set(source_keys)):
+        raise _GraphError("canonical graph contains duplicate sources")
+    if any(row.person_id not in person_set for row in projection.identifiers):
+        raise _GraphError("canonical identifier references an unknown person")
+    if any(row.person_id not in person_set for row in projection.sources):
+        raise _GraphError("canonical source references an unknown person")
+    return parent_ids, person_ids
+
+
+def _plan(
+    conn: sqlite3.Connection,
+    projection: CanonicalGraphProjection,
+    parent_ids: tuple[str, ...],
+    person_ids: tuple[str, ...],
+) -> _GraphPlan:
+    old_parents = {
+        row["parent_id"]: row for row in conn.execute("SELECT * FROM parents")
+    }
+    old_people = {row["person_id"]: row for row in conn.execute("SELECT * FROM people")}
+    parent_set = set(parent_ids)
+    person_set = set(person_ids)
+    new_parent_by_person = {row.person_id: row.parent_id for row in projection.people}
+    targets_by_old: dict[str, Counter[str]] = defaultdict(Counter)
+    for person_id, new_parent in new_parent_by_person.items():
+        old = old_people.get(person_id)
+        if old is not None:
+            targets_by_old[old["parent_id"]][new_parent] += 1
+
+    def _parent_target(old_parent: str) -> str:
+        if old_parent in parent_set and not targets_by_old.get(old_parent):
+            return old_parent
+        targets = targets_by_old.get(old_parent) or Counter()
+        if len(targets) != 1:
+            raise _GraphError(f"ambiguous canonical parent split: {old_parent}")
+        return next(iter(targets))
+
+    removed_people = set(old_people) - person_set
+    if removed_people:
+        placeholders = ",".join("?" for _ in removed_people)
+        for table in ("candidate_people", "artifacts", "facts"):
+            found = conn.execute(
+                f"SELECT 1 FROM {table} WHERE person_id IN ({placeholders}) LIMIT 1",
+                tuple(removed_people),
+            ).fetchone()
+            if found:
+                raise _GraphError(f"canonical graph would orphan {table}")
+
+    memberships: dict[str, list[str]] = defaultdict(list)
+    for row in conn.execute("SELECT row_key, person_id FROM candidate_people"):
+        memberships[row["row_key"]].append(row["person_id"])
+    candidate_targets: dict[str, str] = {}
+    for row in conn.execute("SELECT row_key, parent_id FROM links"):
+        members = memberships.get(row["row_key"], [])
+        if any(person_id not in person_set for person_id in members):
+            raise _GraphError(f"candidate has a removed person: {row['row_key']}")
+        targets = {new_parent_by_person[person_id] for person_id in members}
+        if len(targets) > 1:
+            raise _GraphError(f"candidate crosses canonical parents: {row['row_key']}")
+        candidate_targets[row["row_key"]] = next(iter(targets)) if targets else _parent_target(
+            row["parent_id"]
+        )
+
+    artifact_targets: dict[str, str] = {}
+    rows = conn.execute(
+        "SELECT artifact_key, parent_id, person_id, candidate_key FROM artifacts"
+    )
+    for row in rows:
+        if row["person_id"]:
+            target = new_parent_by_person.get(row["person_id"])
+            if target is None:
+                raise _GraphError(f"artifact has a removed person: {row['artifact_key']}")
+        elif row["candidate_key"]:
+            target = candidate_targets.get(row["candidate_key"])
+            if target is None:
+                raise _GraphError(f"artifact has an unknown candidate: {row['artifact_key']}")
+        else:
+            target = _parent_target(row["parent_id"])
+        artifact_targets[row["artifact_key"]] = target
+
+    fact_targets: dict[str, str] = {}
+    rows = conn.execute("SELECT subject_key, parent_id, person_id, artifact_key FROM facts")
+    for row in rows:
+        target = (
+            new_parent_by_person.get(row["person_id"])
+            if row["person_id"]
+            else artifact_targets.get(row["artifact_key"])
+        )
+        fact_targets[row["subject_key"]] = target or _parent_target(row["parent_id"])
+
+    dependent_targets: dict[str, dict[str, str]] = {}
+    for table in ("research", "guidance", "jobs"):
+        key = "name" if table == "jobs" else "handle"
+        dependent_targets[table] = {}
+        rows = conn.execute(
+            f"SELECT {key}, parent_id, candidate_key FROM {table} WHERE parent_id IS NOT NULL"
+        )
+        for row in rows:
+            target = (
+                candidate_targets.get(row["candidate_key"])
+                if row["candidate_key"]
+                else _parent_target(row["parent_id"])
+            )
+            if target is None:
+                raise _GraphError(f"{table} has an unknown candidate: {row[key]}")
+            dependent_targets[table][row[key]] = target
+
+    human_owners: dict[str, sqlite3.Row] = {}
+    for old_parent, targets in targets_by_old.items():
+        old = old_parents.get(old_parent)
+        if old is None or old["human_worth"] is None:
+            continue
+        chosen = sorted(targets.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        current = human_owners.get(chosen)
+        current_overlap = (
+            targets_by_old[current["parent_id"]][chosen] if current is not None else -1
+        )
+        if current is None or targets[chosen] > current_overlap or (
+            targets[chosen] == current_overlap and old_parent < current["parent_id"]
+        ):
+            human_owners[chosen] = old
+
+    old_sources = tuple(
+        PersonSourceRow(row["person_id"], row["source"])
+        for row in conn.execute("SELECT person_id, source FROM person_sources")
+        if row["person_id"] in person_set
+    )
+    return _GraphPlan(
+        parent_ids,
+        person_ids,
+        old_people,
+        human_owners,
+        candidate_targets,
+        artifact_targets,
+        fact_targets,
+        dependent_targets,
+        projection.sources or old_sources,
+        len(set(old_parents) - parent_set),
+    )
+
+
+def _apply(
+    conn: sqlite3.Connection,
+    projection: CanonicalGraphProjection,
+    plan: _GraphPlan,
+) -> CanonicalGraphCounts:
+    for row in projection.parents:
+        conn.execute(_PARENT_UPSERT, asdict(row))
+        owner = plan.human_owners.get(row.parent_id)
+        conn.execute(
+            "UPDATE parents SET human_worth=?, human_worth_note=?, "
+            "human_worth_source=?, human_worth_at=? WHERE parent_id=?",
+            (
+                owner["human_worth"] if owner else None,
+                owner["human_worth_note"] if owner else None,
+                owner["human_worth_source"] if owner else None,
+                owner["human_worth_at"] if owner else None,
+                row.parent_id,
+            ),
+        )
+    for row in projection.people:
+        old = plan.old_people.get(row.person_id)
+        effective = PersonRow(
+            row.person_id,
+            row.parent_id,
+            row.child_slug,
+            row.parent_slug,
+            row.display_name,
+            row.is_owner,
+            row.is_ghost,
+            row.facts_json if row.facts_json is not None else old["facts_json"] if old else None,
+            row.confidence if row.confidence is not None else old["confidence"] if old else None,
+            row.updated_at,
+        )
+        conn.execute(_PERSON_UPSERT, asdict(effective))
+
+    for table, key, targets in (
+        ("links", "row_key", plan.candidate_targets),
+        ("candidate_people", "row_key", plan.candidate_targets),
+        ("artifacts", "artifact_key", plan.artifact_targets),
+        ("facts", "subject_key", plan.fact_targets),
+    ):
+        conn.executemany(
+            f"UPDATE {table} SET parent_id=? WHERE {key}=?",
+            [(target, row_key) for row_key, target in targets.items()],
+        )
+    for table, targets in plan.dependent_targets.items():
+        key = "name" if table == "jobs" else "handle"
+        conn.executemany(
+            f"UPDATE {table} SET parent_id=? WHERE {key}=?",
+            [(target, row_key) for row_key, target in targets.items()],
+        )
+
+    conn.execute("DELETE FROM person_identifiers")
+    conn.executemany(
+        "INSERT INTO person_identifiers VALUES "
+        "(:person_id, :kind, :normalized_value, :display_value)",
+        [asdict(row) for row in projection.identifiers],
+    )
+    conn.execute("DELETE FROM person_sources")
+    conn.executemany(
+        "INSERT INTO person_sources VALUES (:person_id, :source)",
+        [asdict(row) for row in plan.sources],
+    )
+    for table, key, identifiers in (
+        ("people", "person_id", plan.person_ids),
+        ("parents", "parent_id", plan.parent_ids),
+    ):
+        if identifiers:
+            placeholders = ",".join("?" for _ in identifiers)
+            conn.execute(f"DELETE FROM {table} WHERE {key} NOT IN ({placeholders})", identifiers)
+        else:
+            conn.execute(f"DELETE FROM {table}")
+
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise _GraphError(f"canonical graph violates foreign keys: {violations[0]}")
+    return CanonicalGraphCounts(
+        len(projection.parents),
+        len(projection.people),
+        len(projection.identifiers),
+        len(plan.sources),
+        plan.parents_removed,
+    )
+
+
+def _replace_canonical_graph(
+    conn: sqlite3.Connection,
+    projection: CanonicalGraphProjection,
+) -> CanonicalGraphCounts:
+    parent_ids, person_ids = _validate(projection)
+    return _apply(conn, projection, _plan(conn, projection, parent_ids, person_ids))
