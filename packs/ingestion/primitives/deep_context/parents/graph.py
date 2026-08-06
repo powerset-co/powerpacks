@@ -2,6 +2,9 @@
 
 Clustering (blocking, pair judging, union-find) decides membership;
 ``parents.assignment`` decides which parent id that membership keeps.
+
+Removal countdown (2026-08-06): delete when no supported install predates the
+SQLite cutover release produced from PR #435.
 """
 from __future__ import annotations
 

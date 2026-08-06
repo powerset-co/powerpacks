@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.dossier.facts import headline
 from packs.ingestion.primitives.deep_context.dossier.rendering import render_fact_sections, yaml_list
 from packs.ingestion.primitives.deep_context.parents.models import ChildEntry, ParentPlan
@@ -29,7 +28,6 @@ def render_parent(plan: ParentPlan) -> str:
         f"emails: {yaml_list(list(plan.emails))}",
         f"phones: {yaml_list(list(plan.phones))}",
         f"confidence: {round(float(merged.get('confidence') or 0.0), 2)}",
-        f"generated_at: {now_iso()}",
         "---", "", f"# {plan.name}", "", "## Summary", "",
         headline(merged) or "_Merged from the confirmed records below._",
         "", "## Confirmed children (merged)", "",
@@ -59,12 +57,12 @@ def render_singleton(plan: ParentPlan) -> str:
         f"children: {yaml_list([child_slug])}",
         f"emails: {yaml_list(list(plan.emails))}",
         f"phones: {yaml_list(list(plan.phones))}",
-        f"generated_at: {now_iso()}", "---", "", f"# {plan.name}", "",
+        "---", "", f"# {plan.name}", "",
         f"Single identity — no duplicates detected. Full context in [[{child_slug}]].",
     ]
-    headline = plan.merged.get("headline") or ""
-    if headline:
-        lines += ["", headline]
+    summary = headline(plan.merged) or plan.merged.get("headline") or ""
+    if summary:
+        lines += ["", summary]
     return "\n".join(lines) + "\n"
 
 

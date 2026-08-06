@@ -10,9 +10,9 @@ of existing parents of its members:
 
     |E| = 0  mint a new id from the founding child set
     |E| = 1  absorb — the cluster keeps that id even though membership grew
-    |E| > 1  merge — elect one survivor; ``replace_canonical_graph`` repoints
-             every dependent row onto it and deletes the absorbed parents in
-             one transaction (no alias table)
+    |E| > 1  merge — elect one survivor; ``Db.merge_parents`` repoints every
+             dependent row onto it and deletes the absorbed parents in one
+             transaction (no alias table)
 
 Existing assignments come only from the canonical SQLite snapshot. Installs
 that predate the database cross the one-time legacy import boundary first.
@@ -66,11 +66,11 @@ class ParentAssignment:
             parent_id = self.parent_by_child.get(child_slug, "")
             if parent_id and parent_id not in candidates and parent_id not in self.claimed:
                 candidates.append(parent_id)
-        parent_id = self._elect(candidates) if candidates else mint_parent_id(child_person_ids)
+        parent_id = self.elect(candidates) if candidates else mint_parent_id(child_person_ids)
         self.claimed.add(parent_id)
         return parent_id
 
-    def _elect(self, candidates: list[str]) -> str:
+    def elect(self, candidates: list[str]) -> str:
         """Newest human worth decision wins, else most members, else smallest id."""
         best = max(self._rank(parent_id) for parent_id in candidates)
         return min(parent_id for parent_id in candidates if self._rank(parent_id) == best)

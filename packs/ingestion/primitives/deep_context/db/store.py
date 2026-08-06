@@ -8,14 +8,11 @@ from pathlib import Path
 from typing import Iterator
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context.db import graph
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.models import (
     ArtifactReplacement,
     ArtifactRow,
     CandidatePeopleProjection,
-    CanonicalGraphCounts,
-    CanonicalGraphProjection,
     DerivedResetCounts,
     FactRow,
     GuidanceRow,
@@ -95,6 +92,10 @@ _CLEAR_IDENTITY = (
 _HAS_HUMAN_WORTH = (
     "human_worth IS NOT NULL OR human_worth_note IS NOT NULL OR "
     "human_worth_source IS NOT NULL OR human_worth_at IS NOT NULL"
+)
+_PARENT_OWNER_TABLES = (
+    "people", "links", "candidate_people", "artifacts", "facts",
+    "research", "guidance", "jobs",
 )
 
 
@@ -187,17 +188,57 @@ class Db:
         conn.execute(f"DELETE FROM {table} WHERE {key_column}=?", (key,))
         conn.executemany(UPSERTS[table], [asdict(row) for row in rows])
 
-    def replace_canonical_graph(
-        self, projection: CanonicalGraphProjection,
-    ) -> CanonicalGraphCounts:
-        """Atomically replace parent membership while preserving owned dependents."""
+    def merge_parents(self, survivor_parent_id: str, absorbed_parent_id: str) -> None:
+        """Atomically absorb one parent family into a surviving parent."""
+        if survivor_parent_id == absorbed_parent_id:
+            raise StoreError("cannot merge a parent into itself")
         with self.transaction() as conn:
             conn.execute("PRAGMA defer_foreign_keys=ON")
             conn.execute("BEGIN DEFERRED")
-            try:
-                return graph._replace_canonical_graph(conn, projection)
-            except graph._GraphError as exc:
-                raise StoreError(str(exc)) from exc
+            parents = {
+                row["parent_id"]: row
+                for row in conn.execute(
+                    "SELECT * FROM parents WHERE parent_id IN (?, ?)",
+                    (survivor_parent_id, absorbed_parent_id),
+                )
+            }
+            missing = [
+                parent_id for parent_id in (survivor_parent_id, absorbed_parent_id)
+                if parent_id not in parents
+            ]
+            if missing:
+                raise StoreError(f"unknown parent: {missing[0]}")
+
+            survivor = parents[survivor_parent_id]
+            absorbed = parents[absorbed_parent_id]
+            if absorbed["human_worth"] is not None and (
+                survivor["human_worth"] is None
+                or (absorbed["human_worth_at"] or "")
+                > (survivor["human_worth_at"] or "")
+            ):
+                conn.execute(
+                    "UPDATE parents SET human_worth=?, human_worth_note=?, "
+                    "human_worth_source=?, human_worth_at=? WHERE parent_id=?",
+                    (
+                        absorbed["human_worth"],
+                        absorbed["human_worth_note"],
+                        absorbed["human_worth_source"],
+                        absorbed["human_worth_at"],
+                        survivor_parent_id,
+                    ),
+                )
+            for table in _PARENT_OWNER_TABLES:
+                conn.execute(
+                    f"UPDATE {table} SET parent_id=? WHERE parent_id=?",
+                    (survivor_parent_id, absorbed_parent_id),
+                )
+            conn.execute(
+                "UPDATE people SET parent_slug=? WHERE parent_id=?",
+                (survivor["display_slug"], survivor_parent_id),
+            )
+            IdentityPolicy.settle_human_families(conn, (survivor_parent_id,))
+            IdentityPolicy.clear_machine_winner_conflicts(conn, (survivor_parent_id,))
+            conn.execute("DELETE FROM parents WHERE parent_id=?", (absorbed_parent_id,))
 
     def _project_candidate(self, row: LinkRow, *, conn: sqlite3.Connection) -> None:
         current = conn.execute(

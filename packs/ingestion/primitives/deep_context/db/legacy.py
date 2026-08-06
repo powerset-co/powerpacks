@@ -21,6 +21,7 @@ import csv
 import hashlib
 import json
 import re
+import sqlite3
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from typing import Any
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.legacy import MESSAGE_LINKEDIN_PREFIX, message_linkedin_aliases
+from packs.ingestion.primitives.deep_context.db import graph as canonical_graph
 from packs.ingestion.primitives.deep_context.db import models as m
 from packs.ingestion.primitives.deep_context.db.identity_policy import IdentityPolicy
 from packs.ingestion.primitives.deep_context.db.projectors import ProjectionValue
@@ -41,6 +43,31 @@ LEGACY_MERGE_VERDICTS_CSV = Path(".powerpacks/deep-context/merge-verdicts.csv")
 
 class LegacyImportError(StoreError):
     pass
+
+
+class LegacyGraphMigration:
+    """Temporary whole-graph projector for pre-SQLite migration only."""
+
+    @staticmethod
+    def apply(
+        db: Db,
+        projection: m.CanonicalGraphProjection,
+    ) -> m.CanonicalGraphCounts:
+        with db.transaction() as conn:
+            return LegacyGraphMigration._apply(conn, projection)
+
+    @staticmethod
+    def _apply(
+        conn: sqlite3.Connection,
+        projection: m.CanonicalGraphProjection,
+    ) -> m.CanonicalGraphCounts:
+        conn.execute("PRAGMA defer_foreign_keys=ON")
+        if not conn.in_transaction:
+            conn.execute("BEGIN DEFERRED")
+        try:
+            return canonical_graph._replace_canonical_graph(conn, projection)
+        except canonical_graph._GraphError as exc:
+            raise LegacyImportError(str(exc)) from exc
 
 
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
@@ -884,22 +911,23 @@ def _commit(db: Db, g: _Graph, owner: m.OwnerContextRow | None) -> None:
             raise LegacyImportError(f"canonical DB is not empty: {', '.join(occupied)}")
         if owner:
             db._write("owner_context", owner, conn)
-        for row in g.parents.values():
-            db._write("parents", row, conn)
-        for row in g.people.values():
-            db._write("people", row, conn)
-        for person_id, values in g.identifiers.items():
-            db._replace_children(
-                "person_identifiers",
-                person_id,
-                tuple(m.PersonIdentifierRow(person_id, kind, normalized, display) for kind, normalized, display in sorted(values)),
-                conn=conn,
-            )
-        for person_id, values in g.sources.items():
-            if person_id in g.people:
-                db._replace_children(
-                    "person_sources", person_id, tuple(m.PersonSourceRow(person_id, source) for source in sorted(values)), conn=conn
-                )
+        projection = m.CanonicalGraphProjection(
+            parents=tuple(g.parents.values()),
+            people=tuple(g.people.values()),
+            identifiers=tuple(
+                m.PersonIdentifierRow(person_id, kind, normalized, display)
+                for person_id, values in g.identifiers.items()
+                if person_id in g.people
+                for kind, normalized, display in sorted(values)
+            ),
+            sources=tuple(
+                m.PersonSourceRow(person_id, source)
+                for person_id, values in g.sources.items()
+                if person_id in g.people
+                for source in sorted(values)
+            ),
+        )
+        LegacyGraphMigration._apply(conn, projection)
         for row in g.links.values():
             db._project_candidate(row, conn=conn)
         for key, person_ids in g.memberships.items():

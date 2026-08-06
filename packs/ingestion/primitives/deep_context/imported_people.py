@@ -19,12 +19,13 @@ from packs.ingestion.primitives.common.contact_fields import (
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context.common import slugify
 from packs.ingestion.primitives.deep_context.db.models import (
-    CanonicalGraphProjection,
     IdentifierKind,
     ParentRow,
     PersonIdentifierRow,
+    PersonIdentifiersProjection,
     PersonRow,
     PersonSourceRow,
+    PersonSourcesProjection,
     ReviewSource,
 )
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
@@ -139,7 +140,7 @@ def _components(
 
 
 def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int:
-    """Get-or-create imported people and stable parents in one graph transaction."""
+    """Get or create imported people, incrementally joining prior families."""
     if not imported:
         return 0
     snapshot = canonical_snapshot(db)
@@ -148,7 +149,6 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
     existing_parents = {row.parent_id: row for row in snapshot.parents}
     assignment = load_assignment(snapshot)
     target_by_input: dict[str, str] = {}
-    redirects: dict[str, str] = {}
 
     for component in _components(imported, parent_by_person):
         aliases = tuple(dict.fromkeys(
@@ -163,49 +163,41 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             for value in aliases if value in existing_people
         )
         target = assignment.resolve(child_slugs, tuple(person.person_id for person in component))
+        if target not in existing_parents:
+            representative = component[0]
+            parent = ParentRow(
+                target,
+                f"parent-worth:{target}",
+                representative.display_name,
+                slugify(representative.display_name, target),
+                source=ReviewSource.PARENT_WORTH.value,
+                updated_at=now_iso(),
+            )
+            db.project_rows((parent,))
+            existing_parents[target] = parent
         for old_parent in touched_parents:
-            redirects[old_parent] = target
+            if old_parent != target:
+                db.merge_parents(target, old_parent)
         for person in component:
             target_by_input[person.person_id] = target
 
-    def redirected(parent_id: str) -> str:
-        while parent_id in redirects and redirects[parent_id] != parent_id:
-            parent_id = redirects[parent_id]
-        return parent_id
-
-    incoming_by_id = {row.person_id: row for row in imported}
-    target_slugs = {
-        parent_id: existing_parents[parent_id].display_slug
-        for parent_id in set(redirects.values())
-        if parent_id in existing_parents
-    }
-    people_by_id = {
-        row.person_id: PersonRow(
-            row.person_id,
-            redirected(row.parent_id),
-            row.child_slug,
-            target_slugs.get(redirected(row.parent_id), row.parent_slug),
-            row.display_name,
-            row.is_owner,
-            row.is_ghost,
-            row.facts_json,
-            row.confidence,
-            row.updated_at,
-        )
-        for row in snapshot.people
-    }
+    identifiers_by_person: dict[str, dict[tuple[str, str], PersonIdentifierRow]] = {}
+    for row in snapshot.identifiers:
+        identifiers_by_person.setdefault(row.person_id, {})[
+            (row.kind, row.normalized_value)
+        ] = row
+    sources_by_person: dict[str, dict[str, PersonSourceRow]] = {}
+    for row in snapshot.sources:
+        sources_by_person.setdefault(row.person_id, {})[row.source] = row
+    projection_rows: list[object] = []
     for person in imported:
         prior = existing_people.get(person.person_id)
-        parent_id = redirected(target_by_input[person.person_id])
+        parent_id = target_by_input[person.person_id]
         child_slug = prior.child_slug if prior and prior.child_slug else slugify(
             person.display_name, person.person_id,
         )
-        parent_slug = (
-            existing_parents[parent_id].display_slug
-            if parent_id in existing_parents
-            else slugify(person.display_name, parent_id)
-        )
-        people_by_id[person.person_id] = PersonRow(
+        parent_slug = existing_parents[parent_id].display_slug
+        projection_rows.append(PersonRow(
             person.person_id,
             parent_id,
             child_slug,
@@ -216,38 +208,8 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             prior.facts_json if prior else None,
             prior.confidence if prior else None,
             now_iso(),
-        )
-
-    parent_ids = {row.parent_id for row in people_by_id.values()}
-    representative_by_parent: dict[str, PersonRow] = {}
-    for row in people_by_id.values():
-        representative_by_parent.setdefault(row.parent_id, row)
-    parents: list[ParentRow] = []
-    for parent_id in sorted(parent_ids):
-        prior = existing_parents.get(parent_id)
-        member = representative_by_parent[parent_id]
-        incoming = incoming_by_id.get(member.person_id)
-        display_name = prior.display_name if prior else incoming.display_name if incoming else member.display_name
-        parents.append(ParentRow(
-            parent_id,
-            prior.public_identifier if prior else f"parent-worth:{parent_id}",
-            display_name,
-            prior.display_slug if prior else slugify(display_name or "", parent_id),
-            prior.machine_worth if prior else None,
-            prior.machine_worth_reason if prior else None,
-            prior.source if prior else ReviewSource.PARENT_WORTH.value,
-            now_iso(),
         ))
-
-    identifiers = {
-        (row.person_id, row.kind, row.normalized_value): row
-        for row in snapshot.identifiers
-    }
-    sources = {
-        (row.person_id, row.source): row
-        for row in snapshot.sources
-    }
-    for person in imported:
+        identifiers = identifiers_by_person.setdefault(person.person_id, {})
         for kind, values, normalize in (
             (IdentifierKind.EMAIL.value, person.emails, normalize_email),
             (IdentifierKind.PHONE.value, person.phones, normalize_phone),
@@ -255,16 +217,19 @@ def project_imported_people(db: Db, imported: tuple[ImportedPerson, ...]) -> int
             for display in values:
                 normalized = normalize(display)
                 if normalized:
-                    identifiers[(person.person_id, kind, normalized)] = PersonIdentifierRow(
+                    identifiers[(kind, normalized)] = PersonIdentifierRow(
                         person.person_id, kind, normalized, display,
                     )
+        projection_rows.append(PersonIdentifiersProjection(
+            person.person_id,
+            tuple(identifiers[key] for key in sorted(identifiers)),
+        ))
+        sources = sources_by_person.setdefault(person.person_id, {})
         for source in person.source_channels:
-            sources[(person.person_id, source)] = PersonSourceRow(person.person_id, source)
-
-    db.replace_canonical_graph(CanonicalGraphProjection(
-        parents=tuple(parents),
-        people=tuple(people_by_id[key] for key in sorted(people_by_id)),
-        identifiers=tuple(identifiers[key] for key in sorted(identifiers)),
-        sources=tuple(sources[key] for key in sorted(sources)),
-    ))
+            sources[source] = PersonSourceRow(person.person_id, source)
+        projection_rows.append(PersonSourcesProjection(
+            person.person_id,
+            tuple(sources[key] for key in sorted(sources)),
+        ))
+    db.project_rows(tuple(projection_rows))
     return len(imported)
