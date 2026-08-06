@@ -7,11 +7,11 @@ import json
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
-from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -32,6 +32,10 @@ from packs.ingestion.primitives.deep_context.review_web.feedback import (
     FEEDBACK_ACTIONS, FEEDBACK_ALERT, build_feedback_request,
     post_feedback_quietly, submit_directory_feedback,
 )
+from packs.ingestion.primitives.deep_context.review_web.guided_retarget import (
+    GuidanceRequest,
+    GuidedRetargetWorker,
+)
 from packs.ingestion.primitives.deep_context.review_web.rendering import (
     DECISION_CHUNK_SIZE, GO_BACK_HTML, _carousel_nav, _phase_view, _step,
     decision_rows_payload, directory_page_html, esc, linkedin_finished_body,
@@ -48,25 +52,7 @@ ESTIMATED_COST_USD = 0.06
 TERMINAL_STATES = {"applied", "synthetic", "no_match", "failed"}
 AUTH_SCRIPT = Path(__file__).resolve().parents[5] / "packs/powerset/primitives/auth/auth.py"
 USER_WORTH_VALUES = {"yes", "no"}
-_auth_lock = threading.Lock()
 _auth_proc: dict[str, Any] = {"proc": None}
-_job_lock = threading.Lock()
-
-
-@dataclass(frozen=True)
-class GuidanceRequest:
-    slug: str
-    pub: str
-    name: str
-    guidance: str
-    person_ids: tuple[str, ...] = ()
-    linkedin_url: str = ""
-    candidate_pubs: tuple[str, ...] = ()
-    synthetic_pubs: tuple[str, ...] = ()
-    queue_slug: str = ""
-    submitted_at: str = ""
-    match_emails: tuple[str, ...] = ()
-    match_phones: tuple[str, ...] = ()
 
 
 def _failed_notes(items: list[dict[str, Any]]) -> dict[str, str]:
@@ -100,16 +86,15 @@ def _manifest_for_review_path(review_path: Path) -> Path:
 
 
 def start_auth_login() -> str:
-    with _auth_lock:
-        proc = _auth_proc["proc"]
-        if proc is not None and proc.poll() is None:
-            return "already_running"
-        _auth_proc["proc"] = subprocess.Popen(
-            [sys.executable, str(AUTH_SCRIPT), "login"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return "login_started"
+    proc = _auth_proc["proc"]
+    if proc is not None and proc.poll() is None:
+        return "already_running"
+    _auth_proc["proc"] = subprocess.Popen(
+        [sys.executable, str(AUTH_SCRIPT), "login"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return "login_started"
 
 
 def make_handler(
@@ -151,13 +136,11 @@ def make_handler(
         except OSError:
             run_jobs = False
     retargets_enabled = bool(run_jobs or guided_retargets)
-    events = threading.Condition()
     sequence = {"n": 0}
+    job = {"running": False}
 
     def notify() -> None:
-        with events:
-            sequence["n"] += 1
-            events.notify_all()
+        sequence["n"] += 1
 
     def wake_agent() -> None:
         if agent_notifier:
@@ -166,9 +149,15 @@ def make_handler(
             except Exception:
                 pass
 
+    if guided_retargets is None and run_jobs:
+        guided_retargets = GuidedRetargetWorker(db, on_change=notify)
+        guided_retargets.resume()
+    durable_guided = isinstance(guided_retargets, GuidedRetargetWorker)
+
     def spawn_job(name: str, steps: Callable[[], None]) -> None:
-        if not _job_lock.acquire(blocking=False):
+        if job["running"]:
             return
+        job["running"] = True
 
         def runner() -> None:
             try:
@@ -184,7 +173,7 @@ def make_handler(
                     )
                 )
             finally:
-                _job_lock.release()
+                job["running"] = False
                 notify()
                 wake_agent()
 
@@ -293,7 +282,7 @@ def make_handler(
                 search = ""
             content = f"<div class='worth-stage'>{tabs}{search}<div class='worth-panel'>{body}</div></div>"
         elif view == "enrich":
-            if run_jobs and enrichment.get("state") == "free_pending" and not _job_lock.locked():
+            if run_jobs and enrichment.get("state") == "free_pending" and not job["running"]:
                 spawn_job("free-enrichment", lambda: enrichment_job(0))
             content = render_enrichment(enrichment, progress, worth_complete="worth" in complete)
         elif view == "linkedin":
@@ -311,7 +300,7 @@ def make_handler(
             (3, "Check LinkedIn", active == 2, "linkedin" in complete, progress["linkedin_pending"], "/?stage=linkedin&preview=1"),
         )
         steps = "<i class='step-line'></i>".join(_step(*spec) for spec in specs)
-        workflow = api.workflow_status(job_running=_job_lock.locked())
+        workflow = api.workflow_status(job_running=job["running"])
         replacements = {
             "{{TITLE}}": esc(
                 {"worth": "Add People", "enrich": "Enrich Contacts", "linkedin": "Check LinkedIn", "done": "All Set"}[
@@ -365,10 +354,9 @@ def make_handler(
                 try:
                     self.wfile.write(b"retry: 2000\n\n")
                     while True:
-                        with events:
-                            if sequence["n"] == seen:
-                                events.wait(15)
-                            current = sequence["n"]
+                        if sequence["n"] == seen:
+                            time.sleep(1)
+                        current = sequence["n"]
                         self.wfile.write(
                             (
                                 f"data: {json.dumps({'seq': current, 'job': None})}\n\n"
@@ -381,7 +369,7 @@ def make_handler(
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
             if parsed.path == "/api/status":
-                return self.send_json(api.status(job_running=_job_lock.locked()))
+                return self.send_json(api.status(job_running=job["running"]))
             if parsed.path == "/api/enrichment":
                 return self.send_json(api.enrichment())
             if parsed.path == "/api/retargets":
@@ -562,7 +550,8 @@ def make_handler(
                         }
                     )
                     item["guidance"] = guidance
-                    api.save_retarget(parent, candidate, item)
+                    if not durable_guided:
+                        api.save_retarget(parent, candidate, item)
                 except (ValueError, StoreError) as exc:
                     return self.send_bytes(str(exc).encode(), "text/plain", 409)
                 try:

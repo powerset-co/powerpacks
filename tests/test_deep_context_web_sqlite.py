@@ -7,6 +7,7 @@ import http.client
 import json
 import tempfile
 import threading
+import time
 import urllib.parse
 import unittest
 from pathlib import Path
@@ -24,7 +25,26 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.review_web.guided_retarget import (
+    GuidanceRequest,
+    GuidedRetargetWorker,
+)
 from packs.ingestion.primitives.deep_context.review_web import server as review_server
+
+
+class _QueuedRetargets:
+    def submit(self, request: GuidanceRequest) -> dict[str, str]:
+        return {
+            "slug": request.slug,
+            "pub": request.pub,
+            "queue_slug": request.queue_slug,
+            "name": request.name,
+            "guidance": request.guidance,
+            "state": "queued",
+            "detail": "",
+            "submitted_at": request.submitted_at,
+            "updated_at": request.submitted_at,
+        }
 
 
 class DeepContextSqliteWebTests(unittest.TestCase):
@@ -55,6 +75,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             RowKind.PUB.value,
             paid_profile=1,
         )
+        self.queue = _QueuedRetargets()
         handler = review_server.make_handler(
             self.review,
             self.root / "verdicts.jsonl",
@@ -68,7 +89,8 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             manifest_path=self.root / "review" / "manifest.json",
             enrichment_manifest_path=self.root / "enrichment" / "manifest.json",
             profile_cache_dir=self.root / "profile-cache",
-            run_jobs=True,
+            run_jobs=False,
+            guided_retargets=self.queue,
             db=self.db,
         )
         self.review.unlink()
@@ -287,6 +309,76 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         jobs = self.db.query("SELECT kind, status FROM jobs")
         self.assertEqual(tuple(guidance[0]), ("Find the synthetic operator I met through Casey.", "pending"))
         self.assertEqual(tuple(jobs[0]), ("guided_retarget", "queued"))
+
+    def test_pasted_linkedin_applies_directly_without_research(self) -> None:
+        worker = GuidedRetargetWorker(
+            self.db,
+            runner=lambda _: self.fail("direct pasted URL must not run paid research"),
+            out_dir=self.root / "guided",
+        )
+        item = worker.submit(
+            GuidanceRequest(
+                "jordan-bravo",
+                "jordan-bravo",
+                "Jordan Bravo",
+                "Use https://www.linkedin.com/in/jordan-bravo-correct",
+                person_ids=("linkedin-person",),
+                queue_slug="jordan-bravo",
+                submitted_at="2026-08-05T00:00:00Z",
+            )
+        )
+        self.assertEqual(item["state"], "applied")
+        row = self.db.query(
+            "SELECT decision_action, replacement_public_identifier FROM links "
+            "WHERE row_key='jordan-bravo'"
+        )[0]
+        self.assertEqual(tuple(row), ("retarget", "jordan-bravo-correct"))
+
+    def test_pending_guided_job_resumes_from_sqlite(self) -> None:
+        release = threading.Event()
+        request = GuidanceRequest(
+            "jordan-bravo",
+            "jordan-bravo",
+            "Jordan Bravo",
+            "Find the synthetic operator from Casey.",
+            person_ids=("linkedin-person",),
+            queue_slug="jordan-bravo",
+            submitted_at="2026-08-05T00:00:00Z",
+        )
+        first = GuidedRetargetWorker(
+            self.db,
+            runner=lambda _: (release.wait(5) and {
+                "new_url": "https://www.linkedin.com/in/jordan-bravo-correct"
+            }) or {},
+            out_dir=self.root / "guided",
+        )
+        self.assertEqual(first.submit(request)["state"], "queued")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if self.db.query("SELECT state FROM guidance")[0]["state"] == "running":
+                break
+            time.sleep(0.01)
+        resumed = GuidedRetargetWorker(
+            self.db,
+            runner=lambda _: {
+                "new_url": "https://www.linkedin.com/in/jordan-bravo-correct",
+                "detail": "resumed result",
+            },
+            out_dir=self.root / "guided",
+        )
+        self.assertEqual(resumed.resume(), 1)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            state = self.db.query("SELECT state FROM guidance")[0]["state"]
+            if state == "applied":
+                break
+            time.sleep(0.01)
+        release.set()
+        self.assertEqual(state, "applied")
+        self.assertEqual(
+            self.db.query("SELECT status FROM jobs WHERE kind='guided_retarget'")[0]["status"],
+            "applied",
+        )
 
 
 if __name__ == "__main__":

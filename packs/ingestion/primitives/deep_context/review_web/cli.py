@@ -32,43 +32,21 @@ def cmd_status(args: argparse.Namespace) -> None:
     """Print the next-action contract; ``--wait`` blocks until it is an AGENT
     action (or the timeout passes), then prints and exits.
 
-    This is the whole agent-handoff mechanism — deliberately primitive so it
-    always works: stat six local files once a second, recompute the contract
-    only when one changed. No sockets, no daemons, no thread ids, no coupling
-    to any harness. On timeout the payload carries ``status: waiting`` and the
-    caller simply runs the command again."""
+    This is the whole agent-handoff mechanism: query canonical SQLite once a
+    second until the next move belongs to the agent or the timeout passes."""
     paths = dict(
         review_path=Path(args.review), verdicts_path=Path(args.verdicts),
         synthetic_path=Path(args.synthetic_people), facts_dir=Path(args.facts_dir),
         people_csv=Path(args.people_csv), manifest_path=Path(args.manifest),
         enrichment_manifest_path=Path(args.enrichment_manifest),
     )
-    watched = (paths["review_path"], paths["verdicts_path"], paths["synthetic_path"],
-               paths["people_csv"], paths["manifest_path"],
-               paths["enrichment_manifest_path"])
-
-    def file_signature() -> tuple[tuple[int, int], ...]:
-        values = []
-        for path in watched:
-            try:
-                stat = path.stat()
-                values.append((stat.st_mtime_ns, stat.st_size))
-            except OSError:
-                values.append((0, 0))
-        return tuple(values)
-
     status = workflow_status(**paths)
     if getattr(args, "wait", False):
         started = time.monotonic()
         deadline = started + max(1, int(args.timeout))
-        signature = file_signature()
         while (status["next_action"] not in AGENT_ACTIONS
                and time.monotonic() < deadline):
             time.sleep(1)
-            current = file_signature()
-            if current == signature:
-                continue
-            signature = current
             status = workflow_status(**paths)
         status["waited_seconds"] = int(time.monotonic() - started)
         if status["next_action"] not in AGENT_ACTIONS:
