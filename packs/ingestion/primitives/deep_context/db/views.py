@@ -847,8 +847,95 @@ def worth_review(
     raise StoreError(f"unknown worth review scope: {scope}")
 
 
+def _enrichment_queue(
+    db: Db, *, include_plausibly_absent: bool = False,
+    include_candidates: bool = False, confirm_threshold: float = 0.8,
+) -> list[dict[str, Any]]:
+    """Effective-Yes parents whose identity still needs one paid lookup."""
+    rows = db._query(
+        _WORTH_CTE
+        + """
+SELECT l.row_key, l.parent_id, w.display_slug, w.display_name, l.linkedin_url,
+       l.machine_reason, l.machine_judgment, l.candidate_origin,
+       (SELECT json_group_array(person_id) FROM (
+          SELECT person_id FROM people WHERE parent_id=l.parent_id AND is_ghost=0
+          ORDER BY person_id
+        )) AS person_ids_json,
+       (SELECT json_group_array(value) FROM (
+          SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
+          FROM people pe JOIN person_identifiers i USING(person_id)
+          WHERE pe.parent_id=l.parent_id AND i.kind='email' ORDER BY value
+        )) AS emails_json,
+       (SELECT json_group_array(value) FROM (
+          SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
+          FROM people pe JOIN person_identifiers i USING(person_id)
+          WHERE pe.parent_id=l.parent_id AND i.kind='phone' ORDER BY value
+        )) AS phones_json
+FROM links l JOIN worth w USING(parent_id)
+WHERE w.effective_worth='yes'
+  AND EXISTS (SELECT 1 FROM facts f WHERE f.parent_id=l.parent_id)
+  AND COALESCE(l.decision_approved, '') NOT IN ('yes', 'no')
+  AND COALESCE(l.decision_action, '')!='exclude'
+  AND NOT (
+    l.machine_action='retarget'
+    AND l.machine_proposed_url IS NOT NULL
+    AND lower(COALESCE(l.machine_reject, '')) NOT IN ('1', 'true', 'yes')
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM links kept
+    WHERE kept.parent_id=l.parent_id AND kept.row_key!=l.row_key
+      AND (
+        (kept.machine_judgment='confirmed'
+         AND COALESCE(kept.machine_confidence, 0)>=?)
+        OR (kept.machine_action='verify'
+            AND COALESCE(kept.machine_approved, '') IN ('auto', 'yes'))
+        OR (kept.decision_action='verify' AND kept.decision_approved='yes')
+      )
+  )
+  AND (
+    (? AND l.candidate_origin=1 AND l.raw_import=1)
+    OR (
+      l.machine_judgment='wrong_person'
+      AND COALESCE(l.machine_confidence, 0)>=?
+      AND COALESCE(json_extract(l.judgment_payload_json,
+                               '$.recommend_deep_research'), 0)=1
+    )
+    OR (
+      ? AND COALESCE(json_extract(l.judgment_payload_json,
+                                  '$.linkedin_plausibly_absent'), 0)=1
+    )
+  )
+ORDER BY lower(COALESCE(w.display_name, w.public_identifier)), l.row_key
+""",
+        (
+            confirm_threshold, int(include_candidates), confirm_threshold,
+            int(include_plausibly_absent),
+        ),
+    )
+    return [
+        {
+            "parent_id": row["parent_id"],
+            "parent_slug": row["display_slug"] or row["parent_id"],
+            "name": row["display_name"] or row["row_key"],
+            "person_ids": _json(row["person_ids_json"], []),
+            "candidate_key": row["row_key"],
+            "linkedin": {"linkedin_url": row["linkedin_url"] or ""},
+            "verdict": {
+                "verdict": row["machine_judgment"] or "no_linkedin_candidate",
+                "reason": row["machine_reason"] or "",
+            },
+            "match_emails": _json(row["emails_json"], []),
+            "match_phones": _json(row["phones_json"], []),
+            "candidate_origin": bool(row["candidate_origin"]),
+        }
+        for row in rows
+    ]
+
+
 def linkedin_review(
-    db: Db, scope: Literal["parents", "queue", "progress"],
+    db: Db, scope: Literal["parents", "queue", "progress", "enrichment"], *,
+    include_plausibly_absent: bool = False, include_candidates: bool = False,
+    confirm_threshold: float = 0.8,
 ) -> list[dict[str, Any]] | dict[str, int]:
     """One explicitly scoped LinkedIn-review read from the canonical policy."""
     if scope == "parents":
@@ -857,4 +944,11 @@ def linkedin_review(
         return _linkedin_queue(db)
     if scope == "progress":
         return _linkedin_progress(db)
+    if scope == "enrichment":
+        return _enrichment_queue(
+            db,
+            include_plausibly_absent=include_plausibly_absent,
+            include_candidates=include_candidates,
+            confirm_threshold=confirm_threshold,
+        )
     raise StoreError(f"unknown LinkedIn review scope: {scope}")

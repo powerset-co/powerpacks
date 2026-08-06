@@ -25,7 +25,7 @@ When a phone number is provided:
 - Use the phone mostly as a geography / network-context prior:
   country code and area code can help determine whether a candidate is directionally plausible,
   even when the exact phone number is not publicly attributable
-- If `known_info` includes `User retarget hint`, treat that hint as the strongest clue from the user:
+- If optional `guidance` is present, treat it as the strongest clue from the user:
   - If it contains a LinkedIn URL, research that exact LinkedIn/person first and enrich that profile
   - If it names a company, title, school, location, or alternate spelling, search the person's name together with those terms
   - Prefer a candidate that matches the user hint over a generic phone/name match

@@ -1,11 +1,4 @@
-"""Legacy Parallel resolutions migrate into pending retarget proposals.
-
-The regression these lock in: a legacy web-researched LinkedIn link (attached
-with no judge) must enter the NEW review format — a `retarget` row in
-overrides/review.csv — where the standard judge/queue machinery can finally
-audit it, while people already admitted to merged/people.csv, user-decided
-rows, and factless people are left alone. All data here is synthetic.
-"""
+"""Legacy Parallel resolutions migrate once into canonical SQLite decisions."""
 import csv
 import json
 import tempfile
@@ -15,6 +8,8 @@ from io import StringIO
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context import migrate_legacy_resolutions as mig
+from packs.ingestion.primitives.deep_context.db.models import LinkRow, ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db.store import Db
 
 
 def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -49,6 +44,16 @@ class MigrateLegacyResolutionsTests(unittest.TestCase):
         self.facts = base / "facts"
         self.raw = base / "raw"
         self.cache = base / "cache"
+        self.db_path = base / "deep-context.sqlite"
+        self.db = Db(self.db_path)
+        self.db.project_rows((
+            ParentRow("parent-eligible", "jordan-bravo", "Jordan Bravo"),
+            PersonRow("uuid-eligible", "parent-eligible", display_name="Jordan Bravo"),
+            LinkRow(
+                "jordan-bravo", "parent-eligible", "jordan-bravo", "pub",
+                "https://www.linkedin.com/in/jordan-bravo", "Jordan Bravo",
+            ),
+        ))
         for d in (self.facts, self.raw, self.cache):
             d.mkdir()
 
@@ -88,17 +93,15 @@ class MigrateLegacyResolutionsTests(unittest.TestCase):
             code = mig.main([
                 "--gmail-people", str(self.gmail), "--merged-people", str(self.merged),
                 "--directory-csv", str(self.directory), "--overrides", str(self.overrides),
+                "--db", str(self.db_path),
                 "--facts-dir", str(self.facts), "--raw-dir", str(self.raw),
                 "--cache-dir", str(self.cache), *extra,
             ])
         self.assertEqual(code, 0)
         return json.loads(buf.getvalue())
 
-    def read_overrides(self) -> dict[str, dict[str, str]]:
-        if not self.overrides.exists():
-            return {}
-        with self.overrides.open(newline="", encoding="utf-8") as fh:
-            return {r["public_identifier"]: r for r in csv.DictReader(fh)}
+    def decision(self) -> dict[str, object]:
+        return dict(self.db._query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0])
 
     def test_dry_run_counts_and_writes_nothing(self):
         out = self.invoke()
@@ -112,36 +115,35 @@ class MigrateLegacyResolutionsTests(unittest.TestCase):
     def test_apply_writes_pending_retarget_with_legacy_provenance(self):
         out = self.invoke("--apply")
         self.assertEqual(out["proposed"], 1)
-        row = self.read_overrides()["jordan-bravo"]
-        self.assertEqual(row["action"], "retarget")
-        self.assertEqual(row["approved"], "")
-        self.assertEqual(row["new_linkedin_url"], "https://www.linkedin.com/in/jordan-bravo")
-        self.assertEqual(row["person_id"], "uuid-eligible")
+        row = self.decision()
+        self.assertEqual(row["machine_action"], "retarget")
+        self.assertIsNone(row["machine_approved"])
+        self.assertEqual(row["machine_proposed_url"], "https://www.linkedin.com/in/jordan-bravo")
         self.assertEqual(row["source"], "legacy-migration")
-        self.assertIn("legacy conf 0.87", row["reason"])
-        self.assertEqual(row["match_emails"], "jordan@example.com")
-        # pending = unjudged: no verdict, no fingerprint, so a later judge pass owns it
-        self.assertEqual(row["llm_reject"], "")
-        self.assertEqual(row["llm_judge_fingerprint"], "")
+        self.assertIn("legacy conf 0.87", str(row["machine_reason"]))
+        self.assertIsNone(row["machine_reject"])
+        self.assertIsNone(row["judgment_fingerprint"])
 
     def test_apply_is_idempotent_and_preserves_user_decisions(self):
         self.invoke("--apply")
-        rows = self.read_overrides()
-        rows["jordan-bravo"]["approved"] = "yes"
-        write_csv(self.overrides, list(rows.values()))
+        self.db.decide_identity(
+            "jordan-bravo", "retarget",
+            replacement_url="https://www.linkedin.com/in/jordan-bravo",
+            replacement_public_identifier="jordan-bravo",
+        )
         out = self.invoke("--apply")
         self.assertEqual(out["skipped_user_decided"], 1)
         self.assertEqual(out["proposals"], 0)
-        self.assertEqual(self.read_overrides()["jordan-bravo"]["approved"], "yes")
+        self.assertEqual(self.decision()["decision_approved"], "yes")
 
     def test_judge_no_llm_stamps_verdict_and_fingerprint(self):
         out = self.invoke("--apply", "--judge", "--no-llm")
         self.assertEqual(out["judged"], 1)
-        row = self.read_overrides()["jordan-bravo"]
-        self.assertNotEqual(row["llm_judge_fingerprint"], "")
+        row = self.decision()
+        self.assertTrue(row["judgment_fingerprint"])
         # deterministic judge never auto-confirms an unverified guess -> rejection recorded
-        self.assertEqual(row["llm_reject"], "yes")
-        self.assertNotEqual(row["llm_reject_reason"], "")
+        self.assertEqual(row["machine_reject"], "yes")
+        self.assertTrue(row["machine_reject_reason"])
 
     def test_cache_profile_view_requires_success(self):
         self.assertEqual(mig.cache_profile_view({"normalized_profile": {"success": False}}), {})

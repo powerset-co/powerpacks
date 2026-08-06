@@ -12,7 +12,7 @@ from unittest import mock
 
 from packs.ingestion.primitives.deep_context import reconcile_linkedin as rl
 from packs.ingestion.primitives.deep_context import reconcile_deep_research as dresearch
-from packs.ingestion.primitives.deep_context.db.models import LinkRow, ParentRow, PersonRow
+from packs.ingestion.primitives.deep_context.db.models import LinkRow, ParentRow, PersonRow, RowKind
 from packs.ingestion.primitives.deep_context.db.store import Db
 from packs.ingestion.primitives.enrich import rapidapi_client as rapid
 
@@ -94,6 +94,59 @@ class FetchMissingProfilesTests(unittest.TestCase):
         self.assertFalse(t["linkedin"]["has_profile"])
 
 
+class SqliteReconcileTests(unittest.TestCase):
+    def test_attached_link_judgment_is_file_first_and_sqlite_projected(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = Db(root / "deep-context.sqlite")
+            db.project_rows((
+                ParentRow("parent-1", "jordan-bravo", "Jordan Bravo", "jordan-bravo-p"),
+                PersonRow("person-1", "parent-1", display_name="Jordan Bravo"),
+                LinkRow(
+                    "jordan-bravo", "parent-1", "jordan-bravo", RowKind.PUB.value,
+                    "https://www.linkedin.com/in/jordan-bravo", "Jordan Bravo",
+                ),
+            ))
+            facts, raw, cache, output = (
+                root / "facts", root / "raw", root / "cache", root / "reconcile"
+            )
+            for path in (facts, raw, cache):
+                path.mkdir()
+            rl.profile_cache_path(cache, "jordan-bravo").write_text(json.dumps({
+                "raw_response": {},
+                "normalized_profile": {
+                    "success": True,
+                    "full_name": "Jordan Bravo",
+                    "headline": "Founder at Bravo Robotics",
+                    "experiences": [],
+                    "education": [],
+                },
+            }), encoding="utf-8")
+            verdicts = output / "verdicts.jsonl"
+            payload = rl.ReconcileLinkedin(
+                db=db,
+                people_csv=root / "must-not-be-read.csv",
+                facts_dir=facts,
+                raw_dir=raw,
+                profile_cache_dir=cache,
+                verdicts_jsonl=verdicts,
+                verdicts_csv=output / "verdicts.csv",
+                parents_dir=root / "parents",
+                overrides_csv=root / "review.csv",
+                consolidate_people_csv=root / "consolidate.csv",
+                no_llm=True,
+            ).run()
+
+            link = db._query("SELECT * FROM links WHERE row_key='jordan-bravo'")[0]
+            self.assertEqual((link["machine_action"], link["machine_approved"]), ("verify", "auto"))
+            self.assertEqual(link["judgment_artifact_path"], str(verdicts))
+            self.assertTrue(verdicts.exists())
+            self.assertEqual(payload.tasks, 1)
+            self.assertFalse((output / "verdicts.csv").exists())
+            self.assertFalse((output / "summary.md").exists())
+            self.assertFalse((root / "consolidate.csv").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -157,13 +210,14 @@ class RetargetProposalHydrationTests(unittest.TestCase):
                        "match_emails": [], "match_phones": []}]
             seen = {}
             db = Db(base / "deep-context.sqlite")
-            with db.connect() as conn:
-                db.project_parent(ParentRow("parent-1", "jordan-old", "Jordan Bravo"), conn=conn)
-                db.project_person(PersonRow("pid-1", "parent-1", display_name="Jordan Bravo"), conn=conn)
-                db.project_candidate(LinkRow(
+            db.project_rows((
+                ParentRow("parent-1", "jordan-old", "Jordan Bravo"),
+                PersonRow("pid-1", "parent-1", display_name="Jordan Bravo"),
+                LinkRow(
                     "jordan-old", "parent-1", "jordan-old", "pub",
                     "https://www.linkedin.com/in/jordan-old", "Jordan Bravo",
-                ), conn=conn)
+                ),
+            ))
 
             def capture(task, **kw):
                 seen.update(task.get("linkedin") or {})

@@ -1,49 +1,13 @@
 #!/usr/bin/env python3
-"""Deep-research a contacts research queue via Parallel.ai.
+"""Research fixed contact dossiers through Parallel.ai.
 
-Talks to Parallel through the official `parallel-web` SDK (import name `parallel`,
-hard-pinned in pyproject). The SDK owns transport, retries, and long-poll result
-fetching; `ParallelClient` is a thin adapter that exposes the four task-group
-operations this primitive uses and returns plain dicts in the shapes the rest of
-the module consumes.
+Flow:
+    research_queue.csv -> Parallel task group -> per-person raw/normalized JSON
+    -> one fixed manifest.json -> optional SQLite projection
 
-Changelog:
-- 2026-07-29 (in-process invocation): the run/submit/poll bodies became the
-  payload-returning `run_research`/`submit_research`/`poll_research` over a
-  frozen `ResearchRunParams`; the `cmd_*` subcommands are thin wrappers that
-  call, `emit()`, and map status -> exit code. In-repo callers
-  (reconcile_deep_research) now import and call `run_research` and branch on
-  the returned payload — the subprocess + stdout redirect are gone. CLI
-  surface, per-handle artifacts, `_taskgroup.json`/`_manifest.json`, manifest
-  heartbeats, stderr progress lines, and exit codes are unchanged.
-- 2026-07-23: Replaced the hand-rolled stdlib (urllib) Parallel HTTP client with the
-  official `parallel-web` SDK. Public helpers (PROCESSOR_PRICING_USD,
-  filter_already_done, build_input, parallel_to_research_json, …), the CLI surface
-  (estimate/submit/poll/status/run + flags), the output file formats, and the
-  PARALLEL_API_KEY env source are all unchanged; only the HTTP layer moved to the SDK.
-- 2026-07-23 (audit dedup): now_iso + write_json now import from common.jsonio
-  (byte-identical to the deleted local copies). read_json (raises; no default) and
-  the pretty+flush emit stay local — both diverge from jsonio's variants.
-
-Subcommands:
-    estimate   Show the queue size + per-processor cost estimate. No network.
-    submit     Create a task group + submit all eligible rows; save state for poll.
-    poll       Poll an existing task group + fetch results into per-handle JSON.
-    status     One-shot status check on a task group.
-    run        submit + poll (the common case).
-
-Artifacts produced under --output-dir (matching the legacy layout):
-    <handle>/00_parallel_raw.json       - raw Parallel output `content`
-    <handle>/01_research_parallel.json  - transformed `01_research.json` shape
-    _taskgroup.json                     - submission state for resumability
-    _manifest.json                      - final run summary
-
-Privacy contract:
-- The primitive sends only the fields explicitly built into the input shape
-  (`handle, display_name, bio, known_info, phone_number, area_code`). It does
-  not send source labels, message counts, timestamps, group metadata, or
-  message content.
-- Inputs already filtered by `prepare_research_queue` and `llm_review_contacts`.
+The official Parallel SDK owns transport. This primitive owns only input
+shaping, synchronous task-group execution, paid-output reuse, and durable file
+outputs. It creates no run ledger, task-group state file, or second manifest.
 """
 
 from __future__ import annotations
@@ -63,42 +27,19 @@ from typing import Any, Callable
 
 from parallel import NotFoundError, Parallel
 
-# Repo-root bootstrap so `packs.*` imports work in module AND script mode
-# (script-mode never imports the package __init__, so this must be in-file).
+# Skills invoke this file directly as well as through package imports.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.shared.csv_io import CsvIO  # noqa: E402
-from packs.ingestion.primitives.imports.common import write_manifest  # noqa: E402
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
-from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt  # noqa: E402
-from packs.ingestion.primitives.deep_context.db.projectors import project_manifest  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
+from packs.ingestion.primitives.deep_context.common import load_env
+from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
 from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot
-from packs.ingestion.primitives.deep_context.db.store import Db  # noqa: E402
-
-
-def load_dotenv(path: Path) -> None:
-    """Load simple KEY=VALUE lines into os.environ without overriding env."""
-    if not path.exists():
-        return
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for line in lines:
-        text = line.strip()
-        if not text or text.startswith("#") or "=" not in text:
-            continue
-        key, value = text.split("=", 1)
-        key = key.strip()
-        if not key or key in os.environ:
-            continue
-        value = value.strip().strip('"').strip("'")
-        os.environ[key] = value
-
-
-load_dotenv(Path(__file__).resolve().parents[4] / ".env")
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.deep_context.prompts.loader import load_prompt
+from packs.ingestion.primitives.imports.common import write_manifest
+from packs.shared.csv_io import CsvIO
 
 
 DEFAULT_BASE_URL = os.environ.get("POWERPACKS_PARALLEL_BASE_URL", "https://api.parallel.ai")
@@ -106,305 +47,317 @@ DEFAULT_BETA_HEADER = os.environ.get(
     "POWERPACKS_PARALLEL_BETA", "search-extract-2025-10-10"
 )
 DEFAULT_PROCESSOR = os.environ.get("POWERPACKS_PARALLEL_PROCESSOR", "core2x")
-# Cost guardrail: Powerpacks contact research may use core/core2x/pro only.
-ALLOWED_PROCESSORS = {"core", "core2x", "pro"}
+ALLOWED_PROCESSORS = frozenset({"core", "core2x", "pro"})
 PROCESSOR_PRICING_USD = {"core": 0.025, "core2x": 0.05, "pro": 0.10}
 PROCESSOR_LATENCY = {
-    "core": {
-        "per_task": "60s-5min",
-        "wall_clock": "about 1-5 min once submitted",
-    },
-    "core2x": {
-        "per_task": "60s-10min",
-        "wall_clock": "about 10-15 min once submitted",
-    },
-    "pro": {
-        "per_task": "2-10min",
-        "wall_clock": "about 2-10 min once submitted",
-    },
+    "core": ("60s-5min", "about 1-5 min once submitted"),
+    "core2x": ("60s-10min", "about 10-15 min once submitted"),
+    "pro": ("2-10min", "about 2-10 min once submitted"),
 }
-
 DEFAULT_OUTPUT_DIR = Path(".powerpacks/messages/research")
 DEFAULT_BATCH_SIZE = 500
 DEFAULT_POLL_INTERVAL = 15
-DEFAULT_MAX_WAIT = 7200  # 2 hours
+DEFAULT_MAX_WAIT = 7200
 DEFAULT_RESULT_WORKERS = 4
-
-
-# ---------------------------------------------------------------------------
-# Research instructions + JSON schemas (port from legacy research-parallel flow)
-# ---------------------------------------------------------------------------
-
 RESEARCH_INSTRUCTIONS = load_prompt("contact_research_instructions")
-
-
-PERSON_RESEARCH_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "handle": {"type": "string", "description": "Identifier — Twitter handle, email address, or slug"},
-        "display_name": {"type": "string", "description": "Display name / full name"},
-        "bio": {"type": "string", "description": "Bio text, job title, or role description"},
-        "known_info": {"type": "string", "description": "Any additional known information"},
-        "phone_number": {"type": ["string", "null"], "description": "E.164 phone number if available"},
-        "area_code": {"type": ["string", "null"], "description": "Area code if available"},
-    },
-    "required": ["handle", "display_name", "bio", "known_info"],
-}
-
-PERSON_RESEARCH_OUTPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "real_name": {"type": ["string", "null"], "description": "Full legal name"},
-        "name_confidence": {"type": "number", "description": "0.0-1.0"},
-        "name_evidence": {"type": "string", "description": "How the real name was discovered"},
-        "work_experience": {"type": "string", "description": "JSON array of work positions"},
-        "education": {"type": "string", "description": "JSON array of education entries"},
-        "location_city": {"type": ["string", "null"]},
-        "location_country": {"type": ["string", "null"]},
-        "linkedin_url": {"type": ["string", "null"]},
-        "github_url": {"type": ["string", "null"]},
-        "summary": {"type": "string"},
-        "research_notes": {"type": "string"},
-    },
-    "required": [
-        "name_confidence", "name_evidence", "work_experience", "education",
-        "summary", "research_notes",
-    ],
+_SCHEMAS = json.loads(load_prompt("contact_research_schema"))
+PERSON_RESEARCH_INPUT_SCHEMA: dict[str, Any] = _SCHEMAS["input"]
+PERSON_RESEARCH_OUTPUT_SCHEMA: dict[str, Any] = _SCHEMAS["output"]
+TASK_SPEC = {
+    "instructions": RESEARCH_INSTRUCTIONS,
+    "input_schema": {"json_schema": PERSON_RESEARCH_INPUT_SCHEMA},
+    "output_schema": {"json_schema": PERSON_RESEARCH_OUTPUT_SCHEMA},
 }
 
 
-# ---------------------------------------------------------------------------
-# JSON / IO helpers
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ResearchRunParams:
+    """One explicit configuration door for an in-process research pass."""
 
-def emit(value: Any) -> None:
-    """Print a payload as pretty, key-sorted JSON on stdout, flushing immediately.
+    input_csv: Path
+    output_dir: Path
+    processor: str = DEFAULT_PROCESSOR
+    manifest: str = ""
+    api_key: str | None = None
+    base_url: str = DEFAULT_BASE_URL
+    beta_header: str = DEFAULT_BETA_HEADER
+    batch_size: int = DEFAULT_BATCH_SIZE
+    limit: int | None = None
+    poll_interval: int = DEFAULT_POLL_INTERVAL
+    max_wait: int = DEFAULT_MAX_WAIT
+    workers: int = DEFAULT_RESULT_WORKERS
+    api_timeout: int = 60
+    on_progress: Callable[[dict[str, Any]], None] | None = None
+    db: Db | None = None
 
-    Kept local (not folded into common.jsonio.emit): this variant passes
-    flush=True so the final result is written before the process exits."""
-    print(json.dumps(value, indent=2, sort_keys=True), flush=True)
-
-
-def read_json(path: Path) -> Any:
-    """Read + decode JSON at `path`, raising on a missing file or bad JSON.
-
-    Kept local (not common.jsonio.read_json): callers guard existence / wrap in
-    try-except and rely on the raise, whereas jsonio.read_json swallows errors
-    and returns a default."""
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-# ---------------------------------------------------------------------------
-# Parallel task-group wrapper (official `parallel-web` SDK)
-# ---------------------------------------------------------------------------
 
 class ParallelClient:
-    """Adapter over the official Parallel.ai SDK for the four task-group operations
-    this primitive needs.
+    """Official-SDK channel: submit, wait, and fetch one in-memory task group."""
 
-    Each method returns a plain dict in the exact shape the rest of the module already
-    consumes (``taskgroup_id``, ``run_ids``, ``status.task_run_status_counts``,
-    ``output.content`` + ``run.metadata``), so swapping the transport touched only this
-    class. The ``--base-url`` / ``--api-key`` / ``--beta-header`` CLI surface is threaded
-    into the SDK client; the beta rides as the ``parallel-beta`` default header on every
-    request, matching the legacy wire behavior."""
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = DEFAULT_BASE_URL,
+        beta_header: str = DEFAULT_BETA_HEADER,
+    ) -> None:
+        headers = {"parallel-beta": beta_header} if beta_header else None
+        self._client = Parallel(api_key=api_key, base_url=base_url, default_headers=headers)
 
-    def __init__(self, api_key: str, base_url: str = DEFAULT_BASE_URL, beta_header: str = DEFAULT_BETA_HEADER):
-        self.beta_header = beta_header
-        default_headers = {"parallel-beta": beta_header} if beta_header else None
-        self._client = Parallel(api_key=api_key, base_url=base_url, default_headers=default_headers)
+    def execute(
+        self,
+        inputs: list[dict[str, Any]],
+        params: ResearchRunParams,
+        on_status: Callable[[dict[str, Any]], None],
+    ) -> tuple[int, dict[str, dict[str, Any]], list[str], dict[str, Any]]:
+        group_id = str(self._client.task_group.create(
+            metadata={"source": "powerpacks", "submitted_at": now_iso()}
+        ).task_group_id)
+        run_ids: list[str] = []
+        for start in range(0, len(inputs), params.batch_size):
+            response = self._client.task_group.add_runs(
+                group_id, inputs=inputs[start : start + params.batch_size]
+            )
+            run_ids.extend(str(value) for value in response.run_ids)
+        if not run_ids:
+            return 0, {}, [], {}
 
-    # ---- task group + run lifecycle --------------------------------------
+        deadline = time.time() + params.max_wait
+        final: dict[str, Any] = {}
+        while time.time() < deadline:
+            final = self._client.task_group.retrieve(group_id).status.model_dump()
+            on_status(final.get("task_run_status_counts") or {})
+            if final.get("is_active") is False:
+                break
+            time.sleep(params.poll_interval)
 
-    def create_group(self, metadata: dict[str, str] | None = None) -> dict[str, Any]:
-        """Create a task group; return ``{"taskgroup_id": <id>}``."""
-        group = self._client.task_group.create(metadata=metadata or {})
-        return {"taskgroup_id": group.task_group_id}
+        def fetch(run_id: str) -> tuple[str, dict[str, Any]] | None:
+            try:
+                response = self._client.task_run.result(
+                    run_id, api_timeout=params.api_timeout, timeout=params.api_timeout + 10
+                )
+            except NotFoundError:
+                return None
+            content = getattr(response.output, "content", None)
+            result = content if isinstance(content, dict) else {"raw": str(content)}
+            metadata = dict(response.run.metadata or {})
+            return str(metadata.get("handle") or run_id), result
 
-    def add_runs(self, group_id: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
-        """Submit a batch of run inputs into a group; return ``{"run_ids": [...]}``."""
-        resp = self._client.task_group.add_runs(group_id, inputs=inputs)
-        return {"run_ids": list(resp.run_ids)}
-
-    def get_group(self, group_id: str) -> dict[str, Any]:
-        """Fetch aggregated group status in the legacy poll-payload shape
-        (``status.is_active`` + ``status.task_run_status_counts`` drive the poll loop)."""
-        group = self._client.task_group.retrieve(group_id)
-        return {"taskgroup_id": group.task_group_id, "status": group.status.model_dump()}
-
-    def get_run_result(self, run_id: str, *, api_timeout: int = 60) -> dict[str, Any] | None:
-        """Long-poll a single run's result; ``None`` when the run id is unknown (404).
-
-        ``result()`` blocks server-side up to ``api_timeout``; we give the client read a
-        small margin over that so the long-poll returns before our own read times out."""
-        try:
-            result = self._client.task_run.result(
-                run_id, api_timeout=api_timeout, timeout=api_timeout + 10)
-        except NotFoundError:
-            return None
-        content = getattr(result.output, "content", None)
-        run = result.run
-        return {
-            "output": {"content": content},
-            "run": {"run_id": run.run_id, "metadata": dict(run.metadata or {}), "status": run.status},
-            "input": {},
-        }
-
-
-# ---------------------------------------------------------------------------
-# Input shaping
-# ---------------------------------------------------------------------------
-
-def build_known_info(row: dict[str, str]) -> str:
-    parts: list[str] = []
-    for key, label in (
-        ("primary_email", "Email"),
-        ("all_emails", "All emails"),
-        ("domain", "Company domain"),
-        ("website_url", "Website"),
-    ):
-        value = (row.get(key) or "").strip()
-        if value:
-            parts.append(f"{label}: {value}")
-    if (row.get("follower_count") or "").strip():
-        parts.append(f"Followers: {row['follower_count']}")
-    if (row.get("whale_names") or "").strip():
-        parts.append(f"Followed by: {row['whale_names']}")
-    if (row.get("moe_top_reasoning") or "").strip():
-        parts.append(f"Profile assessment: {row['moe_top_reasoning'][:200]}")
-    if (row.get("retarget_hint") or "").strip():
-        parts.append(f"User retarget hint: {row['retarget_hint']}")
-    return "\n".join(parts)
+        results: dict[str, dict[str, Any]] = {}
+        errors: list[str] = []
+        with ThreadPoolExecutor(max_workers=params.workers) as pool:
+            futures = {pool.submit(fetch, run_id): run_id for run_id in run_ids}
+            for future in as_completed(futures):
+                run_id = futures[future]
+                try:
+                    item = future.result()
+                except Exception as exc:
+                    errors.append(f"{run_id}: {type(exc).__name__}: {exc}"[:300])
+                    continue
+                if item is None:
+                    errors.append(f"{run_id}: no payload")
+                    continue
+                handle, result = item
+                results[handle] = result
+        return len(run_ids), results, errors, final
 
 
 def candidate_handle(row: dict[str, str]) -> str:
+    """Return the stable fixed-directory key for one queue row."""
     handle = (row.get("handle") or "").strip()
     if handle:
         return handle
-    if row.get("primary_email"):
-        return row["primary_email"].split("@")[0].lower().replace(".", "_")
-    if row.get("phone_e164"):
-        digits = re.sub(r"\D", "", str(row["phone_e164"]))
-        if digits:
-            return f"phone-{digits[-10:]}"
-    name = (row.get("display_name") or row.get("first_name") or "").strip().lower()
-    if row.get("last_name") and not row.get("display_name"):
-        name = f"{name} {row['last_name']}".strip()
-    if name:
-        return re.sub(r"[^a-z0-9]+", "_", name).strip("_") or "unknown"
-    return "unknown"
+    email = (row.get("primary_email") or "").strip()
+    if email:
+        return email.split("@", 1)[0].lower().replace(".", "_")
+    digits = re.sub(r"\D", "", row.get("phone_e164") or "")
+    if digits:
+        return f"phone-{digits[-10:]}"
+    name = " ".join(
+        value.strip()
+        for value in (row.get("display_name") or row.get("first_name") or "", row.get("last_name") or "")
+        if value.strip()
+    ).lower()
+    return re.sub(r"[^a-z0-9]+", "_", name).strip("_") or "unknown"
 
 
 def build_input(row: dict[str, str], handle: str) -> dict[str, Any]:
+    """Collapse a queue row into one dossier plus optional human guidance."""
     name = (row.get("display_name") or "").strip()
-    if not name and row.get("first_name"):
-        name = row["first_name"]
-        if row.get("last_name"):
-            name = f"{name} {row['last_name']}".strip()
-    return {
-        "handle": handle,
-        "display_name": name or handle,
-        "bio": (row.get("bio") or "").strip(),
-        "known_info": build_known_info(row),
-        "phone_number": (row.get("phone_e164") or None) or None,
-        "area_code": (row.get("area_code") or None) or None,
-    }
+    if not name:
+        name = " ".join(
+            value.strip()
+            for value in (row.get("first_name") or "", row.get("last_name") or "")
+            if value.strip()
+        )
+    guidance = (row.get("retarget_hint") or "").strip()
+    known = (row.get("known_info") or "").strip()
+    if guidance and known.startswith(guidance):
+        known = known[len(guidance) :].strip()
+    lines = [f"Name: {name or handle}"]
+    for label, value in (
+        ("Relationship dossier", row.get("bio") or ""),
+        ("Email", row.get("primary_email") or ""),
+        ("Phone", row.get("phone_e164") or ""),
+        ("Area code", row.get("area_code") or ""),
+        ("Company domain", row.get("domain") or ""),
+        ("Website", row.get("website_url") or ""),
+        ("Additional context", known),
+    ):
+        text = str(value).strip()
+        if text:
+            lines.append(f"{label}: {text}")
+    payload: dict[str, Any] = {"handle": handle, "dossier": "\n".join(lines)}
+    if guidance:
+        payload["guidance"] = guidance
+    return payload
 
 
-def task_spec() -> dict[str, Any]:
-    return {
-        "instructions": RESEARCH_INSTRUCTIONS,
-        "input_schema": {"json_schema": PERSON_RESEARCH_INPUT_SCHEMA},
-        "output_schema": {"json_schema": PERSON_RESEARCH_OUTPUT_SCHEMA},
-    }
+def _input_fingerprint(row: dict[str, str], handle: str) -> str:
+    """Paid-cache key; stable canonical JSON is intentionally pinned."""
+    data = json.dumps(
+        build_input(row, handle), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# 01_research_parallel.json transform (port from legacy flow)
-# ---------------------------------------------------------------------------
+def load_queue(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        raise SystemExit(f"input CSV not found: {path}")
+    return CsvIO.read_dict_rows_normalized(path)
+
+
+def filter_already_done(
+    rows: list[dict[str, str]], output_dir: Path
+) -> tuple[list[dict[str, str]], int]:
+    """Reuse exact paid outputs; changed dossier/guidance overwrites the fixed path.
+
+    Pre-rewrite outputs have no fingerprint and remain reusable so migration does
+    not unexpectedly rebill existing paid work.
+    """
+    todo: list[dict[str, str]] = []
+    skipped = 0
+    seen: set[str] = set()
+    for source in rows:
+        row = dict(source)
+        handle = candidate_handle(row)
+        if handle in seen:
+            continue
+        seen.add(handle)
+        row["handle"] = handle
+        path = output_dir / handle / "01_research_parallel.json"
+        if path.is_file():
+            try:
+                prior = json.loads(path.read_text(encoding="utf-8"))
+                stored = str((prior.get("metadata") or {}).get("input_fingerprint") or "")
+            except (AttributeError, json.JSONDecodeError, OSError):
+                stored = "invalid"
+            if not stored or stored == _input_fingerprint(row, handle):
+                skipped += 1
+                continue
+        todo.append(row)
+    return todo, skipped
+
+
+def _json_array(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _positions(result: dict[str, Any]) -> list[dict[str, Any]]:
+    positions: list[dict[str, Any]] = []
+    for value in _json_array(result.get("work_experience")):
+        if isinstance(value, str):
+            positions.append({
+                "title": "", "company_name": value, "company_domain": None,
+                "company_linkedin_url": None, "description": None, "start_date": None,
+                "end_date": None, "is_current": False, "confidence": 0.5, "sources": [],
+            })
+            continue
+        if not isinstance(value, dict):
+            continue
+        positions.append({
+            "title": value.get("title") or value.get("position") or "",
+            "company_name": next((str(value.get(key)) for key in (
+                "company", "organization", "employer", "company_name", "name"
+            ) if value.get(key)), ""),
+            "company_domain": value.get("domain") or value.get("company_domain"),
+            "company_linkedin_url": None,
+            "description": value.get("description"),
+            "start_date": value.get("start_date"),
+            "end_date": value.get("end_date"),
+            "is_current": value.get("current") or value.get("is_current", False),
+            "confidence": value.get("confidence", 0.7),
+            "sources": value.get("evidence") if isinstance(value.get("evidence"), list)
+            else ([value["source"]] if value.get("source") else []),
+        })
+    return positions
+
+
+def _education(result: dict[str, Any]) -> list[dict[str, Any]]:
+    education: list[dict[str, Any]] = []
+    for value in _json_array(result.get("education")):
+        if isinstance(value, str):
+            education.append({
+                "school_name": value, "degree": None, "field_of_study": None,
+                "start_year": None, "end_year": None, "confidence": 0.5, "source": "",
+            })
+            continue
+        if not isinstance(value, dict):
+            continue
+        education.append({
+            "school_name": next((str(value.get(key)) for key in (
+                "school", "school_name", "institution", "university", "name"
+            ) if value.get(key)), ""),
+            "degree": value.get("degree"),
+            "field_of_study": value.get("field") or value.get("field_of_study"),
+            "start_year": value.get("start_year"),
+            "end_year": value.get("end_year"),
+            "confidence": value.get("confidence", 0.7),
+            "source": str(value.get("evidence") or ""),
+        })
+    return education
+
+
+def _quality(result: dict[str, Any]) -> tuple[float, list[str]]:
+    positions = _json_array(result.get("work_experience"))
+    education = _json_array(result.get("education"))
+    score = 0.3 if result.get("real_name") else 0.0
+    score += min(0.3, len(positions) * 0.1)
+    score += min(0.2, len(education) * 0.1)
+    score += 0.1 if result.get("location_city") else 0.0
+    score += 0.1 if result.get("linkedin_url") else 0.0
+    gaps = []
+    for missing, label in (
+        (not result.get("real_name"), "Real name not identified"),
+        (not positions, "No work experience found"),
+        (not education, "No education found"),
+        (not result.get("location_city") and not result.get("location_country"), "Location unknown"),
+        (not result.get("linkedin_url"), "No LinkedIn profile found"),
+    ):
+        if missing:
+            gaps.append(label)
+    return round(min(1.0, score), 2), gaps
+
 
 def parallel_to_research_json(
-    result: dict[str, Any], row: dict[str, str], handle: str, name: str, bio: str, *,
+    result: dict[str, Any],
+    row: dict[str, str],
+    handle: str,
+    name: str,
+    bio: str,
+    *,
     research_method: str = "parallel-core2x",
 ) -> dict[str, Any]:
-    real_name = (result.get("real_name") or name) or handle
+    """Normalize one provider result into the standing research artifact shape."""
+    real_name = str(result.get("real_name") or name or handle)
+    first, _, last = real_name.partition(" ")
     source_channel = (row.get("source_channel") or "phone").strip().lower()
-    name_parts = real_name.split(" ", 1) if real_name else [name, ""]
-    first_name = name_parts[0]
-    last_name = name_parts[1] if len(name_parts) > 1 else ""
-
-    positions: list[dict[str, Any]] = []
-    try:
-        we_raw = json.loads(result.get("work_experience", "[]") or "[]")
-        for pos in we_raw:
-            if isinstance(pos, dict):
-                positions.append({
-                    "title": pos.get("title") or pos.get("position", "") or "",
-                    "company_name": (
-                        pos.get("company")
-                        or pos.get("organization")
-                        or pos.get("employer")
-                        or pos.get("company_name")
-                        or pos.get("name", "")
-                        or ""
-                    ),
-                    "company_domain": pos.get("domain") or pos.get("company_domain"),
-                    "company_linkedin_url": None,
-                    "description": pos.get("description"),
-                    "start_date": pos.get("start_date"),
-                    "end_date": pos.get("end_date"),
-                    "is_current": pos.get("current") or pos.get("is_current", False),
-                    "confidence": pos.get("confidence", 0.7),
-                    "sources": pos.get("evidence", []) if isinstance(pos.get("evidence"), list) else (
-                        [pos.get("source", "")] if pos.get("source") else []
-                    ),
-                })
-            elif isinstance(pos, str):
-                positions.append({
-                    "title": "",
-                    "company_name": pos,
-                    "company_domain": None,
-                    "company_linkedin_url": None,
-                    "description": None,
-                    "start_date": None,
-                    "end_date": None,
-                    "is_current": False,
-                    "confidence": 0.5,
-                    "sources": [],
-                })
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    education: list[dict[str, Any]] = []
-    try:
-        ed_raw = json.loads(result.get("education", "[]") or "[]")
-        for edu in ed_raw:
-            if isinstance(edu, dict):
-                education.append({
-                    "school_name": (
-                        edu.get("school")
-                        or edu.get("school_name")
-                        or edu.get("institution")
-                        or edu.get("university")
-                        or edu.get("name", "")
-                        or ""
-                    ),
-                    "degree": edu.get("degree"),
-                    "field_of_study": edu.get("field") or edu.get("field_of_study"),
-                    "start_year": edu.get("start_year"),
-                    "end_year": edu.get("end_year"),
-                    "confidence": edu.get("confidence", 0.7),
-                    "source": str(edu.get("evidence", "")) if edu.get("evidence") else "",
-                })
-            elif isinstance(edu, str):
-                education.append({
-                    "school_name": edu, "degree": None, "field_of_study": None,
-                    "start_year": None, "end_year": None,
-                    "confidence": 0.5, "source": "",
-                })
-    except (json.JSONDecodeError, TypeError):
-        pass
-
+    completeness, gaps = _quality(result)
     return {
         "research_id": f"{handle}-{date.today().isoformat()}",
         "query": f"@{handle} ({name}): {bio[:100]}",
@@ -412,8 +365,8 @@ def parallel_to_research_json(
         "research_method": research_method,
         "person": {
             "full_name": real_name,
-            "first_name": first_name,
-            "last_name": last_name,
+            "first_name": first,
+            "last_name": last,
             "also_known_as": [handle, name] if real_name != name else [handle],
             "confidence": result.get("name_confidence", 0.3),
             "sources": [],
@@ -424,7 +377,7 @@ def parallel_to_research_json(
             "state": "",
             "country": result.get("location_country") or "",
             "raw": "",
-            "confidence": 0.5 if (result.get("location_city") or result.get("location_country")) else 0.0,
+            "confidence": 0.5 if result.get("location_city") or result.get("location_country") else 0.0,
             "source": "",
         },
         "headline": {
@@ -433,12 +386,12 @@ def parallel_to_research_json(
             "source": f"https://x.com/{handle}",
         },
         "summary": {
-            "text": result.get("summary", "") or "",
+            "text": result.get("summary") or "",
             "confidence": 0.7,
             "source": "Parallel Deep Research",
         },
-        "positions": positions,
-        "education": education,
+        "positions": _positions(result),
+        "education": _education(result),
         "social": {
             "twitter_handle": handle if source_channel == "twitter" else None,
             "linkedin_url": result.get("linkedin_url"),
@@ -450,164 +403,31 @@ def parallel_to_research_json(
         },
         "metadata": {
             "total_sources_consulted": 0,
-            "estimated_completeness": _estimate_completeness(result),
-            "gaps": _identify_gaps(result),
+            "estimated_completeness": completeness,
+            "gaps": gaps,
             "research_date": date.today().isoformat(),
             "research_method": research_method,
-            "research_notes": result.get("research_notes", "") or "",
+            "research_notes": result.get("research_notes") or "",
             "source_channel": source_channel or "unknown",
             "source_identifier": row.get("primary_email") or row.get("phone_e164") or handle,
+            "input_fingerprint": _input_fingerprint(row, handle),
         },
     }
-
-
-def _estimate_completeness(result: dict[str, Any]) -> float:
-    score = 0.0
-    if result.get("real_name"):
-        score += 0.3
-    try:
-        score += min(0.3, len(json.loads(result.get("work_experience", "[]") or "[]")) * 0.1)
-    except Exception:
-        pass
-    try:
-        score += min(0.2, len(json.loads(result.get("education", "[]") or "[]")) * 0.1)
-    except Exception:
-        pass
-    if result.get("location_city"):
-        score += 0.1
-    if result.get("linkedin_url"):
-        score += 0.1
-    return round(min(1.0, score), 2)
-
-
-def _identify_gaps(result: dict[str, Any]) -> list[str]:
-    gaps: list[str] = []
-    if not result.get("real_name"):
-        gaps.append("Real name not identified")
-    if not result.get("work_experience") or result.get("work_experience") == "[]":
-        gaps.append("No work experience found")
-    if not result.get("education") or result.get("education") == "[]":
-        gaps.append("No education found")
-    if not result.get("location_city") and not result.get("location_country"):
-        gaps.append("Location unknown")
-    if not result.get("linkedin_url"):
-        gaps.append("No LinkedIn profile found")
-    return gaps
-
-
-# ---------------------------------------------------------------------------
-# CSV reading + filtering
-# ---------------------------------------------------------------------------
-
-def load_queue(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        raise SystemExit(f"input CSV not found: {path}")
-    with path.open(newline="", encoding="utf-8") as handle:
-        reader = CsvIO.dict_reader(handle)
-        return list(reader)
-
-
-def filter_already_done(rows: list[dict[str, str]], output_dir: Path) -> tuple[list[dict[str, str]], int]:
-    todo: list[dict[str, str]] = []
-    skipped = 0
-    seen: set[str] = set()
-    for row in rows:
-        handle = candidate_handle(row)
-        if handle in seen:
-            continue
-        seen.add(handle)
-        if (output_dir / handle / "01_research_parallel.json").exists():
-            skipped += 1
-            continue
-        copy = dict(row)
-        copy["handle"] = handle
-        todo.append(copy)
-    return todo, skipped
-
-
-# ---------------------------------------------------------------------------
-# Subcommands
-# ---------------------------------------------------------------------------
-
-def _validate_processor(processor: str) -> str:
-    if processor not in ALLOWED_PROCESSORS:
-        allowed = ", ".join(sorted(ALLOWED_PROCESSORS))
-        raise SystemExit(
-            f"processor '{processor}' is blocked for Powerpacks contact research; "
-            f"allowed processor: {allowed}"
-        )
-    return processor
-
-
-def estimate_latency(processor: str, count: int) -> dict[str, Any]:
-    latency = PROCESSOR_LATENCY[processor]
-    if count <= 0:
-        rough = "no paid Parallel work"
-    else:
-        rough = latency["wall_clock"]
-        if count > DEFAULT_BATCH_SIZE:
-            rough += "; larger queues can take longer depending on Parallel capacity"
-    return {
-        "processor": processor,
-        "per_task": latency["per_task"],
-        "rough_wall_clock": rough,
-        "basis": "Parallel Task API processor docs; task-group runs are submitted together, so this is not multiplied per contact.",
-    }
-
-
-def _resolve_api_key(cli_value: str | None) -> str:
-    if cli_value:
-        return cli_value
-    env = os.environ.get("PARALLEL_API_KEY")
-    if env:
-        return env
-    raise SystemExit("PARALLEL_API_KEY not set (pass --api-key or add it to the repo .env)")
-
-
-def _persisted_state_path(output_dir: Path) -> Path:
-    return output_dir / "_taskgroup.json"
-
-
-def _write_progress_manifest(manifest: str, status: str,
-                             counts: dict[str, int], **extra: Any) -> Path | None:
-    text = str(manifest or "").strip()
-    if not text:
-        return None
-    path = Path(text)
-    if path.name != "manifest.json":
-        raise SystemExit("--manifest must end in manifest.json")
-    try:
-        existing = read_json(path) if path.exists() else {}
-    except (json.JSONDecodeError, OSError):
-        existing = {}
-    payload = {**existing, **extra, "stage": "enrich", "status": status, "counts": counts}
-    payload.pop("updated_at", None)
-    payload.pop("created_at", None)
-    write_manifest(path.parent.name, payload, import_dir=path.parent.parent)
-    return path
 
 
 def _manifest_relative(manifest_path: Path, artifact_path: Path) -> str:
     try:
         return artifact_path.resolve().relative_to(manifest_path.parent.resolve()).as_posix()
     except ValueError as exc:
-        raise ValueError(
-            f"research artifact must be inside the manifest directory: {artifact_path}"
-        ) from exc
+        raise ValueError(f"research artifact must be inside the manifest directory: {artifact_path}") from exc
 
 
-def research_artifact_inventory(params: "ResearchRunParams") -> list[dict[str, Any]]:
-    """Completed queue outputs, with owners resolved from the explicit DB.
-
-    The producer names exact fixed paths; it never globs the research directory.
-    Hashes are taken only after both per-handle files have been durably written.
-    """
-    if params.db is None or not params.manifest:
+def research_artifact_inventory(params: ResearchRunParams) -> list[dict[str, Any]]:
+    """Name and hash the exact fixed paid outputs for explicit projection."""
+    if params.db is None:
         return []
-    manifest_path = Path(params.manifest)
-    people = {
-        row.person_id: row.parent_id for row in canonical_snapshot(params.db).people
-    }
+    manifest_path = Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
+    owners = {row.person_id: row.parent_id for row in canonical_snapshot(params.db).people}
     inventory: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in load_queue(params.input_csv):
@@ -626,28 +446,26 @@ def research_artifact_inventory(params: "ResearchRunParams") -> list[dict[str, A
             ]
         except (json.JSONDecodeError, TypeError):
             person_ids = []
+        parent_ids = {owners.get(person_id) for person_id in person_ids}
         if not person_ids:
             raise ValueError(f"research queue row has no person ids: {handle}")
-        parent_ids = {people.get(person_id) for person_id in person_ids}
         if None in parent_ids or len(parent_ids) != 1:
             raise ValueError(f"research queue ownership is unresolved: {handle}")
-        parent_id = next(iter(parent_ids))
         candidate_key = str(
             row.get("source_candidate_public_identifier") or person_ids[0]
         ).strip().lower()
-        result_bytes = result_path.read_bytes()
         entry: dict[str, Any] = {
             "kind": "research",
             "artifact_key": f"research:{handle}".lower(),
-            "parent_id": parent_id,
+            "parent_id": next(iter(parent_ids)),
             "candidate_key": candidate_key,
             "public_identifier": candidate_key,
             "handle": handle,
             "person_ids": person_ids,
-            "display_name": str(row.get("display_name") or "").strip(),
+            "display_name": (row.get("display_name") or "").strip(),
             "candidate_origin": any(value.startswith("candidate:") for value in person_ids),
             "path": _manifest_relative(manifest_path, result_path),
-            "sha256": hashlib.sha256(result_bytes).hexdigest(),
+            "sha256": hashlib.sha256(result_path.read_bytes()).hexdigest(),
         }
         raw_path = params.output_dir / handle / "00_parallel_raw.json"
         if raw_path.is_file():
@@ -659,472 +477,235 @@ def research_artifact_inventory(params: "ResearchRunParams") -> list[dict[str, A
     return inventory
 
 
-def _report_progress(params: "ResearchRunParams", status: str,
-                     counts: dict[str, int], **extra: Any) -> None:
-    """The one progress door: durable manifest flush + in-process channel."""
+def _report_progress(
+    params: ResearchRunParams, status: str, counts: dict[str, int], **extra: Any
+) -> None:
+    """Write the one canonical manifest, project it, then notify memory observers."""
+    manifest_path = Path(params.manifest) if params.manifest else params.output_dir / "manifest.json"
+    if manifest_path.name != "manifest.json":
+        raise SystemExit("--manifest must end in manifest.json")
+    try:
+        current = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        current = {}
+    payload = {
+        **current,
+        **extra,
+        "stage": "enrich",
+        "status": status,
+        "counts": counts,
+        "artifacts": research_artifact_inventory(params),
+    }
+    payload.pop("updated_at", None)
+    payload.pop("created_at", None)
+    write_manifest(manifest_path.parent.name, payload, import_dir=manifest_path.parent.parent)
     if params.db is not None:
-        extra = {**extra, "artifacts": research_artifact_inventory(params)}
-    manifest_path = _write_progress_manifest(params.manifest, status, counts, **extra)
-    if params.db is not None and manifest_path is not None:
         project_manifest(params.db, manifest_path)
     if params.on_progress:
         params.on_progress({"status": status, "counts": counts})
 
 
-def _normalized_progress_counts(total: int, reused: int,
-                                provider_counts: dict[str, Any]) -> dict[str, int]:
-    normalized = {str(key).lower(): int(value or 0)
-                  for key, value in provider_counts.items()}
-    completed = reused + sum(normalized.get(key, 0)
-                             for key in ("completed", "succeeded", "success"))
-    failed = sum(normalized.get(key, 0)
-                 for key in ("failed", "error", "errored", "cancelled", "canceled"))
+def _validate_processor(processor: str) -> str:
+    if processor not in ALLOWED_PROCESSORS:
+        raise SystemExit(
+            f"processor '{processor}' is blocked for Powerpacks contact research; "
+            f"allowed processors: {', '.join(sorted(ALLOWED_PROCESSORS))}"
+        )
+    return processor
+
+
+def _api_key(explicit: str | None) -> str:
+    load_env()
+    value = explicit or os.environ.get("PARALLEL_API_KEY")
+    if not value:
+        raise SystemExit("PARALLEL_API_KEY not set (pass --api-key or add it to the repo .env)")
+    return value
+
+
+def _progress_counts(total: int, reused: int, provider: dict[str, Any]) -> dict[str, int]:
+    completed = reused + sum(
+        int(provider.get(key) or 0) for key in ("completed", "succeeded", "success")
+    )
+    failed = sum(
+        int(provider.get(key) or 0)
+        for key in ("failed", "error", "errored", "cancelled", "canceled")
+    )
     completed = min(total, completed)
     failed = min(max(0, total - completed), failed)
-    return {
-        "total": total,
-        "completed": completed,
-        "pending": max(0, total - completed - failed),
-        "failed": failed,
-    }
+    return {"total": total, "completed": completed,
+            "pending": max(0, total - completed - failed), "failed": failed}
 
 
-def cmd_estimate(args: argparse.Namespace) -> int:
-    processor = _validate_processor(args.processor)
-    rows = load_queue(Path(args.input))
-    output_dir = Path(args.output_dir)
-    todo, skipped_done = filter_already_done(rows, output_dir)
-    if args.limit is not None:
-        todo = todo[: args.limit]
-    cost_per = PROCESSOR_PRICING_USD[processor]
-    emit({
-        "primitive": "deep_research_contacts",
-        "command": "estimate",
-        "input": str(args.input),
-        "output_dir": str(output_dir),
-        "queue_rows": len(rows),
-        "skipped_already_done": skipped_done,
-        "would_submit": len(todo),
-        "processor": processor,
-        "estimated_usd": round(len(todo) * cost_per, 4),
-        "estimated_latency": estimate_latency(processor, len(todo)),
-    })
-    return 0
-
-
-def cmd_status(args: argparse.Namespace) -> int:
-    api_key = _resolve_api_key(args.api_key)
-    client = ParallelClient(api_key, args.base_url, args.beta_header)
-    group_id = args.taskgroup_id or _load_group_id(Path(args.output_dir))
-    if not group_id:
-        emit({"primitive": "deep_research_contacts", "command": "status",
-              "status": "failed", "error": "no taskgroup id"})
-        return 1
-    payload = client.get_group(group_id)
-    emit({
-        "primitive": "deep_research_contacts",
-        "command": "status",
-        "taskgroup_id": group_id,
-        "group": payload,
-    })
-    return 0 if payload.get("status", {}).get("is_active") is False else 1
-
-
-def _load_group_id(output_dir: Path) -> str | None:
-    state = _persisted_state_path(output_dir)
-    if not state.exists():
-        return None
-    try:
-        return read_json(state).get("taskgroup_id")
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-@dataclass(frozen=True)
-class ResearchRunParams:
-    """The one config door for the submit/poll/run flow — explicit caller
-    arguments, resolved once (in-process callers construct it directly; the CLI
-    builds it from argparse via `_params_from_args`)."""
-
-    input_csv: Path
-    output_dir: Path
-    processor: str = DEFAULT_PROCESSOR
-    manifest: str = ""  # optional fixed stage manifest for UI progress
-    api_key: str | None = None
-    base_url: str = DEFAULT_BASE_URL
-    beta_header: str = DEFAULT_BETA_HEADER
-    batch_size: int = DEFAULT_BATCH_SIZE
-    limit: int | None = None
-    taskgroup_id: str = ""
-    poll_interval: int = DEFAULT_POLL_INTERVAL
-    max_wait: int = DEFAULT_MAX_WAIT
-    workers: int = DEFAULT_RESULT_WORKERS
-    api_timeout: int = 60
-    # In-process progress channel: fired with {"status", "counts"} by
-    # _report_progress beside every manifest heartbeat, so an in-process caller
-    # (the review server) holds live progress in memory instead of reading its
-    # own flush back. The manifest write remains the durability record.
-    on_progress: Callable[[dict[str, Any]], None] | None = None
-    # Explicit producer handoff. None keeps this primitive file-only; callers
-    # that own the canonical store pass the already-open Db.
-    db: Db | None = None
-
-
-def _params_from_args(args: argparse.Namespace) -> ResearchRunParams:
-    """CLI Namespace -> params. getattr defaults cover subcommands whose parser
-    lacks the other phase's flags (submit has no poll args and vice versa)."""
-    return ResearchRunParams(
-        input_csv=Path(getattr(args, "input", "") or ""),
-        output_dir=Path(args.output_dir),
-        processor=getattr(args, "processor", DEFAULT_PROCESSOR),
-        manifest=str(getattr(args, "manifest", "") or ""),
-        api_key=getattr(args, "api_key", None),
-        base_url=getattr(args, "base_url", DEFAULT_BASE_URL),
-        beta_header=getattr(args, "beta_header", DEFAULT_BETA_HEADER),
-        batch_size=getattr(args, "batch_size", DEFAULT_BATCH_SIZE),
-        limit=getattr(args, "limit", None),
-        taskgroup_id=str(getattr(args, "taskgroup_id", "") or ""),
-        poll_interval=getattr(args, "poll_interval", DEFAULT_POLL_INTERVAL),
-        max_wait=getattr(args, "max_wait", DEFAULT_MAX_WAIT),
-        workers=getattr(args, "workers", DEFAULT_RESULT_WORKERS),
-        api_timeout=getattr(args, "api_timeout", 60),
-    )
-
-
-# status -> CLI exit code, the same codes the subprocess era used.
-_EXIT_CODES = {"no_work": 0, "submitted": 0, "completed": 0, "completed_with_errors": 2}
-
-
-def submit_research(params: ResearchRunParams) -> dict[str, Any]:
-    """Create a task group + submit all eligible rows; save state for poll.
-
-    Returns the payload the CLI used to emit — statuses: no_work | submitted |
-    failed. This is the paid call: every submitted row bills."""
+def run_research(params: ResearchRunParams) -> dict[str, Any]:
+    """Run one synchronous paid pass; fixed completed outputs make reruns free."""
     processor = _validate_processor(params.processor)
-    api_key = _resolve_api_key(params.api_key)
     rows = load_queue(params.input_csv)
-    output_dir = params.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    todo, skipped_done = filter_already_done(rows, output_dir)
+    todo, reused = filter_already_done(rows, params.output_dir)
     if params.limit is not None:
         todo = todo[: params.limit]
-
+    total = reused + len(todo)
     if not todo:
         _report_progress(
-            params, "research_complete",
-            {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
-            provider_status={})
+            params,
+            "research_complete",
+            {"total": total, "completed": reused, "pending": 0, "failed": 0},
+            provider_status={},
+        )
         return {
             "primitive": "deep_research_contacts",
-            "command": "submit",
+            "command": "run",
             "status": "no_work",
             "queue_rows": len(rows),
-            "skipped_already_done": skipped_done,
+            "skipped_already_done": reused,
         }
 
-    client = ParallelClient(api_key, params.base_url, params.beta_header)
-    group = client.create_group(metadata={"source": "powerpacks", "submitted_at": now_iso()})
-    group_id = group.get("taskgroup_id") or group.get("id")
-    if not group_id:
-        return {"primitive": "deep_research_contacts", "command": "submit",
-                "status": "failed", "error": "no taskgroup_id in response", "raw": group}
-
-    spec = task_spec()
-    inputs = [
-        {
-            "task_spec": spec,
-            "input": build_input(row, row["handle"]),
-            "metadata": {"handle": row["handle"], "processor": processor},
-            "processor": processor,
-        }
-        for row in todo
-    ]
-
-    all_run_ids: list[str] = []
-    for i in range(0, len(inputs), params.batch_size):
-        batch = inputs[i:i + params.batch_size]
-        run_resp = client.add_runs(group_id, batch)
-        run_ids = run_resp.get("run_ids") or []
-        all_run_ids.extend(run_ids)
-
-    state = {
-        "taskgroup_id": group_id,
+    params.output_dir.mkdir(parents=True, exist_ok=True)
+    inputs = [{
+        "task_spec": TASK_SPEC,
+        "input": build_input(row, row["handle"]),
+        "metadata": {"handle": row["handle"]},
         "processor": processor,
-        "submitted_at": now_iso(),
-        "input_csv": str(params.input_csv),
-        "rows_submitted": len(todo),
-        "skipped_already_done": skipped_done,
-        "run_ids": all_run_ids,
-        "handles": [row["handle"] for row in todo],
-        "rows": todo,  # keep for poll-time CSV row lookup
-    }
-    write_json(_persisted_state_path(output_dir), state)
+    } for row in todo]
+    api_key = _api_key(params.api_key)
     _report_progress(
         params, "running",
-        {"total": len(rows), "completed": skipped_done,
-         "pending": len(todo), "failed": 0},
-        provider_status={"submitted": len(todo)})
-
-    cost_per = PROCESSOR_PRICING_USD[processor]
-    return {
-        "primitive": "deep_research_contacts",
-        "command": "submit",
-        "status": "submitted",
-        "taskgroup_id": group_id,
-        "processor": processor,
-        "submitted": len(all_run_ids),
-        "skipped_already_done": skipped_done,
-        "estimated_usd": round(len(all_run_ids) * cost_per, 4),
-        "state_path": str(_persisted_state_path(output_dir)),
-    }
-
-
-def cmd_submit(args: argparse.Namespace) -> int:
-    payload = submit_research(_params_from_args(args))
-    emit(payload)
-    return _EXIT_CODES.get(str(payload.get("status")), 1)
-
-
-def _wait_for_group(client: ParallelClient, group_id: str, *, poll_interval: int,
-                    max_wait: int, on_progress=None) -> dict[str, Any]:
-    deadline = time.time() + max_wait
-    last: dict[str, Any] = {}
-    while time.time() < deadline:
-        payload = client.get_group(group_id)
-        last = payload
-        status = payload.get("status") or {}
-        counts = status.get("task_run_status_counts") or {}
-        if counts:
-            print(f"[deep_research_contacts] poll status {counts}", file=sys.stderr, flush=True)
-            if on_progress:
-                on_progress(counts)
-        if status.get("is_active") is False:
-            return payload
-        time.sleep(poll_interval)
-    return last
-
-
-def poll_research(params: ResearchRunParams) -> dict[str, Any]:
-    """Poll the persisted task group + fetch results into per-handle JSON.
-
-    Returns the summary payload the CLI used to emit — statuses: completed |
-    completed_with_errors | failed. Free: reads results already paid for."""
-    api_key = _resolve_api_key(params.api_key)
-    output_dir = params.output_dir
-    state_path = _persisted_state_path(output_dir)
-    if not state_path.exists() and not params.taskgroup_id:
-        return {"primitive": "deep_research_contacts", "command": "poll",
-                "status": "failed", "error": f"no state file at {state_path} and no --taskgroup-id"}
-
-    state = read_json(state_path) if state_path.exists() else {}
-    group_id = params.taskgroup_id or state.get("taskgroup_id")
-    if not group_id:
-        return {"primitive": "deep_research_contacts", "command": "poll",
-                "status": "failed", "error": "no taskgroup_id"}
-    run_ids: list[str] = state.get("run_ids") or []
-    rows: list[dict[str, str]] = state.get("rows") or []
-    rows_by_handle = {row.get("handle"): row for row in rows if row.get("handle")}
-    processor = state.get("processor") or DEFAULT_PROCESSOR
-    research_method = f"parallel-{processor}"
-    skipped_done = int(state.get("skipped_already_done") or 0)
-    total = skipped_done + len(run_ids)
-
-    client = ParallelClient(api_key, params.base_url, params.beta_header)
-
-    print(f"[deep_research_contacts] polling group {group_id}", file=sys.stderr)
-    final_group = _wait_for_group(
-        client, group_id,
-        poll_interval=params.poll_interval,
-        max_wait=params.max_wait,
-        on_progress=lambda counts: _report_progress(
-            params, "running",
-            _normalized_progress_counts(total, skipped_done, counts),
-            provider_status=counts),
+        {"total": total, "completed": reused, "pending": len(todo), "failed": 0},
+        provider_status={"submitted": len(todo)},
     )
-    print(f"[deep_research_contacts] group complete, fetching {len(run_ids)} run results", file=sys.stderr)
 
-    # Fetch each run's result. Use a small thread pool — Parallel rate limits
-    # are generous, but 4 concurrent gets is fine.
-    results_by_handle: dict[str, dict[str, Any]] = {}
-    errors: list[dict[str, Any]] = []
+    def on_status(provider: dict[str, Any]) -> None:
+        _report_progress(
+            params, "running", _progress_counts(total, reused, provider),
+            provider_status=provider,
+        )
+        print(f"[deep_research_contacts] poll status {provider}", file=sys.stderr, flush=True)
 
-    def fetch_one(run_id: str) -> tuple[str, dict[str, Any] | None, str | None]:
-        try:
-            payload = client.get_run_result(run_id, api_timeout=params.api_timeout)
-        except Exception as exc:
-            return run_id, None, f"{type(exc).__name__}: {exc}"
-        return run_id, payload, None
+    try:
+        run_count, results, errors, final_group = ParallelClient(
+            api_key, params.base_url, params.beta_header
+        ).execute(inputs, params, on_status)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:300]
+        _report_progress(
+            params, "failed",
+            {"total": total, "completed": reused, "pending": 0, "failed": len(todo)},
+            error=error,
+        )
+        return {"primitive": "deep_research_contacts", "command": "run",
+                "status": "failed", "error": error}
+    if not run_count:
+        error = "Parallel returned no run ids"
+        _report_progress(
+            params,
+            "failed",
+            {"total": total, "completed": reused, "pending": 0, "failed": len(todo)},
+            error=error,
+        )
+        return {"primitive": "deep_research_contacts", "command": "run", "status": "failed", "error": error}
 
-    with ThreadPoolExecutor(max_workers=params.workers) as pool:
-        futures = {pool.submit(fetch_one, rid): rid for rid in run_ids}
-        for fut in as_completed(futures):
-            run_id, payload, err = fut.result()
-            if err:
-                errors.append({"run_id": run_id, "error": err})
-                continue
-            if not payload:
-                errors.append({"run_id": run_id, "error": "no payload (404)"})
-                continue
-            output = payload.get("output") or {}
-            content = output.get("content")
-            result = content if isinstance(content, dict) else {"raw": str(content)}
-            run_meta = payload.get("run") or {}
-            metadata = run_meta.get("metadata") or {}
-            handle = metadata.get("handle")
-            if not handle:
-                inp = payload.get("input") or {}
-                inner = inp.get("input") if isinstance(inp, dict) else None
-                if isinstance(inner, dict):
-                    handle = inner.get("handle")
-            handle = handle or run_id
-            results_by_handle[handle] = result
+    rows_by_handle = {row["handle"]: row for row in todo}
 
-    # Write artifacts
-    found_name = 0
-    found_linkedin = 0
-    for handle, result in results_by_handle.items():
-        person_dir = output_dir / handle
+    found_name = found_linkedin = 0
+    for handle, result in results.items():
+        row = rows_by_handle.get(handle)
+        if row is None:
+            errors.append(f"{handle}: result did not match a submitted subject")
+            continue
+        person_dir = params.output_dir / handle
         person_dir.mkdir(parents=True, exist_ok=True)
         write_json(person_dir / "00_parallel_raw.json", result)
+        normalized = parallel_to_research_json(
+            result,
+            row,
+            handle,
+            row.get("display_name") or handle,
+            row.get("bio") or "",
+            research_method=f"parallel-{processor}",
+        )
+        write_json(person_dir / "01_research_parallel.json", normalized)
+        found_name += int(bool(result.get("real_name")))
+        found_linkedin += int(bool(result.get("linkedin_url")))
 
-        row = rows_by_handle.get(handle, {"handle": handle, "source_channel": "phone"})
-        name = row.get("display_name") or handle
-        bio = row.get("bio") or ""
-        research = parallel_to_research_json(result, row, handle, name, bio, research_method=research_method)
-        write_json(person_dir / "01_research_parallel.json", research)
-
-        if result.get("real_name"):
-            found_name += 1
-        if result.get("linkedin_url"):
-            found_linkedin += 1
-
-    summary = {
+    status = "completed" if not errors else "completed_with_errors"
+    _report_progress(
+        params,
+        "research_complete" if not errors else status,
+        {
+            "total": total,
+            "completed": reused + len(results),
+            "pending": 0,
+            "failed": len(errors),
+        },
+        provider_status=final_group,
+        errors=errors,
+    )
+    return {
         "primitive": "deep_research_contacts",
-        "command": "poll",
-        "status": "completed" if not errors else "completed_with_errors",
-        "taskgroup_id": group_id,
+        "command": "run",
+        "status": status,
         "completed_at": now_iso(),
-        "output_dir": str(output_dir),
+        "output_dir": str(params.output_dir),
         "counts": {
-            "run_ids": len(run_ids),
-            "results_fetched": len(results_by_handle),
+            "run_ids": run_count,
+            "results_fetched": len(results),
             "errors": len(errors),
             "real_name_found": found_name,
             "linkedin_found": found_linkedin,
         },
-        "group_status": (final_group or {}).get("status"),
+        "group_status": final_group,
         "errors": errors,
     }
-    write_json(output_dir / "_manifest.json", summary)
-    _report_progress(
-        params,
-        "research_complete" if not errors else "completed_with_errors",
-        {"total": total, "completed": skipped_done + len(results_by_handle),
-         "pending": 0, "failed": len(errors)},
-        provider_status=(final_group or {}).get("status") or {})
-    return summary
 
 
-def cmd_poll(args: argparse.Namespace) -> int:
-    payload = poll_research(_params_from_args(args))
-    emit(payload)
-    return _EXIT_CODES.get(str(payload.get("status")), 1)
-
-
-def run_research(params: ResearchRunParams) -> dict[str, Any]:
-    """submit + poll in one go — the payload in-repo callers branch on.
-
-    Statuses: no_work | completed | completed_with_errors | failed. The paid
-    submission happens inside; a failed submit returns without polling."""
-    rows = load_queue(params.input_csv)
-    todo, skipped_done = filter_already_done(rows, params.output_dir)
-    if params.limit is not None:
-        todo = todo[: params.limit]
-    if not todo:
-        _report_progress(
-            params, "research_complete",
-            {"total": len(rows), "completed": skipped_done, "pending": 0, "failed": 0},
-            provider_status={})
-        return {"primitive": "deep_research_contacts", "command": "run",
-                "status": "no_work", "queue_rows": len(rows),
-                "skipped_already_done": skipped_done}
-    submitted = submit_research(params)
-    if submitted.get("status") != "submitted":
-        # no_work was handled above, so anything non-submitted is a failure.
-        return submitted
-    # submit_research already wrote the state; poll_research picks it up.
-    return poll_research(params)
-
-
-def cmd_run(args: argparse.Namespace) -> int:
-    payload = run_research(_params_from_args(args))
-    emit(payload)
-    return _EXIT_CODES.get(str(payload.get("status")), 1)
-
-
-# ---------------------------------------------------------------------------
-# Argparse
-# ---------------------------------------------------------------------------
-
-def add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--api-key", help="Parallel.ai API key (defaults to PARALLEL_API_KEY from env or repo .env)")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--beta-header", default=DEFAULT_BETA_HEADER)
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), type=Path)
-    parser.add_argument("--manifest", help="Optional fixed stage manifest for UI progress")
-
-
-def add_submit_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--input", required=True, help="research_queue.csv (from prepare_research_queue)")
-    parser.add_argument("--processor", default=DEFAULT_PROCESSOR,
-                        choices=sorted(ALLOWED_PROCESSORS))
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--limit", type=int, help="Cap rows submitted (after dedup)")
-
-
-def add_poll_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--taskgroup-id", help="Override the persisted task group id")
-    parser.add_argument("--poll-interval", type=int, default=DEFAULT_POLL_INTERVAL)
-    parser.add_argument("--max-wait", type=int, default=DEFAULT_MAX_WAIT)
-    parser.add_argument("--workers", type=int, default=DEFAULT_RESULT_WORKERS)
-    parser.add_argument("--api-timeout", type=int, default=60)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Deep-research a contacts queue via Parallel.ai")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    estimate = sub.add_parser("estimate", help="Cost estimate without API calls")
-    estimate.add_argument("--input", required=True)
-    estimate.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), type=Path)
-    estimate.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=sorted(ALLOWED_PROCESSORS))
-    estimate.add_argument("--limit", type=int)
-    estimate.set_defaults(func=cmd_estimate)
-
-    status = sub.add_parser("status", help="One-shot status check on a task group")
-    add_common_args(status)
-    status.add_argument("--taskgroup-id")
-    status.set_defaults(func=cmd_status)
-
-    submit = sub.add_parser("submit", help="Create a task group + add runs from a research queue")
-    add_common_args(submit)
-    add_submit_args(submit)
-    submit.set_defaults(func=cmd_submit)
-
-    poll = sub.add_parser("poll", help="Poll an existing task group + write per-handle JSON artifacts")
-    add_common_args(poll)
-    add_poll_args(poll)
-    poll.set_defaults(func=cmd_poll)
-
-    run = sub.add_parser("run", help="submit + poll in one go")
-    add_common_args(run)
-    add_submit_args(run)
-    add_poll_args(run)
-    run.set_defaults(func=cmd_run)
-
-    args = parser.parse_args()
-    raise SystemExit(args.func(args))
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Deep-research contact dossiers via Parallel.ai")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in ("estimate", "run"):
+        child = subparsers.add_parser(command)
+        child.add_argument("--input", required=True)
+        child.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, type=Path)
+        child.add_argument("--processor", default=DEFAULT_PROCESSOR, choices=sorted(ALLOWED_PROCESSORS))
+        child.add_argument("--limit", type=int)
+        if command == "run":
+            child.add_argument("--api-key")
+            child.add_argument("--base-url", default=DEFAULT_BASE_URL)
+            child.add_argument("--beta-header", default=DEFAULT_BETA_HEADER)
+            child.add_argument("--manifest")
+            child.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+            child.add_argument("--poll-interval", type=int, default=DEFAULT_POLL_INTERVAL)
+            child.add_argument("--max-wait", type=int, default=DEFAULT_MAX_WAIT)
+            child.add_argument("--workers", type=int, default=DEFAULT_RESULT_WORKERS)
+            child.add_argument("--api-timeout", type=int, default=60)
+    args = parser.parse_args(argv)
+    if args.command == "estimate":
+        processor = _validate_processor(args.processor)
+        rows = load_queue(Path(args.input))
+        todo, reused = filter_already_done(rows, Path(args.output_dir))
+        todo = todo[: args.limit] if args.limit is not None else todo
+        per_task, wall_clock = PROCESSOR_LATENCY[processor]
+        payload = {
+            "primitive": "deep_research_contacts", "command": "estimate",
+            "input": str(args.input), "output_dir": str(args.output_dir),
+            "queue_rows": len(rows), "skipped_already_done": reused,
+            "would_submit": len(todo), "processor": processor,
+            "estimated_usd": round(len(todo) * PROCESSOR_PRICING_USD[processor], 4),
+            "estimated_latency": {
+                "processor": processor, "per_task": per_task,
+                "rough_wall_clock": "no paid Parallel work" if not todo else wall_clock,
+                "basis": "Parallel Task API processor docs; task-group runs are submitted together.",
+            },
+        }
+    else:
+        payload = run_research(ResearchRunParams(
+            input_csv=Path(args.input), output_dir=Path(args.output_dir),
+            processor=args.processor, manifest=str(args.manifest or ""),
+            api_key=args.api_key, base_url=args.base_url, beta_header=args.beta_header,
+            batch_size=args.batch_size, limit=args.limit, poll_interval=args.poll_interval,
+            max_wait=args.max_wait, workers=args.workers, api_timeout=args.api_timeout,
+        ))
+    print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
+    code = {"completed_with_errors": 2, "failed": 1}.get(str(payload.get("status")), 0)
+    raise SystemExit(code)
 
 
 if __name__ == "__main__":

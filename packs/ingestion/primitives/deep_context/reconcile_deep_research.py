@@ -1,58 +1,8 @@
-"""[Phase 3, escalation] Re-research people whose attached LinkedIn was WRONG.
+"""Research effective-Yes parents that still need a usable identity.
 
-Recovers the correct identity for high-confidence `wrong_person` detaches that the
-judge recommended for research. User-touched rows are excluded because the current
-single-row override schema cannot preserve a sticky decision and a pending retarget
-proposal at the same time. It leans on local history first, then
-hands the still-unresolved subset to the existing Parallel.ai deep-research primitive.
-
-Cost-gated and opt-in: estimate the Parallel.ai spend, get explicit approval, then
-pass ``--approve --budget <approved-estimate>``. The budget defaults to zero so a
-changed queue cannot spend against an unstated ceiling. People the judge flagged
-`linkedin_plausibly_absent` are
-EXCLUDED by default — some people legitimately have no LinkedIn and "no profile exists"
-is a valid final answer; we never force a match. Pass --include-plausibly-absent to
-research them anyway for SYNTHETIC profiles (assemble_synthetic_profile.py).
-
-Reuses `packs/ingestion/primitives/deep_research_contacts` (Parallel.ai core2x) — this
-step only builds the research queue, estimates cost, enforces the gate, and shells out.
-
-Outputs (under .powerpacks/deep-context/reconcile/deep-research/):
-  research_queue.csv     queue handed to deep_research_contacts
-  manifest.json          subset size, estimated cost, gate decision, run status
-
-Changelog:
-  2026-08-05: the canonical CLI opens the existing Deep Context SQLite store
-    and passes it into the node, so every manifest transition reaches the
-    explicit projector. Missing or unsupported stores fail without creation.
-  2026-08-03 (hydrate the proposed profile): before judging a retarget proposal,
-    the proposed LinkedIn is hydrated through the shared
-    `rapidapi_client.hydrate_profiles` (cache first, RapidAPI on miss) and the
-    judge sees the REAL profile instead of whatever positions Parallel happened
-    to return. Parallel finds the right URL but frequently returns no
-    experiences, and the judge was rejecting correct links for "no
-    employer/experience". Keyless installs fall back to the research payload
-    exactly as before.
-  2026-07-27 (declared contract): `ReconcileDeepResearch` is a
-    `pipeline/contract.py:Node` ("deep_research"). `run(args)` became
-    `execute()`; the TERMINAL enrichment-manifest write routes through the Node
-    template (same keys — `source`/`stage`/`counts`/... — plus the declared
-    `fingerprints` block), while every MID-RUN `write_enrichment_manifest` call
-    (the running receipt before the Parallel research runs, the judging heartbeat)
-    stays exactly where it was so the browser's poll contract is untouched. The
-    emitted CLI result and the manifest receipt are DIFFERENT shapes by existing
-    contract, so `main()` emits `node.result` (the same result dict as before)
-    rather than the payload. `RESEARCH_PROFILE_TEMPLATE` names the per-person
-    research output for the graph; assemble_synthetic_profile consumes it.
-    review.csv is declared input-only: its column families are already declared
-    by `deep_reconcile` (identity/fingerprint) and `deep_synthesize`
-    (worth + llm_reject*) — see the comment on the outputs ClassVar.
-  2026-07-24: `eligible_subset` skips `no_link` verdict rows. They are now kept in
-    verdicts.jsonl so contact-only people are reviewable, and their free verdict always
-    carries `linkedin_plausibly_absent` — which the include_plausibly_absent branch
-    accepts with no worth or recommend gate, so without this guard every
-    LinkedIn-less person in the network would become a paid research subject.
-  2026-07-23 (audit dedup): now_iso import from common.jsonio instead of deep_context.common (deduped there); no behavior change.
+SQLite selects the queue. Parallel writes one raw and normalized result per
+parent. The shared identity judge accepts or rejects proposed LinkedIns; the
+assembly step creates a synthetic fallback when none survives.
 """
 from __future__ import annotations
 
@@ -83,35 +33,23 @@ from packs.ingestion.primitives.deep_context.enrichment_contract import (
 from packs.indexing.lib.llm_config import DEFAULT_MODEL
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.ingestion.primitives.deep_context import compose_dossier as compose
-from packs.ingestion.primitives.deep_context.candidates import (
-    candidate_carry,
-    candidate_key_of,
-    candidate_row,
-    is_candidate_id,
-)
 from packs.ingestion.primitives.deep_context.common import (
     DEEP_RESEARCH_DIR,
     DEFAULT_PEOPLE_CSV,
     emit,
     ENRICH_MANIFEST,
     FACTS_DIR,
-    FACTS_TEMPLATE,
     INDEX_JSON,
     LINKEDIN_OVERRIDES_CSV,
-    contact_identifiers,
     load_owner,
     owner_background_block,
-    OWNER_JSON,
-    parse_list,
-    RAW_BUNDLE_TEMPLATE,
     RAW_DIR,
-    read_jsonl,
     ROOT,
     VERDICTS_JSONL,
 )
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.imports.common import write_manifest
-from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest, row_model_for
+from packs.ingestion.primitives.pipeline.contract import StageManifest
 from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
     DEFAULT_CONFIRM,
     linkedin_view,
@@ -137,23 +75,12 @@ from packs.ingestion.primitives.deep_context.deep_research_contacts import (
 )
 from packs.ingestion.primitives.deep_context.db.projectors import project_manifest
 from packs.ingestion.primitives.deep_context.db import views
-from packs.ingestion.primitives.deep_context.db.models import (
-    ApprovedState,
-    ReviewSource,
-)
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
-from packs.ingestion.primitives.deep_context.db.snapshots import (
-    canonical_snapshot,
-    identity_snapshot,
-)
 
 DEFAULT_PROCESSOR = "core2x"
 DEFAULT_BUDGET = 0.0
 CANONICAL_DB = ROOT / "deep-context.sqlite"
-JUDGE_DETACH_THRESHOLD = 0.85
 RESEARCH_CONFIRM_THRESHOLD = 0.80
-HEAL_DETACH_SOURCE = ReviewSource.HEAL.value
-USER_APPROVED = frozenset({ApprovedState.YES.value, ApprovedState.NO.value})
 # The research payload statuses a pass treats as success — the same set the
 # exit-code era called "exit 0" ({no_work, completed}); completed_with_errors
 # (old exit 2) stays a failed pass.
@@ -180,11 +107,6 @@ QUEUE_FIELDS = [
 # (assemble_synthetic_profile, this module's own reuse pass) import it — graph
 # edges are string equality on declared paths (`pipeline/contract.py`).
 RESEARCH_PROFILE_TEMPLATE = str(DR_OUT_DIR / "{handle}" / "01_research_parallel.json")
-# The declared row shape of research_queue.csv, generated FROM QUEUE_FIELDS so
-# the column list keeps one home.
-ResearchQueueRow = row_model_for("ResearchQueueRow", QUEUE_FIELDS)
-
-
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -194,209 +116,21 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def load_people_rows(people_csv: Path) -> dict[str, dict[str, str]]:
-    rows: dict[str, dict[str, str]] = {}
-    if not people_csv.exists():
-        return rows
-    with people_csv.open(newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            pid = str(row.get("id") or "").strip()
-            if pid:
-                rows[pid] = row
-    return rows
-
-
-def _safe_float(value: Any) -> float:
-    try:
-        return float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _is_rejected_retarget(row: dict[str, str]) -> bool:
-    """A retarget the judge rejected (llm_reject=yes) that the user has NOT approved. Such a row is
-    a dead guess, not a decision — it must not permanently mark the person as "decided", so the
-    next (cheap, already-completed) research pass can re-propose. A user decision stays terminal."""
-    if (row.get("action") or "").strip().lower() != "retarget":
-        return False
-    if (row.get("approved") or "").strip().lower() in USER_APPROVED:
-        return False
-    return (row.get("llm_reject") or "").strip().lower() == "yes"
-
-
 def _decision_rows(db: Db) -> dict[str, dict[str, str]]:
-    """Compatibility-shaped identity decisions hydrated from canonical SQL."""
     return {
-        row.row_key: {
-            "action": row.decision_action or row.machine_action or "",
-            "approved": row.decision_approved or row.machine_approved or "",
-            "source": row.decision_source or row.source or "",
-            "confidence": str(row.machine_confidence or ""),
-            "llm_reject": row.machine_reject or "",
-            "llm_judge_fingerprint": row.judgment_fingerprint or "",
-            "new_linkedin_url": (
-                row.replacement_url or row.machine_proposed_url or ""
-            ),
+        row["row_key"]: {
+            "action": row["decision_action"] or row["machine_action"] or "",
+            "approved": row["decision_approved"] or row["machine_approved"] or "",
+            "llm_reject": row["machine_reject"] or "",
+            "llm_judge_fingerprint": row["judgment_fingerprint"] or "",
+            "new_linkedin_url": row["replacement_url"] or row["machine_proposed_url"] or "",
         }
-        for row in identity_snapshot(db).links
+        for row in db._query(
+            "SELECT row_key, decision_action, machine_action, decision_approved, "
+            "machine_approved, machine_reject, judgment_fingerprint, replacement_url, "
+            "machine_proposed_url FROM links"
+        )
     }
-
-
-def eligible_subset(verdicts: list[dict[str, Any]], threshold: float,
-                    overrides: dict[str, dict[str, str]] | None = None,
-                    include_plausibly_absent: bool = False) -> list[dict[str, Any]]:
-    """Model detaches that external research could resolve.
-
-    Eligible means a high-confidence `wrong_person` detach the judge flagged
-    `recommend_deep_research`, whose parent did not already keep a confirmed link.
-    User-touched rows, excluded links, and existing (non-rejected) retargets are skipped.
-    A heal dead-link detach (source deep-context-heal) is NOT treated as decided —
-    it is a re-research invitation, and its plausibly-absent verdict routes it
-    through the synthetic branch below when include_plausibly_absent is set.
-    A judge-rejected, un-approved retarget does NOT count as decided (re-research is cheap once
-    completed). `linkedin_plausibly_absent` people are skipped by default (no profile exists is a
-    valid answer) and included only with include_plausibly_absent=True — the synthetic path.
-
-    `no_link` rows are NEVER eligible here. They are in verdicts.jsonl so the review model can
-    show them (a contact-only person must be decidable), but they had no link to recover and
-    their free verdict always carries `linkedin_plausibly_absent`, which the
-    include_plausibly_absent branch accepts without any worth or recommend gate — so treating
-    them as detach-recovery subjects would silently queue every LinkedIn-less person in the
-    network for paid research. The worth-gated `candidate_subset` is the only research door for
-    people who never had a link.
-    """
-    overrides = overrides or {}
-    has_retarget = {pub for pub, r in overrides.items()
-                    if (r.get("action") or "").strip().lower() == "retarget"
-                    and not _is_rejected_retarget(r)}
-    excluded = {pub for pub, r in overrides.items()
-                if (r.get("action") or "").strip().lower() == "exclude"}
-    # A judge wrong_person AT/ABOVE the detach bar is decided even when the
-    # conflict group had no confirmed winner to auto-apply it (approved stays
-    # ''): the review UI hides those rows as detached, so re-queueing them here
-    # would silently re-bill research for people the reviewer never sees again.
-    # EXCEPT a heal dead-link detach (source deep-context-heal): that is a
-    # re-research INVITATION, not a decision — the heal leaves those people
-    # VISIBLE as pending re-research cards, so the "never sees them again"
-    # rationale does not apply. A human yes/no on such a row still excludes.
-    user_decided = {
-        pub for pub, r in overrides.items()
-        if (r.get("approved") or "").strip().lower() in {"yes", "no"}
-        or ((r.get("action") or "").strip().lower() == "detach"
-            and _safe_float(r.get("confidence")) >= JUDGE_DETACH_THRESHOLD
-            and (r.get("source") or "").strip().lower() != HEAL_DETACH_SOURCE)}
-    parents_with_kept = {
-        r.get("parent_slug") for r in verdicts
-        if (r.get("verdict") or {}).get("verdict") == "confirmed"
-        and float((r.get("verdict") or {}).get("confidence") or 0) >= threshold
-    }
-    out: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for r in verdicts:
-        if r.get("no_link"):
-            continue  # reviewable, never a research subject (see the docstring)
-        v = r.get("verdict") or {}
-        pub = (r.get("candidate_key") or "").strip().lower()
-        if pub and (pub in seen or pub in has_retarget or pub in excluded or pub in user_decided):
-            continue
-        if v.get("linkedin_plausibly_absent"):
-            # Excluded from RETARGET research by design (some people legitimately have no
-            # profile) — but they are the primary SYNTHETIC-profile candidates: research
-            # them only when the caller opts in (synthetic-profiles-plan §5).
-            if include_plausibly_absent and r.get("parent_slug") not in parents_with_kept:
-                if pub:
-                    seen.add(pub)
-                out.append(r)
-            continue
-        model_ok = (v.get("verdict") == "wrong_person"
-                    and float(v.get("confidence") or 0) >= threshold
-                    and v.get("recommend_deep_research")
-                    and r.get("parent_slug") not in parents_with_kept)
-        if model_ok:
-            if pub:
-                seen.add(pub)
-            out.append(r)
-    return out
-
-
-def candidate_subset(facts_dir: Path,
-                     overrides: dict[str, dict[str, str]] | None = None,
-                     *,
-                     db: Db,
-                     worth_skipped: list[str] | None = None,
-                     resolved_candidates: set[str] | None = None,
-                     index_json: Path = INDEX_JSON) -> list[dict[str, Any]]:
-    """Dossier-bearing import candidates as research subjects (opt-in via
-    --include-candidates). Candidates have no resolved LinkedIn by definition;
-    eligibility means their facts file exists — the facts ARE the dossier context
-    the queue bio is built from. Entries mirror the verdict-row shape so
-    build_queue / propose_retargets consume them unchanged; the review.csv key for
-    a candidate is its person_id (candidate:<key>).
-
-    A candidate is eligible when it is in the Added pile: either the model said
-    yes and the user did not override it, or the user explicitly said yes. Model
-    maybe/no candidates remain in the review or Rejected piles unless the user
-    moves them. Every candidate that is not currently Added is appended to
-    ``worth_skipped`` when provided."""
-    del overrides, index_json
-    resolved_candidates = resolved_candidates or set()
-    identity = identity_snapshot(db)
-    decided = {
-        row.row_key for row in identity.links
-        if row.decision_action in {"retarget", "exclude"}
-        or row.decision_approved in {"yes", "no"}
-    }
-    out: list[dict[str, Any]] = []
-    worth_by_parent = {row["parent_id"]: row for row in views.worth_review(db, "rows")}
-    canonical = canonical_snapshot(db)
-    parents = {row.parent_id: row for row in canonical.parents}
-    members: dict[str, list[str]] = {}
-    for row in identity.memberships:
-        members.setdefault(row.row_key, []).append(row.person_id)
-    grouped: dict[str, dict[str, Any]] = {}
-    for row in identity.links:
-        if not row.candidate_origin:
-            continue
-        parent = parents[row.parent_id]
-        grouped[row.row_key] = {
-            "row_key": row.row_key, "parent_id": row.parent_id,
-            "parent_slug": parent.display_slug or row.row_key,
-            "name": parent.display_name or row.row_key,
-            "person_ids": members.get(row.row_key, []),
-        }
-    for person in grouped.values():
-        pids = person["person_ids"] or [person["row_key"]]
-        pid = pids[0]
-        if (person["row_key"] in decided or pid.lower() in resolved_candidates
-                or not any((facts_dir / f"{value}.jsonl").exists() for value in pids)):
-            continue
-        parent_row = worth_by_parent.get(person["parent_id"])
-        worth = {"decision": str((parent_row or {}).get("effective") or "maybe")}
-        if worth["decision"] != "yes":
-            if worth_skipped is not None:
-                worth_skipped.append(pid)
-            continue
-        identifiers = [row for row in canonical.identifiers if row.person_id in pids]
-        out.append({
-            "parent_slug": person["parent_slug"],
-            "name": person["name"],
-            "person_ids": pids,
-            "candidate_key": person["row_key"],
-            "linkedin": {},
-            "verdict": {"verdict": "no_linkedin_candidate", "confidence": 0.0,
-                        "reason": "unresolved import candidate — no LinkedIn attached"},
-            "match_emails": [
-                row.display_value or row.normalized_value
-                for row in identifiers if row.kind == "email"
-            ],
-            "match_phones": [
-                row.display_value or row.normalized_value
-                for row in identifiers if row.kind == "phone"
-            ],
-        })
-    return out
-
-
 def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
     records: list[dict[str, Any]] = []
     for pid in child_pids:
@@ -423,14 +157,6 @@ def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
         parts.append(f"Location: {merged['location']}")
     if merged.get("topics"):
         parts.append(f"We discuss: {', '.join(merged['topics'][:8])}")
-    owner = load_owner() or {}
-    identifiers = contact_identifiers(
-        merged.get("identifiers"),
-        name=str(merged.get("canonical_name") or ""),
-        owner_emails=owner.get("emails") or [],
-        owner_phones=owner.get("phones") or [])
-    if identifiers:
-        parts.append(f"Identifiers from our messages: {', '.join(identifiers[:12])}")
     shared = [
         f"{value.get('overlap', 'other')}: {value.get('detail', '')}".strip(": ")
         for value in (merged.get("shared_context") or [])
@@ -441,37 +167,25 @@ def _dossier_bio(child_pids: list[str], facts_dir: Path, raw_dir: Path) -> str:
     return ". ".join(parts)
 
 
-def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
-                facts_dir: Path, raw_dir: Path) -> list[dict[str, str]]:
+def build_queue(
+    subset: list[dict[str, Any]], facts_dir: Path, raw_dir: Path,
+) -> list[dict[str, str]]:
     queue: list[dict[str, str]] = []
     owner = load_owner()
     owner_context = owner_background_block(owner) if owner else ""
     for r in subset:
         pids = r.get("person_ids") or []
-        row = next((people[p] for p in pids if p in people), {})
-        if not row:
-            crow = next((candidate_row(candidate_key_of(p)) for p in pids if is_candidate_id(p)), None)
-            if crow:
-                row = candidate_carry(crow)
-        emails = [row.get("primary_email", "")] + parse_list(row.get("all_emails"))
-        phones = [row.get("primary_phone", "")] + parse_list(row.get("all_phones"))
-        email = next((e for e in emails if e and "@" in e), "")
-        phone = next((p for p in phones if p), "")
+        email = next((str(value) for value in r.get("match_emails") or [] if "@" in str(value)), "")
+        phone = next((str(value) for value in r.get("match_phones") or [] if str(value)), "")
         rejected = (r.get("linkedin") or {}).get("linkedin_url", "")
-        if any(is_candidate_id(p) for p in pids):
-            hint = ("No LinkedIn is attached yet (unresolved import candidate). "
-                    "Find this person's correct LinkedIn if one exists.")
-        else:
-            hint = (f"The previously attached LinkedIn {rejected} was judged WRONG "
-                    f"({(r.get('verdict') or {}).get('reason', '')}). Find the correct person.")
-        known_info = hint
-        if owner_context:
-            known_info += (
-                "\n\nUse the mailbox owner's background only as an identity/network-context "
-                "prior. Prefer candidates whose geography, school, employers, era, or social "
-                "context plausibly intersect it; do not require an overlap.\n"
-                f"{owner_context}"
+        context = ""
+        if rejected:
+            context = (
+                f"Rejected LinkedIn: {rejected}. "
+                f"Reason: {(r.get('verdict') or {}).get('reason', '')}"
             )
+        if owner_context:
+            context = "\n".join(filter(None, (context, f"Mailbox owner: {owner_context}")))
         queue.append({
             "handle": r.get("parent_slug", ""),
             "source_parent_slug": r.get("parent_slug", ""),
@@ -479,75 +193,16 @@ def build_queue(subset: list[dict[str, Any]], people: dict[str, dict[str, str]],
             "source_candidate_public_identifier": r.get("candidate_key", ""),
             "display_name": r.get("name", ""),
             "bio": _dossier_bio(pids, facts_dir, raw_dir),
-            "known_info": known_info,
+            "known_info": context,
             "primary_email": email,
             "phone_e164": phone,
             "area_code": "",
             "source_channel": "email" if email else "phone",
-            "retarget_hint": hint,
+            "retarget_hint": "",
         })
     return queue
 
 
-def _dig(profile: dict[str, Any], key: str) -> str:
-    """Defensively pull a field from the canonical or older research shapes."""
-    if not isinstance(profile, dict):
-        return ""
-    for loc in (
-        profile,
-        profile.get("research") or {},
-        profile.get("profile") or {},
-        profile.get("social") or {},
-        profile.get("metadata") or {},
-    ):
-        val = (loc or {}).get(key) if isinstance(loc, dict) else None
-        if val:
-            return str(val)
-    return ""
-
-
-def _find_linkedin(profile: dict[str, Any]) -> str:
-    return _dig(profile, "linkedin_url")
-
-
-def _find_reason(profile: dict[str, Any]) -> str:
-    """Best-effort justification for the retarget, from common research fields."""
-    for key in ("research_notes", "reasoning", "rationale", "summary", "headline"):
-        val = _dig(profile, key)
-        if val:
-            return f"deep research: {val}"
-    return "deep research found a correct LinkedIn"
-
-
-def _find_confidence(profile: dict[str, Any]) -> float | None:
-    """The research output's OWN identity/name confidence for the proposed profile.
-
-    In the canonical Parallel shape this is `person.confidence` (a name/identity confidence in
-    [0,1]); older/alternate shapes may put it top-level or under name_confidence. We deliberately
-    do NOT read summary/completeness confidences — those are about the write-up, not identity.
-    Returns the parsed float, or None when nothing usable is present (caller maps None -> 0.0)."""
-    if not isinstance(profile, dict):
-        return None
-    person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
-    candidates = [
-        person.get("confidence"),
-        person.get("name_confidence"),
-        profile.get("name_confidence"),
-        profile.get("identity_confidence"),
-        (profile.get("social") or {}).get("name_confidence") if isinstance(profile.get("social"), dict) else None,
-    ]
-    for value in candidates:
-        if value is None or value == "":
-            continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-# Phrases a research write-up uses when it admits it could NOT verify the contact's identifier —
-# the exact "could not directly verify the Gmail address" case. Matched case-insensitively.
 _UNVERIFIED_MARKERS = (
     "could not directly verify",
     "could not verify",
@@ -567,25 +222,53 @@ _UNVERIFIED_MARKERS = (
 )
 
 
-def _research_unverified(profile: dict[str, Any]) -> bool:
-    """True when the research output itself admits it could not verify the contact's identifier.
-
-    Reads the free-text notes/status the model writes (person.notes, metadata.research_notes,
-    social.linkedin_status) for explicit non-verification language. Deterministic; used by the
-    --no-llm fallback and to bias the judge's context."""
-    if not isinstance(profile, dict):
-        return False
-    person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
-    metadata = profile.get("metadata") if isinstance(profile.get("metadata"), dict) else {}
-    social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
-    texts = [
-        str(person.get("notes") or ""),
-        str(metadata.get("research_notes") or ""),
-        str(social.get("linkedin_status") or ""),
-        _find_reason(profile),
+def _research_evidence(profile: dict[str, Any]) -> dict[str, Any]:
+    """Parse the one normalized provider artifact shape."""
+    person = profile.get("person") or {}
+    metadata = profile.get("metadata") or {}
+    social = profile.get("social") or {}
+    location = profile.get("location") or {}
+    positions = profile.get("positions") or []
+    education_rows = profile.get("education") or []
+    url = str(social.get("linkedin_url") or "").strip()
+    notes = str(metadata.get("research_notes") or person.get("notes") or "").strip()
+    headline = profile.get("headline") or {}
+    headline = str(headline.get("text") or "") if isinstance(headline, dict) else str(headline)
+    try:
+        confidence = float(person.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    experiences = [
+        f"{row.get('title') or '?'} @ {row.get('company_name') or '?'}"
+        for row in positions if isinstance(row, dict)
+        and (row.get("title") or row.get("company_name"))
     ]
-    blob = " ".join(texts).lower()
-    return any(marker in blob for marker in _UNVERIFIED_MARKERS)
+    education = [
+        " — ".join(filter(None, (
+            ", ".join(filter(None, (str(row.get("degree") or ""),
+                                      str(row.get("field_of_study") or "")))),
+            str(row.get("school_name") or ""),
+        )))
+        for row in education_rows if isinstance(row, dict)
+        and (row.get("school_name") or row.get("degree") or row.get("field_of_study"))
+    ]
+    place = str(location.get("raw") or "").strip() or ", ".join(
+        str(location.get(key) or "").strip() for key in ("city", "state", "country")
+        if str(location.get(key) or "").strip()
+    )
+    reason = f"deep research: {notes}" if notes else "deep research found a correct LinkedIn"
+    unverified = any(marker in f"{notes} {social.get('linkedin_status') or ''}".lower()
+                     for marker in _UNVERIFIED_MARKERS)
+    return {
+        "url": url, "confidence": confidence, "reason": reason, "unverified": unverified,
+        "profile": {
+            "public_identifier": extract_public_identifier(url).lower(), "linkedin_url": url,
+            "full_name": str(person.get("full_name") or ""), "headline": headline,
+            "profile_pic_url": "", "experiences": experiences, "education": education,
+            "location": place, "reason": reason,
+            "has_profile": bool(person or positions or education_rows or place),
+        },
+    }
 
 
 # The retarget identity judge defaults to medium reasoning effort (still
@@ -620,54 +303,6 @@ def proposal_fingerprint(old_pub: str, new_url: str, dossier: dict[str, Any],
          "dossier": dossier, "profile": profile_view},
         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _research_text(value: Any) -> str:
-    return str(value.get("text") or "").strip() if isinstance(value, dict) else str(value or "").strip()
-
-
-def _research_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
-    """Stable judge-facing projection of one file-first research result."""
-    person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
-    location = profile.get("location") if isinstance(profile.get("location"), dict) else {}
-    positions = profile.get("positions") if isinstance(profile.get("positions"), list) else []
-    education_rows = profile.get("education") if isinstance(profile.get("education"), list) else []
-    social = profile.get("social") if isinstance(profile.get("social"), dict) else {}
-    experiences = []
-    for row in positions:
-        if not isinstance(row, dict):
-            continue
-        title = str(row.get("title") or "").strip()
-        company = str(row.get("company_name") or "").strip()
-        if title or company:
-            experiences.append(f"{title or '?'} @ {company or '?'}")
-    education = []
-    for row in education_rows:
-        if not isinstance(row, dict):
-            continue
-        school = str(row.get("school_name") or row.get("school") or "").strip()
-        degree = ", ".join(str(row.get(key) or "").strip() for key in ("degree", "field_of_study")
-                           if str(row.get(key) or "").strip())
-        if degree or school:
-            education.append(f"{degree} — {school}" if degree and school else degree or school)
-    raw_location = str(location.get("raw") or "").strip() or ", ".join(
-        str(location.get(key) or "").strip() for key in ("city", "state", "country")
-        if str(location.get(key) or "").strip()
-    )
-    reason = next((f"deep research: {text}" for value in (
-        (profile.get("metadata") or {}).get("research_notes"), profile.get("research_notes"),
-        profile.get("reasoning"), profile.get("rationale"), profile.get("summary"),
-        profile.get("headline"),
-    ) if (text := _research_text(value))), "")
-    return {
-        "public_identifier": extract_public_identifier(str(social.get("linkedin_url") or "")).lower(),
-        "linkedin_url": str(social.get("linkedin_url") or "").strip(),
-        "full_name": str(person.get("full_name") or "").strip(),
-        "headline": _research_text(profile.get("headline")),
-        "profile_pic_url": "", "experiences": experiences, "education": education,
-        "location": raw_location, "reason": reason,
-        "has_profile": bool(person or positions or education or raw_location),
-    }
 
 
 def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
@@ -705,12 +340,13 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     # (75 of 92 such rejections on a real store had a rich profile available). Same
     # policy as the attached-link judge; keyless installs fall back to the payload.
     proposed = [
-        (extract_public_identifier(url).lower(), url)
-        for url in (
-            _find_linkedin(_read_json(out_dir / (r.get("parent_slug") or "") / "01_research_parallel.json"))
-            for r in subset
-        )
-        if url
+        (extract_public_identifier(evidence["url"]).lower(), evidence["url"])
+        for evidence in (
+            _research_evidence(_read_json(
+                out_dir / (row.get("parent_slug") or "") / "01_research_parallel.json"
+            ))
+            for row in subset
+        ) if evidence["url"]
     ]
     if proposed:
         hydrate_profiles(proposed, cache_dir)
@@ -722,16 +358,16 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
     for r in subset:
         handle = r.get("parent_slug", "")
         profile = _read_json(out_dir / handle / "01_research_parallel.json")
-        new_url = _find_linkedin(profile)
+        evidence = _research_evidence(profile)
+        new_url = evidence["url"]
         old_pub = (r.get("candidate_key") or extract_public_identifier((r.get("linkedin") or {}).get("linkedin_url", ""))).lower()
         if not new_url or not old_pub:
             continue
-        carried = _find_confidence(profile)
-        confidence = carried if carried is not None else 0.0
-        unverified = _research_unverified(profile)
+        confidence = evidence["confidence"]
+        unverified = evidence["unverified"]
         person_ids = r.get("person_ids") or []
         dossier = dossier_view(person_ids, facts_dir, raw_dir)
-        li_view = _research_profile_view(profile)
+        li_view = evidence["profile"]
         cached_view = linkedin_view({"linkedin_url": new_url}, cache_dir)
         # THE REAL LINKEDIN WINS. The judge's question is "is this LinkedIn profile
         # the same person as my contact?", so it must see the profile itself; the
@@ -748,7 +384,7 @@ def propose_retargets_from_output(out_dir: Path, subset: list[dict[str, Any]],
             "linkedin_url": (r.get("linkedin") or {}).get("linkedin_url", ""),
             "match_emails": r.get("match_emails") or [], "match_phones": r.get("match_phones") or [],
             "person_id": (person_ids or [""])[0], "confidence": confidence,
-            "reason": _find_reason(profile), "source": "deep-research",
+            "reason": evidence["reason"], "source": "deep-research",
             "judge_fingerprint": fingerprint,
         }
         prior = existing.get(old_pub) or {}
@@ -859,44 +495,13 @@ class ReconcileDeepResearchManifest(StageManifest):
     artifacts: list[dict[str, Any]] | None = None
 
 
-class ReconcileDeepResearch(Node):
+class ReconcileDeepResearch:
     """Cost-gated deep research for wrong-LinkedIn detaches (and opted-in
     candidates): builds the queue, estimates Parallel.ai spend, enforces the
     --approve --budget gate, shells out to the research primitive, and judges
     the proposed retargets. The browser polls ENRICH_MANIFEST while this runs —
     mid-run receipts (running / judging heartbeat) are written in-flow and only
     the TERMINAL receipt goes through the Node template."""
-
-    name = "deep_research"
-    inputs = (
-        Artifact(path=str(VERDICTS_JSONL), required=False),
-        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
-        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
-        Artifact(path=FACTS_TEMPLATE, required=False),
-        Artifact(path=RAW_BUNDLE_TEMPLATE, required=False),
-        # candidates_resolved_by_existing / candidate_subset read the index;
-        # load_owner anchors queue bios and the retarget judge.
-        Artifact(path=str(INDEX_JSON), required=False),
-        Artifact(path=str(OWNER_JSON), required=False),
-        # The reuse pass ($0 steady state) reads this stage's own prior research
-        # output — a self-edge, which the graph checker drops.
-        Artifact(path=RESEARCH_PROFILE_TEMPLATE, required=False),
-    )
-    # review.csv is declared as an INPUT above, not an output, even though this
-    # node's propose pass physically writes retarget rows through the shared
-    # sticky `upsert_retargets`: every review.csv column family already has its
-    # declaring node — `deep_reconcile` owns the identity/action/fingerprint
-    # columns and `deep_synthesize` owns llm_worth* plus the llm_reject* family
-    # (the graph checker forbids a second claim on either). This follows the
-    # existing convention that a shared upsert helper's column families are
-    # declared once (deep_reconcile already speaks for upsert_retargets'
-    # identity columns regardless of caller).
-    outputs = (
-        Artifact(path=str(QUEUE_CSV), row_model=ResearchQueueRow, writes="full_rewrite", required=False),
-        Artifact(path=RESEARCH_PROFILE_TEMPLATE, writes="upsert", required=False),
-    )
-    payload = ReconcileDeepResearchManifest
-    manifest = str(ENRICH_MANIFEST)
 
     def __init__(
         self,
@@ -928,11 +533,9 @@ class ReconcileDeepResearch(Node):
         on_progress: Any = None,
         db: Db,
     ) -> None:
-        self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
+        del verdicts_jsonl, people_csv, index_json
         self.overrides_csv = Path(overrides_csv or LINKEDIN_OVERRIDES_CSV)
-        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
         self.facts_dir = Path(facts_dir or FACTS_DIR)
-        self.index_json = Path(index_json or INDEX_JSON)
         self.raw_dir = Path(raw_dir or RAW_DIR)
         self.out_dir = Path(out_dir or DR_OUT_DIR)
         self.queue_csv = Path(queue_csv or QUEUE_CSV)
@@ -963,23 +566,15 @@ class ReconcileDeepResearch(Node):
         self.result: dict[str, Any] = {}
 
     def _write(self, payload: StageManifest) -> None:
-        """Node terminal/failure write, then the explicit SQLite handoff."""
-        super()._write(payload)
-        if self.manifest_path is not None:
-            project_manifest(self.db, self.manifest_path)
+        if self.manifest_path is None:
+            return
+        write_enrichment_manifest(payload.to_payload(), self.manifest_path)
+        project_manifest(self.db, self.manifest_path)
 
-    def bindings(self) -> dict[str, str]:
-        return {
-            str(VERDICTS_JSONL): str(self.verdicts_jsonl),
-            str(LINKEDIN_OVERRIDES_CSV): str(self.overrides_csv),
-            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
-            FACTS_TEMPLATE: str(self.facts_dir / "{person_id}.jsonl"),
-            RAW_BUNDLE_TEMPLATE: str(self.raw_dir / "{person_id}.json"),
-            str(INDEX_JSON): str(self.index_json),
-            str(QUEUE_CSV): str(self.queue_csv),
-            RESEARCH_PROFILE_TEMPLATE: str(self.out_dir / "{handle}" / "01_research_parallel.json"),
-            self.manifest: str(self.manifest_path) if self.manifest_path else "",
-        }
+    def run(self) -> ReconcileDeepResearchManifest:
+        payload = self.execute()
+        self._write(payload)
+        return payload
 
     def execute(self) -> ReconcileDeepResearchManifest:
         started = time.monotonic()
@@ -1000,8 +595,6 @@ class ReconcileDeepResearch(Node):
                 counts=_manifest_counts(total=0, failed=0),
                 error=message,
             )
-        verdicts = list(read_jsonl(self.verdicts_jsonl))
-        overrides = _decision_rows(self.db)
         # Same authoritative digest the review UI stamps — a candidate promoted to a verified
         # LinkedIn parent leaves the worth pool for BOTH sides here, so they can't disagree by one.
         selection = views.workflow_state(self.db)["selection"]
@@ -1009,16 +602,15 @@ class ReconcileDeepResearch(Node):
             **selection,
             "fingerprint": str(selection.get("fingerprint") or selection.get("sha256") or ""),
         }
-        subset = eligible_subset(verdicts, self.confirm_threshold, overrides,
-                                 include_plausibly_absent=self.include_plausibly_absent)
+        subset = views.linkedin_review(
+            self.db, "enrichment",
+            include_plausibly_absent=self.include_plausibly_absent,
+            include_candidates=self.include_candidates,
+            confirm_threshold=self.confirm_threshold,
+        )
+        candidates = [row for row in subset if row.get("candidate_origin")]
         worth_skipped: list[str] = []
-        candidates = (candidate_subset(
-            self.facts_dir, overrides, db=self.db, worth_skipped=worth_skipped,
-            index_json=self.index_json)
-                      if self.include_candidates else [])
-        subset += candidates
-        people = load_people_rows(self.people_csv)
-        queue = build_queue(subset, people, self.facts_dir, self.raw_dir)
+        queue = build_queue(subset, self.facts_dir, self.raw_dir)
         pending_queue, reused_completed = filter_already_done(queue, self.out_dir)
         duplicate_handles = max(0, len(queue) - len(pending_queue) - reused_completed)
         cost_per = PROCESSOR_PRICING_USD.get(self.processor, PROCESSOR_PRICING_USD[DEFAULT_PROCESSOR])

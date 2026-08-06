@@ -4,13 +4,20 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from packs.ingestion.primitives.deep_context import apply_retargets
 from packs.ingestion.primitives.deep_context.apply_retargets import ApplyRetargets
 from packs.ingestion.primitives.deep_context.db.models import (
     CandidatePersonRow,
+    IdentityMachineProjection,
     LinkRow,
     ParentRow,
+    PersonIdentifierRow,
+    PersonIdentifiersProjection,
     PersonRow,
+    PersonSourceRow,
+    PersonSourcesProjection,
     ReviewSource,
     RowKind,
 )
@@ -91,8 +98,51 @@ class SqliteProducerTests(unittest.TestCase):
             profile_cache_dir=self.root / "cache",
             out_csv=self.root / "retarget.csv",
         ).run()
-        self.assertTrue(baton.exists())
+        self.assertFalse(baton.exists())
+        self.assertTrue((self.root / "retarget.csv").exists())
         self.assertEqual(result.approved_retargets, 0)
+
+    def test_approved_retarget_carries_contact_identity_from_sqlite(self) -> None:
+        self.db.project_rows((
+            PersonIdentifiersProjection("person-1", (
+                PersonIdentifierRow("person-1", "email", "alice@example.com"),
+            )),
+            PersonSourcesProjection("person-1", (
+                PersonSourceRow("person-1", "gmail"),
+            )),
+        ))
+        self.db.project_identity((IdentityMachineProjection(
+            "alice",
+            machine_action="retarget",
+            machine_approved="auto",
+            machine_proposed_url="https://www.linkedin.com/in/alice-correct",
+            machine_proposed_public_identifier="alice-correct",
+        ),))
+        captured = {}
+
+        def build(url, pub, raw, carry):
+            captured.update(carry)
+            return {"public_identifier": pub, "linkedin_url": url}
+
+        with (
+            mock.patch.object(apply_retargets, "load_env"),
+            mock.patch.object(
+                apply_retargets,
+                "enrich_one",
+                return_value={"raw": {}, "from_cache": True, "error": ""},
+            ),
+            mock.patch.object(apply_retargets, "build_retarget_row", side_effect=build),
+        ):
+            result = ApplyRetargets(
+                db=self.db,
+                people_csv=self.root / "absent-people.csv",
+                profile_cache_dir=self.root / "cache",
+                out_csv=self.root / "retarget.csv",
+            ).run()
+
+        self.assertEqual((result.approved_retargets, result.enriched), (1, 1))
+        self.assertEqual(captured["primary_email"], "alice@example.com")
+        self.assertEqual(captured["source_channels"], "gmail")
 
     def test_synthesis_projects_fixed_facts_artifact(self) -> None:
         facts_dir = self.root / "facts"

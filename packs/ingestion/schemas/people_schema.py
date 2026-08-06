@@ -98,6 +98,11 @@ PEOPLE_SCHEMA_COLUMNS = [
     "enrichment_error",
 ]
 
+CONTACT_CARRY_COLUMNS = [
+    "primary_email", "all_emails", "primary_phone", "all_phones",
+    "interaction_counts", "last_interaction", "source_channels",
+]
+
 ENRICHMENT_STATUS_ENRICHED = "enriched"
 ENRICHMENT_STATUS_FAILED = "failed"
 ENRICHMENT_STATUS_SKIPPED = "skipped"

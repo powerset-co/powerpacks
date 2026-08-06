@@ -1,32 +1,11 @@
-"""Persist approved Deep Context identities into the shared directory.
-
-Runs after LinkedIn review and before fan-in/indexing.  It turns approved real
-LinkedIn decisions into durable email/phone -> LinkedIn mappings in
-``directory.csv``.  Future source imports and the immediate fan-in can then
-resolve the same contact without depending on transient review artifacts.
-
-Flow:
-  review.csv + consolidated contacts + hydrated retarget contacts
-    -> directory.csv
-    -> fan-in -> merged/people.csv
-
-Detached and synthetic identities are intentionally excluded: neither is a
-confirmed real-LinkedIn identity to cache in the shared directory.
-
-Changelog:
-  2026-07-27 (declared contract): `PersistReviewIdentities` is a
-    `pipeline/contract.py:Node` declaring the `deep_context_review` row slice of
-    the shared `directory.csv` (`owns_rows_where`) — the third declared writer,
-    after the gmail and messages importers. No manifest file (declaration-only,
-    `manifest=""`); same CLI, same payload.
-"""
+"""Export approved real LinkedIn identities from SQLite to directory.csv."""
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
-from packs.ingestion.primitives.common.contact_fields import emails_from_row, phones_from_row
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.common.paths import DEFAULT_DIRECTORY_CSV
 from packs.ingestion.primitives.deep_context.common import (
@@ -35,31 +14,14 @@ from packs.ingestion.primitives.deep_context.common import (
     emit,
     LINKEDIN_OVERRIDES_CSV,
     RETARGET_PEOPLE_CSV,
+    ROOT,
 )
-from packs.ingestion.primitives.imports.directory import (
-    DEEP_CONTEXT_DIRECTORY_ROWS,
-    DirectoryRow,
-    commit_directory_rows,
-    directory_identity_key,
-)
-from packs.ingestion.primitives.pipeline.contract import Artifact, Node, StageManifest
+from packs.ingestion.primitives.deep_context.db.store import Db
+from packs.ingestion.primitives.imports.directory import commit_directory_rows, directory_identity_key
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
-from packs.shared.csv_io import CsvIO
 
 DIRECTORY_SOURCE = "deep_context_review"
-APPROVED = {"auto", "yes"}
-
-
-def _rows(path: Path) -> list[dict[str, str]]:
-    return CsvIO.read_dict_rows(path) if path.exists() else []
-
-
-def _people_by_id(path: Path) -> dict[str, dict[str, str]]:
-    return {str(row.get("id") or ""): row for row in _rows(path) if row.get("id")}
-
-
-def _pipe_values(value: str) -> list[str]:
-    return [part.strip() for part in str(value or "").split("|") if part.strip()]
+CANONICAL_DB = ROOT / "deep-context.sqlite"
 
 
 def _identity_rows(
@@ -125,27 +87,44 @@ def _identity_rows(
     return rows
 
 
-def rows_from_review(review_csv: Path, people_csv: Path) -> tuple[list[dict[str, str]], dict[str, int]]:
-    """Approved verify/retarget rows, anchored by their current person contact fields."""
-    people = _people_by_id(people_csv)
+def rows_from_db(db: Db) -> tuple[list[dict[str, str]], dict[str, int]]:
+    """Approved real identities with every current parent email and phone."""
     rows: list[dict[str, str]] = []
     stats = {"review_considered": 0, "review_persisted": 0, "review_unanchored": 0}
-    for decision in _rows(review_csv):
-        action = str(decision.get("action") or "").strip().lower()
-        if action not in {"verify", "retarget"} or str(decision.get("approved") or "").strip().lower() not in APPROVED:
-            continue
+    decisions = db._query("""
+SELECT l.row_key, p.display_name,
+       COALESCE(l.decision_action, l.machine_action) AS action,
+       CASE COALESCE(l.decision_action, l.machine_action)
+         WHEN 'retarget' THEN COALESCE(l.replacement_url, l.machine_proposed_url)
+         ELSE l.linkedin_url END AS linkedin_url,
+       (SELECT person_id FROM people WHERE parent_id=l.parent_id AND is_ghost=0
+        ORDER BY person_id LIMIT 1) AS person_id,
+       (SELECT json_group_array(value) FROM (
+          SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
+          FROM people pe JOIN person_identifiers i USING(person_id)
+          WHERE pe.parent_id=l.parent_id AND i.kind='email' ORDER BY value
+        )) AS emails_json,
+       (SELECT json_group_array(value) FROM (
+          SELECT DISTINCT COALESCE(i.display_value, i.normalized_value) AS value
+          FROM people pe JOIN person_identifiers i USING(person_id)
+          WHERE pe.parent_id=l.parent_id AND i.kind='phone' ORDER BY value
+        )) AS phones_json
+FROM links l JOIN parents p USING(parent_id)
+WHERE l.kind!='synthetic'
+  AND COALESCE(l.decision_action, l.machine_action) IN ('verify', 'retarget')
+  AND COALESCE(l.decision_approved, l.machine_approved) IN ('auto', 'yes')
+ORDER BY l.parent_id, l.row_key
+""")
+    for decision in decisions:
         stats["review_considered"] += 1
-        url = decision.get("new_linkedin_url") if action == "retarget" else decision.get("linkedin_url")
-        person_id = str(decision.get("person_id") or "")
-        person = people.get(person_id, {})
-        emails = emails_from_row(person) + _pipe_values(decision.get("match_emails") or "")
-        phones = phones_from_row(person) + _pipe_values(decision.get("match_phones") or "")
         materialized = _identity_rows(
-            emails=emails, phones=phones,
-            name=str(person.get("full_name") or decision.get("matched_name") or ""),
-            linkedin_url=str(url or ""), person_id=person_id,
+            emails=json.loads(decision["emails_json"] or "[]"),
+            phones=json.loads(decision["phones_json"] or "[]"),
+            name=str(decision["display_name"] or ""),
+            linkedin_url=str(decision["linkedin_url"] or ""),
+            person_id=str(decision["person_id"] or ""),
             reason="Approved Deep Context identity review",
-            source_artifact=str(review_csv),
+            source_artifact=str(CANONICAL_DB),
         )
         if materialized:
             stats["review_persisted"] += 1
@@ -155,69 +134,20 @@ def rows_from_review(review_csv: Path, people_csv: Path) -> tuple[list[dict[str,
     return rows, stats
 
 
-def rows_from_people_artifact(path: Path, *, reason: str) -> tuple[list[dict[str, str]], int]:
-    """Persist every real-LinkedIn row from a reviewed contact-carry artifact."""
-    rows: list[dict[str, str]] = []
-    people = 0
-    for person in _rows(path):
-        materialized = _identity_rows(
-            emails=emails_from_row(person), phones=phones_from_row(person),
-            name=str(person.get("full_name") or ""),
-            linkedin_url=str(person.get("linkedin_url") or ""),
-            person_id=str(person.get("id") or ""), reason=reason, source_artifact=str(path),
-        )
-        if materialized:
-            people += 1
-            rows.extend(materialized)
-    return rows, people
+class Payload(dict):
+    def __getattr__(self, key: str) -> Any:
+        try:
+            return self[key]
+        except KeyError as exc:
+            raise AttributeError(key) from exc
+
+    def to_payload(self) -> dict[str, Any]:
+        return dict(self)
 
 
-class PersistReviewIdentitiesManifest(StageManifest):
-    """Typed payload — the raw dict's keys verbatim. The `commit_directory_rows`
-    extras are None on a dry run and dropped by `to_payload()`."""
-    source: str = "persist_review_identities"
-    review_considered: int = 0
-    review_persisted: int = 0
-    review_unanchored: int = 0
-    consolidated_people: int = 0
-    retarget_people: int = 0
-    identity_rows: int = 0
-    directory_csv: str = ""
-    existing_rows: int | None = None
-    imported_rows: int | None = None
-    rows: int | None = None
-
-
-class PersistReviewIdentities(Node):
+class PersistReviewIdentities:
     """Persists approved review/consolidation/retarget identities into the
     `deep_context_review` row slice of the shared `directory.csv`."""
-
-    name = "deep_persist_review"
-    # All optional: an absent review artifact simply contributes zero rows —
-    # the pre-review pipeline state, not an error.
-    inputs = (
-        Artifact(path=str(LINKEDIN_OVERRIDES_CSV), required=False),
-        Artifact(path=str(DEFAULT_PEOPLE_CSV), required=False),
-        Artifact(path=str(CONSOLIDATE_PEOPLE_CSV), required=False),
-        Artifact(path=str(RETARGET_PEOPLE_CSV), required=False),
-    )
-    outputs = (
-        # `feedback=True`: this slice is read by the importers and the merge on
-        # the NEXT realization — the pipeline's one deliberate loop (reviewed
-        # identities survive source re-imports). Excluded from cycle detection,
-        # fully scored for conflicts/ownership.
-        Artifact(
-            path=str(DEFAULT_DIRECTORY_CSV),
-            row_model=DirectoryRow,
-            writes="upsert",
-            owns_rows_where=DEEP_CONTEXT_DIRECTORY_ROWS,
-            feedback=True,
-        ),
-    )
-    payload = PersistReviewIdentitiesManifest
-    # Declaration-only node: no manifest file today, and none invented — the
-    # payload is emitted by the CLI and the durable output is the directory slice.
-    manifest = ""
 
     def __init__(
         self,
@@ -228,47 +158,28 @@ class PersistReviewIdentities(Node):
         retarget_people_csv: Path | None = None,
         directory_csv: Path | None = None,
         dry_run: bool = False,
+        db: Db | None = None,
     ) -> None:
-        self.review_csv = Path(review_csv or LINKEDIN_OVERRIDES_CSV)
-        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
-        self.consolidate_people_csv = Path(consolidate_people_csv or CONSOLIDATE_PEOPLE_CSV)
-        self.retarget_people_csv = Path(retarget_people_csv or RETARGET_PEOPLE_CSV)
+        del review_csv, people_csv, consolidate_people_csv, retarget_people_csv
         self.directory_csv = Path(directory_csv or DEFAULT_DIRECTORY_CSV)
         self.dry_run = dry_run
+        self.db = db or Db(CANONICAL_DB)
 
-    def bindings(self) -> dict[str, str]:
-        return {
-            str(LINKEDIN_OVERRIDES_CSV): str(self.review_csv),
-            str(DEFAULT_PEOPLE_CSV): str(self.people_csv),
-            str(CONSOLIDATE_PEOPLE_CSV): str(self.consolidate_people_csv),
-            str(RETARGET_PEOPLE_CSV): str(self.retarget_people_csv),
-            str(DEFAULT_DIRECTORY_CSV): str(self.directory_csv),
-        }
+    def run(self) -> Payload:
+        return self.execute()
 
-    def execute(self) -> PersistReviewIdentitiesManifest:
-        review_rows, review_stats = rows_from_review(self.review_csv, self.people_csv)
-        consolidated, consolidation_people = rows_from_people_artifact(
-            self.consolidate_people_csv, reason="Approved Deep Context consolidation",
-        )
-        retargeted, retarget_people = rows_from_people_artifact(
-            self.retarget_people_csv, reason="Approved Deep Context retarget",
-        )
-        rows = review_rows + consolidated + retargeted
-        payload = PersistReviewIdentitiesManifest(
-            status="dry_run" if self.dry_run else "completed",
-            **review_stats,
-            consolidated_people=consolidation_people,
-            retarget_people=retarget_people,
-            identity_rows=len(rows),
+    def execute(self) -> Payload:
+        rows, review_stats = rows_from_db(self.db)
+        payload = Payload(
+            source="persist_review_identities",
+            status="dry_run" if self.dry_run else "completed", **review_stats,
+            consolidated_people=0, retarget_people=0, identity_rows=len(rows),
             directory_csv=str(self.directory_csv),
         )
         if self.dry_run:
             return payload
         committed = commit_directory_rows(self.directory_csv, rows)
-        payload.directory_csv = committed["directory_csv"]
-        payload.existing_rows = committed["existing_rows"]
-        payload.imported_rows = committed["imported_rows"]
-        payload.rows = committed["rows"]
+        payload.update(committed)
         return payload
 
 

@@ -18,7 +18,7 @@ PROMPTS = {
     "contact_research_instructions": (
         "packs.ingestion.primitives.deep_context.deep_research_contacts",
         "RESEARCH_INSTRUCTIONS",
-        "6906b488c630b8ea7a37d012e9ceac863d7a3661e62c9729cade00167bc17da3",
+        "77d9675720416cf4e68effd10671aa4eba5ab8b28459380330c04876cef59f9e",
     ),
     "profile_summary_system": (
         "packs.ingestion.primitives.deep_context.prefetch_profiles",

@@ -191,8 +191,7 @@ class EnrichmentProjectionTest(unittest.TestCase):
                     }
                 },
             ),
-            mock.patch.object(reconcile, "eligible_subset", return_value=subset),
-            mock.patch.object(reconcile, "load_people_rows", return_value={}),
+            mock.patch.object(reconcile.views, "linkedin_review", return_value=subset),
             mock.patch.object(reconcile, "build_queue", return_value=[self.queue_row]),
             mock.patch.object(reconcile, "run_research") as paid,
         ):

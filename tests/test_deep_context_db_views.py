@@ -156,6 +156,35 @@ class DeepContextDbViewTests(unittest.TestCase):
             {"total": 4, "pending": 1, "yes": 1, "no": 1},
         )
 
+    def test_enrichment_queue_is_one_effective_yes_sql_policy(self):
+        wrong_people = self.add_parent("wrong", "yes")
+        self.add_candidate(
+            "wrong", "wrong-link", person_ids=wrong_people,
+            linkedin_url="https://www.linkedin.com/in/wrong-link",
+            machine_judgment="wrong_person", machine_confidence=0.91,
+            judgment_payload_json=json.dumps({"recommend_deep_research": True}),
+        )
+        candidate_people = self.add_parent("candidate", "yes")
+        self.add_candidate(
+            "candidate", "candidate:email:jordan@example.com",
+            person_ids=candidate_people, candidate_origin=1, raw_import=1,
+        )
+        no_people = self.add_parent("rejected", "no")
+        self.add_candidate(
+            "rejected", "rejected-link", person_ids=no_people,
+            machine_judgment="wrong_person", machine_confidence=0.99,
+            judgment_payload_json=json.dumps({"recommend_deep_research": True}),
+        )
+
+        default = linkedin_review(self.db, "enrichment")
+        expanded = linkedin_review(self.db, "enrichment", include_candidates=True)
+
+        self.assertEqual([row["candidate_key"] for row in default], ["wrong-link"])
+        self.assertEqual(
+            {row["candidate_key"] for row in expanded},
+            {"wrong-link", "candidate:email:jordan@example.com"},
+        )
+
     def test_linkedin_queue_encodes_standing_and_review_policies(self):
         review_people = self.add_parent("review", "yes")
         self.add_candidate(

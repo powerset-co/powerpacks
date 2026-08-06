@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import http.client
 import json
@@ -25,6 +26,7 @@ from packs.ingestion.primitives.deep_context.db.models import (
     RowKind,
 )
 from packs.ingestion.primitives.deep_context.db.store import Db, StoreError
+from packs.ingestion.primitives.deep_context.deep_research_contacts import build_input
 from packs.ingestion.primitives.deep_context.review_web.guided_retarget import (
     GuidanceRequest,
     GuidedRetargetWorker,
@@ -302,11 +304,9 @@ class DeepContextSqliteWebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["item"]["state"], "queued")
         guidance = query(self.db, "SELECT guidance, state FROM guidance")
-        jobs = query(self.db, "SELECT kind, status FROM jobs")
         self.assertEqual(guidance[0]["guidance"], "Find the synthetic operator I met through Casey.")
         self.assertIn(guidance[0]["state"], {"pending", "running", "applied"})
-        self.assertEqual(jobs[0]["kind"], "guided_retarget")
-        self.assertIn(jobs[0]["status"], {"queued", "running", "applied"})
+        self.assertEqual(query(self.db, "SELECT * FROM jobs WHERE kind='guided_retarget'"), [])
 
     def test_pasted_linkedin_applies_directly_without_research(self) -> None:
         worker = GuidedRetargetWorker(
@@ -330,6 +330,70 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             self.db, "SELECT decision_action, replacement_public_identifier FROM links WHERE row_key='jordan-bravo'"
         )[0]
         self.assertEqual(tuple(row), ("retarget", "jordan-bravo-correct"))
+
+    def test_guided_research_uses_canonical_dossier_and_reuse_home(self) -> None:
+        queue_dir = self.root / "guided"
+        research_dir = self.root / "deep-research"
+        captured: dict[str, str] = {}
+
+        def run_research(params):
+            self.assertEqual(params.output_dir, research_dir)
+            with params.input_csv.open(newline="", encoding="utf-8") as stream:
+                row = next(csv.DictReader(stream))
+            captured.update(row)
+            result_dir = params.output_dir / row["handle"]
+            result_dir.mkdir(parents=True)
+            (result_dir / "01_research_parallel.json").write_text(
+                json.dumps(
+                    {
+                        "social": {"linkedin_url": "https://www.linkedin.com/in/jordan-bravo-correct"},
+                        "metadata": {"research_notes": "matched the dossier"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {"status": "completed"}
+
+        worker = GuidedRetargetWorker(
+            self.db,
+            out_dir=queue_dir,
+            research_dir=research_dir,
+        )
+        request = GuidanceRequest(
+            "jordan-bravo",
+            "jordan-bravo",
+            "Jordan Bravo",
+            "Find the operator I met through Casey.",
+            person_ids=("linkedin-person",),
+            linkedin_url="https://www.linkedin.com/in/jordan-bravo",
+            queue_slug="jordan-bravo",
+            match_emails=("jordan@example.com",),
+            match_phones=("+15550100",),
+        )
+        with mock.patch(
+            "packs.ingestion.primitives.deep_context.review_web.guided_retarget.run_research",
+            side_effect=run_research,
+        ):
+            result = worker._research(request)
+        self.assertEqual(result["new_url"], "https://www.linkedin.com/in/jordan-bravo-correct")
+        self.assertEqual(result["detail"], "matched the dossier")
+        self.assertIn("# Jordan Bravo", captured["bio"])
+        self.assertIn('"current_linkedin": "https://www.linkedin.com/in/jordan-bravo"', captured["bio"])
+        self.assertIn('"emails": ["jordan@example.com"]', captured["bio"])
+        self.assertEqual(captured["known_info"], "")
+        self.assertEqual(captured["retarget_hint"], "Find the operator I met through Casey.")
+        self.assertEqual(
+            build_input(captured, captured["handle"]),
+            {
+                "handle": "jordan-bravo",
+                "dossier": (
+                    "Name: Jordan Bravo\nRelationship dossier: " + captured["bio"]
+                    + "\nEmail: jordan@example.com\nPhone: +15550100"
+                ),
+                "guidance": "Find the operator I met through Casey.",
+            },
+        )
+        self.assertFalse((queue_dir / "manifest.json").exists())
 
     def test_pending_guided_job_resumes_from_sqlite(self) -> None:
         release = threading.Event()
@@ -372,10 +436,7 @@ class DeepContextSqliteWebTests(unittest.TestCase):
             time.sleep(0.01)
         release.set()
         self.assertEqual(state, "applied")
-        self.assertEqual(
-            query(self.db, "SELECT status FROM jobs WHERE kind='guided_retarget'")[0]["status"],
-            "applied",
-        )
+        self.assertEqual(query(self.db, "SELECT * FROM jobs WHERE kind='guided_retarget'"), [])
 
 
 if __name__ == "__main__":

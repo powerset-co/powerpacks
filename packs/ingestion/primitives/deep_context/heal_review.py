@@ -1,45 +1,10 @@
-"""Self-heal pass run BEFORE the review UI serves (`bin/deep-context heal`).
+"""Heal stale LinkedIn identities from SQLite before the review UI serves.
 
-A definitive, first-class step of `bin/deep-context review <stage>`: it always
-runs, always announces itself (a clean store prints one `[heal] ... (nothing
-to do)` line), and stamps its summary into the review stage manifest. No
-approval gate: invoking review/heal IS the consent — the pre-run count lines
-are information. Uncapped by default (2026-08-05: a silent 200-cap left 43 of
-a real store's 243 judge-skips unhealed and read as "heal ran, still
-broken"); --cap is an optional manual bound and a capped run says what it
-left behind.
+Fresh-hydrate judge-skipped links, reuse the shared judge, detach confirmed dead
+links, stand an existing synthetic identity, and stamp the fixed review manifest.
 
-What this actually does, in order:
-  1. OWNER BACKFILL — preserve the one supported owner-phone compatibility fix.
-  2. FETCH — select every UNDECIDED candidate whose stored verdict is the
-     judge-skip ("needs_review", confidence 0.0, no usable LinkedIn profile)
-     with an attached URL, and ask the RapidAPI client for FRESH truth: one
-     `get_profile(fresh=True)` per candidate (the client owns cache-vs-fetch;
-     repeats never re-bill).
-  3. JUDGE — parents whose candidate came back CONTENT re-judge through the
-     normal `ReconcileLinkedin` subset pass (same judge, same write path, so
-     the confirm/detach bars auto-apply exactly as usual). Skipped with a
-     one-liner when no OpenAI key is configured.
-  4. TERMINATE — a candidate whose FRESH answer is EMPTY is a confirmed dead
-     link: detach the row (machine-grade, approved=auto), then stand a FREE
-     identity when one exists — (a) an existing synthetic-people.csv row for
-     the person gates to yes; (b) an existing deep-research output whose
-     proposed URL is the now-dead link mints a synthetic via a scoped
-     `AssembleSyntheticProfile` run (prune=False); (c) otherwise the person
-     stays a pending re-research card. Never any new paid research, never a
-     human yes/no row. An ERROR answer terminates NOBODY — an outage or a
-     keyless install must not detach anyone.
-
-Idempotent: judged rows carry a real verdict, terminated rows carry
-approved=auto, so the next run selects nothing, fetches nothing, and spends
-nothing.
-
-Session gate: standalone `bin/deep-context heal` refuses while a review server
-owns the review session (single-writer contract). `--pre-restart` — passed ONLY
-by the `review` verb — skips that gate: review heals FIRST (the old UI keeps
-serving while the pass runs), then immediately stops the server and boots a
-fresh one that re-reads disk, so the live server's in-memory model never
-outlives these writes.
+Flow: SQLite selection -> RapidAPI hydrate -> shared judge -> SQLite settlement
+-> fixed manifest.
 """
 from __future__ import annotations
 
@@ -47,427 +12,272 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.common.legacy import ensure_owner_phones
-from packs.ingestion.primitives.deep_context.assemble_synthetic_profile import (
-    AssembleSyntheticProfile,
-    profile_is_usable,
-)
-from packs.ingestion.primitives.deep_context.common import (
-    DEEP_RESEARCH_DIR,
-    DEFAULT_PEOPLE_CSV,
-    FACTS_DIR,
-    INDEX_JSON,
-    LINKEDIN_OVERRIDES_CSV,
-    OWNER_JSON,
-    PARENTS_DIR,
-    PROFILE_CACHE_DIR,
-    RAW_DIR,
-    REVIEW_MANIFEST,
-    ROOT,
-    VERDICTS_CSV,
-    VERDICTS_JSONL,
-    emit,
-    load_env,
-    read_jsonl,
-)
-from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
-    NO_PROFILE_REASON,
-    ReconcileLinkedin,
-    _identity_projection,
-    count_pending,
-)
-from packs.ingestion.primitives.deep_context.db.models import ApprovedState, ReviewSource
+from packs.ingestion.primitives.deep_context.common import PROFILE_CACHE_DIR, REVIEW_MANIFEST, ROOT, emit, load_env
+from packs.ingestion.primitives.deep_context.compose_dossier import merge_facts
+from packs.ingestion.primitives.deep_context.db.models import RowKind
+from packs.ingestion.primitives.deep_context.db.snapshots import canonical_snapshot, identity_snapshot
 from packs.ingestion.primitives.deep_context.db.store import Db
-from packs.ingestion.primitives.deep_context.db.snapshots import identity_snapshot
-from packs.ingestion.primitives.enrich.rapidapi_client import (
-    PROFILE_CONTENT,
-    PROFILE_EMPTY,
-    RapidApiClient,
+from packs.ingestion.primitives.deep_context.reconcile_linkedin import (
+    DEFAULT_CONFIRM,
+    DEFAULT_DETACH,
+    NO_PROFILE_REASON,
+    count_pending_identity_reviews,
+    decide_actions,
+    judge_identity_candidate,
+    linkedin_view,
+    project_identity_judgments,
 )
+from packs.ingestion.primitives.enrich.rapidapi_client import PROFILE_CONTENT, PROFILE_EMPTY, RapidApiClient
 from packs.ingestion.primitives.imports.common import write_manifest
-from packs.ingestion.schemas.people_schema import extract_public_identifier
 
-# UNCAPPED by default (owner directive 2026-08-05): the heal is a definitive
-# always-run task and a silent cap reads as "heal ran, still broken" — the
-# first real 243-candidate store proved it. The RapidAPI client's rate limiter
-# is the natural throttle; --cap remains only as a manual bound, and a capped
-# run SAYS what it left behind.
+
 HEAL_BATCH_CAP: int | None = None
 _FETCH_WORKERS = 8
 CANONICAL_DB = ROOT / "deep-context.sqlite"
-SYNTHETIC_PEOPLE_CSV = LINKEDIN_OVERRIDES_CSV.parent / "synthetic-people.csv"
 
 
 @dataclass(frozen=True)
 class HealCandidate:
-    """One judge-skipped, undecided (parent, attached-LinkedIn) pair."""
-
+    parent_id: str
     parent_slug: str
+    name: str
+    candidate_key: str
     pub: str
     url: str
-    person_ids: tuple[str, ...] = ()
-    match_emails: tuple[str, ...] = ()
-    match_phones: tuple[str, ...] = ()
 
 
 def _say(line: str) -> None:
     print(f"[heal] {line}", file=sys.stderr, flush=True)
 
 
-def _review_rows(db: Db) -> dict[str, dict[str, str]]:
-    return {
-        row.key: {name: value for name, value in asdict(row).items() if name != "key"}
-        for row in identity_snapshot(db).review_rows
-    }
-
-
 class HealReview:
-    """Construct-and-run: `HealReview().run()` returns the JSON-able summary."""
+    """Construct and run the SQLite-backed self-heal policy."""
 
-    def __init__(
-        self,
-        *,
-        db: Db,
-        review_csv: Path | None = None,
-        verdicts_jsonl: Path | None = None,
-        verdicts_csv: Path | None = None,
-        people_csv: Path | None = None,
-        profile_cache_dir: Path | None = None,
-        synthetic_csv: Path | None = None,
-        index_json: Path | None = None,
-        facts_dir: Path | None = None,
-        raw_dir: Path | None = None,
-        parents_dir: Path | None = None,
-        deep_research_dir: Path | None = None,
-        owner_json: Path | None = None,
-        review_manifest: Path | None = None,
-        cap: int | None = HEAL_BATCH_CAP,
-    ) -> None:
+    def __init__(self, *, db: Db, profile_cache_dir: Path | None = None,
+                 review_manifest: Path | None = None,
+                 cap: int | None = HEAL_BATCH_CAP) -> None:
         self.db = db
-        self.review_csv = Path(review_csv or LINKEDIN_OVERRIDES_CSV)
-        self.verdicts_jsonl = Path(verdicts_jsonl or VERDICTS_JSONL)
-        self.verdicts_csv = Path(verdicts_csv or VERDICTS_CSV)
-        self.people_csv = Path(people_csv or DEFAULT_PEOPLE_CSV)
         self.profile_cache_dir = Path(profile_cache_dir or PROFILE_CACHE_DIR)
-        self.synthetic_csv = Path(synthetic_csv or SYNTHETIC_PEOPLE_CSV)
-        self.index_json = Path(index_json or INDEX_JSON)
-        self.facts_dir = Path(facts_dir or FACTS_DIR)
-        self.raw_dir = Path(raw_dir or RAW_DIR)
-        self.parents_dir = Path(parents_dir or PARENTS_DIR)
-        self.deep_research_dir = Path(deep_research_dir or DEEP_RESEARCH_DIR)
-        self.owner_json = Path(owner_json or OWNER_JSON)
         self.review_manifest = Path(review_manifest or REVIEW_MANIFEST)
         self.cap = None if cap is None else max(1, int(cap))
 
-    # ---- selection ---------------------------------------------------------
-
     def select_candidates(self) -> tuple[list[HealCandidate], int, int]:
-        """(candidates, skipped_pending_retarget, uncapped_total).
-
-        A candidate is a judge-skipped stored verdict (needs_review, 0.0,
-        NO_PROFILE_REASON) with an attached URL whose review row is still
-        undecided (approved not in yes/no/auto). A pending retarget proposing
-        a DIFFERENT profile is already a live review card and is left to that
-        flow. Human yes/no rows are never candidates."""
-        rows = _review_rows(self.db)
-        seen: set[str] = set()
-        out: list[HealCandidate] = []
+        graph = canonical_snapshot(self.db)
+        identity = identity_snapshot(self.db)
+        parents = {row.parent_id: row for row in graph.parents}
+        selected: list[HealCandidate] = []
         skipped_retarget = 0
-        for rec in read_jsonl(self.verdicts_jsonl):
-            if rec.get("no_link"):
+        for link in identity.links:
+            if (
+                link.kind in {RowKind.SYNTHETIC.value, RowKind.RESEARCH.value}
+                or link.machine_judgment != "needs_review"
+                or float(link.machine_confidence or 0) != 0.0
+                or link.machine_reason != NO_PROFILE_REASON
+                or not link.linkedin_url
+                or (link.decision_approved or link.machine_approved or "").lower()
+                in {"yes", "no", "auto"}
+            ):
                 continue
-            verdict = rec.get("verdict") or {}
-            if (verdict.get("verdict") != "needs_review"
-                    or float(verdict.get("confidence") or 0) != 0.0
-                    or (verdict.get("reason") or "") != NO_PROFILE_REASON):
-                continue
-            pub = (rec.get("candidate_key") or "").strip().lower()
-            url = ((rec.get("linkedin") or {}).get("linkedin_url") or "").strip()
-            if not pub or not url or pub in seen:
-                continue
-            seen.add(pub)
-            row = rows.get(pub) or {}
-            if (row.get("approved") or "").strip().lower() in {"yes", "no", "auto"}:
-                continue
-            new_pub = (row.get("new_public_identifier") or "").strip().lower()
-            if ((row.get("action") or "").strip().lower() == "retarget"
-                    and new_pub not in {"", pub}):
+            action = link.decision_action or link.machine_action or ""
+            proposed = link.replacement_public_identifier or link.machine_proposed_public_identifier
+            if action == "retarget" and proposed and proposed.lower() != link.public_identifier.lower():
                 skipped_retarget += 1
                 continue
-            out.append(HealCandidate(
-                parent_slug=str(rec.get("parent_slug") or ""),
-                pub=pub, url=url,
-                person_ids=tuple(str(p) for p in rec.get("person_ids") or []),
-                match_emails=tuple(str(e) for e in rec.get("match_emails") or []),
-                match_phones=tuple(str(p) for p in rec.get("match_phones") or []),
+            parent = parents.get(link.parent_id)
+            if parent is None:
+                continue
+            selected.append(HealCandidate(
+                parent_id=link.parent_id,
+                parent_slug=parent.display_slug or parent.public_identifier,
+                name=parent.display_name or link.display_name or parent.public_identifier,
+                candidate_key=link.row_key,
+                pub=link.public_identifier.lower(),
+                url=link.linkedin_url,
             ))
-        out.sort(key=lambda c: (c.parent_slug, c.pub))
-        capped = out if self.cap is None else out[: self.cap]
-        if len(capped) < len(out):
-            _say(f"cap {self.cap}: healing {len(capped)} of {len(out)} — "
-                 f"run review again for the remaining {len(out) - len(capped)}")
-        return capped, skipped_retarget, len(out)
-
-    # ---- fetch -------------------------------------------------------------
+        selected.sort(key=lambda row: (row.parent_slug, row.candidate_key))
+        uncapped = len(selected)
+        if self.cap is not None:
+            selected = selected[: self.cap]
+        if len(selected) < uncapped:
+            _say(f"cap {self.cap}: healing {len(selected)} of {uncapped}")
+        return selected, skipped_retarget, uncapped
 
     def fetch_states(self, candidates: list[HealCandidate]) -> dict[str, dict[str, Any]]:
-        """pub -> get_profile result. One fresh client call per candidate; the
-        client owns cache-vs-fetch and the no-rebill promise."""
         if not candidates:
             return {}
-        _say(f"requesting fresh profiles for {len(candidates)} attached links "
-             "(RapidAPI, billed per fetch; repeats served from cache)")
+        _say(f"requesting {len(candidates)} fresh LinkedIn profiles")
         client = RapidApiClient()
-        states: dict[str, dict[str, Any]] = {}
-        done = 0
         with ThreadPoolExecutor(max_workers=min(_FETCH_WORKERS, len(candidates))) as pool:
-            for candidate, result in zip(candidates, pool.map(
-                    lambda c: client.get_profile(
-                        c.pub, c.url, cache_dir=self.profile_cache_dir, fresh=True),
-                    candidates)):
-                states[candidate.pub] = result
-                done += 1
-                if done % 25 == 0:
-                    _say(f"profiles {done}/{len(candidates)}")
-        return states
+            results = pool.map(
+                lambda row: client.get_profile(
+                    row.pub, row.url, cache_dir=self.profile_cache_dir, fresh=True
+                ),
+                candidates,
+            )
+            return {row.candidate_key: result for row, result in zip(candidates, results)}
 
-    # ---- judge -------------------------------------------------------------
+    def _dossiers(self) -> dict[str, dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in canonical_snapshot(self.db).facts:
+            try:
+                facts = json.loads(row.facts_json or "{}")
+            except json.JSONDecodeError:
+                facts = {}
+            if isinstance(facts, dict):
+                grouped.setdefault(row.parent_id, []).append({"facts": facts})
+        return {parent_id: merge_facts(rows) for parent_id, rows in grouped.items()}
+
+    @staticmethod
+    def _dossier_view(facts: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "relationship": str(facts.get("relationship_to_owner") or ""),
+            "title": str(facts.get("title") or ""),
+            "employers": [
+                str(row.get("name") or "")
+                for row in facts.get("employers") or []
+                if isinstance(row, dict) and row.get("name")
+            ],
+            "school": str(facts.get("school") or ""),
+            "location": str(facts.get("location") or ""),
+            "topics": list(facts.get("topics") or [])[:10],
+            "shared_context": [
+                f"{row.get('overlap', 'other')}: {row.get('detail', '')}"
+                for row in facts.get("shared_context") or []
+                if isinstance(row, dict) and row.get("detail")
+            ],
+        }
 
     def rejudge(self, candidates: list[HealCandidate]) -> dict[str, Any]:
-        """Re-judge the CONTENT candidates' parents through the normal subset
-        reconcile pass — the judge, thresholds, and review.csv write path are
-        exactly the standing ones."""
-        summary: dict[str, Any] = {"candidates": len(candidates), "parents": 0,
-                                   "verified": 0, "detached": 0, "pending": 0,
-                                   "restored_pending_retargets": 0,
-                                   "skipped_no_openai_key": False}
+        summary = {
+            "candidates": len(candidates), "parents": len({row.parent_id for row in candidates}),
+            "verified": 0, "detached": 0, "pending": 0,
+            "restored_pending_retargets": 0, "skipped_no_openai_key": False,
+        }
         if not candidates:
             return summary
-        parents = sorted({c.parent_slug for c in candidates if c.parent_slug})
-        summary["parents"] = len(parents)
         load_env()
         if not (os.environ.get("OPENAI_API_KEY") or "").strip():
             summary["skipped_no_openai_key"] = True
-            _say(f"no OpenAI key — leaving {len(candidates)} hydrated candidates "
-                 "for the next reconcile run")
             return summary
-        _say(f"re-judging {len(candidates)} candidates across {len(parents)} people "
-             "(OpenAI, ~cents)")
-        ReconcileLinkedin(
-            db=self.db,
-            index_json=self.index_json,
-            people_csv=self.people_csv,
-            profile_cache_dir=self.profile_cache_dir,
-            facts_dir=self.facts_dir,
-            raw_dir=self.raw_dir,
-            parents_dir=self.parents_dir,
-            verdicts_jsonl=self.verdicts_jsonl,
-            verdicts_csv=self.verdicts_csv,
-            overrides_csv=self.review_csv,
-            consolidate_people_csv=self.review_csv.parent / "consolidate-people.csv",
-            slug=parents,
-        ).run()
-        rows = _review_rows(self.db)
+
+        dossiers = self._dossiers()
+        tasks = []
         for candidate in candidates:
-            row = rows.get(candidate.pub) or {}
-            action = (row.get("action") or "").strip().lower()
-            approved = (row.get("approved") or "").strip().lower()
-            if approved == "auto" and action == "verify":
-                summary["verified"] += 1
-            elif approved == "auto" and action == "detach":
-                summary["detached"] += 1
-            elif approved not in {"yes", "no"}:
-                summary["pending"] += 1
+            row = {"public_identifier": candidate.pub, "linkedin_url": candidate.url}
+            task = {
+                "parent_id": candidate.parent_id,
+                "parent_slug": candidate.parent_slug,
+                "candidate_key": candidate.candidate_key,
+                "name": candidate.name,
+                "dossier": self._dossier_view(dossiers.get(candidate.parent_id, {})),
+                "linkedin": linkedin_view(row, self.profile_cache_dir),
+                "from_connections": False,
+            }
+            tasks.append(task)
+        with ThreadPoolExecutor(max_workers=min(_FETCH_WORKERS, len(tasks))) as pool:
+            verdicts = pool.map(lambda task: judge_identity_candidate(task, use_llm=True), tasks)
+            for task, verdict in zip(tasks, verdicts):
+                task["verdict"] = verdict
+        decide_actions(tasks, DEFAULT_CONFIRM, DEFAULT_DETACH)
+        projected = project_identity_judgments(self.db, tasks)
+        summary.update(
+            verified=projected["verified"],
+            detached=projected["detached"],
+            pending=projected["pending"],
+        )
         return summary
-
-    # ---- terminate ---------------------------------------------------------
-
-    def _synthetic_gates(self) -> dict[str, tuple[str, str]]:
-        """review-key -> (synthetic pub, current approved gate)."""
-        gates: dict[str, tuple[str, str]] = {}
-        snapshot = identity_snapshot(self.db)
-        links = {row.row_key: row for row in snapshot.links}
-        people: dict[str, set[str]] = {}
-        for row in snapshot.memberships:
-            people.setdefault(row.row_key, set()).add(row.person_id.lower())
-        for row in snapshot.synthetic_profiles:
-            link = links[row.candidate_key]
-            pub = row.public_identifier.lower()
-            approved = (link.decision_approved or link.machine_approved or "").lower()
-            keys = {pub, row.candidate_key.lower(), *people.get(row.candidate_key, set())} - {""}
-            for key in keys:
-                gates[key] = (row.candidate_key, approved)
-        return gates
-
-    def _research_mintable(self, candidate: HealCandidate) -> bool:
-        """Case (b) predicate: an existing engine research output for this
-        parent proposed exactly the now-dead link, and its body is usable."""
-        research_json = (self.deep_research_dir / candidate.parent_slug
-                         / "01_research_parallel.json")
-        if not research_json.is_file():
-            return False
-        try:
-            profile = json.loads(research_json.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return False
-        proposed = str((profile.get("social") or {}).get("linkedin_url") or "")
-        if extract_public_identifier(proposed).lower() != candidate.pub:
-            return False
-        return profile_is_usable(profile)
-
-    def _mint_from_research(self, candidates: list[HealCandidate]) -> dict[str, Any]:
-        """Case (b): copy each research output with its (dead) proposed URL
-        cleared into a scratch dir and run ONE scoped assemble over it —
-        prune=False, exactly like the guided-retarget flow's scoped mint. The
-        paid artifact on disk is never modified."""
-        with tempfile.TemporaryDirectory(prefix="heal-synth-") as scratch:
-            scratch_dir = Path(scratch)
-            for candidate in candidates:
-                src = (self.deep_research_dir / candidate.parent_slug
-                       / "01_research_parallel.json")
-                profile = json.loads(src.read_text(encoding="utf-8"))
-                profile["social"] = {**(profile.get("social") or {}), "linkedin_url": ""}
-                dst = scratch_dir / candidate.parent_slug
-                dst.mkdir(parents=True, exist_ok=True)
-                (dst / "01_research_parallel.json").write_text(
-                    json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
-            self.db.export_batons(self.review_csv, self.synthetic_csv)
-            payload = AssembleSyntheticProfile(
-                db=self.db,
-                research_dir=scratch_dir,
-                queue_csv=scratch_dir / "research_queue.csv",  # absent: scope = scratch dirs
-                people_csv=self.people_csv,
-                verdicts_jsonl=self.verdicts_jsonl,
-                out=self.synthetic_csv,
-                index_json=self.index_json,
-                facts_dir=self.facts_dir,
-                prune=False,
-            ).run()
-        return payload.to_payload()
 
     def terminate(self, candidates: list[HealCandidate]) -> dict[str, Any]:
-        """Confirmed-dead links: machine detach + the free identity ladder."""
-        summary: dict[str, Any] = {"candidates": len(candidates), "detached": 0,
-                                   "stood_synthetic": 0, "minted_synthetic": 0,
-                                   "pending_reresearch": 0, "skipped_human_decided": 0,
-                                   "assemble": None}
+        summary = {
+            "candidates": len(candidates), "detached": 0, "stood_synthetic": 0,
+            "minted_synthetic": 0, "pending_reresearch": 0,
+            "skipped_human_decided": 0, "assemble": None,
+        }
         if not candidates:
             return summary
-        rows = _review_rows(self.db)
-        gates = self._synthetic_gates()
-        mintable: list[HealCandidate] = []
-        projections = []
+        snapshot = identity_snapshot(self.db)
+        synthetic_by_parent = {
+            link.parent_id: link
+            for link in snapshot.links
+            if link.kind == RowKind.SYNTHETIC.value
+        }
+        tasks = []
         for candidate in candidates:
-            row = rows.get(candidate.pub) or {}
-            if (row.get("approved") or "").strip().lower() in {"yes", "no"}:
-                summary["skipped_human_decided"] += 1  # a human raced us — their word stands
-                continue
-            projections.append(_identity_projection(
-                self.db, candidate.pub, machine_action="detach", machine_approved="auto",
-                machine_confidence=1.0,
-                machine_reason="attached LinkedIn returned no profile content on a fresh fetch (dead link)",
-                authoritative_detach=1, source=ReviewSource.HEAL.value,
-            ))
-            summary["detached"] += 1
-            # Free identity ladder: existing synthetic row -> research mint -> pending card.
-            gate = next((gates[key] for key in
-                         (candidate.pub, *(pid.strip().lower() for pid in candidate.person_ids))
-                         if key in gates), None)
-            if gate is not None:
-                synth_key, approved = gate
-                if approved in {"yes", "no"}:
-                    summary["stood_synthetic"] += approved == "yes"  # user-gated: their word stands
-                else:
-                    projections.append(_identity_projection(
-                        self.db, synth_key, machine_action="verify",
-                        machine_approved=ApprovedState.AUTO.value,
-                        source=ReviewSource.HEAL.value,
-                    ))
-                    summary["stood_synthetic"] += 1
-            elif self._research_mintable(candidate):
-                mintable.append(candidate)
+            tasks.append({"candidate_key": candidate.candidate_key, "action": "detach",
+                "verdict": {
+                    "verdict": "wrong_person", "confidence": 1.0,
+                    "reason": "fresh LinkedIn fetch returned no profile content",
+                },
+            })
+            synthetic = synthetic_by_parent.get(candidate.parent_id)
+            approved = (synthetic.decision_approved or synthetic.machine_approved or "") if synthetic else ""
+            if synthetic and approved == "yes":
+                summary["stood_synthetic"] += 1
+            elif synthetic and approved not in {"no", "auto"}:
+                tasks.append({"candidate_key": synthetic.row_key, "action": "confirm",
+                    "verdict": {"verdict": "confirmed", "confidence": 1.0,
+                                "reason": "standing synthetic identity for dead attached link"},
+                })
             else:
                 summary["pending_reresearch"] += 1
-        self.db.project_identity(tuple(projections))
-        if mintable:
-            summary["assemble"] = self._mint_from_research(mintable)
-            summary["minted_synthetic"] = len(mintable)
+        projected = project_identity_judgments(self.db, tasks)
+        summary["detached"] = projected["detached"]
+        summary["stood_synthetic"] += projected["verified"]
+        summary["skipped_human_decided"] = projected["preserved_user_rows"]
         return summary
-
-    # ---- run ---------------------------------------------------------------
 
     def run(self) -> dict[str, Any]:
         started = time.monotonic()
-        owner_backfilled = ensure_owner_phones(self.owner_json)
-        scrubs: dict[str, int] = {}
-        queue_before = count_pending(self.db)
-
+        queue_before = count_pending_identity_reviews(self.db)
         candidates, skipped_retarget, uncapped = self.select_candidates()
         states = self.fetch_states(candidates)
-        content = [c for c in candidates if states[c.pub]["state"] == PROFILE_CONTENT]
-        empty_fetched = [c for c in candidates
-                         if states[c.pub]["state"] == PROFILE_EMPTY and states[c.pub]["fetched"]]
-        # An EMPTY served from the cache without a fetch this run (keyless
-        # install) is NOT a fresh confirmation — leave those people alone.
-        empty_unfetched = sum(1 for c in candidates
-                              if states[c.pub]["state"] == PROFILE_EMPTY
-                              and not states[c.pub]["fetched"])
-        errors = sum(1 for c in candidates if states[c.pub]["state"] not in
-                     {PROFILE_CONTENT, PROFILE_EMPTY})
-
+        content = [row for row in candidates if states[row.candidate_key]["state"] == PROFILE_CONTENT]
+        empty = [row for row in candidates if states[row.candidate_key]["state"] == PROFILE_EMPTY
+                 and states[row.candidate_key].get("fetched")]
+        empty_unfetched = sum(
+            states[row.candidate_key]["state"] == PROFILE_EMPTY
+            and not states[row.candidate_key].get("fetched")
+            for row in candidates
+        )
         rejudge = self.rejudge(content)
-        terminated = self.terminate(empty_fetched)
-        queue_after = count_pending(self.db)
-
-        scrub_total = sum(int(v) for v in scrubs.values()) + int(bool(owner_backfilled))
+        terminated = self.terminate(empty)
         summary = {
-            "primitive": "heal_review",
-            "status": "completed",
-            "owner_phones_backfilled": bool(owner_backfilled),
-            "legacy_scrub": scrubs,
+            "primitive": "heal_review", "status": "completed",
+            "owner_phones_backfilled": False, "legacy_scrub": {},
             "queue_pending_before": queue_before,
-            "queue_pending_after": queue_after,
-            "candidates": len(candidates),
-            "candidates_uncapped": uncapped,
-            "capped": uncapped > len(candidates),
-            "cap": self.cap,
+            "queue_pending_after": count_pending_identity_reviews(self.db),
+            "candidates": len(candidates), "candidates_uncapped": uncapped,
+            "capped": len(candidates) < uncapped, "cap": self.cap,
             "skipped_pending_retarget": skipped_retarget,
             "profiles": {
-                "content": len(content),
-                "empty_fetched": len(empty_fetched),
+                "content": len(content), "empty_fetched": len(empty),
                 "empty_unfetched": empty_unfetched,
-                "error": errors,
-                "fetched": sum(1 for s in states.values() if s.get("fetched")),
-                "from_cache": sum(1 for s in states.values() if s.get("from_cache")),
+                "error": len(candidates) - len(content) - len(empty) - empty_unfetched,
+                "fetched": sum(bool(row.get("fetched")) for row in states.values()),
+                "from_cache": sum(bool(row.get("from_cache")) for row in states.values()),
             },
-            "rejudge": rejudge,
-            "terminated": terminated,
+            "rejudge": rejudge, "terminated": terminated,
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
-        self._stamp_review_manifest(summary)
-        tail = "" if candidates or scrub_total else " (nothing to do)"
-        _say(f"scrubs {scrub_total} · fetched {summary['profiles']['fetched']} · "
-             f"judged {rejudge['candidates'] if not rejudge['skipped_no_openai_key'] else 0} · "
+        self._stamp_manifest(summary)
+        tail = " (nothing to do)" if not candidates else ""
+        judged = 0 if rejudge["skipped_no_openai_key"] else rejudge["candidates"]
+        _say(f"fetched {summary['profiles']['fetched']} · judged {judged} · "
              f"dead-links {terminated['detached']}{tail}")
         return summary
 
-    def _stamp_review_manifest(self, summary: dict[str, Any]) -> None:
-        """Merge the heal summary into the review stage manifest (the file
-        review-status reads); stage writes carry the block forward."""
+    def _stamp_manifest(self, summary: dict[str, Any]) -> None:
         try:
             existing = json.loads(self.review_manifest.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             existing = {}
-        if not isinstance(existing, dict):
-            existing = {}
-        receipt = {**existing, "heal": summary}
+        receipt = {**(existing if isinstance(existing, dict) else {}), "heal": summary}
         receipt.pop("updated_at", None)
         receipt.pop("created_at", None)
         write_manifest(self.review_manifest.parent.name, receipt,
@@ -475,15 +285,10 @@ class HealReview:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Self-heal pass before review serve: fresh-fetch + "
-                    "re-judge of judge-skipped links, free dead-link termination.")
+    parser = argparse.ArgumentParser(description="Heal stale LinkedIn review candidates")
     parser.add_argument("--db", default=str(CANONICAL_DB))
-    parser.add_argument("--cap", type=int, default=HEAL_BATCH_CAP,
-                        help="Optional manual bound on candidates per run (default: uncapped; "
-                             "a capped run reports what it left behind)")
-    parser.add_argument("--pre-restart", action="store_true",
-                        help="Accepted for compatibility; review still restarts the server after healing")
+    parser.add_argument("--cap", type=int, default=HEAL_BATCH_CAP)
+    parser.add_argument("--pre-restart", action="store_true")
     args = parser.parse_args(argv)
     emit(HealReview(db=Db(Path(args.db)), cap=args.cap).run())
     return 0

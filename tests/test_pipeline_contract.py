@@ -442,12 +442,8 @@ class GraphCheckTests(unittest.TestCase):
 class WholeDeclaredGraphTests(unittest.TestCase):
     """The report for EVERY converted node, not a hand-picked subset.
 
-    Four of the five findings must stay empty. `dead_outputs` is the exception and
-    it is listed here on purpose: both entries are the LinkedIn enrichment output
-    under its two bindings, whose consumer is the unconverted indexing pack
-    (`packs/indexing/modal/linkedin_modal_pipeline.py` downloads
-    `discover/linkedin/people.csv` to `import/linkedin/people.csv`). If the
-    indexing pack is converted, this list shrinks — it must not GROW quietly."""
+    Four findings stay empty. ``dead_outputs`` records deliberate one-way
+    exports. SQLite-first workers are intentionally outside this file graph."""
 
     @staticmethod
     def _declared_nodes() -> list[type[Node]]:
@@ -469,6 +465,8 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertEqual(
             sorted((item["node"], item["path"]) for item in report["dead_outputs"]),
             [
+                ("deep_parents", ".powerpacks/deep-context/parents/{slug}.md"),
+                ("deep_reconcile", ".powerpacks/deep-context/reconcile/verdicts.jsonl"),
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
             ],
@@ -483,38 +481,27 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         self.assertIn("messages_match_local", report["edges"]["messages_import"])
 
     def test_the_deep_context_stage_is_registered(self) -> None:
-        # The twelve deep-context nodes; a rename or a lost registration import
-        # must not pass silently.
+        # Only file-to-file stages remain registered. Review, enrichment, and
+        # realization workers now read/write SQLite explicitly.
         names = set(check_graph(self._declared_nodes())["nodes"])
         self.assertLessEqual({
             "deep_owner", "deep_collect", "deep_synthesize", "deep_compose",
-            "deep_cluster", "deep_parents", "deep_reconcile", "deep_research",
-            "deep_assemble_synthetic", "deep_prefetch", "deep_apply_retargets",
-            "deep_persist_review",
+            "deep_cluster", "deep_parents", "deep_reconcile",
         }, names)
-        self.assertEqual(len(names), 26)
+        self.assertEqual(len(names), 21)
 
-    def test_review_csv_has_two_disjoint_machine_writers(self) -> None:
-        # review.csv is the graph's most-shared mutable file: synthesize owns the
-        # llm_worth family, reconcile the identity/action slice, the human owns
-        # network_worth, and the row-bookkeeping columns are unclaimed by all.
+    def test_review_csv_has_no_runtime_writer(self) -> None:
+        # Runtime worth and identity decisions live in SQLite. review.csv is a
+        # compatibility baton export, not a pipeline authority.
         claims = {
             node.name: item
             for node in self._declared_nodes()
             for item in node.outputs
             if item.path.endswith("overrides/review.csv")
         }
-        self.assertEqual(sorted(claims), ["deep_reconcile", "deep_synthesize"])
-        synth = set(claims["deep_synthesize"].owns_columns)
-        recon = set(claims["deep_reconcile"].owns_columns)
-        self.assertIn("llm_worth", synth)
-        self.assertIn("action", recon)
-        self.assertEqual(synth & recon, set())
-        self.assertIs(claims["deep_synthesize"].row_model, claims["deep_reconcile"].row_model)
-        for shared in ("network_worth", "public_identifier", "person_id", "source", "updated_at"):
-            self.assertNotIn(shared, synth | recon)
+        self.assertEqual(claims, {})
 
-    def test_directory_csv_has_three_distinct_row_slices(self) -> None:
+    def test_directory_csv_has_two_import_slices(self) -> None:
         slices = {
             node.name: item.owns_rows_where
             for node in self._declared_nodes()
@@ -522,9 +509,9 @@ class WholeDeclaredGraphTests(unittest.TestCase):
             if item.path.endswith("network-import/directory.csv")
         }
         self.assertEqual(
-            sorted(slices), ["deep_persist_review", "gmail_import", "messages_import"]
+            sorted(slices), ["gmail_import", "messages_import"]
         )
-        self.assertEqual(len(set(slices.values())), 3)
+        self.assertEqual(len(set(slices.values())), 2)
 
     def test_index_json_key_split_is_declared(self) -> None:
         owners = {
@@ -535,11 +522,7 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         }
         self.assertEqual(owners, {"deep_compose": ("slugs",), "deep_parents": ("parents",)})
 
-    def test_the_two_feedback_edges_are_the_only_ones(self) -> None:
-        # feedback=True exists for exactly the two cross-iteration writes (the
-        # persist stage's directory slice; parents' index key read by the NEXT
-        # cluster round). Anything else marked feedback would silently exempt a
-        # real edge from cycle detection.
+    def test_parent_index_is_the_only_feedback_edge(self) -> None:
         feedback = sorted(
             (node.name, item.path)
             for node in self._declared_nodes()
@@ -548,7 +531,6 @@ class WholeDeclaredGraphTests(unittest.TestCase):
         )
         self.assertEqual(feedback, [
             ("deep_parents", ".powerpacks/deep-context/index.json"),
-            ("deep_persist_review", ".powerpacks/network-import/directory.csv"),
         ])
 
 
